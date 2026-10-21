@@ -38,7 +38,7 @@ class NodeResult:
 @dataclass
 class RunResult:
     workflow: str
-    state: str  # "complete" | "failed" | "paused"
+    state: str  # "complete" | "failed" | "paused" | "cancelled"
     inputs: dict[str, Any]
     nodes: dict[str, NodeResult] = field(default_factory=dict)
     final_state: dict[str, Any] = field(default_factory=dict)
@@ -220,6 +220,7 @@ class DAGRunner:
         tenant_id: str | None = None,
         observer: "Callable[[NodeResult], None] | None" = None,
         console_run: bool = False,
+        cancel_event: Any = None,
     ) -> None:
         self.doc = doc
         self.engine = engine
@@ -231,6 +232,9 @@ class DAGRunner:
         # WF-02: the run was started from the console — `ask_human` with no resolvable
         # chat pauses for the console operator instead of failing.
         self._console_run = console_run
+        # WF-07: a threading.Event-like (`is_set()`); checked before each node so a
+        # stopped run does not keep spawning engines in the background.
+        self._cancel_event = cancel_event
         # WF-A2: the tenant a run belongs to. Threaded into checkpoint.save so a
         # paused run's checkpoint is stored under ITS tenant, not always _default
         # (which made non-default tenants unable to resume — console resume loads
@@ -313,6 +317,13 @@ class DAGRunner:
 
                 node = node_specs[nid]
                 ntype = node.get("type", "agent")
+
+                if self._cancel_event is not None and self._cancel_event.is_set():
+                    run.state = "cancelled"
+                    run.error = "cancelled"
+                    run.final_state = state
+                    self._audit("run.terminal", state="cancelled", node_id=nid)
+                    return run
 
                 if nid in skipped:
                     t_now = perf_counter()
@@ -521,6 +532,8 @@ def resume_workflow(
     tenant_id: str | None = None,
     replier: str | None = None,
     audit_sink: Callable[[dict[str, Any]], None] | None = None,
+    observer: "Callable[[NodeResult], None] | None" = None,
+    cancel_event: Any = None,
 ) -> RunResult:
     """Load a paused run's checkpoint, reload its workflow, and continue
     execution with `reply` injected at the paused `ask_human` node
@@ -571,7 +584,8 @@ def resume_workflow(
     result: RunResult
     try:
         doc = load_workflow(ckpt["workflow_path"])
-        runner = DAGRunner(doc, engine=engine, audit_sink=audit_sink, tenant_id=tenant_id)
+        runner = DAGRunner(doc, engine=engine, audit_sink=audit_sink, tenant_id=tenant_id,
+                           observer=observer, cancel_event=cancel_event)
         result = runner.run(
             inputs=ckpt["inputs"],
             resume=ResumeContext(

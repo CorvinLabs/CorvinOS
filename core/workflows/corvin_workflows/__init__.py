@@ -12,7 +12,7 @@ from .storage import WorkflowDoc, load_workflow, dump_workflow
 from .validator import validate, WorkflowInvalid
 from .runner import DAGRunner, RunResult, NodeResult, ResumeContext, resume_workflow
 from .engines import WorkerEngine, StubEngine, EngineCall
-from .node_types import NODE_TYPES, register_node_type, WorkflowPaused
+from .node_types import NODE_TYPES, register_node_type, WorkflowPaused, node_requires_engine
 
 __all__ = [
     "WorkflowDoc",
@@ -31,4 +31,5 @@ __all__ = [
     "NODE_TYPES",
     "register_node_type",
     "WorkflowPaused",
+    "node_requires_engine",
 ]

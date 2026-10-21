@@ -930,6 +930,22 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
 }
 
 
+_ENGINE_FREE_TYPES = frozenset({"code", "merge", "answer", "ask_human", "approval", "deliver"})
+
+
+def node_requires_engine(node: dict[str, Any]) -> bool:
+    """True when running this node calls `engine.spawn()`. Single source for every caller
+    that decides whether a worker engine (the `claude` CLI) must exist: a workflow built
+    only from engine-free nodes runs on a host without it. An unregistered/operator type
+    is treated as engine-requiring (conservative)."""
+    ntype = str(node.get("type", "agent"))
+    if ntype in _ENGINE_FREE_TYPES:
+        return False
+    if ntype == "route":
+        return node.get("mode") != "condition"
+    return True
+
+
 def register_node_type(
     name: str,
     *,

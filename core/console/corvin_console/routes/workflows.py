@@ -68,7 +68,7 @@ import time
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, Any, AsyncIterator
+from typing import Annotated, Any, AsyncIterator, Callable
 
 import anyio
 
@@ -95,6 +95,7 @@ from .. import _spawn_gates  # shared fail-closed pre-spawn chokepoint (CRITICAL
 from ..deps import require_csrf, require_session
 from ..utils import read_json_or_none as _read_json
 from . import workflow_composer as _composer  # CONCEPT-0115: design-chat slash commands
+from . import workflow_dag_run as _dag_run  # ADR-2272: console runs of DAG-engine workflows
 
 # ── Path resolution ────────────────────────────────────────────────────────
 
@@ -239,6 +240,7 @@ try:
     from corvin_workflows import validate as _validate_workflow   # noqa: E402
     from corvin_workflows import WorkflowInvalid                  # noqa: E402
     from corvin_workflows.runner import resume_workflow as _resume_awp_workflow  # noqa: E402
+    from corvin_workflows import runner as _awp_runner  # noqa: E402
     from corvin_workflows import checkpoint as _awp_checkpoint     # noqa: E402
     from corvin_workflows.engines_claude import ClaudeCliEngine as _AwpClaudeEngine  # noqa: E402
     _AWP_OK = True
@@ -248,6 +250,7 @@ except Exception:
     class WorkflowInvalid(Exception):  # type: ignore[no-redef]
         pass
     _resume_awp_workflow = None  # type: ignore[assignment]
+    _awp_runner = None           # type: ignore[assignment]
     _awp_checkpoint = None       # type: ignore[assignment]
     _AwpClaudeEngine = None      # type: ignore[assignment]
     _AWP_OK = False
@@ -460,6 +463,9 @@ def _parse_graph(yaml_text: str) -> list[dict[str, Any]]:
                 "skills": list(n.get("skills") or []),
                 "items_from": n.get("items_from"),
                 "config": n.get("config"),
+                # Full node as written in the YAML: the inspector edits every
+                # type's Pflicht fields, not only the canvas subset above.
+                "spec": n,
             }
             for i, n in enumerate(graph)
             if isinstance(n, dict)
@@ -1254,6 +1260,134 @@ def put_workflow_yaml(
     )
     return {"ok": True, "id": wid, "graph": _parse_graph(body.yaml)}
 
+# ── Node-level edits (editor palette + inspector) ─────────────────────────
+# The editor holds the YAML as text and has no YAML library, so node edits go
+# through the server: load, change one entry of orchestration.graph, validate
+# the WHOLE document with the same gate as PUT /yaml, then write. A rejected
+# edit leaves the file untouched.
+
+class NodeRequest(BaseModel):
+    node: dict[str, Any] = Field(...)
+    model_config = {"extra": "forbid"}
+
+
+def _mutate_graph_node(
+    tenant_id: str,
+    wid: str,
+    mutate: Callable[[list[dict[str, Any]]], None],
+) -> dict[str, Any]:
+    if not _YAML_OK:
+        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "PyYAML not available")
+    yaml_p = _yaml_path(tenant_id, wid)
+    raw = yaml_p.read_text(encoding="utf-8") if yaml_p.exists() else ""
+    try:
+        doc = _yaml.safe_load(raw) if raw.strip() else {}
+    except Exception as exc:
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "Invalid workflow YAML syntax") from exc
+    if not isinstance(doc, dict):
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "Invalid workflow YAML syntax")
+    orch = doc.get("orchestration")
+    if not isinstance(orch, dict):
+        orch = {}
+        doc["orchestration"] = orch
+    graph = orch.get("graph") or []
+    if not isinstance(graph, list):
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "orchestration.graph must be a list")
+    mutate(graph)
+    orch["graph"] = graph
+    new_yaml = _yaml.safe_dump(doc, allow_unicode=True, sort_keys=False, default_flow_style=False)
+    _validate_yaml_str(new_yaml)
+    _write_atomic(yaml_p, new_yaml)
+    _write_awpkg_sidecar(tenant_id, wid)
+    meta = _read_json(_meta_path(tenant_id, wid)) or {}
+    meta["updated_at"] = time.time()
+    _write_atomic(_meta_path(tenant_id, wid), meta)
+    return {"ok": True, "id": wid, "yaml": new_yaml, "graph": _parse_graph(new_yaml)}
+
+
+def _audit_node_action(rec: session_auth.SessionRecord, wid: str, action: str) -> None:
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=action,
+        target_kind="workflow",
+        target_id=wid,
+    )
+
+
+def _node_id_of(node: dict[str, Any]) -> str:
+    node_id = node.get("id")
+    if not isinstance(node_id, str) or not node_id.strip():
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "node requires a non-empty 'id'")
+    return node_id
+
+
+@router.post("/workflows/{wid}/nodes")
+def add_workflow_node(
+    wid: str,
+    body: NodeRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    _validate_wid(wid)
+    _require_workflow(rec.tenant_id, wid)
+    node = dict(body.node)
+    node_id = _node_id_of(node)
+
+    def _append(graph: list[dict[str, Any]]) -> None:
+        if any(isinstance(n, dict) and n.get("id") == node_id for n in graph):
+            raise HTTPException(http_status.HTTP_409_CONFLICT, f"node {node_id!r} already exists")
+        graph.append(node)
+
+    result = _mutate_graph_node(rec.tenant_id, wid, _append)
+    _audit_node_action(rec, wid, "workflow.node_added")
+    return result
+
+
+@router.put("/workflows/{wid}/nodes/{node_id}")
+def replace_workflow_node(
+    wid: str,
+    node_id: str,
+    body: NodeRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    _validate_wid(wid)
+    _require_workflow(rec.tenant_id, wid)
+    node = dict(body.node)
+    if node.get("id", node_id) != node_id:
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "renaming a node is not supported")
+    node["id"] = node_id
+
+    def _replace(graph: list[dict[str, Any]]) -> None:
+        for i, n in enumerate(graph):
+            if isinstance(n, dict) and n.get("id") == node_id:
+                graph[i] = node
+                return
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"node {node_id!r} not found")
+
+    result = _mutate_graph_node(rec.tenant_id, wid, _replace)
+    _audit_node_action(rec, wid, "workflow.node_updated")
+    return result
+
+
+@router.delete("/workflows/{wid}/nodes/{node_id}")
+def delete_workflow_node(
+    wid: str,
+    node_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    _validate_wid(wid)
+    _require_workflow(rec.tenant_id, wid)
+
+    def _remove(graph: list[dict[str, Any]]) -> None:
+        kept = [n for n in graph if not (isinstance(n, dict) and n.get("id") == node_id)]
+        if len(kept) == len(graph):
+            raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"node {node_id!r} not found")
+        graph[:] = kept
+
+    result = _mutate_graph_node(rec.tenant_id, wid, _remove)
+    _audit_node_action(rec, wid, "workflow.node_deleted")
+    return result
+
 # ── AWPKG sidecar writer ──────────────────────────────────────────────────
 
 def _write_awpkg_sidecar(tenant_id: str, wid: str) -> None:
@@ -1908,22 +2042,71 @@ def delete_run(
 
 # ── Human-in-the-Loop (approval) endpoints ────────────────────────────────
 
+def _awaiting_of(tenant_id: str, wid: str, rid: str) -> dict[str, Any] | None:
+    meta = _read_json(_run_meta_path(tenant_id, wid, rid)) or {}
+    if meta.get("status") != "paused":
+        return None
+    awaiting = meta.get("awaiting")
+    return awaiting if isinstance(awaiting, dict) else None
+
+
 @router.get("/workflows/{wid}/runs/{rid}/approval")
 def get_approval_state(
     wid: str,
     rid: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    """Return the current approval state for a paused run node."""
+    """The run's pending question, if it is paused (approval bar / reply panel state)."""
     _validate_wid(wid)
     _require_workflow(rec.tenant_id, wid)
-    ap = _approval_path(rec.tenant_id, wid, rid)
-    if not ap.exists():
+    aw = _awaiting_of(rec.tenant_id, wid, rid)
+    if aw is None:
         return {"status": "none"}
-    try:
-        return json.loads(ap.read_text(encoding="utf-8"))
-    except Exception:
-        return {"status": "error"}
+    return {"status": "pending", "node_id": aw.get("node_id"), "kind": aw.get("kind"),
+            "message": aw.get("message", ""), "expires_at_ms": aw.get("expires_at_ms")}
+
+
+def _decide_approval(
+    wid: str, rid: str, verdict: str, comment: str, rec: session_auth.SessionRecord,
+) -> dict[str, Any]:
+    _validate_wid(wid)
+    _require_workflow(rec.tenant_id, wid)
+    if not _AWP_OK:
+        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "AWP workflow stack not available")
+    aw = _awaiting_of(rec.tenant_id, wid, rid)
+    if aw is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "no pending approval for this run")
+    if aw.get("kind") != "approval":
+        raise HTTPException(http_status.HTTP_409_CONFLICT,
+                            "this run is waiting for a reply, not an approval - answer it in the reply box")
+    graph = _graph_of_run(rec.tenant_id, wid, rid)
+    recorder = _make_run_recorder(rec.tenant_id, rec.sid_fingerprint, wid, rid, graph)
+    reply = verdict if not comment.strip() else f"{verdict}: {comment.strip()}"
+    # The decision text is data for later nodes' prompts: same gates as a typed reply.
+    refusal = _spawn_gates.check_console_spawn_or_refusal(
+        reply, tenant_id=rec.tenant_id, persona="assistant", channel="workflow-resume",
+        chat_key=f"workflow-resume:{wid}:{rid}", engine_id="claude_code",
+    )
+    if refusal is not None:
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail={"error": "refused", "message": refusal})
+    cancel = _dag_run.try_begin(rec.tenant_id, wid, rid)
+    if cancel is None:
+        raise HTTPException(http_status.HTTP_409_CONFLICT, "approval is already being decided")
+    _dag_run.start_thread(
+        lambda: _dag_run.run_resume_background(
+            reply=reply, recorder=recorder, cancel_event=cancel, graph=graph),
+        f"wf-resume-{rid}",
+    )
+    action = "workflow.run_approved" if verdict == "approve" else "workflow.run_rejected"
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=action,
+        target_kind="workflow_run",
+        target_id=f"{wid}/{rid}",
+    )
+    return {"ok": True, "status": "approved" if verdict == "approve" else "rejected"}
+
 
 @router.post("/workflows/{wid}/runs/{rid}/approve")
 def approve_run_node(
@@ -1932,27 +2115,9 @@ def approve_run_node(
     body: ApproveRunRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
-    """Approve a paused approval node — continues the workflow run."""
-    _validate_wid(wid)
-    _require_workflow(rec.tenant_id, wid)
-    ap = _approval_path(rec.tenant_id, wid, rid)
-    if not ap.exists():
-        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "no pending approval for this run")
-    try:
-        current = json.loads(ap.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "failed to read approval state") from exc
-    if current.get("status") != "pending":
-        raise HTTPException(http_status.HTTP_409_CONFLICT, f"approval is already {current.get('status')!r}")
-    _write_atomic(ap, {**current, "status": "approved", "comment": body.comment, "decided_at": time.time()})
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="workflow.run_approved",
-        target_kind="workflow_run",
-        target_id=f"{wid}/{rid}",
-    )
-    return {"ok": True, "status": "approved"}
+    """Approve a paused `approval` node - the run continues in the background."""
+    return _decide_approval(wid, rid, "approve", body.comment, rec)
+
 
 @router.post("/workflows/{wid}/runs/{rid}/reject")
 def reject_run_node(
@@ -1961,27 +2126,9 @@ def reject_run_node(
     body: ApproveRunRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
-    """Reject a paused approval node — aborts the workflow run."""
-    _validate_wid(wid)
-    _require_workflow(rec.tenant_id, wid)
-    ap = _approval_path(rec.tenant_id, wid, rid)
-    if not ap.exists():
-        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "no pending approval for this run")
-    try:
-        current = json.loads(ap.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "failed to read approval state") from exc
-    if current.get("status") != "pending":
-        raise HTTPException(http_status.HTTP_409_CONFLICT, f"approval is already {current.get('status')!r}")
-    _write_atomic(ap, {**current, "status": "rejected", "comment": body.comment, "decided_at": time.time()})
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="workflow.run_rejected",
-        target_kind="workflow_run",
-        target_id=f"{wid}/{rid}",
-    )
-    return {"ok": True, "status": "rejected"}
+    """Reject a paused `approval` node - the node fails and the run ends (or the branch is
+    contained, with `retry.error_strategy: fail_branch`)."""
+    return _decide_approval(wid, rid, "reject", body.comment, rec)
 
 def _spawn_refusal_in(result: Any) -> str | None:
     """WFB-R1-09: the refusal text of the first node the pre-spawn gate refused, else None.
@@ -2098,36 +2245,17 @@ def resume_run(
             detail={"error": "refused", "message": _reply_refusal},
         )
 
-    # CON-F3 (ADR-0171): hash-chain every resumed node event into the owner's
-    # audit chain (parity with start_run). Each DAGRunner event carrying a
-    # node_id becomes an allowlisted console.action_performed with the node id
-    # in step_id — so the resumed nodes are as auditable as the pre-pause ones.
-    def _awp_node_sink(event: dict[str, Any]) -> None:
-        node_id = event.get("node_id")
-        ev = event.get("event", "event")
-        try:
-            console_audit.action_performed(
-                tenant_id=rec.tenant_id,
-                sid_fingerprint=rec.sid_fingerprint,
-                action=f"workflow.{ev}",
-                target_kind="workflow_run",
-                target_id=f"{wid}/{rid}",
-                run_id=rid,
-                step_id=str(node_id) if node_id is not None else None,
-            )
-        except Exception:  # never let audit shaping abort a live resume
-            pass
-
+    # CON-F3 (ADR-0171): every resumed node event goes to the owner's audit chain AND to the
+    # run's own log (same trail as the first pass, so run history shows the whole run).
+    graph = _graph_of_run(rec.tenant_id, wid, rid)
+    _ensure_run_meta(rec.tenant_id, wid, rid)
+    recorder = _make_run_recorder(rec.tenant_id, rec.sid_fingerprint, wid, rid, graph)
+    cancel = _dag_run.try_begin(rec.tenant_id, wid, rid)
+    if cancel is None:
+        raise HTTPException(http_status.HTTP_409_CONFLICT, "run is already being resumed")
     try:
-        result = _resume_awp_workflow(
-            rid, body.reply,
-            engine=_AwpClaudeEngine(tenant_id=rec.tenant_id),
-            tenant_id=rec.tenant_id,
-            # Console owner is the privileged operator for this tenant — the
-            # per-approver binding (WF-A3) is enforced on the bridge path where
-            # the replier is a specific chat participant; here replier=None.
-            replier=None,
-            audit_sink=_awp_node_sink,
+        result = _dag_run.run_resume(
+            reply=body.reply, recorder=recorder, cancel_event=cancel, graph=graph,
         )
     except HTTPException:
         raise
@@ -2135,6 +2263,16 @@ def resume_run(
         # CON-F2: a concurrent resume already claimed this checkpoint.
         raise HTTPException(
             http_status.HTTP_409_CONFLICT, "run is already being resumed",
+        ) from exc
+    except _awp_runner.PauseExpired as exc:
+        recorder.expire_if_due()
+        raise HTTPException(
+            http_status.HTTP_410_GONE, "this run was waiting for a reply until its deadline, which has passed",
+        ) from exc
+    except _awp_runner.WorkflowChanged as exc:
+        raise HTTPException(
+            http_status.HTTP_409_CONFLICT,
+            "the workflow was edited while this run was waiting - start a new run",
         ) from exc
     except KeyError as exc:
         raise HTTPException(
@@ -2978,6 +3116,106 @@ def _enrich_prompt_with_charts(
     )
     return prompt + chart_context
 
+def _run_audit_sink(tenant_id: str, sid_fingerprint: str, wid: str, rid: str) -> Callable[[dict[str, Any]], None]:
+    """CON-F3 (ADR-0171): every DAGRunner event becomes an allowlisted
+    ``console.action_performed`` on the owner's hash chain, with the node id in ``step_id``."""
+    def _sink(event: dict[str, Any]) -> None:
+        node_id = event.get("node_id")
+        ev = event.get("event", "event")
+        try:
+            console_audit.action_performed(
+                tenant_id=tenant_id,
+                sid_fingerprint=sid_fingerprint,
+                action=f"workflow.{ev}",
+                target_kind="workflow_run",
+                target_id=f"{wid}/{rid}",
+                run_id=rid,
+                step_id=str(node_id) if node_id is not None else None,
+            )
+        except Exception:  # never let audit shaping abort a live run
+            pass
+    return _sink
+
+
+def _graph_of_yaml(yaml_text: str) -> list[Any]:
+    if not _YAML_OK or not yaml_text.strip():
+        return []
+    try:
+        parsed = _yaml.safe_load(yaml_text) or {}
+        graph = (parsed.get("orchestration") or {}).get("graph") or []
+    except Exception:  # noqa: BLE001
+        return []
+    return graph if isinstance(graph, list) else []
+
+
+def _graph_of_run(tenant_id: str, wid: str, rid: str) -> list[Any]:
+    """The graph a paused run will continue with: its own snapshot (what the checkpoint
+    points at), falling back to the workflow's current YAML for a run started elsewhere."""
+    try:
+        ckpt = _awp_checkpoint.load(rid, tenant_id=tenant_id) if _AWP_OK else None
+    except Exception:  # noqa: BLE001
+        ckpt = None
+    candidates = []
+    if ckpt and ckpt.get("workflow_path"):
+        candidates.append(Path(str(ckpt["workflow_path"])))
+    candidates.append(_yaml_path(tenant_id, wid))
+    for c in candidates:
+        try:
+            if c.exists():
+                return _graph_of_yaml(c.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    return []
+
+
+def _ensure_run_meta(tenant_id: str, wid: str, rid: str) -> None:
+    """A run resumed here may not have been started here (a bridge chat run paused at an
+    ask_human): give it a run record so its resumed events show up in the run history."""
+    meta_p = _run_meta_path(tenant_id, wid, rid)
+    if meta_p.exists():
+        return
+    _write_atomic(meta_p, {
+        "rid": rid, "wid": wid, "status": "paused", "dry_run": False, "started_at": time.time(),
+        "finished_at": None, "ok": None, "error": None, "external": True,
+    })
+
+
+def _make_run_recorder(
+    tenant_id: str, sid_fingerprint: str, wid: str, rid: str, graph: list[Any],
+) -> "_dag_run.RunRecorder":
+    meta_p = _run_meta_path(tenant_id, wid, rid)
+    return _dag_run.RunRecorder(
+        tenant_id=tenant_id, wid=wid, rid=rid,
+        log_path=_run_log_path(tenant_id, wid, rid),
+        read_meta=lambda: _read_json(meta_p) or {},
+        write_meta=lambda m: _write_atomic(meta_p, m),
+        node_types={str(n.get("id")): str(n.get("type", "agent")) for n in graph if isinstance(n, dict)},
+        audit=_run_audit_sink(tenant_id, sid_fingerprint, wid, rid),
+    )
+
+
+def _dag_snapshot_path(tenant_id: str, wid: str, rid: str) -> Path:
+    return _runs_dir(tenant_id, wid) / f"{rid}.workflow.awp.yaml"
+
+
+async def _stream_dag_run(
+    tenant_id: str, sid_fingerprint: str, wid: str, rid: str, yaml_text: str,
+    inputs: dict[str, Any], graph: list[Any],
+) -> AsyncIterator[str]:
+    """SSE for a run executed by the shared DAGRunner (see ``workflow_dag_run``)."""
+    snapshot = _dag_run.snapshot_workflow(yaml_text, _dag_snapshot_path(tenant_id, wid, rid))
+    recorder = _make_run_recorder(tenant_id, sid_fingerprint, wid, rid, graph)
+    cancel = _dag_run.cancel_event_for(tenant_id, wid, rid)
+    thread = _dag_run.start_thread(
+        lambda: _dag_run.run_first_pass(
+            snapshot_path=snapshot, inputs=inputs, recorder=recorder, cancel_event=cancel, graph=graph,
+        ),
+        f"wf-run-{rid}",
+    )
+    async for chunk in _dag_run.tail_events(recorder, thread=thread):
+        yield chunk
+
+
 async def _stream_run(
     tenant_id: str,
     sid_fingerprint: str,
@@ -3136,31 +3374,16 @@ async def _stream_run(
                 except OSError:
                     pass
 
-        # Fail-closed on node types this console executor does not implement.
-        # The ADR-0188 DAG node types code/merge/route/answer/ask_human have
-        # DIVERGENT semantics from a generic `claude -p` step: `code` MUST run
-        # its deterministic source (never an LLM), and `ask_human`/`answer` MUST
-        # pause for a human. This streaming executor only knows agent/deliver/
-        # approval/delegation_loop/fan_out; without this guard those nodes would
-        # silently fall through to the default LLM spawn — executing a `code`
-        # node's logic via an LLM and, worse, letting an LLM "answer" an
-        # ask_human consent gate (HITL bypass). Until start_run delegates chat/
-        # DAG workflows to DAGRunner (ADR-0188 M7), refuse rather than mis-run.
-        _CONSOLE_UNSUPPORTED_NODE_TYPES = {"code", "merge", "route", "answer", "ask_human"}
-        _unsupported = sorted({
-            str(n.get("type", "agent"))
-            for n in graph if isinstance(n, dict)
-        } & _CONSOLE_UNSUPPORTED_NODE_TYPES)
-        if _unsupported:
-            _msg = (
-                "This workflow uses node type(s) not yet runnable from the console: "
-                + ", ".join(_unsupported)
-                + ". Run it with the `corvin-flow` CLI (full DAG engine with "
-                "human-in-the-loop and sandboxed code nodes)."
-            )
-            yield _emit({"type": "error", "ts": time.time(), "message": _msg})
-            run_meta.update({"status": "failed", "ok": False, "error": _msg, "finished_at": time.time()})
-            _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
+        # ADR-0188 M7 / ADR-2272: the node types this executor does not implement (code,
+        # merge, route, answer, ask_human, approval) are run by the shared DAGRunner - the
+        # same node semantics as `corvin-flow`, the scheduler and the MCP server - never by
+        # a generic `claude -p` step (which would run a `code` node through an LLM and let
+        # a model answer an `ask_human` / `approval` consent gate).
+        if _dag_run.needs_dag_engine(graph):
+            async for _chunk in _stream_dag_run(
+                tenant_id, sid_fingerprint, wid, rid, yaml_text, dict(inputs), graph
+            ):
+                yield _chunk
             return
 
         # Build execution order from depends_on (topological sort)
@@ -3245,73 +3468,6 @@ async def _stream_run(
                     all_ok = False
                     break
                 continue  # skip the LLM path below
-
-            # ── approval node: pause for human (Newman in the Loop) ───
-            if node_type == "approval":
-                message = str(node.get("message", "Please review and approve or reject to continue."))
-                timeout_s = int(node.get("timeout_s", 3600))
-                ap_path = _approval_path(tenant_id, wid, rid)
-                _write_atomic(ap_path, {
-                    "status": "pending",
-                    "node_id": node_id,
-                    "message": message,
-                    "ts": time.time(),
-                })
-                yield _emit({
-                    "type": "node_awaiting_approval",
-                    "node_id": node_id,
-                    "message": message,
-                    "timeout_s": timeout_s,
-                    "ts": time.time(),
-                })
-                deadline = time.time() + timeout_s
-                decision: dict[str, Any] | None = None
-                while time.time() < deadline:
-                    await asyncio.sleep(2.0)
-                    try:
-                        raw_dec = ap_path.read_text(encoding="utf-8")
-                        dec_data = json.loads(raw_dec)
-                        if dec_data.get("status") in ("approved", "rejected"):
-                            decision = dec_data
-                            break
-                    except Exception:
-                        pass
-                elapsed = round(time.time() - t0, 2)
-                if decision and decision.get("status") == "approved":
-                    state[node_id] = {"output": "approved", "comment": decision.get("comment", "")}
-                    yield _emit({
-                        "type": "node_completed",
-                        "node_id": node_id,
-                        "elapsed_s": elapsed,
-                        "tokens": 0,
-                        "output_preview": "Approved ✓",
-                        "output": "approved",
-                        "ts": time.time(),
-                    })
-                elif decision and decision.get("status") == "rejected":
-                    reason = decision.get("comment") or "Rejected by reviewer"
-                    state[node_id] = {"error": f"rejected: {reason}"}
-                    yield _emit({
-                        "type": "node_failed",
-                        "node_id": node_id,
-                        "error": f"Rejected: {reason}",
-                        "elapsed_s": elapsed,
-                        "ts": time.time(),
-                    })
-                    all_ok = False
-                    break
-                else:
-                    state[node_id] = {"error": "approval timeout"}
-                    yield _emit({
-                        "type": "node_failed",
-                        "node_id": node_id,
-                        "error": "Approval timed out — no decision received",
-                        "elapsed_s": elapsed,
-                        "ts": time.time(),
-                    })
-                    all_ok = False
-                    break
-                continue  # skip LLM path
 
             # ── delegation_loop ────────────────────────────────────────
             if node_type == "delegation_loop":
