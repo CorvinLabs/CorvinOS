@@ -86,6 +86,27 @@ async def test_auto_update_runs_on_new_commit_and_only_once_per_commit(repo, tmp
     assert (src / "runs.txt").read_text().count("\n") == 1
 
 
+@pytest.mark.asyncio
+async def test_a_refused_start_is_not_marked_as_attempted(repo, tmp_path):
+    """Fresh-system review 2026-10-21 (F11): the marker was written BEFORE
+    start_update, so a start refused while the install/update lock was held
+    consumed the single attempt and that commit was never retried."""
+    src, _ = repo
+    _push_commit_without_version_bump(src, tmp_path)
+    with patch.object(UpdateManager, "start_update", side_effect=um.UpdateNotAllowedError("busy")):
+        assert await um.auto_update_on_start("_default", enabled=True, delay_s=0) == "busy"
+    state_path = UpdateManager("_default").state_path()
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    assert "last_auto_target" not in state
+    with patch("corvin_console.audit.action_performed"), patch("corvin_console.audit.action_failed"):
+        assert await um.auto_update_on_start("_default", enabled=True, delay_s=0) == "started"
+        mgr = UpdateManager("_default")
+        end = time.time() + 10
+        while mgr.lock.locked() and time.time() < end:
+            await asyncio.sleep(0.05)
+    assert json.loads(state_path.read_text())["last_auto_target"]
+
+
 def test_isolated_wrapper_records_result_even_if_console_is_gone(tmp_path):
     state = tmp_path / "state.json"
     state.write_text(json.dumps({"status": "running", "started_at": 1.0, "version_before": "1.0.0"}))

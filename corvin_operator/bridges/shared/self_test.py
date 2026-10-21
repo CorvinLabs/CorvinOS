@@ -113,10 +113,32 @@ def _ensure_sys_path() -> None:
 
 
 def _corvin_home() -> Path:
+    """The runtime root — the SAME resolution as every other reader/writer
+    (``paths.corvin_home``: ``CORVIN_HOME`` → ``<checkout>/.corvin`` → ``~/.corvin``).
+
+    Until 2026-10-21 this fell straight from the env var to ``~/.corvin``.
+    The adapter unit a fresh ``./install.sh`` writes carries no CORVIN_HOME
+    (only the webui unit did), so inside the adapter every other module
+    resolved ``<checkout>/.corvin`` while this one resolved ``~/.corvin``:
+    the self-test reported ``tenant.home_exists`` missing on a healthy
+    install and ``_audit_path()`` wrote ``boot.self_test_failed``,
+    ``compliance.manifest_check``, ``layer_integrity.manifest_absent`` and
+    ``audit.chain_anchor_absent`` into a THIRD chain under ``~/.corvin``,
+    which the boot tripwire then reported as ``audit_chain_split``
+    (fresh-system review 2026-10-21, F10).
+    """
     env = os.environ.get("CORVIN_HOME")
-    if env:
-        return Path(os.path.expanduser(os.path.expandvars(env)))
-    return Path.home() / ".corvin"
+    if env and env.strip():
+        return Path(os.path.expanduser(os.path.expandvars(env.strip())))
+    try:
+        _ensure_sys_path()
+        from paths import corvin_home as _canonical  # type: ignore  # bridges/shared/paths.py
+        return _canonical()
+    except Exception:  # noqa: BLE001 - mirror paths._repo_root() rather than guess ~/.corvin
+        for parent in [_REPO_ROOT, *_REPO_ROOT.parents]:
+            if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+                return parent / ".corvin"
+        return Path.home() / ".corvin"
 
 
 def _resolved_tenant_id() -> tuple[str, str]:

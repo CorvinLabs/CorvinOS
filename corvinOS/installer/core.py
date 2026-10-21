@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -265,13 +264,21 @@ class CorvinInstaller:
 
     def step_2_create_directories(self) -> None:
         print("\n[Step 2] Creating directories...")
+        # Tenant-native layout ONLY (ADR-0007). Until 2026-10-21 this list
+        # also created a legacy top-level ``sessions/``: the adapter's
+        # tenant migration then fired on the first boot of every fresh
+        # install, wrote its ``tenant.path_migrated`` record into the legacy
+        # ``global/forge/audit.jsonl`` and left a second live chain next to
+        # the tenant chain (boot tripwire: ``audit_chain_split``, F10).
+        # ``bridges/`` is a per-home root by design (ADR-0008), not legacy.
+        tenant = self.corvin_home / "tenants" / "_default"
         dirs = [
             self.corvin_home,
             self.voice_config,
             self.corvin_home / "logs",
-            self.corvin_home / "sessions",
             self.corvin_home / "bridges",
-            self.corvin_home / "tenants" / "_default" / "global",
+            *(tenant / sub for sub in ("global", "sessions", "forge",
+                                       "skill-forge", "voice", "cowork")),
         ]
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
@@ -495,8 +502,15 @@ class CorvinInstaller:
             pass
         return "127.0.0.1"
 
-    def _webui_env_vars(self) -> dict:
-        """Build Environment= vars for the webui systemd unit / launchd plist."""
+    def _service_env_vars(self) -> dict:
+        """Environment= vars for EVERY unit / plist this installer writes.
+
+        ``CORVIN_HOME`` is resolved once, here, in the installer process, and
+        baked into the adapter, every bridge and the webui alike — one root for
+        every writer of the hash chain. Until 2026-10-21 only the webui unit got
+        it; the adapter unit started with no CORVIN_HOME and each of its modules
+        resolved the root on its own (fresh-system review, F10).
+        """
         sep = ";" if sys.platform == "win32" else ":"
         pythonpath_dirs = [
             "core/console", "core/gateway", "core/license", "core/compliance",
@@ -537,6 +551,7 @@ class CorvinInstaller:
                     name="voice-bridge-adapter",
                     command=adapter_cmd,
                     description="CorvinOS central adapter",
+                    env_vars={"CORVIN_HOME": self._service_env_vars()["CORVIN_HOME"]},
                     auto_start=True,
                 )
                 print("  ✓ Adapter service registered")
@@ -549,6 +564,7 @@ class CorvinInstaller:
                     name=f"voice-bridge-{bridge}",
                     command=self._get_bridge_command(bridge),
                     description=f"CorvinOS {bridge} bridge",
+                    env_vars={"CORVIN_HOME": self._service_env_vars()["CORVIN_HOME"]},
                     auto_start=True,
                 )
                 print(f"  ✓ {bridge} bridge service registered")
@@ -581,7 +597,7 @@ class CorvinInstaller:
                 name="webui",
                 command=webui_cmd,
                 description="Corvin WebUI — gateway + console (uvicorn)",
-                env_vars=self._webui_env_vars(),
+                env_vars=self._service_env_vars(),
                 auto_start=True,
                 pre_exec=pre_exec,
             )
@@ -679,6 +695,48 @@ class CorvinInstaller:
 
     # ── Step 17: Start Web Console server ─────────────────────────────────
 
+    # Budget for the console to answer after a (re)start. The first boot of a
+    # fresh install syncs the marketplace from GitHub and installs the default
+    # plugins inside the lifespan; uvicorn binds the port only AFTER that, so
+    # the old 15 s TCP wait (5 s in quick mode, while the message still said
+    # "15 s") reported "did not respond" on every fresh install although the
+    # console was up 0-8 s later (2026-10-21, three of three systems, F3). The
+    # unit's own start timeout is 300 s; this waits for what install.sh's
+    # final proof waits for — the SPA shell answering 200 — and says how long
+    # it waited and what it last saw.
+    CONSOLE_START_BUDGET_S = 120.0
+    CONSOLE_PORT = 8765  # instance-overridable so a test can probe a private port
+
+    def _console_http_status(self, path: str, timeout: float = 3.0) -> "int | None":
+        """HTTP status of ``http://127.0.0.1:<port><path>`` or None (not listening)."""
+        import urllib.error
+        import urllib.request
+        try:
+            with urllib.request.urlopen(  # noqa: S310 - loopback only
+                    f"http://127.0.0.1:{self.CONSOLE_PORT}{path}", timeout=timeout) as r:
+                return int(r.status)
+        except urllib.error.HTTPError as exc:
+            return int(exc.code)
+        except Exception:  # noqa: BLE001 - refused, reset, timeout: not up yet
+            return None
+
+    def _wait_for_console(self, budget_s: float, label: str = "Web Console") -> bool:
+        """Poll until the SPA shell answers 200 (healthz alone stays green
+        while a console that booted without dist/ serves its 503 page)."""
+        started = time.monotonic()
+        last: "int | None" = None
+        while time.monotonic() - started < budget_s:
+            last = self._console_http_status("/console/")
+            if last == 200:
+                print(f"  ✓ {label} running on http://127.0.0.1:{self.CONSOLE_PORT}/console/ "
+                      f"({time.monotonic() - started:.0f} s)")
+                return True
+            time.sleep(1.0)
+        seen = "not listening" if last is None else f"last HTTP status {last}"
+        print(f"  ⚠ {label} did not answer within {budget_s:.0f} s ({seen}) — "
+              f"check: journalctl --user -u corvin-webui -n 100")
+        return False
+
     def step_17_start_console(self, quick_mode: bool = False) -> None:
         print("\n[Step 17] Starting Web Console...")
         # Prefer the systemd service registered in step 14 so the server is
@@ -690,20 +748,7 @@ class CorvinInstaller:
                 # start_service is unsafe here on an upgrade of an existing
                 # install (2026-08-02 finding).
                 self.service_manager.restart_service("webui")
-                # Wait up to 15 s (or 5 s in quick mode) for the port to accept connections.
-                max_waits = 10 if quick_mode else 30
-                for _ in range(max_waits):
-                    time.sleep(0.5)
-                    try:
-                        s = socket.socket()
-                        s.settimeout(0.5)
-                        s.connect(("127.0.0.1", 8765))
-                        s.close()
-                        print("  ✓ Web Console running on http://127.0.0.1:8765/console/")
-                        return
-                    except OSError:
-                        pass
-                print("  ⚠ Web Console did not respond within 15 s — check: journalctl --user -u corvin-webui")
+                self._wait_for_console(self.CONSOLE_START_BUDGET_S)
                 return
             except Exception as e:
                 print(f"  ⚠ systemd start failed ({e}), falling back to foreground start")
@@ -713,20 +758,8 @@ class CorvinInstaller:
         # for 8765 in a crash-loop. Wait for the launchd-managed server instead
         # of spawning our own.
         if sys.platform == "darwin" and getattr(self, "_webui_service_registered", False):
-            max_waits = 10 if quick_mode else 30
-            for _ in range(max_waits):
-                time.sleep(0.5)
-                try:
-                    s = socket.socket()
-                    s.settimeout(0.5)
-                    s.connect(("127.0.0.1", 8765))
-                    s.close()
-                    print("  ✓ Web Console running on http://127.0.0.1:8765/console/ (launchd)")
-                    return
-                except OSError:
-                    pass
-            print("  ⚠ WebUI (launchd) did not respond within 15 s — check "
-                  "~/.corvin/logs/launchd/webui.err")
+            if not self._wait_for_console(self.CONSOLE_START_BUDGET_S, label="WebUI (launchd)"):
+                print("    launchd log: ~/.corvin/logs/launchd/webui.err")
             return
         _console.start_server(self.repo_root)
 

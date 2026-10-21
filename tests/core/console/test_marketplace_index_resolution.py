@@ -44,31 +44,62 @@ def test_env_override_expands_user(monkeypatch):
     assert resolve_index_path() == Path.home() / "some" / "plugins.json"
 
 
+def _relocate_module(monkeypatch, tmp_path: Path) -> Path:
+    """Pretend the routes module lives in a checkout under tmp_path and
+    return that checkout's root (the module anchors on Path(__file__))."""
+    import corvin_console.routes.marketplace as mp
+    fake = tmp_path / "repo" / "core" / "console" / "corvin_console" / "routes" / "marketplace.py"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("")
+    monkeypatch.setattr(mp, "__file__", str(fake))
+    return tmp_path / "repo"
+
+
 def test_legacy_in_repo_index_wins_over_sibling(tmp_path, monkeypatch):
-    legacy = tmp_path / "corvin_operator" / "marketplace" / "index" / "plugins.json"
+    repo = _relocate_module(monkeypatch, tmp_path)
+    legacy = repo / "corvin_operator" / "marketplace" / "index" / "plugins.json"
     _write_index(legacy, "from-legacy")
-    monkeypatch.chdir(tmp_path)
+    _write_index(tmp_path / "Corvin-Marketplace" / "index" / "plugins.json", "from-sibling")
     assert resolve_index_path() == legacy
+
+
+def test_resolution_does_not_depend_on_the_cwd(tmp_path, monkeypatch):
+    """Fresh-system review 2026-10-21 (F7): the legacy candidate was built from
+    Path.cwd(); a systemd unit's cwd is $HOME, so every boot logged "Index not
+    found at /home/<user>/corvin_operator/..." — a path that never existed.
+    An index in the cwd must be ignored, one in the checkout must be found."""
+    repo = _relocate_module(monkeypatch, tmp_path)
+    cwd = tmp_path / "somewhere-else"
+    _write_index(cwd / "corvin_operator" / "marketplace" / "index" / "plugins.json", "from-cwd")
+    monkeypatch.chdir(cwd)
+    resolved = resolve_index_path()
+    assert "somewhere-else" not in str(resolved)
+    assert resolved == repo / "corvin_operator" / "marketplace" / "index" / "plugins.json"
 
 
 def test_falls_back_to_sibling_checkout(tmp_path, monkeypatch):
     """The normal developer layout after ADR-0512: no in-repo index at all."""
-    monkeypatch.chdir(tmp_path)  # no corvin_operator/marketplace here
-    resolved = resolve_index_path()
-    sibling = Path(
-        __import__("corvin_console.routes.marketplace", fromlist=["x"]).__file__
-    ).resolve().parents[4].parent / "Corvin-Marketplace" / "index" / "plugins.json"
-    if sibling.is_file():
-        assert resolved == sibling
-    else:
-        # No sibling checkout on this machine — resolution must still return the
-        # legacy path so the caller's FileNotFoundError branch reaches GitHub.
-        assert resolved == tmp_path / "corvin_operator" / "marketplace" / "index" / "plugins.json"
+    repo = _relocate_module(monkeypatch, tmp_path)
+    sibling = tmp_path / "Corvin-Marketplace" / "index" / "plugins.json"
+    _write_index(sibling, "from-sibling")
+    assert resolve_index_path() == sibling
+    sibling.unlink()
+    # No sibling checkout either — resolution must still return the (absent)
+    # legacy path so the caller's FileNotFoundError branch reaches GitHub.
+    assert resolve_index_path() == repo / "corvin_operator" / "marketplace" / "index" / "plugins.json"
 
 
 def test_missing_everything_degrades_to_empty_index(tmp_path, monkeypatch):
-    """A resolvable-but-absent index must not raise; the API returns count 0."""
-    monkeypatch.chdir(tmp_path)
+    """A resolvable-but-absent index must not raise; the API returns count 0.
+
+    Offline by construction: with network the manager's GitHub fallback
+    serves the real index (37 plugins on 2026-10-21) and this test asserted
+    an empty list against it."""
+    import urllib.request
+
+    def _offline(*a, **k):
+        raise OSError("offline")
+    monkeypatch.setattr(urllib.request, "urlopen", _offline)
     manager = _IndexManager()
     manager.set_index_path(tmp_path / "nope" / "plugins.json")
     index = manager.get_index()

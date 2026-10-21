@@ -32,7 +32,9 @@ done
 # Resolve script directory and CORVIN_HOME
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CORVIN_HOME="${CORVIN_HOME:-$HOME/.corvin}"
+# The runtime root of THIS checkout, as corvinOS/shared/paths.py resolves it
+# (CORVIN_HOME → <checkout>/.corvin). ~/.corvin here created a second root.
+CORVIN_HOME="${CORVIN_HOME:-$REPO_DIR/.corvin}"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 
 echo ""

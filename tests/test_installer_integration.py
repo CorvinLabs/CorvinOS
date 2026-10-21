@@ -69,9 +69,14 @@ class TestCorvinInstallerIntegration:
                     installer.step_2_create_directories()
 
                     assert (tmpdir_path / "logs").exists()
-                    assert (tmpdir_path / "sessions").exists()
                     assert (tmpdir_path / "bridges").exists()
-                    assert (tmpdir_path / "tenants" / "_default" / "global").exists()
+                    for sub in ("global", "sessions", "forge", "skill-forge", "voice", "cowork"):
+                        assert (tmpdir_path / "tenants" / "_default" / sub).exists()
+                    # Tenant-native ONLY: a legacy top-level sessions/ made the
+                    # adapter's tenant migration fire on the first boot of every
+                    # fresh install and write a second live audit chain (F10).
+                    assert not (tmpdir_path / "sessions").exists()
+                    assert not (tmpdir_path / "global").exists()
 
     def test_installer_bridge_selection(self):
         """A non-interactive install selects NO bridges by default.

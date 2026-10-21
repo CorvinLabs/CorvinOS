@@ -74,6 +74,12 @@ def count_existing_tenants(corvin_home_path: Path) -> int:
     )
 
 
+def _canonical_chain(home: Path) -> Path:
+    """The tenant chain every writer resolves (``tenant_audit_chain``), bound
+    to the ``home`` this helper operates on rather than to the process env."""
+    return home / "tenants" / DEFAULT_TENANT_ID / "global" / "forge" / "audit.jsonl"
+
+
 def _emit_pre_migration_audit(
     audit_path: Path,
     to_migrate: list[tuple[str, Path, Path]],
@@ -117,9 +123,11 @@ def migrate_to_default_tenant_if_needed(
         The directory currently used as ``<corvin_home>``. The helper
         operates exclusively under this root; nothing outside is touched.
     audit_path
-        Where to write the pre-migration audit event. Default:
-        ``<corvin_home>/global/forge/audit.jsonl`` (the chain that's
-        about to move). Tests pass an explicit sandbox path.
+        Where to write the pre-migration audit event. Default: the chain
+        that is canonical after the move — ``<corvin_home>/global/forge/
+        audit.jsonl`` when ``global/`` itself moves, else the tenant chain
+        ``<corvin_home>/tenants/_default/global/forge/audit.jsonl``. Tests
+        pass an explicit sandbox path.
     dry_run
         When True, no filesystem changes happen; the returned dict
         describes what *would* be migrated.
@@ -196,8 +204,22 @@ def migrate_to_default_tenant_if_needed(
             "subdirs": [s[0] for s in to_migrate],
         }
 
-    # Audit BEFORE the move (chain still at legacy path).
-    chain_path = audit_path if audit_path is not None else home / "global" / "forge" / "audit.jsonl"
+    # Audit BEFORE the move, into the chain that is CANONICAL AFTER it. When
+    # ``global/`` itself is being moved, that is the legacy
+    # ``<home>/global/forge/audit.jsonl`` (the rename carries the record to
+    # ``tenants/_default/global/forge/``). When only other subdirs move (a
+    # fresh install whose installer had created a legacy ``sessions/``), the
+    # legacy path is NOT about to move: writing there created a second,
+    # permanently live sibling chain next to the tenant chain, which the
+    # ADR-0232 boot tripwire reported as ``audit_chain_split`` on every fresh
+    # install (2026-10-21, F10). Writers never disagree on the chain location.
+    moving = {s[0] for s in to_migrate}
+    if audit_path is not None:
+        chain_path = audit_path
+    elif "global" in moving:
+        chain_path = home / "global" / "forge" / "audit.jsonl"
+    else:
+        chain_path = _canonical_chain(home)
     _emit_pre_migration_audit(chain_path, to_migrate)
 
     # Ensure target parent exists.

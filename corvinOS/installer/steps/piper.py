@@ -185,8 +185,15 @@ def _install_piper(interactive: bool) -> None:
 
     if shutil.which("piper"):
         print("  ✓ Piper TTS installed")
+    elif installed and _piper_binary():
+        # pip put it next to the interpreter (the uv tool venv's bin/), which
+        # is where the voice runtime looks (say.py: PIPER_BIN → PATH → next to
+        # the interpreter). Not on the ambient PATH, by design — re-opening the
+        # shell would not change that, so do not say it (F8).
+        print(f"  ✓ Piper TTS installed ({_piper_binary()})")
     elif installed:
-        print("  ⚠ piper-tts installed but 'piper' not on PATH — re-open your shell if needed")
+        print("  ⚠ piper-tts installed but no 'piper' binary was found next to the "
+              "interpreter or on PATH — voice falls back to edge-tts")
     else:
         print("  ⚠ Could not install piper-tts — install manually: pip install piper-tts")
 
@@ -394,6 +401,13 @@ def _download_model(lang: str, rel_path: str, model_dir: Path, config_file: Path
     _save_model_config(config_file, lang, str(onnx_path))
 
 
+def _stdout_is_tty() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
     """Download url → dest. True only for a COMPLETE file.
 
@@ -404,18 +418,26 @@ def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
     urllib branch even accepted any non-empty file as success.
     """
     state = {"last": -1}
+    # A carriage-return bar is for a terminal; into a log it is ONE line of
+    # every percent step (30 kB per model, F9). Without a TTY print a line
+    # every 25 %.
+    tty = _stdout_is_tty()
+    step = 1 if tty else 25
 
     def _progress(done: int, total: int) -> None:
         if silent or total <= 0:
             return
         pct = done * 100 // total
-        if pct != state["last"]:
+        if pct != state["last"] and pct % step == 0:
             state["last"] = pct
-            print(f"\r  {pct:3d}%  {done // 1024 // 1024} MB / {total // 1024 // 1024} MB",
-                  end="", flush=True)
+            line = f"  {pct:3d}%  {done // 1024 // 1024} MB / {total // 1024 // 1024} MB"
+            if tty:
+                print("\r" + line, end="", flush=True)
+            else:
+                print(line, flush=True)
 
     ok = _vm.fetch(url, dest, attempts=1, progress=_progress)
-    if not silent and state["last"] >= 0:
+    if not silent and state["last"] >= 0 and tty:
         print()
     if not ok and not silent and sys.platform == "win32":
         print("  (urllib error: download interrupted — common on Windows, retrying next fetch)")
@@ -475,12 +497,14 @@ def _seed_profile_display_language(lang: str) -> None:
             lang = _i18n.normalise(lang) or lang
         except Exception:  # noqa: BLE001
             pass
-        try:
-            from corvin_console.profile import set_value as _set_value  # noqa: PLC0415
-        except ImportError:
-            import profile as _profile_mod  # type: ignore  # noqa: PLC0415
-            _set_value = _profile_mod.set_value
-        _set_value("display_language", lang)
+        import profile as _profile_mod  # type: ignore  # noqa: PLC0415
+        # A SEED, not a pin: `set_value` is the operator's write path and marks
+        # the language authoritative ("reply in it even when the user writes
+        # another language"). The installer only guesses from the locale, so it
+        # records the provenance — the reply language stays the user's own
+        # until the operator pins one (measured 2026-10-21: a fresh en_US
+        # install refused to answer German in German).
+        _profile_mod.seed_display_language(lang)
     except Exception:
         pass
 

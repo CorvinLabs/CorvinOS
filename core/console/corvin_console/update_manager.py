@@ -567,14 +567,21 @@ async def auto_update_on_start(tenant_id: str, *, enabled: bool, delay_s: float 
         logger.warning("auto-update: origin/main %s was already attempted - not retrying", res.remote_sha)
         return "already-tried"
     try:
-        st = mgr._read_state() or {}
-        st["last_auto_target"] = res.remote_sha
-        mgr._write_state(st)
         logger.info("auto-update: %d commit(s) behind origin/main (%s -> %s) - updating",
                     res.behind, res.local_sha, res.remote_sha)
         mgr.start_update("auto-update", trigger="auto")
     except UpdateNotAllowedError:
+        # NOT marked as attempted: nothing ran. Until 2026-10-21 the marker was
+        # written before start_update, so a start refused because an install
+        # or a manual update still held the lock consumed the one attempt and
+        # that commit was never retried on any later restart.
         return "busy"
+    # Marked right after the updater really started (start_update keeps an
+    # existing marker, it never writes one): a failed, rolled-back run leaves
+    # HEAD behind, and without the marker every restart would re-run it.
+    st = mgr._read_state() or {}
+    st["last_auto_target"] = res.remote_sha
+    mgr._write_state(st)
     return "started"
 
 

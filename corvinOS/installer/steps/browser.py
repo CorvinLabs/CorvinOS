@@ -74,6 +74,36 @@ def _chromium_present() -> bool:
         return False
 
 
+# Playwright's own mirror list, in its order. The first two entries redirect
+# to / are ``playwright.download.prss.microsoft.com``, a hostname that does
+# not resolve any more (measured 2026-10-21 from two networks): every install
+# printed two ``getaddrinfo ENOTFOUND`` stack traces per download before the
+# third mirror served the file (F9). When that host does not resolve, pin the
+# one that does; when it does, leave Playwright's fallback chain alone.
+_PLAYWRIGHT_DEAD_MIRROR_HOST = "playwright.download.prss.microsoft.com"
+_PLAYWRIGHT_LIVE_MIRROR = "https://cdn.playwright.dev"
+
+
+def _playwright_env() -> dict:
+    import os
+    import socket
+    env = dict(os.environ)
+    if "PLAYWRIGHT_DOWNLOAD_HOST" in env:
+        return env
+    try:
+        socket.getaddrinfo(_PLAYWRIGHT_DEAD_MIRROR_HOST, 443)
+    except OSError:
+        env["PLAYWRIGHT_DOWNLOAD_HOST"] = _PLAYWRIGHT_LIVE_MIRROR
+    return env
+
+
+def _stdout_is_tty() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def ensure_browser(interactive: bool = True) -> None:
     """Install Playwright and download its Chromium binary so agent-driven
     browsing (ADR-0182) works out of the box. Fail-soft — never aborts install."""
@@ -101,19 +131,25 @@ def ensure_browser(interactive: bool = True) -> None:
         return
 
     print("  Downloading Chromium (~150 MB, one-time)...")
+    tty = _stdout_is_tty()
     try:
         # Use the SAME interpreter the console runs on (sys.executable) so the
         # binary lands in the browsers path that interpreter's Playwright reads.
-        # No capture: Playwright prints its own download progress, matching the
-        # other steps' visible-progress convention.
+        # On a terminal, no capture: Playwright prints its own download
+        # progress (visible-progress convention). Without one the progress is
+        # noise in a log; keep the output and print it only on failure.
         proc = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
-            timeout=600,
+            timeout=600, env=_playwright_env(),
+            **({} if tty else {"capture_output": True, "text": True}),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         print(f"  ⚠ Chromium download did not finish ({type(exc).__name__}). "
               f"Finish later with:  {_REMEDY_PROVISION}")
         return
+    if not tty and proc.returncode != 0:
+        tail = "\n".join(((proc.stdout or "") + (proc.stderr or "")).splitlines()[-20:])
+        print(tail)
     if proc.returncode == 0 and _chromium_present():
         print("  ✓ Chromium installed — agent browsing is ready")
         # The download alone is not sufficient on minimal Linux images: Chromium

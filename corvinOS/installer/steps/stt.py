@@ -211,9 +211,16 @@ def _download_whisper_model(voice_config_dir: Path, model_name: str) -> bool:
     # the progress bar appears — which reads as a hang to a non-technical user.
     # Set expectations up front (ADR-0185 Decision 3: visible progress).
     print("    (this can take a minute on a slow connection — it only happens once)")
+    import os as _os
     import sys as _sys
     _sys.stdout.flush()
     try:
+        # pywhispercpp's downloader draws a tqdm bar: fine on a terminal, but
+        # into a log it is one 128 kB line of carriage returns (F9). tqdm
+        # honours TQDM_DISABLE; the "one-time download" line above stands.
+        if not (_sys.stderr.isatty() or _sys.stdout.isatty()):
+            _os.environ.setdefault("TQDM_DISABLE", "1")
+            print("    (no terminal — progress bar hidden)")
         from pywhispercpp.utils import download_model
         download_model(model_name, download_dir=str(model_dir))
     except Exception as exc:  # noqa: BLE001

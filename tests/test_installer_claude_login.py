@@ -81,6 +81,7 @@ def test_interactive_confirms_login_after_user_presses_enter(monkeypatch):
 # ── Non-interactive path: drives login automatically instead of skipping ───
 
 def test_noninteractive_launches_auth_login_not_stale_login_subcommand(monkeypatch):
+    monkeypatch.setattr(deps_mod, "_terminal_present", lambda: True)
     monkeypatch.setattr(deps_mod, "find_claude_creds", lambda: None)
     monkeypatch.setattr(deps_mod.shutil, "which", lambda name: "/usr/bin/claude")
     monkeypatch.setattr(deps_mod.time, "sleep", lambda s: None)
@@ -115,6 +116,7 @@ def test_noninteractive_popen_passes_no_console_window_flags(monkeypatch):
     Currently unreachable in practice (install.ps1 always has an attached
     console today), but the fix closes it defensively rather than leaving
     an inconsistent call site for the next unattended installer path."""
+    monkeypatch.setattr(deps_mod, "_terminal_present", lambda: True)
     monkeypatch.setattr(deps_mod, "find_claude_creds", lambda: None)
     monkeypatch.setattr(deps_mod.shutil, "which", lambda name: "/usr/bin/claude")
     monkeypatch.setattr(deps_mod.time, "sleep", lambda s: None)
@@ -139,6 +141,7 @@ def test_noninteractive_popen_passes_no_console_window_flags(monkeypatch):
 
 
 def test_noninteractive_polls_until_credentials_appear(monkeypatch):
+    monkeypatch.setattr(deps_mod, "_terminal_present", lambda: True)
     monkeypatch.setattr(deps_mod.shutil, "which", lambda name: "/usr/bin/claude")
     monkeypatch.setattr(deps_mod.time, "sleep", lambda s: None)
 
@@ -215,3 +218,32 @@ def test_noninteractive_streams_popen_output_without_reading_stdin(monkeypatch):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_noninteractive_without_a_terminal_does_not_wait(monkeypatch, capsys):
+    """Fresh-system review 2026-10-21 (F8): a logged/piped install printed the
+    OAuth URL and then waited the whole window for a login nobody could
+    complete. With no terminal attached the step must not launch the flow
+    at all, must not sleep, and must name the command for later."""
+    monkeypatch.setattr(deps_mod, "_terminal_present", lambda: False)
+    monkeypatch.setattr(deps_mod, "find_claude_creds", lambda: None)
+    monkeypatch.setattr(deps_mod.shutil, "which", lambda name: "/usr/bin/claude")
+    popen_spy = mock.Mock()
+    monkeypatch.setattr(deps_mod.subprocess, "Popen", popen_spy)
+    slept = []
+    monkeypatch.setattr(deps_mod.time, "sleep", lambda s: slept.append(s))
+
+    assert deps_mod.ensure_claude_login(interactive=False) is False
+    popen_spy.assert_not_called()
+    assert slept == []
+    out = capsys.readouterr().out
+    assert "claude auth login" in out
+    assert "no terminal" in out
+
+
+def test_terminal_present_reads_the_real_streams(monkeypatch):
+    monkeypatch.setattr(deps_mod.sys, "stdin", mock.Mock(isatty=lambda: False))
+    monkeypatch.setattr(deps_mod.sys, "stdout", mock.Mock(isatty=lambda: True))
+    assert deps_mod._terminal_present() is True
+    monkeypatch.setattr(deps_mod.sys, "stdout", mock.Mock(isatty=lambda: False))
+    assert deps_mod._terminal_present() is False

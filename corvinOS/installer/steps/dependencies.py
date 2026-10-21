@@ -128,6 +128,16 @@ _LOGIN_POLL_TIMEOUT_S = 90.0
 _LOGIN_POLL_INTERVAL_S = 2.0
 
 
+def _terminal_present() -> bool:
+    """A human can complete a browser login only when the installer is
+    attached to a terminal (``./install.sh`` at a prompt, ``curl | sh`` in a
+    terminal). A piped/logged run, CI or a container has none."""
+    try:
+        return sys.stdin.isatty() or sys.stdout.isatty()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def ensure_claude_login(interactive: bool = True) -> bool:
     """Verify Claude Code is logged in; attempt to complete login if not.
 
@@ -190,8 +200,19 @@ def ensure_claude_login(interactive: bool = True) -> bool:
         return False
 
     # Non-interactive: drive the login ourselves instead of skipping it —
-    # see the docstring above for why this is safe (no stdin required).
+    # see the docstring above for why this is safe (no stdin required) — but
+    # only where a human can complete it. A run with no terminal at all (a
+    # logged/piped install, CI, a container) has nobody to open the OAuth URL:
+    # it used to print the URL and then wait the full window for a login that
+    # could not happen (2026-10-21, F8). Say so and name the command instead.
+    if not _terminal_present():
+        print("ℹ Claude Code is not logged in and no terminal is attached — "
+              "skipping the login (nobody could open the browser).")
+        print("  Log in any time with:  claude auth login   (the chat needs it)")
+        return False
     print("⚠ Claude Code credentials not found — attempting automatic login...")
+    print(f"  (waits up to {int(_LOGIN_POLL_TIMEOUT_S)} s for the browser login; "
+          "later: claude auth login)")
     try:
         proc = subprocess.Popen(
             [claude_bin, "auth", "login"],
@@ -298,45 +319,45 @@ def ensure_node(info: PlatformInfo, interactive: bool = True) -> bool:
         subprocess.run(["brew", "link", "--overwrite", "node@20"], check=False)
         return result.returncode == 0
 
-    # Linux / WSL: use nvm
-    print("  Installing nvm (Node Version Manager)...")
-    result = subprocess.run(
-        "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash",
-        shell=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        print("✗ nvm install failed.")
-        return False
+    # Linux / WSL: the repository's own self-contained bootstrap
+    # (scripts/ensure-node.sh → <CORVIN_HOME>/node). install.sh runs it first;
+    # this is the retry when that failed (network) or when corvin-install is
+    # run on its own. Until 2026-10-21 this branch installed nvm with
+    # ``curl | bash``, which appends to ~/.bashrc / ~/.zshrc and installs a
+    # DIFFERENT Node than the pinned one — side effects an installer that
+    # advertises "self-contained, no shell changes" must not have (F8).
+    return _ensure_node_via_bootstrap()
 
-    nvm_sh = Path.home() / ".nvm" / "nvm.sh"
-    if not nvm_sh.exists():
-        print("✗ nvm.sh not found after install.")
-        return False
 
-    result = subprocess.run(
-        f"source {nvm_sh} && nvm install --lts && nvm alias default lts/*",
-        shell=True,
-        executable="/bin/bash",
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-
-    # Bring the newly installed node into the current process's PATH
+def _ensure_node_via_bootstrap() -> bool:
+    """Run scripts/ensure-node.sh and put its Node on this process's PATH."""
     import os
-    result_path = subprocess.run(
-        f"source {nvm_sh} && which node",
-        shell=True, executable="/bin/bash",
-        capture_output=True, text=True, check=False,
+    script = Path(__file__).resolve().parents[3] / "scripts" / "ensure-node.sh"
+    if not script.is_file():
+        print(f"✗ Node.js bootstrap script not found: {script}")
+        print("  Install Node.js 20+ yourself (https://nodejs.org) and re-run the installer.")
+        return False
+    try:
+        from corvinOS.shared.paths import corvin_home as _home
+        home = str(_home())
+    except Exception:  # noqa: BLE001
+        home = os.environ.get("CORVIN_HOME") or str(Path.home() / ".corvin")
+    print(f"  Installing the local Node.js runtime ({script.name} → {home}/node)...")
+    result = subprocess.run(
+        ["bash", str(script)], check=False,
+        env={**os.environ, "CORVIN_HOME": home},
     )
-    node_bin = result_path.stdout.strip()
-    if node_bin:
-        node_dir = str(Path(node_bin).parent)
-        if node_dir not in os.environ.get("PATH", ""):
-            os.environ["PATH"] = node_dir + ":" + os.environ.get("PATH", "")
-
-    return bool(shutil.which("node"))
+    node_bin = Path(home) / "node" / "bin"
+    if result.returncode != 0 or not (node_bin / "node").exists():
+        print("✗ Node.js bootstrap failed.")
+        print(f"  Retry with:  bash {script}   or install Node.js 20+ from https://nodejs.org")
+        return False
+    if str(node_bin) not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = str(node_bin) + os.pathsep + os.environ.get("PATH", "")
+    ok = bool(shutil.which("node")) and bool(shutil.which("npm"))
+    if ok:
+        print(f"✓ node {subprocess.run(['node', '--version'], capture_output=True, text=True, check=False).stdout.strip()} + npm ({node_bin})")
+    return ok
 
 
 # ── System tools ───────────────────────────────────────────────────────────
@@ -471,6 +492,9 @@ def pip_install(*packages: str, venv_python: Path | None = None) -> bool:
     import os
     python = str(venv_python) if venv_python else sys.executable
     pkg_list = list(packages)
+    # The uv tool venv's pip is whatever ensurepip shipped; its "[notice] A new
+    # release of pip is available" is noise nobody can act on there (F9).
+    os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 
     # Ensure pip is available (critical on uv-installed Python)
     _ensure_pip_available(python)

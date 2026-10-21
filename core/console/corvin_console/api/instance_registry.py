@@ -17,6 +17,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, asdict
+import os
 from pathlib import Path
 from threading import Lock
 from typing import Optional, List
@@ -72,10 +73,16 @@ class InstanceRegistry:
 
     @staticmethod
     def _default_registry_path() -> Path:
-        """Get default registry path: ~/.corvin/instances.json."""
-        corvin_home = Path.home() / ".corvin"
-        corvin_home.mkdir(parents=True, exist_ok=True)
-        return corvin_home / "instances.json"
+        """<corvin_home>/instances.json via the canonical resolver (CORVIN_HOME →
+        <checkout>/.corvin → ~/.corvin). The old literal ~/.corvin ignored
+        CORVIN_HOME and mkdir'd a second root on first use (2026-10-21, F17);
+        the directory is created on the first write instead."""
+        try:
+            from core.paths.tenant import corvin_home
+            return corvin_home() / "instances.json"
+        except Exception:  # noqa: BLE001
+            root = os.environ.get("CORVIN_HOME", "").strip()
+            return (Path(root).expanduser() if root else Path.home() / ".corvin") / "instances.json"
 
     def register(self, instance_id: str, endpoint_id: str, **metadata) -> InstanceRecord:
         """Register or update an instance in the registry.

@@ -31,7 +31,11 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-PY = str(REPO / ".venv" / "bin" / "python")
+# The interpreter running this suite — NOT a hardcoded <repo>/.venv/bin/python,
+# which does not exist on an installed system (uv tool venv; measured on a
+# fresh Ubuntu 24.04 install 2026-10-21: five of these tests failed on it with
+# FileNotFoundError before they could check anything).
+PY = sys.executable
 
 
 def _run(code: str, home: Path, *, extra_env: dict[str, str] | None = None) -> dict:

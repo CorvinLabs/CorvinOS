@@ -201,6 +201,47 @@ else
     test_fail "install.ps1 not found"
 fi
 
+# ─ Test 16a: ONE runtime root — the shell side resolves CORVIN_HOME like the
+#   Python side (<checkout>/.corvin). Fresh-system review 2026-10-21, F10: a
+#   fresh install had ~/.corvin (node, setup.sh dirs, a third audit chain) AND
+#   <checkout>/.corvin (the services), and the boot tripwire reported
+#   audit_chain_split on every system.
+test_case "install.sh resolves ONE runtime root (CORVIN_HOME=<checkout>/.corvin)"
+if grep -q 'export CORVIN_HOME="${CORVIN_HOME:-$REPO_DIR/.corvin}"' "$INSTALL_SCRIPT" \
+   && grep -q 'CORVIN_HOME="${CORVIN_HOME:-$REPO_DIR/.corvin}"' "$REPO_ROOT/scripts/setup.sh" \
+   && grep -q 'export CORVIN_HOME="${CORVIN_HOME:-$SRC/.corvin}"' "$REPO_ROOT/update.sh"; then
+    test_pass
+else
+    test_fail "install.sh / scripts/setup.sh / update.sh must default CORVIN_HOME to the checkout's .corvin"
+fi
+
+test_case "ensure-node.sh puts Node under the checkout's .corvin, not ~/.corvin"
+_en_tmp="$(mktemp -d)"
+mkdir -p "$_en_tmp/scripts" "$_en_tmp/.corvin/node/bin"
+cp "$REPO_ROOT/scripts/ensure-node.sh" "$_en_tmp/scripts/"
+: > "$_en_tmp/.corvin_repo"
+_en_ver="$(tr -d ' \n' < "$REPO_ROOT/.nvmrc" 2>/dev/null || echo v24.18.0)"
+printf '#!/bin/sh\necho %s\n' "$_en_ver" > "$_en_tmp/.corvin/node/bin/node"
+chmod +x "$_en_tmp/.corvin/node/bin/node"
+# No CORVIN_HOME in the env: the script must find the fake runtime under the
+# checkout (and exit before any download); ~/.corvin must play no part.
+_en_out="$(env -u CORVIN_HOME bash "$_en_tmp/scripts/ensure-node.sh" 2>&1)"; _en_rc=$?
+rm -rf "$_en_tmp"
+if [ "$_en_rc" -eq 0 ] && printf '%s' "$_en_out" | grep -q "already available at $_en_tmp/.corvin/node"; then
+    test_pass
+else
+    test_fail "ensure-node.sh did not resolve <checkout>/.corvin (rc=$_en_rc): $_en_out"
+fi
+
+# ─ Test 16b: the README promise — app shell AND a working local login,
+#   proven over the wire (scripts/verify_install.py), not just /console/ 200.
+test_case "install.sh runs the install proof (scripts/verify_install.py)"
+if grep -q 'scripts/verify_install.py" --url' "$INSTALL_SCRIPT"; then
+    test_pass
+else
+    test_fail "install.sh must end with scripts/verify_install.py (the README promises a working local login)"
+fi
+
 # ─ Test 17: Docker E2E availability
 test_case "Docker E2E test framework"
 DOCKER_E2E="$TEST_DIR/test-install-docker.sh"

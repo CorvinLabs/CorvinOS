@@ -36,12 +36,16 @@ _HEALTH_PREFIX = "/v1/console"
 _HEALTH_ROUTE = "/healthz"
 _HEALTH_PATH = _HEALTH_PREFIX + _HEALTH_ROUTE
 
-_URL_RE = re.compile(r"http://localhost:8765(/[^\"\s]*)")
+# Both spellings the installers use: install.sh's literal localhost/127.0.0.1
+# and install.ps1's "http://127.0.0.1:$Port/..." / "$TargetPort" (since
+# e3092bedc the URL there is always 127.0.0.1 with a configurable port).
+_URL_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(?:8765|\$\{?[A-Za-z]*Port\}?)(/[^\"'\s]*)")
+_SHELL_PATH = "/console/"
 
 
 def _probe_paths(text: str) -> list[str]:
-    """Every localhost:8765 path referenced in an installer file."""
-    return _URL_RE.findall(text)
+    """Every console-URL path referenced in an installer file."""
+    return [p.rstrip("')") for p in _URL_RE.findall(text)]
 
 
 def test_posix_installer_polls_the_real_health_route() -> None:
@@ -57,20 +61,26 @@ def test_posix_installer_polls_the_real_health_route() -> None:
 
 
 def test_windows_installer_polls_the_real_health_route() -> None:
+    """install.ps1 waits for the SPA shell (/console/ → 200), which is the
+    stronger readiness proof: healthz stays green while a console that booted
+    without dist/ serves its 503 page. No /api-style probe may exist."""
     paths = _probe_paths(_INSTALL_PS1.read_text(encoding="utf-8"))
     assert paths, "install.ps1 no longer references the console server URL"
     for p in paths:
         assert not p.startswith("/api/"), f"install.ps1 polls a non-existent endpoint: {p}"
-    assert _HEALTH_PATH in paths, (
-        f"install.ps1 must poll {_HEALTH_PATH!r} for readiness; found {paths!r}"
+    assert _SHELL_PATH in paths, (
+        f"install.ps1 must wait for the app shell {_SHELL_PATH!r}; found {paths!r}"
     )
 
 
 def test_both_installers_agree_on_the_probe() -> None:
+    """Both wait for the SAME thing — the app shell answering 200 (install.sh
+    additionally confirms /v1/console/healthz and then runs
+    scripts/verify_install.py, which covers local login as well)."""
     sh = set(_probe_paths(_INSTALL_SH.read_text(encoding="utf-8")))
     ps1 = set(_probe_paths(_INSTALL_PS1.read_text(encoding="utf-8")))
-    assert _HEALTH_PATH in (sh & ps1), (
-        "install.sh and install.ps1 must poll the SAME readiness endpoint; "
+    assert _SHELL_PATH in (sh & ps1), (
+        "install.sh and install.ps1 must wait for the SAME readiness signal; "
         f"sh={sorted(sh)!r} ps1={sorted(ps1)!r}"
     )
 

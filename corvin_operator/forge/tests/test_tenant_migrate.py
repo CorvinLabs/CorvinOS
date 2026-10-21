@@ -280,6 +280,38 @@ class AuditEventEmittedTests(_SandboxBase):
         self.assertEqual(event["details"]["method"], "rename+symlink")
         self.assertIn("global", event["details"]["subdirs"])
 
+    def test_default_chain_when_global_does_not_move_is_the_tenant_chain(self):
+        """Fresh-system review 2026-10-21 (F10): the installer had created a
+        legacy ``sessions/`` only. The event then went to the legacy
+        ``global/forge/audit.jsonl`` — a file nothing was about to move —
+        and that second chain stayed live next to the tenant chain
+        (boot tripwire: ``audit_chain_split``)."""
+        (self.home / "sessions").mkdir()
+        (self.home / "sessions" / "s.json").write_text("{}", encoding="utf-8")
+        (self.home / "tenants" / DEFAULT_TENANT_ID / "global").mkdir(parents=True)
+
+        result = migrate_to_default_tenant_if_needed(corvin_home_path=self.home)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["moved"], ["sessions"])
+        self.assertFalse((self.home / "global").exists(),
+                         "no legacy global/ (and no second chain) may be created")
+        canonical = self.home / "tenants" / DEFAULT_TENANT_ID / "global" / "forge" / "audit.jsonl"
+        self.assertTrue(canonical.exists())
+        event = json.loads(canonical.read_text().strip().splitlines()[-1])
+        self.assertEqual(event["event_type"], "tenant.path_migrated")
+        self.assertEqual(event["details"]["subdirs"], ["sessions"])
+
+    def test_default_chain_when_global_moves_is_the_legacy_one(self):
+        """When global/ itself moves, the pre-move record belongs in the
+        file that the rename carries to the canonical location."""
+        self._seed_legacy_layout()
+        migrate_to_default_tenant_if_needed(corvin_home_path=self.home)
+        moved = self.home / "tenants" / DEFAULT_TENANT_ID / "global" / "forge" / "audit.jsonl"
+        lines = moved.read_text().strip().splitlines()
+        self.assertEqual(json.loads(lines[-1])["event_type"], "tenant.path_migrated")
+        self.assertTrue((self.home / "global").is_symlink())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

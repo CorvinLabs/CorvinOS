@@ -84,10 +84,15 @@ git-ignored — and `~/.config/corvin-voice`) are never touched by an update.
 
 1. Refuses to run outside a CorvinOS clone (no `.corvin_repo` / `pyproject.toml`) — before anything is downloaded.
 2. Bootstraps `uv` (pinned, checksum-verified) and a local Node.js; installs your clone with `uv tool install --editable`, plus the offline voice models.
-3. Installs Claude Code if it is missing.
-4. Builds and starts the console, waits for an HTTP 200 with the app shell **and** a working local login, then opens the browser. If that proof does not come it says why instead of reporting success ([Windows errors](docs/windows-installation-errors.md)).
+3. Installs Claude Code if it is missing. If you are at a terminal it also starts the browser login and waits up to 90 s; a run with no terminal (a log, CI) skips that and tells you to run `claude auth login` later — the chat needs it.
+4. Builds and starts the console, waits for an HTTP 200 with the app shell **and** a working local login (`scripts/verify_install.py`, the same proof `update.sh` runs), then opens the browser. If that proof does not come it says why instead of reporting success ([Windows errors](docs/windows-installation-errors.md)).
 
-Because the install is editable, the code that runs **is** your clone.
+Because the install is editable, the code that runs **is** your clone. Everything the install generates —
+the Node.js runtime, the services' state, the audit chain — lives in ONE place, `.corvin/` inside the clone
+(`CORVIN_HOME`); nothing is written to `~/.corvin`. On Linux, with passwordless `sudo` available, optional
+system tools (`jq`, `espeak-ng`, `poppler-utils`, `pandoc`, `pulseaudio-utils`, `gnupg`) are installed through
+`apt`/`dnf`/`pacman`; without it they are skipped and the exact command is printed — nothing else elevates,
+and nothing ever prompts for a password.
 
 ```bash
 ./install.sh --editable /path/to/CorvinOS   # install another clone
@@ -129,6 +134,13 @@ sh update.sh --no-rollback    # keep the new code even if verification fails
 
 Exit codes: `0` updated · `1` failed, rolled back · `2` rollback failed too · `3` another install/update runs.
 Update never installs: with nothing installed (or a legacy PyPI install) it prints the install steps above.
+
+**The console updates itself.** 60 s after every start it compares your clone with `origin/main`; when the
+clone is behind, it runs this same updater (`corvin-update-<timestamp>` systemd unit on Linux) — so a fresh
+install whose `main` moved on during the install updates itself a minute after the first boot and restarts
+once (open tabs reload). Each remote commit is attempted once; a failed update is rolled back and not retried
+until `main` moves again. Switch it off in Settings → Updates, or with `"auto_update": false` in
+`~/.config/corvin-launcher/config.json`.
 More: [docs/setup/UPGRADE_GUIDE.md](docs/setup/UPGRADE_GUIDE.md)
 
 </details>

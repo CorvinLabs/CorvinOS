@@ -32,14 +32,22 @@ class CorvinInstance:
 class InstanceRegistry:
     """Discover and aggregate metrics across all CorvinOS instances."""
 
-    def __init__(self, registry_path: str | Path = "~/.corvin/instances.json"):
+    def __init__(self, registry_path: "str | Path | None" = None):
         """Initialize instance registry.
 
         Args:
             registry_path: Path to instances.json (local discovery file)
         """
+        # Default: <corvin_home>/instances.json through the canonical resolver
+        # (CORVIN_HOME → <checkout>/.corvin → ~/.corvin). The old literal
+        # "~/.corvin/instances.json" ignored CORVIN_HOME, and because the
+        # module-level singleton below runs at import, every console boot
+        # created an empty ~/.corvin next to the real runtime root (fresh-system
+        # review 2026-10-21, F17). The directory is made on the first WRITE,
+        # never at import.
+        if registry_path is None:
+            registry_path = _default_registry_path()
         self.registry_path = Path(registry_path).expanduser()
-        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         self._instances: dict[str, CorvinInstance] = {}
         self._load_instances()
 
@@ -58,6 +66,7 @@ class InstanceRegistry:
 
     def _save_instances(self):
         """Persist instances to registry file."""
+        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.registry_path, "w") as f:
             json.dump({
                 "updated_at": datetime.utcnow().isoformat(),
@@ -198,6 +207,15 @@ class InstanceRegistry:
                 for inst in instances
             ],
         }
+
+
+def _default_registry_path() -> Path:
+    try:
+        from core.paths.tenant import corvin_home
+        return corvin_home() / "instances.json"
+    except Exception:  # noqa: BLE001 - resolver unavailable (unusual layout)
+        root = os.environ.get("CORVIN_HOME", "").strip()
+        return (Path(root).expanduser() if root else Path.home() / ".corvin") / "instances.json"
 
 
 # Singleton instance registry (module-level)

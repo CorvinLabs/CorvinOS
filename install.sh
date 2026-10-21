@@ -261,6 +261,14 @@ _retry() {  # _retry N cmd… — exponential backoff 2,4,8 s
 echo "  Source: local checkout ($EDITABLE)"
 REPO_DIR="$EDITABLE"
 
+# ONE runtime root. The Python side resolves CORVIN_HOME to <checkout>/.corvin
+# (corvinOS/shared/paths.py) and bakes it into the services; the shell side
+# (ensure-node.sh, setup.sh) defaulted to ~/.corvin — so a fresh install had
+# two roots, with the Node runtime and a second audit chain in the wrong one
+# (2026-10-21, F10). Resolve it once here, the same way, for every child.
+export CORVIN_HOME="${CORVIN_HOME:-$REPO_DIR/.corvin}"
+echo "  Runtime root: $CORVIN_HOME"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1b: Bootstrap local Node.js runtime (self-contained, no sudo)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -486,6 +494,20 @@ if ! _wait_console 90; then
 fi
 curl -fs -m 3 "$HEALTHZ_URL" >/dev/null 2>&1 \
     || printf '  %s %s did not answer — the UI loads, but check the console logs.\n' "$(_yellow '⚠')" "$HEALTHZ_URL"
+
+# The README's promise: an HTTP 200 with the app shell AND a working local
+# login, over the wire, like a browser (scripts/verify_install.py — the same
+# proof update.sh runs). Until 2026-10-21 install.sh stopped at "/console/
+# answers 200"; the login half was never proven at install time.
+_vpy="$_tool_py"; [ -x "$_vpy" ] || _vpy="$(command -v python3 || true)"
+if [ -n "$_vpy" ] && [ -f "$REPO_DIR/scripts/verify_install.py" ]; then
+    _vdist=""; [ -n "$SPA_DIR" ] && [ -f "$SPA_DIR/dist/index.html" ] && _vdist="$SPA_DIR/dist"
+    if ! "$_vpy" "$REPO_DIR/scripts/verify_install.py" --url "http://127.0.0.1:8765" ${_vdist:+--dist "$_vdist"} --wait 60; then
+        printf '%s — the console is up but did not pass its install proof (above).\n' "$(_red 'Error')"
+        printf '  Logs: %s\n' "$(_bold 'journalctl --user -u corvin-webui -n 100')"
+        exit 2
+    fi
+fi
 
 if [ -t 1 ] || [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     echo "  Launching CorvinOS console in your browser ..."

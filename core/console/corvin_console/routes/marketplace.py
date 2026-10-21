@@ -69,7 +69,11 @@ class _IndexManager:
             logger.info(f"✅ Loaded marketplace index from {self._index_path}")
             return self._index
         except FileNotFoundError:
-            logger.warning(f"⚠️  Index not found at {self._index_path}, fetching from GitHub...")
+            # An install with no local index is the NORMAL case since ADR-0512
+            # (the index lives in Corvin-Marketplace, fetched from GitHub) —
+            # informational, not a warning about a missing file.
+            logger.info("no local marketplace index (checked %s) — fetching from GitHub",
+                        self._index_path)
             # Fallback: fetch from Corvin-Marketplace repo
             try:
                 import urllib.request
@@ -111,7 +115,7 @@ def resolve_index_path() -> Path:
     still exists on branches predating that move. Resolution order:
 
     1. ``CORVIN_MARKETPLACE_INDEX`` — explicit operator override.
-    2. ``<cwd>/corvin_operator/marketplace/index/plugins.json`` — legacy in-repo index.
+    2. ``<repo>/corvin_operator/marketplace/index/plugins.json`` — legacy in-repo index.
     3. ``<repo parent>/Corvin-Marketplace/index/plugins.json`` — sibling checkout.
 
     Returns the first candidate that exists; otherwise the legacy path, so the
@@ -121,9 +125,14 @@ def resolve_index_path() -> Path:
     if override:
         return Path(override).expanduser()
 
-    legacy = Path.cwd() / "corvin_operator" / "marketplace" / "index" / "plugins.json"
     # core/console/corvin_console/routes/marketplace.py -> repo root -> its parent
     repo_root = Path(__file__).resolve().parents[4]
+    # Anchored on the repo, NOT on Path.cwd(): a systemd unit's cwd is $HOME,
+    # so the old cwd-relative candidate named a path that never existed
+    # ("Index not found at /home/<user>/corvin_operator/..." on every fresh
+    # boot, 2026-10-21, F7) while the real question is whether THIS checkout
+    # still carries the pre-ADR-0512 in-repo index.
+    legacy = repo_root / "corvin_operator" / "marketplace" / "index" / "plugins.json"
     sibling = repo_root.parent / "Corvin-Marketplace" / "index" / "plugins.json"
 
     for candidate in (legacy, sibling):

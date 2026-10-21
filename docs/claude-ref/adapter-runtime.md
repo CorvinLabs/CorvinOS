@@ -953,9 +953,22 @@ Path resolution (tenant-aware, mirrors `self_test.py`):
 
 ```
 VOICE_AUDIT_PATH env  →  use directly
-else: CORVIN_HOME / tenants / <current_tenant()> / global / forge / audit.jsonl
+else: <corvin_home> / tenants / <current_tenant()> / global / forge / audit.jsonl
+      where <corvin_home> = CORVIN_HOME env → <checkout>/.corvin → ~/.corvin   (paths.corvin_home)
 anchor = audit.jsonl.parent / chain_anchor.json
 ```
+
+`self_test._corvin_home()` resolves through `paths.corvin_home()` — the same three-step
+rule as every other writer. Until 2026-10-21 it fell straight from the env var to
+`~/.corvin`; the adapter unit a fresh `./install.sh` wrote carried no `CORVIN_HOME` (only the
+webui unit did), so inside the adapter the self-test reported `tenant.home_exists` CRITICAL on a
+healthy install and wrote `boot.self_test_failed`, `compliance.manifest_check`,
+`layer_integrity.manifest_absent` and `audit.chain_anchor_absent` into a third chain under
+`~/.corvin` — the boot tripwire's `audit_chain_split` on every fresh system. The installer now
+bakes `CORVIN_HOME` into the adapter and every bridge unit as well, and creates the tenant layout
+only (no legacy `sessions/`, which had made `tenant_migrate` write its record into the legacy
+`global/forge` chain). **Must NOT do:** resolve the root in a module of its own — call
+`paths.corvin_home()`; write a unit/plist without `CORVIN_HOME`.
 
 Verification happens in two complementary steps:
 

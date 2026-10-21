@@ -197,6 +197,9 @@ else
       git clone ${REPO_URL}.git && cd CorvinOS && ./install.sh"
 fi
 step "[2/6] Source ($KIND): $SRC"
+# One runtime root, the one the services use (corvinOS/shared/paths.py:
+# CORVIN_HOME → <checkout>/.corvin). Node lands there too (see ensure-node.sh).
+export CORVIN_HOME="${CORVIN_HOME:-$SRC/.corvin}"
 
 PREV_REV=""; BACKUP_REF=""
 _git() { git -C "$SRC" "$@"; }
@@ -316,7 +319,11 @@ progress ui_build running
 if [ -f "$SRC/scripts/ensure-node.sh" ]; then
     _quiet "Node.js runtime" bash "$SRC/scripts/ensure-node.sh" || warn "local Node.js bootstrap failed — trying the system Node.js"
 fi
-[ -x "${CORVIN_HOME:-$HOME/.corvin}/node/bin/npm" ] && export PATH="${CORVIN_HOME:-$HOME/.corvin}/node/bin:$PATH"
+# Pre-2026-10-21 installs keep their Node under ~/.corvin/node until this
+# update's ensure-node.sh has put one under the checkout's root; both are tried.
+for _nb in "$CORVIN_HOME/node/bin" "$HOME/.corvin/node/bin"; do
+    [ -x "$_nb/npm" ] && { export PATH="$_nb:$PATH"; break; }
+done
 
 _npm_deps() {
     cd "$WEB" || return 1

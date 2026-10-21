@@ -64,8 +64,11 @@ What the installer downloads, and how it is verified:
 | `uv` installer | yes — exact version, immutable GitHub release asset | SHA-256 of the installer script is checked before it runs; the script then verifies the `uv` binary against its embedded checksums |
 | CorvinOS itself | not downloaded — it is your checkout | whatever revision you cloned / pulled |
 
-`sudo` is used in exactly two places on Linux: to `apt-get`/`yum install curl` when neither curl nor
-wget exists, and for `--always-on` (system-level service, ADR-0184 Stufe 2). Nothing else elevates.
+`sudo` is used in three places on Linux, never with a password prompt: to `apt-get`/`yum install curl`
+when neither curl nor wget exists; for `--always-on` (system-level service, ADR-0184 Stufe 2); and —
+only when `sudo -n` already works (passwordless) — to install the optional system tools `jq`,
+`espeak-ng`, `poppler-utils`, `pandoc`, `pulseaudio-utils` and `gnupg` through apt/dnf/pacman.
+Without passwordless sudo those tools are skipped and the exact command is printed. Nothing else elevates.
 The firewall is never touched unless you pass `--lan` (Linux `ufw`) / `-Lan` (Windows Defender) —
 the console listens on `127.0.0.1` by default, so no inbound rule is needed until you enable A2A
 LAN pairing.
@@ -157,7 +160,7 @@ service. Use after pulling UI changes or when the console shows a 503.
 corvin-uninstall
 ```
 
-Prompts whether to keep data files (`~/.corvin/`).
+Prompts whether to keep data files (`<checkout>/.corvin/`).
 
 ---
 
@@ -174,7 +177,8 @@ detected, the installer prints a manual install hint.
 
 **Requirements:**
 - systemd user session (`systemctl --user`)
-- No sudo required (except `--always-on`, and the curl bootstrap when neither curl nor wget is installed)
+- No sudo required (except `--always-on`, the curl bootstrap when neither curl nor wget is installed, and
+  the optional system tools above, which need passwordless sudo or are skipped)
 
 **What gets installed:**
 ```
@@ -280,7 +284,9 @@ claude --version                                # Is the Claude Code CLI install
 After installation:
 
 ```
-~/.corvin/                                 # Corvin home (CORVIN_HOME)
+<checkout>/.corvin/                        # Corvin home (CORVIN_HOME) — ONE root for everything
+├── node/                                  # the local Node.js runtime (ensure-node.sh)
+├── tenants/_default/global/forge/audit.jsonl   # THE audit chain (every writer, every service)
 ├── bridges/
 │   ├── discord/
 │   │   ├── venv/                          # Isolated Python env
@@ -358,7 +364,7 @@ schtasks /run /tn "CorvinOS\bridge-discord"      # Windows (WSL2)
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `CORVIN_HOME` | Override Corvin home path | `~/.corvin/` |
+| `CORVIN_HOME` | Override Corvin home path | `<checkout>/.corvin/` (resolved once by `install.sh` and baked into every service unit; `~/.corvin/` only outside a checkout) |
 | `CORVIN_TENANT_ID` | Select tenant | `_default` |
 
 ---

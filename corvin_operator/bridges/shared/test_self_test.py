@@ -133,6 +133,27 @@ class TenantTreeCheckTests(unittest.TestCase):
             self.assertEqual(names["tenant.home_exists"].severity, st.CRITICAL)
 
 
+class HomeResolverTests(unittest.TestCase):
+    def test_without_env_the_self_test_resolves_the_same_root_as_paths(self) -> None:
+        """Fresh-system review 2026-10-21 (F10): with no CORVIN_HOME in the
+        adapter unit this module fell back to ~/.corvin while every other
+        module resolved <checkout>/.corvin — a false ``tenant.home_exists``
+        CRITICAL and four boot events written into a third audit chain."""
+        st._ensure_sys_path()
+        import paths as _paths  # bridges/shared/paths.py
+        with mock.patch.dict(os.environ, {"CORVIN_HOME": ""}):
+            os.environ.pop("CORVIN_HOME", None)
+            self.assertEqual(st._corvin_home(), _paths.corvin_home())
+            # This checkout carries .corvin_repo: the root is repo-local.
+            self.assertNotEqual(st._corvin_home(), Path.home() / ".corvin")
+            self.assertEqual(st._corvin_home().name, ".corvin")
+
+    def test_env_override_still_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"CORVIN_HOME": d}):
+                self.assertEqual(st._corvin_home(), Path(d))
+
+
 class MemoryCheckTests(unittest.TestCase):
     def test_critical_when_recall_db_world_readable(self) -> None:
         with _Sandbox() as sbx:

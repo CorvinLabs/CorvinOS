@@ -1,5 +1,5 @@
 #!/bin/bash
-# ensure-node.sh — Bootstrap local Node.js runtime (~/.corvin/node/)
+# ensure-node.sh — Bootstrap local Node.js runtime (<CORVIN_HOME>/node/)
 # Idempotent, self-contained, no sudo needed.
 #
 # Usage: bash scripts/ensure-node.sh
@@ -10,12 +10,16 @@ set -eu
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
-CORVIN_HOME="${CORVIN_HOME:-${HOME}/.corvin}"
-NODE_ROOT="${CORVIN_HOME}/node"
-NODE_BIN="${NODE_ROOT}/bin"
-
 # Read .nvmrc from repo root if present
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The runtime root of this checkout, as corvinOS/shared/paths.py resolves it
+# (CORVIN_HOME → <checkout>/.corvin → ~/.corvin). Defaulting to ~/.corvin here
+# put the Node runtime into a second root the services never used (F10).
+if [ -z "${CORVIN_HOME:-}" ]; then
+    if [ -f "${REPO_ROOT}/.corvin_repo" ]; then CORVIN_HOME="${REPO_ROOT}/.corvin"; else CORVIN_HOME="${HOME}/.corvin"; fi
+fi
+NODE_ROOT="${CORVIN_HOME}/node"
+NODE_BIN="${NODE_ROOT}/bin"
 if [ -f "${REPO_ROOT}/.nvmrc" ]; then
     NODE_VERSION=$(cat "${REPO_ROOT}/.nvmrc" | tr -d ' \n')
 else
