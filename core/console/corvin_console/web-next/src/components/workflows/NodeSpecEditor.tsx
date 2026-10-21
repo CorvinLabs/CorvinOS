@@ -52,6 +52,67 @@ function textToPairs(text: string): Record<string, string> {
   return out;
 }
 
+/**
+ * Textarea that keeps what the user typed. The parsed value (list / pairs) drops blank lines
+ * and whitespace, so rendering it back on every keystroke would eat the Enter key and spaces.
+ * The raw text is the state; the parsed value is pushed up on every change.
+ */
+function RawTextArea({
+  id,
+  initial,
+  onText,
+}: {
+  id: string;
+  initial: string;
+  onText: (text: string) => void;
+}) {
+  const [text, setText] = React.useState(initial);
+  return (
+    <Textarea
+      id={id}
+      data-testid={id}
+      className="min-h-[56px] font-mono text-xs"
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onText(e.target.value);
+      }}
+    />
+  );
+}
+
+/** Condition value: free text while typing, typed (number/bool/list) when committed on blur. */
+function ConditionValueInput({
+  label,
+  testId,
+  value,
+  op,
+  onCommit,
+}: {
+  label: string;
+  testId: string;
+  value: unknown;
+  op: string;
+  onCommit: (v: unknown) => void;
+}) {
+  const shown = Array.isArray(value) ? value.join(",") : String(value ?? "");
+  const [text, setText] = React.useState(shown);
+  React.useEffect(() => setText(shown), [shown]);
+  return (
+    <Input
+      aria-label={label}
+      data-testid={testId}
+      className="h-7 text-xs"
+      placeholder="value"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        if (text !== shown) onCommit(parseConditionValue(op, text));
+      }}
+    />
+  );
+}
+
 function FieldRow({
   field,
   spec,
@@ -118,24 +179,12 @@ function FieldRow({
       break;
     case "list":
       control = (
-        <Textarea
-          id={id}
-          data-testid={id}
-          className="min-h-[56px] font-mono text-xs"
-          value={listToText(raw)}
-          onChange={(e) => onChange(field.path, textToList(e.target.value))}
-        />
+        <RawTextArea id={id} initial={listToText(raw)} onText={(t) => onChange(field.path, textToList(t))} />
       );
       break;
     case "pairs":
       control = (
-        <Textarea
-          id={id}
-          data-testid={id}
-          className="min-h-[56px] font-mono text-xs"
-          value={pairsToText(raw)}
-          onChange={(e) => onChange(field.path, textToPairs(e.target.value))}
-        />
+        <RawTextArea id={id} initial={pairsToText(raw)} onText={(t) => onChange(field.path, textToPairs(t))} />
       );
       break;
     default:
@@ -209,13 +258,12 @@ function RouteConditionEditor({
           >
             {ROUTE_OPS.map((o) => <option key={o} value={o}>{o}</option>)}
           </Select>
-          <Input
-            aria-label={`case ${i + 1} value`}
-            data-testid={`route-case-value-${i}`}
-            className="h-7 text-xs"
-            placeholder="value"
-            defaultValue={Array.isArray(r.when.value) ? r.when.value.join(",") : String(r.when.value ?? "")}
-            onBlur={(e) => patchRow(i, { when: { value: parseConditionValue(r.when.op, e.target.value) } })}
+          <ConditionValueInput
+            label={`case ${i + 1} value`}
+            testId={`route-case-value-${i}`}
+            value={r.when.value}
+            op={r.when.op}
+            onCommit={(v) => patchRow(i, { when: { value: v } })}
           />
           <button
             type="button"
@@ -270,9 +318,18 @@ export function NodeSpecEditor({
   const [busy, setBusy] = React.useState<"save" | "delete" | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
+  // A new node id always resets the form. A fresh spec for the SAME node (graph refetch,
+  // design-chat update, the response to our own save) only replaces the draft when the user
+  // has no unsaved edits: an unrelated graph update must not wipe typing.
+  const lastSpecRef = React.useRef<string>(JSON.stringify(node.spec ?? {}));
+  const lastIdRef = React.useRef(node.id);
   React.useEffect(() => {
-    setDraft(node.spec ?? {});
-    setError(null);
+    const incoming = JSON.stringify(node.spec ?? {});
+    const idChanged = lastIdRef.current !== node.id;
+    setDraft((d) => (idChanged || JSON.stringify(d) === lastSpecRef.current ? (node.spec ?? {}) : d));
+    if (idChanged) setError(null);
+    lastIdRef.current = node.id;
+    lastSpecRef.current = incoming;
   }, [node.id, node.spec]);
 
   if (!isSupportedNodeType(String(draft.type ?? node.type))) {

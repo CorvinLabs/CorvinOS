@@ -792,6 +792,7 @@ function NodeInspector({
       )}
       {wid && csrf && onNodeChanged && (
         <NodeSpecEditor
+          key={node.id}
           node={node}
           allNodeIds={allNodeIds ?? []}
           wid={wid}
