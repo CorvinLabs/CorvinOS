@@ -598,12 +598,12 @@ def case_body_cap_truncates(failures: list[str]) -> None:
     slot = sandbox / "slot"
     chat_key = "chat-H"
     cid = _resolve_chat_channel_id(chat_key)
-    # Build a body > 4 KiB. Begin with MARKER-START, then 5 KiB of filler,
+    # Build a body > 16 KiB (the cap, ADR-2274). Begin with MARKER-START, then filler,
     # then MARKER-AFTER-CAP at the very end (which must NOT survive truncation).
     body = (
         "# demo.bigbody\n\n"
         "MARKER-START — first 80 chars are visible regardless of cap.\n\n"
-        + ("repeat-block. " * 400)        # ~ 5.2 KiB of filler
+        + ("repeat-block. " * 1400)       # ~ 19.6 KiB of filler
         + "\nMARKER-AFTER-CAP must not appear in the injected prompt.\n"
     )
     _create_skill(

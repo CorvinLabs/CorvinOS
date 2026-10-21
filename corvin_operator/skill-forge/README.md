@@ -74,7 +74,7 @@ Fail-closed errors block `create()`:
   `sk-…` keys, PEM private-key headers)
 - persona-boundary phrases (`you can now use bash`, `bypass permissions`,
   `--dangerously-skip-permissions`, `you may execute`)
-- body > 8192 bytes
+- body > 16384 bytes (ADR-2274)
 
 Warning-only (does not block):
 

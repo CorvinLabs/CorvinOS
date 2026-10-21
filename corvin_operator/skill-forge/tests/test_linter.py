@@ -94,8 +94,8 @@ def test_persona_boundary_blocked():
 
 
 def test_length_rejected():
-    print("\n[length > 8192 bytes rejected]")
-    body = "# x\n\n" + ("a " * 5000)
+    print("\n[length > 16384 bytes rejected]")
+    body = "# x\n\n" + ("a " * 9000)
     r = lint(body)
     t("reject oversized", not r.ok and any("length" in e for e in r.errors),
       detail=str(r.errors)[:200])

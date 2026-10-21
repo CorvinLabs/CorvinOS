@@ -1423,7 +1423,7 @@ needed**. Most tasks produce none — that is correct and expected, exactly like
 
 **Skip reasons:** a single bug fix with nothing generalizable; a one-off tooling workaround;
 already fully captured by an existing concept (amend it, never create a near-duplicate) or by a
-Skill (if a ≤8KB behavioral snippet is genuinely sufficient, a full concept adds nothing). When
+Skill (if a ≤16 KiB behavioral snippet (ADR-2274) is genuinely sufficient, a full concept adds nothing). When
 skipping, name the reason in one sentence — never skip silently, exactly like ADR Gate.
 
 **Destination:** `/home/shumway/projects/Corvin-Knowledge/concepts/CONCEPT-NNNN-slug.md` (sibling repo, own numbering,
@@ -1435,7 +1435,7 @@ working keeps paying off, with real evidence (cited commits/tasks), Alternatives
 an explicit "when NOT to use" boundary — the same depth ADR-0264 models, applied to process
 instead of architecture. Every durable concept SHOULD mint or update a companion SkillForge
 skill (`skill_create`/`skill_promote`, `type: learned-experience`, `scope: project`) whose body
-distills the Method section (≤8KB) and points back at the full concept file for depth — this is
+distills the Method section (≤16 KiB, ADR-2274) and points back at the full concept file for depth — this is
 what makes the archive genuinely *self-learning*: the concept is what a human (or a future
 agent doing a deep read) consults; the skill is what gets auto-injected and auto-graded into
 ordinary turns without anyone having to remember the concept exists. Record the skill name in

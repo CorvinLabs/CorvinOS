@@ -23,7 +23,7 @@ CorvinOS already has two kinds of durable, versioned knowledge:
 | | ADR (`Corvin-Knowledge/decisions/`) | Skill (SkillForge, `type: learned-experience`) | Concept (`Corvin-Knowledge/concepts/`) |
 |---|---|---|---|
 | Answers | What did we decide, and why? | How, mechanically, every time? | Why does this way of working keep paying off? |
-| Length | As long as the decision needs | ≤8KB, prompt-injectable | As long as the evidence needs |
+| Length | As long as the decision needs | ≤16KB, prompt-injectable (ADR-2274) | As long as the evidence needs |
 | Gated by | `adr_gate`, structural triggers | Grading/promotion ladder | Concept Gate, recurrence/generalization |
 | Surfaced by | Manual read / `scripts/adr_graph.py` | Automatic prompt injection + auto-grade | Manual read (deep dive) — a durable concept SHOULD also mint a companion Skill for automatic surfacing |
 | Amended | New ADR supersedes | New grades / re-created body | Dated amendment note, `## Operator Notes` never touched |
@@ -53,7 +53,7 @@ applied to *process* instead of *architecture*.
 - A one-off tooling workaround.
 - Anything already fully captured by an existing concept — **amend that one** (see below),
   never create a near-duplicate.
-- Anything a ≤8KB Skill snippet genuinely already covers — a full concept adds nothing.
+- Anything a ≤16KB Skill snippet genuinely already covers — a full concept adds nothing.
 
 **When you skip, name the reason in one sentence — never skip silently.**
 
@@ -68,7 +68,7 @@ approach generalizes beyond this one file."
    ADR-0264-style amendments, prepended under Status), never rewrite or remove prior text, and
    never touch anything under `## Operator Notes`.
 4. **If yes and nothing existing covers it:** write a new concept (see Structure below).
-5. **If the method is durable and narrow enough to fit ≤8KB of prompt-injectable prose:** mint
+5. **If the method is durable and narrow enough to fit ≤16KB of prompt-injectable prose:** mint
    or update a companion SkillForge skill (`skill_create`/`skill_promote`, `type:
    learned-experience`, `scope: project`) distilling the Method section, pointing back at the
    full concept file for depth. Record the skill name in the concept's `skills:` frontmatter

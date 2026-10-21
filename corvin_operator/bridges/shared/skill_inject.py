@@ -267,9 +267,13 @@ def _grade_with_canary(reg: Any, *, name: str, channel_id: str | None,
 _DEFAULT_MAX = 5
 # Per-skill body cap — anything longer is truncated with a clear marker so a
 # very large skill can't dominate the system prompt (or smuggle prompt-payload
-# past the linter via sheer length). 4 KiB is large enough for substantive
-# skills while keeping the total inject block bounded at 5 × 4 KiB = 20 KiB.
-_BODY_CAP_BYTES = 4096
+# past the linter via sheer length). The cap equals the linter's body limit (ADR-2274), so
+# an accepted skill is never truncated; the inject block stays bounded at 5 × 16 KiB = 80 KiB.
+# ADR-2274 (option 1, 2026-10-21): 16 KiB, the SkillForge linter's limit — a skill the linter
+# accepts is served whole, never silently truncated. Bound: 5 x 16 KiB = 80 KiB per turn.
+# Measured 2026-10-21: LDD bundle n=14, mean 8.3 KiB, max 13.1 KiB, top-5 sum 51.3 KiB; live
+# store n=109, mean 1.2 KiB — the cap does not bind for any shipped skill.
+_BODY_CAP_BYTES = 16384
 # Wrapper tag — picked to be unambiguous (no real skill body would use the
 # `<auto_skill ...>` form by accident). Sanitization replaces literal
 # occurrences in the body before wrapping so a body cannot escape the tag.

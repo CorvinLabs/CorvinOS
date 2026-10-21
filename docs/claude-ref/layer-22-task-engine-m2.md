@@ -451,9 +451,18 @@ so a worker never reads its own bookkeeping) and to the task's event log as `tas
 (`task.notice_sent` on the audit chain: kind and channel only). `GET
 /v1/console/chat/sessions/{sid}/tasks/{task_id}/timeline` returns the read model
 (`task_timeline.py`): one row per transition or notice, folded from the event log, never a second
-writer. The SPA panel **Task Timeline** (`/app/task-timeline`, System group; `pages/task-timeline.tsx`,
-model in `lib/task-timeline.ts`) lists a chat's tasks and shows each one's rows; the notices also appear in the chat.
+writer. The endpoint is kept for the API; the SPA page **Task Timeline** (`/app/task-timeline`) was
+removed from the console, so the notices in the chat are the user-visible surface.
 Proof: `core/console/tests/test_turn_recovery_e2e.py::test_user_is_told_in_the_chat_and_can_read_the_timeline`.
+
+**Platform-correct kill, and a terminal write the state machine refuses (2026-10-21).** The console's stop path
+ends a CLI that ignores SIGTERM with `process_signals.hard_kill` — `os.kill(SIGKILL)` on POSIX, `Popen.kill()`
+(TerminateProcess) on Windows, recorded as `SIGKILL` on both; `signal.SIGKILL` does not exist on Windows and the
+previous call raised there, masking the original error and leaving the CLI running. `failure_classes` reads the
+number through `getattr(signal, "SIGKILL", 9)` for the same reason (its import failure took turn recovery, the
+adapter's exit classifier and the interruption report with it on Windows). When the finishing turn's `task.failed`
+write is refused (`cancelled -> failed`, `interrupted -> failed`: the operator's cancel or a reaper already ended
+the task) the refusal is logged and the streamed text is still persisted, exactly like the `task.completed` case.
 
 **Cancel vs. cut-off, and what a disconnect really does (PLAN-0958 P5).** A client disconnect
 does NOT end a turn: `routes/chat.py::_detach_turn` lets it finish and only a watchdog
@@ -472,8 +481,11 @@ measured this install (214 finished turns, 68 interrupted): 24 % use Write/Edit/
 call Bash, so "most interrupted turns are read-only" is false. A workspace effect is safe to continue (the
 re-run prompt says "continue from the current state of the workspace"); an OUTBOUND one is not - a sent
 mail, A2A task, share or push cannot be seen in the workspace. `turn_recovery.outbound_tools()` reads the
-tool names the interrupted run already called from its own event log (names only, never arguments); a
-match (`OUTBOUND_MARKERS`) means the request is NOT re-run: the user gets a `needs_user` notice, the
+tool names the interrupted run already called from its own event log (names only, never arguments — matched on
+word boundaries, so `get_post` and `list_posts` are reads); a Bash call is recorded with a closed `effect_class`
+(`outbound_possible` when the command's leading word is a sender: `git push`, `curl`, `gh`, `mail`, `ssh`, `scp`,
+`rsync`, cloud CLIs, package publishers — the command itself is never stored); a
+match (`OUTBOUND_MARKERS` or that class) means the request is NOT re-run: the user gets a `needs_user` notice, the
 attempt budget is closed so a later boot does not ask again, and `chat.turn.recovery_needs_user` is audited.
 
 **EVERY host reaps, not just the bridge (2026-09-21).** Until this date the sweep

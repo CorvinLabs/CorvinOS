@@ -45,7 +45,7 @@ _PERSONA_BOUNDARY_SUBSTRINGS: tuple[str, ...] = (
 )
 
 # 4) length & density
-_MAX_BODY_BYTES = 8192
+_MAX_BODY_BYTES = 16384  # ADR-2274: raised from 8192 together with the injection cap
 _CODE_FENCE_RE = re.compile(r"```[^\n]*\n.*?```", re.DOTALL)
 _DENSITY_WARN_THRESHOLD = 0.40
 

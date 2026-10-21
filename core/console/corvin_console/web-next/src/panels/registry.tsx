@@ -21,7 +21,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   MarketplacePage,
   GitHubPage, SyncMonitorPage,
-  QualityGatesPage, TaskTimelinePage, CorvinKnowledgePage, VideoProducerPage,
+  QualityGatesPage, CorvinKnowledgePage, VideoProducerPage,
   DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ModelsPage,
   ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
@@ -165,8 +165,6 @@ export const PANELS: ConsolePanel[] = [
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,
      { nav: { label: "GitHub", icon: "Github", group: "system" } }),
-  rc("task-timeline", "Task Timeline", TaskTimelinePage,
-     { nav: { label: "Task Timeline", icon: "History", group: "system" } }),
   rc("sync-monitor", "Sync Monitor", SyncMonitorPage,
      { nav: { label: "Sync Monitor", icon: "Activity", group: "system" } }),
   // REMOVED: webhooks, audit, releases — backend routes 404 (not implemented)

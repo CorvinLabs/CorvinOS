@@ -173,9 +173,6 @@ export const SyncMonitorPage = React.lazy(() =>
 // REMOVED: WebhooksPage, AuditPage, ReleasesPage — backend routes return 404
 // These are not implemented and should not be referenced
 
-export const TaskTimelinePage = React.lazy(() =>
-  import("@/pages/task-timeline").then((m) => ({ default: m.default }))
-);
 
 export const QualityGatesPage = React.lazy(() =>
   import("@/pages/quality").then((m) => ({ default: m.default }))
