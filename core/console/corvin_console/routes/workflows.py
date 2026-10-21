@@ -2242,13 +2242,16 @@ def _decide_approval(
         raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail={"error": "refused", "message": refusal})
     # An approval resumes the run in the background: it must pass the SAME workflows_concurrent
     # gate as resume_run / start_run (review 2026-10-21: N approvals at once all ran).
-    _running = _count_running_workflows(rec.tenant_id)
+    # A rejection ends the run (or contains the branch): it never needs a run slot, and gating
+    # it would leave a paused run stuck at the limit until its deadline (REF-14).
+    _running = _count_running_workflows(rec.tenant_id) if verdict == "approve" else 0
     try:
-        _lic_assert("workflows_concurrent", _running + 1)
+        if verdict == "approve":
+            _lic_assert("workflows_concurrent", _running + 1)
     except _LicLimitError as _wf_exc:
         console_audit.action_failed(
             tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
-            action="workflow.run_approved" if verdict == "approve" else "workflow.run_rejected",
+            action="workflow.run_approved",
             target_kind="workflow_run", target_id=f"{wid}/{rid}", reason="quota_exceeded",
         )
         raise HTTPException(
@@ -3488,6 +3491,10 @@ async def _stream_run(
     dry_run: bool,
 ) -> AsyncIterator[str]:
     """SSE event stream for a workflow run (Phase 3)."""
+    # True once the run belongs to the DAG engine's RunRecorder (REF-01, 2026-10-21): the
+    # GeneratorExit handler below must then never touch the run's meta (a reload during a pause
+    # turned a paused run into 'aborted' and orphaned its checkpoint).
+    _dag_owned_meta = False
     log_path = _run_log_path(tenant_id, wid, rid)
     _ensure_dir(log_path.parent)
 
@@ -3642,6 +3649,7 @@ async def _stream_run(
         # a generic `claude -p` step (which would run a `code` node through an LLM and let
         # a model answer an `ask_human` / `approval` consent gate).
         if _dag_run.needs_dag_engine(graph):
+            _dag_owned_meta = True
             async for _chunk in _stream_dag_run(
                 tenant_id, sid_fingerprint, wid, rid, yaml_text, dict(inputs), graph
             ):
@@ -3906,6 +3914,10 @@ async def _stream_run(
         # closed tabs would permanently lock the tenant out of starting runs
         # (there is no reaper). Finalize as "aborted" before re-raising. No
         # yield here (forbidden during generator close); disk I/O + audit only.
+        # A DAG-engine run is excluded: its RunRecorder owns the meta, the run keeps going
+        # (or waiting) in its thread, and the editor re-attaches through the stream route.
+        if _dag_owned_meta:
+            raise
         run_meta.update({"status": "aborted", "ok": False, "finished_at": time.time()})
         with contextlib.suppress(Exception):
             _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)

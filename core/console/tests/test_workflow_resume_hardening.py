@@ -198,7 +198,6 @@ def _live_sandbox(tmp_path: Path):
     stays open across a pause can never be read through it — the nine console DAG E2E tests
     (ADR-2273) timed out on every host (review 2026-10-21). Over a real socket the stream is
     read while the run is paused, as the browser reads it."""
-    import socket
     import threading
 
     import httpx
@@ -206,23 +205,23 @@ def _live_sandbox(tmp_path: Path):
 
     with _sandbox(tmp_path) as (test_client, home, tenant_id):
         app = test_client.app
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            port = s.getsockname()[1]
-        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+        config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="off")
         server = uvicorn.Server(config)
         thread = threading.Thread(target=server.run, name="wf-e2e-uvicorn", daemon=True)
         thread.start()
-        deadline = time.time() + 15
-        while not server.started and time.time() < deadline:
-            time.sleep(0.05)
-        assert server.started, "uvicorn did not start"
-        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30.0)
-        client.cookies.set("corvin_console_sid", test_client.cookies.get("corvin_console_sid"))
-        client.headers.update({"X-CSRF-Token": test_client.headers["X-CSRF-Token"]})
+        client = None
         try:
+            deadline = time.time() + 15
+            while not server.started and time.time() < deadline:
+                time.sleep(0.05)
+            assert server.started, "uvicorn did not start"
+            port = server.servers[0].sockets[0].getsockname()[1]   # the kernel chose it: no TOCTOU
+            client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30.0)
+            client.cookies.set("corvin_console_sid", test_client.cookies.get("corvin_console_sid"))
+            client.headers.update({"X-CSRF-Token": test_client.headers["X-CSRF-Token"]})
             yield client, home, tenant_id
         finally:
-            client.close()
+            if client is not None:
+                client.close()
             server.should_exit = True
             thread.join(timeout=10)

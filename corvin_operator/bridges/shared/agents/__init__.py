@@ -313,7 +313,9 @@ def attested_model(result: SpawnResult) -> str:
     (the ACS worker reads the JSON envelope, not the stream) would otherwise get
     ``""`` for every run — the ADR-0759 "0 priced runs" failure again. One
     ``modelUsage`` key is the model; several name the one with the most output
-    tokens (a sub-agent model never outweighs the turn's own).
+    tokens — a heuristic: a turn whose sub-agents (Explore/Task on a cheaper model)
+    wrote more than its own model is attributed to the cheaper one. An explicit
+    ``model`` field on any frame (``system.init``) always wins over this fallback.
     """
     for ev in reversed(result.events):
         raw = ev.raw

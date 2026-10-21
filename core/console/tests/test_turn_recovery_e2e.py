@@ -249,6 +249,26 @@ class TurnRecoveryE2E(unittest.TestCase):
             json.dumps({"event": "tool_use", "tool_name": n}) for n in names) + "\n")
         self.assertEqual(self.tr.outbound_tools(tasks, "t1"), ())
 
+    def test_camel_case_and_shell_outbound_tools_are_outbound(self):
+        # REF-03 (2026-10-21): the word-boundary match on a lowercased name missed every camelCase
+        # sender; a Bash call recorded with effect_class outbound_possible counts too; reads
+        # whose name merely CONTAINS a marker ("get_post", "list_posts") do not.
+        rows = [
+            {"event": "tool_use", "tool_name": "mcp__slack__chat_postMessage"},
+            {"event": "tool_use", "tool_name": "SendMessage"},
+            {"event": "tool_use", "tool_name": "mcp__x__sendEmail"},
+            {"event": "tool_use", "tool_name": "mcp__db__get_post"},
+            {"event": "tool_use", "tool_name": "mcp__x__list_posts"},
+            {"event": "tool_use", "tool_name": "Bash", "effect_class": "outbound_possible"},
+            {"event": "tool_use", "tool_name": "Bash"},
+        ]
+        tasks = Path(self.sess.workdir) / "tasks"
+        tasks.mkdir(exist_ok=True)
+        (tasks / "t2.events.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        found = self.tr.outbound_tools(tasks, "t2")
+        self.assertEqual(found, ("Bash (outbound command)", "SendMessage", "mcp__slack__chat_postMessage",
+                                 "mcp__x__sendEmail"))
+
     def test_operator_cancel_ends_the_child_and_is_final(self):
         """PLAN-0958 P5 / CONCEPT-0112 Q2: a stop from another tab (cancel_live_turn) must terminate the
         real claude child - not only the asyncio task - end the task as cancelled, tell the user

@@ -363,6 +363,13 @@ function Get-ConsoleTask {
 
 $script:RestartTasks = @()
 $script:DisabledTasks = @()
+# A terminating error anywhere after Stop-Console must not leave the console stopped AND its
+# watchdog disabled: re-arm the tasks, release the lock, then let the error surface.
+trap {
+    try { Enable-DisabledTasks } catch { }
+    try { Exit-SetupLock } catch { }
+    break
+}
 $script:Stopped = $false
 function Stop-Console {
     if ($script:Stopped) { return }
@@ -956,11 +963,19 @@ function Start-ConsoleDirect {
     Write-LogFile "started corvinos-serve directly"
 }
 
-function Start-ConsoleAgain {
-    $started = $false
+function Enable-DisabledTasks {
+    # Re-arm the console watchdog tasks Stop-Console disabled. Called by Start-ConsoleAgain, by
+    # the two early exits after Stop-Console and by the trap below: a half-failed update must
+    # leave the host WITH its 5-minute self-healing, not without (review REF-11, 2026-10-21).
     foreach ($t in @($script:DisabledTasks)) {
         try { $null = Enable-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop } catch { }
     }
+    $script:DisabledTasks = @()
+}
+
+function Start-ConsoleAgain {
+    $started = $false
+    Enable-DisabledTasks
     foreach ($t in @($script:RestartTasks) + @($ConsoleTask)) {
         if (-not $t -or -not ($t.TaskName -like 'CorvinOS-AutoRestart*' -or $t.TaskName -eq 'CorvinOS-Console')) { continue }
         Repair-ConsoleTask $t
@@ -1028,6 +1043,7 @@ function Wait-Live {
 if ($NoRestart) {
     Send-UpdateProgress verification skipped "no restart"
     Write-Ok "restart skipped (-NoRestart) -- restart the console to load the update"
+    Enable-DisabledTasks
     Exit-SetupLock
     exit 0
 }
@@ -1037,6 +1053,7 @@ if ((Get-PortState -TargetPort $Port) -eq "foreign") {
     Write-Host ""
     Write-Warn "port $Port is held by ANOTHER user's CorvinOS on this machine."
     Write-Warn "The update itself is installed; start yours on a free port: corvinos-serve --port <n>"
+    Enable-DisabledTasks
     Exit-SetupLock
     exit 2
 }

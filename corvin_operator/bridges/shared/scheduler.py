@@ -184,32 +184,39 @@ def _advance_cron(cron: str, after_ts: float, tz: str | None = None, max_iter: i
     doms = _parse_field(fields[2], 1, 31)
     months = _parse_field(fields[3], 1, 12)
     dows = {(d % 7) for d in _parse_field(fields[4], 0, 7)}
-    start = datetime.fromtimestamp(after_ts, zone).replace(second=0, microsecond=0)
-    # Step forward one minute first so calling _advance_cron immediately after
-    # a fire doesn't re-fire the same minute.
-    cur = datetime.fromtimestamp(start.timestamp() + 60, zone).replace(second=0, microsecond=0)
-    limit = start + timedelta(days=366)
+    # Every step is taken on the EPOCH (UTC) and converted back to wall time: wall-clock
+    # arithmetic on aware datetimes resets `fold`, so a step taken inside the DST fall-back
+    # hour landed 60 min in the past and an hourly workflow re-fired every tick (REF-02).
+    ts = (int(after_ts) // 60) * 60 + 60       # the next whole minute after after_ts
+    limit_ts = ts + 366 * 86400
+
+    def _wall(t: float) -> datetime:
+        return datetime.fromtimestamp(t, zone).replace(second=0, microsecond=0)
+
+    def _forward(cur: datetime, target: datetime) -> float:
+        # a wall-clock target (fold 0) may resolve to an instant before `cur` in a fold
+        # hour or inside a spring-forward gap: never move backwards, never stand still
+        t = target.timestamp()
+        return t if t > cur.timestamp() else cur.timestamp() + 60
+
     # Skip whole months, days and hours whose fields cannot match instead of walking every
     # minute of a year on the adapter loop (a rare cron cost ~1.3 s per advance, WFB-R1-17).
     for _ in range(max_iter):
-        if cur > limit:
+        if ts > limit_ts:
             break
+        cur = _wall(ts)
         if cur.month not in months:
-            nxt = (cur.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1)
-            cur = nxt
+            ts = _forward(cur, (cur.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1))
             continue
         if cur.day not in doms or ((cur.weekday() + 1) % 7) not in dows:
-            cur = cur.replace(hour=0, minute=0) + timedelta(days=1)
+            ts = _forward(cur, cur.replace(hour=0, minute=0) + timedelta(days=1))
             continue
         if cur.hour not in hours:
-            cur = cur.replace(minute=0) + timedelta(hours=1)
+            ts = _forward(cur, cur.replace(minute=0) + timedelta(hours=1))
             continue
-        if cur.minute not in minutes:
-            cur = cur + timedelta(minutes=1)
-            continue
-        if _matches_cron(cron, cur):          # the authoritative check, DST folds included
-            return cur.timestamp()
-        cur = cur + timedelta(minutes=1)
+        if cur.minute in minutes and _matches_cron(cron, cur):   # authoritative, fold-aware
+            return float(ts)
+        ts += 60
     raise ValueError(f"no matching minute within a year for cron: {cron!r}")
 
 
@@ -292,8 +299,10 @@ def _persist_fired_state(it: dict[str, Any], now: float, *, restore: bool = Fals
             return
         merged = [replacement if x.get("id") == tid and replacement is not None else x
                   for x in current if not (x.get("id") == tid and replacement is None)]
-        if replacement is not None and not any(x.get("id") == tid for x in current):
+        if replacement is not None and not restore and not any(x.get("id") == tid for x in current):
             merged.append(replacement)
+        if restore and not any(x.get("id") == tid for x in current) and not it.get("cron"):
+            merged.append(replacement)         # a dropped one-shot comes back; a removed cron entry stays removed
         save(merged)
 
 
@@ -563,8 +572,11 @@ def materialize_due(inbox_dir: Path, now: float | None = None) -> list[dict[str,
         kind = it.get("kind", "text")
         if kind == "workflow":
             # Overrun policy (console `schedule.overrun`): "skip" drops a fire while the previous
-            # run of the same task is still going (another tick / thread), "queue" and
-            # "parallel" let it fire. Until 2026-10-21 the policy was stored and never read.
+            # run of the same task is still going in another caller of materialize_due (a second
+            # tick or thread); "queue" and "parallel" let it fire. Today the adapter runs the
+            # workflow synchronously inside its single poll loop, so no overlap can occur and
+            # all three policies behave alike — the policy is stored and read, and it binds the
+            # moment scheduled runs move to a worker thread (REF-05).
             if it.get("id") in _RUNNING_WORKFLOW_TASKS and (it.get("overrun") or "skip") == "skip":
                 keep.append(it)
                 continue
@@ -575,6 +587,11 @@ def materialize_due(inbox_dir: Path, now: float | None = None) -> list[dict[str,
             _RUNNING_WORKFLOW_TASKS.add(it.get("id", ""))
             try:
                 ok = _run_workflow_to_outbox(it, now=now)
+            except BaseException:
+                # the state is already advanced/dropped: put the entry back before the error
+                # reaches the loop, or a one-shot task would be lost (REF-12)
+                _persist_fired_state(it, now, restore=True)
+                raise
             finally:
                 _RUNNING_WORKFLOW_TASKS.discard(it.get("id", ""))
             if not ok:

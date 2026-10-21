@@ -182,7 +182,8 @@ def ensure_tenant_kb(tenant_id: str) -> dict[str, Any]:
 
         init = marketplace_resolve.resolve_builtin_dir(KG_INDEX_ID) / "src" / "kb_init.py"
     except Exception as exc:  # noqa: BLE001
-        return {"status": "error", "error": f"plugin source not found: {type(exc).__name__}: {exc}"[:300]}
+        return _kg_failed_outcome(tenant_id, {"status": "error",
+                                              "error": f"plugin source not found: {type(exc).__name__}: {exc}"[:300]})
     if not init.is_file():
         return _kg_failed_outcome(tenant_id, {"status": "error",
                                               "error": "the installed Knowledge Graph plugin predates kb_init.py — update it"})

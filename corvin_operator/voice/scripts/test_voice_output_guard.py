@@ -397,6 +397,18 @@ def test_identifier_description_round2(said: str, expected: str) -> None:
     assert guard.sanitize_spoken(said, "de") == expected
 
 
+@pytest.mark.parametrize("said, expected", [
+    ("Bestellnummer 4f7a21c9 ist unterwegs.", "Bestellnummer 4f7a21c9 ist unterwegs."),
+    ("Gutscheincode abc1234 gilt.", "Gutscheincode abc1234 gilt."),
+    ("Der Fix kam mit 1f4da0f8a9c3b2d1e0 auf main.", "Der Fix kam mit einem Commit auf main."),
+    ("Die Datei liegt unter C:\\Users\\x\\.corvin\\tenants\\_default\\global\\tenant.corvin.yaml.",
+     "Die Datei liegt unter einer Konfigurationsdatei."),
+    ("Der Ordner C:\\Users\\x\\Projekte ist neu.", "Der Ordner ist neu."),
+])
+def test_bare_hex_codes_and_windows_paths(said: str, expected: str) -> None:
+    assert guard.sanitize_spoken(said, "de") == expected
+
+
 def test_english_run_of_commits_after_the_noun() -> None:
     assert guard.sanitize_spoken("I pushed 2 commits: 1f4da0f8a and 9a7c1eb58.", "en") == "I pushed 2 commits."
     assert guard.sanitize_spoken("Changed foo.py.", "en") == "Changed a Python file."

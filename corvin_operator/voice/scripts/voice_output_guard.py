@@ -250,6 +250,15 @@ _DIR = re.compile(
     r"|(?:[A-Za-z]:/)?" + _SEG + r"(?:/" + _SEG + r")+)/?")
 _IPV4 = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?(?!\w|\.\d)")
 _HASH = re.compile(r"(?<![\w/#.\-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w\-])")
+# A word before a short hex run that says it is NOT a commit: an order number, a voucher, a
+# serial, a password, an id (REF-08). Without such a word a 7-11 hex run in an answer about
+# code is a commit ("der Fix kam mit c81daf266 auf main"); 12+ hex characters always are.
+_NOT_HASH_NOUNS = frozenset((
+    "bestellnummer", "nummer", "nr", "code", "gutscheincode", "rabattcode", "passwort", "password",
+    "seriennummer", "serial", "kennung", "id", "pin", "token", "key", "schlüssel", "order", "voucher",
+    "tracking", "build", "block", "kundennummer", "rechnungsnummer", "ticket", "artikelnummer",
+))
+_WINPATH = re.compile(r'(?<![\w\\])[A-Za-z]:\\(?:[^\s\\/:*?"<>|]+\\)*[^\s\\/:*?"<>|]*')
 _KB_ID = re.compile(r"\b(?:(ADR)|(PLAN)|(CONCEPT)|(REVIEW)|(IDEA)|(NOTE))-\d{1,5}\b|\b(?:(T)-\d{4}|(E)-\d{3}|(I)-\d{2})\b")
 _KB_KEYS = ("adr", "plan", "concept", "review", "idea", "note", "task", "epic", "init")
 _VERSION = re.compile(r"(?<![\w.\-])v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z][0-9A-Za-z.\-]*)?(?!\w|\.\d)")
@@ -320,6 +329,26 @@ def _dir_cb(m: "re.Match[str]") -> str:
 _VERSION_NOUNS = frozenset(("version", "versionen", "release", "releases", "build", "tag", "v"))
 
 
+def _hash_cb(m: "re.Match[str]") -> str:
+    """A short hex run is a commit unless the word before it says otherwise — an order number,
+    a voucher code or a serial number ("Seriennummer 9f8e7d6c") stays spoken (REF-08). Twelve or
+    more hex characters are a hash whatever precedes them."""
+    tok = m.group(0)
+    if len(tok) >= 12 or _prev_word(m.string, m.start()) not in _NOT_HASH_NOUNS:
+        return _mark(m, "commit")
+    return tok
+
+
+def _winpath_cb(m: "re.Match[str]") -> str:
+    tok = m.group(0).rstrip(".,;:!?")
+    tail = tok.rsplit("\\", 1)[-1]
+    if tail and "." in tail and tail.rsplit(".", 1)[-1].lower() in _EXT_KEYS:
+        key = _EXT_KEYS[tail.rsplit(".", 1)[-1].lower()]
+    else:
+        key = "dir"
+    return _mark(m, key) + m.group(0)[len(tok):]
+
+
 def _version_cb(m: "re.Match[str]") -> str:
     """Only a token that IS a version is described: a ``v`` prefix, a pre-release suffix, or a
     version noun in front of it. "Abschnitt 3.2.1", "Python 3.11.4" and dates stay spoken."""
@@ -377,10 +406,11 @@ def describe_identifiers(text: str, lang: str | None = None) -> str:
         s = text.replace("\x01", "").replace("\x02", "")
         s = _URL.sub(lambda m: _mark(m, "url"), s)
         s = _LOCAL.sub(lambda m: _mark(m, "local"), s)
+        s = _WINPATH.sub(_winpath_cb, s)
         s = _FILE.sub(_file_cb, s)
         s = _DIR.sub(_dir_cb, s)
         s = _IPV4.sub(lambda m: _mark(m, "ip"), s)
-        s = _HASH.sub(lambda m: _mark(m, "commit"), s)
+        s = _HASH.sub(_hash_cb, s)
         s = _KB_ID.sub(_kb_cb, s)
         s = _VERSION.sub(_version_cb, s)
         s = _SNAKE.sub(lambda m: m.group(0).replace("_", " "), s)

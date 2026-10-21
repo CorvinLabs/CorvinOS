@@ -79,6 +79,21 @@ def running_as_service_main(*, ppid: int | None = None, cgroup_path: str | None 
     return leaf.endswith(".service")
 
 
+#: The verdict of running_as_service_main() taken when the adapter STARTED (note_startup()).
+#: Evaluated at sweep time an orphaned adapter — its shell parent gone during the drain — is
+#: reparented to the user manager and would pass the gate (REF-10).
+_SERVICE_MAIN_AT_START: bool | None = None
+
+
+def note_startup() -> bool:
+    """Record, once, whether this process started as a service main process. Called by the
+    adapter before it forks anything; the sweep reads this verdict."""
+    global _SERVICE_MAIN_AT_START  # noqa: PLW0603
+    if _SERVICE_MAIN_AT_START is None:
+        _SERVICE_MAIN_AT_START = running_as_service_main()
+    return _SERVICE_MAIN_AT_START
+
+
 def _pids_in(procs_file: Path) -> set[int]:
     try:
         return {int(x) for x in procs_file.read_text(encoding="utf-8").split() if x.isdigit()}
@@ -130,7 +145,8 @@ def sweep_unit_leftovers(*, grace_s: float = 5.0, procs_file: Path | None = None
     and only when :func:`running_as_service_main` holds — otherwise nothing is signalled.
     """
     if procs_file is None:
-        if not running_as_service_main():
+        verdict = _SERVICE_MAIN_AT_START if _SERVICE_MAIN_AT_START is not None else running_as_service_main()
+        if not verdict:
             logger.info("unit sweep skipped: not the main process of a systemd service "
                         "(the cgroup is shared with whoever started this adapter)")
             return 0

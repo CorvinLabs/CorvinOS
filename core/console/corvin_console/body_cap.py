@@ -41,6 +41,16 @@ BODY_CAPS = {
     "/v1/console/license/upload": 8 * MIB,
     "/v1/console/packages/upload": 256 * MIB,
     "/v1/console/workflows/import": 64 * MIB,
+    # The remaining upload routes, at their handlers' own limits plus multipart framing (REF-09):
+    # until 2026-10-21 they fell to the 2 MiB default on the standalone host, and since the
+    # gateway caps every console route they would have been 413 there too.
+    "/v1/console/plugin-uploads": 100 * MIB + 256 * 1024,
+    "/v1/console/skills-manager/skills/install": 100 * MIB + 256 * 1024,
+    "/v1/console/forge-bundles/import": 50 * MIB + 256 * 1024,
+    "/v1/console/forge-bundles/validate": 50 * MIB + 256 * 1024,
+    "/v1/console/forge-intake/attachments": 25 * MIB + 256 * 1024,
+    "/v1/console/skills/upload": 50 * MIB + 256 * 1024,
+    "/v1/console/learning/model-cost-optimizer/import": 8 * MIB,
     **VIDEO_BODY_CAPS,
 }
 BODY_CAP_PREFIXES = {

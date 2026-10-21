@@ -1312,6 +1312,12 @@ def load_license_from_env(*, force: bool = False) -> None:
 
 
 def reload_from_disk() -> None:
+    try:                                   # the A2A gate remembers an ALLOW for 10 min: a reload re-decides it
+        import a2a_license_gate as _gate   # noqa: PLC0415
+
+        _gate.reset_allow_cache()
+    except Exception:  # noqa: BLE001 — the bridge module is not on every host's path
+        pass
     """Re-read the license key from disk and update _ACTIVE_LICENSE in-process.
 
     Thin serialising wrapper. The work is in ``_reload_from_disk_locked``; this

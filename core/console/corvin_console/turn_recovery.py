@@ -52,6 +52,8 @@ SYSTEM_SID = "auto-recovery"
 # the user instead of being re-run.
 OUTBOUND_MARKERS = ("send", "reply", "forward", "share", "notify", "notification", "push", "post",
                     "publish", "respond", "a2a", "remotetrigger")
+_READ_VERBS = frozenset(("get", "list", "read", "fetch", "search", "show", "find", "describe", "lookup",
+                         "query", "view", "load", "check", "count", "has", "is"))
 PROMPT_PREFIX = (
     "[Automatic restart: the previous attempt at this request was cut off by a service "
     "restart before it produced an answer. Continue from the current state of the "
@@ -173,10 +175,14 @@ def outbound_tools(tasks_dir: Path, task_id: str) -> tuple[str, ...]:
             continue
         if isinstance(ev, dict) and ev.get("event") == "tool_use":
             name = str(ev.get("tool_name") or "")
-            low = name.rsplit("__", 1)[-1].lower()
-            # Word-boundary match: "get_post" and "list_posts" are reads, "send_message" is not.
-            words = set(re.split(r"[^a-z0-9]+", low))
-            if words & set(OUTBOUND_MARKERS):
+            # camelCase is split first ("chat_postMessage" -> "chat_post_message"): a word-boundary
+            # match on the lowercased name alone missed SendMessage / sendEmail / publishPost.
+            low = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name.rsplit("__", 1)[-1]).lower()
+            # Word-boundary match: "send_message" and "chat_post_message" are senders; a name
+            # whose FIRST word is a read verb ("get_post", "list_posts", "search_threads") is not,
+            # whatever marker follows it.
+            words = [w for w in re.split(r"[^a-z0-9]+", low) if w]
+            if words and words[0] not in _READ_VERBS and set(words) & set(OUTBOUND_MARKERS):
                 found.add(name[:80])
             elif ev.get("effect_class") == "outbound_possible":
                 # A Bash command whose first word is a sender (git push, curl, gh, mail, ssh …) —

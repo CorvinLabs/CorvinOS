@@ -13931,6 +13931,12 @@ def _boot_acp_skills() -> list[str]:
 
 
 def main() -> int:
+    try:
+        from unit_sweep import note_startup as _note_startup  # noqa: PLC0415
+
+        _note_startup()                    # the sweep's service-main verdict is taken HERE, before any fork
+    except Exception:  # noqa: BLE001 — no cgroup v2 / module: the sweep is a no-op anyway
+        pass
     global _executor, _sidechannel_executor
     # parents=True: with ADAPTER_INBOX/OUTBOX/PROCESSED pinned to a fresh
     # runtime dir (<corvin_home>/bridges/shared/*) the parent may not exist yet.

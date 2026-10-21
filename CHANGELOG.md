@@ -12,7 +12,8 @@
   "output" and the run reported success. The prompt that is really spawned (upstream output, inputs, skill bodies
   included) passes the pre-spawn gates, not only the node's instructions.
 - **A scheduled console workflow runs.** `corvin_workflows run <wid>` resolves the tenant's saved workflow, cron fields
-  are read in the schedule's timezone, the overrun policy (skip / queue / parallel) is enforced, an unparseable cron is
+  are read in the schedule's timezone, the overrun policy (skip / queue / parallel) is read by the scheduler (it binds
+  once scheduled runs leave the adapter's synchronous poll loop; today no overlap can occur), an unparseable cron is
   refused with 400, a crash between a fire and the save no longer re-fires the workflow after a restart, and a corrupt
   `schedule.json` is never overwritten by the next write.
 - **Workflow runs and pauses clean up.** Deleting a run removes its attachment snapshot and artifacts; an expired pause
@@ -64,6 +65,16 @@
   buffers an SSE stream that stays open across a pause); the spawn-gate E2E's fake CLI answered the house-rules classifier
   with its worker marker; the diagnostics review suite is aligned with the current contracts; the MCP A2A tool tests run
   as a member install; the bg-task timeout test uses the smallest honoured deadline.
+
+- **Refutation round on the fixes above (same day):** a page reload during a paused DAG run no longer marks the run
+  "aborted" (the editor re-attaches as documented); the cron advance steps on the epoch, so the DST fall-back hour never
+  re-fires a schedule and spring-forward gaps behave as before; camelCase outbound tools (`chat_postMessage`,
+  `SendMessage`) count as outbound again while read verbs (`get_post`) do not; a rejection never needs a run slot; a
+  one-shot schedule survives a crashing run; the orphaned-adapter case of the sweep gate is closed (verdict taken at
+  start); the Windows updater re-arms its watchdog on every exit path; the gateway caps the plugin, skill, bundle and
+  intake upload routes at their handlers' own limits; bare hex codes (order numbers, vouchers, serials) and Windows
+  paths are spoken correctly; the stored A2A allow is forgotten on a licence reload; the live-server test sandbox takes
+  its port from the kernel.
 
 ### Changed — SkillForge body limit 16 KiB (ADR-2274)
 - The linter limit and the injection cap are both 16 KiB, so a skill the linter accepts is injected whole (the
