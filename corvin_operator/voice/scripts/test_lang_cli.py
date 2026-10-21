@@ -162,6 +162,20 @@ class LangCliMalformedProfileTests(unittest.TestCase):
         self.assertFalse(payload["set"])
         self.assertEqual(payload["code"], "en")
 
+    def test_show_reports_the_installer_seed_as_unset_and_a_pin_as_set(self):
+        """`/lang` on a seeded install says "no preference set, defaulting to
+        English" (the seed is a default); after `/lang set` it is a preference."""
+        self._write_raw(json.dumps({"display_language": "en",
+                                    "_meta": {"display_language_source": "installer"}}))
+        payload = self._assert_clean_json_ok(self._run("show"))
+        self.assertFalse(payload["set"])
+        self.assertEqual(payload["code"], "en")
+        self.assertEqual(payload["source"], "installer")
+        self._assert_clean_json_ok(self._run("set", "de"))
+        payload = self._assert_clean_json_ok(self._run("show"))
+        self.assertTrue(payload["set"])
+        self.assertEqual((payload["code"], payload["source"]), ("de", "operator"))
+
     def test_show_against_string_profile_does_not_crash(self):
         self._write_raw(_NON_DICT_PAYLOADS["string"])
         r = self._run("show")

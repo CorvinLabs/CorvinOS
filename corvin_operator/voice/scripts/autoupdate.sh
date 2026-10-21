@@ -61,6 +61,19 @@ if [[ -z "$REPO_ROOT" || ! -d "$REPO_ROOT/.git" ]]; then
   exit 0
 fi
 
+# A CorvinOS checkout (marker .corvin_repo) is updated by ONE updater only:
+# update.sh / update.ps1, driven by the console (ADR-2054, ADR-2215). This
+# tag-based plugin updater predates it. Left on, every Claude Code session
+# start (the console's own worker turns included) ran `git fetch --tags
+# --prune-tags` on the operator's checkout: 173 release tags, an 8 s kill,
+# and on a shallow clone a 5–42 MB tmp_pack left in .git/objects/pack per
+# session (measured on a fresh system, 2026-10-21, round 2) — and it would
+# have detached HEAD onto a tag, which update.sh then refuses to update.
+if [[ -f "$REPO_ROOT/.corvin_repo" ]]; then
+  voice_log "autoupdate: $REPO_ROOT is a CorvinOS checkout — updates run through update.sh (console), skipping"
+  exit 0
+fi
+
 # Marker file — the operator's "hands off this tree" switch. Documented
 # default for any developer install. Path is gitignored via .gitignore's
 # `.corvin/` rule so it never accidentally lands in a release.

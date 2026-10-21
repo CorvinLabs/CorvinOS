@@ -1050,23 +1050,18 @@ try {
 
 Write-Header "Phase 4: Environment Setup"
 
-# Mirrors core/paths/tenant.py::corvin_home and the other paths.py copies, in
-# that order: $CORVIN_HOME, else a repo-local .corvin IF IT ALREADY EXISTS (a
-# source checkout's live root), else ~/.corvin. The order is load-bearing, not
-# cosmetic: the installer exports CORVIN_HOME for the console it starts itself,
-# so a divergence here is invisible during the install and shows up later, when
-# the operator runs `corvinos-serve` from a plain shell and Python picks the
-# repo-local root the installer never prepared or verified. Note the asymmetry
-# with the Python side -- a repo-local root is ADOPTED, never created, so a
-# fresh clone still installs into the home directory.
+# ONE runtime root, the one the Python side resolves: $CORVIN_HOME, else
+# <checkout>\.corvin -- this script only ever installs from a checkout
+# (.corvin_repo is required above), and every paths.py copy
+# (corvinOS/shared, corvin_operator/forge/forge, corvin_operator/bridges/shared,
+# core/paths/tenant.py) answers <checkout>\.corvin for a checkout whether or
+# not the directory exists yet. Until 2026-10-21 (fresh-system review, round
+# 2) this picked ~\.corvin on a FRESH clone ("adopt the repo-local root only if
+# it already exists"): the installer prepared ~\.corvin, the scheduled task
+# started the console with no CORVIN_HOME, Python resolved <checkout>\.corvin,
+# and the install ran on two roots -- the Windows twin of the Linux F10 split.
 $RepoLocalCorvinHome = Join-Path $RepoPath ".corvin"
-$CorvinHome = if ($env:CORVIN_HOME) {
-    $env:CORVIN_HOME
-} elseif (Test-Path -LiteralPath $RepoLocalCorvinHome -PathType Container) {
-    $RepoLocalCorvinHome
-} else {
-    Join-Path $env:USERPROFILE ".corvin"
-}
+$CorvinHome = if ($env:CORVIN_HOME) { $env:CORVIN_HOME } else { $RepoLocalCorvinHome }
 $NodeRoot = Join-Path $CorvinHome "node"
 # uv-installer.ps1 installs into %USERPROFILE%\.local\bin (or UV_INSTALL_DIR).
 $UvBin    = Join-Path $env:USERPROFILE ".local\bin"
@@ -1624,7 +1619,19 @@ function New-HiddenConsoleAction {
     $vbsPath = Join-Path $vbsDir "$TaskName.vbs"
     $targetCmd = "`"$ExePath`" --no-browser --port $ServePort"
     $vbsEscaped = $targetCmd.Replace('"', '""')
-    Set-Content -LiteralPath $vbsPath -Value "CreateObject(""WScript.Shell"").Run ""$vbsEscaped"", 0, False" -Encoding ASCII
+    # Task Scheduler has no Environment= of its own: the console it starts at
+    # logon must see the SAME runtime root the installer prepared, so the
+    # wrapper puts CORVIN_HOME into its process environment (inherited by the
+    # child) before it runs the console -- what the Linux unit's Environment=
+    # line and the launchd plist's EnvironmentVariables do.
+    $homeEscaped = $CorvinHome.Replace('"', '""')
+    # The PROCESS environment belongs to wscript.exe itself, so the child
+    # started by any WScript.Shell object's Run inherits it.
+    $vbs = @(
+        "CreateObject(""WScript.Shell"").Environment(""PROCESS"")(""CORVIN_HOME"") = ""$homeEscaped""",
+        "CreateObject(""WScript.Shell"").Run ""$vbsEscaped"", 0, False"
+    )
+    Set-Content -LiteralPath $vbsPath -Value $vbs -Encoding ASCII
     return New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$vbsPath`""
 }
 

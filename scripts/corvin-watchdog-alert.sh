@@ -3,7 +3,10 @@
 # Emits audit events and optionally notifies operator
 set -e
 
-CORVIN_HOME="${CORVIN_HOME:-$HOME/.corvin}"
+# The runtime root of THIS checkout, as corvinOS/shared/paths.py resolves it
+# (CORVIN_HOME -> <checkout>/.corvin); ~/.corvin was a second root (F10).
+_wd_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CORVIN_HOME="${CORVIN_HOME:-$_wd_repo/.corvin}"
 
 # Styling utilities
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }

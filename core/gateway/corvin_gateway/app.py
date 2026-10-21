@@ -457,7 +457,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             _sys.path.insert(0, _bridges)
         from house_rules import house_rules_boot_health_check as _hr_boot  # type: ignore
         import logging as _logging
-        _hr_boot(log_fn=_logging.getLogger("corvin.house_rules").warning)
+        _hr_log = _logging.getLogger("corvin.house_rules")
+        _hr_boot(log_fn=_hr_log.warning, ok_fn=_hr_log.info)
     except Exception:
         pass  # best-effort — never blocks gateway startup
 

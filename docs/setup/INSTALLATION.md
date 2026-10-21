@@ -65,7 +65,8 @@ What the installer downloads, and how it is verified:
 | CorvinOS itself | not downloaded — it is your checkout | whatever revision you cloned / pulled |
 
 `sudo` is used in three places on Linux, never with a password prompt: to `apt-get`/`yum install curl`
-when neither curl nor wget exists; for `--always-on` (system-level service, ADR-0184 Stufe 2); and —
+when neither curl nor wget exists (a system with only `wget` is fine — every download and probe
+in `install.sh` falls back to it); for `--always-on` (system-level service, ADR-0184 Stufe 2); and —
 only when `sudo -n` already works (passwordless) — to install the optional system tools `jq`,
 `espeak-ng`, `poppler-utils`, `pandoc`, `pulseaudio-utils` and `gnupg` through apt/dnf/pacman.
 Without passwordless sudo those tools are skipped and the exact command is printed. Nothing else elevates.

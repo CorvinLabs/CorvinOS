@@ -519,7 +519,11 @@ class CorvinInstaller:
         ]
         # Only include dirs that actually exist (source-tree install).
         paths = [str(self.repo_root / d) for d in pythonpath_dirs if (self.repo_root / d).exists()]
-        env: dict = {"CORVIN_HOME": str(self.corvin_home)}
+        # CORVIN_PYTHON: the product's interpreter (this installer runs in the
+        # corvinos tool venv). A README install on a bare system has no
+        # `python3` on PATH, and every bridge daemon spawns the CLIs with it
+        # (shared/js/python_bin.js resolves this first) — round 2, 2026-10-21.
+        env: dict = {"CORVIN_HOME": str(self.corvin_home), "CORVIN_PYTHON": sys.executable}
         if paths:
             env["PYTHONPATH"] = sep.join(paths)
         return env
@@ -551,7 +555,7 @@ class CorvinInstaller:
                     name="voice-bridge-adapter",
                     command=adapter_cmd,
                     description="CorvinOS central adapter",
-                    env_vars={"CORVIN_HOME": self._service_env_vars()["CORVIN_HOME"]},
+                    env_vars={k: v for k, v in self._service_env_vars().items() if k != "PYTHONPATH"},
                     auto_start=True,
                 )
                 print("  ✓ Adapter service registered")
@@ -564,7 +568,7 @@ class CorvinInstaller:
                     name=f"voice-bridge-{bridge}",
                     command=self._get_bridge_command(bridge),
                     description=f"CorvinOS {bridge} bridge",
-                    env_vars={"CORVIN_HOME": self._service_env_vars()["CORVIN_HOME"]},
+                    env_vars={k: v for k, v in self._service_env_vars().items() if k != "PYTHONPATH"},
                     auto_start=True,
                 )
                 print(f"  ✓ {bridge} bridge service registered")
@@ -759,7 +763,10 @@ class CorvinInstaller:
         # of spawning our own.
         if sys.platform == "darwin" and getattr(self, "_webui_service_registered", False):
             if not self._wait_for_console(self.CONSOLE_START_BUDGET_S, label="WebUI (launchd)"):
-                print("    launchd log: ~/.corvin/logs/launchd/webui.err")
+                # The plist's StandardErrorPath — under the resolved runtime
+                # root, not a hardcoded ~/.corvin (that is where it was until
+                # 2026-10-21 while the agent wrote <checkout>/.corvin/logs/...).
+                print(f"    launchd log: {self.corvin_home / 'logs' / 'launchd' / 'webui.err'}")
             return
         _console.start_server(self.repo_root)
 

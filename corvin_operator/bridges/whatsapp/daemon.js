@@ -76,7 +76,7 @@ function synthesizeVoiceNoteForText(text, lang = 'de', voice = 'shimmer', timeou
       // Use the interpreter the adapter runs under (anaconda) when configured
       // via PYTHON in service.env — system python3 typically lacks `openai`,
       // which makes say.py silently fall through to a text-only reply.
-      const pyBin = process.env.PYTHON || 'python3';
+      const pyBin = require('../shared/js/python_bin').pythonBin();
       child = spawn(pyBin, [SAY_HELPER, outPath, text, lang, voice], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -496,7 +496,7 @@ function writeInbox(payload) {
       const snippet = (payload.text || payload.caption || '').slice(0, 200) || `[${kind}]`;
       const fromShort = (payload.from || '').replace('@s.whatsapp.net', '').replace('@lid', '');
       if (mode === 'earcon') {
-        spawn('python3', [path.join(PLUGIN_ROOT, 'scripts', 'earcon.py'), 'play', 'tool'], {
+        spawn(require('../shared/js/python_bin').pythonBin(), [path.join(PLUGIN_ROOT, 'scripts', 'earcon.py'), 'play', 'tool'], {
           detached: true, stdio: 'ignore',
         }).unref();
       } else if (mode === 'voice') {
@@ -1431,7 +1431,7 @@ if (MOCK) {
               const ocard = inChatCmds.disclosureCardText({
                 channel: CHANNEL, ownerLabel: currentSettings().operator_name || '(owner)',
                 hasObserverTranscript: true,
-                lang: currentSettings().lang || 'en',
+                lang: currentSettings().lang,   // unset → the profile's language (disclosureCardText)
               });
               if (ocard) {
                 try { await safeSend(s, sender, { text: ocard }); } catch {}
@@ -1458,7 +1458,7 @@ if (MOCK) {
           const card = inChatCmds.disclosureCardText({
             channel: CHANNEL, ownerLabel: '(owner)',
             hasObserverTranscript: false,
-            lang: currentSettings().lang || 'en',
+            lang: currentSettings().lang,   // unset → the profile's language (disclosureCardText)
           });
           if (card) {
             try { await safeSend(s, sender, { text: card }); } catch {}

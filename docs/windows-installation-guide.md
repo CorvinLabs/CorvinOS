@@ -97,7 +97,7 @@ Each of these is a real check, not an assumption:
 
 | Variable | Windows | Unix |
 |----------|---------|------|
-| `CORVIN_HOME` | `C:\Users\user\.corvin` | `~/.corvin` |
+| `CORVIN_HOME` | `<checkout>\.corvin` (the clone you installed from) | `<checkout>/.corvin` |
 | `USERPROFILE` | ✓ (home dir) | N/A |
 | `HOME` | N/A | ✓ (home dir) |
 | `TEMP`/`TMP` | ✓ | N/A |
@@ -200,7 +200,7 @@ The installer respects all platform-specific environment variables:
 
 | Variable | Purpose | Windows Default |
 |----------|---------|-----------------|
-| `CORVIN_HOME` | Installation root | `%USERPROFILE%\.corvin` |
+| `CORVIN_HOME` | Runtime root (data, audit chain, Node runtime) | `<checkout>\.corvin` — the same root the Python side resolves; the logon task carries it |
 | `CORVIN_TENANT_ID` | Tenant scope | `_default` |
 | `CORVIN_SUPERVISED` | Autostart detection | (internal) |
 | `PATH` | Separator: `;` on Windows, `:` on Unix | Auto-updated |

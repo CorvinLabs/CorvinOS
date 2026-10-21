@@ -393,10 +393,19 @@ except Exception: print("")' 2>/dev/null)"
 fi
 
 if [ "$SYSTEMD" = 1 ]; then
+    _units_stale=0
+    # Units written before 2026-10-21 carry the 5-per-300 s budget (a restarted
+    # console stayed dead for five minutes) and no CORVIN_HOME on the adapter
+    # unit (a second runtime root); re-provisioning from the installer fixes both.
+    if systemctl --user cat corvin-webui.service 2>/dev/null | grep -q '^StartLimitBurst=5$'; then _units_stale=1; fi
+    for _au in $(systemctl --user list-unit-files 'corvin-*adapter*.service' --no-legend 2>/dev/null | awk '{print $1}'); do
+        systemctl --user cat "$_au" 2>/dev/null | grep -q 'CORVIN_HOME=' || _units_stale=1
+    done
     if [ -x "$TOOL_PY" ] && { ! systemctl --user cat corvin-webui.service >/dev/null 2>&1 \
+            || [ "$_units_stale" = 1 ] \
             || { [ -n "$(served_tree)" ] && [ "$(served_tree)" != "$SRC" ]; }; }; then
-        # Units gone (deleted, profile reset), or pointing at a different
-        # source tree than the one just built: re-provision them from $SRC.
+        # Units gone (deleted, profile reset), stale (above), or pointing at a
+        # different source tree than the one just built: re-provision them from $SRC.
         _quiet "re-registering services" corvin-install --yes || warn "service registration incomplete — run: corvin-install --yes"
     fi
     [ -f "$SRC/scripts/setup.sh" ] && { bash "$SRC/scripts/setup.sh" --no-autostart >>"$LOG" 2>&1 || true; }

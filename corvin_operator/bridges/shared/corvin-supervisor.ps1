@@ -40,11 +40,11 @@ param(
     [Parameter(Mandatory=$true)][ValidateSet("console", "bridge")][string]$Target,
     [Parameter(Mandatory=$false)][string]$Bridge = "discord",
     [int]$RestartSec = 5,
-    # ADR-0184 Stufe-1: bounded restart. Mirrors the systemd
-    # StartLimitBurst=5 / StartLimitIntervalSec=300 pair used for the Linux
-    # user unit (corvinOS/installer/service_manager.py) so all three
-    # platforms apply the same crash-loop cutoff -- 5 restarts in 5 minutes,
-    # then stop instead of spinning forever.
+    # ADR-0184 Stufe-1: bounded restart -- 5 crashes in 5 minutes, then stop
+    # instead of spinning forever. The Linux user unit's budget is 8 per 120 s
+    # since 2026-10-21 (corvinOS/installer/service_manager.py: systemd counts
+    # EVERY start, deliberate ones too); this loop counts crashes only, so it
+    # keeps 5 per 300 s (tests/test_windows_supervisor_parity.py pins it).
     [int]$MaxRestarts = 5,
     [int]$RestartWindowSec = 300
 )

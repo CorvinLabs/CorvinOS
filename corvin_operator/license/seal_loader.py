@@ -56,9 +56,13 @@ def _try_load_compiled() -> Any | None:
 
 def _load_stub() -> Any:
     from . import _corvin_seal_stub
-    log.warning(
-        "seal_loader: using Python stub — compiled Rust binary absent. "
-        "Dev/CI mode only; stub lacks compile-time key hardening (ADR-0144 F-04)."
+    # No build of CorvinOS ships the compiled seal (the repository carries only
+    # the stub), so this is the normal state of every install — INFO, not a
+    # WARNING telling each operator they are in "Dev/CI mode" (fresh-system
+    # review 2026-10-21, round 2). The hardening gap itself is ADR-0144 F-04.
+    log.info(
+        "seal_loader: Python seal implementation in use (no compiled "
+        "corvin_seal binary in this build; ADR-0144 F-04)."
     )
     return _corvin_seal_stub
 

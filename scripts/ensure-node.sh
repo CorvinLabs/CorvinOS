@@ -56,6 +56,12 @@ else
     ARCHIVE_EXT="tar.gz"
 fi
 DOWNLOAD_URL="https://nodejs.org/dist/v${NODE_VERSION}/${NODE_FILENAME}.${ARCHIVE_EXT}"
+# nodejs.org publishes one SHASUMS256.txt per release next to the archives.
+# The archive is verified against it BEFORE anything is extracted — until
+# 2026-10-21 (round 2) `_sha256_of` below was defined and never called, so
+# the only unpinned, unverified download of the whole install was the Node
+# runtime that builds and serves the console.
+SHASUMS_URL="https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper functions
@@ -109,19 +115,29 @@ _tmp_dir=$(mktemp -d) || _fail "mktemp failed"
 trap "rm -rf '$_tmp_dir'" EXIT
 
 _archive="${_tmp_dir}/${NODE_FILENAME}.${ARCHIVE_EXT}"
+_sums="${_tmp_dir}/SHASUMS256.txt"
 
-# Download with curl or wget
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --max-time 300 -o "${_archive}" "${DOWNLOAD_URL}" 2>/dev/null \
-        || _fail "Failed to download from ${DOWNLOAD_URL}"
-elif command -v wget >/dev/null 2>&1; then
-    wget -qO "${_archive}" "${DOWNLOAD_URL}" 2>/dev/null \
-        || _fail "Failed to download from ${DOWNLOAD_URL}"
-else
-    _fail "curl or wget required (not found)"
-fi
-
+_download() {  # _download URL DEST
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 300 -o "$2" "$1" 2>/dev/null
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$2" "$1" 2>/dev/null
+    else
+        _fail "curl or wget required (not found)"
+    fi
+}
+_download "${DOWNLOAD_URL}" "${_archive}" || _fail "Failed to download from ${DOWNLOAD_URL}"
 [ -f "${_archive}" ] || _fail "Download resulted in no file"
+
+# Verify against the release's SHASUMS256.txt (fail-closed: no checksum file,
+# no tool to hash with, or a mismatch all stop here with nothing extracted).
+_download "${SHASUMS_URL}" "${_sums}" || _fail "Failed to download ${SHASUMS_URL} (needed to verify the Node.js archive)"
+_want="$(grep -E "[[:space:]](\./)?${NODE_FILENAME}\.${ARCHIVE_EXT}\$" "${_sums}" 2>/dev/null | awk '{print $1}' | head -1)"
+[ -n "${_want}" ] || _fail "no entry for ${NODE_FILENAME}.${ARCHIVE_EXT} in ${SHASUMS_URL}"
+_got="$(_sha256_of "${_archive}")"
+[ -n "${_got}" ] || _fail "no sha256sum/shasum/openssl available to verify the Node.js archive"
+[ "${_got}" = "${_want}" ] || _fail "Node.js archive checksum mismatch (expected ${_want}, got ${_got}) — refusing to extract it"
+_ok "Node.js archive verified against SHASUMS256.txt"
 
 _log "Extracting to ${NODE_ROOT} ..."
 

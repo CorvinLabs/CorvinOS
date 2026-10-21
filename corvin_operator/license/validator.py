@@ -1101,6 +1101,16 @@ def load_license_from_env(*, force: bool = False) -> None:
     # free/invalid path leaves it free so a stale paid key is never retained.
     _set_feature_root_key(None)
 
+    # The instance seed BEFORE the first audit record of this boot. Every
+    # free/invalid path below calls _init_instance_seed() again (idempotent),
+    # but only after ``license.token_source`` / ``license.free_tier`` were
+    # written — so on EVERY fresh install the chain already held one record
+    # when the seed was created 55 ms later, and the G1 check below reported
+    # "NEWLY CREATED on an existing audit chain … possible G-vector attack"
+    # as CRITICAL on a system nobody had touched (fresh-system review
+    # 2026-10-21, round 2). A seed that exists first is simply the seed.
+    _init_instance_seed()
+
     token = _find_token()
     # A3 (ADR-0138 M5): emit token source for forensic auditability — ops can
     # detect env-var bypass (D2 vector) without exposing the token value itself.
@@ -1312,12 +1322,6 @@ def load_license_from_env(*, force: bool = False) -> None:
 
 
 def reload_from_disk() -> None:
-    try:                                   # the A2A gate remembers an ALLOW for 10 min: a reload re-decides it
-        import a2a_license_gate as _gate   # noqa: PLC0415
-
-        _gate.reset_allow_cache()
-    except Exception:  # noqa: BLE001 — the bridge module is not on every host's path
-        pass
     """Re-read the license key from disk and update _ACTIVE_LICENSE in-process.
 
     Thin serialising wrapper. The work is in ``_reload_from_disk_locked``; this
@@ -1402,6 +1406,17 @@ def _reload_from_disk_locked() -> None:
             _THROTTLE_WINDOW_STARTED_AT = _now
         return
     _LAST_RELOAD_AT = _now
+    if content_changed:
+        # The A2A gate remembers an ALLOW for 10 min and a status verdict for 30 s: a reload that
+        # picks up a NEW (or removed) token re-decides both. Until 2026-10-21 (round 2) the reset
+        # ran on EVERY call — including the one every authenticated console request makes — so
+        # with the console open the ALLOW was re-evaluated (and audited) on every ping and send.
+        try:
+            import a2a_license_gate as _gate  # noqa: PLC0415
+
+            _gate.reset_allow_cache()
+        except Exception:  # noqa: BLE001 — the bridge module is not on every host's path
+            pass
     _LAST_LOADED_TOKEN_HASH = token_hash
 
     # ADR-0154 M1/M3/M5 — the OTA feature root key must end this call matching

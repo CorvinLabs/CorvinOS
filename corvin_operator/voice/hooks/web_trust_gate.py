@@ -286,21 +286,55 @@ def _resolve_aliased_env(canonical: str, legacy: str) -> str | None:
     return None
 
 
+def _repo_root() -> Path | None:
+    """Nearest ancestor carrying the checkout marker ``.corvin_repo``. The
+    former ``(parent / "plugins").is_dir()`` heuristic matched ``~/.claude``
+    when this hook ran from Claude Code's plugin cache (2026-10-21)."""
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / ".corvin_repo").exists():
+            return parent
+    return None
+
+
+def _installed_root() -> Path | None:
+    """The runtime root ``corvin-install`` recorded in ``installer.json``
+    (see path_gate._installed_root — same contract, inlined on purpose)."""
+    cfg_dir = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if not cfg_dir:
+        xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+        base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
+        cfg_dir = str(base / "corvin-voice")
+    try:
+        import json as _json
+        value = _json.loads((Path(cfg_dir) / "installer.json").read_text(encoding="utf-8")).get("corvin_home")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return Path(os.path.expanduser(value)) if isinstance(value, str) and value else None
+
+
 def _corvin_home() -> Path:
     env = _resolve_aliased_env("CORVIN_HOME", "CORVIN_HOME")
     if env:
         return Path(os.path.expanduser(os.path.expandvars(env)))
-    here = Path(__file__).resolve()
-    for parent in [here, *here.parents]:
-        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-            new_path = parent / ".corvin"
-            if new_path.exists():
-                return new_path
-            legacy_path = parent / ".corvinOS"
-            if legacy_path.exists():
-                return legacy_path
-            return new_path  # default to canonical even if it doesn't exist yet
+    repo = _repo_root()
+    if repo is not None:
+        return repo / ".corvin"  # canonical even if it doesn't exist yet
+    installed = _installed_root()
+    if installed is not None:
+        return installed
     return Path.home() / ".corvin"
+
+
+def _tenant_chain() -> Path:
+    """THE audit chain of the current tenant — ``<home>/tenants/<tid>/global/
+    forge/audit.jsonl``, what ``tenant_audit_chain()`` resolves everywhere
+    else. Until 2026-10-21 this hook wrote ``<home>/global/forge/audit.jsonl``,
+    the pre-ADR-0007 location: one WebFetch in a console worker created a
+    second live chain next to the tenant chain and the next boot's tripwire
+    reported ``audit_chain_split``."""
+    tid = (os.environ.get("CORVIN_TENANT_ID") or "_default").strip() or "_default"
+    return _corvin_home() / "tenants" / tid / "global" / "forge" / "audit.jsonl"
 
 
 def _emit_audit(tool_name: str, classifications: list[dict]) -> None:
@@ -311,20 +345,17 @@ def _emit_audit(tool_name: str, classifications: list[dict]) -> None:
     if not classifications:
         return
     try:
-        here = Path(__file__).resolve()
-        repo = None
-        for parent in [here, *here.parents]:
-            if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-                repo = parent
-                break
-        if repo is None:
-            return
-        forge_pkg_parent = repo / "corvin_operator" / "forge"
-        if str(forge_pkg_parent) not in sys.path:
-            sys.path.insert(0, str(forge_pkg_parent))
+        repo = _repo_root()
+        if repo is not None:
+            forge_pkg_parent = repo / "corvin_operator" / "forge"
+            if str(forge_pkg_parent) not in sys.path:
+                sys.path.insert(0, str(forge_pkg_parent))
+        # Outside a checkout (plugin cache) the package may still be on
+        # PYTHONPATH (a console/bridge worker inherits its unit's); if not,
+        # the ImportError below ends this best-effort emission.
         from forge.security_events import write_event  # type: ignore
 
-        audit_target = _corvin_home() / "global" / "forge" / "audit.jsonl"
+        audit_target = _tenant_chain()
         audit_target.parent.mkdir(parents=True, exist_ok=True)
         # One event per classified source. INFO severity: this is
         # observability, not a deny.

@@ -68,10 +68,22 @@ def _voice_dir() -> Path:
     env = os.environ.get("CORVIN_HOME")
     if env:
         return Path(os.path.expanduser(os.path.expandvars(env))) / "voice"
+    # The checkout marker only — the former ``(parent / "plugins").is_dir()``
+    # test matched ``~/.claude`` when this hook ran from the plugin cache and
+    # resolved ``~/.claude/.corvin`` (2026-10-21). Outside a checkout, the
+    # root the installer recorded (installer.json) wins over ``~/.corvin``.
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
-        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+        if (parent / ".corvin_repo").exists():
             return parent / ".corvin" / "voice"
+    try:
+        import json as _json
+        cfg = _voice_config_dir() / "installer.json"
+        value = _json.loads(cfg.read_text(encoding="utf-8")).get("corvin_home")
+        if isinstance(value, str) and value:
+            return Path(os.path.expanduser(value)) / "voice"
+    except (OSError, ValueError, AttributeError):
+        pass
     return Path.home() / ".corvin" / "voice"
 
 

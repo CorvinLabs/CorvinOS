@@ -143,6 +143,31 @@ console.log('\n[card text DE + EN]');
   ok(de !== en, 'DE and EN differ');
 }
 
+// ── 9b: no caller language → the profile's display_language (seed or pin) ──
+console.log('\n[card language from the profile]');
+{
+  // A sandboxed profile.json (XDG_CONFIG_HOME is this test's temp dir), seeded
+  // `de` by the installer: the card is German although the daemon passed no lang.
+  const xdg = path.join(TMP, 'xdg');
+  fs.mkdirSync(path.join(xdg, 'corvin-voice'), { recursive: true });
+  const prevXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = xdg;
+  try {
+    fs.writeFileSync(path.join(xdg, 'corvin-voice', 'profile.json'),
+      JSON.stringify({ display_language: 'de', _meta: { display_language_source: 'installer' } }));
+    ok(inChat.profileCardLanguage() === 'de', 'profile language resolves the seed', `(${inChat.profileCardLanguage()})`);
+    const card = disclosureCardText({ channel: CHANNEL, ownerLabel: 'Silvio', hasObserverTranscript: false, lang: undefined });
+    const de = disclosureCardText({ channel: CHANNEL, ownerLabel: 'Silvio', hasObserverTranscript: false, lang: 'de' });
+    ok(card === de, 'card without a caller language is the German card on a de install');
+    fs.writeFileSync(path.join(xdg, 'corvin-voice', 'profile.json'), JSON.stringify({}));
+    const en = disclosureCardText({ channel: CHANNEL, ownerLabel: 'Silvio', hasObserverTranscript: false, lang: 'en' });
+    ok(disclosureCardText({ channel: CHANNEL, ownerLabel: 'Silvio', hasObserverTranscript: false, lang: '' }) === en,
+       'no profile language → English card');
+  } finally {
+    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = prevXdg;
+  }
+}
+
 // ── 10: disclosureHasSeen / disclosureMarkSeen round-trip ────────────────
 console.log('\n[has_seen / mark_seen round-trip]');
 {

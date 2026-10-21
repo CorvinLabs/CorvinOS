@@ -1221,7 +1221,7 @@ def _house_rules_classifier(
     return "", min_clear_conf, "all chunks clear"
 
 
-def house_rules_boot_health_check(log_fn: "object | None" = None) -> None:
+def house_rules_boot_health_check(log_fn: "object | None" = None, ok_fn: "object | None" = None) -> None:
     """Boot-time L44 classifier health check — call from any startup path.
 
     ADR-2091: the only classifier backend is the cloud ``claude -p`` helper, so
@@ -1231,11 +1231,17 @@ def house_rules_boot_health_check(log_fn: "object | None" = None) -> None:
     tenant's classifier errors and the gate degrades to the Tier-0 floor
     (audited ``classifier_error_tier0_degraded``).
 
-    ``log_fn`` is a callable(str) for log output; defaults to logging.warning."""
+    ``log_fn`` is a callable(str) for the PROBLEM lines (defaults to
+    logging.warning); ``ok_fn`` for the one success line (defaults to
+    ``log_fn``, else logging.info). Until 2026-10-21 the "CLI resolved ✓"
+    line went through the same callable, so the gateway's clean boot carried
+    it as a WARNING in the journal (fresh-system review, round 2)."""
     import logging as _logging
     import shutil as _shutil
 
-    _log = log_fn if callable(log_fn) else _logging.getLogger("corvin.house_rules").warning
+    _logger = _logging.getLogger("corvin.house_rules")
+    _log = log_fn if callable(log_fn) else _logger.warning
+    _ok = ok_fn if callable(ok_fn) else (log_fn if callable(log_fn) else _logger.info)
     try:
         cli = _resolve_helper_claude_bin()
         found = bool(cli) and (os.path.isfile(cli) or _shutil.which(cli) is not None)
@@ -1250,7 +1256,7 @@ def house_rules_boot_health_check(log_fn: "object | None" = None) -> None:
             "claude CLI or set CORVIN_CLAUDE_BIN."
         )
         return
-    _log(f"[house-rules] boot-check: cloud classifier CLI resolved ({cli}) ✓")
+    _ok(f"[house-rules] boot-check: cloud classifier CLI resolved ({cli}) ✓")
 
 
 # ── operator CLI: read-only show / status ────────────────────────────────────

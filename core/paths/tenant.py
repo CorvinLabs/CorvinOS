@@ -34,9 +34,18 @@ def corvin_home() -> Path:
     root = os.environ.get("CORVIN_HOME", "").strip()
     if root:
         return Path(os.path.expandvars(root)).expanduser()
-    repo_local = Path(__file__).resolve().parents[2] / ".corvin"
-    if repo_local.is_dir():  # source checkout: the repo-local root is the live one
-        return repo_local
+    # The same answer as the three paths.py mirrors (corvinOS/shared,
+    # corvin_operator/forge/forge, corvin_operator/bridges/shared): inside a
+    # checkout (marker ``.corvin_repo``) the root IS ``<checkout>/.corvin``,
+    # whether or not it exists yet. Until 2026-10-21 (round 2) this copy
+    # adopted it only once the directory existed and said ``~/.corvin`` before
+    # — so in one process the first writer that created the directory flipped
+    # every later ``core.paths`` resolution to a different root (fresh Windows
+    # install: the installer prepares ~/.corvin, the console the task starts
+    # has no CORVIN_HOME and lands in <checkout>/.corvin).
+    repo = Path(__file__).resolve().parents[2]
+    if (repo / ".corvin_repo").exists():
+        return repo / ".corvin"
     return Path.home() / ".corvin"
 
 

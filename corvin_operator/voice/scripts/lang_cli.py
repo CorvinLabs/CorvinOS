@@ -71,17 +71,26 @@ def _provision_voice(code: str) -> str:
 
 
 def cmd_show() -> int:
-    raw = profile.load().get("display_language") or ""
+    # `set` means the OPERATOR pinned a language (`/lang set`, the console).
+    # The installer's locale seed (profile.seed_display_language) is a default:
+    # it is reported as the current code with set=false, so `/lang` answers
+    # "No language preference set. Defaulting to English (en)." instead of
+    # claiming a preference nobody chose (round 2, 2026-10-21).
+    raw = profile.display_language_pin()
+    source = "operator"
+    if not raw:
+        raw = profile.display_language_default()
+        source = "installer" if raw else ""
     code = i18n.normalise(raw)
-    if not code:
+    if not code or source != "operator":
         # Default falls back to English. The caller decides whether to
         # auto-detect from bridge metadata when the profile is empty.
         return _emit({
-            "ok": True, "set": False,
-            "code": "en", "name": i18n.native_name("en"),
+            "ok": True, "set": False, "source": source if code else "",
+            "code": code or "en", "name": i18n.native_name(code or "en"),
         })
     return _emit({
-        "ok": True, "set": True,
+        "ok": True, "set": True, "source": source,
         "code": code, "name": i18n.native_name(code),
     })
 

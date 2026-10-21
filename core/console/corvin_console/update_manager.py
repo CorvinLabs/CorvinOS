@@ -30,7 +30,11 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-logger = logging.getLogger(__name__)
+# In the ``corvin.`` namespace: the hosts' journal/file handlers are attached
+# to the ``corvin`` logger, so ``corvin_console.update_manager`` (the module
+# name) never reached the journal — an auto-update check that fetched, stalled
+# and was killed at its timeout left no line at all (fresh system, 2026-10-21).
+logger = logging.getLogger("corvin.console.update_manager")
 
 BRANCH = "main"
 _FETCH_TIMEOUT_S = 120.0
@@ -585,11 +589,23 @@ async def auto_update_on_start(tenant_id: str, *, enabled: bool, delay_s: float 
     return "started"
 
 
+_SCHEDULED_FOR: set[str] = set()
+
+
 def schedule_auto_update(tenant_id: str | None = None) -> None:
-    """Fire-and-forget; called from the lifespan of BOTH hosts (console app, gateway app)."""
+    """Fire-and-forget; called from the lifespan of BOTH hosts (console app, gateway app).
+
+    Once per tenant per process: when the gateway mounts the console, both
+    lifespans run in ONE process and two checks ran two concurrent `git fetch`
+    on the same checkout (two abandoned tmp_pack files on a fresh system,
+    2026-10-21, round 2)."""
     try:
         from .routes.settings import _read_auto_update
         tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+        if tid in _SCHEDULED_FOR:
+            logger.info("auto-update on start: already scheduled for tenant %s in this process", tid)
+            return
+        _SCHEDULED_FOR.add(tid)
 
         async def _run() -> None:
             try:

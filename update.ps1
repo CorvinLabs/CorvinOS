@@ -514,6 +514,17 @@ if ($Port -le 0 -and $env:CORVIN_CONSOLE_PORT -match '^\d+$') { $Port = [int]$en
 if ($Port -le 0) { $Port = 8765 }
 $BaseUrl = "http://127.0.0.1:$Port"
 $Web = Join-Path $Src "core\console\corvin_console\web-next"
+# ONE runtime root -- the one the Python side resolves for this tree
+# (<checkout>\.corvin, see install.ps1 phase 4 and update.sh step 2). Until
+# 2026-10-21 this script kept ~\.corvin regardless of the tree it updated, so
+# its Node runtime and the console's root could differ. A pre-2026-10-21
+# install's Node under ~\.corvin\node stays usable through PATH until the
+# fetch below has put one under the tree's own root.
+if (-not $env:CORVIN_HOME) {
+    $CorvinHome = Join-Path $Src ".corvin"
+    $env:CORVIN_HOME = $CorvinHome
+    $env:PATH = ((Join-Path $CorvinHome "node"), (Join-Path (Join-Path $env:USERPROFILE ".corvin") "node"), $env:PATH) -join ';'
+}
 $Dist = Join-Path $Web "dist"
 Write-Step "[2/6] Source ($Kind): $Src"
 

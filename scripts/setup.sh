@@ -40,6 +40,17 @@ SYSTEMD_DIR="$HOME/.config/systemd/user"
 echo ""
 echo "$(_bold "Setting up CorvinOS services (watchdog + systemd)...")"
 
+# The watchdog is a systemd user unit. On macOS (launchd keeps the console
+# alive through KeepAlive in its LaunchAgent) and on a Linux without a user
+# session there is nothing to register — not an error. Until 2026-10-21 this
+# script failed on `systemctl` there and install.sh reported "Watchdog setup
+# encountered an error" on every macOS install.
+if ! { command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; }; then
+    echo "  $(_dim 'ℹ') no systemd user session — watchdog not needed here (nothing registered)"
+    mkdir -p "$CORVIN_HOME/logs" "$CORVIN_HOME/cache" "$CORVIN_HOME/config" 2>/dev/null || true
+    exit 0
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 1: Create systemd user directory
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,8 +90,14 @@ Type=simple
 # localhost: the console binds v4 loopback only. $$ is systemd's escape for $.
 # reset-failed first: a unit that hit its start limit refuses `restart` for the rest of
 # the window, and the watchdog would loop on that refusal (2026-10-21).
+# Bounded: a console that never comes back is restarted three times a minute
+# apart, then once every 30 minutes — each attempt is a WARNING/ERROR line
+# (<4>/<3> = journal priority) naming the journal to read. Unbounded, the
+# reset-failed above turned a crash loop (a broken import) into 8 boot
+# attempts every ~80 s forever, invisible as such in `systemctl status`
+# (fresh-system review 2026-10-21, round 2). A healthy probe resets the count.
 # NO User=: in a --user unit it fails every start with 216/GROUP.
-ExecStart=/bin/bash -c 'f=0; while true; do if curl -fs -m 5 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || kill -0 "$$(cat "$${TMPDIR:-/tmp}/corvinos-setup.lock/pid" 2>/dev/null || echo none)" 2>/dev/null; then f=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then systemctl --user reset-failed corvin-webui.service 2>/dev/null; systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
+ExecStart=/bin/bash -c 'f=0; r=0; while true; do if curl -fs -m 5 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || kill -0 "$$(cat "$${TMPDIR:-/tmp}/corvinos-setup.lock/pid" 2>/dev/null || echo none)" 2>/dev/null; then f=0; r=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then r=$$((r+1)); if [ "$$r" -gt 3 ]; then echo "<3>watchdog: console still down after 3 restarts - a crash loop? read: journalctl --user -u corvin-webui -n 100 - next attempt in 30 min"; sleep 1740; fi; echo "<4>watchdog: console unhealthy for 3 probes - restarting it (attempt $$r)"; systemctl --user reset-failed corvin-webui.service 2>/dev/null; systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
 Restart=always
 RestartSec=10
 StandardOutput=journal

@@ -43,7 +43,7 @@ const PLUGIN_VOICE_ROOT = path.resolve(__dirname, '..', '..', '..', 'voice');
 const VOICE_AUDIT_CLI = path.join(
   PLUGIN_VOICE_ROOT, 'scripts', 'voice_audit.py'
 );
-const PYTHON = process.env.PYTHON || 'python3';
+const PYTHON = require('./python_bin').pythonBin();  // CORVIN_PYTHON / PYTHON / PATH / tool venv
 
 const KNOWN_EVENT_TYPES = new Set([
   'bridge.login',

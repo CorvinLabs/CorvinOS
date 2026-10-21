@@ -55,6 +55,7 @@ def test_downloads_chromium_with_the_console_interpreter(capsys):
     presence = iter([False, True])
     with mock.patch.object(browser, "_chromium_present",
                            side_effect=lambda: next(presence)), \
+         mock.patch.object(browser, "_chromium_launch_problem", return_value=""), \
          mock.patch.object(browser.subprocess, "run", _fake_run):
         browser.ensure_browser(interactive=False)
 
@@ -146,6 +147,7 @@ def test_linux_install_deps_hint_uses_the_tool_venv_interpreter(capsys):
                            side_effect=lambda: next(presence)), \
          mock.patch.object(browser.subprocess, "run",
                            return_value=subprocess.CompletedProcess([], 0)), \
+         mock.patch.object(browser, "_chromium_launch_problem", return_value="missing libnss3.so"), \
          mock.patch.object(browser.sys, "platform", "linux"):
         browser.ensure_browser(interactive=False)
     out = capsys.readouterr().out
@@ -170,3 +172,62 @@ def test_cli_browser_flag_runs_only_the_browser_step(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["corvin-install", "install", "--browser"])
     inst_main.main()
     assert len(ran) == 1
+
+
+# ── round 2 (2026-10-21): "ready" means it LAUNCHES, not that the download landed ──
+
+def _completed(rc=0):
+    return subprocess.CompletedProcess(["playwright"], rc, stdout="", stderr="")
+
+
+def test_a_download_that_cannot_launch_is_not_reported_as_ready(capsys):
+    """Bare Ubuntu 24.04: the binary lands, the launch dies with a missing shared
+    library. The step must say so and name the remedy, never "agent browsing is ready"."""
+    with mock.patch.object(browser, "_chromium_present", side_effect=[False, True]), \
+         mock.patch.object(browser.subprocess, "run", return_value=_completed(0)), \
+         mock.patch.object(browser, "_chromium_launch_problem", return_value="missing libglib-2.0.so.0"), \
+         mock.patch.object(browser, "_stdout_is_tty", return_value=False):
+        browser.ensure_browser(interactive=False)
+    out = capsys.readouterr().out
+    assert "agent browsing is ready" not in out
+    assert "cannot launch" in out and "libglib-2.0.so.0" in out
+    assert "install-deps chromium" in out
+    _assert_remedies_are_runnable(out)
+
+
+def test_a_launching_chromium_is_ready(capsys):
+    with mock.patch.object(browser, "_chromium_present", side_effect=[False, True]), \
+         mock.patch.object(browser.subprocess, "run", return_value=_completed(0)), \
+         mock.patch.object(browser, "_chromium_launch_problem", return_value=""), \
+         mock.patch.object(browser, "_stdout_is_tty", return_value=False):
+        browser.ensure_browser(interactive=False)
+    out = capsys.readouterr().out
+    assert "launches — agent browsing is ready" in out
+
+
+def test_launch_problem_names_the_missing_library():
+    """The probe parses Playwright's launch error (the real text from the fresh system)."""
+    class _Chromium:
+        def launch(self, headless=True):
+            raise RuntimeError(
+                "BrowserType.launch: Target page, context or browser has been closed\n"
+                "Browser logs:\n<launching> /x/chrome-headless-shell --headless\n"
+                "/x/chrome-headless-shell: error while loading shared libraries: "
+                "libglib-2.0.so.0: cannot open shared object file: No such file or directory\n")
+
+    class _PW:
+        chromium = _Chromium()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    fake_api = mock.MagicMock(sync_playwright=lambda: _PW())
+    with mock.patch.dict(sys.modules, {"playwright": mock.MagicMock(), "playwright.sync_api": fake_api}):
+        assert browser._chromium_launch_problem() == "missing libglib-2.0.so.0"
+
+    class _OK:
+        def launch(self, headless=True):
+            return mock.MagicMock()
+    fake_ok = mock.MagicMock(sync_playwright=lambda: type("P", (), {"chromium": _OK(), "__enter__": lambda s: s, "__exit__": lambda s, *a: False})())
+    with mock.patch.dict(sys.modules, {"playwright": mock.MagicMock(), "playwright.sync_api": fake_ok}):
+        assert browser._chromium_launch_problem() == ""
+

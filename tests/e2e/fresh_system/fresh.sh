@@ -49,7 +49,11 @@ case "$cmd" in
     echo "$n up" ;;
   install)
     n="$1"; ref="${2:-main}"
-    _ex "$n" "set -u; cd ~; echo \"== \$(date -u +%FT%TZ) clone $ref\"; git clone --depth 1 --branch '$ref' '$REPO_URL' CorvinOS 2>&1 | tail -1; cd CorvinOS; git log --oneline -1; echo \"== \$(date -u +%FT%TZ) install.sh --lan\"; ./install.sh --lan; rc=\$?; echo \"== \$(date -u +%FT%TZ) install.sh exit=\$rc\"; exit \$rc" ;;
+    # The install's own output is kept INSIDE the system as ~/install.log:
+    # test_fresh_install_live.py reads it there when CORVIN_FRESH_INSTALL_LOG
+    # is not given (the /tmp/corvinos-install.log the installer writes holds
+    # only the awaited sub-steps, never corvin-install's step lines).
+    _ex "$n" "set -u -o pipefail; cd ~; { echo \"== \$(date -u +%FT%TZ) clone $ref\"; git clone --depth 1 --branch '$ref' '$REPO_URL' CorvinOS 2>&1 | tail -1; cd CorvinOS; git log --oneline -1; echo \"== \$(date -u +%FT%TZ) install.sh --lan\"; ./install.sh --lan; rc=\$?; echo \"== \$(date -u +%FT%TZ) install.sh exit=\$rc\"; exit \$rc; } 2>&1 | tee ~/install.log; exit \${PIPESTATUS[0]}" ;;
   ex)
     n="$1"; shift; _ex "$n" "$@" ;;
   login)

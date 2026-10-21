@@ -22,7 +22,7 @@ function makeAnnouncer({ pluginRoot, channelLabel, currentSettings, logger }) {
     const snippet = (payload.text || payload.caption || '').slice(0, 200) || `[${kind}]`;
     try {
       if (mode === 'earcon') {
-        spawn('python3', [path.join(pluginRoot, 'scripts', 'earcon.py'), 'play', 'tool'],
+        spawn(require('./python_bin').pythonBin(), [path.join(pluginRoot, 'scripts', 'earcon.py'), 'play', 'tool'],
           { detached: true, stdio: 'ignore' }).unref();
       } else if (mode === 'voice') {
         const intro = `${channelLabel}-message: ${snippet}`;

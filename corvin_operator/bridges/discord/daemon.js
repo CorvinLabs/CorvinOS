@@ -79,7 +79,7 @@ function synthesizeVoiceNoteForText(text, lang = 'de', voice = 'shimmer', timeou
     const finish = (val) => { if (!resolved) { resolved = true; resolve(val); } };
     let child;
     try {
-      const pyBin = process.env.PYTHON || 'python3';
+      const pyBin = require('../shared/js/python_bin').pythonBin();
       child = spawn(pyBin, [SAY_HELPER, outPath, text, lang, voice], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -380,7 +380,7 @@ client.on('interactionCreate', async (interaction) => {
       try {
         const _spgScript = require('path').join(__dirname, '..', 'shared', 'spg.py');
         const _spgRes = require('child_process').spawnSync(
-          process.env.CORVIN_PYTHON || 'python3',
+          require('../shared/js/python_bin').pythonBin(),
           [_spgScript, 'is-allowed', CHANNEL, String(channelId), String(userId)],
           { encoding: 'utf8', timeout: 2000 }
         );
@@ -408,7 +408,7 @@ client.on('interactionCreate', async (interaction) => {
       const card = inChatCmds.disclosureCardText({
         channel: CHANNEL, ownerLabel: OPERATOR_NAME || '(owner)',
         hasObserverTranscript: false,
-        lang: currentSettings().lang || 'en',
+        lang: currentSettings().lang,   // unset → the profile's language (disclosureCardText)
       });
       if (card) {
         let disclosureDelivered = false;
@@ -672,7 +672,7 @@ client.on('messageCreate', async (msg) => {
           const ocard = inChatCmds.disclosureCardText({
             channel: CHANNEL, ownerLabel: OPERATOR_NAME || '(owner)',
             hasObserverTranscript: true,
-            lang: currentSettings().lang || 'en',
+            lang: currentSettings().lang,   // unset → the profile's language (disclosureCardText)
           });
           if (ocard) {
             // EU AI Act Art. 50: only mark disclosed AFTER confirmed delivery.
@@ -712,7 +712,7 @@ client.on('messageCreate', async (msg) => {
       try {
         const _spgScript = require('path').join(__dirname, '..', 'shared', 'spg.py');
         const _spgRes = require('child_process').spawnSync(
-          process.env.CORVIN_PYTHON || 'python3',
+          require('../shared/js/python_bin').pythonBin(),
           [_spgScript, 'is-allowed', CHANNEL, String(msg.channel.id), String(userId)],
           { encoding: 'utf8', timeout: 2000 }
         );
@@ -737,7 +737,7 @@ client.on('messageCreate', async (msg) => {
       const card = inChatCmds.disclosureCardText({
         channel: CHANNEL, ownerLabel: OPERATOR_NAME || '(owner)',
         hasObserverTranscript: false,
-        lang: currentSettings().lang || 'en',
+        lang: currentSettings().lang,   // unset → the profile's language (disclosureCardText)
       });
       if (card) {
         // EU AI Act Art. 50: only mark disclosed AFTER confirmed delivery.

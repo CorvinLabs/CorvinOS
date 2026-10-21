@@ -562,6 +562,8 @@ function welcomeReply(ctx) {
 // independent of where the daemon is launched from. (`path` is already
 // required at the top of this file.)
 const { spawnSync } = require('child_process');
+// The product's Python — a fresh README install has no `python3` on PATH (python_bin.js).
+const PYTHON = require('./python_bin').pythonBin();
 const SCHEDULE_CLI = bridgePaths.voiceScript('schedule_cli.py');
 const PROFILE_CLI  = bridgePaths.voiceScript('profile_cli.py');
 // i18n — `/lang` slash-command. Validates BCP-47 codes via i18n.normalise()
@@ -702,7 +704,7 @@ function _channelId(channel, chatKey) {
 function profileReply(ctx, sub, rest) {
   // sub: "show" (default) | "get" | "set" | "rm" | "unset" | "reset"
   const s = (sub || 'show').toLowerCase();
-  const args = ['python3', PROFILE_CLI, s];
+  const args = [PYTHON, PROFILE_CLI, s];
   if (rest) {
     // Pass the rest as a single argument so phrases like
     // `tone=concise, du-form` survive without quoting weirdness.
@@ -742,7 +744,7 @@ cryptic content (stack traces, CLI output) for the listener; it never
 overrides the faithfulness or completeness rules in the base prompt.`;
 
 function voiceUserShow() {
-  const r = spawnSync('python3', [PROFILE_CLI, 'show'], { encoding: 'utf8' });
+  const r = spawnSync(PYTHON, [PROFILE_CLI, 'show'], { encoding: 'utf8' });
   const lines = (r.stdout || '').split('\n');
   const audience = lines.filter(l => /voice_audience_/.test(l));
   if (audience.length === 0) {
@@ -763,7 +765,7 @@ function voiceUserSet(rest) {
     return `Error: unknown key "${key}". Allowed: ${VOICE_USER_KEYS.join(', ')}`;
   }
   const fullKey = 'voice_audience_' + key;
-  const r = spawnSync('python3', [PROFILE_CLI, 'set', `${fullKey}=${val}`], { encoding: 'utf8' });
+  const r = spawnSync(PYTHON, [PROFILE_CLI, 'set', `${fullKey}=${val}`], { encoding: 'utf8' });
   const out = (r.stdout || '') + (r.stderr ? '\n' + r.stderr : '');
   return out.trim() || '(no output)';
 }
@@ -774,10 +776,10 @@ function voiceUserClear() {
   const removed = [];
   for (const k of VOICE_USER_KEYS) {
     const fullKey = 'voice_audience_' + k;
-    const probe = spawnSync('python3', [PROFILE_CLI, 'get', fullKey], { encoding: 'utf8' });
+    const probe = spawnSync(PYTHON, [PROFILE_CLI, 'get', fullKey], { encoding: 'utf8' });
     const present = !((probe.stdout || '').includes('(no value set'));
     if (!present) continue;
-    spawnSync('python3', [PROFILE_CLI, 'rm', fullKey], { encoding: 'utf8' });
+    spawnSync(PYTHON, [PROFILE_CLI, 'rm', fullKey], { encoding: 'utf8' });
     removed.push(k);
   }
   if (removed.length === 0) return '(listener profile was already empty)';
@@ -792,7 +794,7 @@ function voiceUserPreview(rest) {
   const SHARED = path.resolve(__dirname, '..');
   const py = `import sys; sys.path.insert(0, "${SHARED}"); ` +
              `import profile; sys.stdout.write(profile.for_tts_audience("${lang === 'en' ? 'en' : 'de'}"))`;
-  const r = spawnSync('python3', ['-c', py], { encoding: 'utf8' });
+  const r = spawnSync(PYTHON, ['-c', py], { encoding: 'utf8' });
   const out = (r.stdout || '').trim();
   if (!out) return '(listener profile empty — nothing to preview)';
   return `AUDIENCE block (lang=${lang}):\n\n${out}`;
@@ -820,7 +822,7 @@ function vaultReply(ctx, sub, rest) {
   }
   // sub: "list" (default) | "get" | "set" | "unlock" | "forget" | "rm" | "audit"
   const s = (sub || 'list').toLowerCase();
-  const args = ['python3', VAULT_CLI, s];
+  const args = [PYTHON, VAULT_CLI, s];
   // For most sub-commands the rest of the line goes through verbatim,
   // but `set` accepts CLI flags and a `name=value` token, so we shell-split
   // it cheaply (single-pass). Quotes around values are preserved.
@@ -854,7 +856,7 @@ function langReply(ctx, tail) {
   const t = (tail || '').trim();
   // Determine current language so we can render the reply in it (so a
   // user who is on `de` keeps seeing German confirmations).
-  const showRes = spawnSync('python3', [LANG_CLI, 'show'],
+  const showRes = spawnSync(PYTHON, [LANG_CLI, 'show'],
                             { encoding: 'utf8', timeout: 5000 });
   let currentCode = 'en';
   try { currentCode = (JSON.parse(showRes.stdout || '{}').code) || 'en'; }
@@ -871,11 +873,11 @@ function langReply(ctx, tail) {
 
   const low = t.toLowerCase();
   if (low === 'clear' || low === 'reset' || low === 'off') {
-    spawnSync('python3', [LANG_CLI, 'clear'], { encoding: 'utf8', timeout: 5000 });
+    spawnSync(PYTHON, [LANG_CLI, 'clear'], { encoding: 'utf8', timeout: 5000 });
     return { reply: _tString('lang.cleared', currentCode), kind: 'lang-clear' };
   }
   if (low === 'list') {
-    const r = spawnSync('python3', [LANG_CLI, 'list'],
+    const r = spawnSync(PYTHON, [LANG_CLI, 'list'],
                         { encoding: 'utf8', timeout: 5000 });
     let j; try { j = JSON.parse(r.stdout || '{}'); } catch { j = {}; }
     const codes = (j.codes || []).map(c => `  ${c.code} — ${c.name}`).join('\n');
@@ -887,7 +889,7 @@ function langReply(ctx, tail) {
   }
 
   // Anything else → try to set it
-  const r = spawnSync('python3', [LANG_CLI, 'set', t],
+  const r = spawnSync(PYTHON, [LANG_CLI, 'set', t],
                       { encoding: 'utf8', timeout: 5000 });
   let j; try { j = JSON.parse(r.stdout || '{}'); } catch { j = {}; }
   if (!j.ok) {
@@ -937,7 +939,7 @@ function _tString(key, lang, fmt) {
 function memoryReply(ctx, sub, rest) {
   // sub: "list" (default) | "show <t>" | "write <t> <text>" | "append <t> <text>" | "forget <t>"
   const s = (sub || 'list').toLowerCase();
-  const args = ['python3', MEMORY_CLI, s];
+  const args = [PYTHON, MEMORY_CLI, s];
   if (s === 'show' || s === 'read' || s === 'forget' || s === 'rm' || s === 'delete') {
     if (rest) args.push(rest);
   } else if (s === 'write' || s === 'set' || s === 'append') {
@@ -1025,7 +1027,7 @@ function resetReply(ctx) {
   // so the action is always traceable. Idempotent — re-running on an
   // already-reset chat is fine.
   const args = [
-    'python3', SESSION_RESET_CLI,
+    PYTHON, SESSION_RESET_CLI,
     '--channel', String(ctx.channel || ''),
     '--chat-id', String(ctx.chatKey || ''),
     '--reason', 'manual',
@@ -1069,7 +1071,7 @@ function resetReply(ctx) {
 function scheduleReply(ctx, sub, rest) {
   // sub: "list" | "add" | "rm" | empty (= list this chat)
   const s = (sub || 'list').toLowerCase();
-  const args = ['python3', SCHEDULE_CLI, s];
+  const args = [PYTHON, SCHEDULE_CLI, s];
   if (s === 'list') {
     args.push(ctx.channel || '', String(ctx.chatKey || ''));
   } else if (s === 'add') {
@@ -1104,7 +1106,7 @@ function objectiveReply(ctx, sub, rest) {
   }
 
   if (!sub || sub === 'list') {
-    const r = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), 'list', chan, chat], { encoding: 'utf8', timeout: 5000 });
+    const r = spawnSync(PYTHON, [ULO_CLI, ..._uloTenantArgs(), 'list', chan, chat], { encoding: 'utf8', timeout: 5000 });
     let obj;
     try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `${statusIcon('warning')} Failed to load objectives.`, kind: 'objective_list' }; }
     if (!obj || !obj.ok) return { reply: `${statusIcon('warning')} ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_list' };
@@ -1134,7 +1136,7 @@ function objectiveReply(ctx, sub, rest) {
     }
     const priority = parts[0].toLowerCase();
     const text = parts.slice(1).join(' ');
-    const r = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), 'add', chan, chat, priority, text], { encoding: 'utf8', timeout: 5000 });
+    const r = spawnSync(PYTHON, [ULO_CLI, ..._uloTenantArgs(), 'add', chan, chat, priority, text], { encoding: 'utf8', timeout: 5000 });
     let obj;
     try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `${statusIcon('warning')} Failed to add objective.`, kind: 'objective_add' }; }
     if (!obj || !obj.ok) return { reply: `${statusIcon('warning')} ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_add' };
@@ -1147,7 +1149,7 @@ function objectiveReply(ctx, sub, rest) {
   if (sub === 'pause' || sub === 'resume') {
     const id = rest ? rest.trim().split(/\s+/)[0] : '';
     if (!id) return { reply: `**Usage:** \`/objective ${sub} <id>\``, kind: `objective_${sub}` };
-    const r = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), sub, chan, chat, id], { encoding: 'utf8', timeout: 5000 });
+    const r = spawnSync(PYTHON, [ULO_CLI, ..._uloTenantArgs(), sub, chan, chat, id], { encoding: 'utf8', timeout: 5000 });
     let obj;
     try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `${statusIcon('warning')} Failed to ${sub} objective.`, kind: `objective_${sub}` }; }
     if (!obj || !obj.ok) return { reply: `${statusIcon('warning')} ${(obj && obj.error) || 'Unknown error'}`, kind: `objective_${sub}` };
@@ -1158,7 +1160,7 @@ function objectiveReply(ctx, sub, rest) {
   if (sub === 'delete' || sub === 'rm') {
     const id = rest ? rest.trim().split(/\s+/)[0] : '';
     if (!id) return { reply: '**Usage:** `/objective delete <id>`', kind: 'objective_delete' };
-    const r = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), 'delete', chan, chat, id], { encoding: 'utf8', timeout: 5000 });
+    const r = spawnSync(PYTHON, [ULO_CLI, ..._uloTenantArgs(), 'delete', chan, chat, id], { encoding: 'utf8', timeout: 5000 });
     let obj;
     try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `${statusIcon('warning')} Failed to delete objective.`, kind: 'objective_delete' }; }
     if (!obj || !obj.ok) return { reply: `${statusIcon('warning')} ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_delete' };
@@ -1181,7 +1183,7 @@ function statusReply(ctx) {
   const lines = [];
 
   // Active goal
-  const gr = spawnSync('python3', [GOAL_CLI, 'get',
+  const gr = spawnSync(PYTHON, [GOAL_CLI, 'get',
                                     String(ctx.channel || ''), String(ctx.chatKey || '')],
                         { encoding: 'utf8', timeout: 5000 });
   let goal = null;
@@ -1193,19 +1195,19 @@ function statusReply(ctx) {
   lines.push(`👾 **Persona:** \`${persona}\``);
 
   // Scheduled tasks for this chat
-  const sr = spawnSync('python3', [SCHEDULE_CLI, 'list',
+  const sr = spawnSync(PYTHON, [SCHEDULE_CLI, 'list',
                                     String(ctx.channel || ''), String(ctx.chatKey || '')],
                         { encoding: 'utf8', timeout: 5000 });
   const schedOut = (sr.stdout || '').trim();
   lines.push(`📅 **Schedule:** ${schedOut || '_(no scheduled tasks)_'}`);
 
   // LDD status (compact)
-  const lr = spawnSync('python3', [LDD_CLI, 'status'], { encoding: 'utf8', timeout: 5000 });
+  const lr = spawnSync(PYTHON, [LDD_CLI, 'status'], { encoding: 'utf8', timeout: 5000 });
   const lddOut = (lr.stdout || '').trim().split('\n')[0] || 'unknown';
   lines.push(`🔁 **LDD:** ${lddOut}`);
 
   // ULO — active learning objectives (M5)
-  const ur = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), 'list',
+  const ur = spawnSync(PYTHON, [ULO_CLI, ..._uloTenantArgs(), 'list',
                                     String(ctx.channel || ''), String(ctx.chatKey || '')],
                         { encoding: 'utf8', timeout: 5000 });
   let uloLine = '_(none — use /objective add)_';
@@ -1224,7 +1226,7 @@ function lddReply(ctx, sub, rest) {
   // sub: "" (status) | "on" | "off" | "status" | "set" | "preset"
   // /ldd-on/off/status are direct heads; /ldd-set <layer> <on|off>
   // and /ldd-preset <name> carry sub as the rest.
-  const args = ['python3', LDD_CLI];
+  const args = [PYTHON, LDD_CLI];
   if (sub) args.push(sub);
   if (rest) {
     const parts = rest.split(/\s+/).filter(Boolean);
@@ -1346,7 +1348,7 @@ const CONSENT_READONLY_HELP = [
 ].join('\n');
 
 function _runConsentCli(args) {
-  const r = spawnSync('python3', [CONSENT_CLI, ...args], {
+  const r = spawnSync(PYTHON, [CONSENT_CLI, ...args], {
     encoding: 'utf8', timeout: 5000,
   });
   return {
@@ -1574,7 +1576,7 @@ function dispatchReadOnlyConsent(ctx) {
 // the caller cannot grant on someone else's behalf.
 
 function _runRolesCli(args) {
-  const r = spawnSync('python3', [ROLES_CLI, ...args], {
+  const r = spawnSync(PYTHON, [ROLES_CLI, ...args], {
     encoding: 'utf8', timeout: 5000,
   });
   return {
@@ -1872,7 +1874,7 @@ function rolesLeaveReply(ctx) {
 //     friendly redirect explaining who the commands are for.
 
 function _runDisclosureCli(args) {
-  const r = spawnSync('python3', [DISCLOSURE_CLI, ...args], {
+  const r = spawnSync(PYTHON, [DISCLOSURE_CLI, ...args], {
     encoding: 'utf8', timeout: 5000,
   });
   return {
@@ -1892,7 +1894,7 @@ const _SPG_DISCLOSURE = '🤖 This chat now has AI assistance enabled via Corvin
 function _runSpg(channel, chatKey, ...args) {
   // spg.py <cmd> <channel> <chat_key> [extra...]
   const [cmd, ...extra] = args;
-  return spawnSync('python3', [SPG_CLI, cmd, channel, chatKey.toString(), ...extra], {
+  return spawnSync(PYTHON, [SPG_CLI, cmd, channel, chatKey.toString(), ...extra], {
     encoding: 'utf8',
     timeout: 5000,
   });
@@ -2057,7 +2059,7 @@ function proactiveReply(ctx, sub) {
   const chatKey = String(ctx.chatKey || ctx.chat_id || '');
   const cliArgs = [PROACTIVE_CLI, cliSub, tenantId, channel, uid];
   if (cliSub === 'off' && chatKey) cliArgs.push(chatKey);
-  const r = spawnSync('python3', cliArgs, {
+  const r = spawnSync(PYTHON, cliArgs, {
     encoding: 'utf8', timeout: 5000,
   });
   if (r.error || r.status !== 0) {
@@ -2134,13 +2136,27 @@ function dispatchReadOnlyDisclosure(ctx) {
 // Helper for the daemon: render the bot-disclosure card for first-encounter.
 // Returns the card text (≤ 1500 chars). Daemon calls this when has_seen()
 // returns false, sends the card, then mark_seen(action="pending").
+// The language the bot-disclosure card is rendered in when the caller has no
+// per-chat/bridge language of its own: the profile's display_language — the
+// operator's pin or the installer's locale seed, both are the right default for
+// a greeting (2026-10-21 round 2: the daemons passed `settings.lang || 'en'`,
+// a settings key nothing writes, so a German install greeted every new user in
+// English while its replies were German). Empty when the profile has none.
+function profileCardLanguage() {
+  try {
+    const r = spawnSync(PYTHON, [LANG_CLI, 'show'], { encoding: 'utf8', timeout: 5000 });
+    const j = JSON.parse(r.stdout || '{}');
+    return (j.ok && j.source && j.code) ? String(j.code) : '';
+  } catch { return ''; }
+}
+
 function disclosureCardText({ channel, ownerLabel, hasObserverTranscript, lang }) {
   const args = ['card', String(channel || ''), String(ownerLabel || '(unknown)')];
   // i18n — only `de` keeps the German card, every other code (including
   // legacy `en` and any BCP-47 like zh-Hans / ja / ar / fr) hits the
   // English template. Phase 4 will swap the templates for LLM-generated
   // translations; for now English is the engine-stable pivot.
-  const base = String(lang || 'en').split('-')[0].toLowerCase();
+  const base = String(lang || profileCardLanguage() || 'en').split('-')[0].toLowerCase();
   args.push(base === 'de' ? 'de' : 'en');
   args.push(hasObserverTranscript ? 'transcript' : 'no-transcript');
   const r = _runDisclosureCli(args);
@@ -2187,7 +2203,7 @@ function disclosureMarkSeen({ channel, chatKey, uid, action }) {
 // ─── Layer-20 — quota + audit-view (delegated-budget visibility) ───────
 
 function _runQuotaCli(args) {
-  const r = spawnSync('python3', [QUOTA_CLI, ...args], {
+  const r = spawnSync(PYTHON, [QUOTA_CLI, ...args], {
     encoding: 'utf8', timeout: 5000,
   });
   return { stdout: r.stdout || '', stderr: r.stderr || '',
@@ -2195,7 +2211,7 @@ function _runQuotaCli(args) {
 }
 
 function _runAuditViewCli(args) {
-  const r = spawnSync('python3', [AUDIT_VIEW_CLI, ...args], {
+  const r = spawnSync(PYTHON, [AUDIT_VIEW_CLI, ...args], {
     encoding: 'utf8', timeout: 5000,
   });
   return { stdout: r.stdout || '', stderr: r.stderr || '',
@@ -2471,7 +2487,7 @@ function decisionReviewReply(ctx, tail) {
 
   const uidHash = (ctx.uid || 'unknown').slice(0, 8);  // abbreviated, not raw UID
 
-  const r = spawnSync('python3', ['-c',
+  const r = spawnSync(PYTHON, ['-c',
     `import sys; sys.path.insert(0,"${path.resolve(__dirname,'..')}"); ` +
     `from decision_registry import cli_review; ` +
     `from pathlib import Path; ` +
@@ -2559,7 +2575,7 @@ function auditReply(ctx, tail) {
 //     owner-steering as one combined prompt.
 
 function _runProposalCli(args) {
-  const r = spawnSync('python3', [PROPOSAL_CLI, ...args], {
+  const r = spawnSync(PYTHON, [PROPOSAL_CLI, ...args], {
     encoding: 'utf8', timeout: 5000,
   });
   return { stdout: r.stdout || '', stderr: r.stderr || '',
@@ -2614,7 +2630,7 @@ function goalReply(ctx, tail) {
   const body = (tail || '').trim();
 
   if (!body || body.toLowerCase() === 'show') {
-    const r = spawnSync('python3', [GOAL_CLI, 'get', String(ctx.channel || ''),
+    const r = spawnSync(PYTHON, [GOAL_CLI, 'get', String(ctx.channel || ''),
                                      String(ctx.chatKey || '')],
                         { encoding: 'utf8', timeout: 5000 });
     let j; try { j = JSON.parse(r.stdout); }
@@ -2629,7 +2645,7 @@ function goalReply(ctx, tail) {
   }
 
   if (body.toLowerCase() === 'clear') {
-    const r = spawnSync('python3', [GOAL_CLI, 'clear', String(ctx.channel || ''),
+    const r = spawnSync(PYTHON, [GOAL_CLI, 'clear', String(ctx.channel || ''),
                                      String(ctx.chatKey || '')],
                         { encoding: 'utf8', timeout: 5000 });
     let j; try { j = JSON.parse(r.stdout); }
@@ -2639,7 +2655,7 @@ function goalReply(ctx, tail) {
   }
 
   // set
-  const r = spawnSync('python3', [GOAL_CLI, 'set', String(ctx.channel || ''),
+  const r = spawnSync(PYTHON, [GOAL_CLI, 'set', String(ctx.channel || ''),
                                    String(ctx.chatKey || ''), body],
                       { encoding: 'utf8', timeout: 5000 });
   let j; try { j = JSON.parse(r.stdout); }
@@ -2825,7 +2841,7 @@ function dispatchReadOnlyProposal(ctx) {
 function phase3Reply(ctx, command, sub, rest) {
   // command is one of "ps", "pipe", "svc", "budget".
   // sub is the sub-command (or "" / "list" implied), rest is space-split args.
-  const args = ['python3', PHASE3_CLI, command];
+  const args = [PYTHON, PHASE3_CLI, command];
   if (sub) args.push(sub);
   if (rest) {
     const parts = rest.split(/\s+/).filter(Boolean);
@@ -2846,7 +2862,7 @@ function dialecticReply(ctx, sub, rest) {
   // sub: "" (status) | "on" | "off" | "status" | "set" | "show"
   // /dialectic-on/off/status are direct heads; /dialectic-set <site> <mode>
   // and /dialectic-show <on|off> carry sub as the rest.
-  const args = ['python3', DIALECTIC_CLI];
+  const args = [PYTHON, DIALECTIC_CLI];
   if (sub) args.push(sub);
   if (rest) {
     // shell-split on whitespace — set takes <site> <mode>, show takes <on|off>.
@@ -2886,7 +2902,7 @@ function engineReply(ctx, tail) {
   const token = (tail || '').trim().toLowerCase();
 
   if (!token) {
-    const args = ['python3', ENGINE_SWITCH_CLI, 'show', channel, chatKey];
+    const args = [PYTHON, ENGINE_SWITCH_CLI, 'show', channel, chatKey];
     const r = spawnSync(args[0], args.slice(1), { encoding: 'utf8' });
     const cur = ((r.stdout || '') + (r.stderr || '')).trim() || '(no preference)';
     const help = [
@@ -2908,14 +2924,14 @@ function engineReply(ctx, tail) {
   }
 
   if (token === 'off' || token === 'clear' || token === 'reset' || token === 'none') {
-    const args = ['python3', ENGINE_SWITCH_CLI, 'clear', channel, chatKey];
+    const args = [PYTHON, ENGINE_SWITCH_CLI, 'clear', channel, chatKey];
     if (uid) { args.push('--uid', uid); }
     const r = spawnSync(args[0], args.slice(1), { encoding: 'utf8' });
     const out = ((r.stdout || '') + (r.stderr || '')).trim() || '(no output)';
     return { reply: `🛠️ engine override: ${out}`, kind: 'engine' };
   }
 
-  const args = ['python3', ENGINE_SWITCH_CLI, 'set', channel, chatKey, token];
+  const args = [PYTHON, ENGINE_SWITCH_CLI, 'set', channel, chatKey, token];
   if (uid) { args.push('--uid', uid); }
   const r = spawnSync(args[0], args.slice(1), { encoding: 'utf8' });
   const out = ((r.stdout || '') + (r.stderr || '')).trim() || '(no output)';
@@ -2934,7 +2950,7 @@ function engineReply(ctx, tail) {
 // reachable from the CLI for ops.
 function settingsReply(ctx) {
   const lang = (ctx && ctx.lang === 'en') ? 'en' : 'de';
-  const args = ['python3', SETTINGS_CLI, 'render',
+  const args = [PYTHON, SETTINGS_CLI, 'render',
                 String(ctx.channel || ''),
                 String(ctx.chatKey || '')];
   if (ctx && ctx.uid) { args.push('--uid', String(ctx.uid)); }
@@ -2987,7 +3003,7 @@ function workflowReply(ctx, sub, rest) {
     // cron expression as its first token, then the workflow name, then
     // key=value inputs. We inject --channel + --chat from the chat ctx so
     // the user doesn't have to type them on every command.
-    cliArgs = ['python3', '-m', 'corvin_workflows', 'schedule'];
+    cliArgs = [PYTHON, '-m', 'corvin_workflows', 'schedule'];
     const tokens = _shellSplit(rest || '');
     const ssub = (tokens.shift() || '').toLowerCase();
     if (!['add', 'list', 'rm'].includes(ssub)) {
@@ -3026,7 +3042,7 @@ function workflowReply(ctx, sub, rest) {
       cliArgs.push(tokens[0]);
     }
   } else {
-    cliArgs = ['python3', '-m', 'corvin_workflows', sub];
+    cliArgs = [PYTHON, '-m', 'corvin_workflows', sub];
     if (rest) {
       const parts = rest.split(/\s+/).filter(Boolean);
       cliArgs.push(...parts);
@@ -3055,7 +3071,7 @@ function workflowReply(ctx, sub, rest) {
 // ── Layer-27 — personal tools (me.* permanent forge library) ───────────
 
 function _runPersonalToolsCli(args) {
-  const r = spawnSync('python3', [PERSONAL_TOOLS_CLI, ...args], {
+  const r = spawnSync(PYTHON, [PERSONAL_TOOLS_CLI, ...args], {
     encoding: 'utf8', timeout: 8000,
   });
   return {
@@ -3206,7 +3222,7 @@ function _listAgentsText() {
 
 function agentsReply(_ctx) {
   // Fast path: read JSON files directly without spawning a subprocess.
-  const r = spawnSync('python3', [A2A_CLI, 'agents', '--json'],
+  const r = spawnSync(PYTHON, [A2A_CLI, 'agents', '--json'],
                       { encoding: 'utf8', timeout: 5000 });
   if (r.status !== 0 || r.error) {
     // Fallback: read endpoint files directly
@@ -3263,7 +3279,7 @@ function a2aReply(ctx, tail) {
   if (!instruction) {
     return { reply: 'Usage: `/a2a <agent-name> <instruction>`', kind: 'a2a-help' };
   }
-  const r = spawnSync('python3', [A2A_CLI, 'send', agentName, instruction],
+  const r = spawnSync(PYTHON, [A2A_CLI, 'send', agentName, instruction],
                       { encoding: 'utf8', timeout: 35000 });
   const stderr = (r.stderr || '').trim();
   if (r.error || r.status !== 0) {
@@ -3309,7 +3325,7 @@ function a2aLabelReply(ctx, tail) {
   if (!label) {
     return { reply: 'Usage: `/a2a-label <endpoint-id> <friendly-name>`', kind: 'a2a-label-help' };
   }
-  const r = spawnSync('python3', [A2A_CLI, 'label-endpoint', endpointId, label],
+  const r = spawnSync(PYTHON, [A2A_CLI, 'label-endpoint', endpointId, label],
                       { encoding: 'utf8', timeout: 5000 });
   if (r.error || r.status !== 0) {
     const msg = (r.stderr || r.stdout || '').trim();
@@ -3537,6 +3553,7 @@ module.exports = {
   // plus card rendering helpers for the first-encounter disclosure flow.
   dispatchReadOnlyDisclosure,
   disclosureCardText,
+  profileCardLanguage,
   disclosureHasSeen,
   disclosureMarkSeen,
   // Layer-21 — daemon-side hooks: /propose for read-only senders, plus

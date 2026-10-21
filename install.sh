@@ -67,6 +67,25 @@ _sha256_of() {
     else echo ""; fi
 }
 
+# Phase 0 accepts a system that has ONLY wget (no curl). Every later HTTP use
+# in this script goes through these two helpers, so that system is not failed
+# at the end by a probe that silently printed nothing (2026-10-21, round 2:
+# `_console_code` was curl-only — on a wget-only box the console came up and
+# install.sh still exited 2 "did not come up", and the Claude Code download
+# was skipped as "install failed").
+_fetch() {  # _fetch URL DEST [max-seconds]
+    if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time "${3:-300}" -o "$2" "$1"
+    elif command -v wget >/dev/null 2>&1; then wget -qO "$2" -T "${3:-300}" "$1"
+    else return 1; fi
+}
+_http_code() {  # _http_code URL — the HTTP status, or "" when nothing answers
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -o /dev/null -m 3 -w '%{http_code}' "$1" 2>/dev/null || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 3 -t 1 --server-response -O /dev/null "$1" 2>&1 | awk '/^  HTTP\//{c=$2} END{printf "%s", c}'
+    fi
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Argument parsing
 # ─────────────────────────────────────────────────────────────────────────────
@@ -191,15 +210,8 @@ command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
 if ! command -v uv >/dev/null 2>&1; then
     echo "  Bootstrapping the uv ${UV_PIN_VERSION} runtime (brings its own Python) ..."
     _uv_tmp="$(mktemp "${TMPDIR:-/tmp}/uv-installer.XXXXXX")" || die "mktemp failed"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --max-time 300 -o "$_uv_tmp" "$UV_INSTALLER_URL" \
-            || { rm -f "$_uv_tmp"; die "could not download $UV_INSTALLER_URL"; }
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$_uv_tmp" "$UV_INSTALLER_URL" \
-            || { rm -f "$_uv_tmp"; die "could not download $UV_INSTALLER_URL"; }
-    else
-        rm -f "$_uv_tmp"; die "Need curl or wget to bootstrap uv. Please install one and re-run."
-    fi
+    _fetch "$UV_INSTALLER_URL" "$_uv_tmp" 300 \
+        || { rm -f "$_uv_tmp"; die "could not download $UV_INSTALLER_URL (need curl or wget and network access)"; }
     _uv_sum="$(_sha256_of "$_uv_tmp")"
     [ -n "$_uv_sum" ] || { rm -f "$_uv_tmp"; die "no sha256sum/shasum/openssl available to verify the uv installer"; }
     if [ "$_uv_sum" != "$UV_INSTALLER_SHA256" ]; then
@@ -233,7 +245,7 @@ if [ "$SKIP_CLAUDE" != "1" ]; then
         # and every fresh Debian/Ubuntu install was left without a chat engine.
         if ! command -v bash >/dev/null 2>&1; then
             printf '  %s bash not found — Claude Code not installed; chat needs it (https://claude.ai/install.sh).\n' "$(_yellow '⚠')"
-        elif curl -fsSL --max-time 60 -o "$_claude_install_sh" "https://claude.ai/install.sh" 2>/dev/null \
+        elif _fetch "https://claude.ai/install.sh" "$_claude_install_sh" 60 2>/dev/null \
            && _await "Installing Claude Code" bash "$_claude_install_sh"; then
             export PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"
             CLAUDE_CODE_PATH="$(command -v claude 2>/dev/null || true)"
@@ -361,7 +373,14 @@ echo ""
 echo "  Setting up watchdog service (health monitoring) ..."
 SETUP_SCRIPT="${REPO_DIR}/scripts/setup.sh"
 
-if [ -f "$SETUP_SCRIPT" ]; then
+# The watchdog is a systemd user unit. macOS (launchd keeps the console alive
+# itself, KeepAlive in the LaunchAgent) and a Linux without a user session
+# have nothing to register — until 2026-10-21 setup.sh then failed on
+# `systemctl` and every such install printed "Watchdog setup encountered an
+# error" for a non-error.
+if ! { command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; }; then
+    printf '  %s No systemd user session here — the watchdog is not needed (launchd / the init system keeps the console alive).\n' "$(_dim 'ℹ')"
+elif [ -f "$SETUP_SCRIPT" ]; then
     # Started now, not "at next login": it stands down while this script holds
     # the setup lock, then guards the console from the first minute on.
     if bash "$SETUP_SCRIPT"; then
@@ -427,7 +446,14 @@ if [ "$(uname -s 2>/dev/null)" = "Linux" ] && command -v systemctl >/dev/null 2>
     USE_SYSTEMD=1
 fi
 
-_console_code() { curl -s -o /dev/null -m 3 -w '%{http_code}' "$CONSOLE_URL" 2>/dev/null || true; }
+_console_code() { _http_code "$CONSOLE_URL"; }
+# macOS: corvin-install registered a LaunchAgent (RunAtLoad + KeepAlive) for
+# the console. Killing its child and starting a second corvinos-serve here made
+# launchd respawn the first one and the two fight for the port — restart it
+# through launchd instead, as update.sh does.
+_launchd_webui() {
+    [ "$(uname -s 2>/dev/null)" = "Darwin" ] && [ -f "$HOME/Library/LaunchAgents/com.corvin.webui.plist" ]
+}
 
 _wait_console() {
     _wc_i=0
@@ -444,6 +470,10 @@ _wait_console() {
 _start_console() {
     if [ "$USE_SYSTEMD" = "1" ]; then
         systemctl --user restart corvin-webui.service
+    elif _launchd_webui; then
+        launchctl kickstart -k "gui/$(id -u)/com.corvin.webui" 2>/dev/null \
+            || { launchctl unload "$HOME/Library/LaunchAgents/com.corvin.webui.plist" 2>/dev/null; \
+                 launchctl load "$HOME/Library/LaunchAgents/com.corvin.webui.plist" 2>/dev/null; }
     else
         pkill -f corvinos-serve 2>/dev/null || true
         # --no-browser: this script opens the tab itself below; without it the
@@ -492,7 +522,7 @@ if ! _wait_console 90; then
         exit 2
     fi
 fi
-curl -fs -m 3 "$HEALTHZ_URL" >/dev/null 2>&1 \
+[ "$(_http_code "$HEALTHZ_URL")" = "200" ] \
     || printf '  %s %s did not answer — the UI loads, but check the console logs.\n' "$(_yellow '⚠')" "$HEALTHZ_URL"
 
 # The README's promise: an HTTP 200 with the app shell AND a working local
@@ -523,6 +553,9 @@ fi
 if [ "$USE_SYSTEMD" = "1" ]; then
     RUN_INFO="systemd user service corvin-webui"
     STOP_CMD="systemctl --user stop corvin-webui"
+elif _launchd_webui; then
+    RUN_INFO="LaunchAgent com.corvin.webui"
+    STOP_CMD="launchctl unload ~/Library/LaunchAgents/com.corvin.webui.plist"
 else
     RUN_INFO="background PID ${SERVER_PID:-$(pgrep -f corvinos-serve 2>/dev/null | head -1)}"
     STOP_CMD="pkill -f corvinos-serve"

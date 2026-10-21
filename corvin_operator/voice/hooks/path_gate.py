@@ -67,24 +67,52 @@ def _resolve_aliased_env(canonical: str, legacy: str = "") -> str | None:
     return os.environ.get(canonical) or None
 
 
+def _installed_root() -> Path | None:
+    """The runtime root the installer recorded: ``corvin-install`` (step 18)
+    writes ``<voice config>/installer.json`` with ``corvin_home`` — the ONE
+    pointer from an install to its live root that every process of the user
+    can read, including a hook that runs from Claude Code's plugin cache
+    outside any checkout and without CORVIN_HOME in its environment."""
+    cfg_dir = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if not cfg_dir:
+        xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+        base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
+        cfg_dir = str(base / "corvin-voice")
+    try:
+        import json as _json
+        value = _json.loads((Path(cfg_dir) / "installer.json").read_text(encoding="utf-8")).get("corvin_home")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return Path(os.path.expanduser(value)) if isinstance(value, str) and value else None
+
+
 def _corvin_home() -> Path:
     """Mirror of forge.paths.corvin_home(), inlined to keep the hook
-    self-contained and import-free at runtime."""
+    self-contained and import-free at runtime.
+
+    Resolution: ``CORVIN_HOME`` → the checkout this file sits in (marker
+    ``.corvin_repo``) → the root the installer recorded → ``~/.corvin``.
+    The former ``(parent / "plugins").is_dir()`` heuristic is gone: when the
+    hook runs from the plugin cache (``~/.claude/plugins/cache/…``) that test
+    matched ``~/.claude`` and the hook resolved ``~/.claude/.corvin`` — a
+    third runtime root nothing else reads (fresh-system review 2026-10-21)."""
     env = _resolve_aliased_env("CORVIN_HOME")
     if env:
         return Path(os.path.expanduser(os.path.expandvars(env)))
-    here = Path(__file__).resolve()
-    for parent in [here, *here.parents]:
-        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-            return parent / ".corvin"
+    repo = _repo_root()
+    if repo is not None:
+        return repo / ".corvin"
+    installed = _installed_root()
+    if installed is not None:
+        return installed
     return Path.home() / ".corvin"
 
 
 def _repo_root() -> Path | None:
-    """Nearest ancestor with a plugins/ subdir, else None."""
+    """Nearest ancestor carrying the checkout marker ``.corvin_repo``, else None."""
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
-        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+        if (parent / ".corvin_repo").exists():
             return parent
     return None
 

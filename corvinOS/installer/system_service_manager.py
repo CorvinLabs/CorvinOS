@@ -446,7 +446,9 @@ class WindowsSystemServiceManager(SystemServiceManager):
         )
 
         # WA-4: -RestartCount 5 / -RestartInterval 1min = bounded restart-on-
-        # failure (mirrors Linux Restart=on-failure + StartLimitBurst=5).
+        # failure (mirrors Linux Restart=on-failure; the Linux user unit's
+        # budget is 8 per 120 s since 2026-10-21, the Windows supervisor keeps
+        # 5 per 300 s because its loop counts crashes only).
         # -Hidden mirrors install.ps1's identical belt-and-suspenders setting
         # on the wscript-wrapped action — keep both in sync (see that file's
         # comment on the "close the window, the app dies" class of bug).

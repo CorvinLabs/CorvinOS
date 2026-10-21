@@ -11,6 +11,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRIPTS_DIR="$PLUGIN_DIR/scripts"
+# A fresh system may have no python3 on PATH (the installer brings uv's Python
+# inside the corvinos tool venv only) — see hooks/with_python.sh. Put that
+# venv's bin on PATH so every `python3 …` below resolves (2026-10-21, round 2).
+if ! command -v python3 >/dev/null 2>&1; then
+  for _pyd in "${CORVIN_PYTHON_DIR:-}" "$(uv tool dir 2>/dev/null)/corvinos/bin" "${XDG_DATA_HOME:-$HOME/.local/share}/uv/tools/corvinos/bin"; do
+    if [[ -n "$_pyd" && -x "$_pyd/python3" ]]; then PATH="$_pyd:$PATH"; export PATH; break; fi
+  done
+fi
 # shellcheck source=../scripts/voice_lib.sh
 source "$SCRIPTS_DIR/voice_lib.sh"
 

@@ -86,15 +86,23 @@ def test_the_adapter_runs_the_tenant_migration_as_a_noop():
 # ── F3 / README: the installer's own words and the proof ────────────────────
 
 def _install_log_text() -> str:
+    """The install's STDOUT (what the operator saw): the host copy named by
+    CORVIN_FRESH_INSTALL_LOG, else ~/install.log inside the system, which
+    `fresh.sh install` tees. NOT /tmp/corvinos-install.log — that file holds
+    only the installer's awaited sub-steps (uv, Claude Code, builds) and never
+    corvin-install's "[Step N]" lines, so reading it made the step-17 assertion
+    fail for the wrong reason on every run without the env var (round 2)."""
     if _INSTALL_LOG and Path(_INSTALL_LOG).is_file():
         return Path(_INSTALL_LOG).read_text(encoding="utf-8", errors="replace")
-    r = _ex("cat /tmp/corvinos-install.log 2>/dev/null; cat ~/install.log 2>/dev/null")
-    return r.stdout
+    return _ex("cat ~/install.log 2>/dev/null").stdout
 
 
 def test_step_17_reported_the_console_up_with_its_seconds():
     log = _install_log_text()
-    assert log, "no install log: pass CORVIN_FRESH_INSTALL_LOG=<host path of the install output>"
+    assert log, "no install output: run `fresh.sh install` (it keeps ~/install.log) or pass CORVIN_FRESH_INSTALL_LOG"
+    # Positive control first: this must be corvin-install's own output, not
+    # some other log — otherwise the absence assertions below pass vacuously.
+    assert "[Step 17] Starting Web Console" in log, log[-2000:]
     assert "Web Console running on http://127.0.0.1:8765/console/ (" in log, log[-2000:]
     assert "did not respond within" not in log and "did not answer within" not in log
 
