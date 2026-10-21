@@ -682,6 +682,12 @@ def _cmd_send(args: argparse.Namespace) -> int:
     }
     if written_attachments:
         output["attachments_written"] = written_attachments
+    if not res.ok:
+        # The refusal reason used to stay inside SendResult: a free install printed a bare
+        # ``"status": "rejected"`` (2026-10-21) — "A2A network requires a member seat" never reached
+        # the operator. Both fields are the sender's own closed/sanitised texts, never peer-supplied.
+        output["error_category"] = res.error_category
+        output["error_detail"] = res.error_detail
     print(json.dumps(output, sort_keys=True, indent=2))
     return 0 if res.ok else 1
 

@@ -31,6 +31,7 @@ from typing import Any, Callable
 
 from core.federation.local_agent import LocalAgentRegistry
 from core.federation.peer_catalog import PeerCatalog, agent_address
+from core.federation.protocol import model_pin
 from core.paths import tenant_home
 from core.tenants.validation import validate_tenant_id
 
@@ -180,7 +181,7 @@ def _run_local_turn(*, instruction: str, task_id: str, model: str, origin_id: st
         res = a2a_worker.spawn_a2a_worker(
             instruction=instruction, origin_id=origin_id, task_id=task_id,
             persona="assistant", ttl_s=LOCAL_TURN_TTL_S,
-            engine_factory=_engine_factory, model=model or None,
+            engine_factory=_engine_factory, model=model_pin(model),
         )
     except a2a_worker.InjectionAttempt:
         return {"ok": False, "status": "rejected", "text": "", "duration_ms": 0,

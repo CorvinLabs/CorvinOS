@@ -81,3 +81,33 @@ the chain. Voice: a Voice-on turn owes and delivers the per-task recap and the s
 (real `claude -p` text about the turn, real MP3 via edge-tts — no OpenAI key), history, the
 on-demand session recap, `/voice/tts` in de and en, `/voice/status`; an English chat gets an
 English recap. Each run takes ~8 minutes and spends real tokens.
+
+## Peers and A2A between two fresh systems (`test_fresh_a2a_two_instances_live.py`)
+
+Driven from the HOST (it needs `docker` to reach both containers) against two installed fresh
+systems on `corvinnet`, `CORVIN_FRESH_CONTAINER_B` / `CORVIN_FRESH_CONTAINER_C` (default
+`corvin-b` / `corvin-c`), both logged in (`fresh.sh login`). Everything goes through the installed
+product: the console API inside each container (local-login + CSRF, what the browser calls),
+`corvin-a2a`, the A2A ingress on `0.0.0.0:8775`, and each container's own audit chain.
+
+```bash
+CORVIN_FRESH_E2E=1 .venv/bin/python -m pytest tests/e2e/fresh_system/test_fresh_a2a_two_instances_live.py -q -p no:cacheprovider -x
+```
+
+`a2a.network` is member-only (gate 28ad07b54): a fresh install is Free and cannot pair, ping or
+exchange anything. The test proves THAT first — 402 `license_limit` / `a2a.network` /
+`member_seat_required` on create, import and send, `network.allowed: false` on every read, the
+CLI's `error_detail` — and then runs the rest as a member install: `a2a_member_pin.sh <name> [off]`
+installs a systemd drop-in whose `sitecustomize` pins the two licence-tier resolvers to `member`
+(the repo's own A2A E2E fixture, `a2a_test_tier.pin_member_tier`, does the same under pytest;
+nothing in the product changes). What it then proves with real workers: token pairing ACTIVE on
+both sides with the ingress on 8775; an observer send recorded on both chains and run nowhere; an
+executor send (`corvin-a2a send`) answered `MARMOT` by the peer's real `claude` worker with a priced
+`engine.span.end` (model + four-way tokens); a sha256-pinned attachment and the 1 MiB cap (422);
+replay (`replay`), tamper and unknown origin refused opaquely (`a2a_tamper_driver.py`); L44 refusing
+prohibited content (`house_rules`); federation register/share/catalog/select/delegate (`OTTER`) with
+both chain anchors in the trace; a four-turn agent-to-agent conversation that agrees on a code word
+with an operator message, pause and resume; `/agents`, `/ask @peer` (`WALRUS`), `/ask @mine`
+(`BADGER`), `/talk` + `/stop`; a group `send-to-peer` mirrored on the peer; a restart mid-conversation
+(`interrupted`); a peer whose console is stopped (`unconfirmed`, presence offline); revoke named on
+the other side (`peer_revoked_at`, `ENDED BY PEER`) and re-pairing. ~12 minutes, ~12 worker runs.

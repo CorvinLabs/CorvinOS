@@ -64,7 +64,8 @@ Every failure — bad signature, replay, unknown origin, missing consent — ans
 | `corvin-a2a` CLI | **LIVE** | `corvin_operator/voice/scripts/corvin_a2a.py` |
 | Console Agent Hub (Live Feed, Peers, Connect, Audit trail) | **LIVE** | `core/console/corvin_console/web-next/src/pages/agent-hub.tsx` |
 | Attachments (sha256, ≤ 1 MiB total) | **LIVE** | `a2a_attachments.py` |
-| Peer limit by license (`a2a_peers_max`, free tier 1; over it → 402) | **LIVE** | pairing path |
+| A2A network membership (`a2a.network`, member-only: a Free install cannot pair, ping or exchange — every console surface, the CLI and the feed say *member seat required*, pairing answers 402) | **LIVE** | `a2a_license_gate.py`, `routes/a2a_pair.py::a2a_network_status` |
+| Peer limit by license (`a2a_peers_max`, free tier 1; over it → 402; a pairing the peer ended holds no seat) | **LIVE** | pairing path |
 | Inbound worker spawn | **GATED** — `spawn_worker` off per origin by default | `a2a_worker.py` |
 | Relay fallback (AES-256-GCM store-and-forward) | **GATED** — flag `a2a_relay_fallback` | `a2a_relay.py` |
 | LAN bind | **GATED** — flag `a2a_lan_bind` | gateway |
@@ -106,7 +107,9 @@ Grant execution only when you want the peer to run work on your instance: `corvi
 - **Relay and LAN bind are gated.** Two instances that cannot reach each other directly need the relay flag turned on.
 - **IBC auto-renewal is open** (ADR-2099).
 - **The completeness ADR is still PROPOSED.** A2A audit coverage is documented in ADR-2042, which has not been accepted.
-- **Free tier: one peer.** More peers need a license; the pairing path answers 402 over the limit.
+- **A2A is member-only.** A Free install can run everything else, but it cannot join the network: creating or importing a token, sending from the chat, the CLI and every ping answer *A2A network requires a member seat* (HTTP 402 `license_limit` / `a2a.network` in the console). Two fresh installs therefore cannot talk to each other until one seat each is active — the peers tab, the diagnostics and the feed carry `network.allowed` so the UI says so instead of "unreachable".
+- **Member tier: `a2a_peers_max` applies.** Over the limit the pairing path answers 402. A pairing the peer ended (its signed revoke notice) shows *ended by peer*, holds no seat and stays readable until you remove it.
+- **A message to a peer that is offline is not queued by this instance.** The relay keeps it for at most 5 minutes and the envelope itself expires after its TTL (60 s by default); the sender reports *delivery unconfirmed* — resend when the peer is back.
 
 ## Under the hood
 

@@ -253,6 +253,62 @@ def _pair_write_lock():
             raise HTTPException(status_code=503, detail="lock_busy") from None
 
 
+_NETWORK_DENIED_MSG = (
+    "A2A is member-only on this install: pairing, pings and messages need a member seat. "
+    "Until one is active, a token can be created or imported but the peer can never be reached "
+    "and nothing is sent."
+)
+
+
+def a2a_network_status() -> dict[str, Any]:
+    """``{"allowed": bool, "reason": str | None, "detail": str | None}`` — the ``a2a.network``
+    verdict (member-only, gate 28ad07b54) as every console read reports it.
+
+    Measured on two fresh (Free) installs, 2026-10-21: the import answered ``ok: true`` /
+    ``UNREACHABLE``, the dialog said *peer can't reach you back — set your own A2A URL*, every
+    ping wrote a deny record to the chain — and nothing said "member seat". Fail-closed like
+    the gate itself: an unavailable checker reads as not allowed.
+    """
+    try:
+        import a2a_license_gate as _gate  # type: ignore[import-not-found]  # noqa: PLC0415
+        _gate.require_a2a_network(entry_point="console.a2a_pair")
+    except Exception as exc:  # noqa: BLE001 — any failure is a refusal, never a pass
+        reason = "member_seat_required"
+        if not isinstance(exc, getattr(sys.modules.get("a2a_license_gate"), "A2ANetworkDenied", ())):
+            reason = "licence_check_unavailable"
+        return {"allowed": False, "reason": reason, "detail": _NETWORK_DENIED_MSG}
+    return {"allowed": True, "reason": None, "detail": None}
+
+
+def _require_a2a_network_for_pairing() -> None:
+    """402 before any pairing file is written on an install that cannot use the network.
+
+    Same shape as the ``a2a_peers_max`` refusal below, so the console shows one kind of
+    licence message. A pairing started here could never become ACTIVE (the receiver answers
+    neither the ack nor a ping — CHANGELOG 2026-10-21) and would only fill the chain with
+    deny records at every backoff step.
+    """
+    status = a2a_network_status()
+    if status["allowed"]:
+        return
+    raise HTTPException(status_code=402, detail={
+        "error": "license_limit", "feature": "a2a.network", "reason": status["reason"],
+        "msg": status["detail"], "upgrade_url": "https://corvin-labs.com/pricing",
+    })
+
+
+def _peer_revoked(origin_path: Path) -> bool:
+    """True when the PEER ended this pairing (its signed revoke notice stamped
+    ``_peer_revoked_at`` — a2a_friendship._process_revoke_notice). Such a record can
+    never carry a task again, so it holds no licence seat: until 2026-10-21 it did, and a
+    Free install whose only peer re-issued a token answered 402 "at most 1 peer" to the
+    re-pair while showing the dead one as merely UNREACHABLE."""
+    try:
+        return bool(json.loads(origin_path.read_text("utf-8")).get("_peer_revoked_at"))
+    except Exception:  # noqa: BLE001 — unreadable: count it (fail-closed for the limit)
+        return False
+
+
 def _check_a2a_peers_max(excluding: str | None = None) -> None:
     """Raise HTTP 402 if a2a_peers_max licence limit is reached.
 
@@ -279,7 +335,8 @@ def _check_a2a_peers_max(excluding: str | None = None) -> None:
             })
         _a2a_max = 1
     _existing = sum(
-        1 for p in _origins_dir().glob("*.json") if excluding is None or p.stem != excluding
+        1 for p in _origins_dir().glob("*.json")
+        if (excluding is None or p.stem != excluding) and not _peer_revoked(p)
     ) if _origins_dir().exists() else 0
     if _existing >= _a2a_max:
         raise HTTPException(
@@ -1183,6 +1240,7 @@ def friendship_create(
     record is single-use, consumed by the redeemer's ack (see
     /remote-trigger/pair/friendship/import and the /v1/a2a/friendship-ack
     wire endpoint)."""
+    _require_a2a_network_for_pairing()
     url_val: str | None = body.url.strip().rstrip("/") or None
     # Never issue a token with no address when one is inferable. Previously
     # a blank form field produced url=None -> the token landed on the
@@ -1447,6 +1505,7 @@ def friendship_import(
        (a second, independent token exchange in reverse was the only
        workaround).
     """
+    _require_a2a_network_for_pairing()
     try:
         token = _ft.parse_and_verify(body.token.strip())
     except _ft.FriendshipError as exc:
@@ -1746,7 +1805,9 @@ def friendship_revoke(
 def friendship_connections(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    """List all friendship connections (PENDING + ACTIVE)."""
+    """List all friendship connections (PENDING + ACTIVE). ``network`` says whether this
+    install may use the A2A network at all — a connection on a Free install is UNREACHABLE
+    for that reason, not for a network one."""
     _ = rec
     seen: dict[str, dict[str, Any]] = {}
     cfgs_by_kid: dict[str, list[dict[str, Any]]] = {}
@@ -1777,6 +1838,9 @@ def friendship_connections(
             "peer_knows_us": bool(cfg.get("_peer_knows_us", False)),
             "peer_reports_reachable": bool(cfg.get("_peer_reports_reachable", False)),
             "via": cfg.get("_last_via"),
+            # The peer's signed revoke notice (a2a_friendship._process_revoke_notice) — the
+            # record is kept for the operator to remove; nothing can be sent over it.
+            "peer_revoked_at": cfg.get("_peer_revoked_at"),
         }
 
     for path in sorted(_endpoints_dir().glob("*.json")):
@@ -1791,6 +1855,8 @@ def friendship_connections(
         url = cfg.get("url") or None
         if kid in seen:
             seen[kid]["url"] = url
+            if not seen[kid].get("peer_revoked_at"):
+                seen[kid]["peer_revoked_at"] = cfg.get("_peer_revoked_at")
         else:
             seen[kid] = {
                 "kid": kid,
@@ -1812,7 +1878,7 @@ def friendship_connections(
     for kid, conn in seen.items():
         conn.update(_conn_presence(cfgs_by_kid.get(kid, []), now))
     connections = sorted(seen.values(), key=lambda c: c["kid"])
-    return {"connections": connections, "count": len(connections)}
+    return {"connections": connections, "count": len(connections), "network": a2a_network_status()}
 
 
 # ── POST /remote-trigger/pair/friendship/{kid}/recheck ─────────────────
@@ -2043,6 +2109,7 @@ def a2a_diagnostics(
             "last_ok_at": cfg.get("_last_ok_at"),
             "last_check_at": cfg.get("_last_check_at"),
             "has_peer_url": bool(cfg.get("url")),
+            "peer_revoked_at": cfg.get("_peer_revoked_at"),
         })
     pending = sorted(p.stem for p in _pending_friendships_dir().glob("*.json")) \
         if _pending_friendships_dir().exists() else []
@@ -2055,6 +2122,7 @@ def a2a_diagnostics(
         }),
         "connections": connections,
         "pending_tokens": len(pending),
+        "network": a2a_network_status(),
     }
 
 

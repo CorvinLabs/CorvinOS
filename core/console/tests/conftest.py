@@ -187,3 +187,43 @@ def _a2a_issuer_has_its_own_binding_key(request, tmp_path, monkeypatch):
     monkeypatch.setattr(_ft, "create_friendship_token", as_issuer)
     yield
     _bind._cached.clear()
+
+
+# ── a2a.network is member-only (gate 28ad07b54) ─────────────────────────────────────────────
+# The pairing/feed routes refuse a Free install with 402 "member seat required" (2026-10-21), so
+# the console tests that drive those routes run as a MEMBER install for the network gate only —
+# ``capability_api.active_tier`` — exactly like corvin_operator/bridges/shared/conftest.py. The
+# licence LIMITS (validator.get_limit → a2a_peers_max free=1) stay Free, so the 402-on-limit
+# tests keep their subject. Scoped by file name; ``@pytest.mark.licence_tier("free")`` opts out.
+_A2A_TEST_FILE_MARKERS = ("a2a", "remote_trigger", "friendship", "agent_hub", "peer")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "licence_tier(name): tier capability_api resolves for an A2A console test")
+
+
+@pytest.fixture(autouse=True)
+def _a2a_member_tier(request, monkeypatch):
+    from pathlib import Path as _P
+    name = _P(str(request.node.fspath)).name
+    if not any(m in name for m in _A2A_TEST_FILE_MARKERS):
+        yield
+        return
+    marker = request.node.get_closest_marker("licence_tier")
+    tier = marker.args[0] if marker else "member"
+    try:
+        from corvin_operator.license import capability_api
+    except ImportError:  # licensing absent: the gate refuses on its own (fail-closed)
+        yield
+        return
+    monkeypatch.setattr(capability_api, "active_tier", lambda **_k: tier)
+    try:
+        import a2a_license_gate  # type: ignore[import-not-found]
+        a2a_license_gate.reset_allow_cache()
+    except Exception:  # noqa: BLE001 — the cache is a convenience
+        pass
+    yield
+    try:
+        a2a_license_gate.reset_allow_cache()
+    except Exception:  # noqa: BLE001
+        pass

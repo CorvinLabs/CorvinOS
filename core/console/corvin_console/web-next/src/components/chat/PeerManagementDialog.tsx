@@ -154,9 +154,12 @@ function StateBadge({ state }: { state: "PENDING" | "ACTIVE" | "UNREACHABLE" | s
 // (2026-07-29) — whether the PEER also has its own record of us, i.e.
 // whether this is a genuinely bidirectional pairing or a one-way import
 // that is waiting on "Settings -> A2A -> My URL" to be configured.
-function PeerKnowsUsHint({ state, peerKnowsUs }: { state: string; peerKnowsUs: boolean }) {
+function PeerKnowsUsHint({ state, peerKnowsUs, muted }: { state: string; peerKnowsUs: boolean; muted?: boolean }) {
   if (state === "PENDING") return null;
   if (peerKnowsUs) return null;
+  // "set your own URL" is wrong advice when the peer ended the pairing or this install
+  // has no member seat — those rows carry their own badge/notice (2026-10-21).
+  if (muted) return null;
   return (
     <span
       className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0"
@@ -1275,6 +1278,7 @@ function FriendshipConnectionsList() {
   }
 
   const connections = conns.data?.connections ?? [];
+  const network = conns.data?.network;
 
   return (
     <Card>
@@ -1288,6 +1292,12 @@ function FriendshipConnectionsList() {
         </div>
       </CardHeader>
       <CardContent className="p-0">
+        {network && !network.allowed && (
+          <p className="mx-4 my-2 rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
+            data-testid="a2a-network-notice" data-reason={network.reason ?? ""}>
+            {network.detail ?? "A2A is member-only on this install: pairing and messages need a member seat."}
+          </p>
+        )}
         {actionError && (
           <p className="mx-4 my-2 rounded bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="connection-action-error">
             {actionError}
@@ -1316,7 +1326,15 @@ function FriendshipConnectionsList() {
                     </span>
                   )}
                   <ViaBadge via={c.via} />
-                  <PeerKnowsUsHint state={c.state} peerKnowsUs={c.peer_knows_us} />
+                  {c.peer_revoked_at ? (
+                    <Badge className="bg-destructive/15 text-destructive border-destructive/30 text-[10px]"
+                      data-testid="peer-revoked-badge"
+                      title={`The peer ended this pairing on ${new Date(c.peer_revoked_at * 1000).toLocaleString()}. Nothing can be sent over it and it holds no seat — remove it, then import a new token to pair again.`}>
+                      ENDED BY PEER
+                    </Badge>
+                  ) : null}
+                  <PeerKnowsUsHint state={c.state} peerKnowsUs={c.peer_knows_us}
+                    muted={Boolean(c.peer_revoked_at) || (network ? !network.allowed : false)} />
                   <div className="ml-auto flex gap-1.5 shrink-0">
                     {c.presence === "offline" && (
                       <EnableRelayPrompt

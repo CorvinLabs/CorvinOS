@@ -2,6 +2,74 @@
 
 ## [Unreleased]
 
+### Fixed — peers and A2A between two fresh systems (two bare Ubuntu 24.04 containers, 2026-10-21)
+- **Every federated task on a fresh install was refused `engine_error`.** The one-click agent registers with the
+  label `model: "claude-code"`, and the receiver's task path, a conversation's local turn and `/ask @mine` handed
+  that label to `claude --model` (404) — delegate, `/ask @peer`, `/talk` and both sides of an agent conversation
+  failed while a plain message to the same peer worked. `core/federation/protocol.model_pin` is now the one place
+  a label becomes a pin (`ENGINE_DEFAULT_MODEL` → no pin, the engine's own default); measured end to end: delegate
+  answers `OTTER`, a four-turn conversation agrees on a code word, `/ask @peer` answers `WALRUS`.
+- **A Free install says "member seat required" instead of "unreachable".** `a2a.network` is member-only, but the
+  console imported a token with `ok: true` / `UNREACHABLE`, hinted *set your own A2A URL*, left a feed message
+  *queued* forever and the CLI printed a bare `rejected`. Now `POST …/friendship/create|import` and
+  `POST /a2a/feed/send` answer 402 `license_limit` / `a2a.network` with the reason, every read (`connections`,
+  `a2a/diagnostics`, `GET /a2a/feed`) carries `network.{allowed,reason,detail}`, the peer dialog shows the notice,
+  the composer disables itself and says why, the sender closes a pre-recorded feed row it refuses, and
+  `corvin-a2a send` prints `error_category` / `error_detail`.
+- **A pairing the peer ended is named and holds no seat.** The peer's signed revoke notice stamped
+  `_peer_revoked_at` and nothing showed it: the connection read UNREACHABLE/offline with the wrong hint, and on the
+  free tier the dead record still counted, so re-pairing with the same peer's new token answered 402 "at most 1
+  peer". The connections/diagnostics/feed reads expose `peer_revoked_at`, the UI shows *ENDED BY PEER* / *pairing
+  ended by <peer>* with the way back (remove, import a new token), and `a2a_peers_max` no longer counts it.
+- **`/agents` in a peer thread refreshes a stale catalog** instead of answering `peer: []` five minutes after the
+  last fetch while `/ask @peer` still worked.
+- **`tests/federation` is green again.** The directory had no member-tier pin and every catalog refresh answered
+  502 from the day the network gate landed; one sharing test still asserted the pre-1e7713d46 refusal wording.
+- **Fresh-system E2E for two instances:** `tests/e2e/fresh_system/test_fresh_a2a_two_instances_live.py` pairs two
+  containers, proves the Free refusal first, then (member-pinned via `a2a_member_pin.sh`) pairing, observer and
+  executor sends with the worker's real answer and priced span, attachments, replay/tamper, L44, federation
+  delegate, an agent-to-agent conversation with an operator message, pause/resume/stop, restart mid-conversation,
+  revoke and re-pair.
+
+### Fixed — chat and voice summary on a fresh system (measured on a bare Ubuntu 24.04 container, 2026-10-21)
+- **The bot answers in the user's language on a fresh install.** The installer seeds `display_language` from the
+  system locale, and every reply-language rule (console system prompt, closing block, turn language resolver, the
+  bridge adapter, the voice-language resolvers) treated that seed as the operator's explicit pin — a German question
+  on an `en_US` install got *"Die Operatorvorgabe lautet, dass ich immer auf Englisch antworte"*. The profile now
+  records the provenance (`profile.seed_display_language` / `display_language_pin` / `display_language_default`):
+  an installer seed only decides language-less input, an operator write (`/lang set`, Settings → Profile) is a pin
+  and un-seeds. Profiles written before the marker keep pin behaviour.
+- **Automatic voice recaps speak the chat's language.** The per-task and session recaps defaulted to `lang="de"`,
+  so an English chat on an English install got German recaps; they now take the language the backend resolved for
+  the chat's latest turn (`routes/voice.py::chat_language`), the owed-task marker carries it across a restart.
+- **A service restart no longer loses a running chat turn silently.** uvicorn re-raises the captured
+  SIGTERM after the graceful shutdown, so a turn still pending then died without its finaliser: no
+  `web.turn.cancelled`/`os_turn.completed` pair, no persisted text, no notice — and a turn that had
+  already produced its answer was never re-run either. Both hosts now cancel and await the live
+  turns in their lifespan shutdown (`chat_runtime.shutdown_live_turns`): the streamed text is kept
+  (`[answer cancelled here]`), the audit is paired, the task is `interrupted` (`exit_code -1`) and
+  turn recovery re-runs a turn without output after the restart.
+- **`GET /v1/console/settings/engine/health` is a real probe** (the chat's own pre-turn check: engine selectable,
+  `claude` present, signed in) instead of a constant `healthy: true`.
+- **`/btw` typed over the chat WebSocket** steers the chat's live turn or, with nothing running, is the next message
+  — the same semantics as the console UI — instead of "is a messaging-bridge command … not available in the web
+  console".
+- **`/voice/status` no longer logs "no Piper model for '<lang>' — falling back … (wrong-language speech)"** once
+  per language without a model: the status probe uses the exact per-language lookup.
+- **Fresh-system live E2E for chat and voice**: `tests/e2e/fresh_system/test_fresh_chat_live.py`,
+  `test_fresh_voice_summary_live.py` (real `claude -p`, real edge-tts/piper audio, audit-chain and ledger
+  assertions; `CORVIN_FRESH_E2E=1`).
+
+### Fixed — boot noise that every install logged (fresh system and host alike, 2026-10-21)
+- **The Phase 1d plugin-registry reader recognises state.TenantRegistry's schema.** Both readers share one
+  `registry.yaml`; the list-schema reader parsed the mapping's keys as entries and warned
+  `'str' object has no attribute 'items'` twice per boot. It now leaves a state-schema file alone (DEBUG).
+- **A record-only plugin is not a load failure.** The two default plugins (Knowledge Graph, CorvinTV) have no
+  `class_path` by design; every boot logged `plugin … has no class_path — skipping` as an ERROR and audited
+  `plugin.load_failed` for each. They are skipped at DEBUG now, like `TenantRegistry.enable` already treats them.
+- **The absent canonical plugin manifest is reported once per process**, not as two WARNINGs every 30 s from
+  the drift detector (1 500+ lines a day on the maintainer's host).
+
 ### Fixed — the promised fresh-system install (`git clone` + `./install.sh` on a bare Ubuntu 24.04, 2026-10-21)
 - **Claude Code is installed under `bash`.** `install.sh` ran the official installer with `sh`, which is dash on
   Debian/Ubuntu; the script is bash and died at its line 9 with a syntax error, so every fresh Debian/Ubuntu install
@@ -19,6 +87,40 @@
   still warns; a tampered alias is a CRITICAL mismatch.
 - **Python 3.14 (what `uv` picks on a bare system) imports every module cleanly**: an invalid `\`` escape in the
   Windows shim docstring is gone; `scripts/stream_a_orchestrator.py` parses on 3.11 again.
+- **One runtime root, one audit chain, on a fresh install.** Measured on four bare systems: after `./install.sh`
+  the boot tripwire reported `audit_chain_split` — three chains had received writes. Four causes, all closed:
+  the installer created a legacy top-level `sessions/`, so the adapter's tenant migration fired on the first
+  boot and wrote its record into the legacy `global/forge/audit.jsonl` (step 2 now creates the tenant layout
+  only; the migration writes into the chain that is canonical after the move); the adapter unit carried no
+  `CORVIN_HOME` while the webui unit did (every unit the installer writes now carries it); the boot self-test
+  resolved `~/.corvin` instead of the checkout's root (false `tenant.home_exists` CRITICAL, four events in a
+  third chain — it now uses the canonical resolver); and the shell side (`ensure-node.sh`, `setup.sh`,
+  `update.sh`) defaulted to `~/.corvin` while Python resolves `<checkout>/.corvin` — `install.sh` now resolves
+  `CORVIN_HOME` once and every child inherits it. Existing chains are never merged or rewritten.
+- **No empty `~/.corvin` next to the runtime root.** `core/learning/instance_registry.py` ran its
+  module-level singleton at import with the literal `~/.corvin/instances.json`, so every console boot created an
+  empty `~/.corvin` (attributed with a Python audit hook on the fresh system); the console API's registry had the
+  same default. Both now resolve `<corvin_home>/instances.json` through the canonical resolver and create the
+  directory on the first write only.
+- **Step 17 waits for the console honestly.** "Web Console did not respond within 15 s" appeared on every
+  fresh install: `corvin-install --yes` runs in quick mode, whose budget was 5 s, and the first boot syncs the
+  marketplace from GitHub before uvicorn binds (10–12 s measured). It now waits up to 120 s for the SPA shell to
+  answer 200 over HTTP and says how long it waited and what it last saw.
+- **`install.sh` proves what the README promises.** It now ends with `scripts/verify_install.py` (app shell,
+  hashed bundle, healthz, a working local login) — the same proof `update.sh` runs — instead of stopping at
+  "`/console/` answers 200".
+- **An auto-update refused for a held lock is retried.** The console's start-time auto-update wrote its
+  "attempted" marker before starting the updater, so a start refused while an install still held the lock
+  consumed the one attempt for that commit. Documented in the README: the console checks `origin/main` 60 s
+  after every start and updates itself.
+- **Installer rough edges on an unattended run.** No 90 s wait for a browser login when no terminal is attached
+  (it names `claude auth login` instead); the Node fallback runs the repository's own `ensure-node.sh` instead of
+  `nvm` via `curl | bash` (which edited `~/.bashrc`); Playwright's dead mirror host is detected and the live CDN
+  pre-picked (no more `getaddrinfo ENOTFOUND` traces); progress bars are not written as 30–128 kB
+  carriage-return lines into a log; the pip "new release" notice from the tool venv is silenced; the Piper
+  message no longer says "re-open your shell" for a binary that lives next to the interpreter by design; the
+  marketplace's legacy index candidate is anchored on the checkout, not on the service's cwd (no more
+  "Index not found at /home/<user>/corvin_operator/…").
 - **The local Node.js runtime extracts without `xz`.** `scripts/ensure-node.sh` only knew the `.tar.xz` build; a
   minimal Ubuntu (containers, cloud-minimal images) has no xz-utils, tar failed twice and the script "fell back to the
   system Node.js", which does not exist on such a system — no SPA build. It now takes nodejs.org's `.tar.gz` build when

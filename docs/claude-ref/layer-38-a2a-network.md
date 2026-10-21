@@ -1201,6 +1201,58 @@ old-style ping still works, and `GET /a2a/feed` carries `stages` and `task_capac
 `web-next/tests/e2e/peer-live-status-symbols.spec.ts` does the same for the page, with no stubs. Run both after every
 restart; red against a host started before the change, green after (2026-10-09: 2 red → 6 green).
 
+### Two fresh installs, end to end (2026-10-21)
+
+Measured on two bare Ubuntu 24.04 containers that ran only `git clone` + `./install.sh --lan`
+(`tests/e2e/fresh_system/`, containers `corvin-b` / `corvin-c`, real `claude` workers). What the
+promised path looks like there, and what it took:
+
+- **A Free install is not on the network, and now says so.** The import answered `ok: true` /
+  `UNREACHABLE`, the dialog hinted *set your own A2A URL*, a feed message stayed *queued* forever,
+  `corvin-a2a send` printed a bare `rejected`, and every backoff ping wrote a deny record. One source,
+  `routes/a2a_pair.py::a2a_network_status()` (`{allowed, reason, detail}`, fail-closed like the gate):
+  `friendship/create`, `friendship/import` and `POST /a2a/feed/send` answer 402 `license_limit` /
+  `a2a.network` / `member_seat_required`; `friendship/connections`, `a2a/diagnostics` and `GET /a2a/feed`
+  carry `network`; `PeerManagementDialog` shows the notice and mutes the URL hint; `PeerConversation`
+  shows *member seat required*, disables the composer and names the reason in the placeholder; the
+  sender closes a pre-recorded feed row it refuses; the CLI prints `error_category` / `error_detail`.
+- **Every federated task was refused `engine_error`.** `LocalAgentRegistry.ensure_default_agent`
+  registers `model="claude-code"` — a LABEL (its own comment says so) — and `a2a_federation.preflight`,
+  `conversation._run_local_turn` and `/ask @mine` passed it to `spawn_a2a_worker(model=…)` →
+  `claude --model claude-code` → 404 → `engine_error`, while a plain send to the same peer ran fine.
+  `core/federation/protocol.model_pin()` is the only place a label becomes a pin
+  (`ENGINE_DEFAULT_MODEL` and its spellings → `None`, a real id passes). Proof:
+  `tests/federation/test_engine_default_model_pin.py` + the fresh-system E2E (delegate → `OTTER`,
+  `/ask @peer` → `WALRUS`, a four-turn conversation that agrees on a code word with an operator
+  message, pause and resume in between).
+- **A pairing the peer ended.** `_process_revoke_notice` stamps `_peer_revoked_at` and keeps the record
+  (operator's decision what to do with it) — but nothing showed it: UNREACHABLE/offline with the URL
+  hint, and the dead record still counted for `a2a_peers_max`, so on the free tier the SAME peer's new
+  token answered 402 "at most 1 peer". `peer_revoked_at` now rides `connections`, `diagnostics` and the
+  feed's peers; the UI shows *ENDED BY PEER* / *pairing ended by <peer>* with the way back; the seat
+  count skips it. The sender's refusal text for a send over such a pairing already said "no longer
+  recognises this connection".
+- **`/agents` in a peer thread** answered `peer: []` five minutes after the last catalog fetch (fresh
+  catalogs only) while `/ask @peer` refreshed on its own; it refreshes once, best-effort, now.
+- **Observed, not changed:** a message to a peer whose console is stopped goes to the relay, times out
+  after 30 s and is reported *delivery unconfirmed — the peer may have received and run it*; after the
+  peer returned (2.5 min later, inside the relay's 5-min queue) nothing was delivered and nothing retries.
+  The envelope TTL (60 s) is shorter than the relay queue TTL, so a queued message is dead on arrival
+  anyway. The overview now states the limit. Replay of a correctly signed envelope answers the closed
+  public reason `replay` (`A2A_PUBLIC_REASONS`); a tampered or unknown-origin envelope answers the same
+  opaque `rejected` — the signature check comes first, so no unauthenticated prober learns anything.
+  A freshly paired origin carries `require_ibc: false` (ADR-2099 permissive mode) with the instance pin
+  and binding key attached. Group messages (`send-to-peer`) land in the peer's mirrored group and never
+  spawn a worker (ADR-2218 human-only path). The auto-update that runs minutes after `install.sh`
+  (default `auto_update: true`, ADR-2256) rebuilt both consoles once; it stashes local checkout edits.
+- **Test tier on a fresh system:** `tests/e2e/fresh_system/a2a_member_pin.sh <container> [off]` makes
+  the installed console run as a member install exactly like `a2a_test_tier.pin_member_tier` does
+  under pytest (a sitecustomize on an extra PYTHONPATH entry, systemd drop-in; nothing in the product
+  changes). It pins `active_tier` AND `get_limit` under both names the licence package has in that process
+  (`corvin_operator.license.*` and bare `license.*` — `a2a_worker` imports `license.compute_quota`): with the
+  tier alone pinned the Free compute pool (10 runs/day) refused the 11th worker run with `quota`. `tests/federation/conftest.py` carries the same pin — without it every catalog refresh
+  there answered 502 from the day the gate landed.
+
 ### Continuous watch — `a2a_live_watch.py` (2026-10-09)
 
 **Goal:** A2A works on every freshly installed instance. **Success = a pass says `healthy`.** One pass

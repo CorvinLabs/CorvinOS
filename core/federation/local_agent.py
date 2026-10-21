@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.federation.protocol import FEDERABLE_ENGINE
+from core.federation.protocol import ENGINE_DEFAULT_MODEL, FEDERABLE_ENGINE
 from core.paths import tenant_home
 from core.tenants.validation import validate_tenant_id
 
@@ -39,9 +39,10 @@ _AGENT_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY
 
 
 #: The one-click agent (see :meth:`LocalAgentRegistry.ensure_default_agent`). The model is a display label
-#: for the operator and for peers; the engine that actually runs a task chooses its own model.
+#: for the operator and for peers; the engine that actually runs a task chooses its own model —
+#: ``protocol.model_pin`` turns the label into "no pin" at every spawn site.
 DEFAULT_AGENT_ID = "claude-code"
-DEFAULT_AGENT_MODEL = "claude-code"
+DEFAULT_AGENT_MODEL = ENGINE_DEFAULT_MODEL
 
 
 class LocalAgentError(ValueError):

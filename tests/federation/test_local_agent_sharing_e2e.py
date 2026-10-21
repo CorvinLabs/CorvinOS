@@ -49,10 +49,12 @@ def test_the_refusals_name_where_to_fix_it(fresh_peer):
     peer = _cmd(c, h, "/ask @peer hello").json()
     assert peer["executed"] is False
     assert "no federable agent" in peer["reason"]
-    assert "Your agents" in peer["reason"] and "Share with paired peers" in peer["reason"], peer["reason"]
+    # 1e7713d46 moved "Your agents" into the peer chat (Agents button in its header); the refusal
+    # names THAT control now, and this assertion followed it (it was red from that commit on).
+    assert "click Agents" in peer["reason"] and "Share with paired peers" in peer["reason"], peer["reason"]
     mine = _cmd(c, h, "/ask @mine hello").json()
     assert mine["executed"] is False
-    assert "Your agents" in mine["reason"], mine["reason"]
+    assert "click Agents" in mine["reason"], mine["reason"]
 
 
 def test_one_click_registers_the_default_agent_without_sharing_it(fresh_peer):

@@ -87,9 +87,13 @@ def _peers() -> list[dict[str, Any]]:
             p = peers.setdefault(pid, {
                 "peer_id": pid, "label": None, "state": None,
                 "can_send": False, "can_receive": False, "enabled": False,
+                "peer_revoked_at": None,
             })
             p["label"] = p["label"] or _rtl._label_out(cfg)
             p["state"] = p["state"] or cfg.get("state")
+            # The peer ended the pairing (signed revoke notice): the thread stays readable,
+            # the composer says so instead of "unreachable".
+            p["peer_revoked_at"] = p.get("peer_revoked_at") or cfg.get("_peer_revoked_at")
             p["enabled"] = p["enabled"] or bool(cfg.get("enabled", False))
             if kind == "endpoint":
                 p["can_send"] = bool(cfg.get("enabled", False))
@@ -179,11 +183,21 @@ def a2a_feed(
         "has_more": more,
         "last_seq": max((int(m.get("seq") or 0) for m in msgs), default=after or 0),
         "peers": peers,
+        # Member-only network: the composer disables itself and says why (one source, a2a_pair).
+        "network": _network_status(),
         # ADR-2242: the furthest stage the peer reported per task we sent. Not tied to the
         # `after` cursor on purpose — a stage changes on a message that is already
         # delivered to the client, so the whole (small, capped) map rides every poll.
         "stages": _recent_stages(tid, peer_id),
     }
+
+
+def _network_status() -> dict[str, Any]:
+    try:
+        from .a2a_pair import a2a_network_status  # noqa: PLC0415
+        return a2a_network_status()
+    except Exception:  # noqa: BLE001 — a feed read never fails on the licence check; fail-closed verdict
+        return {"allowed": False, "reason": "licence_check_unavailable", "detail": None}
 
 
 def _recent_stages(tenant_id: str, peer_id: str | None) -> dict[str, Any]:
@@ -294,6 +308,15 @@ def a2a_feed_send(rec: Session, body: _SendBody) -> dict[str, Any]:
     peer = next((p for p in _peers() if p["peer_id"] == body.peer_id), None)
     if peer is None or not peer["can_send"]:
         raise HTTPException(status_code=404, detail="no enabled endpoint for this peer")
+    # a2a.network is member-only: say so HERE, with the pairing routes' 402, instead of
+    # recording a "queued" row the sender then refuses (2026-10-21: the row never resolved).
+    from .a2a_pair import a2a_network_status  # noqa: PLC0415
+    network = a2a_network_status()
+    if not network["allowed"]:
+        raise HTTPException(status_code=402, detail={
+            "error": "license_limit", "feature": "a2a.network", "reason": network["reason"],
+            "msg": network["detail"], "upgrade_url": "https://corvin-labs.com/pricing",
+        })
 
     from a2a_attachments import AttachmentError, validate_attachments  # type: ignore[import-not-found]
     atts: list[dict] = []

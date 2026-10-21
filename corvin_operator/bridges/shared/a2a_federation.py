@@ -65,7 +65,7 @@ def _repo_root() -> Path:
 if str(_repo_root()) not in sys.path:
     sys.path.insert(0, str(_repo_root()))
 from core.federation.protocol import (  # noqa: E402
-    FEDERABLE_ENGINE, FEDERATION_VERSION, MAX_HOPS, PUBLIC_REASONS,
+    FEDERABLE_ENGINE, FEDERATION_VERSION, MAX_HOPS, PUBLIC_REASONS, model_pin,
 )
 
 
@@ -339,8 +339,10 @@ def preflight(env: Any, origin_config: dict, *, tenant_id: str, worker_enabled: 
         _SEEN.forget(seen_key)
         return PreflightOutcome(reject_reason="federation_audit_unavailable",
                                 rollback_nonce=True)
+    # The agent's ``model`` is a catalog label; only a real model id becomes a pin
+    # (the default agent's label used to reach ``claude --model`` and 404 every task).
     return PreflightOutcome(ctx=FederationContext(
-        tenant_id=tenant_id, agent_id=agent.agent_id, model=agent.model,
+        tenant_id=tenant_id, agent_id=agent.agent_id, model=model_pin(agent.model),
         seen_key=seen_key))
 
 

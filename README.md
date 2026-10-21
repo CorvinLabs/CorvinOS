@@ -338,7 +338,7 @@ What runs today and what is still on the way — the overview pages give the det
 | ACP layers for workflows, security, data flow | **NOT BUILT** |
 | Chat-team roles, quotas, proposals across 7 messengers | **LIVE** |
 | Multi-user console login / SSO | **NOT BUILT** |
-| A2A pairing + signed envelopes | **LIVE** · remote worker execution **GATED** (off by default) |
+| A2A pairing + signed envelopes | **LIVE, member-only** (a Free install answers *member seat required*) · remote worker execution **GATED** (off by default) |
 | Plugin install / enable / load | **LIVE** · plugin update path **NOT BUILT** |
 | Video producer (Marketplace plugin) | **LIVE** · YouTube upload **NOT BUILT** |
 

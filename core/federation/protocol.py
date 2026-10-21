@@ -17,6 +17,29 @@ FEDERATION_VERSION = 1
 FEDERABLE_ENGINE = "claude_code"
 MAX_HOPS = 3
 
+#: The model label of an agent that runs on the engine's OWN default model — whatever this
+#: installation's worker-model selection says at spawn time. ``LocalAgentRegistry.ensure_default_agent``
+#: registers the one-click agent with it and a peer's catalog shows it as such. It is a label, never a
+#: model id: passed to ``claude --model`` it answered 404 and every federated task on a fresh install —
+#: ``/ask @peer``, ``/talk``, delegate, both turns of a conversation — was refused ``engine_error``
+#: (measured on two fresh installs, 2026-10-21). :func:`model_pin` is the ONLY place a label turns into a pin.
+ENGINE_DEFAULT_MODEL = "claude-code"
+_ENGINE_DEFAULT_LABELS = frozenset({"claude-code", "claude_code", "default", "engine-default"})
+
+
+def model_pin(model: object) -> str | None:
+    """The model to hand the engine for an agent's ``model`` field, or ``None`` for the engine default.
+
+    Every spawn of a federated agent (the receiver's task path, a conversation's local turn,
+    ``/ask @mine``) goes through here; a real model id passes unchanged.
+    """
+    if not isinstance(model, str):
+        return None
+    pin = model.strip()
+    if not pin or pin.lower() in _ENGINE_DEFAULT_LABELS:
+        return None
+    return pin
+
 # Signed rejection reasons a receiver may send for a federation request.
 PUBLIC_REASONS = frozenset({
     "federation_unsupported_version",

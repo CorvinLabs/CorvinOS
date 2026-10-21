@@ -332,8 +332,13 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
   });
   const stagedRef = React.useRef(pendingAttachments);
   stagedRef.current = pendingAttachments;
+  const peer = feed.data?.peers.find((p) => p.peer_id === peerId);
+  const network = feed.data?.network;
+  // One rule for every composer control: no endpoint, no member seat, or the peer ended
+  // the pairing — each with its own notice in the header (2026-10-21).
+  const cannotSend = peer?.can_send === false || (network ? !network.allowed : false) || Boolean(peer?.peer_revoked_at);
   const { recording, startRecording, stopRecording } = useVoiceInput({
-    value: text, onChange: setText, csrf, disabled: busy || feed.data?.peers.find((p) => p.peer_id === peerId)?.can_send === false,
+    value: text, onChange: setText, csrf, disabled: busy || cannotSend,
     onError: setError,
   });
   const { isDragging: paneDragging, dropHandlers: paneDropHandlers } = useFileDrop(
@@ -341,7 +346,6 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
     { disabled: busy || uploading, onTruncated: setDropTruncated },
   );
 
-  const peer = feed.data?.peers.find((p) => p.peer_id === peerId);
   const label = peer?.label || peerId;
   const msgs = React.useMemo(() => feed.data?.messages ?? [], [feed.data]);
   // task_id -> the reply record, so the symbol of a task knows HOW it was answered
@@ -437,6 +441,20 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
                 </span>
               );
             })()}
+            {network && !network.allowed && (
+              <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
+                data-testid="peer-network-notice" data-reason={network.reason ?? ""}
+                title={network.detail ?? "A2A is member-only on this install."}>
+                <AlertTriangle className="h-3 w-3" /> member seat required ·
+              </span>
+            )}
+            {peer?.peer_revoked_at && (
+              <span className="inline-flex items-center gap-1 text-destructive"
+                data-testid="peer-revoked-notice"
+                title={`${label} ended this pairing on ${new Date(peer.peer_revoked_at * 1000).toLocaleString()}. The history stays readable; to pair again, remove the connection in the peer settings and import a new token.`}>
+                <AlertTriangle className="h-3 w-3" /> pairing ended by {label} ·
+              </span>
+            )}
             {peer?.task_capacity === "limit_reached" && (
               <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
                 data-testid="peer-task-capacity" data-capacity="limit_reached"
@@ -568,7 +586,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
               size="icon"
               className="h-8 w-8 shrink-0 text-muted-foreground"
               onClick={() => fileInputRef.current?.click()}
-              disabled={busy || uploading || peer?.can_send === false}
+              disabled={busy || uploading || cannotSend}
               title="Attach files"
               data-testid="attach-button"
             >
@@ -583,7 +601,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
                 size="icon"
                 className="h-8 w-8 shrink-0 text-muted-foreground"
                 onClick={() => folderInputRef.current?.click()}
-                disabled={busy || uploading || peer?.can_send === false}
+                disabled={busy || uploading || cannotSend}
                 title="Attach a folder"
                 data-testid="attach-folder-button"
               >
@@ -606,8 +624,10 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
               }} rows={1}
                 placeholder={peer?.presence === "removed"
                   ? "Pairing removed — this conversation is read-only"
+                  : network && !network.allowed ? "A2A needs a member seat on this install"
+                  : peer?.peer_revoked_at ? `${label} ended this pairing`
                   : peer?.can_send === false ? "Sending to this agent is disabled" : `Message ${label}…`}
-                disabled={peer?.can_send === false || recording || busy}
+                disabled={cannotSend || recording || busy}
                 className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                 aria-label="Message to agent"
                 onKeyDown={(e) => {
@@ -623,7 +643,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
               size="icon"
               className={cn("h-8 w-8 shrink-0", !recording && "text-muted-foreground")}
               onClick={recording ? stopRecording : startRecording}
-              disabled={busy || peer?.can_send === false}
+              disabled={busy || cannotSend}
               aria-label={recording ? "Stop recording" : "Start recording"}
               title={recording ? "Stop recording (or release Space)" : "Start recording (or hold Space)"}
               data-testid="peer-composer-mic"
@@ -631,7 +651,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
               {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
             </Button>
             <Button variant="accent" size="icon" className="h-8 w-8 shrink-0 rounded-full"
-              disabled={busy || uploading || (!text.trim() && pendingAttachments.length === 0) || peer?.can_send === false}
+              disabled={busy || uploading || (!text.trim() && pendingAttachments.length === 0) || cannotSend}
               onClick={handleSend} aria-label="Send">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>

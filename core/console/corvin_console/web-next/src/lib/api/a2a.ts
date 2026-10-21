@@ -298,15 +298,28 @@ export interface FriendshipConnection {
   // ("direct" | "relay"), or null if never successfully reached yet.
   // Sticky across a failed recheck (last known-good path).
   via: "direct" | "relay" | null;
+  /** Unix seconds of the peer's signed revoke notice: the PEER ended this pairing. The record
+   *  stays until the operator removes it; nothing can be sent over it and it holds no seat. */
+  peer_revoked_at?: number | null;
   /** Measured reachability — the same rule as A2AFeedPeer.presence. */
   presence?: A2APresence;
   last_check_at?: number | null;
   last_ok_at?: number | null;
 }
 
+/** Whether this install may use the A2A network at all (member-only, gate 28ad07b54).
+ *  Reported by every A2A read so the UI can say "member seat" instead of "unreachable". */
+export interface A2ANetworkStatus {
+  allowed: boolean;
+  reason: "member_seat_required" | "licence_check_unavailable" | null;
+  detail: string | null;
+}
+
 export interface FriendshipConnectionsResponse {
   connections: FriendshipConnection[];
   count: number;
+  /** Absent on an older host. */
+  network?: A2ANetworkStatus;
 }
 
 export interface MyUrlResponse {
@@ -603,6 +616,8 @@ export interface A2AFeedPeer {
   last_ok_at?: number | null;
   /** What the peer says about taking tasks right now; absent for an older peer or when offline. */
   task_capacity?: "available" | "limit_reached" | null;
+  /** The peer ended the pairing (its signed revoke notice); see FriendshipConnection.peer_revoked_at. */
+  peer_revoked_at?: number | null;
 }
 
 export type A2APresence = "online" | "offline" | "unknown" | "pending" | "disabled" | "removed";
@@ -618,6 +633,8 @@ export interface A2AFeedResponse {
   peers: A2AFeedPeer[];
   /** task_id -> furthest stage the peer reported. Absent on older hosts. */
   stages?: Record<string, A2AStageInfo>;
+  /** Member-only network verdict; absent on an older host. */
+  network?: A2ANetworkStatus;
 }
 
 export async function getA2AFeed(

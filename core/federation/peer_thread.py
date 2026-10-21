@@ -206,11 +206,21 @@ def dispatch(tenant_id: str, endpoint_id: str, line: str) -> dict[str, Any]:
         return {"executed": True, "kind": "stop", "stopped": _stop_running(tenant_id, endpoint_id)}
 
     if line == "/agents":
+        catalog = PeerCatalog(tenant_id)
+        peer_agents = [a for a in catalog.agents() if a.endpoint_id == endpoint_id]
+        if not peer_agents:
+            # ``agents()`` lists FRESH catalogs only (CATALOG_TTL_S). Five minutes after the last
+            # fetch ``/agents`` answered ``peer: []`` for a peer whose agent ``/ask @peer`` then
+            # used fine (it refreshes on its own) — measured 2026-10-21. Fetch once, best-effort;
+            # an unreachable or refusing peer simply stays an empty list.
+            try:
+                peer_agents = catalog.refresh(endpoint_id)
+            except Exception:  # noqa: BLE001 — a read command never fails on the wire
+                peer_agents = []
         return {
             "executed": True, "kind": "agents",
             "local": [a.agent_id for a in LocalAgentRegistry(tenant_id).list_agents()],
-            "peer": [a.agent_id for a in PeerCatalog(tenant_id).agents()
-                    if a.endpoint_id == endpoint_id],
+            "peer": [a.agent_id for a in peer_agents],
         }
 
     raise PeerThreadCommandError("unknown command — not sent")

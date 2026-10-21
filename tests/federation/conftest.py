@@ -14,6 +14,26 @@ import pytest
 TENANT_ID = "_default"
 
 
+@pytest.fixture(autouse=True)
+def _a2a_member_tier(monkeypatch):
+    """``a2a.network`` is member-only (gate 28ad07b54). These suites exercise the federation
+    PROTOCOL between two instances, not the licence verdict (which has its own tests): without this
+    pin every catalog refresh answered 502 and the whole directory was red from the day the gate
+    landed (measured 2026-10-21). Mirrors ``corvin_operator/bridges/shared/conftest.py``."""
+    try:
+        from corvin_operator.license import capability_api
+    except ImportError:  # licensing absent: the gate refuses on its own (fail-closed)
+        yield
+        return
+    monkeypatch.setattr(capability_api, "active_tier", lambda **_k: "member")
+    try:
+        import a2a_license_gate  # type: ignore[import-not-found]
+        a2a_license_gate.reset_allow_cache()
+    except Exception:  # noqa: BLE001 — the cache is a convenience
+        pass
+    yield
+
+
 @pytest.fixture
 def tmp_corvin_home(tmp_path: Path) -> Generator[Path, None, None]:
     home = tmp_path / "corvin_home"

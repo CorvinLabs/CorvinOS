@@ -1106,12 +1106,17 @@ class RemoteTriggerSender:
         # conversations, groups — comes through here.
         _denied = _network_denied("remote_trigger_sender.send")
         if _denied:
-            return SendResult(
+            refused = SendResult(
                 ok=False, status="rejected", task_id=task_id or str(uuid.uuid4()),
                 instance_id="", instance_id_match=False, data={}, attachments=[],
                 duration_ms=0, error_category=ErrorCategory.REJECTED,
                 error_detail=_sanitize_error(_denied),
             )
+            # The console records the outbound row BEFORE calling send (feed_task_recorded):
+            # without a response row it stayed "queued" forever on a Free install (2026-10-21).
+            if feed_task_recorded and group_id is None:
+                _record_feed_response(endpoint_id, refused, None)
+            return refused
         # The receiver refuses instructions over 16 KiB (after NFKC) as an
         # "injection attempt" — refuse locally with a clear reason instead of
         # sending it and leaving a false security signal on the peer (round 7).
