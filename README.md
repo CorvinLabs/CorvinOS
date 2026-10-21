@@ -10,7 +10,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue.svg" alt="License: Apache 2.0"/></a>
   <img src="https://img.shields.io/badge/version-2.0.0-f0b429" alt="Version 2.0.0"/>
-  <img src="https://img.shields.io/badge/python-%E2%89%A53.10-3776ab" alt="Python 3.10+"/>
+  <img src="https://img.shields.io/badge/python-%E2%89%A53.11-3776ab" alt="Python 3.11+"/>
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-555" alt="Linux, macOS, Windows"/>
   <img src="https://img.shields.io/badge/GDPR%20%2B%20EU%20AI%20Act-by%20design-3fb950" alt="GDPR and EU AI Act by design"/>
 </p>
