@@ -1480,12 +1480,13 @@ function EditorToolbar({
 
   const exportAwpkg = async () => {
     setExportingPkg(true);
+    setSaveError(null);
     try {
       const res = await fetch(`/v1/console/workflows/${encodeURIComponent(wid)}/export.awpkg`, {
         credentials: "include",
       });
       if (!res.ok) {
-        console.error("PKG export failed:", res.status, res.statusText);
+        setSaveError(`Package export failed (HTTP ${res.status})`);
         return;
       }
       const blob = await res.blob();
@@ -1497,6 +1498,8 @@ function EditorToolbar({
       a.download = fn;
       a.click();
       URL.revokeObjectURL(url);
+    } catch (e) {
+      setSaveError(`Package export failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setExportingPkg(false);
     }
@@ -1740,7 +1743,7 @@ function RunTimeline({
   if (!run || events.length === 0) return null;
 
   // Collect per-node timing from events
-  const nodeMap: Record<string, { start: number; end?: number; status: "ok" | "failed" | "running" }> = {};
+  const nodeMap: Record<string, { start: number; end?: number; status: "ok" | "failed" | "running" | "waiting" }> = {};
   for (const evt of events) {
     if (!evt.node_id) continue;
     if (evt.type === "node_started") {
@@ -1751,6 +1754,14 @@ function RunTimeline({
     } else if (evt.type === "node_failed" && nodeMap[evt.node_id]) {
       nodeMap[evt.node_id].end = evt.ts;
       nodeMap[evt.node_id].status = "failed";
+    }
+  }
+
+  // A node still open when the run is over did not finish: waiting if the run is paused,
+  // otherwise aborted (never a bar that pulses as if it were still executing).
+  if (run.status !== "running") {
+    for (const n of Object.values(nodeMap)) {
+      if (n.status === "running") n.status = run.status === "paused" ? "waiting" : "failed";
     }
   }
 
@@ -1766,6 +1777,7 @@ function RunTimeline({
     ok: "bg-emerald-500",
     failed: "bg-destructive",
     running: "bg-amber-400 animate-pulse",
+    waiting: "bg-amber-400",
   };
 
   return (
@@ -3444,7 +3456,7 @@ export function WorkflowRunDetailPage() {
     queryFn: ({ signal }) => getRun(wid!, rid!, signal),
     enabled: !!wid && !!rid,
     refetchInterval: (q) =>
-      q.state.data?.run.status === "running" ? 2000 : false,
+      q.state.data?.run.status === "running" || q.state.data?.run.status === "paused" ? 2000 : false,
   });
 
   const mediaQ = useQuery({
@@ -3509,7 +3521,7 @@ export function WorkflowRunDetailPage() {
                   : "bg-amber-500/10 text-amber-600",
             )}
           >
-            {run.status}
+            {run.status === "paused" ? "waiting for an answer" : run.status}
           </Badge>
           {run.dry_run && <Badge variant="outline">dry-run</Badge>}
           <span className="text-muted-foreground">
@@ -3519,6 +3531,48 @@ export function WorkflowRunDetailPage() {
             Duration {formatDuration(run.started_at, run.finished_at)}
           </span>
           {run.error && <span className="text-destructive">{run.error}</span>}
+        </div>
+      )}
+
+      {/* ── A paused run waits for an answer here too (after a reload or from the history) ── */}
+      {run?.status === "paused" && run.awaiting && wid && rid && session && (
+        <div data-testid="run-detail-awaiting" className="overflow-hidden rounded-xl border border-amber-300 dark:border-amber-700">
+          {run.awaiting.kind === "approval" ? (
+            <HitlApprovalBar
+              wid={wid}
+              rid={rid}
+              nodeId={run.awaiting.node_id}
+              message={run.awaiting.message}
+              csrf={session.csrf_token}
+              onDecision={() => void detail.refetch()}
+            />
+          ) : (
+            <WorkflowChatPanel
+              wid={wid}
+              rid={rid}
+              nodeId={run.awaiting.node_id}
+              prompt={run.awaiting.message}
+              history={[]}
+              csrf={session.csrf_token}
+              onResumed={() => void detail.refetch()}
+            />
+          )}
+          <div className="flex justify-end border-t border-amber-200 px-3 py-2 dark:border-amber-800">
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="run-detail-cancel"
+              onClick={async () => {
+                try {
+                  await cancelWorkflowRun(wid, rid, session.csrf_token);
+                } finally {
+                  void detail.refetch();
+                }
+              }}
+            >
+              Cancel run
+            </Button>
+          </div>
         </div>
       )}
 
@@ -3745,7 +3799,7 @@ function EventRow({ evt, csrf }: { evt: WorkflowRunEvent; csrf?: string }) {
       ? "text-emerald-600 dark:text-emerald-400"
       : evt.type === "node_failed" || evt.type === "error" || (evt.type === "run_completed" && !evt.ok)
         ? "text-destructive"
-        : evt.type === "node_started"
+        : evt.type === "node_started" || evt.type === "node_awaiting_approval" || evt.type === "node_awaiting_reply" || evt.type === "run_paused"
           ? "text-amber-600 dark:text-amber-400"
           : "text-muted-foreground";
 
@@ -3754,6 +3808,8 @@ function EventRow({ evt, csrf }: { evt: WorkflowRunEvent; csrf?: string }) {
     evt.type === "node_completed" ? "✓" :
     evt.type === "node_failed" || evt.type === "error" ? "✗" :
     evt.type === "run_completed" ? (evt.ok ? "✓✓" : "✗✗") :
+    evt.type === "node_skipped" ? "⤼" :
+    evt.type === "node_awaiting_approval" || evt.type === "node_awaiting_reply" || evt.type === "run_paused" ? "⏸" :
     "·";
 
   return (
@@ -3785,7 +3841,7 @@ function EventRow({ evt, csrf }: { evt: WorkflowRunEvent; csrf?: string }) {
           </span>
         )}
         {!expanded && (evt.error ?? evt.message) && (
-          <span className="min-w-0 flex-1 truncate text-destructive">
+          <span className={cn("min-w-0 flex-1 truncate", evt.error || evt.type === "error" ? "text-destructive" : "text-muted-foreground")}>
             {evt.error ?? evt.message}
           </span>
         )}
