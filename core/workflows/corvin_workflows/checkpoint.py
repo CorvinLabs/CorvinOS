@@ -124,6 +124,7 @@ def load(run_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
 def delete(run_id: str, *, tenant_id: str | None = None) -> None:
     p = _run_path(run_id, tenant_id)
     p.unlink(missing_ok=True)
+    _claim_marker(p).unlink(missing_ok=True)
     # A resume in flight may have moved the checkpoint to its `.claimed` sidecar
     # (see claim() below) — remove that too so a completed run leaves nothing.
     p.with_suffix(".json.claimed").unlink(missing_ok=True)
@@ -133,30 +134,88 @@ class AlreadyClaimedError(RuntimeError):
     """Raised by claim() when another resume already holds the checkpoint."""
 
 
-def claim(run_id: str, *, tenant_id: str | None = None) -> Path:
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    except OSError:
+        return False
+    return True
+
+
+def _claim_marker(p: Path) -> Path:
+    return p.with_suffix(".json.claim")
+
+
+def _reap_stale_claim(p: Path) -> bool:
+    """A-07: a resume killed hard (kill -9, power loss) leaves `<id>.json.claimed` behind and
+    the run could never be resumed or even listed again. The claim records the claiming pid;
+    when that process is gone the checkpoint is put back. A claim without a readable marker is
+    only reaped when it is older than an hour (a claim by an older version)."""
+    claimed = p.with_suffix(".json.claimed")
+    if not claimed.exists():
+        return False
+    marker = _claim_marker(p)
+    stale = False
+    try:
+        info = json.loads(marker.read_text(encoding="utf-8"))
+        stale = not _pid_alive(int(info["pid"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        try:
+            stale = time.time() - claimed.stat().st_mtime > 3600
+        except OSError:
+            stale = False
+    if not stale:
+        return False
+    try:
+        if not p.exists():
+            os.replace(claimed, p)
+        else:
+            claimed.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
+
+
+def claim(run_id: str, *, tenant_id: str | None = None, claimer_pid: int | None = None) -> Path:
     """Atomically claim a paused checkpoint for the duration of one resume
     (CON-F2). Renames `<run_id>.json` -> `<run_id>.json.claimed`; the rename is
     atomic on POSIX and Windows, so exactly one concurrent resume wins and every
     other observes the source already gone. Prevents the double-resume race that
     would otherwise double-execute side-effecting nodes.
 
-    Returns the claimed path. Raises FileNotFoundError if there is no paused
-    checkpoint, AlreadyClaimedError if a concurrent resume already claimed it.
+    The claimer's pid is recorded next to it so a claim whose process died is recoverable
+    (A-07). Returns the claimed path. Raises FileNotFoundError if there is no paused
+    checkpoint, AlreadyClaimedError if a live concurrent resume already claimed it.
     Call release() on a non-terminal resume to make it re-resumable, or delete()
     on completion to remove it for good.
     """
     p = _run_path(run_id, tenant_id)
     claimed = p.with_suffix(".json.claimed")
+    for attempt in (0, 1):
+        try:
+            # os.rename raises FileNotFoundError if the source vanished (already
+            # claimed by a racing resume that renamed it away, or never existed).
+            os.rename(p, claimed)
+            break
+        except FileNotFoundError as exc:
+            if claimed.exists():
+                if attempt == 0 and _reap_stale_claim(p):
+                    continue
+                raise AlreadyClaimedError(
+                    f"run {run_id!r} is already being resumed"
+                ) from exc
+            raise FileNotFoundError(f"no paused run found for run_id={run_id!r}") from exc
     try:
-        # os.rename raises FileNotFoundError if the source vanished (already
-        # claimed by a racing resume that renamed it away, or never existed).
-        os.rename(p, claimed)
-    except FileNotFoundError as exc:
-        if claimed.exists():
-            raise AlreadyClaimedError(
-                f"run {run_id!r} is already being resumed"
-            ) from exc
-        raise FileNotFoundError(f"no paused run found for run_id={run_id!r}") from exc
+        _claim_marker(p).write_text(
+            json.dumps({"pid": claimer_pid if claimer_pid is not None else os.getpid(),
+                        "ts": time.time()}), encoding="utf-8")
+    except OSError:
+        pass
     return claimed
 
 
@@ -171,6 +230,7 @@ def release(run_id: str, *, tenant_id: str | None = None) -> None:
     """
     p = _run_path(run_id, tenant_id)
     claimed = p.with_suffix(".json.claimed")
+    _claim_marker(p).unlink(missing_ok=True)
     if not claimed.exists():
         return
     if p.exists():
@@ -182,6 +242,8 @@ def release(run_id: str, *, tenant_id: str | None = None) -> None:
 
 def list_paused(*, tenant_id: str | None = None) -> list[dict[str, Any]]:
     d = _runs_dir(tenant_id)
+    for c in sorted(d.glob("*.json.claimed")):
+        _reap_stale_claim(d / c.name[: -len(".claimed")])
     out = []
     for f in sorted(d.glob("*.json")):
         try:

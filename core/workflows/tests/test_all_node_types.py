@@ -169,6 +169,12 @@ def test_other_branch_runs_when_the_condition_does_not_match(_doc):
     assert run.paused_at_node == "confirm"
 
 
+def _pf_default(call):
+    if call.metadata["node_id"] == "pf":
+        raise RuntimeError("pf fails")
+    return {"v": call.metadata["node_id"]}
+
+
 def test_join_is_skipped_only_when_every_dependency_is_dead():
     graph = [
         {"id": "gate", "type": "route", "mode": "condition", "depends_on": [],
@@ -176,9 +182,9 @@ def test_join_is_skipped_only_when_every_dependency_is_dead():
                    {"id": "b", "when": "default"}]},
         {"id": "pa", "type": "agent", "agent": "r", "branch": "a", "depends_on": ["gate"]},
         {"id": "pb", "type": "agent", "agent": "r", "branch": "b", "depends_on": ["gate"]},
-        {"id": "pc", "type": "agent", "agent": "r", "branch": "c", "depends_on": ["gate"]},
+        {"id": "pf", "type": "agent", "agent": "r", "depends_on": [], "retry": {"error_strategy": "fail_branch"}},
         {"id": "join_all_dead", "type": "merge", "strategy": "concat_list",
-         "inputs": ["pa.v", "pc.v"], "output": "o", "depends_on": ["pa", "pc"]},
+         "inputs": ["pa.v", "pf.v"], "output": "o", "depends_on": ["pa", "pf"]},
         {"id": "after", "type": "agent", "agent": "r", "depends_on": ["join_all_dead"]},
         {"id": "join_live", "type": "merge", "strategy": "concat_list",
          "inputs": ["pa.v", "pb.v"], "output": "o", "depends_on": ["pa", "pb"]},
@@ -186,9 +192,9 @@ def test_join_is_skipped_only_when_every_dependency_is_dead():
     doc = WorkflowDoc(awp_version="1.1.0", name="join_rules", description="d",
                       orchestration={"engine": "dag", "graph": graph}, raw={})
     validate(doc)
-    run = DAGRunner(doc, engine=StubEngine(default=lambda c: {"v": c.metadata["node_id"]})).run({"x": 2})
+    run = DAGRunner(doc, engine=StubEngine(default=_pf_default)).run({"x": 2})
     st = {k: v.status for k, v in run.nodes.items()}
-    assert st["pa"] == "skipped" and st["pc"] == "skipped" and st["pb"] == "success"
+    assert st["pa"] == "skipped" and st["pf"] == "failed" and st["pb"] == "success"
     assert st["join_all_dead"] == "skipped" and st["after"] == "skipped"
     assert st["join_live"] == "success"
 

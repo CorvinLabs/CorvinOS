@@ -23,6 +23,7 @@ Shipped types:
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Any, Callable
 
@@ -491,6 +492,7 @@ def _execute_answer(*, node, engine, state, inputs, audit) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _EXPECT_TYPES = {"boolean", "string"}
+_MAX_APPROVAL_TIMEOUT_S = 7 * 24 * 3600
 
 
 class WorkflowPaused(Exception):
@@ -527,8 +529,12 @@ def _validate_ask_human(node: dict[str, Any]) -> None:
         if expect.get("type", "string") not in _EXPECT_TYPES:
             raise ValueError(f"ask_human node 'expect.type' must be one of {sorted(_EXPECT_TYPES)}")
     timeout = node.get("timeout_minutes")
-    if timeout is not None and (not isinstance(timeout, (int, float)) or timeout <= 0):
-        raise ValueError("ask_human node 'timeout_minutes' must be a positive number")
+    if timeout is not None:
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError("ask_human node 'timeout_minutes' must be a positive, finite number")
+        if timeout > _MAX_APPROVAL_TIMEOUT_S / 60:
+            raise ValueError("ask_human node 'timeout_minutes' must be <= 10080 (7 days)")
     # `on_timeout.branch` is declared INTENT (ADR-0188 open question): no wake-up
     # trigger exists, so it is accepted and ignored. What `timeout_minutes` does enforce
     # (WF-04) is that a pause past its deadline can no longer be resumed.
@@ -617,7 +623,7 @@ def _execute_ask_human(*, node, engine, state, inputs, audit) -> dict[str, Any]:
 # Approval node — a yes/no gate answered by the operator (console review step)
 # ---------------------------------------------------------------------------
 
-_MAX_APPROVAL_TIMEOUT_S = 7 * 24 * 3600
+_DECISION_RE = re.compile(r"^\s*(approve|reject)\s*(?::.*)?$", re.IGNORECASE | re.DOTALL)
 
 
 class ApprovalRejected(RuntimeError):
@@ -631,8 +637,9 @@ def _validate_approval(node: dict[str, Any]) -> None:
         raise ValueError("approval node 'message' must be a non-empty string")
     timeout = node.get("timeout_s")
     if timeout is not None:
-        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
-            raise ValueError("approval node 'timeout_s' must be a positive number")
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError("approval node 'timeout_s' must be a positive, finite number")
         if timeout > _MAX_APPROVAL_TIMEOUT_S:
             raise ValueError(f"approval node 'timeout_s' must be <= {_MAX_APPROVAL_TIMEOUT_S} (7 days)")
 
@@ -647,13 +654,13 @@ def _execute_approval(*, node, engine, state, inputs, audit) -> dict[str, Any]:
     replies = state.get("__replies__") or {}
     if node["id"] in replies:
         raw_reply = str(replies[node["id"]])
-        head = raw_reply.strip().lower()
-        # The console sends the unambiguous "approve[: comment]" / "reject[: comment]";
-        # a free-text reply (CLI resume, bridge) falls back to the fail-closed coercion.
-        if head.startswith("approve"):
-            approved = True
-        elif head.startswith("reject"):
-            approved = False
+        # The console sends the unambiguous "approve[: comment]" / "reject[: comment]". Only
+        # that exact token form counts (A-06): "approver is on holiday, reject for now" starts
+        # with "approve" and must NOT be consent. Anything else is free text (CLI resume,
+        # bridge) and goes through the fail-closed, negation-first coercion.
+        m = _DECISION_RE.match(raw_reply)
+        if m:
+            approved = m.group(1).lower() == "approve"
         else:
             approved = _coerce_reply(raw_reply, "boolean")
         audit("approval.decided", node_id=node["id"], approved=bool(approved))
@@ -928,6 +935,29 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
     "ask_human": {"validate": _validate_ask_human, "execute": _execute_ask_human},
     "approval": {"validate": _validate_approval, "execute": _execute_approval},
 }
+
+
+_ERROR_STRATEGIES = {"abort", "fail_branch"}
+
+
+def validate_common_fields(node: dict[str, Any]) -> None:
+    """Fields every node type may carry (`retry`, `share_output`); checked once for all types
+    so a typo there is a validation error, not a crash after the node's side effect (A-03)."""
+    retry = node.get("retry")
+    if retry is not None:
+        if not isinstance(retry, dict):
+            raise ValueError("'retry' must be a mapping")
+        for key in ("max_retries", "retry_interval_s"):
+            v = retry.get(key)
+            if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))
+                                  or not math.isfinite(v) or v < 0):
+                raise ValueError(f"retry.{key} must be a non-negative finite number")
+        strat = retry.get("error_strategy", "abort")
+        if strat not in _ERROR_STRATEGIES:
+            raise ValueError(f"retry.error_strategy must be one of {sorted(_ERROR_STRATEGIES)}, got {strat!r}")
+    share = node.get("share_output")
+    if share is not None and (not isinstance(share, list) or not all(isinstance(x, str) for x in share)):
+        raise ValueError("'share_output' must be a list of field names")
 
 
 _ENGINE_FREE_TYPES = frozenset({"code", "merge", "answer", "ask_human", "approval", "deliver"})

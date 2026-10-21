@@ -76,6 +76,16 @@ preserves the original all-or-nothing behavior. A `merge` node is the join point
 skipped or failed dependency skips its dependents, EXCEPT a `merge`, which is skipped only when
 *all* of its dependencies are skipped/failed (so `route` -> two branches -> `merge` works).
 
+**Validation (R9, R10).** Beyond the per-type rules: a selector (`text_from`, `items_from`, `chat_id_from`,
+`prompt_from`, merge/code `inputs`, route selectors) may only read a node that is in the reader's
+`depends_on` chain; a `branch:` label must be a case id (or class) of a route node the node directly depends
+on; `retry` and `share_output` are checked for every node type; non-finite or > 7 day timeouts are rejected;
+a malformed document raises `WorkflowInvalid` (never a `TypeError`). A failed resume keeps the nodes it
+completed (an `answer`/`deliver` that already sent is not sent again on the next resume); a resume claim held by
+a process that died is released automatically. `corvin-flow resume` exits 3 for an expired or changed pause and
+4 for a run that is already being resumed. The `approval` reply must be exactly `approve` / `reject`
+(optionally `: comment`); other text is judged by the fail-closed yes/no coercion.
+
 **Pauses.** `timeout_minutes` (`ask_human`) / `timeout_s` (`approval`) set a deadline stored in the
 checkpoint (`expires_at_ms`); resuming after it raises `PauseExpired` (the checkpoint is kept for
 inspection). `on_timeout.branch` is still declared intent only. A checkpoint also records the

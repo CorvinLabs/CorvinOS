@@ -334,7 +334,9 @@ def _run_workflow_to_outbox(
     import re as _re
     for k, v in workflow_inputs.items():
         _k = str(k)
-        if not _re.match(r'^[a-zA-Z0-9_\-]+$', _k):
+        # No leading dash (A-11): `--engine=stub` as an input NAME would be parsed by the CLI
+        # as an option and silently turn a scheduled run into a synthetic one.
+        if not _re.match(r'^[a-zA-Z0-9_][a-zA-Z0-9_\-]*$', _k):
             continue  # skip keys with unsafe characters (no shell=True, but be conservative)
         cmd.append(f"{_k}={v}")
 

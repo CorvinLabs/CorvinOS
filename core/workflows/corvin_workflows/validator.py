@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from .node_types import NODE_TYPES
+from .node_types import NODE_TYPES, validate_common_fields
 
 if TYPE_CHECKING:
     from .storage import WorkflowDoc
@@ -42,6 +42,26 @@ class WorkflowInvalid(Exception):
         super().__init__(f"[{code}] {message}")
         self.code = code
         self.message = message
+
+
+def _r0_shape(doc: "WorkflowDoc") -> None:
+    """A-10: a malformed document is a WorkflowInvalid, never a TypeError/RecursionError from
+    a later rule. Checks only the container shapes the other rules iterate over."""
+    if not isinstance(doc.orchestration, dict):
+        raise WorkflowInvalid("R5", "orchestration must be a mapping")
+    graph = (doc.orchestration or {}).get("graph", [])
+    if not isinstance(graph, list):
+        raise WorkflowInvalid("R5", "orchestration.graph must be a list")
+    for i, n in enumerate(graph):
+        if not isinstance(n, dict):
+            raise WorkflowInvalid("R6", f"graph entry {i} must be a mapping, got {type(n).__name__}")
+        deps = n.get("depends_on")
+        if deps is not None and (
+            not isinstance(deps, list) or not all(isinstance(d, str) for d in deps)
+        ):
+            raise WorkflowInvalid("R8", f"node {n.get('id')!r}: depends_on must be a list of node ids")
+    if not isinstance(doc.engine, str):
+        raise WorkflowInvalid("R4", "orchestration.engine must be a string")
 
 
 def _r1_awp_version(doc: "WorkflowDoc") -> None:
@@ -111,19 +131,104 @@ def _r9_no_cycles(doc: "WorkflowDoc") -> None:
     WHITE, GRAY, BLACK = 0, 1, 2
     color: dict[str, int] = {nid: WHITE for nid in edges}
 
-    def dfs(node: str, path: list[str]) -> None:
-        color[node] = GRAY
-        for nb in edges[node]:
+    # Iterative DFS (A-10): a long valid chain must not hit the interpreter recursion limit.
+    for start in edges:
+        if color[start] != WHITE:
+            continue
+        path = [start]
+        iters = [iter(edges[start])]
+        color[start] = GRAY
+        while path:
+            try:
+                nb = next(iters[-1])
+            except StopIteration:
+                color[path.pop()] = BLACK
+                iters.pop()
+                continue
             if color[nb] == GRAY:
-                cycle = " -> ".join(path + [node, nb])
-                raise WorkflowInvalid("R9", f"cycle detected: {cycle}")
+                raise WorkflowInvalid("R9", f"cycle detected: {' -> '.join(path + [nb])}")
             if color[nb] == WHITE:
-                dfs(nb, path + [node])
-        color[node] = BLACK
+                color[nb] = GRAY
+                path.append(nb)
+                iters.append(iter(edges[nb]))
 
-    for nid in edges:
-        if color[nid] == WHITE:
-            dfs(nid, [])
+
+def _selectors_of(node: dict) -> list[str]:
+    """Every selector string a node's executor will resolve against upstream state."""
+    out: list[str] = []
+    t = node.get("type", "agent")
+    for key in ("text_from", "prompt_from", "chat_id_from", "items_from"):
+        if isinstance(node.get(key), str) and node[key]:
+            out.append(node[key])
+    if t == "merge" and isinstance(node.get("inputs"), list):
+        out += [x for x in node["inputs"] if isinstance(x, str)]
+    if t == "code" and isinstance(node.get("inputs"), dict):
+        out += [x for x in node["inputs"].values() if isinstance(x, str)]
+    if t == "route":
+        if node.get("mode") == "classify" and isinstance(node.get("input"), str):
+            out.append(node["input"])
+        for c in node.get("cases") or []:
+            when = c.get("when") if isinstance(c, dict) else None
+            if isinstance(when, dict) and isinstance(when.get("selector"), str):
+                out.append(when["selector"])
+    return out
+
+
+def _r9b_selectors_follow_dependencies(doc: "WorkflowDoc") -> None:
+    """A-01: a selector may only read a node the reader (transitively) depends on. Otherwise
+    the level order can run the reader first and it silently reads None."""
+    ids = {n["id"] for n in doc.graph}
+    deps = {n["id"]: list(n.get("depends_on") or []) for n in doc.graph}
+    closure: dict[str, set[str]] = {}
+
+    def reach(nid: str) -> set[str]:
+        if nid in closure:
+            return closure[nid]
+        seen: set[str] = set()
+        stack = list(deps[nid])
+        while stack:
+            d = stack.pop()
+            if d in seen:
+                continue
+            seen.add(d)
+            stack.extend(deps.get(d, []))
+        closure[nid] = seen
+        return seen
+
+    for n in doc.graph:
+        for sel in _selectors_of(n):
+            root = sel.split(".", 1)[0]
+            if root in ids and root not in reach(n["id"]):
+                raise WorkflowInvalid(
+                    "R9", f"node {n['id']!r}: selector {sel!r} reads node {root!r}, "
+                          f"which is not in its depends_on chain",
+                )
+
+
+def _r9c_branch_labels(doc: "WorkflowDoc") -> None:
+    """A-02: `branch:` must name a case of a route the node DIRECTLY depends on; a typo or a
+    tag on a non-direct dependent otherwise skips (or runs) the wrong nodes without a word."""
+    by_id = {n["id"]: n for n in doc.graph}
+    for n in doc.graph:
+        if "branch" not in n:
+            continue
+        label = n["branch"]
+        routes = [by_id[d] for d in (n.get("depends_on") or []) if by_id[d].get("type") == "route"]
+        if not routes:
+            raise WorkflowInvalid(
+                "R9", f"node {n['id']!r}: 'branch: {label}' needs a route node among its direct depends_on"
+            )
+        labels: set[str] = set()
+        for r in routes:
+            if r.get("mode") == "classify":
+                labels |= {c for c in (r.get("classes") or []) if isinstance(c, str)}
+            else:
+                labels |= {c.get("id") for c in (r.get("cases") or []) if isinstance(c, dict)}
+        if label not in labels:
+            raise WorkflowInvalid(
+                "R9", f"node {n['id']!r}: branch {label!r} is not a case of its route "
+                      f"(cases: {sorted(x for x in labels if x)})"
+            )
 
 
 def _r10_per_type_validation(doc: "WorkflowDoc") -> None:
@@ -131,6 +236,10 @@ def _r10_per_type_validation(doc: "WorkflowDoc") -> None:
         ntype = n.get("type", "agent")
         spec = NODE_TYPES[ntype]
         validator = spec.get("validate")
+        try:
+            validate_common_fields(n)
+        except Exception as e:  # noqa: BLE001
+            raise WorkflowInvalid("R10", f"node {n.get('id')!r}: {e}") from e
         if validator is not None:
             try:
                 validator(n)
@@ -158,6 +267,7 @@ def _r11_chat_engine_needs_turn_node(doc: "WorkflowDoc") -> None:
 
 
 RULES = (
+    _r0_shape,
     _r1_awp_version,
     _r2_name,
     _r3_description,
@@ -168,11 +278,19 @@ RULES = (
     _r8_depends_on_refs,
     _r9_no_cycles,
     _r10_per_type_validation,
+    _r9b_selectors_follow_dependencies,
+    _r9c_branch_labels,
     _r11_chat_engine_needs_turn_node,
 )
 
 
 def validate(doc: "WorkflowDoc") -> None:
-    """Run R1..R10 in order; first failure raises WorkflowInvalid."""
+    """Run R1..R11 in order; first failure raises WorkflowInvalid. Anything else a rule
+    raises on a malformed document is reported as WorkflowInvalid too (A-10)."""
     for rule in RULES:
-        rule(doc)
+        try:
+            rule(doc)
+        except WorkflowInvalid:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise WorkflowInvalid("R10", f"malformed workflow ({type(e).__name__}: {e})") from e

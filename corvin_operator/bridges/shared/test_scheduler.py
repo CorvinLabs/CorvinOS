@@ -357,6 +357,19 @@ class ScheduledWorkflowUsesRealEngineTests(unittest.TestCase):
         self.assertNotIn("Reuters", env["text"])
         self.assertNotIn("[STUB", env["text"])
 
+    def test_input_name_cannot_inject_a_cli_option(self):
+        """A-11: an input called `--engine` with value `stub` must not switch the run to the
+        synthetic engine."""
+        item = {
+            "id": "wf02", "channel": "discord", "chat_id": "123456",
+            "workflow_name": str(self.wf_path), "workflow_inputs": {"--engine": "stub"},
+        }
+        self.assertTrue(scheduler._run_workflow_to_outbox(item, now=1000.0))
+        report = next((self._td / "outbox").glob("sched_wf_wf02_*.json"))
+        env = json.loads(report.read_text(encoding="utf-8"))
+        self.assertNotIn("[STUB", env["text"])
+        self.assertIn(self.MARKER, env["text"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

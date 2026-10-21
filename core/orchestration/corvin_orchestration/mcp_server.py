@@ -192,16 +192,9 @@ except ImportError:
 _ACTIVE_WORKFLOW_RUNS = 0
 _ACTIVE_WORKFLOW_LOCK = threading.Lock()
 
-# Node types whose executor NEVER calls engine.spawn() (see
-# corvin_workflows/node_types.py). A workflow built only from these runs with
-# NO LLM engine — so it must not require the `claude` CLI on PATH. This is the
-# no-Claude fresh-install path (and CI, which ships no CLI): a
-# pure code/compute/merge workflow has to execute regardless. Any node type
-# NOT in this set is treated as engine-requiring and fails fast up front with a
-# clean engine_unavailable envelope rather than an opaque mid-run node failure.
-_ENGINE_FREE_NODE_TYPES = frozenset(
-    {"code", "compute", "merge", "static", "ask_human", "deliver"}
-)
+# Whether a workflow needs a worker engine at all is decided by
+# corvin_workflows.node_requires_engine (one definition for every caller): a graph of
+# engine-free nodes runs without the `claude` CLI on PATH (no-Claude install, CI).
 
 
 class _NullEngine:
@@ -965,7 +958,7 @@ class OrchestrationServer:
         if not _WID_RE.match(workflow_id):
             self._error(msgid, INVALID_PARAMS, "workflow_id must match [a-z][a-z0-9_-]{0,63}")
             return
-        tenant_id = _current_tenant(args.get("tenant_id"))
+        tenant_id = _current_tenant(None)
         yaml_path = _tenant_home(tenant_id) / "workflows" / f"{workflow_id}.awp.yaml"
         if not yaml_path.exists():
             self._error(msgid, INVALID_PARAMS, f"workflow {workflow_id!r} not found for tenant {tenant_id!r}")
@@ -1053,10 +1046,9 @@ class OrchestrationServer:
         # (no-Claude fresh install, and CI). An engine-requiring
         # workflow with no CLI fails fast here with a clean engine_unavailable
         # envelope instead of an opaque mid-run node failure.
-        needs_engine = any(
-            str(node.get("type", "agent")) not in _ENGINE_FREE_NODE_TYPES
-            for node in doc.graph
-        )
+        from corvin_workflows import node_requires_engine as _node_requires_engine
+
+        needs_engine = any(_node_requires_engine(node) for node in doc.graph)
         engine: Any = _NULL_ENGINE
         if needs_engine:
             try:
@@ -1108,7 +1100,7 @@ class OrchestrationServer:
         if not run_id or not reply:
             self._error(msgid, INVALID_PARAMS, "run_id and reply are required")
             return
-        tenant_id = _current_tenant(args.get("tenant_id"))
+        tenant_id = _current_tenant(None)
         budget_s = _clamp(args.get("budget_s"), lo=10, hi=600, default=120)
         sink = _audit_sink_for(tenant_id, "workflow")
 
@@ -1233,7 +1225,7 @@ class OrchestrationServer:
         if not _AWP_AVAILABLE:
             self._error(msgid, METHOD_NOT_FOUND, "AWP workflow engine not installed (core/workflows/)")
             return
-        tenant_id = _current_tenant(args.get("tenant_id"))
+        tenant_id = _current_tenant(None)
         try:
             paused = _awp_checkpoint.list_paused(tenant_id=tenant_id)
         except Exception as exc:  # noqa: BLE001
@@ -1363,7 +1355,7 @@ class OrchestrationServer:
         if not task:
             self._error(msgid, INVALID_PARAMS, "task is required")
             return
-        tenant_id = _current_tenant(args.get("tenant_id"))
+        tenant_id = _current_tenant(None)
         dry_run = bool(args.get("dry_run", False))
         budget_override = args.get("budget_override")
         budget_s = _clamp(args.get("budget_s"), lo=30, hi=600, default=180)

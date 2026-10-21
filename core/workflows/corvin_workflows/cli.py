@@ -660,11 +660,21 @@ def _resume_workflow_cmd(run_id: str, reply: str, *, format_: str, engine_name: 
         print(f"ERROR: {e} (use --engine stub only for an explicit synthetic demo run)",
               file=sys.stderr)
         return 2
+    from . import checkpoint as _checkpoint
+    from .runner import PauseExpired, WorkflowChanged
+
     try:
         result = resume_workflow(run_id, reply, engine=engine)
     except KeyError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
+    # A-10: distinct, traceback-free answers (exit 3 = cannot be resumed, 4 = already running).
+    except (PauseExpired, WorkflowChanged) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 3
+    except _checkpoint.AlreadyClaimedError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 4
     # doc.name isn't available post-resume without reloading; result.workflow carries it.
     class _DocStub:
         name = result.workflow

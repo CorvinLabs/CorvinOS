@@ -66,6 +66,9 @@ class ResumeContext:
     paused_at_node: str
     reply: str
     failed_ids: set[str] = field(default_factory=set)
+    # The checkpoint being resumed (prompt / channel / approver), so a failed resume can write
+    # a fresh one that keeps the progress of that pass (A-05).
+    checkpoint: dict[str, Any] | None = None
 
 
 def _topo_levels(graph: list[dict[str, Any]]) -> list[list[str]]:
@@ -337,7 +340,11 @@ class DAGRunner:
                     continue
 
                 executor = NODE_TYPES[ntype]["execute"]
-                max_retries, interval_s, error_strategy = _retry_config(node)
+                try:
+                    max_retries, interval_s, error_strategy = _retry_config(node)
+                except Exception as e:  # noqa: BLE001 - a bad retry block fails this node
+                    max_retries, interval_s, error_strategy = 0, 0.0, _DEFAULT_ERROR_STRATEGY
+                    node = {**node, "__config_error__": str(e)}
 
                 t0 = perf_counter()
                 self._audit("node.started", node_id=nid, node_type=ntype)
@@ -346,10 +353,20 @@ class DAGRunner:
                 attempts = 0
                 for attempts in range(1, max_retries + 2):  # first try + N retries
                     try:
+                        if "__config_error__" in node:
+                            raise ValueError(node["__config_error__"])
                         output = executor(
                             node=node, engine=self.engine, state=state,
                             inputs=inputs, audit=self._audit,
                         )
+                        # A-03: whatever the engine handed back must be a mapping; a list /
+                        # null / scalar is a node failure, not an AssertionError after the
+                        # fact. The projection is computed here too so its errors count.
+                        if not isinstance(output, dict):
+                            raise TypeError(
+                                f"node returned {type(output).__name__}, expected a JSON object"
+                            )
+                        shared = _share_output(node, output)
                         last_error = None
                         break
                     except WorkflowPaused as p:
@@ -416,11 +433,18 @@ class DAGRunner:
                     run.error = f"node {nid!r}: {err_text}"
                     run.final_state = state
                     self._audit("run.terminal", state="failed", node_id=nid)
+                    if resume is not None and resume.checkpoint:
+                        # A-05: the nodes this pass completed (answer / deliver sent their
+                        # message) must not run again when the operator retries the resume.
+                        self._save_failed_resume_progress(
+                            run=run, resume=resume, state=state, inputs=inputs,
+                            done=(set(run.nodes) | done) - skipped - {nid},
+                            skipped=skipped, failed=failed,
+                        )
                     return run
 
                 # Success — publish projection into state.
-                assert output is not None
-                state[nid] = _share_output(node, output)
+                state[nid] = shared
                 run.nodes[nid] = NodeResult(
                     node_id=nid, node_type=ntype,
                     started_at=t0, finished_at=t1,
@@ -455,6 +479,31 @@ class DAGRunner:
             failed_branches=failed_ct, skipped=skipped_ct,
         )
         return run
+
+    def _save_failed_resume_progress(
+        self, *, run: "RunResult", resume: "ResumeContext", state: dict[str, Any],
+        inputs: dict[str, Any], done: set[str], skipped: set[str], failed: set[str],
+    ) -> None:
+        from . import checkpoint as _checkpoint
+
+        old = resume.checkpoint or {}
+        _checkpoint.save(
+            run.run_id,
+            workflow_path=self.doc.source_path or old.get("workflow_path", ""),
+            workflow_name=self.doc.name,
+            inputs=inputs,
+            state={k: v for k, v in state.items() if k != "__replies__"},
+            completed_ids=sorted(done),
+            skipped_ids=sorted(skipped),
+            failed_ids=sorted(failed),
+            paused_at_node=resume.paused_at_node,
+            prompt=old.get("prompt", ""),
+            channel=old.get("channel"),
+            chat_id=old.get("chat_id"),
+            expect=old.get("expect"),
+            approver=old.get("approver"),
+            tenant_id=self._tenant_id,
+        )
 
     def _checkpoint_and_pause(
         self,
@@ -594,6 +643,7 @@ def resume_workflow(
                 completed_ids=set(ckpt["completed_ids"]),
                 skipped_ids=set(ckpt.get("skipped_ids") or []),
                 failed_ids=set(ckpt.get("failed_ids") or []),
+                checkpoint=ckpt,
                 paused_at_node=ckpt["paused_at_node"],
                 reply=reply,
             ),

@@ -178,6 +178,23 @@ orchestration:
         payload = json.loads(resp[0]["result"]["content"][0]["text"])
         self.assertEqual(payload["paused"], [])
 
+    def test_workflow_list_paused_ignores_a_caller_supplied_tenant_id(self):
+        """A-09: the tenant comes from the server's own environment, never from tool arguments."""
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "workflows"))
+        from corvin_workflows import DAGRunner, StubEngine, WorkflowDoc
+        doc = WorkflowDoc(
+            awp_version="1.1.0", name="other_t", description="d", raw={},
+            orchestration={"engine": "dag", "graph": [
+                {"id": "a", "type": "approval", "depends_on": [], "message": "m"}]},
+        )
+        run = DAGRunner(doc, engine=StubEngine(), tenant_id="other", console_run=True).run({})
+        self.assertEqual(run.state, "paused")
+        server = self._server()
+        resp = _drive(server, [_call("workflow_list_paused", {"tenant_id": "other"})])
+        payload = json.loads(resp[0]["result"]["content"][0]["text"])
+        self.assertEqual(payload["paused"], [])
+
     def test_workflow_resume_unknown_run_id_is_invalid_params(self):
         server = self._server()
         resp = _drive(server, [_call("workflow_resume", {"run_id": "nope", "reply": "ok"})])
