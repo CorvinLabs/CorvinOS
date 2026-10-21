@@ -528,7 +528,12 @@ class StyleHardeningE2E(unittest.TestCase):
         for path in (f"{V}/styles", f"{V}/styles/preview"):
             self.assertEqual(bc.standalone_cap_for(path), 8 * mib)
             self.assertEqual(bc.gateway_cap_for(path), 8 * mib)
-        self.assertIsNone(bc.gateway_cap_for("/v1/console/files/upload"))  # the gateway caps only what it names
+        # Since 2026-10-21 the gateway host caps every mounted console route exactly like the
+        # standalone host (review A2A-03: an unauthenticated upload of any size was spooled first).
+        self.assertEqual(bc.gateway_cap_for("/v1/console/files/upload"), bc.standalone_cap_for("/v1/console/files/upload"))
+        self.assertEqual(bc.gateway_cap_for("/v1/console/chat/sessions/x/attachments"), 512 * mib)
+        self.assertEqual(bc.gateway_cap_for("/v1/console/anything/else"), bc.BODY_CAP_DEFAULT)
+        self.assertIsNone(bc.gateway_cap_for("/v1/a2a/receive"))  # the gateway's own routes keep their own guards
         root = Path(__file__).resolve().parents[2]
         self.assertIn("make_body_cap_middleware(_standalone_cap_for)", (root / "console" / "corvin_console" / "standalone.py").read_text())
         self.assertIn("make_body_cap_middleware(_body_cap.gateway_cap_for)", (root / "gateway" / "corvin_gateway" / "app.py").read_text())

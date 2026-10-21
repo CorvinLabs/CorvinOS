@@ -622,16 +622,18 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             self.assertEqual(runner.calls[-1][2]["tts_engine"], "openai")
             self.assertNotIn("sk-test-not-real", resp.text)
 
-    def test_an_outdated_edge_tts_is_upgraded_before_the_job_instead_of_failing_with_403(self):
+    def test_an_outdated_edge_tts_is_named_with_its_install_command_and_never_installed_from_the_route(self):
         """edge-tts 7.2.8 is importable but the service answers it with HTTP 403 (measured
-        2026-10-17): the keyless fallback is only real if the installed version is current."""
+        2026-10-17): the keyless fallback is only real if the installed version is current.
+        Until 2026-10-21 the route ran an unpinned `pip install --upgrade` from the public index
+        inside the request (review PLG-06); now the gap is named with the command to run and no
+        package manager is ever started by a request."""
         from unittest import mock
 
         with _sandbox(self._tmp, plugin="enabled", keep_key=False) as (client, csrf, _home, _c):
             mod = _route_module()
             runner = _RecordingRunner()
             mod.get_runner = lambda: runner
-            mod._edge_install_tried = False
             ran: list = []
             with mock.patch.object(mod, "_adopt_stored_openai_key", lambda: None), \
                  mock.patch("importlib.metadata.version", lambda n: "7.2.8" if n == "edge-tts" else "1.0"), \
@@ -639,10 +641,10 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
                 self._benign_l44()
                 resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
                                    headers={"X-CSRF-Token": csrf})
-            self.assertEqual(resp.status_code, 200, resp.text)
-            self.assertTrue(ran, "an outdated edge-tts must trigger an install attempt")
-            self.assertIn("edge-tts>=7.3.1", ran[0])
-            self.assertEqual(runner.calls[-1][2]["tts_engine"], "auto")
+            self.assertEqual(resp.status_code, 503, resp.text)
+            self.assertIn("edge-tts>=7.3.1", resp.text)
+            self.assertFalse(ran, "a request must never start a package install")
+            self.assertFalse(runner.calls, "no job starts without a narration engine")
 
     def test_captions_endpoint_is_gone_and_new_jobs_have_no_subtitle_output(self):
         with _sandbox(self._tmp) as (client, _csrf, _home, _c):

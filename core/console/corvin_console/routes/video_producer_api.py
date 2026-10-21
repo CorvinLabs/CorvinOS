@@ -585,7 +585,6 @@ def _effective_tts_engine(tts_engine: str) -> str:
     return tts_engine
 
 
-_edge_install_tried = False
 # Microsoft changed the Read-Aloud handshake: edge-tts < 7.3.1 gets HTTP 403 and produces no
 # audio (measured 2026-10-17 with 7.2.8), so an importable but old package is NOT a working one.
 _EDGE_TTS_MIN = (7, 3, 1)
