@@ -322,20 +322,22 @@ class TestCombinedGate(unittest.TestCase):
 
     def test_opencode_unpinned_blocked_by_l35(self):
         # opencode default compliance is locality=unknown → L34 blocks it
-        # for INTERNAL. Upgrade it to be "local" in a custom config to
-        # isolate the L35 check.
+        # for INTERNAL. Classify it as "local" in a custom config to isolate
+        # the L35 check — the matrix itself may never admit "unknown" (R2-A5:
+        # it is the label of an unclassified engine, not a place; a widened
+        # row is refused at config load).
         custom_cfg: dict[str, Any] = {
             "spec": {
                 "data_classification": {
                     "matrix": {
-                        "INTERNAL": ["local", "unknown"],  # temporarily widen
+                        "INTERNAL": ["local"],
                     },
                     "engine_compliance": [
                         {
                             "engine_id": "opencode",
-                            "locality": "unknown",
+                            "locality": "local",
                             "network_egress": "external",
-                            "notes": "no provider pinned",
+                            "notes": "classified local for this test; the L35 host stays unpinned",
                         }
                     ],
                 },
