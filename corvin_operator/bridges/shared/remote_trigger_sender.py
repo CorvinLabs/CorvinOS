@@ -215,6 +215,24 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # do not follow — urlopen raises HTTPError for the 3xx
 
 
+def _nudge_presence(endpoint_id: str) -> None:
+    """A delivery that could not reach the peer is a presence observation.
+
+    Presence is decided by the connectivity manager's probe (``a2a_connectivity.presence``:
+    the newest check wins, a probe runs every ``PRESENCE_INTERVAL_S`` = 60 s). Without this
+    nudge the feed kept showing a peer whose console had just refused the connection as
+    "online" for up to a minute after the sender reported the failure (measured between
+    two fresh installs, 2026-10-21). ``wake(kid)`` makes that connection's ping due now;
+    the probe stamps the failed check and the next feed read says "offline". Best effort:
+    no manager (CLI process, tests) is a no-op.
+    """
+    try:
+        import a2a_connectivity  # noqa: PLC0415  # bridges/shared alias of core.a2a.a2a_connectivity
+        a2a_connectivity.wake(endpoint_id)
+    except Exception:  # noqa: BLE001 — a presence nudge never changes a send's outcome
+        pass
+
+
 class _ConnectTimeoutMixin:
     """Split connect/read timeouts for http.client connections.
 
@@ -1393,6 +1411,7 @@ class RemoteTriggerSender:
                      "via": via,
                      "duration_ms": _ms(start)},
                 )
+                _nudge_presence(endpoint_id)
                 return SendResult(
                     ok=False, status="error", task_id=task_id,
                     instance_id="", instance_id_match=False, data={},

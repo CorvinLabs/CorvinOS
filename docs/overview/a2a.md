@@ -109,6 +109,7 @@ Grant execution only when you want the peer to run work on your instance: `corvi
 - **The completeness ADR is still PROPOSED.** A2A audit coverage is documented in ADR-2042, which has not been accepted.
 - **A2A is member-only.** A Free install can run everything else, but it cannot join the network: creating or importing a token, sending from the chat, the CLI and every ping answer *A2A network requires a member seat* (HTTP 402 `license_limit` / `a2a.network` in the console). Two fresh installs therefore cannot talk to each other until one seat each is active — the peers tab, the diagnostics and the feed carry `network.allowed` so the UI says so instead of "unreachable".
 - **Member tier: `a2a_peers_max` applies.** Over the limit the pairing path answers 402. A pairing the peer ended (its signed revoke notice) shows *ended by peer*, holds no seat and stays readable until you remove it.
+- **A delivery that fails is a presence observation.** The sender wakes the connectivity probe for that peer at once, so the feed shows it *offline* within the probe's timeout instead of up to a minute later.
 - **A message to a peer that is offline is not queued by this instance.** The relay keeps it for at most 5 minutes and the envelope itself expires after its TTL (60 s by default); the sender reports *delivery unconfirmed* — resend when the peer is back.
 
 ## Under the hood

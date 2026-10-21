@@ -429,9 +429,14 @@ def test_a_peer_that_is_down_is_reported_not_faked(consoles, pairing):
         rep = response_for(b, acc["task_id"], timeout=120)
         assert rep["status"] in ("unconfirmed", "error", "timeout"), rep
         assert rep["error"], rep
-        _, feed = b.get("/a2a/feed?limit=1")
-        peer = [p for p in feed["peers"] if p["peer_id"] == kid][0]
-        assert peer["presence"] == "offline", peer
+        # The failed delivery wakes B's connectivity probe for this peer; the probe's
+        # own ping timeout bounds how soon the feed says "offline" (never a full
+        # PRESENCE_INTERVAL_S later, which is what the operator saw before 2026-10-21).
+        def _offline():
+            _, feed = b.get("/a2a/feed?limit=1")
+            peer = [p for p in feed["peers"] if p["peer_id"] == kid][0]
+            return peer if peer["presence"] == "offline" else None
+        assert wait_for(_offline, timeout=45, what="peer-c offline in B's feed")
     finally:
         ex(C, "systemctl --user start corvin-webui")
         wait_for(lambda: "200" in ex(C, "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/v1/console/healthz"),

@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Fixed — peers and A2A between two fresh systems (two bare Ubuntu 24.04 containers, 2026-10-21)
+- **A peer the sender could not reach is shown offline at once.** Presence comes from the connectivity probe
+  (every 60 s); a send that failed with the peer's console down left the feed saying *online* for up to a minute.
+  The sender now wakes the probe for that peer, and the fresh-system E2E waits for *offline* instead of
+  reading the stale value.
 - **Every federated task on a fresh install was refused `engine_error`.** The one-click agent registers with the
   label `model: "claude-code"`, and the receiver's task path, a conversation's local turn and `/ask @mine` handed
   that label to `claude --model` (404) — delegate, `/ask @peer`, `/talk` and both sides of an agent conversation

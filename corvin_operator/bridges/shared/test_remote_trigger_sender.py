@@ -356,6 +356,23 @@ class TestSenderE2E(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.status, "error")
 
+    def test_transport_failure_makes_the_peer_s_presence_probe_due_now(self):
+        """A peer the sender could not reach must not stay "online" in the feed until
+        the next scheduled probe (2026-10-21): the failure wakes the connectivity
+        manager for that one connection."""
+        import a2a_connectivity
+        from unittest.mock import patch
+        cfg_path = self.endpoints_dir / f"{ENDPOINT_ID}.json"
+        cfg = json.loads(cfg_path.read_text())
+        cfg["url"] = "http://127.0.0.1:1/v1/a2a/receive"
+        cfg_path.write_text(json.dumps(cfg))
+        cfg_path.chmod(0o600)
+        sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
+        with patch.object(a2a_connectivity, "wake") as wake:
+            result = sender.send(ENDPOINT_ID, instruction="hi", timeout_s=2)
+        self.assertFalse(result.ok)
+        wake.assert_called_once_with(ENDPOINT_ID)
+
     def test_replay_rejected_by_receiver(self):
         sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
         # First request succeeds
