@@ -72,14 +72,15 @@ class TurnRecoveryE2E(unittest.TestCase):
         return sorted((json.loads(p.read_text()) for p in d.glob("*.json") if p.name != "recovery_attempts.json"),
                       key=lambda m: m["created_at"])
 
-    async def _interrupted_turn(self, prompt: str) -> None:
+    async def _interrupted_turn(self, prompt: str, sess=None) -> None:
         """A real turn whose CLI is SIGTERMed mid-run, exactly like a service restart."""
+        sess = sess or self.sess
         os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=4.0, silent_s=30.0))
         pidfile = self.home / "fake.pid"
         pidfile.unlink(missing_ok=True)
 
         async def drain() -> None:
-            async for _ in self.cr.stream_turn(self.sess, prompt):
+            async for _ in self.cr.stream_turn(sess, prompt):
                 pass
         t = asyncio.create_task(drain())
         for _ in range(200):
@@ -108,8 +109,9 @@ class TurnRecoveryE2E(unittest.TestCase):
             newest = self._tasks()[-1]
             self.assertNotEqual(newest["task_id"], failed["task_id"])
             self.assertEqual(newest["status"], "completed")
-            self.assertIn("please do it", newest["input"]["instruction"])
-            self.assertTrue(newest["input"]["instruction"].startswith("[Automatic restart"))
+            # BGT-15: the task log keeps the request as typed; the re-run is marked, not prefixed
+            self.assertEqual(newest["input"]["instruction"], "please do it")
+            self.assertEqual(newest["input"]["recovery"], {"attempt": 1, "of_turn": failed["task_id"]})
             # the request is now answered: nothing left to recover, and it is not retried forever
             self.assertEqual(self.tr.find_interrupted("_default"), [])
         asyncio.run(go())
@@ -163,10 +165,10 @@ class TurnRecoveryE2E(unittest.TestCase):
         notices = [t["notice"] for t in self.cr.read_turns("_default", self.sess.sid) if t.get("notice")]
         self.assertNotIn("recovered", notices)
         self.assertEqual(notices[-1], "gave_up")
-        reruns = [t for t in self._tasks() if t["input"]["instruction"].startswith("[Automatic restart")]
-        self.assertEqual(len(reruns), self.tr.MAX_ATTEMPTS)
-        for t in reruns:   # the request is stored once, not with one more prefix per attempt
-            self.assertEqual(t["input"]["instruction"].count("[Automatic restart"), 1)
+        reruns = [t for t in self._tasks() if t["input"].get("recovery")]
+        self.assertEqual([t["input"]["recovery"]["attempt"] for t in reruns], [1, 2])
+        for t in reruns:   # the request is stored as typed, never with a prefix (BGT-15)
+            self.assertEqual(t["input"]["instruction"], "summarise the board minutes")
         # an exhausted chain stays visible but is never picked up again at the next boot
         self.assertTrue(all(c.attempts >= self.tr.MAX_ATTEMPTS for c in self.tr.find_interrupted("_default")))
         self.assertEqual(asyncio.run(self.tr.recover_all("_default", delay_s=0)), [])
@@ -346,7 +348,7 @@ class TurnRecoveryE2E(unittest.TestCase):
             cand = self.tr.find_interrupted("_default")[0]
             calls = []
 
-            async def no_output(c):
+            async def no_output(c, *, attempt):
                 calls.append(c.task_id)
                 return False
             with patch.object(self.tr, "_run_once", no_output):
@@ -356,6 +358,89 @@ class TurnRecoveryE2E(unittest.TestCase):
                 self.assertEqual(await self.tr.recover_candidate(cand), "exhausted")
                 self.assertEqual(len(calls), self.tr.MAX_ATTEMPTS)
         asyncio.run(go())
+
+    def test_the_restart_prefix_reaches_the_engine_but_never_the_record(self):
+        """BGT-15 (2026-10-21): the re-run used to pass ``PROMPT_PREFIX + instruction`` to
+        ``stream_turn``, so the chat log and the ledger carried the prefix as the USER's own
+        words (and re-supplied it to later turns). The engine must still get the prefix; the
+        record keeps the bare request plus a machine-readable ``recovery`` marker."""
+        import agents.claude_code as _cc  # what chat_runtime feeds the CLI's stdin goes through here
+        import session_ledger  # type: ignore
+        fed: list[str] = []
+        orig = _cc.guard_prompt_head
+
+        def spy(text: str, *a, **kw):
+            fed.append(text)
+            return orig(text, *a, **kw)
+
+        async def go():
+            await self._interrupted_turn("please do it")
+            failed = self._tasks()[-1]
+            self.tr.note_shutdown("_default")
+            os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=4.0))
+            with patch.object(_cc, "guard_prompt_head", spy):
+                self.assertEqual(await self.tr.recover_all("_default", delay_s=0), [(self.sess.sid, "recovered")])
+            return failed
+        failed = asyncio.run(go())
+
+        # the engine received the prefixed prompt
+        self.assertTrue(fed, "control: the spy saw no engine prompt")
+        self.assertTrue(fed[-1].startswith(self.tr.PROMPT_PREFIX), fed[-1][:80])
+        self.assertTrue(fed[-1].endswith("please do it"))
+        # the chat log holds the user's words twice (original turn, re-run), never the prefix
+        users = [t for t in self.cr.read_turns("_default", self.sess.sid) if t.get("role") == "user"]
+        self.assertEqual([t["parts"][0]["text"] for t in users], ["please do it", "please do it"])
+        self.assertNotIn("recovery", users[0])
+        self.assertEqual(users[1]["recovery"], {"attempt": 1, "of_turn": failed["task_id"]})
+        # the ledger (what a later turn re-supplies) never carries the prefix either
+        recs = session_ledger.records_from_turn_log(self.cr.read_turns("_default", self.sess.sid))
+        self.assertTrue(recs, "control: the ledger view must contain the turns")
+        self.assertFalse([r for r in recs if "[Automatic restart" in (r.get("user") or "")], recs)
+        # the attempt key still identifies the request (ADR-2261): nothing left to recover
+        self.assertEqual(self.tr.find_interrupted("_default"), [])
+
+    def test_every_tenant_is_recovered_not_only_the_default_one(self):
+        """BGT-13 (2026-10-21): ``schedule_recovery`` / ``note_shutdown`` used the process's
+        ``CORVIN_TENANT_ID`` (``_default``) only - another tenant's interrupted turn was never
+        re-run. Both now walk ``<corvin_home>/tenants/*``; a directory whose name is not a
+        valid tenant id is skipped."""
+        other = self.cr.create_session("acme")
+        tenants = Path(os.environ["CORVIN_HOME"]) / "tenants"
+
+        async def go():
+            await self._interrupted_turn("please do it")                          # _default
+            await self._interrupted_turn("do it for acme", sess=other)            # acme
+            (tenants / "Not A Tenant").mkdir()          # invalid id: skipped, never raised on
+            (tenants / "global").mkdir(exist_ok=True)    # reserved name: skipped too
+            self.assertEqual(self.tr.tenant_ids(), ["_default", "acme"])
+            self.tr.note_shutdown()                      # what the lifespans do: no tenant argument
+            for tid in ("_default", "acme"):
+                self.assertTrue(self.tr._marker_path(tid).exists(), tid)
+            self.assertEqual([c.task_id for c in self.tr.find_interrupted("acme")],
+                             [self._tasks_of(other)[-1]["task_id"]])
+            os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=4.0))
+            done = await self.tr.recover_everywhere(delay_s=0)
+            self.assertEqual(done, [("_default", self.sess.sid, "recovered"), ("acme", other.sid, "recovered")])
+            self.assertEqual(self.tr.find_interrupted("_default"), [])
+            self.assertEqual(self.tr.find_interrupted("acme"), [])
+            # the lifespans' entry point reaches the same walk (no tenant argument, no env)
+            seen: list[tuple] = []
+
+            async def fake_everywhere(*, delay_s):
+                seen.append(("everywhere", delay_s))
+                return []
+            self.tr._started = False
+            with patch.object(self.tr, "recover_everywhere", fake_everywhere), \
+                    patch.dict(os.environ, {"CORVIN_TENANT_ID": "acme"}):
+                self.tr.schedule_recovery(delay_s=0)
+                await asyncio.sleep(0.05)
+            self.assertEqual(seen, [("everywhere", 0)])
+        asyncio.run(go())
+
+    def _tasks_of(self, sess) -> list[dict]:
+        d = Path(sess.workdir) / "tasks"
+        return sorted((json.loads(p.read_text()) for p in d.glob("*.json") if p.name != "recovery_attempts.json"),
+                      key=lambda m: m["created_at"])
 
 
 class HostLifespansReachTheMechanism(unittest.TestCase):

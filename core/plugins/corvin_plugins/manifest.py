@@ -145,6 +145,18 @@ class PluginError(Exception):
     """
 
 
+class PluginAlreadyInstalled(PluginError):
+    """``PluginLifecycle.install`` found a record for the plugin id already in the registry.
+
+    Typed, with a stable ``code``, so a caller that treats the case as "upgrade instead" or
+    as idempotent success can check the TYPE. Until 2026-10-21 the only signal was the words
+    "already installed" in the message, and ``default_plugins.provision`` matched them by
+    substring (review PLG-13): a rewording would have turned every boot upgrade into a failure.
+    """
+
+    code = "already_installed"
+
+
 class DependencyConflictError(PluginError):
     """A dependency is missing or its version constraint is unsatisfiable."""
 
@@ -728,6 +740,7 @@ class SettingsValidator:
 
 
 __all__ = [
+    "PluginAlreadyInstalled",
     "BreakingChange",
     "Locality",
     "NetworkEgress",

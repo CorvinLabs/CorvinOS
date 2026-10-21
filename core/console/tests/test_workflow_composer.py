@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -55,8 +56,12 @@ def sandbox(tmp_path: Path, tenant_id: str = "_default"):
         app = FastAPI()
         app.include_router(router, prefix="/v1/console")
 
-        def new_client(tid: str = tenant_id):
-            rec = _auth.create_session(tenant_id=tid, token_fingerprint=f"fp-{tid}")
+        def new_client(tid: str = tenant_id, token_fingerprint: str | None = None):
+            # token_fingerprint is the login's durable key (same login again = same value,
+            # new session fingerprint); None keeps the suite's default per tenant.
+            rec = _auth.create_session(
+                tenant_id=tid,
+                token_fingerprint=f"fp-{tid}" if token_fingerprint is None else token_fingerprint)
             csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
             c = TestClient(app, raise_server_exceptions=False)
             c.cookies.set("corvin_console_sid", rec.sid)
@@ -434,24 +439,29 @@ orchestration:
 # ── Art. 17 (CONCEPT-0115 P5) ──────────────────────────────────────────────
 
 def test_art17_erasure_removes_the_subjects_attachment_files_and_run_snapshots_only(tmp_path):
+    """T-0241: the request names the subject by the DURABLE key of their login (``token_fingerprint``
+    on the session record), never by the per-login session fingerprint read back from the record
+    it erases."""
     with sandbox(tmp_path) as (app, home, tid, new_client):
         yaml_text = _TWO_STEP.replace("type: agent\n      agent: assistant\n      depends_on: []",
                                       "type: code\n      depends_on: []", 1)
         wf_dir = make_workflow(tid, "wf1", yaml_text, phase="ready")
-        a, b = new_client(), new_client()  # two sessions = two uploader identities
+        a, b = new_client(token_fingerprint="tok-subject"), new_client(token_fingerprint="tok-other")
         att_a = _upload(a, "wf1", [("files", ("mine.txt", b"subject data", "text/plain"))]).json()["attachments"][0]
         att_b = _upload(b, "wf1", [("files", ("other.txt", b"someone else", "text/plain"))]).json()["attachments"][0]
         a.post("/v1/console/workflows/wf1/runs", json={"inputs": {}, "dry_run": False})  # snapshots both
 
         root = _att_dir(tid, "wf1")
-        subject = json.loads((root / att_a["id"] / "meta.json").read_text())["uploaded_by"]
-        other = json.loads((root / att_b["id"] / "meta.json").read_text())["uploaded_by"]
-        assert subject != other
+        meta_a = json.loads((root / att_a["id"] / "meta.json").read_text())
+        meta_b = json.loads((root / att_b["id"] / "meta.json").read_text())
+        assert meta_a["uploaded_by"] != meta_b["uploaded_by"]
+        assert meta_a["uploaded_by_subject"] == "tok-subject" and meta_a["uploaded_by"] != "tok-subject"
+        assert meta_b["uploaded_by_subject"] == "tok-other"
         snaps = list((wf_dir / "wf1" / "runs").glob(f"*/attachments/{att_a['id']}/data/mine.txt"))
         assert snaps and root.joinpath(att_a["id"], "data", "mine.txt").exists()
 
         from erasure_handlers import WorkflowChatHandler
-        res = WorkflowChatHandler(tenant_id=tid).purge(subject, "er-att")
+        res = WorkflowChatHandler(tenant_id=tid).purge("tok-subject", "er-att")
         assert res.status.value == "applied", res
 
         # file proof: the subject's bytes are gone from the store AND from every run snapshot ...
@@ -462,3 +472,183 @@ def test_art17_erasure_removes_the_subjects_attachment_files_and_run_snapshots_o
         assert (root / att_b["id"] / "data" / "other.txt").read_bytes() == b"someone else"
         assert (root / att_b["id"] / "meta.json").exists()
         assert list((wf_dir / "wf1" / "runs").glob(f"*/attachments/{att_b['id']}/data/other.txt"))
+
+
+def test_art17_erasure_by_durable_key_reaches_uploads_from_an_earlier_login(tmp_path):
+    """T-0241 (WFE-19): a subject who logged in again has a new session fingerprint; the durable
+    key reaches every login's uploads, the session fingerprint only its own."""
+    with sandbox(tmp_path) as (app, home, tid, new_client):
+        make_workflow(tid, "wf1")
+        first = new_client(token_fingerprint="tok-subject")
+        att1 = _upload(first, "wf1", [("files", ("one.txt", b"first login", "text/plain"))]).json()["attachments"][0]
+        again = new_client(token_fingerprint="tok-subject")  # logged in again: new session, same login
+        att2 = _upload(again, "wf1", [("files", ("two.txt", b"second login", "text/plain"))]).json()["attachments"][0]
+        other = new_client(token_fingerprint="tok-other")
+        att3 = _upload(other, "wf1",
+                       [("files", ("three.txt", b"someone else", "text/plain"))]).json()["attachments"][0]
+        root = _att_dir(tid, "wf1")
+        m1 = json.loads((root / att1["id"] / "meta.json").read_text())
+        m2 = json.loads((root / att2["id"] / "meta.json").read_text())
+        assert m1["uploaded_by"] != m2["uploaded_by"]
+
+        from erasure_handlers import WorkflowChatHandler
+        # the per-login fingerprint still works, and reaches exactly that login's upload
+        res = WorkflowChatHandler(tenant_id=tid).purge(m2["uploaded_by"], "er-sid")
+        assert res.status.value == "applied" and res.count == 1, res
+        assert (root / att1["id"]).exists() and not (root / att2["id"]).exists()
+        # the durable key reaches the older login's upload the fingerprint could not name
+        res = WorkflowChatHandler(tenant_id=tid).purge("tok-subject", "er-tok")
+        assert res.status.value == "applied" and res.count == 1, res
+        assert not (root / att1["id"]).exists()
+        assert (root / att3["id"] / "data" / "three.txt").read_bytes() == b"someone else"
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0,
+                    reason="needs directory modes a non-root user cannot bypass")
+def test_art17_erasure_reports_an_unremovable_attachment_dir_and_still_purges_the_rest(tmp_path):
+    """T-0241 (PLG-09): one directory that cannot be removed is reported in the result, the other
+    directories AND the layer's remaining passes (chat transcript) still run."""
+    with sandbox(tmp_path) as (app, home, tid, new_client):
+        wf_dir = make_workflow(tid, "wf1")
+        a = new_client(token_fingerprint="tok-subject")
+        att1 = _upload(a, "wf1", [("files", ("one.txt", b"locked", "text/plain"))]).json()["attachments"][0]
+        att2 = _upload(a, "wf1", [("files", ("two.txt", b"free", "text/plain"))]).json()["attachments"][0]
+        chat = wf_dir / "wf1.chat.jsonl"
+        chat.write_text(json.dumps({"role": "user", "content": "mine", "speaker": "tok-subject"}) + "\n"
+                        + json.dumps({"role": "user", "content": "theirs", "speaker": "tok-other"}) + "\n")
+        root = _att_dir(tid, "wf1")
+        locked = root / att1["id"] / "data"
+        locked.chmod(0o500)  # its file cannot be unlinked
+        try:
+            from erasure_handlers import WorkflowChatHandler
+            res = WorkflowChatHandler(tenant_id=tid).purge("tok-subject", "er-part")
+        finally:
+            locked.chmod(0o700)
+        assert res.status.value == "failed" and res.code == "store_error", res
+        assert res.count == 2, res  # the removable dir + the transcript line
+        assert str(root / att1["id"]) in res.reason and str(root / att2["id"]) not in res.reason
+        assert not (root / att2["id"]).exists()
+        assert (locked / "one.txt").exists()
+        assert (root / att1["id"] / "meta.json").exists()  # the record stays attributable for a retry
+        assert [json.loads(x)["speaker"] for x in chat.read_text().splitlines()] == ["tok-other"]
+
+
+# ── Snapshot by hard link (T-0238 / WFE-13) ─────────────────────────────────
+
+def _code_node_workflow(tid: str, wid: str = "wf1") -> Path:
+    """A run of this workflow stops at its `code` node AFTER the snapshot step: no engine spawns."""
+    yaml_text = _TWO_STEP.replace("type: agent\n      agent: assistant\n      depends_on: []",
+                                  "type: code\n      depends_on: []", 1)
+    return make_workflow(tid, wid, yaml_text, phase="ready")
+
+
+def test_run_snapshot_is_a_hard_link_that_outlives_the_store_attachment(tmp_path):
+    import hashlib
+    with sandbox(tmp_path) as (app, home, tid, new_client):
+        wf_dir = _code_node_workflow(tid)
+        c = new_client()
+        att = _upload(c, "wf1", [("files", ("data.csv", b"x,y\n1,2\n", "text/csv"))]).json()["attachments"][0]
+        store = _att_dir(tid, "wf1") / att["id"] / "data" / att["name"]
+        r = c.post("/v1/console/workflows/wf1/runs", json={"inputs": {}, "dry_run": False})
+        assert r.status_code == 200, r.text
+        rid = r.headers["X-Run-Id"]
+        snap_dir = wf_dir / "wf1" / "runs" / rid / "attachments" / att["id"]
+        snap = snap_dir / "data" / att["name"]
+        # one inode under two names: the snapshot costs no disk
+        assert snap.stat().st_ino == store.stat().st_ino and store.stat().st_nlink == 2
+        meta = json.loads((snap_dir / "meta.json").read_text())
+        ev = [x for x in audit_records(tid) if "workflow.attachment_snapshot" in json.dumps(x)]
+        assert ev and json.dumps(ev[-1]).count('"link"') == 1
+        # the store attachment goes: the run keeps its bytes, still hash-valid
+        assert c.delete(f"/v1/console/workflows/wf1/attachments/{att['id']}").status_code == 200
+        assert not store.exists()
+        assert snap.read_bytes() == b"x,y\n1,2\n" and snap.stat().st_nlink == 1
+        assert hashlib.sha256(snap.read_bytes()).hexdigest() == meta["sha256"]
+        assert snap.stat().st_size == meta["size"]
+
+
+def test_run_snapshot_falls_back_to_a_copy_when_the_link_is_refused(tmp_path, monkeypatch):
+    import errno
+    with sandbox(tmp_path) as (app, home, tid, new_client):
+        wf_dir = _code_node_workflow(tid)
+        c = new_client()
+        att = _upload(c, "wf1", [("files", ("data.csv", b"x,y\n1,2\n", "text/csv"))]).json()["attachments"][0]
+        attempts: list[tuple] = []
+
+        def _cross_device(src, dst, *a, **k):
+            attempts.append((src, dst))
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+        monkeypatch.setattr(os, "link", _cross_device)
+        r = c.post("/v1/console/workflows/wf1/runs", json={"inputs": {}, "dry_run": False})
+        assert r.status_code == 200, r.text
+        rid = r.headers["X-Run-Id"]
+        snap = wf_dir / "wf1" / "runs" / rid / "attachments" / att["id"] / "data" / att["name"]
+        store = _att_dir(tid, "wf1") / att["id"] / "data" / att["name"]
+        assert attempts, "the link was never attempted"
+        assert snap.read_bytes() == b"x,y\n1,2\n"
+        assert snap.stat().st_ino != store.stat().st_ino and store.stat().st_nlink == 1
+        ev = [x for x in audit_records(tid) if "workflow.attachment_snapshot" in json.dumps(x)]
+        assert ev and json.dumps(ev[-1]).count('"copy"') == 1
+
+
+# ── Attachment cap under concurrency (T-0239 / WFE-18) ─────────────────────
+
+def test_attachment_cap_holds_under_concurrent_uploads(tmp_path):
+    """With 99 stored, two uploads racing through the real ASGI app end with exactly one 200,
+    one 409 and 100 directories - the cap is counted and admitted in one critical section."""
+    import asyncio
+    import httpx
+    with sandbox(tmp_path) as (app, home, tid, new_client):
+        from corvin_console.routes import workflow_composer as _wc
+        make_workflow(tid, "wf1")
+        sync = new_client()
+        root = _att_dir(tid, "wf1")
+        root.mkdir(parents=True)
+        for i in range(_wc.MAX_ATTACHMENTS_PER_WORKFLOW - 1):
+            (root / f"{i:016x}" / "data").mkdir(parents=True)
+            (root / f"{i:016x}" / "meta.json").write_text("{}")
+        big = b"z" * (1024 * 1024 + 1024)  # past starlette's 1 MiB spool: the parser yields to the loop
+
+        async def _race():
+            async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://test",
+                    cookies={"corvin_console_sid": sync.cookies.get("corvin_console_sid")},
+                    headers={"X-CSRF-Token": sync.headers["X-CSRF-Token"]}) as ac:
+                return await asyncio.gather(*[
+                    ac.post("/v1/console/workflows/wf1/attachments",
+                            files=[("files", (f"f{i}.bin", big, "application/octet-stream"))])
+                    for i in range(2)])
+
+        r1, r2 = asyncio.run(_race())
+        assert sorted([r1.status_code, r2.status_code]) == [200, 409], (r1.text, r2.text)
+        assert sum(1 for p in root.iterdir() if p.is_dir()) == _wc.MAX_ATTACHMENTS_PER_WORKFLOW
+
+
+# ── Reservations are not attachments (T-0239 follow-up) ─────────────────────
+
+def test_an_upload_in_flight_does_not_refuse_a_concurrent_run_and_a_dead_reservation_is_swept(tmp_path):
+    """A reserved attachment directory without ``meta.json`` (an upload streaming right now)
+    is skipped by the run snapshot instead of refusing the run; one older than
+    ``RESERVATION_TTL_S`` is removed by the next reservation so it never holds a cap slot."""
+    import os
+    with sandbox(tmp_path) as (app, home, tid, new_client):
+        from corvin_console.routes import workflow_composer as _wc
+        make_workflow(tid, "wf1")
+        c = new_client()
+        r = c.post("/v1/console/workflows/wf1/attachments",
+                   files=[("files", ("a.txt", b"hello", "text/plain"))])
+        assert r.status_code == 200, r.text
+        root = _att_dir(tid, "wf1")
+        in_flight = root / "0123456789abcdef"
+        (in_flight / "data").mkdir(parents=True)          # a reservation, no meta.json yet
+        snap = _wc.snapshot_for_run(tid, "wf1", "run1")
+        assert [s["name"] for s in snap] == ["a.txt"]
+        assert in_flight.is_dir()                          # a young reservation is left alone
+        old = time.time() - _wc.RESERVATION_TTL_S - 5
+        os.utime(in_flight, (old, old))
+        reserved = _wc._reserve_attachment_dirs(tid, "wf1", 1)
+        assert not in_flight.exists()                      # the dead one was swept under the lock
+        assert reserved and reserved[0].is_dir()
+        for d in reserved:
+            d.rmdir()

@@ -20,6 +20,8 @@
 
 const fs = require('fs');
 const path = require('path');
+// Chat status icons by NAME (ADR-2269) — the vocabulary lives in shared/status_markers.py.
+const { icon: statusIcon } = require('../shared/js/status_markers');
 
 /**
  * Send orchestration completion summary via WhatsApp.
@@ -172,14 +174,14 @@ function formatOrchestrationSummary(payload) {
   const failCount = (failed_tasks || []).length;
 
   // Emoji based on outcome
-  const emoji = event_type === 'ORCHESTRATION_COMPLETE_SUCCESS' ? '✅' : '⚠️';
+  const emoji = event_type === 'ORCHESTRATION_COMPLETE_SUCCESS' ? statusIcon('done') : statusIcon('warning');
 
   // Basic summary
   let summary = `${emoji} ${success_count}/${task_count} tasks completed`;
 
   // Add failure details if any
   if (failCount > 0) {
-    summary += `\n❌ ${failCount} failed`;
+    summary += `\n${statusIcon('failed')} ${failCount} failed`;
 
     // List first 3 failures (avoid flooding the message)
     const failList = (failed_tasks || []).slice(0, 3);

@@ -466,7 +466,7 @@ non-symlink file in the attachment's own `data/` dir, and its size + sha256 on E
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/v1/console/workflows/{wid}/attachments` | multipart `files`; 10 files × 50 MiB per request (`attachments_common`), 100 per workflow; all-or-nothing; returns `{id,name,size,mime}` only (no path) |
+| POST | `/v1/console/workflows/{wid}/attachments` | multipart `files`; 10 files × 50 MiB per request (`attachments_common`), 100 per workflow — counted and admitted in one critical section under `<wid>/attachments/.lock` (`_reserve_attachment_dirs`: the directories are created under the lock BEFORE the files are streamed, so concurrent uploads cannot add up past the cap; 503 `lock_busy` after 2 s; a reserved directory without `meta.json` is an upload in flight — the run snapshot skips it, and one older than `RESERVATION_TTL_S` (1 h, a crashed upload) is swept by the next reservation); all-or-nothing; returns `{id,name,size,mime}` only (no path) |
 | GET | `/v1/console/workflows/{wid}/attachments/{att_id}` | `serve_headers()` (inline only for safe types, CSP sandbox otherwise) |
 | DELETE | `/v1/console/workflows/{wid}/attachments/{att_id}` | removes the files |
 
@@ -500,11 +500,18 @@ and `_chat_history_text()` skips such lines, so it cannot reach any later prompt
 `<wid>/runs/<rid>/attachments/<att_id>/` before any node starts (variant b of the concept: a run is
 reproducible). A missing or changed attachment refuses the run (`error: attachment changed`).
 Run meta carries `attachments` (id/name/size/mime/sha256_prefix). Node prompts do not read the
-snapshot yet — it is the reproducibility record.
+snapshot yet — it is the reproducibility record. The snapshot is a **hard link** of the store's data
+file (`snapshot_for_run` → `_freeze_bytes`, T-0238): the store file is write-once (`O_EXCL` at upload,
+never rewritten; `DELETE` unlinks the directory entry, a re-upload is a new `att_id`), so the link
+freezes the same bytes for the run at no disk cost (it used to copy up to 100 × 50 MiB per run), and
+the run keeps its bytes, hash-valid, after the store attachment is deleted. Only where the filesystem
+refuses a link (EXDEV, EPERM, EMLINK, ENOTSUP/EOPNOTSUPP/ENOSYS, or no `os.link`) is it a copy; any
+other error refuses the run. Size + sha256 are re-verified first, the per-run `meta.json` is written,
+and each item is audited with `method` `link`/`copy`.
 
 **Audit** (`audit.py::workflow_attachment_*`, registered in BOTH `EVENT_SEVERITY` and
 `_EVENT_ALLOWLIST`): `workflow.attachment_uploaded` (wid, att_id, size_bytes, closed-shape mime,
-sha256_prefix, sid_fingerprint), `workflow.attachment_deleted`, `workflow.attachment_snapshot`,
+sha256_prefix, sid_fingerprint), `workflow.attachment_deleted`, `workflow.attachment_snapshot` (+ `method`),
 `workflow.attachment_refused` (WARNING; closed `reason_code`: bad_id, missing, corrupt, changed,
 not_readable, too_many). Never a file name, never content.
 
@@ -530,8 +537,18 @@ Tests: `tests/unit/workflow-chat-panel.test.tsx`.
 ### Erasure and cleanup (CONCEPT-0115 P5)
 
 Art. 17: `WorkflowChatHandler` (`erasure_handlers.py`, layer `L-workflows`) removes whole attachment
-directories — store and per-run snapshots — whose `meta.json` names the subject (`uploaded_by` =
-session fingerprint); see `layer-36-erasure.md`. Deleting a workflow removes its `<wid>/` tree
-(attachments included); `DELETE …/attachments/{att_id}` removes one.
+directories — store and per-run snapshots (both globs, and a hard-linked snapshot goes with its own
+directory, so the bytes are gone from every name) — whose `meta.json` names the subject under ANY of
+`uploaded_by` (the per-login session fingerprint), `uploaded_by_subject` (the login's durable key,
+`SessionRecord.token_fingerprint`: a subject who logged in again has a new fingerprint but the same key)
+or a shared identity key; the request names the subject by whichever it has. **Limit, stated honestly:**
+the console local login is credential-less and carries no durable key — its sessions store
+`uploaded_by_subject: ""`, so an erasure for a local-login subject must name each session fingerprint
+(the hash-chained `console.session_started` records map every fingerprint to its tenant, time and
+user agent). A directory that cannot be removed is listed in the layer's `reason` (trail file only) and
+makes the layer FAILED → the request PARTIAL, never a signed "gone"; the other directories and the
+transcript passes still run and `count` says what went (T-0241). See `layer-36-erasure.md`.
+Deleting a workflow removes its `<wid>/` tree (attachments included); `DELETE …/attachments/{att_id}`
+removes one.
 Cleanup: the design chat's own recorder/transcription code and two-row textarea were removed in P2;
 `CreateWorkflowDialog` (name only) and `ScheduleModal` (cron) ask for neither text nor files and stay.

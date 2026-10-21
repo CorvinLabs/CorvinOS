@@ -296,6 +296,14 @@ test asserts the set.
    - Slack `xox[bpoa]-…`
    - PEM `-----BEGIN … PRIVATE KEY-----`
    - `password = …` assignment
+   - T-0248 (2026-10-21 review): OpenRouter `sk-or-v1-` + 64 hex, GitLab `glpat-` + 20-char body
+     (the routable form's dotted segments included), HuggingFace `hf_` + 34, Groq `gsk_` + 52,
+     xAI `xai-` + 80, npm `npm_` + 36 — each at the vendor's documented length, bounded on both
+     sides and without `_` in the body, so "the hf_ prefix", `hf_hub_download` or a short
+     `gsk_x1y2` stay PUBLIC
+   - JWT / compact JWS (`_JwtPattern`): three base64url segments whose HEADER decodes to a JSON
+     object naming `alg` — `eyJ` alone is only the encoding of `{"`, so a dotted identifier or a
+     three-segment string with a non-JSON header is not a hit
    → `SECRET`.
 2. **Explicit marker.** `[class:secret] …`, `[class:confidential] …`,
    `[class:internal] …`, `[class:public] …` — case-insensitive at the

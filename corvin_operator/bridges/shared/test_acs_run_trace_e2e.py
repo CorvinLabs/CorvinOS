@@ -180,10 +180,12 @@ def test_bridge_streams_each_step_as_a_status_line_and_appends_the_summary():
         )
 
     assert answer is not None
-    step_lines = [ln for ln in lines if ln.startswith(("🧭", "🤖", "📊"))]
+    import status_markers  # noqa: PLC0415
+    _gate_icons = (status_markers.icon("done"), status_markers.icon("failed"))
+    step_lines = [ln for ln in lines if ln.startswith(("🧭", "🤖") + _gate_icons)]
     assert step_lines[0].startswith("🧭 Iteration 1: Manager teilt in 2 Teilaufgaben")
     assert sum(ln.startswith("🤖 Worker") for ln in step_lines) == 2
-    assert any(ln.startswith("📊 Gate") for ln in step_lines)
+    assert any(ln.startswith(_gate_icons) and " Gate" in ln for ln in step_lines)
     assert answer.startswith(WORKER_TEXT[:40])
     assert "ACS-Lauf" in answer and "- Loss-Score (höher = besser): " in answer
 

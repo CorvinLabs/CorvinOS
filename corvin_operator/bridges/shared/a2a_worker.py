@@ -642,7 +642,8 @@ def spawn_a2a_worker(
 
     # 1a. Quota FAST-FAIL (ADR-2242 §8, non-consuming). The authoritative quota gate (1d) sits
     # AFTER L44 on purpose — a request refused by acceptable-use must burn no unit — but L44 is
-    # the expensive step (a model call, ~15 s). A free-tier peer whose daily pool is spent used
+    # the expensive step (a model call, ~15 s). A peer whose daily pool is spent (free pool: a lapsed
+    # licence or an operator-lowered pool; members have none, 2026-10-21) used
     # to pay all of that for every task it was going to refuse anyway: the sender waited ~25 s
     # and got nothing back that named a cause. Peeking costs a file read and can only ever
     # say "exhausted" when it is; any doubt falls through to the real gate.

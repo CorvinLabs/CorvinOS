@@ -202,6 +202,26 @@ class TestMarketplaceInstallE2E(unittest.TestCase):
             self.assertEqual(second.status_code, 200, second.text)
             self.assertTrue(second.json().get("already_installed"), second.text)
 
+    def test_already_installed_is_recognised_by_type_not_by_message_text(self):
+        """PLG-13 (review 2026-10-21): the route matched "already installed" by substring. The installer
+        raises the typed ``PluginAlreadyInstalled``; a reworded message still answers idempotently."""
+        from unittest import mock
+
+        from corvin_plugins.manifest import PluginAlreadyInstalled  # type: ignore[import-not-found]
+        from corvin_plugins.state import PluginLifecycle  # type: ignore[import-not-found]
+
+        with self._live() as (client, csrf, _home):
+            first = client.post(f"{_INSTALL_BASE}/{_INDEX_ID}/install", json={}, headers=self._hdr(csrf))
+            self.assertEqual(first.status_code, 200, first.text)
+
+            def reworded(self_, record, *, installed_by):
+                raise PluginAlreadyInstalled(f"a record for {record.plugin_id} exists; use upgrade")
+
+            with mock.patch.object(PluginLifecycle, "install", reworded):
+                second = client.post(f"{_INSTALL_BASE}/{_INDEX_ID}/install", json={}, headers=self._hdr(csrf))
+            self.assertEqual(second.status_code, 200, second.text)
+            self.assertTrue(second.json().get("already_installed"), second.text)
+
     def test_unknown_index_id_fails_cleanly(self):
         with self._live() as (client, csrf, _home):
             resp = client.post(

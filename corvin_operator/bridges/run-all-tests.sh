@@ -607,6 +607,7 @@ run "Python: LIP Tier 4 audit-head (ADR-0141)" python3 shared/test_a2a_audit_hea
 run "Bash: say.py TTS helper"    bash ../voice/scripts/test_say.sh >/dev/null               || fails=$((fails+1))
 run "Python: audit-verify notify" python3 ../voice/scripts/test_audit_verify_notify.py >/dev/null || fails=$((fails+1))
 run "Node: shared/js/ modules"   node shared/js/test_modules.js >/dev/null            || fails=$((fails+1))
+run "Node: status markers (export = Python vocabulary)" node shared/js/test_status_markers.js >/dev/null || fails=$((fails+1))
 run "Node: net probe (outage detection)" node shared/js/test_net_probe.js >/dev/null  || fails=$((fails+1))
 run "Node: outbox poller (preCheck+dedup+dead-letter+stall)" node shared/js/test_outbox_poller.js >/dev/null || fails=$((fails+1))
 run "Node: discord outbox hardening (stall visibility + snowflake guard)" node discord/test_outbox_hardening.js >/dev/null || fails=$((fails+1))

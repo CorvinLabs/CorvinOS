@@ -73,7 +73,7 @@ class PluginSourceMoved(unittest.TestCase):
         runner_mod = sys.modules[f"{vpa._PLUGIN_PKG}.async_runner"]
         self.assertEqual(runner_mod._JOB_MAIN, (self.new / "job_main.py").resolve())
         self.assertTrue(runner_mod._JOB_MAIN.is_file())
-        self.assertEqual(vpa._RETIRED_RUNNER_GETTERS, [old_getter])
+        self.assertEqual(list(vpa._RETIRED_RUNNER_GETTERS), [old_getter])
 
     def test_the_reload_does_not_close_the_jobs_this_console_is_running(self):
         # the fresh load's first open of a store sweeps non-terminal jobs as "interrupted" (a console restart);

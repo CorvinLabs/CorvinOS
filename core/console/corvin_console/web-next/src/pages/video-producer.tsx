@@ -40,6 +40,7 @@ import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-
 import { ProductionSignals } from "@/components/video-quality-report";
 import { AssetsTab, CanvasTab, CaptureDialog, CodeTab } from "@/components/video-expressive";
 import { captureBlockedReason, firstUrlIn, type CaptureSettings } from "@/lib/api/video-assets";
+import { installOutcomeText, installWebSlidesBrowser, webSlidesNote, webSlidesState, type WebSlidesState } from "@/lib/api/video-web-slides";
 import type { ProductionReport } from "@/lib/video-quality-signals";
 
 // ── Types (routes/video_producer_api.py, video_quality.py, video_learning_api.py) ──
@@ -615,7 +616,7 @@ export function VideoProducerPage() {
   const styleFull = styles.data ? styles.data.styles.length >= styles.data.limits.max_styles : false;
   const importBlocked = styles.isError ? "Custom styles are not available on this installation."
     : styleFull ? `You have reached the limit of ${styles.data!.limits.max_styles} styles. Delete one to import another.` : null;
-  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number; openai_configured: boolean; web_slides_available: boolean } & CaptureSettings>(`${BASE}/settings`, { signal }), retry: false });
+  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number; openai_configured: boolean; web_slides_available: boolean; web_slides?: WebSlidesState } & CaptureSettings>(`${BASE}/settings`, { signal }), retry: false });
   const [form, setForm] = useState<{ tts_engine: string; max_duration_minutes: number } | null>(null);
   useEffect(() => { if (settings.data && !form) setForm({ tts_engine: settings.data.tts_engine, max_duration_minutes: settings.data.max_duration_minutes }); }, [settings.data, form]);
   const save = useMutation({ mutationFn: (f: NonNullable<typeof form>) => api(`${BASE}/settings`, { method: "PUT", csrf, body: f }) });
@@ -623,6 +624,14 @@ export function VideoProducerPage() {
     mutationFn: (on: boolean) => api(`${BASE}/settings`, { method: "PUT", csrf, body: { capture_enabled: on } }),
     onSettled: () => void qc.invalidateQueries({ queryKey: ["video", "settings"] }),
   });
+  // The browser for animated web slides is installed only on this explicit request (never by a GET).
+  const installBrowser = useMutation({
+    mutationFn: () => installWebSlidesBrowser(csrf),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["video", "settings"] }),
+  });
+  const webSlides = settings.data ? webSlidesState(settings.data) : null;
+  const installOutcome = installBrowser.data ? installOutcomeText(installBrowser.data)
+    : installBrowser.error ? installOutcomeText(installBrowser.error as Error) : null;
 
   if (jobs.isError) {
     const off = jobs.error instanceof ApiError && (jobs.error.status === 503 || jobs.error.status === 404);
@@ -807,8 +816,16 @@ export function VideoProducerPage() {
               ) : null}
               {captureSwitch.isError ? <p className="text-xs text-destructive" role="alert">The setting was not changed.</p> : null}
             </div>
-            {settings.data && !settings.data.web_slides_available ? (
-              <p className="md:col-span-3 text-xs text-amber-600" data-testid="web-slides-note">Animated web slides need Playwright in the console environment; until it is installed every slide is the classic still.</p>
+            {webSlides && !webSlides.available ? (
+              <div className="md:col-span-3 flex flex-wrap items-center gap-3">
+                <p className="text-xs text-amber-600" data-testid="web-slides-note">{webSlidesNote(webSlides)}</p>
+                {webSlides.reason === "browser_missing" ? (
+                  <Button type="button" variant="outline" size="sm" data-testid="install-browser" disabled={!csrf || installBrowser.isPending} onClick={() => installBrowser.mutate()}>
+                    {installBrowser.isPending ? "Installing…" : "Install browser"}
+                  </Button>
+                ) : null}
+                {installOutcome ? <p className="text-xs text-muted-foreground" data-testid="install-browser-outcome" role="status">{installOutcome}</p> : null}
+              </div>
             ) : null}
             <div className="md:col-span-3 flex items-center gap-3"><Button variant="outline" size="sm" disabled={save.isPending || !csrf} onClick={() => save.mutate(form)}>{save.isSuccess ? "Saved" : "Save settings"}</Button>{save.isError ? <span className="text-xs text-destructive">Settings were not saved.</span> : null}</div>
           </CardContent>

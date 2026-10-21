@@ -51,6 +51,9 @@ const chatToggle                = require('../shared/js/chat_toggle');
 const slashCommands             = require('./slash_commands');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
 const { messageContentAvailable } = require('./intent_preflight');
+// Chat status icons by NAME (ADR-2269): the vocabulary is shared/status_markers.py,
+// exported to shared/status_markers.json — never a glyph literal in this file.
+const { icon: statusIcon }      = require('../shared/js/status_markers');
 const {
   normalizeExecutionContext, shouldRenderContext,
   getColorForMode, getEmojiForEngine, formatEngineId,
@@ -470,7 +473,7 @@ client.on('interactionCreate', async (interaction) => {
         );
       } catch (e) {
         log(`/task inbox-write failed: ${e.message}`);
-        try { await interaction.editReply(`❌ Error: ${e.message}`); } catch {}
+        try { await interaction.editReply(`${statusIcon('failed')} Error: ${e.message}`); } catch {}
       }
       return;
     }
@@ -507,7 +510,7 @@ client.on('interactionCreate', async (interaction) => {
         try {
           await interaction.editReply(btwText
             ? '📝 Note queued for the running task.'
-            : '⚠️ Empty /btw — give it some text after the command.');
+            : `${statusIcon('warning')} Empty /btw — give it some text after the command.`);
         } catch {}
         return;
       }
@@ -591,7 +594,7 @@ client.on('interactionCreate', async (interaction) => {
     // through this path.
     activeChannels.set(channelId, Date.now());
     writeInbox({ ...base, text });
-    try { await interaction.editReply('⏳ on it…'); } catch {}
+    try { await interaction.editReply(`${statusIcon('running')} on it…`); } catch {}
   } catch (e) {
     log(`interactionCreate error: ${e.message}`);
     try {
@@ -847,7 +850,7 @@ client.on('messageCreate', async (msg) => {
     // Hourglass reaction on the user's message → instant visual ack. Removed
     // again when the real reply lands (see sendDiscord).
     try {
-      await msg.react('⏳');
+      await msg.react(statusIcon('running'));
       pendingReactions.set(msg.channel.id, msg);
     } catch {}
 
@@ -1256,7 +1259,7 @@ async function sendDiscord(payload, _fpath) {
   if (!payload._heartbeat && pendingReactions.has(chId)) {
     const userMsg = pendingReactions.get(chId);
     try {
-      const reaction = userMsg.reactions.cache.find(r => r.emoji.name === '⏳');
+      const reaction = userMsg.reactions.cache.find(r => r.emoji.name === statusIcon('running'));
       if (reaction) await reaction.users.remove(client.user.id);
     } catch {}
     pendingReactions.delete(chId);

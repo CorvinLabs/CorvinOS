@@ -44,10 +44,18 @@ def _task(tm: TaskManager, *events: dict) -> str:
 def test_task_status_is_the_canonical_enum():
     assert TaskStatus is TaskState
     assert QueueTaskStatus is TaskState
+    # BGT-14 (2026-10-21): waiting_retry / resuming / needs_user / abandoned had no writer —
+    # no event in EVENT_TARGET_STATE, no queue or manager call site — so they were removed.
     assert {s.value for s in TaskState} == {
-        "pending", "running", "completed", "failed", "cancelled",
-        "interrupted", "waiting_retry", "resuming", "needs_user", "abandoned",
+        "pending", "running", "completed", "failed", "cancelled", "interrupted",
     }
+
+
+def test_every_non_initial_state_has_a_writer():
+    """A state nobody can write is a dead end in the table and a lie in the docs."""
+    from corvin_core.task_states import EVENT_TARGET_STATE
+    writable = set(EVENT_TARGET_STATE.values()) | {TaskState.PENDING}
+    assert writable == set(TaskState)
 
 
 def test_every_state_has_a_transition_row_and_terminal_states_have_no_exit():
@@ -56,14 +64,15 @@ def test_every_state_has_a_transition_row_and_terminal_states_have_no_exit():
         assert ALLOWED_TRANSITIONS[state] == frozenset(), state
 
 
-def test_failed_cannot_go_straight_to_resuming():
+def test_failed_cannot_run_again():
     with pytest.raises(InvalidTransitionError):
-        check_transition(TaskState.FAILED, TaskState.RESUMING)
+        check_transition(TaskState.FAILED, TaskState.RUNNING)
 
 
-def test_interrupted_cannot_run_without_resuming():
+def test_interrupted_cannot_run_again_only_cancel_leaves_it():
     with pytest.raises(InvalidTransitionError):
         check_transition(TaskState.INTERRUPTED, TaskState.RUNNING)
+    assert ALLOWED_TRANSITIONS[TaskState.INTERRUPTED] == frozenset({TaskState.CANCELLED})
 
 
 def test_same_state_write_is_an_idempotent_no_op():

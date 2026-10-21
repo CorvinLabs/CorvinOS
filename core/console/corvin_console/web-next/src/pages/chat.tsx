@@ -58,6 +58,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { cn, formatDate } from "@/lib/utils";
 import { formatTurnUsage } from "@/lib/turn-usage";
+import { turnOutcomeIsFailure, turnOutcomeText } from "@/lib/turn-outcome";
 import {
   PREF_KEYS,
   setString as setPref,
@@ -2271,6 +2272,21 @@ const MessageBubble = React.memo(function MessageBubble({
         {m.error && (
           <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
             {m.error}
+          </p>
+        )}
+        {/* T-0250: how the turn ended (`cut` / `process_died`) — the same banner shape as a
+            failed turn; `ok` renders nothing. Text comes from the closed enum in turn-outcome.ts. */}
+        {!isUser && turnOutcomeText(m.outcome) && (
+          <p
+            data-turn-outcome={m.outcome}
+            className={cn(
+              "mt-2 rounded-md border px-2 py-1 text-xs",
+              turnOutcomeIsFailure(m.outcome)
+                ? "border-destructive/30 bg-destructive/10 text-destructive"
+                : "border-border bg-muted/50 text-muted-foreground",
+            )}
+          >
+            {turnOutcomeText(m.outcome)}
           </p>
         )}
         {!isUser && m.engine && (

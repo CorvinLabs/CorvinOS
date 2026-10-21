@@ -19,6 +19,7 @@ import dataclasses
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -110,7 +111,8 @@ class CorvinTVIsProvisionedAndEnabledByBoot(unittest.TestCase):
                                          egress_hosts=("translate.google.com", "api.anthropic.com"))
             self.assertTrue(legacy.consent_required())
             mi._lifecycle("_default").install(legacy, installed_by="test:legacy")
-            self.dp._write_ledger("_default", {"offered": {_OLD: {"registry_id": "video_producer", "version": "1.6.0"}}})
+            self.dp._write_ledger(
+                "_default", {"offered": {_OLD: {"registry_id": "video_producer", "version": "1.6.0"}}})
             self.assertFalse(TenantRegistry.load(tenant_id="_default").records["video_producer"].enabled)
 
             res = {r["index_id"]: r for r in self.dp.provision("_default", entries=self._entries(_NEW))}[_NEW]
@@ -123,6 +125,52 @@ class CorvinTVIsProvisionedAndEnabledByBoot(unittest.TestCase):
                              (str(current.version), PluginOrigin.VETTED, True, False))
             self.assertEqual(after.display_name, "CorvinTV")
             self.assertEqual(client.get("/v1/console/video/settings").status_code, 200)
+
+    def test_the_migration_branch_is_taken_by_exception_type_not_by_message_text(self):
+        """PLG-13 (review 2026-10-21): ``provision`` matched "already installed" by substring on the
+        installer's message. The installer now raises ``PluginAlreadyInstalled`` (``code ==
+        "already_installed"``) and the branch is chosen by type: a reworded message still migrates,
+        a plain ``PluginError`` that merely mentions the words does not."""
+        from corvin_console.routes import marketplace_install as mi, marketplace_resolve as mr
+        from corvin_plugins.manifest import PluginAlreadyInstalled, PluginError, PluginOrigin  # type: ignore[import-not-found]
+        from corvin_plugins.state import PluginLifecycle, TenantRegistry  # type: ignore[import-not-found]
+
+        self.assertTrue(issubclass(PluginAlreadyInstalled, PluginError))
+        self.assertEqual(PluginAlreadyInstalled.code, "already_installed")
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            plugin_dir, manifest = mr.load_manifest(_NEW)
+            current = mr.record_from_manifest(manifest, plugin_dir=plugin_dir)
+            legacy = dataclasses.replace(current, version="1.6.0", origin=PluginOrigin.COMMUNITY,
+                                         requires_consent=True, display_name="Video Producer")
+            mi._lifecycle("_default").install(legacy, installed_by="test:legacy")
+            self.dp._write_ledger("_default", {"offered": {_OLD: {"registry_id": "video_producer", "version": "1.6.0"}}})
+
+            def reworded(self_, record, *, installed_by):
+                raise PluginAlreadyInstalled(f"a record for {record.plugin_id} exists; use upgrade")
+
+            with mock.patch.object(PluginLifecycle, "install", reworded):
+                res = {r["index_id"]: r for r in self.dp.provision("_default", entries=self._entries(_NEW))}[_NEW]
+            self.assertEqual((res["status"], res.get("upgraded_from")), ("installed", "1.6.0"), res)
+            self.assertEqual(TenantRegistry.load(tenant_id="_default").records["video_producer"].origin,
+                             PluginOrigin.VETTED)
+
+            # the words alone, in an untyped error, are not the signal
+            self.dp._write_ledger("_default", {"offered": {}})
+
+            def untyped(self_, record, *, installed_by):
+                raise PluginError(f"{record.plugin_id} is already installed")
+
+            with mock.patch.object(PluginLifecycle, "install", untyped):
+                res = {r["index_id"]: r for r in self.dp.provision("_default", entries=self._entries(_NEW))}[_NEW]
+            self.assertEqual(res["status"], "failed", res)
+
+        # the real installer raises the typed error on a second install
+        with _sandbox(self.tmp / "second") as (client, csrf, home, _):
+            plugin_dir, manifest = mr.load_manifest(_NEW)
+            record = mr.record_from_manifest(manifest, plugin_dir=plugin_dir)
+            mi._lifecycle("_default").install(record, installed_by="test")
+            with self.assertRaises(PluginAlreadyInstalled):
+                mi._lifecycle("_default").install(record, installed_by="test")
 
     def test_an_operator_uninstall_of_the_predecessor_is_kept(self):
         from corvin_plugins.state import TenantRegistry  # type: ignore[import-not-found]

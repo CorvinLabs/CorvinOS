@@ -11,6 +11,7 @@
  */
 
 import { parseTurnUsage, type TurnUsage } from "@/lib/turn-usage";
+import { parseTurnOutcome, type TurnOutcome } from "@/lib/turn-outcome";
 import { useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
 import { getBool, PREF_KEYS } from "./preferences";
@@ -82,6 +83,9 @@ export interface ChatMessage {
   ts: number;
   streaming?: boolean;
   error?: string;
+  /** T-0250: outcome of the closing `result` (`cut` / `process_died` are rendered as a
+   *  banner on the turn, `ok` shows nothing). Live-only, like `engine`. */
+  outcome?: TurnOutcome;
   /** ADR-0214: agentic-compute engine that produced this turn
    *  ("claude_code" | "acs" | "tiered_delegation"). Live-only
    *  (stamped from the `engine` stream event; not persisted in turns.jsonl). */
@@ -169,6 +173,10 @@ export interface StreamEvent {
   interim?: boolean;
   final?: boolean;
   pending_children?: number;
+  // T-0250: how the turn ended — `ok`, `cut` (ended on purpose at a scope limit) or
+  // `process_died` (the CLI exited with a child open; the text is a failure notice).
+  // Present on every closing result of a CLI turn; rendered on the turn by the chat page.
+  outcome?: TurnOutcome;
   // `bg_status` event: how many background tasks are open right now (kind/age only).
   open?: number;
   children?: { id?: string; kind: string; state: string; age_s: number; label?: string }[];
@@ -658,6 +666,14 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
     case "result": {
       // An interim result (ADR-2236) is progress, not the answer to replay or speak.
       if (evt.text && !evt.interim) entry.latestResultText = evt.text;
+      // T-0250: the closing result says how the turn ended; stamp it on the turn so the
+      // page can tell a failure notice from an answer. An interim result never closes
+      // a turn, and an outcome outside the closed enum is ignored, not rendered.
+      const outcome = evt.interim ? null : parseTurnOutcome(evt.outcome);
+      const aid = entry.currentAssistantId;
+      if (aid && outcome) {
+        entry.messages = entry.messages.map((m) => (m.id === aid ? { ...m, outcome } : m));
+      }
       return;
     }
 

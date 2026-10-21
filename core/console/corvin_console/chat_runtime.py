@@ -4508,12 +4508,16 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
                  btw: bool = False, btw_status: str | None = None,
                  btw_via: str | None = None, btw_client_id: str | None = None,
                  btw_gated: bool = False, btw_reason: str | None = None,
-                 notice: str | None = None) -> None:
+                 notice: str | None = None, recovery: dict[str, Any] | None = None) -> None:
     """Append one turn (user or assistant) to the session's turns log.
 
     ``notice`` (PLAN-0958 P2): the kind of a system notice (interruption / resume / ending,
     ``task_notices.py``). A notice is UI record only - ``session_ledger`` skips it, a worker
     is never handed it.
+
+    ``recovery`` (BGT-15, user turns): ``{"attempt": n, "of_turn": <task_id>}`` - this user
+    turn is ``turn_recovery``'s automatic re-run of that cut-off task. The text is the
+    request as typed; the marker, not a prefix in the text, says it was re-run.
 
     ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
     turn will actually be SPOKEN as, which is not always derivable from the
@@ -4570,6 +4574,8 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
             payload["btw_gated"] = True
     if notice:
         payload["notice"] = notice
+    if recovery:
+        payload["recovery"] = dict(recovery)
     if gate_refused:
         # A pre-spawn gate answered: the session ledger re-supplies this turn
         # with the user's text WITHHELD, never past the gate (ADR-2102).
@@ -6203,8 +6209,16 @@ async def stream_turn(
     prompt: str,
     *,
     sid_fingerprint: str = "",
+    recovery: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Public entry point: ``_stream_turn_impl`` plus a guaranteed task finalizer.
+
+    ``recovery`` (``turn_recovery``, BGT-15): ``{"attempt": n, "of_turn": <task_id>}`` marks
+    this turn as the automatic re-run of a request a host restart cut off. ``prompt`` is then
+    the request AS THE USER TYPED IT - it is what the chat log, the task log and the session
+    ledger record, with the marker beside it - and only the engine receives
+    ``turn_recovery.PROMPT_PREFIX`` in front of it. Until 2026-10-21 the caller passed the
+    prefixed prompt and it was stored, and re-supplied, as the user's own words.
 
     The only reason this wrapper exists is the ``finally`` below. The impl is a
     ~2200-line async generator with ~25 terminal-event call sites, and the one
@@ -6220,7 +6234,7 @@ async def stream_turn(
     _btw_turn_opened(sess.chat_key)
     try:
         async with contextlib.aclosing(
-            _stream_turn_impl(sess, prompt, sid_fingerprint=sid_fingerprint)
+            _stream_turn_impl(sess, prompt, sid_fingerprint=sid_fingerprint, recovery=recovery)
         ) as gen:
             async for event in gen:
                 if event.get("type") == "done":
@@ -6242,6 +6256,7 @@ async def _stream_turn_impl(
     prompt: str,
     *,
     sid_fingerprint: str = "",
+    recovery: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one turn against claude and yield normalised events.
 
@@ -6262,6 +6277,14 @@ async def _stream_turn_impl(
         yield {"type": "error", "message": "empty prompt"}
         yield {"type": "done"}
         return
+
+    # BGT-15 (2026-10-21): a recovery re-run records `prompt` as the user's own words; the
+    # restart prefix is an instruction to the ENGINE and is added at the spawn sites only
+    # (the native CLI's stdin message and the ACS delegation spec), never to anything persisted.
+    _engine_prefix = ""
+    if recovery:
+        from .turn_recovery import PROMPT_PREFIX as _restart_prefix  # noqa: PLC0415
+        _engine_prefix = _restart_prefix
 
     # ADR-0650 Phase 4 — resolve THE language for this turn, once, before any
     # work happens. Priority is Profile > Input > Response > system default;
@@ -6300,6 +6323,8 @@ async def _stream_turn_impl(
         persona="assistant",
         turn_number=sess.turn_count,
         tenant_id=sess.tenant_id,  # ADR-0314 outcome sink: the task's own tenant, never env
+        # BGT-15: the re-run marker sits beside the request, never inside its text
+        **({"recovery": dict(recovery)} if recovery else {}),
     )
     # Hand the task to stream_turn's finalizer: from here on an interrupted turn
     # gets a terminal event instead of leaking a permanently-``running`` task
@@ -6881,7 +6906,7 @@ async def _stream_turn_impl(
 
     # Persist the user-side of this turn immediately so a tab refresh
     # mid-turn still shows what the user said.
-    _append_turn(sess, "user", [{"kind": "text", "text": prompt}])
+    _append_turn(sess, "user", [{"kind": "text", "text": prompt}], recovery=recovery)
 
     # ── ADR-0141 / Layer-Integrity + ADR-0143 / Layer 44 — pre-spawn gates ──
     # Mandatory, fail-closed acceptable-use + security-layer-presence checks that
@@ -7535,7 +7560,7 @@ async def _stream_turn_impl(
         if not _quota_fallback:
             run_id = f"acs-web-{int(time.time())}-{secrets.token_hex(3)}"
             run_dir = sess.workdir / "acs" / "runs" / run_id
-            spec_dict = _build_delegation_spec(task_text, _delegation_budget(sess.tenant_id))
+            spec_dict = _build_delegation_spec(_engine_prefix + task_text, _delegation_budget(sess.tenant_id))
             _dbg(sess.workdir, "acs.run.start",
                  run_id=run_id, task_len=len(task_text),
                  # No task_preview — see the matching comment on turn.start
@@ -8130,12 +8155,10 @@ async def _stream_turn_impl(
     # orchestration MCP server reads CORVIN_TENANT_ID (d7f9cbb77 took it from the env instead
     # of a caller-supplied id); without it a tenant-B chat ran and resumed tenant _default's
     # workflows on a multi-tenant host (review 2026-10-21).
+    # The console's own stored secrets never pass through here: the CorvinTV route hands its
+    # stored OpenAI TTS key to the video JOB process only (``video_producer_api._job_env``), so
+    # ``os.environ`` carries nothing to strip (review 2026-10-21, T-0245).
     _spawn_env = {**os.environ, "CORVIN_SESSION_DIR": str(sess.workdir), "CORVIN_TENANT_ID": str(sess.tenant_id)}
-    # The CorvinTV route adopts the console's stored OpenAI TTS key into this process's
-    # environment for its own jobs; an OS worker (and every MCP child of it) has no business with
-    # it (review 2026-10-21). An operator's own exported key is not touched here.
-    if os.environ.get("CORVIN_TTS_OPENAI_KEY_ADOPTED") == "1":
-        _spawn_env.pop("CORVIN_TTS_OPENAI_KEY", None)
     # ADR-2241 amendment: a PreToolUse hook on Bash snapshots the files a command
     # names BEFORE it runs, so its card can show what it changed. Per-turn dir,
     # removed in the turn's `finally`; a failure here only means "no Bash diff".
@@ -8236,8 +8259,8 @@ async def _stream_turn_impl(
         # `claude -p` expands a leading "/name" into a slash command / skill
         # on the stdin transport too, and the CEL prefix is conditional.
         from agents.claude_code import guard_prompt_head as _guard_prompt_head  # noqa: PLC0415
-        _worker_prompt = _guard_prompt_head((_volatile_user_prefix + "\n\n" + prompt)
-                                            if _volatile_user_prefix else prompt)
+        _worker_prompt = _guard_prompt_head((_volatile_user_prefix + "\n\n" + _engine_prefix + prompt)
+                                            if _volatile_user_prefix else _engine_prefix + prompt)
         _init_payload = {"type": "user", "message": {"role": "user", "content": _worker_prompt}}
         proc.stdin.write((json.dumps(_init_payload, ensure_ascii=False) + "\n").encode("utf-8"))
         await proc.stdin.drain()
@@ -8525,11 +8548,15 @@ async def _stream_turn_impl(
                 # annotation comes back empty — otherwise the turn would never
                 # be spoken at all.
                 _ann_pending = bool(result_text.strip()) and _annotation_enabled()
+                # outcome (T-0250): a result with no background scope is a clean finish.
+                # The web client renders "cut" / "process_died" on the turn (chat-registry
+                # -> turn-outcome.ts); "ok" is what every closing result of a CLI turn says.
                 yield {
                     "type":   "result",
                     "text":   result_text,
                     "usage":  last_usage,
                     "annotation_pending": _ann_pending,
+                    "outcome": "ok",
                 }
         _stdout_drained_normally = True
     except (asyncio.CancelledError, GeneratorExit):

@@ -590,7 +590,7 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             mod.get_runner = lambda: _RecordingRunner()
             runner = mod.get_runner()
             mod.get_runner = lambda: runner
-            with mock.patch.object(mod, "_adopt_stored_openai_key", lambda: None):
+            with mock.patch.object(mod, "_stored_openai_key", lambda: None):
                 st = client.get("/v1/console/video/settings").json()
                 self.assertFalse(st["openai_configured"])
                 self.assertEqual(st["tts_engine"], "auto")
@@ -635,7 +635,7 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             runner = _RecordingRunner()
             mod.get_runner = lambda: runner
             ran: list = []
-            with mock.patch.object(mod, "_adopt_stored_openai_key", lambda: None), \
+            with mock.patch.object(mod, "_stored_openai_key", lambda: None), \
                  mock.patch("importlib.metadata.version", lambda n: "7.2.8" if n == "edge-tts" else "1.0"), \
                  mock.patch.object(mod.subprocess, "run", lambda cmd, **k: ran.append(cmd)):
                 self._benign_l44()

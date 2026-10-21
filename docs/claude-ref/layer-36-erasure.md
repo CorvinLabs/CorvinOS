@@ -431,10 +431,20 @@ silent.
     subject as author/owner. Since CONCEPT-0115 also the uploaded attachments:
     `<wid>/attachments/<att_id>/` and the per-run snapshots
     `<wid>/runs/<rid>/attachments/<att_id>/` are removed WHOLE (file + `meta.json`) when the
-    record's `uploaded_by` (console session fingerprint) or an identity key names the subject;
-    another uploader's attachment is untouched. Single attachments are deleted by
+    record names the subject under `uploaded_by` (the per-login console session fingerprint),
+    `uploaded_by_subject` (the login's durable key, `SessionRecord.token_fingerprint` — a subject
+    who logged in again has a new fingerprint but the same key; the credential-less local login
+    has none and stores `""`, so such a subject is named by session fingerprint, which the
+    `console.session_started` audit records enumerate) or a shared identity key — the request
+    may carry any one of them; another uploader's attachment is untouched. The run snapshot is a
+    hard link of the store file; both directories go, so the bytes are gone from every name. A
+    directory that cannot be removed (a locked file) is listed in `reason` and makes the layer
+    FAILED (request PARTIAL) without aborting it: the other directories and the transcript
+    passes still run, `count` says what went, and the stuck directory keeps its `meta.json` for
+    the retry. Single attachments are deleted by
     `DELETE /v1/console/workflows/{wid}/attachments/{att_id}`. Proof:
-    `core/console/tests/test_workflow_composer.py::test_art17_erasure_removes_the_subjects_attachment_files_and_run_snapshots_only`
+    `core/console/tests/test_workflow_composer.py::test_art17_erasure_*` and
+    `corvin_operator/bridges/shared/test_erasure_handlers.py::TestWorkflowAttachmentErasure`
   * `BrowserSessionHandler` (R2-A7) — `<tenant>/browser/sessions/<session_id>/`,
     the per-session Chromium user-data dir (cookies, local storage, cached
     pages); attributed by directory name, which is the session id

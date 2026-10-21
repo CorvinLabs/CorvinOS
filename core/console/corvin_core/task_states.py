@@ -7,9 +7,22 @@ chat task log) and ``TaskQueue`` (the tenant-global queue behind
 task-lifecycle enum that is not registered there.
 
 Transitions are enforced by :func:`check_transition`. Forbidden examples:
-``cancelled -> anything``, ``completed -> anything``, ``failed -> resuming``,
-``interrupted -> running`` (an interrupted task must pass ``resuming``).
-A same-state write is an idempotent no-op and always allowed.
+``cancelled -> anything``, ``completed -> anything``, ``failed -> running``,
+``interrupted -> running``. A same-state write is an idempotent no-op and
+always allowed.
+
+Every state except the initial ``PENDING`` has a writer: an event name in
+:data:`EVENT_TARGET_STATE` (what ``TaskManager.record_event`` and the task
+timeline read). The four states the P1 table also declared —
+``waiting_retry``, ``resuming``, ``needs_user``, ``abandoned`` — had none
+(no event, no queue or manager call site, nothing in the UI), so no task could
+ever reach them and the table rows leading there were dead ends; they were
+removed on 2026-10-21 (BGT-14) together with their rows in the layer-22 docs.
+``INTERRUPTED`` is not terminal — the user can still cancel it, and
+``turn_recovery`` re-runs the REQUEST as a new task (never this task) — but
+nothing resumes the task itself: ``TaskQueue`` drops its payload like a
+terminal one. Resumption notices (``needs_user`` and friends) are
+``task_notices`` kinds, not states.
 
 Stored events are append-only and are never rewritten. A task that the
 pre-P1 boot reaper finalized as ``task.failed`` with
@@ -31,17 +44,12 @@ class TaskState(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     INTERRUPTED = "interrupted"
-    WAITING_RETRY = "waiting_retry"
-    RESUMING = "resuming"
-    NEEDS_USER = "needs_user"
-    ABANDONED = "abandoned"
 
 
 TERMINAL_STATES: frozenset[TaskState] = frozenset({
     TaskState.COMPLETED,
     TaskState.FAILED,
     TaskState.CANCELLED,
-    TaskState.ABANDONED,
 })
 
 #: States from which a user or operator can still cancel the task.
@@ -49,9 +57,6 @@ CANCELLABLE_STATES: frozenset[TaskState] = frozenset({
     TaskState.PENDING,
     TaskState.RUNNING,
     TaskState.INTERRUPTED,
-    TaskState.WAITING_RETRY,
-    TaskState.RESUMING,
-    TaskState.NEEDS_USER,
 })
 
 _S = TaskState
@@ -61,16 +66,12 @@ ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
     # production, so refusing a flow that exists would turn a finished task into an exception).
     _S.PENDING: frozenset({_S.RUNNING, _S.COMPLETED, _S.FAILED, _S.CANCELLED, _S.INTERRUPTED}),
     _S.RUNNING: frozenset({_S.COMPLETED, _S.FAILED, _S.CANCELLED, _S.INTERRUPTED}),
-    _S.INTERRUPTED: frozenset({_S.WAITING_RETRY, _S.RESUMING, _S.NEEDS_USER,
-                               _S.ABANDONED, _S.CANCELLED}),
-    _S.WAITING_RETRY: frozenset({_S.RESUMING, _S.NEEDS_USER, _S.ABANDONED, _S.CANCELLED}),
-    _S.RESUMING: frozenset({_S.RUNNING, _S.COMPLETED, _S.FAILED, _S.INTERRUPTED,
-                            _S.CANCELLED}),
-    _S.NEEDS_USER: frozenset({_S.RESUMING, _S.ABANDONED, _S.CANCELLED}),
+    # An interrupted task is never run again (the request is, as a NEW task - turn_recovery);
+    # the only way out is the user's or operator's cancel.
+    _S.INTERRUPTED: frozenset({_S.CANCELLED}),
     _S.COMPLETED: frozenset(),
     _S.FAILED: frozenset(),
     _S.CANCELLED: frozenset(),
-    _S.ABANDONED: frozenset(),
 }
 
 #: Audit / log event name -> the state it moves a task into.

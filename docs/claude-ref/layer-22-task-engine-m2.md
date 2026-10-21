@@ -184,6 +184,12 @@ const { tasks, isConnected } = useTaskProgress();
 // ]
 ```
 
+`status` mirrors `TaskState` (`pending | running | completed | failed | cancelled |
+interrupted`). A task in one of `ENDED_STATUSES` (`completed`, `failed`, `cancelled`,
+`interrupted`) leaves the list five minutes after the status arrived (BGT-14, 2026-10-21:
+`interrupted` used to stay forever). Note that the socket carries the worker's raw
+stream events; a `status` field arrives only when an event carries one.
+
 ### useTaskPolling()
 
 **HTTP polling fallback (when WebSocket unavailable)**
@@ -428,11 +434,17 @@ Two layers clean this up:
 orphan; it never ran it again. `systemctl --user restart corvin-webui` kills the unit's whole
 control group, so a running console turn ended `failed` / exit 143 (`-15` as asyncio reports
 it) with an empty `result_summary` and no retry. `corvin_console/turn_recovery.py` closes
-that: both host lifespans call `note_shutdown()` on stop (`last_shutdown.json` in the tenant's
-global dir) and `schedule_recovery()` on start. The newest task of a chat is re-run through the
-normal `stream_turn` path (same gates, ledger and persistence as a typed message, prompt
-prefixed `[Automatic restart: ...]`) only when it failed with a signal exit code, produced no
-output, ended inside the shutdown window (or was reaped as an orphan) and is under 30 min old.
+that: both host lifespans call `note_shutdown()` on stop (`last_shutdown.json` in EACH tenant's
+global dir) and `schedule_recovery()` on start. Both walk every tenant under
+`<corvin_home>/tenants/` (`turn_recovery.tenant_ids`, invalid directory names skipped) and work per
+tenant with that tenant's own id, never the process's `CORVIN_TENANT_ID` (BGT-13, 2026-10-21: until
+then only that one tenant was recovered). The newest task of a chat is re-run through the
+normal `stream_turn` path (same gates, ledger and persistence as a typed message) only when it
+failed with a signal exit code, produced no output, ended inside the shutdown window (or was reaped
+as an orphan) and is under 30 min old. The re-run is recorded as the request AS TYPED with the
+marker `recovery: {attempt, of_turn}` beside it (chat log user line, task `input.recovery`); the
+engine alone receives the `[Automatic restart: ...]` prefix (BGT-15, 2026-10-21: until then the
+prefixed prompt was stored as the user's words).
 A re-run that again yields no `result` is repeated, at most `MAX_ATTEMPTS` (2) per request,
 counted in `tasks/recovery_attempts.json` so a crash loop cannot restart forever; exhaustion is
 audited (`chat.turn.recovery_exhausted`). Cancels and background-scope caps are not signal exits
@@ -595,28 +607,35 @@ stateDiagram-v2
     RUNNING --> CANCELLED
     RUNNING --> INTERRUPTED: process killed (137/143/-9/-15)
     PENDING --> INTERRUPTED: boot reaper
-    INTERRUPTED --> RESUMING
-    INTERRUPTED --> WAITING_RETRY
-    INTERRUPTED --> NEEDS_USER
-    INTERRUPTED --> ABANDONED
     INTERRUPTED --> CANCELLED
-    WAITING_RETRY --> RESUMING
-    NEEDS_USER --> RESUMING
-    RESUMING --> RUNNING
-    RESUMING --> COMPLETED
-    RESUMING --> FAILED
-    RESUMING --> INTERRUPTED
     COMPLETED --> [*]
     FAILED --> [*]
     CANCELLED --> [*]
-    ABANDONED --> [*]
 ```
+
+Six states, every one of them written by a real event (`EVENT_TARGET_STATE`:
+`task.started`, `task.completed`, `task.failed`, `task.cancelled`,
+`task.interrupted`; `pending` is the initial state). The P1 table also declared
+`waiting_retry`, `resuming`, `needs_user` and `abandoned` — none had a writer (no
+event name, no queue or manager call site, nothing in the UI), so no task could
+reach them and their rows were dead ends; they were removed on 2026-10-21 (BGT-14,
+`test_task_state_machine.py::test_every_non_initial_state_has_a_writer` fails on the
+next writer-less state). `needs_user` / `interrupted_resuming` / `recovered` /
+`gave_up` are `task_notices` KINDS (what the user is told), not states.
+`INTERRUPTED` is not terminal — the user can still cancel it — but nothing ever
+resumes the task itself: `turn_recovery` re-runs the REQUEST as a new task, and
+`TaskQueue.update_status` drops the payload file at `interrupted` exactly as at a
+terminal state (`PAYLOAD_DROP_STATES`; proof
+`test_task_queue.py::TestInterruptedCleanup`). The console's cross-chat progress hook
+(`use-task-progress.ts`) types `interrupted` and auto-cleans it after the same five
+minutes as the other ended states (`ENDED_STATUSES`; proof
+`tests/unit/use-task-progress.test.tsx`).
 
 **Guard.** `TaskManager.record_event` checks the transition for `task.started`,
 `task.completed`, `task.failed`, `task.cancelled` and `task.interrupted` BEFORE it
 appends anything. A forbidden transition raises `InvalidTransitionError` and the
 log is untouched (for example `cancelled -> completed`, `completed -> failed`,
-`interrupted -> running`, `failed -> resuming`). Same-state writes are idempotent.
+`interrupted -> running`, `failed -> running`). Same-state writes are idempotent.
 `TaskQueue.update_status` refuses to move a terminal task to a different state.
 
 **Worker.** `TaskWorkerPool` maps a worker that exited with 137/143/-9/-15 to
@@ -639,8 +658,9 @@ orphaned task as a failed outcome.
 
 **Not yet in P1:** the other domain enums (orchestrator, vibe-engineering,
 inspection, nervous-system, orchestration subsystems) are registered with their
-reasons, not converted; the resume path (`RESUMING` from a real retry or the user)
-arrives with PLAN-0958 P2 and later.
+reasons, not converted. There is no resume path for a task: a cut-off REQUEST is
+re-run as a new task (§ Stuck-task recovery), the interrupted task stays
+`interrupted` until the user cancels it.
 
 ## Testing
 
@@ -655,7 +675,7 @@ through `TestClient`, the real `TaskWorkerPool._execute_task` spawning a fake
 `claude` that sleeps, SIGKILL on the engine pid, then `GET` shows `interrupted`;
 abort of an interrupted task works; a stale-read abort of a completed task returns 409.
 
-**E2E tests:** `test_task_engine_m2_e2e.py`
+**E2E tests:** `test_task_manager_e2e.py`, `test_task_queue.py`, `test_task_state_machine.py`, `test_task_interrupt_http_e2e.py`, `test_turn_recovery_e2e.py` (the file `test_task_engine_m2_e2e.py` named here until 2026-10-21 does not exist)
 - Multi-tenant task isolation
 - Pub/sub broadcast across subscribers
 - Task lifecycle (create → running → completed)

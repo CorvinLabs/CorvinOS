@@ -511,11 +511,28 @@ class CostEfficiencyResult:
     # estimation step.
     model_cost: dict[str, dict[str, float]] = field(default_factory=dict)
     acs_model_cost: dict[str, dict[str, float]] = field(default_factory=dict)
+    # The model every baseline dollar above was priced at (T-0246: a caller may
+    # choose it; the console keeps the default).
+    reference_model: str = _BASELINE_MODEL_PREFIX
+
+
+def _reference_price(reference: Optional[str]) -> tuple[str, tuple[float, float]]:
+    """``(model id, (input, output) $/1K)`` of the reference model: the default
+    baseline, or a caller's choice resolved through the SAME rate card as the
+    served models (routing prefix stripped, longest prefix). An id the card
+    does not know is refused — a guessed reference would be a fabricated saving."""
+    if not reference:
+        return _BASELINE_MODEL_PREFIX, _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
+    price = _price_for_model(reference)
+    if price is None:
+        raise ValueError(f"reference model {reference!r} is not in the rate card")
+    return _ROUTING_PREFIX.sub("", reference), price
 
 
 def _price_and_baseline(
     model: str, in_tok: int, out_tok: int,
     cache_write_tok: int = 0, cache_read_tok: int = 0,
+    reference: Optional[str] = None,
 ) -> Optional[tuple[float, float]]:
     """(actual_usd, baseline_usd) for one turn's full token accounting, or
     None if unpriceable. Baseline reuses the SAME real token counts (input,
@@ -524,16 +541,27 @@ def _price_and_baseline(
     price = _price_for_model(model)
     if price is None:
         return None
-    baseline_price = _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
+    ref_model, baseline_price = _reference_price(reference)
     actual = _turn_cost_usd(price, in_tok, out_tok, cache_write_tok, cache_read_tok, model)
-    baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok,
-                              _BASELINE_MODEL_PREFIX)
+    baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok, ref_model)
     return actual, baseline
+
+
+def _in_window(ts: Any, since_ts: float, until_ts: Optional[float]) -> bool:
+    """``since_ts <= ts < until_ts``; a missing ``ts`` counts only when no bound is set."""
+    t = float(ts or 0)
+    if since_ts and t < since_ts:
+        return False
+    return until_ts is None or t < until_ts
 
 
 def compute_cost_efficiency(
     tenant_id: str,
     chain_path: Optional[Path] = None,
+    *,
+    since: Optional[float] = None,
+    until: Optional[float] = None,
+    reference: Optional[str] = None,
 ) -> CostEfficiencyResult:
     """Real cost-efficiency trend from actual token usage + published pricing.
 
@@ -545,27 +573,37 @@ def compute_cost_efficiency(
     ``has_data=False`` means exactly that — no turn in the scanned window
     has both a recognized model AND real token counts — so the honest
     result is "insufficient data", never a fabricated number.
+
+    ``since`` / ``until`` (epoch seconds, ``since <= ts < until``): an explicit
+    window. With ``since`` omitted the tenant's counting epoch (ADR-0760)
+    applies — the console's window; an explicit ``since`` replaces it (the
+    receipt script's window, T-0246). ``reference``: the model the baseline is
+    priced at (default ``_BASELINE_MODEL_PREFIX``); must be in the rate card.
     """
     if chain_path is None:
         from core.console.corvin_console import _bootstrap
 
         chain_path = _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
 
-    # ADR-0760 — the SAME counting epoch model_usage applies. Two panels on one
-    # screen deriving their numbers from different windows is worse than no
-    # reset at all, so the window is read from one place, never re-decided here.
-    try:
-        from core.console.corvin_console import usage_epoch  # noqa: PLC0415
+    if since is not None:
+        since_ts = float(since)
+    else:
+        # ADR-0760 — the SAME counting epoch model_usage applies. Two panels on one
+        # screen deriving their numbers from different windows is worse than no
+        # reset at all, so the window is read from one place, never re-decided here.
+        try:
+            from core.console.corvin_console import usage_epoch  # noqa: PLC0415
 
-        since_ts = usage_epoch.epoch_ts(tenant_id)
-    except Exception:  # noqa: BLE001
-        since_ts = 0.0
+            since_ts = usage_epoch.epoch_ts(tenant_id)
+        except Exception:  # noqa: BLE001
+            since_ts = 0.0
+    until_ts = float(until) if until is not None else None
+    ref_model, baseline_price = _reference_price(reference)
 
     turns = [
         t for t in _read_completed_turns(chain_path, _MAX_SCAN_BYTES)
-        if not since_ts or float(t.get("completed_ts") or 0) >= since_ts
+        if _in_window(t.get("completed_ts"), since_ts, until_ts)
     ]
-    baseline_price = _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
 
     by_day: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])  # date -> [actual, baseline]
     by_day_total: dict[str, int] = defaultdict(int)
@@ -589,8 +627,7 @@ def compute_cost_efficiency(
             continue
         actual = _turn_cost_usd(price, in_tok, out_tok, cache_write_tok, cache_read_tok,
                                 t.get("model") or "")
-        baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok,
-                                  _BASELINE_MODEL_PREFIX)
+        baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok, ref_model)
         by_day[day][0] += actual
         by_day[day][1] += baseline
         by_day_counted[day] += 1
@@ -645,7 +682,7 @@ def compute_cost_efficiency(
         _deduped.append(_c)
     acs_completions = [
         c for c in _deduped
-        if not since_ts or float(c.get("completed_ts") or 0) >= since_ts
+        if _in_window(c.get("completed_ts"), since_ts, until_ts)
     ]
     acs_by_day: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
     acs_by_day_total: dict[str, int] = defaultdict(int)
@@ -666,7 +703,7 @@ def compute_cost_efficiency(
         cache_read_tok = c.get("cache_read_input_tokens") or 0
         has_usage = in_tok or out_tok or cache_write_tok or cache_read_tok
         priced = (
-            _price_and_baseline(model, in_tok, out_tok, cache_write_tok, cache_read_tok)
+            _price_and_baseline(model, in_tok, out_tok, cache_write_tok, cache_read_tok, reference=ref_model)
             if has_usage else None
         )
         if priced is None:
@@ -706,6 +743,7 @@ def compute_cost_efficiency(
         acs_model_mix=dict(acs_model_mix),
         model_cost=_round_cost(model_cost),
         acs_model_cost=_round_cost(acs_model_cost),
+        reference_model=ref_model,
     )
 
 

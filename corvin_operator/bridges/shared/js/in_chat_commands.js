@@ -30,6 +30,8 @@ const path = require('path');
 // `__dirname/..` there is a directory with no Python in it at all. See
 // bridge_paths.js::operatorRoot for the full failure mode.
 const bridgePaths = require('./bridge_paths');
+// Chat status icons by NAME (ADR-2269) — the vocabulary lives in shared/status_markers.py.
+const { icon: statusIcon } = require('./status_markers');
 
 const HERE = __dirname;
 const COWORK_BUNDLE_DIR = path.resolve(HERE, '../../../cowork/personas');
@@ -410,7 +412,7 @@ function helpReply(ctx) {
 // answer instead of the Claude-CLI's "command isn't available" — but they
 // never mutate settings.json any more (no chat_profiles[].persona binding).
 const PERSONAS_RETIRED_REPLY =
-  'ℹ️ Personas were retired — capabilities are Skills now and are picked ' +
+  `${statusIcon('note')} Personas were retired — capabilities are Skills now and are picked ` +
   'automatically per request. Nothing to switch: just describe the task. ' +
   'See /skills for what this chat can do and /whoami for its current role.';
 
@@ -1104,8 +1106,8 @@ function objectiveReply(ctx, sub, rest) {
   if (!sub || sub === 'list') {
     const r = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), 'list', chan, chat], { encoding: 'utf8', timeout: 5000 });
     let obj;
-    try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: '⚠️ Failed to load objectives.', kind: 'objective_list' }; }
-    if (!obj || !obj.ok) return { reply: `⚠️ ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_list' };
+    try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `${statusIcon('warning')} Failed to load objectives.`, kind: 'objective_list' }; }
+    if (!obj || !obj.ok) return { reply: `${statusIcon('warning')} ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_list' };
     if (!obj.objectives || obj.objectives.length === 0) {
       return {
         reply: '**Learning Objectives** — none set\n\nAdd one with `/objective add <high|medium|low> <text>`',
@@ -1114,7 +1116,7 @@ function objectiveReply(ctx, sub, rest) {
     }
     const lines = [`**Learning Objectives** (${obj.active_count}/${obj.count} active)\n`];
     for (const o of obj.objectives) {
-      const status = o.active ? '✅' : '⏸';
+      const status = o.active ? statusIcon('done') : '⏸';
       const cr = o.compliance_rate != null ? `  ${Math.round(o.compliance_rate * 100)}% compliant` : '';
       lines.push(`${status} \`${o.id}\` **[${o.priority}]** ${o.text}${cr}`);
     }
@@ -1134,10 +1136,10 @@ function objectiveReply(ctx, sub, rest) {
     const text = parts.slice(1).join(' ');
     const r = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), 'add', chan, chat, priority, text], { encoding: 'utf8', timeout: 5000 });
     let obj;
-    try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: '⚠️ Failed to add objective.', kind: 'objective_add' }; }
-    if (!obj || !obj.ok) return { reply: `⚠️ ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_add' };
+    try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `${statusIcon('warning')} Failed to add objective.`, kind: 'objective_add' }; }
+    if (!obj || !obj.ok) return { reply: `${statusIcon('warning')} ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_add' };
     return {
-      reply: `✅ Objective added: \`${obj.objective.id}\`\n> ${obj.objective.text}`,
+      reply: `${statusIcon('done')} Objective added: \`${obj.objective.id}\`\n> ${obj.objective.text}`,
       kind: 'objective_add',
     };
   }
@@ -1147,8 +1149,8 @@ function objectiveReply(ctx, sub, rest) {
     if (!id) return { reply: `**Usage:** \`/objective ${sub} <id>\``, kind: `objective_${sub}` };
     const r = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), sub, chan, chat, id], { encoding: 'utf8', timeout: 5000 });
     let obj;
-    try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `⚠️ Failed to ${sub} objective.`, kind: `objective_${sub}` }; }
-    if (!obj || !obj.ok) return { reply: `⚠️ ${(obj && obj.error) || 'Unknown error'}`, kind: `objective_${sub}` };
+    try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `${statusIcon('warning')} Failed to ${sub} objective.`, kind: `objective_${sub}` }; }
+    if (!obj || !obj.ok) return { reply: `${statusIcon('warning')} ${(obj && obj.error) || 'Unknown error'}`, kind: `objective_${sub}` };
     const icon = sub === 'pause' ? '⏸' : '▶️';
     return { reply: `${icon} Objective \`${id}\` ${sub}d.`, kind: `objective_${sub}` };
   }
@@ -1158,8 +1160,8 @@ function objectiveReply(ctx, sub, rest) {
     if (!id) return { reply: '**Usage:** `/objective delete <id>`', kind: 'objective_delete' };
     const r = spawnSync('python3', [ULO_CLI, ..._uloTenantArgs(), 'delete', chan, chat, id], { encoding: 'utf8', timeout: 5000 });
     let obj;
-    try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: '⚠️ Failed to delete objective.', kind: 'objective_delete' }; }
-    if (!obj || !obj.ok) return { reply: `⚠️ ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_delete' };
+    try { obj = JSON.parse(r.stdout || '{}'); } catch { return { reply: `${statusIcon('warning')} Failed to delete objective.`, kind: 'objective_delete' }; }
+    if (!obj || !obj.ok) return { reply: `${statusIcon('warning')} ${(obj && obj.error) || 'Unknown error'}`, kind: 'objective_delete' };
     return { reply: `🗑️ Objective \`${id}\` deleted.`, kind: 'objective_delete' };
   }
 
@@ -2920,7 +2922,7 @@ function engineReply(ctx, tail) {
   // Exit code 2 means usage / unknown alias. The Python CLI already
   // printed a helpful diagnostic; surface it verbatim with a soft prefix.
   if (r.status !== 0) {
-    return { reply: `⚠️ /engine — ${out}`, kind: 'engine' };
+    return { reply: `${statusIcon('warning')} /engine — ${out}`, kind: 'engine' };
   }
   return { reply: `🛠️ ${out}`, kind: 'engine' };
 }
@@ -2941,7 +2943,7 @@ function settingsReply(ctx) {
   const stdout = (r && r.stdout) ? r.stdout.trim() : '';
   const stderr = (r && r.stderr) ? r.stderr.trim() : '';
   if (!stdout && stderr) {
-    return { reply: '⚠ /settings: ' + stderr, kind: 'error' };
+    return { reply: `${statusIcon('warning')} /settings: ` + stderr, kind: 'error' };
   }
   return { reply: stdout || '(no output)', kind: 'settings' };
 }
@@ -3039,7 +3041,7 @@ function workflowReply(ctx, sub, rest) {
   const stdout = (r && r.stdout) ? r.stdout.trim() : '';
   const stderr = (r && r.stderr) ? r.stderr.trim() : '';
   if (!stdout && stderr) {
-    return { reply: '⚠ /workflow: ' + stderr, kind: 'error' };
+    return { reply: `${statusIcon('warning')} /workflow: ` + stderr, kind: 'error' };
   }
   // Cap reply at ~3500 chars so phone scroll stays sane; long JSON dumps
   // are truncated with a marker.

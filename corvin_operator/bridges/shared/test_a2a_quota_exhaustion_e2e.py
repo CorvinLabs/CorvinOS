@@ -1,15 +1,23 @@
-"""A free-tier peer's daily compute pool, end to end: what the 11th task of the day looks like.
+"""The receiver's daily compute pool, end to end: what the 11th task of the day looks like.
 
-Root cause of "the peer refused the task without naming a reason" against PF65XQC9 (2026-10-09):
-the free tier allows ``compute_units_per_day = 10`` agent runs, shared by everything on that
-instance, counted per UTC day. Intensive testing used the peer's 10 units (9 completed runs + 1
-that timed out), and from the 11th task on every task was refused — after ~22-28 s, because the
-quota gate sat BEHIND the L44 classification (a model call) and the refusal threw its cause away.
+A MECHANISM test with the network gate bypassed — NOT a free-peer scenario. Since gate 28ad07b54
+``a2a.network`` is member-only (``limits.py``: free limit 0) and the member tier has
+``compute_units_per_day = None``, so on the real network a free install is refused by
+``require_a2a_network`` BEFORE the quota is reached and a member peer has no daily pool
+(decision 2026-10-21: A2A stays member-only). The quota path is kept as the fail-closed defence
+for a peer whose licence lapses mid-day (it falls back to the free pool of 10) and for an
+operator-lowered pool; this test proves that path by bypassing the gate alone.
+
+Origin (predates the gate): against PF65XQC9 on the free tier (2026-10-09), intensive testing used
+the peer's 10 units (9 completed runs + 1 that timed out), and from the 11th task on every task was
+refused — after ~22-28 s, because the quota gate sat BEHIND the L44 classification (a model call)
+and the refusal threw its cause away.
 
 This runs the REAL path in a subprocess with its own ``CORVIN_HOME`` (the worker snapshots it at
 import): ``RemoteTriggerSender.send`` -> ``RemoteTriggerReceiver.receive`` -> ``spawn_a2a_worker``
 -> ``license.compute_quota``, plus the signed ping that advertises the peer's task capacity. Only
-the model (a scripted engine), the L44 classifier (a counter) and the network hop are replaced.
+the model (a scripted engine), the L44 classifier (a counter), the network hop and the member-only
+network gate are replaced.
 
 Asserted:
   * tasks 1-10 complete; the 11th and 12th are refused with the closed reason ``quota``
@@ -38,8 +46,9 @@ for p in ("corvin_operator/bridges/shared", "corvin_operator/forge", "core/conso
     sys.path.insert(0, str(R / p))
 import unittest.mock as mock
 _se = mock.MagicMock(); _se.write_event = mock.MagicMock(return_value={"hash": "x"})
-# This test is about the COMPUTE-UNIT quota of a free peer; the member-only network gate
-# (28ad07b54) would refuse every send before the quota is reached, so it alone is bypassed.
+# This test is about the receiver's COMPUTE-UNIT quota path (a lapsed licence / an operator-lowered
+# pool); the member-only network gate (28ad07b54) would refuse every send before the quota is
+# reached, so it alone is bypassed. See the module docstring.
 import a2a_license_gate as _gate
 _gate.require_a2a_network = lambda **_k: None
 import remote_trigger_receiver as rtr

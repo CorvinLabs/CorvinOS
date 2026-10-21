@@ -383,8 +383,29 @@ applied); and a re-run killed with a child open was announced as "recovered". Th
   `ok` / `cut` (a deliberate child-cap or wake-up stop) / `process_died` (the CLI was killed with a
   child open; its text is a failure notice). Interim results carry `interim: true`. Only an answer —
   not interim, not `process_died` — counts as "recovered" (`turn_recovery._is_answer`).
+  On the console the field is on EVERY closing result of a CLI turn (a turn with no background scope
+  says `ok`, T-0250) and it has a consumer: the web client stamps it on the turn
+  (`chat-registry.ts`, `result` case, never from an interim result) and `chat.tsx` renders a banner
+  from the closed enum in `src/lib/turn-outcome.ts` — "The worker process died …" (styled as a
+  failure) and "The turn was cut at the scope limit …" (a notice); `ok` renders nothing. Proof over
+  the real WebSocket route: `core/console/tests/test_chat_turn_outcome_ws_e2e.py`; renderer:
+  `web-next/tests/unit/chat-turn-outcome.test.ts`.
 - **The re-run key is the request, not the prompt.** `turn_recovery._strip_restart_prefix` removes
-  every stacked restart prefix before the attempt key is computed, so `MAX_ATTEMPTS` holds.
+  every stacked restart prefix before the attempt key is computed, so `MAX_ATTEMPTS` holds. Since
+  2026-10-21 (BGT-15) a re-run no longer stores the prefix at all: `turn_recovery._run_once` calls
+  `stream_turn(sess, <request as typed>, recovery={"attempt": n, "of_turn": <cut-off task id>})`;
+  the chat log (`turns.jsonl`, the console's ledger) and the task log (`input.instruction` +
+  `input.recovery`) hold the bare request with that marker beside it, and only the engine receives
+  `PROMPT_PREFIX` in front of the text (the native CLI's stdin message and the ACS delegation spec).
+  A later turn therefore re-supplies the user's own words, never the restart notice. The strip stays
+  for task logs written before that date. Proof:
+  `test_turn_recovery_e2e.py::test_the_restart_prefix_reaches_the_engine_but_never_the_record`.
+- **Every tenant is recovered (BGT-13, 2026-10-21).** `note_shutdown()` and `schedule_recovery()`
+  (both hosts pass no tenant) walk `<corvin_home>/tenants/*` (`turn_recovery.tenant_ids`,
+  `validate_tenant_id` on each name, invalid names skipped and logged) and run the shutdown note and
+  the recovery per tenant with that tenant's own id — never the process's `CORVIN_TENANT_ID`, which
+  until then was the only tenant ever re-run. One tenant's failure never stops the others. Proof:
+  `test_turn_recovery_e2e.py::test_every_tenant_is_recovered_not_only_the_default_one`.
 - **Recovery outcomes are audited.** `chat.turn.recovery_started`, `…_attempt_failed`,
   `…_succeeded`, `…_exhausted`.
 - **The adapter leaves nothing behind — but only as a service.** After the drain, `unit_sweep.sweep_unit_leftovers`
@@ -1258,7 +1279,10 @@ The console web-chat applies the same renderer to its existing append-only
 (cancelled, failed, artifact-only) is kept, marked "(no text answer)"; only the
 in-flight last message is left out. Console slash commands the dispatcher answers
 (`routes/chat.py` → `chat_runtime.record_side_turn`) are recorded before the reply is
-sent, gated like a turn, `cli_spawned=False`. A pre-marker (v1) turn log's refusal is recognised by the tag every gate refusal starts with (`[house-rules]`, `[data-flow]`, `[egress]`, `[security]`). The streamed part of a cancelled answer is persisted, marked `[answer cancelled here]`. With `cel_cache_stable` on, the turn's message still reaches the ledger renderer (`ledger_prompt`), so an earlier unanswered message stays history (review R5-6). The worker is pointed at the generated view in the session workdir, never at `turns.jsonl` (which keeps a refused message's text for the chat window). The console's 50-chats-per-tenant cap still
+sent, gated like a turn, `cli_spawned=False`. A turn `turn_recovery` re-runs after a host restart is
+recorded as the user's own words — the request as typed — with the marker `recovery: {attempt,
+of_turn}` on the user line (BGT-15, 2026-10-21); the `[Automatic restart: …]` prefix goes to the
+engine only and is never in the record or re-supplied. A pre-marker (v1) turn log's refusal is recognised by the tag every gate refusal starts with (`[house-rules]`, `[data-flow]`, `[egress]`, `[security]`). The streamed part of a cancelled answer is persisted, marked `[answer cancelled here]`. With `cel_cache_stable` on, the turn's message still reaches the ledger renderer (`ledger_prompt`), so an earlier unanswered message stays history (review R5-6). The worker is pointed at the generated view in the session workdir, never at `turns.jsonl` (which keeps a refused message's text for the chat window). The console's 50-chats-per-tenant cap still
 deletes the oldest chat whole — a retention rule that predates the ledger.
 
 **Tool-card diffs (ADR-2241, 2026-10-09).** For an Edit / MultiEdit / Write the console
@@ -1410,9 +1434,28 @@ prompts — nor to the console Assistant widget (its own "short, no lists" style
 texts (quota/limit notices, background-task acks, worker-finished lines) take their icon from
 `status_markers.icon(name)` — never a literal — so they match what the model is taught.
 
+**The JavaScript bridges read an export of the same vocabulary (T-0249, 2026-10-21).** `discord/daemon.js` and
+the `shared/js` modules cannot import the Python module, so `status_markers.py --write-json` generates
+`corvin_operator/bridges/shared/status_markers.json` (`icons` name → glyph, `markers` legend) and
+`shared/js/status_markers.js` exposes `icon(name)` (throws on an unknown name) and `STATUS_MARKERS`. The Discord daemon's
+`❌ Error:`, `⚠️ Empty /btw`, `⏳ on it…` and the ⏳ reaction (set and removed), the `/on`/`/status` replies of
+`chat_toggle.js`, the `/objective*` and `/engine` replies of `in_chat_commands.js` and the `fallback` mode glyph of
+`execution_context_renderer.js` all take the icon by name. `test_status_marker_literals.py` pins the JSON to
+`status_markers.as_json()` (an export, never a second list — edit the Python and regenerate) and
+`shared/js/test_status_markers.js` proves the JS reader resolves every name to the shipped glyph. ACS step lines
+(`acs_runtime.format_acs_step`): the compass / robot / wrench glyphs name the step KIND and are not statuses; the
+gate line is a verdict and carries the shared `done` / `failed` marker (the TTS stripper and the run-trace E2E
+match that shape).
+
 **Guard and engine coverage (ADR-2269).** `corvin_operator/bridges/shared/test_status_marker_literals.py` scans the
-chat-output modules (AST, docstrings excluded) and fails on a status glyph typed as a string literal, so the
-vocabulary cannot fork; its positive control proves the scan reaches every listed module. Codex and OpenCode take one
+chat-output modules (AST, docstrings excluded — `acs_runtime.py` included) and fails on a status glyph typed as a
+string literal, so the vocabulary cannot fork; its positive control proves the scan reaches every listed module.
+The same file scans EVERY non-test `*.js` under `corvin_operator/bridges` (the discord, telegram, slack, whatsapp,
+signal, teams and email daemons, their helpers and `shared/js`; `node_modules` excluded) with a comment- and regex-aware
+string-literal scanner and fails on a status glyph in a JS string or template literal; its positive control asserts
+all seven daemons are in the scan. The WhatsApp daemon's ⏳/✅ reactions, its `/on`/`/status` acks and the
+orchestration summary of `whatsapp/orchestration_handler.js` take their icons by name too; the discord
+provisioner/ownership helpers' log lines carry no icon at all (a log is machine-read output). Codex and OpenCode take one
 `system` string and get the rule from `adapter._chat_status_rule_part()`; `test_adapter_status_markers.py` drives both
 real functions up to the engine boundary. `test_status_marker_process_one_e2e.py` boots the real adapter daemon: the
 daemon used to need a cgroup of its own, because on shutdown `unit_sweep.sweep_unit_leftovers` terminated everything

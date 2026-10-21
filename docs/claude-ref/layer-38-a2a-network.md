@@ -1166,13 +1166,20 @@ A rejection with **no** reason (an older peer build, or a pairing the peer no lo
 "refused without naming a reason (an older build, or it no longer recognises this connection) — check the peer's
 audit log for `house_rules.*` / `A2A.engine_spawned`, its engine sign-in and usage limit" instead of nothing.
 
-**The commonest refusal: the peer's daily compute pool (measured 2026-10-09, PF65XQC9).** The free tier allows
-`compute_units_per_day = 10` agent runs per UTC day — ONE pool shared by every engine on that instance (ACS, TDE,
-forge compute, A2A inbound, its own chat agents). PF65XQC9 completed 9 runs for us and timed out a 10th between
-14:49 and 14:55 UTC; from the 11th task on **every** task was refused, for the rest of the UTC day. It looked like
-an outage because (a) the cause was discarded (above) and (b) the quota gate sits **behind** L44 — a refusal cost
-the sender ~22-28 s (relay round trip + the L44 model call) and the peer a model call per refused task. Reproduced
-end to end in `test_a2a_quota_exhaustion_e2e.py` (tasks 1-10 ok, 11-12 `quota`). Two structural fixes:
+**The peer's daily compute pool — a fail-closed defence, no longer a refusal a peer on the network can
+normally hit (decision 2026-10-21, consistent with gate 28ad07b54).** `a2a.network` is member-only
+(`corvin_operator/license/limits.py`: free limit 0) and the member tier has `compute_units_per_day = None`
+(unlimited). So a free install is not on the network at all — `require_a2a_network` refuses it at the sender and at
+the receiver BEFORE any quota is consulted — and a member peer has no daily pool to exhaust. The receiver's
+compute-quota path below is kept as the fail-closed defence for the two cases that remain: a peer whose licence
+lapses mid-day (it falls back to the free pool of `compute_units_per_day = 10`, ONE pool shared by every engine on
+that instance — ACS, TDE, forge compute, A2A inbound, its own chat agents) and an operator-lowered pool.
+`peer_pool_pressure` and `task_capacity: limit_reached` can only occur for such a peer. The mechanism was built from
+a measurement that predates the gate (2026-10-09, PF65XQC9 on the free tier: 9 completed runs and a timed-out 10th
+between 14:49 and 14:55 UTC, then **every** task refused for the rest of the UTC day; it looked like an outage because
+the cause was discarded and the quota gate sat **behind** L44, costing the sender ~22-28 s and the peer a model call
+per refused task). It is reproduced end to end in `test_a2a_quota_exhaustion_e2e.py` — a MECHANISM test that bypasses
+the network gate (tasks 1-10 ok, 11-12 `quota`), not a free-peer scenario. Two structural fixes:
 
 - **Fast-fail.** `compute_quota.peek_exhausted()` (read-only, never consumes, any doubt → False) runs right after
   the sanitiser, before L34/L35/L44. The authoritative `increment_and_check` stays AFTER L44 on purpose — a request
@@ -1205,7 +1212,7 @@ measures, over the host's REAL HTTP boundary and without sending a task or spend
 | CRITICAL (host wrong) | `service_fresh` | the serving process started AFTER the newest A2A source file on disk — a service keeps the code it started with (this class left the quota fast-fail undeployed for hours) |
 | CRITICAL | `ordinary_ping`, `pong_capacity`, `task_status_unknown`, `reaimed_ignored`, `forged_refused`, `feed_shape` | the contract in `a2a_live_probe` (the same probe `tests/e2e/a2a/test_live_host_a2a_contract_e2e.py` asserts on) |
 | WARN | `peer_offline`, `peer_probe_stale` (>5 min), `peer_limit_reached` | a paired peer is down / the host stopped probing it / it reports its daily pool as spent |
-| WARN | `peer_pool_pressure` | we alone used ≥ 8 of a free-tier peer's 10 daily units today (UTC) |
+| WARN | `peer_pool_pressure` | we alone ran ≥ 8 tasks on a peer today (UTC) — a problem only for a peer on the free pool of 10 (lapsed licence, operator-lowered pool); a member peer has no daily pool |
 | WARN | `peer_refusing` | the peer's last ≥ 3 answers to us were refusals — with the reason it gave |
 
 Exit 0 = healthy/degraded, **1 = broken (shows in `systemctl --user --failed`)**, 2 = the watch could not run. Output:
@@ -1229,9 +1236,10 @@ concurrent runs; the real CLI as a subprocess; the unit's ExecStart pointing at 
 Found by running it on 2026-10-09: peer rows of removed connections lacked `task_capacity`; the watch itself crashed
 on a non-numeric timestamp and exited 2 when its log directory was unusable.
 
-Operator note: testing against a **live** peer spends THAT peer's pool. 10 tasks a day is also what a fresh free-tier
-installation can accept from its peers — a product/licensing question (a separate, larger inbound-A2A allowance) that
-this layer deliberately does not decide.
+Operator note: testing against a **live** peer spends THAT peer's pool only if it has one — a member peer (the only
+kind on the network since 28ad07b54) has `compute_units_per_day = None`. A fresh free-tier installation is not on the
+network, so "10 tasks a day" is not what it can accept from peers: it accepts none. Whether inbound A2A should ever
+get its own allowance below a member seat is a product/licensing question that this layer deliberately does not decide.
 
 **Resend.** A refused or never-sent message of ours shows a *Resend* action. It is withheld for `unconfirmed`
 (the message may already have run — a resend would run it twice), for messages with attachments (the feed keeps no

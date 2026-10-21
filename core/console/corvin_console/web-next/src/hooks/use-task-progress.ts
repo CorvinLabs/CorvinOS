@@ -3,10 +3,23 @@ import { useEffect, useState } from 'react';
 export interface TaskProgress {
   task_id: string;
   chat_key: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  /** Mirrors corvin_core/task_states.py (TaskState). */
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
   progress_pct?: number;
   latest_line?: string;
 }
+
+/**
+ * Statuses after which a task is no longer running and leaves the list after a grace period.
+ * `interrupted` (worker killed, PLAN-0958 P1) is not terminal on the backend — it can still be
+ * cancelled — but it never runs again, so the bar treats it as ended too (BGT-14, 2026-10-21).
+ */
+export const ENDED_STATUSES: ReadonlyArray<TaskProgress['status']> = [
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+];
 
 /**
  * Subscribe to cross-chat task progress via WebSocket pub/sub.
@@ -59,8 +72,8 @@ export function useTaskProgress() {
 
           updated.set(taskId, newTask);
 
-          // Auto-cleanup completed/failed after 5 min
-          if (['completed', 'failed', 'cancelled'].includes(newTask.status)) {
+          // Auto-cleanup ended tasks (completed/failed/cancelled/interrupted) after 5 min
+          if (ENDED_STATUSES.includes(newTask.status)) {
             setTimeout(() => {
               setTasks((prev) => {
                 const cleaned = new Map(prev);

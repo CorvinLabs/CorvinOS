@@ -41,6 +41,8 @@
 //     → { kind, reply } | null
 
 const fs = require('fs');
+// Chat status icons by NAME (ADR-2269) — the vocabulary lives in shared/status_markers.py.
+const { icon: statusIcon } = require('./status_markers');
 
 function _read(settingsFile) {
   try {
@@ -143,7 +145,7 @@ function handleToggleCommand({ text, chatKey, isOwner, settingsFile }) {
     enableChat(settingsFile, chatKey);
     return {
       kind: 'toggle-on',
-      reply: '✅ KI ist für diesen Chat aktiviert. · AI is on for this chat.',
+      reply: `${statusIcon('done')} KI ist für diesen Chat aktiviert. · AI is on for this chat.`,
     };
   }
   if (cmd === '/off') {
@@ -157,7 +159,7 @@ function handleToggleCommand({ text, chatKey, isOwner, settingsFile }) {
   // (only when the operator hasn't opted into the explicit allow-list).
   const on = isChatEnabled(data, chatKey);
   const state = on
-    ? '✅ KI ist für diesen Chat aktiv. · AI is on.'
+    ? `${statusIcon('done')} KI ist für diesen Chat aktiv. · AI is on.`
     : '🛑 KI ist für diesen Chat deaktiviert. · AI is off.';
   const optIn = isToggleEnabled(data);
   const note = optIn

@@ -15,10 +15,14 @@ Run directly:  python3 core/workflows/tests/test_workflow_hardening.py
 """
 from __future__ import annotations
 
+import errno
+import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -251,6 +255,81 @@ class CheckpointClaimTests(_TmpHomeMixin, unittest.TestCase):
     def test_claim_missing_raises(self) -> None:
         with self.assertRaises(FileNotFoundError):
             _checkpoint.claim("nope-not-here")
+
+    # ── T-0240 (WFE-20): the claim marker is part of the claim, never best-effort ──
+
+    def test_marker_write_failure_releases_the_claim_and_raises(self) -> None:
+        """A claim whose (pid, ts) marker could not be written used to return as if it held the
+        checkpoint, marker silently missing; for a pause older than an hour the next concurrent
+        claim then reaped the live claim as stale - two resumes of one run."""
+        self._save()
+        p = _checkpoint._run_path("deadbeef", None)
+        old = time.time() - 2 * 3600
+        os.utime(p, (old, old))
+        with mock.patch.object(_checkpoint, "_write_claim_marker_payload",
+                               side_effect=OSError(errno.ENOSPC, "No space left on device")):
+            with self.assertRaises(OSError):
+                _checkpoint.claim("deadbeef")
+        # nothing is held: the checkpoint is where it was, no sidecar, no marker
+        self.assertTrue(p.exists())
+        self.assertFalse(p.with_suffix(".json.claimed").exists())
+        self.assertFalse(_checkpoint._claim_marker(p).exists())
+        # exactly one later claim wins; the one after it is refused, not reaped
+        _checkpoint.claim("deadbeef")
+        with self.assertRaises(_checkpoint.AlreadyClaimedError):
+            _checkpoint.claim("deadbeef")
+
+    def test_a_concurrent_claimant_inside_the_rename_window_sees_the_marker(self) -> None:
+        """Between the rename and the (former) marker write a second claimant saw a `.claimed`
+        with no marker; it must see a marker from the first instant of the claim."""
+        self._save()
+        real_rename = os.rename
+        seen: list[BaseException] = []
+        state = {"intruded": False}
+
+        def _rename_with_intruder(src, dst, *a, **k):
+            if not state["intruded"]:
+                state["intruded"] = True
+                try:
+                    _checkpoint.claim("deadbeef")
+                except BaseException as exc:  # noqa: BLE001
+                    seen.append(exc)
+            return real_rename(src, dst, *a, **k)
+
+        with mock.patch.object(_checkpoint.os, "rename", side_effect=_rename_with_intruder):
+            claimed = _checkpoint.claim("deadbeef")
+        self.assertTrue(claimed.exists())
+        self.assertEqual(len(seen), 1, seen)
+        self.assertIsInstance(seen[0], _checkpoint.AlreadyClaimedError)
+        self.assertTrue(_checkpoint._claim_marker(_checkpoint._run_path("deadbeef", None)).exists())
+
+    def test_a_sidecar_without_a_marker_is_an_older_versions_claim_stale_after_an_hour(self) -> None:
+        """Before T-0240 the marker was best-effort, so a `.claimed` with no marker exists on
+        disk from older versions: live for an hour, then reaped - exactly the old rule."""
+        self._save()
+        p = _checkpoint._run_path("deadbeef", None)
+        claimed = p.with_suffix(".json.claimed")
+        os.rename(p, claimed)  # an old-version claim: sidecar, no marker
+        with self.assertRaises(_checkpoint.AlreadyClaimedError):
+            _checkpoint.claim("deadbeef")
+        self.assertFalse(_checkpoint._claim_marker(p).exists())  # the refused claimant left nothing
+        old = time.time() - 2 * 3600
+        os.utime(claimed, (old, old))
+        self.assertTrue(_checkpoint.claim("deadbeef").exists())
+        self.assertTrue(_checkpoint._claim_marker(p).exists())
+
+    def test_a_dead_claimants_marker_without_a_sidecar_is_reaped(self) -> None:
+        """A-07 for the marker-first claim: a process that died between writing its marker and
+        the rename leaves only the marker; a later claim reaps it instead of being blocked."""
+        self._save()
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        p = _checkpoint._run_path("deadbeef", None)
+        _checkpoint._claim_marker(p).write_text(json.dumps({"pid": child.pid, "ts": 0}), encoding="utf-8")
+        claimed = _checkpoint.claim("deadbeef")
+        self.assertTrue(claimed.exists())
+        info = json.loads(_checkpoint._claim_marker(p).read_text(encoding="utf-8"))
+        self.assertEqual(info["pid"], os.getpid())
 
 
 if __name__ == "__main__":

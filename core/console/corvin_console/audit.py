@@ -461,10 +461,13 @@ def workflow_attachment_deleted(*, tenant_id: str, wid: str, att_id: str, sid_fi
 
 
 def workflow_attachment_snapshot(*, tenant_id: str, wid: str, rid: str, att_id: str, size_bytes: int,
-                                 sha256_prefix: str) -> None:
+                                 sha256_prefix: str, method: str = "link") -> None:
+    """One record per attachment frozen for a run. ``method`` is closed: ``link`` (a hard link of
+    the store file, no disk used) or ``copy`` (the filesystem refused a link)."""
     _emit("workflow.attachment_snapshot", tenant_id=tenant_id,
           details={"tenant_id": tenant_id, "wid": wid, "rid": rid, "att_id": att_id,
-                   "size_bytes": int(size_bytes), "sha256_prefix": sha256_prefix})
+                   "size_bytes": int(size_bytes), "sha256_prefix": sha256_prefix,
+                   "method": method if method in ("link", "copy") else "copy"})
 
 
 def workflow_attachment_refused(*, tenant_id: str, wid: str, att_id: str, reason_code: str,

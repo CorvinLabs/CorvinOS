@@ -44,7 +44,7 @@ The cost engine (`compute_cost_efficiency`) prices each completed turn from its 
 
 ## Measured, not modelled
 
-These are the figures from the maintainer's own install, read from its audit chain on 2026-10-04. The chain on that machine starts on 2026-09-24 (an earlier chain was lost and the loss is recorded in the chain itself), so that is where the window starts.
+These are the figures from the maintainer's own install: the first two rows were read from its audit chain by hand on 2026-10-04, the third was printed by the receipt script on 2026-10-21 (same fold as the console, read-only; the rate card gained the Opus 5.5 cache-read rate and Sonnet 5.5 in between, so the rows are not a time series of one rate card). The chain on that machine starts on 2026-09-24 (an earlier chain was lost and the loss is recorded in the chain itself), so that is where the window starts.
 
 <p align="center"><img src="img/token-savings-measured.svg" alt="Actual cost of routed OS turns versus the same tokens on Opus 5.5 and on Opus 5, in two windows" width="100%"/></p>
 
@@ -52,6 +52,7 @@ These are the figures from the maintainer's own install, read from its audit cha
 |---|---|---|---|---|
 | 2026-09-24 → 10-04 | 607 of 613 | **$414.21** | $629.15 (−34 %) | $1,181.21 (−65 %) |
 | 2026-09-28 → 10-04 (three-tier routing live) | 222 of 228 | **$343.80** | $449.79 (−24 %) | $863.01 (−60 %) |
+| 2026-09-28 → 10-21, printed by `scripts/token_savings_receipt.py` on 2026-10-21 | 967 of 1,136 | **$1,241.10** | $1,644.86 (−24.5 %) | $3,127.85 (−60.3 %) |
 
 <p align="center"><img src="img/token-savings-mix.svg" alt="Model mix: share of turns and share of tokens for Haiku, Sonnet and Opus" width="100%"/></p>
 
@@ -81,6 +82,7 @@ Rates are the ones in the code's rate card (input/output per million tokens: Hai
 | Token split per turn in the audit chain | **LIVE** | `os_turn.completed` |
 | Cost vs. reference, with counting window | **LIVE** | `core/learning/model_selection_learner.py` (`compute_cost_efficiency`), console *Models* panel |
 | Reset the counting window without touching the chain | **LIVE** | `<tenant>/global/usage_epoch.json` |
+| Receipt script (same fold, any window, any reference model, read-only) | **LIVE** | `scripts/token_savings_receipt.py` |
 | Delegated worker runs priced | **PARTIAL** — spans are emitted, but on this install 0 of 6 worker runs carried token data | `engine_span.usage_split()` |
 | Delegation router (which engine/agent does the work) | **SHADOW** — decides nothing yet | `os.delegation_router` → [Self-learning](self-learning.md) |
 
@@ -88,6 +90,18 @@ Rates are the ones in the code's rate card (input/output per million tokens: Hai
 
 - **Console → Models**: actual vs. reference cost, model mix, and the window they were counted over.
 - **API** (same data): `GET /learning/model-cost-optimizer/status` and `GET /v1/engine/model-usage` on `http://127.0.0.1:8765`.
+- **Re-print the receipt** — the table above, from your own chain, with the console's own fold
+  (`compute_cost_efficiency`: same reader, same rate card, same cache multipliers; nothing copied):
+  ```bash
+  python3 scripts/token_savings_receipt.py --since 2026-09-28 --reference claude-opus-5
+  python3 scripts/token_savings_receipt.py --since 2026-09-28 --until 2026-10-05 --reference claude-opus-5-5 --json
+  python3 scripts/token_savings_receipt.py --chain /path/to/audit.jsonl --since 2026-09-28   # any chain file
+  ```
+  It reads the tenant's canonical chain (`--tenant`, default `_default`) read-only and prints turns,
+  priced turns, actual $, reference $ and the saving (`1 − actual ⁄ reference` over the summed dollars,
+  unclamped — a window of Fable turns shows a negative saving against Opus 5). With `--since` omitted the
+  tenant's counting window (`usage_epoch`) applies, as in the console; an explicit `--since` replaces it.
+  The reference model must be in the rate card. Exit 2 when the chain cannot be read.
 - **By hand**, from the audit chain:
   ```bash
   jq -c 'select(.event_type=="os_turn.completed")' \

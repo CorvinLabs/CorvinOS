@@ -82,7 +82,9 @@ skipped or failed dependency skips its dependents, EXCEPT a `merge`, which is sk
 on; `retry` and `share_output` are checked for every node type; non-finite or > 7 day timeouts are rejected;
 a malformed document raises `WorkflowInvalid` (never a `TypeError`). A failed resume keeps the nodes it
 completed (an `answer`/`deliver` that already sent is not sent again on the next resume); a resume claim held by
-a process that died is released automatically. `corvin-flow resume` exits 3 for an expired or changed pause and
+a process that died is released automatically (a resume claims the checkpoint by creating the marker
+`<run_id>.json.claim` exclusively BEFORE renaming it to `.claimed`, so a concurrent resume always sees a live
+claim and a marker that cannot be written is not a claim). `corvin-flow resume` exits 3 for an expired or changed pause and
 4 for a run that is already being resumed. The `approval` reply must be exactly `approve` / `reject`
 (optionally `: comment`); other text is judged by the fail-closed yes/no coercion.
 
@@ -139,7 +141,10 @@ deadline ends as failed (also when nobody has it open: reading the run reaps it)
 **Run lifecycle routes.** `GET /workflows/{wid}/runs/{rid}/stream` replays a run's log and follows it
 (the editor re-attaches to a paused run after a reload); `POST .../cancel` stops a running run before its
 next node, or ends a paused one and removes its checkpoint; `DELETE .../runs/{rid}` cancels, drops the
-checkpoint, the YAML snapshot and the run's directory (attachment snapshot, artifacts) and 404s for an unknown run;
+checkpoint, the YAML snapshot and the run's directory (attachment snapshot, artifacts) and 404s for an unknown run
+(the attachment snapshot under `<wid>/runs/<rid>/attachments/` is a HARD LINK of each write-once store file —
+frozen for the run at no disk cost, a copy only where the filesystem refuses a link; audited per item as
+`workflow.attachment_snapshot` with `method` link/copy);
 closing the run's event stream (reload, navigation) never stops a run — only `POST .../cancel` does; deleting a workflow removes the checkpoints of its
 paused runs. A typed `/resume` reply to an `approval` pause is refused (409: use approve/reject). Workflow
 YAML is limited to 256 KiB and 200 nodes for every writer (PUT /yaml, node routes, design chat), aliases

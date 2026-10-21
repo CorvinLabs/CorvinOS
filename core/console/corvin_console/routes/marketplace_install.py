@@ -99,7 +99,7 @@ try:
         UpdateRefused,
         version_is_newer,
     )
-    from corvin_plugins.manifest import PluginError  # type: ignore[import-not-found]
+    from corvin_plugins.manifest import PluginAlreadyInstalled, PluginError  # type: ignore[import-not-found]
     from corvin_plugins.protocol import PluginNotFound  # type: ignore[import-not-found]
 
     _LIFECYCLE_AVAILABLE = True
@@ -428,15 +428,16 @@ def _run_install(
             "runtime plugin changes are switched off — enable "
             "plugin_runtime_lifecycle in Settings → Features"
         )
+    except PluginAlreadyInstalled:
+        # Idempotent success, not a failure - recognised by the installer's TYPE (``code ==
+        # "already_installed"``), never by the words of its message (review 2026-10-21, PLG-13).
+        return _done("Already installed", {
+            "registry_id": record.plugin_id,
+            "already_installed": True,
+            "requires_consent": record.consent_required(),
+            **(_enable_step(rec, plugin_id, record, consent) if enable else {}),
+        })
     except PluginError as exc:
-        # "already installed" is idempotent success, not a failure.
-        if "already installed" in str(exc):
-            return _done("Already installed", {
-                "registry_id": record.plugin_id,
-                "already_installed": True,
-                "requires_consent": record.consent_required(),
-                **(_enable_step(rec, plugin_id, record, consent) if enable else {}),
-            })
         return _fail(str(exc))
     except Exception as exc:  # noqa: BLE001 - mapped to a failed job
         return _fail(f"install failed: {type(exc).__name__}")

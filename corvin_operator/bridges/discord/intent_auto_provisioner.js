@@ -49,7 +49,7 @@ class IntentAutoProvisioner {
           reason: 'intent_available',
         };
       } else {
-        this.log(`⚠️  Message Content Intent NOT available for ${guild.name}`);
+        this.log(`Message Content Intent NOT available for ${guild.name}`);
         this.log(`   Bot can still respond to: DMs + @mentions (no guild-message scanning)`);
 
         // Optional: Auto-request intent if enabled in settings
@@ -68,7 +68,7 @@ class IntentAutoProvisioner {
         };
       }
     } catch (err) {
-      this.log(`❌ Error checking intent status: ${err.message}`);
+      this.log(`Error checking intent status: ${err.message}`);
       // Fail-open: assume intent is available (graceful degradation)
       return {
         intentAvailable: true,

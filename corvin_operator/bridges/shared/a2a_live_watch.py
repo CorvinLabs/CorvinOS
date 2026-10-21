@@ -18,8 +18,10 @@ What it measures (the goal: A2A just works on every freshly installed instance):
   WARN — look at it, the host itself is fine
     peer_offline        a paired peer is not reachable (measured by the host's own probe)
     peer_probe_stale    the host has not probed a peer for >5 min (its connectivity manager is stuck)
-    peer_limit_reached  the peer reports its daily compute pool as spent (free tier: 10 agent tasks/day)
-    peer_pool_pressure  we alone already used >=8 of those 10 units on the peer today (UTC)
+    peer_limit_reached  the peer reports its daily compute pool as spent. Only a peer on the free pool
+                        (10 agent tasks/day) has one: a lapsed licence or an operator-lowered pool. A member
+                        peer has no daily pool and a free install is not on the network (28ad07b54).
+    peer_pool_pressure  we alone already ran >=8 tasks on the peer today (UTC) — a problem only for such a peer
     peer_refusing       the peer's last >=3 answers to us were refusals — and what it said about why
 
 Nothing here raises, spends a peer's quota, or sends a task: only pings and reads. Concurrent runs are
@@ -47,7 +49,8 @@ try:
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
-POOL_LIMIT = 10                 # free tier: compute_units_per_day (limits.FREE_TIER)
+POOL_LIMIT = 10                 # the free pool (limits.FREE_TIER compute_units_per_day); only a peer with a lapsed
+                                # licence or an operator-lowered pool is on it — a member peer is unlimited (2026-10-21)
 POOL_WARN_AT = 8
 REFUSAL_STREAK = 3
 PROBE_STALE_S = 300.0
@@ -130,7 +133,7 @@ def analyse_peers(feed: dict | None, now: float) -> list[Check]:
         used = sum(1 for m in mine if _num(m.get("ts")) >= day0 and m.get("status") in _RAN)
         if used >= POOL_WARN_AT:
             out.append(Check("peer_pool_pressure", False,
-                             f"{label}: {used} of {POOL_LIMIT} daily units on a free-tier peer already used by us today (UTC)",
+                             f"{label}: {used} tasks run by us today (UTC) — a problem only if the peer is on the free pool of {POOL_LIMIT} (lapsed licence, operator-lowered pool)",
                              "warn"))
         streak = 0
         for m in reversed(mine):

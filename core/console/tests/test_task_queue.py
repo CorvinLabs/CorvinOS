@@ -206,3 +206,30 @@ class TestTaskQueueMultiTenant:
 
         assert q.dequeue("acme") is None
         assert q.dequeue("beta") is None
+
+
+class TestInterruptedCleanup:
+    """BGT-14 (2026-10-21): an INTERRUPTED queue entry is never resumed from the queue — nothing
+    dequeues it again — so its payload file is dropped exactly like a terminal one. It stays
+    cancellable (the abort route and the TaskManager agree on that)."""
+
+    def test_interrupted_drops_the_payload_like_a_terminal_state(self, tmp_tenant_dir):
+        q = TaskQueue(tmp_tenant_dir)
+        task_id = q.enqueue("_default", "web:s1", "resume me never", 3600)
+        q.update_status(task_id, TaskStatus.RUNNING)
+        assert q.load_instruction(task_id) == "resume me never"   # control: payload exists
+        q.update_status(task_id, TaskStatus.INTERRUPTED, exit_code=143)
+        assert q.get_task(task_id).status == TaskStatus.INTERRUPTED
+        assert q.load_instruction(task_id) is None
+        assert not (tmp_tenant_dir / "task_payloads" / f"{task_id}.bin").exists()
+
+    def test_interrupted_is_still_cancellable_and_cancel_is_final(self, tmp_tenant_dir):
+        from corvin_core.task_states import InvalidTransitionError
+        q = TaskQueue(tmp_tenant_dir)
+        task_id = q.enqueue("_default", "web:s1", "x", 3600)
+        q.update_status(task_id, TaskStatus.RUNNING)
+        q.update_status(task_id, TaskStatus.INTERRUPTED, exit_code=137)
+        q.update_status(task_id, TaskStatus.CANCELLED)
+        assert q.get_task(task_id).status == TaskStatus.CANCELLED
+        with pytest.raises(InvalidTransitionError):
+            q.update_status(task_id, TaskStatus.RUNNING)

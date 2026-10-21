@@ -88,7 +88,7 @@ class AutoOwnershipBridge {
    */
   resetFirstMessage() {
     this._firstMessageProcessed = false;
-    if (this.log) this.log('⚠️  Auto-Owner flag reset (development only)');
+    if (this.log) this.log('Auto-Owner flag reset (development only)');
   }
 }
 

@@ -6,6 +6,14 @@ run-id-keyed pattern as the rest of the runtime's per-run artifact stores
 (no new storage subsystem). A checkpoint is written only when a run pauses
 (`ask_human`/`answer` under `orchestration.engine: chat`) and deleted once
 the run reaches a terminal state (complete/failed) after resuming.
+
+A resume CLAIMS the checkpoint first (`claim()`): the marker
+`<run_id>.json.claim` (`{pid, ts}`) is created exclusively and only then is the
+checkpoint renamed to `<run_id>.json.claimed` — the marker is the lock, the
+sidecar never exists without it, and a marker that cannot be written is not a
+claim. `release()` puts the checkpoint back (marker removed last), `delete()`
+removes all three. A marker whose pid is dead is reaped by the next claimant
+or by `list_paused()` (A-07).
 """
 from __future__ import annotations
 
@@ -123,11 +131,14 @@ def load(run_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
 
 def delete(run_id: str, *, tenant_id: str | None = None) -> None:
     p = _run_path(run_id, tenant_id)
-    p.unlink(missing_ok=True)
-    _claim_marker(p).unlink(missing_ok=True)
     # A resume in flight may have moved the checkpoint to its `.claimed` sidecar
     # (see claim() below) — remove that too so a completed run leaves nothing.
+    # The sidecar goes first and the marker LAST: the marker guards the sidecar
+    # for its whole life, so a claimant racing this delete is refused instead
+    # of claiming a run that is being removed.
     p.with_suffix(".json.claimed").unlink(missing_ok=True)
+    p.unlink(missing_ok=True)
+    _claim_marker(p).unlink(missing_ok=True)
 
 
 class AlreadyClaimedError(RuntimeError):
@@ -150,72 +161,142 @@ def _claim_marker(p: Path) -> Path:
     return p.with_suffix(".json.claim")
 
 
-def _reap_stale_claim(p: Path) -> bool:
-    """A-07: a resume killed hard (kill -9, power loss) leaves `<id>.json.claimed` behind and
-    the run could never be resumed or even listed again. The claim records the claiming pid;
-    when that process is gone the checkpoint is put back. A claim without a readable marker is
-    only reaped when it is older than an hour (a claim by an older version)."""
-    claimed = p.with_suffix(".json.claimed")
-    if not claimed.exists():
-        return False
-    marker = _claim_marker(p)
-    stale = False
+STALE_CLAIM_AFTER_S = 3600.0
+
+
+def _older_than(path: Path, seconds: float) -> bool:
     try:
-        info = json.loads(marker.read_text(encoding="utf-8"))
-        stale = not _pid_alive(int(info["pid"]))
-    except (OSError, ValueError, KeyError, TypeError):
+        return time.time() - path.stat().st_mtime > seconds
+    except OSError:
+        return False
+
+
+def _write_claim_marker_payload(fd: int, payload: bytes) -> None:
+    """Write the marker bytes to the exclusively created marker and flush them.
+
+    Split out so a test can make exactly this step fail (T-0240)."""
+    view = memoryview(payload)
+    while view:
+        view = view[os.write(fd, view):]
+    os.fsync(fd)
+
+
+def _create_claim_marker(marker: Path, pid: int) -> None:
+    """Create ``<run_id>.json.claim`` EXCLUSIVELY and record ``{pid, ts}`` in it.
+
+    ``O_EXCL`` makes the marker the lock: exactly one creator wins, every other gets
+    ``FileExistsError``. Any other ``OSError`` (a full disk, a read-only mount) removes the
+    half-made marker and propagates — a claim whose marker cannot be written is NOT a claim
+    (T-0240 / WFE-20: the marker used to be written best-effort AFTER the rename, and a
+    sidecar without a marker was reaped as stale by the next claimant once the pause was an
+    hour old — two resumes of one run).
+    """
+    payload = json.dumps({"pid": pid, "ts": time.time()}).encode("utf-8")
+    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    ok = False
+    try:
+        _write_claim_marker_payload(fd, payload)
+        ok = True
+    finally:
+        os.close(fd)
+        if not ok:
+            marker.unlink(missing_ok=True)
+
+
+def _reap_stale_claim(p: Path) -> bool:
+    """A-07: a resume killed hard (kill -9, power loss) leaves its marker (and usually the
+    `<id>.json.claimed` sidecar) behind and the run could never be resumed or even listed
+    again. The marker records the claiming pid; when that process is gone the checkpoint is
+    put back and the marker removed. A marker that cannot be read (being written this
+    instant, or torn by a crash) counts as live until it is an hour old. A sidecar WITHOUT a
+    marker can only come from a version that wrote none; it is reaped after an hour.
+
+    Returns True when something was put back / cleared, i.e. a claim may be retried.
+    """
+    claimed = p.with_suffix(".json.claimed")
+    marker = _claim_marker(p)
+    if marker.exists():
         try:
-            stale = time.time() - claimed.stat().st_mtime > 3600
+            info = json.loads(marker.read_text(encoding="utf-8"))
+            stale = not _pid_alive(int(info["pid"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            stale = _older_than(marker, STALE_CLAIM_AFTER_S)
+        if not stale:
+            return False
+        try:
+            if claimed.exists() and not p.exists():
+                os.replace(claimed, p)
+            marker.unlink(missing_ok=True)
         except OSError:
-            stale = False
-    if not stale:
+            return False
+        return True
+    return _reap_legacy_claim(p)
+
+
+def _reap_legacy_claim(p: Path, *, own_marker: bool = False) -> bool:
+    """Put back a `.claimed` sidecar that has NO marker (a claim by an older version) once it
+    is older than :data:`STALE_CLAIM_AFTER_S`. Never touches a sidecar whose marker exists —
+    except when ``own_marker`` says the only marker is the caller's, created just now in
+    :func:`claim` (so the sidecar it found was there before any marker)."""
+    claimed = p.with_suffix(".json.claimed")
+    if (_claim_marker(p).exists() and not own_marker) or not claimed.exists():
+        return False
+    if not _older_than(claimed, STALE_CLAIM_AFTER_S):
         return False
     try:
         if not p.exists():
             os.replace(claimed, p)
         else:
             claimed.unlink(missing_ok=True)
-        marker.unlink(missing_ok=True)
     except OSError:
         return False
     return True
 
 
 def claim(run_id: str, *, tenant_id: str | None = None, claimer_pid: int | None = None) -> Path:
-    """Atomically claim a paused checkpoint for the duration of one resume
-    (CON-F2). Renames `<run_id>.json` -> `<run_id>.json.claimed`; the rename is
-    atomic on POSIX and Windows, so exactly one concurrent resume wins and every
-    other observes the source already gone. Prevents the double-resume race that
-    would otherwise double-execute side-effecting nodes.
+    """Atomically claim a paused checkpoint for the duration of one resume (CON-F2).
 
-    The claimer's pid is recorded next to it so a claim whose process died is recoverable
-    (A-07). Returns the claimed path. Raises FileNotFoundError if there is no paused
-    checkpoint, AlreadyClaimedError if a live concurrent resume already claimed it.
-    Call release() on a non-terminal resume to make it re-resumable, or delete()
-    on completion to remove it for good.
+    Two steps, in this order:
+
+    1. the MARKER ``<run_id>.json.claim`` is created exclusively (``O_EXCL``) with the
+       claimer's pid and timestamp — it is the lock: exactly one concurrent resume gets it,
+       every other sees it from the first instant and is refused (or reaps it when its pid is
+       dead, A-07);
+    2. the checkpoint is renamed ``<run_id>.json`` -> ``<run_id>.json.claimed``.
+
+    So a `.claimed` sidecar never exists without its marker, and a marker that cannot be
+    written is not a claim: the ``OSError`` propagates and nothing is held (T-0240). Returns
+    the claimed path. Raises FileNotFoundError if there is no paused checkpoint,
+    AlreadyClaimedError if a live concurrent resume already claimed it. Call release() on a
+    non-terminal resume to make it re-resumable, or delete() on completion to remove it for
+    good.
     """
     p = _run_path(run_id, tenant_id)
     claimed = p.with_suffix(".json.claimed")
+    marker = _claim_marker(p)
+    pid = claimer_pid if claimer_pid is not None else os.getpid()
     for attempt in (0, 1):
         try:
-            # os.rename raises FileNotFoundError if the source vanished (already
-            # claimed by a racing resume that renamed it away, or never existed).
-            os.rename(p, claimed)
+            _create_claim_marker(marker, pid)
             break
-        except FileNotFoundError as exc:
-            if claimed.exists():
-                if attempt == 0 and _reap_stale_claim(p):
-                    continue
-                raise AlreadyClaimedError(
-                    f"run {run_id!r} is already being resumed"
-                ) from exc
-            raise FileNotFoundError(f"no paused run found for run_id={run_id!r}") from exc
+        except FileExistsError as exc:
+            if attempt == 0 and _reap_stale_claim(p):
+                continue
+            raise AlreadyClaimedError(f"run {run_id!r} is already being resumed") from exc
+    # The marker is ours from here; whatever fails below gives it back.
     try:
-        _claim_marker(p).write_text(
-            json.dumps({"pid": claimer_pid if claimer_pid is not None else os.getpid(),
-                        "ts": time.time()}), encoding="utf-8")
-    except OSError:
-        pass
+        try:
+            os.rename(p, claimed)
+        except FileNotFoundError as exc:
+            if not claimed.exists():
+                raise FileNotFoundError(f"no paused run found for run_id={run_id!r}") from exc
+            # A sidecar that existed before our marker: a claim by an older version.
+            if not _reap_legacy_claim(p, own_marker=True):
+                raise AlreadyClaimedError(f"run {run_id!r} is already being resumed") from exc
+            os.rename(p, claimed)
+    except BaseException:
+        marker.unlink(missing_ok=True)
+        raise
     return claimed
 
 
@@ -226,24 +307,26 @@ def release(run_id: str, *, tenant_id: str | None = None) -> None:
     If the resumed run RE-PAUSED, the runner already wrote a fresh checkpoint at
     the canonical path; in that case the stale `.claimed` sidecar is discarded
     rather than clobbering the fresh state. Otherwise the claimed file is moved
-    back to the canonical path so the original pause stays resumable.
+    back to the canonical path so the original pause stays resumable. The marker
+    goes LAST, so the sidecar is never seen without it.
     """
     p = _run_path(run_id, tenant_id)
     claimed = p.with_suffix(".json.claimed")
+    if claimed.exists():
+        if p.exists():
+            # A fresh checkpoint was written during the resume — keep it, drop stale.
+            claimed.unlink(missing_ok=True)
+        else:
+            os.replace(claimed, p)
     _claim_marker(p).unlink(missing_ok=True)
-    if not claimed.exists():
-        return
-    if p.exists():
-        # A fresh checkpoint was written during the resume — keep it, drop stale.
-        claimed.unlink(missing_ok=True)
-    else:
-        os.replace(claimed, p)
 
 
 def list_paused(*, tenant_id: str | None = None) -> list[dict[str, Any]]:
     d = _runs_dir(tenant_id)
     for c in sorted(d.glob("*.json.claimed")):
         _reap_stale_claim(d / c.name[: -len(".claimed")])
+    for m in sorted(d.glob("*.json.claim")):  # a marker left by a claimant that died before its rename
+        _reap_stale_claim(d / m.name[: -len(".claim")])
     out = []
     for f in sorted(d.glob("*.json")):
         try:

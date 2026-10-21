@@ -441,6 +441,71 @@ class TestClassifyTaskHeuristic(unittest.TestCase):
         self.assertEqual(classify_task("   "), DataClassification.PUBLIC)
 
 
+class TestSecretBankVendorFormats(unittest.TestCase):
+    """T-0248: the vendor key formats the 2026-10-21 review found missing from the bank.
+
+    Every token below is synthetic (right prefix and documented length, random-looking
+    body); the negatives are prose and identifiers that merely contain a prefix.
+    """
+
+    def _jwt(self, header: dict) -> str:
+        import base64 as _b64
+        import json as _json
+
+        def seg(obj):
+            return _b64.urlsafe_b64encode(_json.dumps(obj).encode()).decode().rstrip("=")
+        return f"{seg(header)}.{seg({'sub': '1234567890', 'name': 'x'})}.c2lnbmF0dXJlLXNpZ25hdHVyZQ"
+
+    def test_openrouter_key_is_secret(self):
+        self.assertEqual(classify_task("use sk-or-v1-" + "ab12" * 16 + " for the call"),
+                         DataClassification.SECRET)
+
+    def test_gitlab_pat_is_secret(self):
+        # Built at run time: a literal token shape in the source trips GitHub's push protection.
+        self.assertEqual(classify_task("export GITLAB_TOKEN=glpat-" + "A1b2C3d4E5" * 2),
+                         DataClassification.SECRET)
+        # GitLab 17 routable form: the 20-char body followed by dotted checksum segments.
+        self.assertEqual(classify_task("glpat-" + "Zy9x" * 7 + ".01.0a1b2c3d4"),
+                         DataClassification.SECRET)
+
+    def test_huggingface_token_is_secret(self):
+        self.assertEqual(classify_task("HF_TOKEN hf_" + "Qw7E" * 8 + "Ab"),  # 34 chars after hf_
+                         DataClassification.SECRET)
+
+    def test_groq_key_is_secret(self):
+        self.assertEqual(classify_task("gsk_" + "Wx9Y" * 13),  # 52 chars after gsk_
+                         DataClassification.SECRET)
+
+    def test_xai_key_is_secret(self):
+        self.assertEqual(classify_task("key: xai-" + "Hj4K" * 20),  # 80 chars after xai-
+                         DataClassification.SECRET)
+
+    def test_npm_token_is_secret(self):
+        self.assertEqual(classify_task("//registry.npmjs.org/:_authToken=npm_" + "Lm3N" * 9),  # 36 chars
+                         DataClassification.SECRET)
+
+    def test_jwt_with_alg_header_is_secret(self):
+        tok = self._jwt({"alg": "HS256", "typ": "JWT"})
+        self.assertTrue(tok.startswith("eyJ"))
+        self.assertEqual(classify_task(f"Authorization: Bearer {tok}"), DataClassification.SECRET)
+
+    def test_prose_and_identifiers_with_a_prefix_stay_public(self):
+        for text in (
+            "the hf_ prefix marks HuggingFace tokens",
+            "gsk_ is a prefix, npm_ is another, xai- a third and glpat- a fourth",
+            "call hf_hub_download(repo_id) then gsk_client_factory() and npm_config_registry",
+            "hf_abc123 is too short to be a token, as is gsk_short and npm_x1y2z3",
+            "an identifier like my_hf_" + "A" * 34 + " is attached to a word",
+            "sk-or-v1-notahexstring",
+            "eyJabcdefghij.klmnopqrstuv.wxyz0123 is not a JWT (header is not JSON)",
+        ):
+            self.assertEqual(classify_task(text), DataClassification.PUBLIC, text)
+
+    def test_three_segments_whose_header_lacks_alg_stay_public(self):
+        tok = self._jwt({"typ": "JWT", "kid": "7"})
+        self.assertEqual(classify_task(tok), DataClassification.PUBLIC)
+
+
 class TestNoAnthropicImport(unittest.TestCase):
     """CI lint: data_classification.py MUST NOT import anthropic.
 

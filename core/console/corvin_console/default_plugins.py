@@ -19,8 +19,10 @@ Rules that make this safe to run on every boot:
   not narrowed, the plugin is of a class that does not need the prompt (ADR-2265).
 * **A reclassified plugin follows its record.** An entry may name the index id it ``replaces``.
   An existing community-origin record of the same plugin is upgraded to the vetted listing
-  (``PluginLifecycle.upgrade``: narrowing, never an escalation) and then enabled; a
-  predecessor the operator uninstalled stays uninstalled.
+  (``PluginLifecycle.upgrade`` with the first-party listing's escalations approved) and then
+  enabled; a predecessor the operator uninstalled stays uninstalled. The "already installed"
+  case is recognised by the installer's typed ``PluginAlreadyInstalled`` error, never by
+  matching its message text.
 * **Never blocks boot.** :func:`start` runs in a daemon thread (the source may have to be
   downloaded from GitHub); every failure is logged and recorded as a per-entry outcome.
 * **Retried until it sticks.** A failed entry (e.g. offline first boot) is NOT written to
@@ -148,7 +150,7 @@ def provision(tenant_id: str, *, entries: Optional[List[Dict[str, Any]]] = None)
     if not _mi._LIFECYCLE_AVAILABLE or not _resolve.available():
         return [{"index_id": e["index_id"], "status": "failed",
                  "error": "plugin subsystem unavailable in this installation"} for e in entries]
-    from corvin_plugins.manifest import PluginError, PluginOrigin  # type: ignore[import-not-found]
+    from corvin_plugins.manifest import PluginAlreadyInstalled, PluginOrigin  # type: ignore[import-not-found]
     from corvin_plugins.state import TenantRegistry  # type: ignore[import-not-found]
 
     with _lock:
@@ -189,9 +191,9 @@ def provision(tenant_id: str, *, entries: Optional[List[Dict[str, Any]]] = None)
                 try:
                     life.install(record, installed_by="default_plugins")
                     _audit(tenant_id, "marketplace.install", iid)
-                except PluginError as exc:
-                    if "already installed" not in str(exc):
-                        raise
+                except PluginAlreadyInstalled:
+                    # Chosen by TYPE (``code == "already_installed"``), never by the words of the
+                    # message (review PLG-13): a rewording must not turn the upgrade into a failure.
                     stored = TenantRegistry.load(tenant_id=tenant_id).records.get(record.plugin_id)
                     if stored is not None and stored.origin is PluginOrigin.COMMUNITY \
                             and record.origin is not PluginOrigin.COMMUNITY \

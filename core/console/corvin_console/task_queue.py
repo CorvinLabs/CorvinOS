@@ -33,6 +33,12 @@ class QuotaExceededError(Exception):
 # PLAN-0958 P1: the queue aliases the canonical state declaration (task_states.py).
 TaskStatus = TaskState
 
+#: States whose payload file is no longer needed. INTERRUPTED is not terminal (it can still be
+#: cancelled) but nothing ever dequeues or resumes an interrupted entry - the request is re-run
+#: as a NEW task by ``turn_recovery`` from the chat's own task log - so keeping the instruction
+#: text on disk only kept user content around for nothing (BGT-14, 2026-10-21).
+PAYLOAD_DROP_STATES: frozenset[TaskState] = TERMINAL_STATES | {TaskState.INTERRUPTED}
+
 
 @dataclass
 class TaskQueueEntry:
@@ -335,10 +341,11 @@ class TaskQueue:
     ) -> None:
         """Update task status (idempotent).
 
-        Cleans up the payload file when the task reaches a terminal state.
-        PLAN-0958 P1: a terminal task is final. Moving it to any other state
-        raises :class:`InvalidTransitionError` and writes nothing (a same-state
-        write stays an idempotent no-op).
+        Cleans up the payload file when the task reaches a state in
+        :data:`PAYLOAD_DROP_STATES` (terminal, or interrupted - nothing resumes
+        an interrupted entry from the queue). PLAN-0958 P1: a terminal task is
+        final. Moving it to any other state raises :class:`InvalidTransitionError`
+        and writes nothing (a same-state write stays an idempotent no-op).
         """
         task = self.get_task(task_id)
         if task is None:
@@ -353,7 +360,7 @@ class TaskQueue:
             started_at = now
 
         ended_at = task.ended_at
-        if status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+        if status in TERMINAL_STATES:
             ended_at = now
 
         details: dict[str, Any] = {
@@ -369,8 +376,8 @@ class TaskQueue:
 
         self._write_event(task.tenant_id, "task.status_changed", **details)
 
-        # Clean up payload file on terminal state (instruction no longer needed)
-        if status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+        # Clean up the payload file once the instruction can never be needed again
+        if status in PAYLOAD_DROP_STATES:
             self._cleanup_payload(task_id)
 
     def get_task(self, task_id: str, tenant_id: Optional[str] = None) -> Optional[TaskQueueEntry]:

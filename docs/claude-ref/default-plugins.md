@@ -65,6 +65,10 @@ tenant data folder and every audit event name did not**, so existing installs, v
 A tenant that still carries the pre-1.7 community record is **upgraded** to the vetted listing at the next boot and
 enabled; a tenant whose operator uninstalled it keeps it uninstalled. The console loader still finds the old
 marketplace path (`plugins/contributor/media/video_producer`) as a fallback for a checkout that has not been updated.
+The "already installed" case that opens the upgrade branch is the installer's typed `PluginAlreadyInstalled`
+(`corvin_plugins.manifest`, `code == "already_installed"`, raised by `PluginLifecycle.install`), checked by type —
+until 2026-10-21 `provision` matched the words "already installed" in the message (review PLG-13), so a rewording
+would have failed every boot upgrade.
 
 ## Knowledge Graph: the tenant knowledge base (ADR-2265)
 

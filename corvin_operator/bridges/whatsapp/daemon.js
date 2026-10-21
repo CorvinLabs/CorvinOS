@@ -23,6 +23,8 @@ const http = require('http');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { bridgeSettingsPath } = require('../shared/js/bridge_paths');
+// Chat status icons by NAME (ADR-2269) — the vocabulary lives in shared/status_markers.py.
+const { icon: statusIcon } = require('../shared/js/status_markers');
 const { writeInboxAtomic } = require('../shared/js/inbox_write');
 const { countPending } = require('../shared/js/outbox');
 const { computeReconnectDelay } = require('./reconnect_backoff');
@@ -751,7 +753,7 @@ async function processOutbox() {
         if (!payload._heartbeat && pendingReactions.has(payload.to)) {
           const userKey = pendingReactions.get(payload.to);
           try {
-            await safeSend(waSocket, payload.to, { react: { text: '✅', key: userKey } });
+            await safeSend(waSocket, payload.to, { react: { text: statusIcon('done'), key: userKey } });
           } catch (e) {
             // non-fatal
           }
@@ -1232,7 +1234,7 @@ if (MOCK) {
                 enableChatForMessage(m);
                 const jids = chatState.chatJidsForMessage(m);
                 log(`owner-cmd: enabled ${sender} (jids=${jids.join(',')})`);
-                const ackSent = await safeSend(s, sender, { text: '✅ AI on for this chat.' });
+                const ackSent = await safeSend(s, sender, { text: `${statusIcon('done')} AI on for this chat.` });
                 log(`owner-cmd: /on ack sent=${!!ackSent?.key?.id} to=${sender}`);
               } else if (cmd === '/off') {
                 disableChatForMessage(m);
@@ -1250,7 +1252,7 @@ if (MOCK) {
                 log(`owner-cmd: /off ack sent=${!!ackSent?.key?.id} to=${sender}`);
               } else {
                 const on = isChatEnabledForMessage(m);
-                await safeSend(s, sender, { text: on ? '✅ AI is on.' : '🔇 AI is off.' });
+                await safeSend(s, sender, { text: on ? `${statusIcon('done')} AI is on.` : '🔇 AI is off.' });
               }
             } catch (e) {
               log(`owner-cmd send failed: ${e.message}`);
@@ -1525,7 +1527,7 @@ if (MOCK) {
         // ("got it, working on it") without spamming a separate text message.
         // Flipped to ✅ in processOutbox() once the real reply goes out.
         try {
-          await safeSend(s, sender, { react: { text: '⏳', key: m.key } });
+          await safeSend(s, sender, { react: { text: statusIcon('running'), key: m.key } });
           pendingReactions.set(sender, m.key);
         } catch (e) {
           // non-fatal — group settings or older WA clients may reject reactions

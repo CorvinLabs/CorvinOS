@@ -19,6 +19,7 @@ from erasure_handlers import (  # noqa: E402
     L28RecallHandler,
     L33ArtifactHandler,
     WebChatHandler,
+    WorkflowChatHandler,
     WorkflowCheckpointHandler,
     real_handler_chain,
 )
@@ -165,6 +166,74 @@ class TestL33ArtifactHandler(unittest.TestCase):
     def test_layer_id_default(self):
         h = L33ArtifactHandler()
         self.assertEqual(h.layer_id, "L33-artifacts")
+
+
+# ── Workflow attachments (CONCEPT-0115 / ADR-2270 s7, T-0241) ─────────────
+
+
+class TestWorkflowAttachmentErasure(unittest.TestCase):
+    """``<tenant>/workflows/<wid>/attachments/<att_id>/`` and the per-run snapshots are removed
+    whole when ``meta.json`` names the subject under ``uploaded_by`` (per-login session
+    fingerprint) OR ``uploaded_by_subject`` (the login's durable key); a directory that cannot be
+    removed is reported, never hidden, and never aborts the layer."""
+
+    def _store(self, home: Path, att_id: str, meta: dict, *, run: str | None = None) -> Path:
+        base = home / "tenants" / "_default" / "workflows" / "wf1"
+        d = (base / "runs" / run / "attachments" / att_id) if run else (base / "attachments" / att_id)
+        (d / "data").mkdir(parents=True)
+        (d / "data" / "f.txt").write_text("payload", encoding="utf-8")
+        (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        return d
+
+    def test_durable_key_matches_store_and_snapshot_session_fingerprint_only_its_login(self):
+        with tempfile.TemporaryDirectory(prefix="erasure-wfatt-") as td:
+            os.environ["CORVIN_HOME"] = td
+            home = Path(td)
+            old_login = self._store(home, "a" * 16, {"uploaded_by": "sid-1", "uploaded_by_subject": "tok-s"})
+            old_snap = self._store(home, "a" * 16, {"uploaded_by": "sid-1", "uploaded_by_subject": "tok-s"}, run="r1")
+            new_login = self._store(home, "b" * 16, {"uploaded_by": "sid-2", "uploaded_by_subject": "tok-s"})
+            other = self._store(home, "c" * 16, {"uploaded_by": "sid-3", "uploaded_by_subject": "tok-o"})
+            local = self._store(home, "d" * 16, {"uploaded_by": "sid-4", "uploaded_by_subject": ""})
+
+            res = WorkflowChatHandler().purge("sid-2", "r-sid")
+            self.assertEqual(res.status, LayerStatus.APPLIED)
+            self.assertEqual(res.count, 1)
+            self.assertFalse(new_login.exists())
+            self.assertTrue(old_login.exists() and old_snap.exists())
+
+            res = WorkflowChatHandler().purge("tok-s", "r-tok")
+            self.assertEqual(res.status, LayerStatus.APPLIED)
+            self.assertEqual(res.count, 2)
+            self.assertFalse(old_login.exists() or old_snap.exists())
+            self.assertTrue(other.exists() and local.exists())
+
+            # a session with no durable key stores "" and an empty key never matches anything
+            res = WorkflowChatHandler().purge("sid-4", "r-local")
+            self.assertEqual(res.count, 1)
+            self.assertFalse(local.exists())
+            self.assertTrue(other.exists())
+
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0, "needs directory modes a non-root user cannot bypass")
+    def test_an_unremovable_directory_is_reported_and_the_others_still_go(self):
+        with tempfile.TemporaryDirectory(prefix="erasure-wfatt-") as td:
+            os.environ["CORVIN_HOME"] = td
+            home = Path(td)
+            stuck = self._store(home, "a" * 16, {"uploaded_by": "sid-1", "uploaded_by_subject": "tok-s"})
+            free = self._store(home, "b" * 16, {"uploaded_by": "sid-1", "uploaded_by_subject": "tok-s"})
+            snap = self._store(home, "b" * 16, {"uploaded_by": "sid-1", "uploaded_by_subject": "tok-s"}, run="r1")
+            (stuck / "data").chmod(0o500)
+            try:
+                res = WorkflowChatHandler().purge("tok-s", "r-part")
+            finally:
+                (stuck / "data").chmod(0o700)
+            self.assertEqual(res.status, LayerStatus.FAILED)
+            self.assertEqual(res.code, "store_error")
+            self.assertEqual(res.count, 2)
+            self.assertIn(str(stuck), res.reason)
+            self.assertNotIn(str(free), res.reason)
+            self.assertFalse(free.exists() or snap.exists())
+            self.assertTrue((stuck / "data" / "f.txt").exists())
+            self.assertTrue((stuck / "meta.json").exists())
 
 
 # ── Workflow checkpoints (ADR-0188 M5) ────────────────────────────────

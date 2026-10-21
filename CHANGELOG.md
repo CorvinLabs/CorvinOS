@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+### Fixed — the 14 findings deferred from the 2026-10-21 review (KB tasks T-0238 … T-0251, epic E-035)
+- **A workflow run freezes its attachments by hard link, not by copy.** The run snapshot used to copy every attachment
+  (up to 100 × 50 MiB) into `runs/<rid>/attachments/` on every run; it now links the write-once store file (a copy only
+  where the filesystem refuses a link, audited as `method`). A directory reserved by an upload still in flight is skipped
+  by the snapshot instead of refusing the run; a reservation left by a crashed upload is swept after an hour.
+- **The 100-attachments-per-workflow cap holds under concurrent uploads.** The count and the admission happen in one
+  critical section under the workflow's attachment lock, before any byte is streamed (503 when the lock is busy).
+- **A paused workflow cannot be resumed twice.** The claim marker is created exclusively BEFORE the checkpoint is renamed
+  and is the lock; a marker that cannot be written is not a claim (the error propagates, nothing is held). Before, the
+  marker was written best-effort after the rename, and a sidecar without a marker was reaped as stale after an hour.
+- **Art. 17 erasure of workflow attachments reaches uploads from an earlier login.** The record names the uploader by the
+  per-login session fingerprint AND the login's durable key (`token_fingerprint`; the credential-less local login has
+  none, which the docs now say); the request may name either. One attachment directory that cannot be removed is reported
+  as partial (named in the layer's reason) and no longer fails the whole workflow layer.
+- **Turn recovery after a console restart covers every tenant**, enumerated from the tenant directory, never from
+  `CORVIN_TENANT_ID`; the shutdown marker is written for every tenant.
+- **Background-task states that nothing could write are gone** (`waiting_retry`, `resuming`, `needs_user`, `abandoned`);
+  an `interrupted` queue entry drops its payload like a terminal one; the console's task-progress hook types and
+  auto-cleans `interrupted`.
+- **The automatic-restart prefix is no longer recorded as the user's words.** The chat log, the task record and the
+  session ledger carry the instruction as typed plus a `recovery: {attempt, of_turn}` marker; only the engine receives
+  the prefixed prompt.
+- **CorvinTV hands the stored OpenAI TTS key to the video job only.** Opening the video panel no longer exports the key
+  into the console's environment (every later child process inherited it); the job spawn receives it in its own `env`.
+  The console's `sys.path` is no longer mutated from a request handler.
+- **The README token-savings figure is reproducible.** `scripts/token_savings_receipt.py --since --until --reference`
+  prints the receipt table read-only from the tenant audit chain with the console's own fold
+  (`compute_cost_efficiency` gained `since`/`until`/`reference`); the README and `docs/overview/token-savings.md`
+  carry the 2026-10-21 re-print beside the 2026-10-04 hand-read rows.
+- **Video producer:** a plugin build without a job runner is retried with backoff (30 s → 10 min) instead of being
+  re-imported on every request; the retired-runner list is capped; the bundled ffmpeg directory is handed to the job's
+  PATH instead of the console's, a dangling symlink is replaced, the home comes from the tenant resolver; `GET
+  /video/settings` installs nothing any more — it reports `web_slides.reason` and the panel offers an explicit
+  **Install browser** action (`POST /v1/console/video/web-slides/install`, session + CSRF, audited
+  `video_producer.web_slides_install_requested|finished`, refused offline).
+- **"Already installed" is recognised by type** (`PluginAlreadyInstalled`) in the default-plugin migration and the
+  marketplace installer, not by matching the message text.
+- **L34 secret bank:** OpenRouter, GitLab, HuggingFace, Groq, xAI and npm tokens and JWTs (header must name `alg`) are
+  classified as secrets; prose such as "the hf_ prefix" and snake_case identifiers are not.
+- **One status-icon vocabulary.** `status_markers.json` is generated from the Python source and read by every bridge's
+  JavaScript (`shared/js/status_markers.js`); the WhatsApp and Discord daemons and helpers use it; the literal guard scans
+  all seven bridge daemons, their helpers and `shared/js`. ACS step lines render a gate verdict with the shared
+  done/failed icons.
+- **The `outcome` of a console turn is shown.** Every closing `result` event carries `outcome` (`ok`, `process_died`,
+  `cut`), and the chat renders a notice for a worker that died or a turn cut at the scope limit.
+- **A2A is member-only, and the docs say so.** The layer-38 "free-tier peer's daily pool" text, the quota E2E's premise,
+  the live watch, the sender's refusal texts and the console tooltips no longer describe a free peer on the network; the
+  receiver's compute-quota path stays as the fail-closed defence for a peer whose licence lapses mid-day.
+
 ### Fixed — release hardening from the adversarial review of 2026-10-21 (six review rounds over the week's work)
 - **A bridge adapter started from a shell, a test or a CI job no longer terminates every process in its cgroup on
   shutdown.** The drain-time sweep (`unit_sweep`) runs only when the adapter is the main process of its own systemd

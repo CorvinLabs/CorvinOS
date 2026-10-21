@@ -33,7 +33,11 @@ from test_video_producer_routes_e2e import _install_plugin, _route_module, _sand
 _REPO = Path(__file__).resolve().parents[3]
 _CONSOLE = _REPO / "core" / "console"
 _PKG = "corvin_video_producer_plugin"
-_SIBLING = _REPO.parent / "Corvin-Marketplace" / "plugins" / "contributor" / "media" / "video_producer"
+# Both places the sibling marketplace checkout can hold the plugin: the buildin tier (CorvinTV, since 2026-10-19)
+# and the old contributor tier the loader still falls back to. The "absent" probe must hide every one that exists.
+_SIBLINGS = [_REPO.parent / "Corvin-Marketplace" / "plugins" / "buildin" / "media" / "corvintv",
+             _REPO.parent / "Corvin-Marketplace" / "plugins" / "contributor" / "media" / "video_producer"]
+_SIBLING = next((p for p in _SIBLINGS if p.is_dir()), _SIBLINGS[0])
 
 # Run inside the fresh interpreter: import the console as a host does, then report what happened.
 _PROBE = textwrap.dedent(r"""
@@ -93,9 +97,10 @@ class FreshInterpreterImport(unittest.TestCase):
         home, empty = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, home, True)
         self.addCleanup(shutil.rmtree, empty, True)
-        # the only plugin directory on this host is the sibling checkout; CORVIN_HOME is empty, so the
-        # installed/cached locations do not exist either. Hide the sibling for this one process only.
-        script = (f'mount --bind "{empty}" "{_SIBLING}" && exec "$@"')
+        # the only plugin directories on this host are in the sibling checkout; CORVIN_HOME is empty, so the
+        # installed/cached locations do not exist either. Hide every sibling path for this one process only.
+        mounts = " && ".join(f'mount --bind "{empty}" "{p}"' for p in _SIBLINGS if p.is_dir())
+        script = f'{mounts} && exec "$@"'
         out = _probe(["unshare", "-r", "-m", "sh", "-c", script, "sh"], home)
         print(f"\n[F3 absent] {out}")
         self.assertFalse(any(out["present"].values()), f"positive control: a plugin directory is visible {out}")

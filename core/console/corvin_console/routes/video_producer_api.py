@@ -5,6 +5,11 @@ marketplace (buildin/media/corvintv/src; contributor/media/video_producer/src be
 private package. Every route is tenant-scoped: each tenant has its own store
 under ``tenant_home(rec.tenant_id)/video_producer`` and its own settings, so
 no tenant can list, read or download another tenant's jobs.
+
+What a job process gets, and the console does not: the console's stored OpenAI TTS key and the
+bundled-ffmpeg bin directory travel in the ``env=`` of the job spawn (``_job_env``) and are never
+written to ``os.environ`` (review 2026-10-21, T-0245 / PLG-11). Playwright's Chromium is installed
+only on an explicit operator request (``POST /video/web-slides/install``), never from a GET.
 """
 
 from __future__ import annotations
@@ -13,10 +18,12 @@ import asyncio
 import collections
 import importlib
 import importlib.util
+import inspect
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -25,6 +32,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
@@ -49,6 +57,13 @@ _PLUGIN_PKG = "corvin_video_producer_plugin"
 _JOB_RUNNER = "process"
 
 _repo_root = Path(__file__).resolve().parents[4]
+
+# The host's shared bridge modules this route imports (``provider_keys``, ``video_job_store``). Appended
+# ONCE at import - never inserted at position 0 from a request handler (review 2026-10-21): the front of
+# ``sys.path`` decides what every later bare import anywhere in the console process resolves to.
+_SHARED_DIR = _repo_root / "corvin_operator" / "bridges" / "shared"
+if _SHARED_DIR.is_dir() and str(_SHARED_DIR) not in sys.path:
+    sys.path.append(str(_SHARED_DIR))
 
 
 # Where the plugin source sits inside a Corvin-Marketplace checkout. CorvinTV (until 1.6.0 "Video Producer") moved
@@ -110,17 +125,78 @@ def _load_plugin():
         try:
             runner_mod = importlib.import_module(f"{_PLUGIN_PKG}.async_runner")
         except Exception as e:  # noqa: BLE001 — read routes still work without the producer
-            logger.warning("video producer runner unavailable (%s): jobs cannot be started", type(e).__name__)
+            _note_runner_missing(f"{type(e).__name__} importing async_runner")
         logger.info("video producer plugin loaded from %s", kind)
-        global _PLUGIN_SRC, _LOADED_AT
-        _PLUGIN_SRC, _LOADED_AT = src, time.monotonic()
+        global _PLUGIN_SRC, _LOADED_AT, _LOADED_ENTRY
+        _PLUGIN_SRC, _LOADED_AT, _LOADED_ENTRY = src, time.monotonic(), None
         getter = None
         if runner_mod is not None:
             getter = runner_mod.get_runner
             if _JOB_RUNNER == "process" and hasattr(runner_mod, "get_process_runner"):
-                getter = runner_mod.get_process_runner
+                entry = src / "job_main.py"
+                if entry.is_file():
+                    getter, _LOADED_ENTRY = _process_runner_getter(runner_mod), entry
+                else:  # a process runner would spawn a path that is not there: refuse jobs, retry the load
+                    getter = None
+                    _note_runner_missing("job_main.py is missing")
+        if getter is not None:
+            _note_runner_present()
         return models.VideoJob, storage.get_storage, getter, kind
     return None, None, None, None
+
+
+def _process_runner_getter(runner_mod):
+    """The process runner of THIS load. Built here, through the plugin's public ``ProcessJobRunner(env=...)``,
+    with the console's job environment (``_JobEnv``, resolved at every spawn) - so the stored TTS key and the
+    bundled-ffmpeg PATH reach the job process and nothing else. A plugin build whose runner does not take
+    ``env`` gets its own singleton, and its jobs inherit the console's environment as before (the stored key
+    is then NOT available to them; the thread runner of a pre-process-runner build is the same)."""
+    cls = getattr(runner_mod, "ProcessJobRunner", None)
+    try:
+        takes_env = cls is not None and "env" in inspect.signature(cls.__init__).parameters
+    except (TypeError, ValueError):
+        takes_env = False
+    if not takes_env:
+        return runner_mod.get_process_runner
+    holder: Dict[str, Any] = {}
+    lock = threading.Lock()
+
+    def get_runner():
+        if "runner" not in holder:
+            with lock:
+                if "runner" not in holder:
+                    holder["runner"] = cls(env=_JobEnv())
+        return holder["runner"]
+
+    return get_runner
+
+
+class _JobEnv(collections.abc.Mapping):
+    """The job environment as a live mapping: the runner copies it (``dict(env)``) at EVERY spawn, so a key
+    the operator stores after the runner was built reaches the next job. ``dict()`` calls ``keys()`` once
+    and then ``__getitem__`` per key; the snapshot ``keys()`` takes is what the items are read from
+    (per thread - the event loop and the runner's reaper thread spawn independently)."""
+
+    def __init__(self) -> None:
+        self._local = threading.local()
+
+    def _snapshot(self, fresh: bool) -> Dict[str, str]:
+        snap = None if fresh else getattr(self._local, "snap", None)
+        if snap is None:
+            snap = self._local.snap = _job_env()
+        return snap
+
+    def keys(self):
+        return self._snapshot(fresh=True).keys()
+
+    def __getitem__(self, key: str) -> str:
+        return self._snapshot(fresh=False)[key]
+
+    def __iter__(self):
+        return iter(self._snapshot(fresh=True))
+
+    def __len__(self) -> int:
+        return len(self._snapshot(fresh=True))
 
 
 # F3 (ADR-2247, T-0093): NOTHING is loaded at import. The plugin is third-party-style code; importing the
@@ -135,9 +211,19 @@ _load_lock = threading.Lock()
 # started ``python <gone>/job_main.py`` and died with "exit code 2". ``_ensure_plugin`` reloads from wherever
 # the source is now; the runners of a retired load keep their running jobs and stay reachable for cancel.
 _PLUGIN_SRC: Optional[Path] = None
-_RETIRED_RUNNER_GETTERS: List[Any] = []
-# a load whose runner did not import (e.g. caught mid-resync) is retried after this long, not kept for good
+# The job entry point the loaded process runner spawns (``<src>/job_main.py``); None for a load without one
+# (thread runner, or no runner). Its disappearance is what "the source is gone" means for a complete load.
+_LOADED_ENTRY: Optional[Path] = None
+# Runners of retired loads, kept so their running jobs stay cancellable - at most this many, oldest dropped
+# (a console that reloaded the plugin a hundred times must not hold a hundred runners, review PLG-10).
+_MAX_RETIRED_RUNNERS = 8
+_RETIRED_RUNNER_GETTERS: "collections.deque[Any]" = collections.deque(maxlen=_MAX_RETIRED_RUNNERS)
+# A load whose runner did not import (e.g. caught mid-resync, or a source without job_main.py) is retried
+# after this long, then with the wait doubled on every failed retry up to the cap - never on every request.
 _RUNNER_RETRY_S = 30.0
+_RUNNER_RETRY_CAP_S = 600.0
+_runner_retry_s = _RUNNER_RETRY_S   # the current wait
+_runner_missing_warned = False      # the missing-runner state was logged; cleared when the runner is back
 _LOADED_AT = 0.0
 
 PLUGIN_ID = "video_producer"
@@ -162,39 +248,79 @@ def _ensure_plugin(tenant_id: str) -> bool:
     global VideoJob, _get_storage, get_runner, PLUGIN_SOURCE
     if not _enabled_for(tenant_id):
         return False
-    if _get_storage is None or _plugin_needs_reload():
+    if _get_storage is None or _plugin_reload_reason():
         with _load_lock:
-            if _get_storage is None or _plugin_needs_reload():
-                opened = _retire_loaded_plugin()
+            reason = _plugin_reload_reason()
+            if _get_storage is None or reason:
+                opened = _retire_loaded_plugin(reason or "first_load")
                 VideoJob, _get_storage, get_runner, PLUGIN_SOURCE = _load_plugin()
                 _reopen_stores(opened)
     return True
 
 
-def _plugin_needs_reload() -> bool:
-    """The source the plugin was loaded from no longer holds the job entry point (resync, tier move), or the
-    load came without a runner (caught mid-resync) and is old enough to try again."""
+def _plugin_reload_reason() -> Optional[str]:
+    """Why the loaded source must be loaded again, or None.
+
+    ``source_gone`` - the files the load came from are no longer there (a marketplace resync, a tier
+    move), or the job entry point the loaded runner spawns vanished: reload at once, with a warning.
+    ``runner_retry`` - the load came without a usable runner (no ``async_runner``, no ``job_main.py``;
+    e.g. caught mid-resync) and the current wait is over: 30 s after the load, then 60, 120 ... at most
+    10 min between attempts (``_note_runner_missing``). Until 2026-10-21 such a load was retried on EVERY
+    request after 30 s - a warning and a full re-import per request, for ever (review PLG-10)."""
     src = _PLUGIN_SRC
     if src is None:
-        return False
-    if not ((src / "__init__.py").is_file() and (src / "job_main.py").is_file()):
-        return True
-    return get_runner is None and time.monotonic() - _LOADED_AT > _RUNNER_RETRY_S
+        return None
+    if not ((src / "__init__.py").is_file() and (src / "storage.py").is_file()):
+        return "source_gone"
+    if get_runner is not None:
+        return "source_gone" if _LOADED_ENTRY is not None and not _LOADED_ENTRY.is_file() else None
+    return "runner_retry" if time.monotonic() - _LOADED_AT > _runner_retry_s else None
 
 
-def _retire_loaded_plugin() -> List[str]:
+def _plugin_needs_reload() -> bool:
+    return _plugin_reload_reason() is not None
+
+
+def _note_runner_missing(why: str) -> None:
+    """A load without a usable job runner: log it ONCE per missing state, and lengthen the retry wait on
+    every failed retry (30 s -> 60 -> ... -> 10 min). Read routes keep working without the runner."""
+    global _runner_retry_s, _runner_missing_warned
+    if _runner_missing_warned:
+        _runner_retry_s = min(_runner_retry_s * 2, _RUNNER_RETRY_CAP_S)
+        logger.debug("video producer runner still unavailable (%s); next retry in %.0f s", why, _runner_retry_s)
+        return
+    _runner_missing_warned = True
+    logger.warning("video producer runner unavailable (%s): jobs cannot be started; retrying in %.0f s",
+                   why, _runner_retry_s)
+
+
+def _note_runner_present() -> None:
+    """A load with a runner: the retry wait starts over and a recovery is logged once."""
+    global _runner_retry_s, _runner_missing_warned
+    if _runner_missing_warned:
+        logger.info("video producer runner available again")
+    _runner_missing_warned = False
+    _runner_retry_s = _RUNNER_RETRY_S
+
+
+def _retire_loaded_plugin(reason: str) -> List[str]:
     """Forget the loaded source so ``_load_plugin`` resolves it afresh. Caller holds ``_load_lock``.
-    Returns the store bases this console had already opened (see ``_reopen_stores``)."""
-    global VideoJob, _get_storage, get_runner, PLUGIN_SOURCE, _PLUGIN_SRC
+    Returns the store bases this console had already opened (see ``_reopen_stores``). Only a vanished
+    source is worth a warning; a runner retry is routine (and its getter, None, is not retired)."""
+    global VideoJob, _get_storage, get_runner, PLUGIN_SOURCE, _PLUGIN_SRC, _LOADED_ENTRY
     if _PLUGIN_SRC is None:
         return []
-    logger.warning("video producer plugin source %s (%s) is gone or incomplete; reloading", _PLUGIN_SRC, PLUGIN_SOURCE)
+    if reason == "source_gone":
+        logger.warning("video producer plugin source %s (%s) is gone or incomplete; reloading",
+                       _PLUGIN_SRC, PLUGIN_SOURCE)
+    else:
+        logger.debug("video producer plugin %s (%s): reloading (%s)", _PLUGIN_SRC, PLUGIN_SOURCE, reason)
     if get_runner is not None:
         _RETIRED_RUNNER_GETTERS.append(get_runner)
     opened = list(getattr(sys.modules.get(f"{_PLUGIN_PKG}.storage"), "_stores", None) or [])
     for name in [n for n in sys.modules if n == _PLUGIN_PKG or n.startswith(_PLUGIN_PKG + ".")]:
         sys.modules.pop(name, None)
-    VideoJob = _get_storage = get_runner = PLUGIN_SOURCE = _PLUGIN_SRC = None
+    VideoJob = _get_storage = get_runner = PLUGIN_SOURCE = _PLUGIN_SRC = _LOADED_ENTRY = None
     return opened
 
 
@@ -369,6 +495,7 @@ _settings: Dict[str, Dict[str, Any]] = {}
 
 def _tenant_settings(rec) -> Dict[str, Any]:
     s = _settings.setdefault(rec.tenant_id, dict(_DEFAULT_SETTINGS))
+    web_slides = _web_slides_state()
     return {
         **s,
         # Fixed: videos always land in the tenant's own store. A settable
@@ -381,7 +508,9 @@ def _tenant_settings(rec) -> Dict[str, Any]:
         "openai_configured": _openai_configured(),
         # The engine jobs really run with: "openai" degrades to "auto" (edge-tts fallback) without a key
         "effective_tts_engine": _effective_tts_engine(s["tts_engine"]),
-        "web_slides_available": _web_slides_available(),
+        "web_slides_available": web_slides["available"],
+        # ... and why not: package_missing | browser_missing | install_running (POST /video/web-slides/install)
+        "web_slides": web_slides,
         # Website capture (ADR-2249 D4): usable only when the switch is on AND an egress policy exists
         "capture_enabled": _capture_enabled(rec),
         "capture_policy_configured": _capture_egress_gate(rec.tenant_id) is not None,
@@ -548,32 +677,45 @@ def _grounding_for_job(tenant_id: str, chat_key: str, job_id: str, task: str, ba
     return pack, None
 
 
-def _adopt_stored_openai_key() -> None:
-    """The console's own stored TTS key (Setup / BYOK) into this process's environment, when the
-    environment does not already carry one — the plugin reads only the environment, and a job
-    must not depend on the operator having exported the key by hand. An explicit export wins."""
-    if (os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY") or "").strip():
-        return
-    try:
-        shared = str(_repo_root / "corvin_operator" / "bridges" / "shared")
-        if shared not in sys.path:
-            sys.path.insert(0, shared)
-        import provider_keys  # type: ignore[import-not-found]  # noqa: PLC0415
+def _stored_openai_key() -> Optional[str]:
+    """The OpenAI TTS key this console knows - RESOLVED, never exported. The process environment first
+    (the two names the plugin reads; an operator's own export always wins), then the console's own store
+    (Setup / BYOK: ``secrets.enc``, ``service.env``) through ``provider_keys.resolve_key``.
 
-        val = provider_keys.resolve_key("tts_openai_api_key")
-    except Exception:  # noqa: BLE001 - best effort; no key just means the edge-tts tier narrates
-        return
-    if val:
-        os.environ["CORVIN_TTS_OPENAI_KEY"] = val
-        # Marker for chat_runtime: this one was adopted by the console, strip it from worker envs.
-        os.environ["CORVIN_TTS_OPENAI_KEY_ADOPTED"] = "1"
+    Until 2026-10-21 the stored key was promoted into ``os.environ`` by a plain GET of the settings, and
+    every later child process of the console - OS workers and their MCP servers included - inherited it
+    (review PLG-05). It now reaches exactly one process, the video job, through ``_job_env``."""
+    direct = (os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY") or "").strip()
+    if direct:
+        return direct
+    try:
+        import provider_keys  # type: ignore[import-not-found]  # noqa: PLC0415 - bridges/shared, on sys.path
+
+        return (provider_keys.resolve_key("tts_openai_api_key") or "").strip() or None
+    except Exception:  # noqa: BLE001 - no store, no key: the edge-tts tier narrates
+        return None
 
 
 def _openai_configured() -> bool:
-    """A TTS key is available: in this process's environment (the two names the plugin reads)
-    or stored by the console itself."""
-    _adopt_stored_openai_key()
-    return bool(os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY"))
+    """A TTS key is available to a job: in this process's environment or stored by the console itself."""
+    return _stored_openai_key() is not None
+
+
+def _job_env() -> Dict[str, str]:
+    """The environment a video JOB process is spawned with (``ProcessJobRunner(env=...)``): the console's
+    own, plus what only the job may have - the stored OpenAI TTS key under the name the plugin reads (an
+    export already in the environment is left as it is) and, on a host without a system ffmpeg, the
+    console-local bin directory holding the bundled binary at the front of PATH. Nothing here is ever
+    written to ``os.environ``; OS workers are spawned from the untouched console environment."""
+    env = dict(os.environ)
+    if not (env.get("CORVIN_TTS_OPENAI_KEY") or env.get("OPENAI_API_KEY")):
+        key = _stored_openai_key()
+        if key:
+            env["CORVIN_TTS_OPENAI_KEY"] = key
+    bin_dir = _ffmpeg_bin_dir()
+    if bin_dir is not None:
+        env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    return env
 
 
 def _effective_tts_engine(tts_engine: str) -> str:
@@ -644,73 +786,149 @@ def _playwright_chromium_dirs() -> Optional[List[str]]:
         return None
 
 
-def _web_slides_available() -> bool:
-    """Animated web slides need the ``playwright`` package AND the Chromium build THAT package launches. The package
-    alone used to be reported as "available": on an install whose browser download had failed (the installer's step
-    8b is fail-soft) the panel said yes while every slide silently fell back to the classic slide. So did any
-    ``chromium*`` directory - also one left behind by an older playwright: after a playwright upgrade (1243 on disk,
-    1248 wanted, 2026-10-19) every slide degraded. A missing build is downloaded once, in the background."""
-    if importlib.util.find_spec("playwright") is None:
-        return False
+def _chromium_build_present() -> bool:
+    """The Chromium build THIS playwright package launches is on disk. The package alone used to be reported as
+    "available": on an install whose browser download had failed (the installer's step 8b is fail-soft) the panel
+    said yes while every slide silently fell back to the classic slide. So did any ``chromium*`` directory - also one
+    left behind by an older playwright: after a playwright upgrade (1243 on disk, 1248 wanted, 2026-10-19) every
+    slide degraded."""
     try:
         base = _playwright_browsers_dir()
         wanted = _playwright_chromium_dirs()
         if not wanted:
             return any(p.is_dir() and p.name.startswith("chromium") for p in base.iterdir())
-        if (base / wanted[0]).is_dir():
-            return True
+        return (base / wanted[0]).is_dir()
     except (OSError, ImportError):
-        pass
-    _install_chromium_in_background()
-    return False
+        return False
 
 
-_chromium_install_started = False
+def _web_slides_state() -> Dict[str, Any]:
+    """What the panel shows: ``{"available": bool, "reason": None | "package_missing" | "browser_missing" |
+    "install_running"}``. Animated web slides need the ``playwright`` package AND its Chromium build. A probe,
+    nothing more: until 2026-10-21 a missing build started a ~150 MB ``playwright install`` thread from every GET
+    that found it - offline, an 1800 s subprocess per console restart (review PLG-11). Installing the browser is
+    the operator's explicit action: ``POST /video/web-slides/install``."""
+    if importlib.util.find_spec("playwright") is None:
+        return {"available": False, "reason": "package_missing"}
+    if _chromium_build_present():
+        return {"available": True, "reason": None}
+    with _chromium_install_lock:
+        running = bool(_chromium_install["running"])
+    return {"available": False, "reason": "install_running" if running else "browser_missing"}
 
 
-def _install_chromium_in_background() -> None:
-    """``playwright install`` the Chromium build this package needs - once per console process, never blocking a
-    request (a ~150 MB download). Until it lands, slides use the classic renderer, which the panel already says."""
-    global _chromium_install_started
-    if _chromium_install_started:
-        return
-    _chromium_install_started = True
+def _web_slides_available() -> bool:
+    return bool(_web_slides_state()["available"])
+
+
+# The one Chromium install this console may be running: never two at once, never from a GET.
+_chromium_install: Dict[str, Any] = {"running": False, "started_at": None, "last_outcome": None}
+_chromium_install_lock = threading.Lock()
+_PLAYWRIGHT_DOWNLOAD_HOST = "cdn.playwright.dev"
+_DOWNLOAD_PROBE_TIMEOUT_S = 3.0
+
+
+def _playwright_download_host() -> str:
+    """Where ``playwright install`` fetches from: Playwright's own ``PLAYWRIGHT_DOWNLOAD_HOST`` override (a URL
+    or a bare host) when set, else its CDN."""
+    raw = (os.environ.get("PLAYWRIGHT_DOWNLOAD_HOST") or "").strip()
+    if raw:
+        host = urlsplit(raw if "://" in raw else "https://" + raw).hostname
+        if host:
+            return host
+    return _PLAYWRIGHT_DOWNLOAD_HOST
+
+
+def _download_host_reachable() -> bool:
+    """A short TCP connect to the download host: offline, the install is refused up front instead of a
+    subprocess that gives up after 1800 s. Not a gate on what the install then downloads."""
+    try:
+        with socket.create_connection((_playwright_download_host(), 443), timeout=_DOWNLOAD_PROBE_TIMEOUT_S):
+            return True
+    except OSError:
+        return False
+
+
+def _start_chromium_install(tenant_id: str) -> bool:
+    """``playwright install chromium chromium-headless-shell`` in a daemon thread, one at a time; its end is
+    recorded as ``video_producer.web_slides_install_finished`` (ok | failed, duration, error class). False when
+    an install is already running. Until it lands, slides use the classic renderer, which the panel says."""
+    with _chromium_install_lock:
+        if _chromium_install["running"]:
+            return False
+        _chromium_install.update(running=True, started_at=time.monotonic(), last_outcome=None)
 
     def _run() -> None:
         cmd = [sys.executable, "-m", "playwright", "install", "chromium", "chromium-headless-shell"]
+        outcome, error_class = "ok", None
         try:
-            subprocess.run(cmd, check=True, timeout=1800, capture_output=True)  # deadline-exempt: background thread
+            # deadline-exempt: operator-requested, runs in the background thread
+            subprocess.run(cmd, check=True, timeout=1800, capture_output=True)
             logger.info("video producer: Playwright Chromium installed")
         except Exception as e:  # noqa: BLE001
-            logger.warning("video producer: Playwright Chromium install failed (%s)", type(e).__name__)
+            outcome, error_class = "failed", type(e).__name__
+            logger.warning("video producer: Playwright Chromium install failed (%s)", error_class)
+        finally:
+            # recorded BEFORE the state is released: the install is not over until the chain says so
+            with _chromium_install_lock:
+                started = _chromium_install["started_at"] or time.monotonic()
+            details: Dict[str, Any] = {"outcome": outcome, "duration_s": round(time.monotonic() - started, 1)}
+            if error_class:
+                details["error_class"] = error_class
+            _audit(tenant_id, "video_producer.web_slides_install_finished", details)
+            with _chromium_install_lock:
+                _chromium_install.update(running=False, last_outcome=outcome)
 
     threading.Thread(target=_run, daemon=True, name="vp-chromium-install").start()
+    return True
 
 
-def _ensure_ffmpeg() -> bool:
-    """ffmpeg on PATH? The plugin calls a bare ``ffmpeg``. When the system has none, expose the
-    static binary bundled with the ``imageio-ffmpeg`` wheel under that name (a console-local
-    bin directory prepended to PATH), so no system install is needed."""
+# The console-local directory holding the bundled ffmpeg under the name the plugin calls, once made.
+_ffmpeg_bin: Optional[Path] = None
+
+
+def _ffmpeg_bin_dir() -> Optional[Path]:
+    """``<corvin_home>/bin`` with ``ffmpeg`` -> the static binary of the ``imageio-ffmpeg`` wheel, for a host whose
+    PATH has no ffmpeg; None when the system has one or the wheel is not installed. The home comes from
+    ``core.paths.tenant.corvin_home()`` (CORVIN_HOME, else the repo-local root, else ``~/.corvin``), never composed
+    from the environment here. A dangling link (the wheel was removed) or one pointing at an older wheel is
+    replaced - ``exists()`` is False for a dangling symlink, so the old code's ``symlink`` raised and its fallback
+    copied the binary onto the link. The directory is put on the JOB's PATH by ``_job_env``; the console's own PATH
+    is never touched by a request (review PLG-11)."""
+    global _ffmpeg_bin
     if shutil.which("ffmpeg"):
-        return True
+        return None
+    if _ffmpeg_bin is not None and shutil.which("ffmpeg", path=str(_ffmpeg_bin)):
+        return _ffmpeg_bin
     try:
         import imageio_ffmpeg  # type: ignore[import-not-found]  # noqa: PLC0415
+        from core.paths.tenant import corvin_home  # noqa: PLC0415
 
         exe = Path(imageio_ffmpeg.get_ffmpeg_exe())
-        home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
-        shim_dir = home / "bin"
+        shim_dir = corvin_home() / "bin"
         shim_dir.mkdir(parents=True, exist_ok=True)
         shim = shim_dir / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        if shim.is_symlink() and (not shim.exists() or shim.resolve() != exe.resolve()):
+            shim.unlink()
         if not shim.exists():
             try:
                 os.symlink(exe, shim)
             except (OSError, NotImplementedError, AttributeError):
                 shutil.copy2(exe, shim)
                 shim.chmod(0o755)
-        os.environ["PATH"] = str(shim_dir) + os.pathsep + os.environ.get("PATH", "")
+        if not shutil.which("ffmpeg", path=str(shim_dir)):
+            return None
+        _ffmpeg_bin = shim_dir
+        return shim_dir
     except Exception as e:  # noqa: BLE001
         logger.warning("video producer: bundled ffmpeg unavailable (%s)", type(e).__name__)
-    return shutil.which("ffmpeg") is not None
+        return None
+
+
+def _ensure_ffmpeg() -> bool:
+    """A job can call a bare ``ffmpeg``: the system has one on PATH, or the bundled one is in the directory
+    ``_job_env`` puts at the front of the job's PATH."""
+    return bool(shutil.which("ffmpeg")) or _ffmpeg_bin_dir() is not None
 
 
 def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
@@ -743,10 +961,7 @@ def _vjs():
     sidecars (owners, revisions) under one locked read-modify-write, a job's files, its deletion and
     the store's size. The GDPR erasure layer ``L-video-producer`` uses the same module, so a job is
     deleted the same way by the operator and by an Art. 17 request (ADR-2247 R3)."""
-    shared = str(_repo_root / "corvin_operator" / "bridges" / "shared")
-    if shared not in sys.path:
-        sys.path.insert(0, shared)
-    import video_job_store  # type: ignore[import-not-found]  # noqa: PLC0415
+    import video_job_store  # type: ignore[import-not-found]  # noqa: PLC0415 - bridges/shared, on sys.path
 
     return video_job_store
 
@@ -1492,6 +1707,44 @@ def update_settings(req: SettingsRequest, rec=_SessionRec):
 
 # ── Artifacts ────────────────────────────────────────────────────────────────
 
+@router.post("/web-slides/install")
+async def install_web_slides_browser(rec=_SessionRec):
+    """Install the Chromium build Playwright needs for animated web slides - on the operator's explicit request.
+
+    A GET never installs anything (``_web_slides_state`` only reports ``browser_missing``). The download is
+    ~150 MB from Playwright's CDN; a short reachability pre-check refuses it up front when the console is
+    offline. Audit-first: ``video_producer.web_slides_install_requested`` (outcome: started |
+    refused_offline | already_available | already_running | package_missing) commits before the subprocess
+    starts; the thread closes it with ``web_slides_install_finished``. Session + CSRF (router dependency).
+    202 ``started`` / ``running``, 200 ``already_available``, 409 no playwright package, 503 offline."""
+    state = await asyncio.to_thread(_web_slides_state)
+
+    def _record(outcome: str, **extra: Any) -> bool:
+        return _audit(rec.tenant_id, "video_producer.web_slides_install_requested", {"outcome": outcome, **extra})
+
+    if state["reason"] == "package_missing":
+        await asyncio.to_thread(_record, "package_missing")
+        raise HTTPException(status_code=409, detail=(
+            "The playwright package is not installed in the console environment (pip install playwright); "
+            "there is nothing to install a browser for"))
+    if state["available"]:
+        await asyncio.to_thread(_record, "already_available")
+        return JSONResponse({"status": "already_available"}, status_code=200)
+    if state["reason"] == "install_running":
+        await asyncio.to_thread(_record, "already_running")
+        return JSONResponse({"status": "running"}, status_code=202)
+    host = _playwright_download_host()
+    if not await asyncio.to_thread(_download_host_reachable):
+        await asyncio.to_thread(_record, "refused_offline", host=host)
+        raise HTTPException(status_code=503, detail=(
+            f"The Playwright download host {host} is not reachable from this console; the browser was not installed"))
+    if not await asyncio.to_thread(_record, "started", host=host):
+        raise HTTPException(status_code=503, detail="The install could not be recorded; it was not started")
+    if not _start_chromium_install(rec.tenant_id):
+        return JSONResponse({"status": "running"}, status_code=202)
+    return JSONResponse({"status": "started"}, status_code=202)
+
+
 def _video_output(rec, job_id: str):
     _check_job_id(job_id)
     out = _store(rec).get_video_output(job_id)
@@ -1572,8 +1825,7 @@ def _plugin_signals():
 
 
 def _openai_key() -> Optional[str]:
-    _adopt_stored_openai_key()
-    return os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY") or None
+    return _stored_openai_key()
 
 
 def _ms(value: Any) -> Optional[int]:

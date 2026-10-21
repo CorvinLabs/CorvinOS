@@ -10,8 +10,18 @@ Design: Corvin-Knowledge ``CONCEPT-0114`` (vocabulary, limits) and the ADR that
 binds it to both prompt builders. The text is prompt content for the model, so
 it is English like the rest of the system prompt; the model answers in the
 user's language at runtime.
+
+The JavaScript bridge runtime (``discord/daemon.js``, ``shared/js``) cannot import this
+module, so it reads ``status_markers.json`` next to it through ``shared/js/status_markers.js``.
+That file is GENERATED from here (``python3 status_markers.py --write-json``) and
+``test_status_marker_literals.py`` pins it to ``as_json()`` — it is an export of the
+vocabulary, not a second copy (T-0249).
 """
 from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
 
 # Icon constants — the ONLY place an icon literal for a status lives. System-generated
 # chat messages (slash-command replies, notifications) take their icon from here via
@@ -54,6 +64,24 @@ def icon(name: str) -> str:
     return _BY_NAME[name]
 
 
+#: The export the JavaScript bridges read (``shared/js/status_markers.js``).
+JSON_PATH = Path(__file__).with_name("status_markers.json")
+
+
+def as_json() -> dict:
+    """The vocabulary as plain data: ``icons`` (name -> icon) and ``markers`` (icon, meaning)."""
+    return {
+        "icons": dict(_BY_NAME),
+        "markers": [[glyph, meaning] for glyph, meaning in STATUS_MARKERS],
+    }
+
+
+def write_json(path: Path = JSON_PATH) -> Path:
+    """Write the export; the test suite fails when the file on disk differs from it."""
+    path.write_text(json.dumps(as_json(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 def status_marker_rule() -> str:
     """The prompt block that teaches the marker vocabulary and its limits."""
     legend = "\n".join(f"   {glyph} {meaning}" for glyph, meaning in STATUS_MARKERS)
@@ -77,3 +105,10 @@ def status_marker_rule() -> str:
         "comments. Tool output and anything machine-read stays unchanged.\n"
         "   - Do not invent other icons for status."
     )
+
+
+if __name__ == "__main__":  # pragma: no cover - generator entry point
+    if "--write-json" in sys.argv[1:]:
+        print(write_json())
+    else:
+        print(json.dumps(as_json(), ensure_ascii=False, indent=2))

@@ -113,9 +113,16 @@ def test_step_lines_follow_the_native_status_style():
     assert acs_runtime.format_acs_step(
         {"kind": "worker", "iteration": 1, "index": 2, "of": 3, "status": "success", "confidence": 0.8}
     ) == "🤖 Worker 2/3: erfolgreich (Konfidenz 0.8)"
+    # T-0249 / ADR-2269: a gate verdict is a status, so its icon comes from the shared
+    # vocabulary (done / failed) — never a chart glyph of its own.
+    import status_markers  # noqa: PLC0415
     assert acs_runtime.format_acs_step(
         {"kind": "gate", "iteration": 2, "passed": False, "loss": 0.5}
-    ) == "📊 Gate Iteration 2: nicht bestanden, Loss-Score 0.500 (höher = besser)"
+    ) == f"{status_markers.icon('failed')} Gate Iteration 2: nicht bestanden, Loss-Score 0.500 (höher = besser)"
+    assert acs_runtime.format_acs_step(
+        {"kind": "gate", "iteration": 3, "passed": True, "loss": 0.9}, german=False
+    ) == f"{status_markers.icon('done')} Gate iteration 3: passed, loss score 0.900 (higher is better)"
+    assert "\U0001F4CA" not in acs_runtime.format_acs_step({"kind": "gate", "iteration": 1, "passed": True})
 
 
 def test_loss_is_labelled_as_a_higher_is_better_score_in_both_languages():

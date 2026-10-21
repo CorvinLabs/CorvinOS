@@ -45,6 +45,7 @@ from .manifest import (
     Locality,
     NetworkEgress,
     PIIRisk,
+    PluginAlreadyInstalled,
     PluginError,
     PluginManifest,
     PluginNotFound,
@@ -688,7 +689,7 @@ class PluginLifecycle:
         self, reg: TenantRegistry, record: PluginRecord, *, installed_by: str
     ) -> PluginRecord:
         if reg.has(record.plugin_id):
-            raise PluginError(f"{record.plugin_id} is already installed")
+            raise PluginAlreadyInstalled(f"{record.plugin_id} is already installed")
 
         # A tenant-scope install may not persist a privileged boot layer: the
         # read-side downgrade would catch it on the next load, but the file on

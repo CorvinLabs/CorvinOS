@@ -760,7 +760,53 @@ _SECRET_PATTERNS = [
     re.compile(r"xox[bpoa]-[A-Za-z0-9-]{20,}"),                   # Slack token
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),            # PEM private key
     re.compile(r"\bpassword\s*[:=]\s*[^\s]{6,}", re.IGNORECASE),  # password=...
+    # T-0248 — vendor formats the 2026-10-21 review found missing. Each carries the vendor's
+    # documented body length and an alphabet without "_", bounded on both sides, so prose
+    # ("the hf_ prefix"), snake_case identifiers (hf_hub_download) and short strings never
+    # trip them; the false-positive cost of the bank is still only "routed locally".
+    re.compile(r"sk-or-v1-[0-9a-fA-F]{64}"),                                  # OpenRouter (64 hex)
+    # GitLab PAT (20-char body; the GitLab 17 routable form adds dotted segments)
+    re.compile(r"(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_\-]{20,}"),
+    re.compile(r"(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{34}(?![A-Za-z0-9_])"),        # HuggingFace user token (34)
+    re.compile(r"(?<![A-Za-z0-9_])gsk_[A-Za-z0-9]{52}(?![A-Za-z0-9_])"),       # Groq (52)
+    re.compile(r"(?<![A-Za-z0-9_])xai-[A-Za-z0-9]{80}(?![A-Za-z0-9_])"),       # xAI (80)
+    re.compile(r"(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{36}(?![A-Za-z0-9_])"),       # npm access token (36)
 ]
+
+
+class _JwtPattern:
+    """A compact JWS/JWT (``header.payload.signature``) in the bank (T-0248).
+
+    Three base64url segments are not enough — ``eyJ`` is only the encoding of ``{"``, and
+    dotted identifiers exist — so a candidate counts only when its header decodes to a JSON
+    object naming ``alg`` (RFC 7515 §4.1.1). The signature may be empty (``alg: none``).
+    Duck-types :meth:`re.Pattern.search` so the bank stays a flat list of ``search``-ables.
+    """
+
+    _RE = re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*")
+    pattern = "<jwt: header.payload.signature with alg in the header>"
+
+    @staticmethod
+    def _header_names_alg(token: str) -> bool:
+        import base64
+        import binascii
+        import json
+        head = token.split(".", 1)[0]
+        try:
+            raw = base64.urlsafe_b64decode(head + "=" * (-len(head) % 4))
+            obj = json.loads(raw.decode("utf-8"))
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            return False
+        return isinstance(obj, dict) and "alg" in obj
+
+    def search(self, text: str) -> re.Match[str] | None:
+        for m in self._RE.finditer(text):
+            if self._header_names_alg(m.group(0)):
+                return m
+        return None
+
+
+_SECRET_PATTERNS.append(_JwtPattern())  # type: ignore[arg-type]  # JWT bearer tokens
 
 
 def classify_task(

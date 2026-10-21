@@ -222,7 +222,7 @@ One resolver picks the model for every turn on every surface: conversation → H
 
 <p align="center"><img src="docs/overview/img/token-savings-measured.svg" alt="Measured cost of routed OS turns versus the same tokens on Opus 5.5 and Opus 5" width="100%"/></p>
 
-Measured on the maintainer's install (607 priced turns, 2026-09-24 → 10-04): **$414 actual vs. $629 for the same tokens on Opus 5.5 (−34 %)** and $1,181 on Opus 5 (−65 %). Since three-tier routing went live on 2026-09-28 (222 priced turns): **−24 %** vs. Opus 5.5 and −60 % vs. Opus 5 ($344 actual vs. $863) — a table read from the audit chain by hand on 2026-10-04; a script that re-prints it is still to come. Re-add it yourself from the chain — the page shows how, and what the numbers do *not* say.
+Measured on the maintainer's install (607 priced turns, 2026-09-24 → 10-04): **$414 actual vs. $629 for the same tokens on Opus 5.5 (−34 %)** and $1,181 on Opus 5 (−65 %). Since three-tier routing went live on 2026-09-28, re-printed by `scripts/token_savings_receipt.py` from the chain on 2026-10-21 (967 priced of 1,136 turns): **−24.5 %** vs. Opus 5.5 ($1,241 actual vs. $1,645) and −60.3 % vs. Opus 5 ($3,128). The 2026-10-04 reading of the same window (222 turns, $344 vs. $863, −60 %) was a hand-read table; the script reproduces the fold read-only on any chain — the page shows the command, and what the numbers do *not* say.
 
 <p align="center"><a href="docs/overview/token-savings.md"><strong>→ Token savings, the proof path and how to read the numbers</strong></a></p>
 

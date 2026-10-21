@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useTaskProgress } from '@/hooks/use-task-progress';
+import { ENDED_STATUSES, useTaskProgress } from '@/hooks/use-task-progress';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
@@ -14,9 +14,7 @@ export function TaskStatusBarM2() {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const runningTasks = tasks.filter((t) => t.status === 'running');
-  const completedCount = tasks.filter((t) =>
-    ['completed', 'failed', 'cancelled'].includes(t.status)
-  ).length;
+  const completedCount = tasks.filter((t) => ENDED_STATUSES.includes(t.status)).length;
 
   return (
     <div className="bg-card border-b border-border px-4 py-2">

@@ -70,7 +70,8 @@ class _Base(unittest.TestCase):
     def impl(*, completes: bool, answer: str = "Das Ergebnis."):
         """A stand-in for _stream_turn_impl that does what every real exit does
         to the task lifecycle: create, start, then (maybe) record completion."""
-        async def _impl(sess, prompt, *, sid_fingerprint=""):
+        # the impl's contract (recovery=) grows; a stand-in takes it like the real one
+        async def _impl(sess, prompt, *, sid_fingerprint="", **_kw):
             tasks_dir = sess.workdir / "tasks"
             tm = TaskManager(tasks_dir)
             task_id = tm.create_task(

@@ -440,7 +440,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
             {peer?.task_capacity === "limit_reached" && (
               <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
                 data-testid="peer-task-capacity" data-capacity="limit_reached"
-                title="This peer's daily compute limit is used up, so it will refuse tasks until it resets at 00:00 UTC (a free-tier peer runs 10 agent tasks per day). Upgrading its licence lifts the limit.">
+                title="This peer's daily compute limit is used up, so it will refuse tasks until it resets at 00:00 UTC. Only a peer on the free pool (10 agent tasks per day: a lapsed licence or an operator-lowered pool) has a daily limit; a member peer has none.">
                 <AlertTriangle className="h-3 w-3" /> daily limit reached ·
               </span>
             )}

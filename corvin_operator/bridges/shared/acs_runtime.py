@@ -525,11 +525,25 @@ _RUN_STATUS_LABEL = {
 }
 
 
+def _status_icon(name: str) -> str:
+    """Status icon from the one shared vocabulary (``status_markers.icon``, ADR-2269)."""
+    try:
+        from . import status_markers as _sm  # type: ignore  # noqa: PLC0415
+    except ImportError:
+        try:
+            import status_markers as _sm  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            return ""
+    return _sm.icon(name)
+
+
 def format_acs_step(step: dict, *, german: bool = True) -> str:
     """One interim status line for a run step, in the native worker's style (🤖 / 📖 …).
 
     Shown live while the run is going, so the user sees what the manager decided and
-    what each worker returned, not only the final answer.
+    what each worker returned, not only the final answer. The compass / robot / wrench
+    glyphs name the step KIND (manager decision, worker, other) and are not statuses; a
+    gate line is a verdict, so its icon is the shared ``done`` / ``failed`` marker (T-0249).
     """
     kind = step.get("kind")
     it = step.get("iteration", "?")
@@ -560,11 +574,12 @@ def format_acs_step(step: dict, *, german: bool = True) -> str:
         passed = bool(step.get("passed"))
         loss = step.get("loss")
         loss_txt = f"{loss:.3f}" if isinstance(loss, (int, float)) else "–"
+        mark = _status_icon("done" if passed else "failed")
         if german:
             verdict = "bestanden" if passed else "nicht bestanden"
-            return f"📊 Gate Iteration {it}: {verdict}, Loss-Score {loss_txt} (höher = besser)"
+            return f"{mark} Gate Iteration {it}: {verdict}, Loss-Score {loss_txt} (höher = besser)"
         verdict = "passed" if passed else "not passed"
-        return f"📊 Gate iteration {it}: {verdict}, loss score {loss_txt} (higher is better)"
+        return f"{mark} Gate iteration {it}: {verdict}, loss score {loss_txt} (higher is better)"
     return f"🔧 {kind}"
 
 

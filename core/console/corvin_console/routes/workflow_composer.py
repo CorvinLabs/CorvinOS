@@ -14,7 +14,13 @@ Attachment store (CONCEPT-0115 / ADR-2270):
 ``<tenant_home>/workflows/<wid>/attachments/<att_id>/{meta.json,data/<safe_name>}`` — under the
 SAME root the workflow files and the Art. 17 handler use, never in a worker's cwd. The tenant
 comes ONLY from the session record, never from a request field. A client names an attachment by
-``att_id`` (16 hex); the server re-checks existence, size and sha256 on every use.
+``att_id`` (16 hex); the server re-checks existence, size and sha256 on every use. The data file
+is write-once (``O_EXCL``, never modified in place); ``meta.json`` names the uploader twice:
+``uploaded_by`` (the per-login session fingerprint) and ``uploaded_by_subject`` (the login's
+durable key, ``SessionRecord.token_fingerprint`` — ``""`` for the credential-less local login,
+which has none). The cap of ``MAX_ATTACHMENTS_PER_WORKFLOW`` is counted and admitted under the
+per-workflow lock ``<wid>/attachments/.lock`` (T-0239). A run freezes the store for itself by
+HARD LINK into ``<wid>/runs/<rid>/attachments/`` (T-0238), see :func:`snapshot_for_run`.
 
 Slash commands are a SERVER table, not a client constant (the ADR-2235 lesson):
 a command the server does not parse cannot be audited or refused fail-closed,
@@ -26,6 +32,8 @@ WITHOUT spawning an engine and WITHOUT writing it into the design transcript
 """
 from __future__ import annotations
 
+import asyncio
+import errno
 import hashlib
 import json
 import logging
@@ -273,26 +281,61 @@ def inline_block(items: list[tuple[dict[str, Any], Path]]) -> str:
     return "\n\n".join(parts)
 
 
+# ``os.link`` is refused on these for reasons that are the filesystem's, not the file's: another
+# device (EXDEV), a filesystem or mount that has no hard links (EPERM, ENOTSUP, EOPNOTSUPP,
+# ENOSYS), or the link limit of the inode (EMLINK). Only then is the snapshot a copy. Anything
+# else (ENOSPC, EACCES, EEXIST, ...) is a real failure and refuses the run.
+_LINK_FALLBACK_ERRNOS = frozenset(
+    getattr(errno, name) for name in ("EXDEV", "EPERM", "EMLINK", "ENOTSUP", "EOPNOTSUPP", "ENOSYS")
+    if hasattr(errno, name))
+
+
+def _freeze_bytes(src: Path, dst: Path) -> str:
+    """Give ``dst`` the bytes of ``src`` for the life of the run: a HARD LINK where the
+    filesystem allows one, else a copy. Returns ``"link"`` or ``"copy"`` (audited).
+
+    The store file is write-once (``O_EXCL`` at upload, never rewritten; ``DELETE`` unlinks the
+    directory entry, a re-upload is a new ``att_id``), so both names see the same immutable
+    bytes and the link freezes them at no cost — the copy used to add up to 100 x 50 MiB per
+    run (T-0238 / WFE-13)."""
+    try:
+        os.link(src, dst)
+        return "link"
+    except (AttributeError, NotImplementedError):
+        pass
+    except OSError as exc:
+        if exc.errno not in _LINK_FALLBACK_ERRNOS:
+            raise
+    shutil.copyfile(src, dst)
+    return "copy"
+
+
 def snapshot_for_run(tenant_id: str, wid: str, rid: str) -> list[dict[str, Any]]:
     """Freeze the workflow's attachments for one run (variant b of the concept).
 
-    Copies each stored attachment to ``<wid>/runs/<rid>/attachments/<att_id>/`` after
-    re-verifying size and hash, and audits ``workflow.attachment_snapshot`` per item. A missing
-    or changed attachment raises ``AttachmentError``: the run is refused, never silently run
-    with different bytes. Returns the public records for the run meta."""
+    Hard-links (or, where the filesystem refuses a link, copies — :func:`_freeze_bytes`) each
+    stored attachment into ``<wid>/runs/<rid>/attachments/<att_id>/`` after re-verifying size and
+    hash, writes the per-run ``meta.json`` and audits ``workflow.attachment_snapshot`` per item
+    (with ``method`` link/copy). A missing or changed attachment raises ``AttachmentError``: the
+    run is refused, never silently run with different bytes. Returns the public records for the
+    run meta."""
     root = attachments_root(tenant_id, wid)
     if not root.is_dir():
         return []
     snap: list[dict[str, Any]] = []
     for d in sorted(p for p in root.iterdir() if p.is_dir() and valid_att_id(p.name)):
+        if not (d / "meta.json").is_file():
+            # A reservation (upload in flight, or a leftover of a crashed one — swept by the
+            # next reservation): not an attachment of the workflow yet, never a refusal.
+            continue
         meta, path = load_attachment(tenant_id, wid, d.name)
         dest = root.parent / "runs" / rid / "attachments" / d.name
         (dest / "data").mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, dest / "data" / path.name)
+        method = _freeze_bytes(path, dest / "data" / path.name)
         _write_meta(dest, meta)
         console_audit.workflow_attachment_snapshot(
             tenant_id=tenant_id, wid=wid, rid=rid, att_id=d.name,
-            size_bytes=int(meta["size"]), sha256_prefix=str(meta["sha256"])[:16])
+            size_bytes=int(meta["size"]), sha256_prefix=str(meta["sha256"])[:16], method=method)
         snap.append({**public_view(meta), "sha256_prefix": str(meta["sha256"])[:16]})
     return snap
 
@@ -303,6 +346,57 @@ def _require_workflow(rec: session_auth.SessionRecord, wid: str) -> None:
     _wf._require_workflow(rec.tenant_id, wid)
 
 
+# A reservation that still has no ``meta.json`` after this long is the leftover of an upload
+# whose process died mid-stream (the all-or-nothing cleanup never ran). It would otherwise hold
+# a slot of the cap forever; it is removed under the lock by the next reservation.
+RESERVATION_TTL_S = 3600.0
+
+
+def _sweep_dead_reservations(root: Path, *, now: float | None = None) -> int:
+    """Remove attachment directories that never got their ``meta.json`` and are older than
+    :data:`RESERVATION_TTL_S`. Caller holds the attachments lock. Returns the count removed."""
+    now = time.time() if now is None else now
+    removed = 0
+    for d in root.iterdir():
+        if not d.is_dir() or d.is_symlink() or (d / "meta.json").exists():
+            continue
+        try:
+            if now - d.stat().st_mtime <= RESERVATION_TTL_S:
+                continue
+            shutil.rmtree(d)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def _reserve_attachment_dirs(tenant_id: str, wid: str, n: int) -> list[Path]:
+    """Count and admit ``n`` new attachments in ONE critical section (T-0239 / WFE-18).
+
+    The cap used to be checked against a count taken BEFORE the upload body was awaited, so N
+    concurrent uploads each saw room and together overshot it. Here the per-workflow lock
+    ``<wid>/attachments/.lock`` (the same bounded ``flock`` the workflow routes use, so it holds
+    across processes) covers the count AND the ``mkdir`` of every new attachment directory: a
+    reserved directory is counted by the next uploader before a byte of its file is stored.
+    The caller streams into the reservations and removes them on failure."""
+    from . import workflows as _wf  # lazy: workflows.py imports this module
+    root = attachments_root(tenant_id, wid)
+    try:
+        with _wf._bounded_flock(root / ".lock", f"workflow attachments {wid!r}"):
+            _sweep_dead_reservations(root)
+            existing = sum(1 for p in root.iterdir() if p.is_dir())
+            if existing + n > MAX_ATTACHMENTS_PER_WORKFLOW:
+                raise HTTPException(409, f"a workflow holds at most {MAX_ATTACHMENTS_PER_WORKFLOW} attachments")
+            reserved: list[Path] = []
+            for _ in range(n):
+                d = root / secrets.token_hex(8)
+                d.mkdir(exist_ok=False)
+                reserved.append(d)
+            return reserved
+    except _wf.WorkflowLockBusy as exc:
+        raise HTTPException(503, "the attachment store is busy - try again") from exc
+
+
 @router.post("/workflows/{wid}/attachments")
 async def upload_workflow_attachments(
     wid: str,
@@ -311,22 +405,19 @@ async def upload_workflow_attachments(
 ) -> dict[str, Any]:
     """Store one or more files (same limits as the chat: 10 files, 50 MiB each, no type list)."""
     _require_workflow(rec, wid)
-    root = attachments_root(rec.tenant_id, wid)
-    existing = sum(1 for p in root.iterdir() if p.is_dir()) if root.is_dir() else 0
     files, form = await _attachments.read_upload_form(request)
     created: list[Path] = []
     try:
-        if existing + len(files) > MAX_ATTACHMENTS_PER_WORKFLOW:
-            raise HTTPException(409, f"a workflow holds at most {MAX_ATTACHMENTS_PER_WORKFLOW} attachments")
         for f in files:  # sizes first: a refused batch stores nothing
             size = f.size
             if size is not None and size > _attachments.ATTACH_MAX_BYTES:
                 raise HTTPException(413, f"File exceeds 50 MB limit: {f.filename!r}")
+        # The cap: counted and admitted atomically, in a thread so the lock never stalls the loop.
+        created = await asyncio.get_running_loop().run_in_executor(
+            None, _reserve_attachment_dirs, rec.tenant_id, wid, len(files))
         records: list[dict[str, Any]] = []
-        for f in files:
-            att_id = secrets.token_hex(8)
-            att_dir = root / att_id
-            created.append(att_dir)
+        for f, att_dir in zip(files, created):
+            att_id = att_dir.name
             stored = await _attachments.receive_uploaded_files([f], att_dir / "data", max_files=1)
             info = stored[0]
             file_path = att_dir / "data" / info["name"]
@@ -334,7 +425,10 @@ async def upload_workflow_attachments(
                 "att_id": att_id, "name": info["name"], "size": info["size"],
                 "mime": _closed_mime(info.get("mime"), info["name"]),
                 "sha256": _sha256_of(file_path), "created_at": time.time(),
+                # Art. 17 (ADR-2270 s7): the per-login session fingerprint AND the login's durable
+                # key, so an erasure request can name either. The local login has no durable key.
                 "uploaded_by": rec.sid_fingerprint,
+                "uploaded_by_subject": rec.token_fingerprint or "",
             }
             _write_meta(att_dir, meta)
             records.append(public_view(meta))
@@ -342,7 +436,7 @@ async def upload_workflow_attachments(
                 tenant_id=rec.tenant_id, wid=wid, att_id=att_id, size_bytes=int(meta["size"]),
                 mime=meta["mime"], sha256_prefix=meta["sha256"][:16], sid_fingerprint=rec.sid_fingerprint)
     except BaseException:
-        for d in created:  # all-or-nothing
+        for d in created:  # all-or-nothing: the reservations go too
             shutil.rmtree(d, ignore_errors=True)
         raise
     finally:

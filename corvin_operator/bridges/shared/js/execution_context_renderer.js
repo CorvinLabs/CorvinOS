@@ -13,6 +13,9 @@
  * @param {object} obj - Raw execution_context from outbox payload
  * @returns {object} - Normalized context with all required fields
  */
+// Chat status icons by NAME (ADR-2269) — the vocabulary lives in shared/status_markers.py.
+const { icon: statusIcon } = require('./status_markers');
+
 function normalizeExecutionContext(obj) {
   if (!obj || typeof obj !== 'object') {
     return getDefaultContext();
@@ -127,7 +130,7 @@ function getEmojiForMode(delegationMode) {
     'native': '🔧',
     'acs': '☁️',
     'tde': '🎯',
-    'fallback': '⚠️',
+    'fallback': statusIcon('warning'),
   };
   return emojiMap[delegationMode] || '⚙️';
 }

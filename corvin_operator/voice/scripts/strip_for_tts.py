@@ -47,9 +47,10 @@ def _force_utf8_stdio() -> None:
 _force_utf8_stdio()
 
 
-# Step lines exactly as acs_runtime.format_acs_step writes them (compass / robot / chart emoji).
+# Step lines exactly as acs_runtime.format_acs_step writes them (compass / robot, and the
+# shared done / failed status marker on a gate verdict — T-0249).
 _ACS_STEP_LINE = (r"(?:\U0001F9ED Iteration \d+:|\U0001F916 Worker \d+/\d+:"
-                  r"|\U0001F4CA Gate [Ii]teration \d+:)[^\n]*")
+                  r"|[\u2705\u274C] Gate [Ii]teration \d+:)[^\n]*")
 _ACS_STEPS_RE = re.compile(r"(?m)^(?:Verlauf|Steps)\r?\n(?:" + _ACS_STEP_LINE + r"\r?\n?)+")
 # The run summary starts with the trigger line; its other lines carry the known labels.
 _ACS_SUMMARY_RE = re.compile(

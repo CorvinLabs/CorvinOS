@@ -1214,6 +1214,10 @@ EVENT_SEVERITY: dict[str, str] = {
     # a capture started (before any egress) and finished (accepted / refused / failed; an accepted one
     # BEFORE the asset is committed). The host and a sha256 prefix of the URL only - never the URL, its
     # path or query, the caption, a hotspot text or the uploading user's id.
+    # PLG-11 (2026-10-21): Playwright's Chromium is installed only on an explicit operator
+    # request (POST /video/web-slides/install), never from a GET; both ends are recorded.
+    "video_producer.web_slides_install_requested": "INFO",
+    "video_producer.web_slides_install_finished": "INFO",
     "video_producer.capture_setting_changed": "INFO",
     "video_producer.capture_started":    "INFO",
     "video_producer.capture_finished":   "INFO",
@@ -3241,7 +3245,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "tenant_id", "wid", "att_id", "size_bytes", "mime", "sha256_prefix", "sid_fingerprint",
     }),
     "workflow.attachment_deleted": frozenset({"tenant_id", "wid", "att_id", "sid_fingerprint", "reason_code"}),
-    "workflow.attachment_snapshot": frozenset({"tenant_id", "wid", "rid", "att_id", "size_bytes", "sha256_prefix"}),
+    "workflow.attachment_snapshot": frozenset({"tenant_id", "wid", "rid", "att_id", "size_bytes", "sha256_prefix",
+                                               "method"}),
     "workflow.attachment_refused": frozenset({"tenant_id", "wid", "att_id", "reason_code", "sid_fingerprint"}),
     "workflow.spawn_refused": frozenset({"tenant_id", "engine_id", "reason_code"}),
     "forge_run.finished": frozenset({
@@ -4491,6 +4496,10 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "video_producer.job_deleted": frozenset({
         "tenant_id", "job_id", "status", "files_removed", "bytes_freed",
+    }),
+    "video_producer.web_slides_install_requested": frozenset({"tenant_id", "outcome", "host"}),
+    "video_producer.web_slides_install_finished": frozenset({
+        "tenant_id", "outcome", "duration_s", "error_class",
     }),
     "video_producer.measure_started": frozenset({
         "tenant_id", "job_id", "signal", "engine", "classification", "scenes",

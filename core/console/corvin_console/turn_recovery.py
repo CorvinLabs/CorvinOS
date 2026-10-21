@@ -8,12 +8,23 @@ finalizes such a task; it never re-runs it.
 
 Contract:
 
-* On host shutdown the lifespan calls :func:`note_shutdown` (one timestamp per tenant).
-* After the next start :func:`schedule_recovery` looks for the NEWEST task of each chat
+* On host shutdown the lifespan calls :func:`note_shutdown` (one timestamp per tenant -
+  EVERY tenant under ``<corvin_home>/tenants/``, a restart cuts them all off at once).
+* After the next start :func:`schedule_recovery` walks the same tenants (:func:`tenant_ids`;
+  a directory whose name is not a valid tenant id is skipped) and, per tenant with that
+  tenant's own id - never the process's ``CORVIN_TENANT_ID`` (BGT-13: until 2026-10-21 only
+  that one tenant was recovered) - looks for the NEWEST task of each chat
   that failed from a restart - signal exit code (143/137/-15/-9/-1), finalized inside the
   shutdown window or reaped as an orphan - and produced no output. It is re-run on the
   same chat through the normal ``stream_turn`` path, so persistence, ledger, L44 and
-  L34 gates apply exactly as for a typed message.
+  L34 gates apply exactly as for a typed message. The attempt bookkeeping
+  (``tasks/recovery_attempts.json``) lives in the chat's own workdir, so it is per tenant
+  by construction.
+* The request is recorded AS THE USER TYPED IT. ``stream_turn(..., recovery={"attempt",
+  "of_turn"})`` persists the bare instruction as the user turn (chat log, task log, ledger)
+  with that machine-readable marker, and feeds :data:`PROMPT_PREFIX` + instruction to the
+  engine only (BGT-15: until 2026-10-21 the prefixed prompt was stored as the user's own
+  words and re-supplied to later turns).
 * A run that again ends without a ``result`` is re-run, at most :data:`MAX_ATTEMPTS`
   times per request in total (persisted per chat, so a crash loop cannot restart forever).
 * Deliberate stops (cancel, background-scope caps) are never matched: they are not
@@ -95,11 +106,39 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
         raise
 
 
-def note_shutdown(tenant_id: str | None = None) -> None:
-    """Called from the host lifespan teardown; never raises."""
+def tenant_ids() -> list[str]:
+    """Every tenant with a home under ``<corvin_home>/tenants/``, in name order.
+
+    A directory whose name ``core.tenants.validate_tenant_id`` refuses (path characters,
+    upper case, a reserved name such as ``global``) is skipped and logged - never raised on,
+    never recovered. Never the process's ``CORVIN_TENANT_ID``: that names one tenant, the
+    home holds all of them."""
+    from core.paths.tenant import corvin_home
+    from core.tenants import validate_tenant_id
+    root = corvin_home() / "tenants"
     try:
-        tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
-        _atomic_write(_marker_path(tid), {"at": time.time()})
+        dirs = sorted(p.name for p in root.iterdir() if p.is_dir())
+    except OSError:
+        return []
+    out: list[str] = []
+    for name in dirs:
+        try:
+            out.append(validate_tenant_id(name))
+        except ValueError:
+            logger.warning("turn-recovery: skipping tenants/%r: not a valid tenant id", name)
+    return out
+
+
+def note_shutdown(tenant_id: str | None = None) -> None:
+    """Called from the host lifespan teardown; never raises. Without a tenant (what the
+    hosts pass) the shutdown is noted for EVERY tenant on this home - one restart cuts
+    every tenant's running turn off, so each one needs the marker its recovery reads."""
+    try:
+        for tid in ([tenant_id] if tenant_id else tenant_ids()):
+            try:
+                _atomic_write(_marker_path(tid), {"at": time.time()})
+            except Exception as exc:  # noqa: BLE001 - one tenant must not stop the others
+                logger.warning("turn-recovery: shutdown not noted for %s: %s", tid, exc)
     except Exception as exc:  # noqa: BLE001 - shutdown must not fail
         logger.warning("turn-recovery: shutdown not noted: %s", exc)
 
@@ -128,10 +167,12 @@ def _last_event(tasks_dir: Path, task_id: str) -> dict[str, Any]:
 
 
 def _strip_restart_prefix(instruction: str) -> str:
-    """The request as the user typed it. Every rerun stores ``PROMPT_PREFIX + request`` as its
-    instruction; reading that back as the request grew the text by one prefix per attempt, so
-    the attempt key changed each time and MAX_ATTEMPTS never applied (measured 2026-10-18:
-    seven stacked prefixes in one chat)."""
+    """The request as the user typed it. Until 2026-10-21 every rerun stored ``PROMPT_PREFIX +
+    request`` as its instruction; reading that back as the request grew the text by one prefix
+    per attempt, so the attempt key changed each time and MAX_ATTEMPTS never applied (measured
+    2026-10-18: seven stacked prefixes in one chat). A rerun now stores the bare request with
+    an ``input.recovery`` marker (BGT-15), so this is a no-op on new records and keeps the
+    attempt key stable for task logs written before that date."""
     text = instruction.strip()
     while text.startswith(PROMPT_PREFIX.strip()):
         text = text[len(PROMPT_PREFIX.strip()):].lstrip()
@@ -255,8 +296,12 @@ def _is_answer(event: dict[str, Any]) -> bool:
     return event.get("outcome", "ok") in ("ok", "cut")
 
 
-async def _run_once(cand: Candidate) -> bool:
-    """Run the request through the normal turn path. True iff it produced a result."""
+async def _run_once(cand: Candidate, *, attempt: int) -> bool:
+    """Run the request through the normal turn path. True iff it produced a result.
+
+    The engine gets :data:`PROMPT_PREFIX` + the request; the record (chat log, task log,
+    ledger) gets the request as typed plus the ``recovery`` marker - ``stream_turn`` keeps
+    the two apart (BGT-15)."""
     from . import chat_runtime, live_turns
     from .routes.chat import _session_turn_lock
     got_output = False
@@ -270,7 +315,8 @@ async def _run_once(cand: Candidate) -> bool:
         turn_id = live_turns.begin(cand.tenant_id, cand.sid, live_turns.new_token())
         try:
             async with contextlib.aclosing(
-                chat_runtime.stream_turn(sess, PROMPT_PREFIX + cand.instruction, sid_fingerprint=SYSTEM_SID)
+                chat_runtime.stream_turn(sess, cand.instruction, sid_fingerprint=SYSTEM_SID,
+                                         recovery={"attempt": attempt, "of_turn": cand.task_id})
             ) as gen:
                 async for event in gen:
                     live_turns.publish(cand.tenant_id, cand.sid, turn_id, event)
@@ -346,7 +392,7 @@ async def recover_candidate(cand: Candidate) -> str:
         _audit_failure_class(cand, source="console")
         _notify(cand, "interrupted_resuming", n)
         try:
-            if await _run_once(cand):
+            if await _run_once(cand, attempt=n):
                 _audit(cand, ok=True, action="chat.turn.recovery_succeeded")
                 _notify(cand, "recovered", n)
                 return "recovered"
@@ -371,17 +417,36 @@ async def recover_all(tenant_id: str, *, delay_s: float = START_DELAY_S) -> list
     return results
 
 
+async def recover_everywhere(*, delay_s: float = START_DELAY_S) -> list[tuple[str, str, str]]:
+    """Recovery for every tenant on this home, each with its own id. One tenant's failure
+    never stops the others. Returns ``(tenant_id, sid, outcome)`` triples."""
+    await asyncio.sleep(delay_s)
+    results: list[tuple[str, str, str]] = []
+    for tid in tenant_ids():
+        try:
+            for sid, outcome in await recover_all(tid, delay_s=0):
+                results.append((tid, sid, outcome))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one tenant must not stop the others
+            logger.warning("turn-recovery: tenant %s failed: %s", tid, type(exc).__name__)
+    return results
+
+
 def schedule_recovery(tenant_id: str | None = None, *, delay_s: float = START_DELAY_S) -> None:
-    """Fire-and-forget; called from the lifespan of BOTH hosts (console app, gateway app)."""
+    """Fire-and-forget; called from the lifespan of BOTH hosts (console app, gateway app).
+
+    The hosts pass no tenant: every tenant under ``<corvin_home>/tenants/`` is recovered
+    with its own id (:func:`recover_everywhere`). An explicit ``tenant_id`` restricts the
+    run to that tenant (tools, tests). The process's ``CORVIN_TENANT_ID`` is never consulted."""
     global _started
     if _started:
         return
     try:
-        tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
-
         async def _run() -> None:
             try:
-                done = await recover_all(tid, delay_s=delay_s)
+                done = (await recover_all(tenant_id, delay_s=delay_s) if tenant_id
+                        else await recover_everywhere(delay_s=delay_s))
                 if done:
                     logger.info("turn-recovery: %s", done)
             except Exception as exc:  # noqa: BLE001 - never affects startup

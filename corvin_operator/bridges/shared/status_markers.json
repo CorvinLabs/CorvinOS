@@ -1,0 +1,46 @@
+{
+  "icons": {
+    "done": "✅",
+    "failed": "❌",
+    "warning": "⚠️",
+    "note": "ℹ️",
+    "investigating": "🔍",
+    "running": "⏳",
+    "suggestion": "💡",
+    "decision": "📌"
+  },
+  "markers": [
+    [
+      "✅",
+      "done / succeeded / verified"
+    ],
+    [
+      "❌",
+      "failed / rejected / broken"
+    ],
+    [
+      "⚠️",
+      "warning / risk / limitation"
+    ],
+    [
+      "ℹ️",
+      "note / context"
+    ],
+    [
+      "🔍",
+      "investigating / finding still open"
+    ],
+    [
+      "⏳",
+      "running / waiting"
+    ],
+    [
+      "💡",
+      "suggestion / option for the user"
+    ],
+    [
+      "📌",
+      "decision / final result"
+    ]
+  ]
+}

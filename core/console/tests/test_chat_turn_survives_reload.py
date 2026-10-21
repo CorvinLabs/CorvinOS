@@ -62,7 +62,8 @@ class ReloadSurvivalTest(unittest.TestCase):
     def _impl(self, *, run_s: float):
         outer = self
 
-        async def impl(sess, prompt, *, sid_fingerprint=""):
+        # the impl's contract (recovery=) grows; a stand-in takes it like the real one
+        async def impl(sess, prompt, *, sid_fingerprint="", **_kw):
             tasks_dir = sess.workdir / "tasks"
             tm = TaskManager(tasks_dir)
             task_id = tm.create_task(

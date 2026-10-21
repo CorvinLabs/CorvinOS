@@ -1702,7 +1702,13 @@ class WorkflowChatHandler:
     user-authored free text, no TTL, no erasure path. The run logs beside them
     (``<wid>/runs/<rid>.jsonl``) carry step output the same way.
 
-    Attachments (CONCEPT-0115) are removed per directory by their ``meta.json`` uploader.
+    Attachments (CONCEPT-0115 / ADR-2270 s7) are removed per directory — store and per-run
+    snapshots — when their ``meta.json`` names the subject under ``uploaded_by`` (the per-login
+    session fingerprint), ``uploaded_by_subject`` (the login's durable key) or a shared identity
+    key; the request may name the subject by ANY of them. A directory that cannot be removed is
+    listed in the result's ``reason`` and makes the layer FAILED (the orchestrator reports the
+    request PARTIAL) — but it never aborts the layer: the other directories and the transcript
+    passes still run and ``count`` says what went (T-0241).
 
     Attribution is line-wise via :data:`_SUBJECT_KEYS` (which is why ``speaker``
     was added to it), plus whole-file removal when the workflow's own metadata
@@ -1744,7 +1750,8 @@ class WorkflowChatHandler:
             # ``meta.json`` that names the uploader. Remove the WHOLE attachment directory when the
             # record names the subject — before the generic JSON pass below, which would otherwise
             # delete only the record and strand the file it describes.
-            removed += _purge_workflow_attachment_dirs(root, subject_id)
+            attachments = _purge_workflow_attachment_dirs(root, subject_id)
+            removed += len(attachments.erased)
             removed += _purge_json_tree(root, subject_id)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(
@@ -1753,30 +1760,77 @@ class WorkflowChatHandler:
                 code=ReasonCode.STORE_ERROR.value,
                 duration_ms=int((time.time() - t0) * 1000),
             )
+        if attachments.failed:
+            # Partial: what went is counted, what stayed is named (trail file only, never the
+            # chain) — the operator must clear it by hand; never a signed "gone".
+            left = "; ".join(f"{path} ({err})" for path, err in attachments.failed)
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=(f"removed {removed} workflow item(s) for subject; "
+                        f"{len(attachments.failed)} attachment dir(s) could not be removed and "
+                        f"still hold the subject's data: {left}"),
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
         return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
                        empty_reason="no workflow content matched subject",
                        applied_reason="removed {n} workflow item(s) for subject")
 
 
-def _purge_workflow_attachment_dirs(root: Path, subject_id: str) -> int:
+@dataclass
+class AttachmentPurgeOutcome:
+    """What :func:`_purge_workflow_attachment_dirs` did: the directories it removed and the
+    ones it could not, each with the error (operator-facing, trail file only)."""
+    erased: list[str] = field(default_factory=list)
+    failed: list[tuple[str, str]] = field(default_factory=list)
+
+
+#: The keys under which a workflow attachment record names its uploader (ADR-2270 s7):
+#: the per-login console session fingerprint and the login's durable key. Both are matched
+#: EXACTLY, beside the shared :data:`_SUBJECT_KEYS`; an empty stored value never matches.
+_ATTACHMENT_UPLOADER_KEYS: tuple[str, ...] = ("uploaded_by", "uploaded_by_subject")
+
+
+def _attachment_names_subject(meta: dict, subject_id: str) -> bool:
+    if not subject_id:
+        return False
+    if any(meta.get(k) == subject_id for k in _ATTACHMENT_UPLOADER_KEYS):
+        return True
+    return _mentions_subject(meta, subject_id)
+
+
+def _purge_workflow_attachment_dirs(root: Path, subject_id: str) -> AttachmentPurgeOutcome:
     """Remove every workflow attachment directory whose ``meta.json`` names the subject.
 
-    ``uploaded_by`` (the console session fingerprint of the uploader) is matched exactly, as are
-    the shared identity keys. A directory whose record is unreadable or names someone else is
-    left alone — never guessed at."""
+    ``uploaded_by`` (the per-login console session fingerprint), ``uploaded_by_subject`` (the
+    login's durable key — a subject who logged in again has a new fingerprint but the same key)
+    and the shared identity keys are matched exactly; the request may carry any one of them. A
+    directory whose record is unreadable or names someone else is left alone — never guessed at.
+
+    One directory that cannot be removed (a locked file, a permission) is recorded in
+    ``failed`` and the loop goes on: it used to raise out of the layer and fail the WHOLE
+    ``L-workflows`` purge, transcript included (PLG-09). The data file goes first and the
+    record last, so a directory that stays keeps its ``meta.json`` and is still attributable
+    on the retry."""
     import shutil
-    removed = 0
+    out = AttachmentPurgeOutcome()
     candidates = list(root.glob("*/attachments/*")) + list(root.glob("*/runs/*/attachments/*"))
     for att_dir in sorted(candidates):
         if att_dir.is_symlink() or not att_dir.is_dir():
             continue
         meta = _load_json(att_dir / "meta.json")
-        if not isinstance(meta, dict):
+        if not isinstance(meta, dict) or not _attachment_names_subject(meta, subject_id):
             continue
-        if meta.get("uploaded_by") == subject_id or _mentions_subject(meta, subject_id):
+        try:
+            data = att_dir / "data"
+            if data.is_dir() and not data.is_symlink():
+                shutil.rmtree(data, ignore_errors=False)
             shutil.rmtree(att_dir, ignore_errors=False)
-            removed += 1
-    return removed
+        except OSError as exc:
+            out.failed.append((str(att_dir), f"{type(exc).__name__}: {str(exc)[:160]}"))
+            continue
+        out.erased.append(str(att_dir))
+    return out
 
 
 @dataclass
