@@ -70,6 +70,7 @@ import {
   listRuns,
   listWorkflows,
   putWorkflowYaml,
+  addWorkflowNode,
   putWorkflowSchedule,
   deleteWorkflowSchedule,
   deleteRun,
@@ -83,10 +84,13 @@ import {
   type LicenseInfo,
   type RunMeta,
   type WorkflowMeta,
+  type WorkflowNodeResponse,
   type WorkflowRunEvent,
 } from "@/lib/api";
 import { MediaGallery, ImageCard, type MediaItem } from "@/components/media";
 import { WorkflowComposer, type WorkflowComposerHandle } from "@/components/workflows/WorkflowComposer";
+import { NodeSpecEditor } from "@/components/workflows/NodeSpecEditor";
+import { NODE_PALETTE, nextNodeId, type PaletteEntry } from "@/lib/workflow-node-types";
 import type { SlashCommand } from "@/components/chat/SlashCommandPalette";
 import { DropOverlay } from "@/components/chat/DropOverlay";
 import { DEFAULT_COMPOSER_LIMITS, type ComposerAttachmentRef, type ComposerContextAdapter } from "@/components/chat/composer-adapter";
@@ -700,264 +704,22 @@ function AwpCanvas({
   );
 }
 
-// ── Delivery inspector (editable deliver nodes) ──────────────────────────
-
-import { listMessengerChats } from "@/lib/api";
-
-const MESSENGERS: { id: string; label: string; icon: string; hint?: string }[] = [
-  { id: "discord",  label: "Discord",   icon: "💬" },
-  { id: "telegram", label: "Telegram",  icon: "✈️" },
-  { id: "slack",    label: "Slack",     icon: "🔔" },
-  { id: "whatsapp", label: "WhatsApp",  icon: "📱", hint: "Send a message to the bot first so the chat appears here" },
-  { id: "email",    label: "Email",     icon: "📧", hint: "Enter recipient address as destination" },
-  { id: "teams",    label: "Teams",     icon: "👥", hint: "Enter webhook URL as destination" },
-  { id: "signal",   label: "Signal",    icon: "🔐", hint: "Send a message to the bot first so the chat appears here" },
-];
-
-function DeliveryInspector({
-  config,
-  nodeId: _nodeId,
-  wid,
-  yaml,
-  csrf,
-  onYamlChange,
-}: {
-  config: Record<string, unknown>;
-  nodeId: string;
-  wid: string;
-  yaml: string;
-  csrf: string;
-  onYamlChange: (yaml: string) => void;
-}) {
-  const qc = useQueryClient();
-  const [channel, setChannel] = React.useState(String(config.channel ?? "discord"));
-  const [chatId, setChatId] = React.useState(String(config.chat_id ?? "auto"));
-  const [format, setFormat] = React.useState(String(config.format ?? "markdown"));
-  const [voice, setVoice] = React.useState(Boolean(config.voice ?? false));
-  const [saving, setSaving] = React.useState(false);
-
-  const messengerMeta = MESSENGERS.find((m) => m.id === channel);
-
-  const chatsQuery = useQuery({
-    queryKey: ["messenger-chats", channel],
-    queryFn: ({ signal }) => listMessengerChats(channel, signal),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const chats = React.useMemo(() => chatsQuery.data?.chats ?? [], [chatsQuery.data?.chats]);
-
-  // Resolve current chatId to a human label for display
-  const resolvedLabel = React.useMemo(() => {
-    if (chatId === "auto") return "auto — same chat as trigger";
-    const found = chats.find((c) => c.id === chatId || c.name === chatId);
-    return found ? found.name : chatId;
-  }, [chatId, chats]);
-
-  const patchYaml = (ch: string, cid: string, fmt: string, v: boolean): string => {
-    let patched = yaml
-      .replace(/(channel\s*:\s*)(['"]?)([^\n'"]+)(['"]?)/g, (_m, p) => `${p}${ch}`)
-      .replace(/(chat_id\s*:\s*)(['"]?)([^\n'"]+)(['"]?)/g, (_m, p) => `${p}"${cid}"`)
-      .replace(/(format\s*:\s*)(['"]?)([^\n'"]+)(['"]?)/g, (_m, p) => `${p}${fmt}`);
-    // Patch or inject voice field
-    if (/voice\s*:/.test(patched)) {
-      patched = patched.replace(/(voice\s*:\s*)(true|false)/g, `$1${v}`);
-    } else {
-      // Inject after format line
-      patched = patched.replace(/(format\s*:\s*\S+)/, `$1\n        voice: ${v}`);
-    }
-    return patched;
-  };
-
-  const save = async (ch: string, cid: string, fmt: string, v: boolean) => {
-    setSaving(true);
-    try {
-      const { putWorkflowYaml } = await import("@/lib/api");
-      const newYaml = patchYaml(ch, cid, fmt, v);
-      await putWorkflowYaml(wid, newYaml, csrf);
-      onYamlChange(newYaml);
-      qc.invalidateQueries({ queryKey: ["workflow", wid] });
-    } catch { /* silent */ } finally { setSaving(false); }
-  };
-
-  const handleChannelChange = (ch: string) => {
-    setChannel(ch);
-    setChatId("auto");
-    save(ch, "auto", format, voice);
-  };
-
-  const handleChatChange = (cid: string) => {
-    setChatId(cid);
-    save(channel, cid, format, voice);
-  };
-
-  const handleFormatChange = (fmt: string) => {
-    setFormat(fmt);
-    save(channel, chatId, fmt, voice);
-  };
-
-  const handleVoiceChange = (v: boolean) => {
-    setVoice(v);
-    save(channel, chatId, format, v);
-  };
-
-  // For freetext messengers (email, teams) use an input; for others use dropdown
-  const isFreetext = channel === "email" || channel === "teams";
-
-  return (
-    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5 space-y-3">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-medium uppercase tracking-widest text-emerald-600 dark:text-emerald-400">
-          Delivery
-        </span>
-        {saving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-      </div>
-
-      {/* Messenger (channel) dropdown */}
-      <div className="space-y-1">
-        <label className="text-[10px] text-muted-foreground">messenger</label>
-        <select
-          value={channel}
-          onChange={(e) => handleChannelChange(e.target.value)}
-          className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
-        >
-          {MESSENGERS.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.icon} {m.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Destination */}
-      <div className="space-y-1">
-        <label className="text-[10px] text-muted-foreground">destination</label>
-
-        {isFreetext ? (
-          <>
-            <input
-              type="text"
-              value={chatId === "auto" ? "" : chatId}
-              onChange={(e) => setChatId(e.target.value)}
-              onBlur={(e) => e.target.value && save(channel, e.target.value, format, voice)}
-              placeholder={channel === "email" ? "user@example.com" : "https://…webhook…"}
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </>
-        ) : chatsQuery.isLoading ? (
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Loading {messengerMeta?.label} chats…
-          </div>
-        ) : chats.length > 0 ? (
-          <select
-            value={chatId}
-            onChange={(e) => handleChatChange(e.target.value)}
-            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
-          >
-            <option value="auto">↩ auto — same chat as trigger</option>
-            {chats.map((c) => (
-              <option
-                key={c.id}
-                value={channel === "discord" && c.name.startsWith("#") ? c.name : c.id}
-              >
-                {c.label}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <>
-            <input
-              type="text"
-              value={chatId === "auto" ? "" : chatId}
-              onChange={(e) => setChatId(e.target.value)}
-              onBlur={(e) => e.target.value && save(channel, e.target.value, format, voice)}
-              placeholder="Chat ID or name"
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-            <div className="text-[9px] text-amber-600 dark:text-amber-400">
-              {messengerMeta?.hint ?? `Configure ${messengerMeta?.label ?? channel} bridge first`}
-            </div>
-          </>
-        )}
-
-        {/* Always show resolved label */}
-        {!isFreetext && chatId && chatId !== "auto" && (
-          <div className="text-[9px] text-muted-foreground">
-            <span className="text-foreground font-medium">{resolvedLabel}</span>
-            {" · "}
-            <span className="font-mono opacity-60">{chatId}</span>
-            {chatsQuery.data && chats.length > 0 && (
-              <span className="ml-1 opacity-50">
-                · {chats.length} {channel === "discord" ? "channels" : "chats"}
-                {chatsQuery.data.chats.some((c) => c.source === "inbox") ? " (inbox)" : ""}
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Format */}
-      <div className="space-y-1">
-        <label className="text-[10px] text-muted-foreground">format</label>
-        <select
-          value={format}
-          onChange={(e) => handleFormatChange(e.target.value)}
-          className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
-        >
-          <option value="markdown">markdown</option>
-          <option value="text">plain text</option>
-        </select>
-      </div>
-
-      {/* Voice note toggle */}
-      <label className="flex cursor-pointer items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-1.5 text-xs font-medium">
-            <Volume2 className="h-3.5 w-3.5 text-muted-foreground" />
-            Also send voice note
-          </div>
-          <p className="text-[9px] text-muted-foreground mt-0.5">
-            TTS reads the output aloud as an audio message
-          </p>
-        </div>
-        <button
-          role="switch"
-          aria-checked={voice}
-          onClick={() => handleVoiceChange(!voice)}
-          className={cn(
-            "relative h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors",
-            voice ? "bg-accent" : "bg-input",
-          )}
-        >
-          <span
-            className={cn(
-              "block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
-              voice ? "translate-x-4" : "translate-x-0",
-            )}
-          />
-        </button>
-      </label>
-    </div>
-  );
-}
-
 // ── Node inspector ────────────────────────────────────────────────────────
 
 function NodeInspector({
   node,
   nodeState,
   wid,
-  yaml,
+  allNodeIds,
   csrf,
-  onYamlChange,
+  onNodeChanged,
 }: {
   node: GraphNode | null;
   nodeState?: "idle" | "running" | "ok" | "failed" | "waiting";
   wid?: string;
-  yaml?: string;
+  allNodeIds?: string[];
   csrf?: string;
-  onYamlChange?: (yaml: string) => void;
+  onNodeChanged?: (res: WorkflowNodeResponse, deletedId?: string) => void;
 }) {
   if (!node) {
     return (
@@ -1024,14 +786,13 @@ function NodeInspector({
           <p className="text-xs text-muted-foreground leading-relaxed">{node.instructions}</p>
         </div>
       )}
-      {node.type === "deliver" && node.config && wid && yaml && csrf && onYamlChange && (
-        <DeliveryInspector
-          config={node.config}
-          nodeId={node.id}
+      {wid && csrf && onNodeChanged && (
+        <NodeSpecEditor
+          node={node}
+          allNodeIds={allNodeIds ?? []}
           wid={wid}
-          yaml={yaml}
           csrf={csrf}
-          onYamlChange={onYamlChange}
+          onChanged={onNodeChanged}
         />
       )}
       {/* MCP connectors */}
@@ -1692,19 +1453,21 @@ function EditorToolbar({
 }) {
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
   const [exportingPkg, setExportingPkg] = React.useState(false);
   const importInputRef = React.useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
 
   const save = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       await putWorkflowYaml(wid, yaml, csrf);
       await qc.invalidateQueries({ queryKey: ["workflow", wid] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch {
-      // ignore
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -1757,6 +1520,11 @@ function EditorToolbar({
       <Button size="sm" variant="outline" onClick={save} disabled={saving}>
         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? "Saved ✓" : "Save"}
       </Button>
+      {saveError && (
+        <span data-testid="save-error" className="max-w-[28ch] truncate text-xs text-destructive" title={saveError}>
+          {saveError}
+        </span>
+      )}
       <div className="flex items-center gap-1">
         <Button size="sm" variant="ghost" onClick={exportAwpkg} disabled={exportingPkg || !yaml.trim()} title="Export self-contained .awpkg bundle (includes tools & skills)">
           {exportingPkg ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Package className="h-3.5 w-3.5" />}
@@ -2089,61 +1857,21 @@ function ExplanationDrawer({
 }
 
 // ── ADR-0062 M10: Quick-Add Palette ──────────────────────────────────────
-
-const NODE_STUBS: Array<{ type: string; label: string; emoji: string; yaml: string }> = [
-  {
-    type: "trigger",
-    label: "Trigger",
-    emoji: "⚡",
-    yaml: "\n- id: trigger\n  type: trigger\n  config:\n    event: message_received\n",
-  },
-  {
-    type: "agent",
-    label: "Agent",
-    emoji: "🤖",
-    yaml: "\n- id: agent_step\n  type: agent\n  depends_on: [trigger]\n  config:\n    prompt: \"{{ input }}\"\n",
-  },
-  {
-    type: "condition",
-    label: "Condition",
-    emoji: "🔀",
-    yaml: "\n- id: condition\n  type: condition\n  depends_on: [agent_step]\n  config:\n    expression: \"{{ output }} != ''\"\n",
-  },
-  {
-    type: "deliver",
-    label: "Send",
-    emoji: "📤",
-    yaml: "\n- id: deliver\n  type: deliver\n  depends_on: [condition]\n  config:\n    messenger: whatsapp\n    chat: auto\n    message: \"{{ output }}\"\n",
-  },
-  {
-    type: "delay",
-    label: "Wait",
-    emoji: "⏱",
-    yaml: "\n- id: wait\n  type: delay\n  config:\n    seconds: 60\n",
-  },
-  {
-    type: "http",
-    label: "HTTP",
-    emoji: "🔗",
-    yaml: "\n- id: http_call\n  type: http\n  config:\n    method: GET\n    url: https://example.com/api\n",
-  },
-  {
-    type: "approval",
-    label: "Human Review",
-    emoji: "👤",
-    yaml: "\n- id: human_review\n  type: approval\n  depends_on: []\n  message: \"Please review the results above and approve or reject to continue.\"\n  timeout_s: 3600\n",
-  },
-];
+// Every entry is a node type the backend validator accepts (workflow-node-types.ts mirrors
+// NODE_TYPES); the node is created through POST /workflows/{wid}/nodes, which validates the
+// whole document before writing.
 
 function QuickAddPalette({
   onAdd,
   onClose,
+  busy,
 }: {
-  onAdd: (yaml: string) => void;
+  onAdd: (entry: PaletteEntry) => void;
   onClose: () => void;
+  busy: boolean;
 }) {
   return (
-    <div className="absolute bottom-14 right-4 z-20 w-56 rounded-xl border border-border bg-card shadow-xl shadow-black/20">
+    <div data-testid="quick-add-palette" className="absolute bottom-14 right-4 z-20 w-56 rounded-xl border border-border bg-card shadow-xl shadow-black/20">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Add node</span>
         <Button variant="ghost" size="icon" className="h-5 w-5 text-muted-foreground" onClick={onClose}>
@@ -2151,14 +1879,16 @@ function QuickAddPalette({
         </Button>
       </div>
       <div className="p-2 space-y-1">
-        {NODE_STUBS.map((stub) => (
+        {NODE_PALETTE.map((entry) => (
           <button
-            key={stub.type}
-            onClick={() => { onAdd(stub.yaml); onClose(); }}
-            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-left hover:bg-muted/60 transition-colors"
+            key={entry.type}
+            data-testid={`quick-add-${entry.type}`}
+            disabled={busy}
+            onClick={() => onAdd(entry)}
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-left hover:bg-muted/60 transition-colors disabled:opacity-50"
           >
-            <span className="text-base leading-none">{stub.emoji}</span>
-            <span>{stub.label}</span>
+            <span className="text-base leading-none">{entry.emoji}</span>
+            <span>{entry.label}</span>
           </button>
         ))}
       </div>
@@ -2804,6 +2534,37 @@ export function WorkflowEditorPage() {
 
   const selectedNodeData = graph.find((n) => n.id === selectedNode) ?? null;
 
+  const [nodeBusy, setNodeBusy] = React.useState(false);
+
+  // A node edit answers with the validated YAML and the re-parsed graph: both replace the
+  // editor state, so the canvas, the inspector and the file on disk can never disagree.
+  const applyNodeResponse = React.useCallback(
+    (res: WorkflowNodeResponse, deletedId?: string) => {
+      setYaml(res.yaml);
+      setGraph(res.graph);
+      if (deletedId) setSelectedNode((prev) => (prev === deletedId ? null : prev));
+      void qc.invalidateQueries({ queryKey: ["workflow", wid] });
+    },
+    [qc, wid],
+  );
+
+  const addNodeFromPalette = async (entry: PaletteEntry) => {
+    if (!session || !wid) return;
+    setNodeBusy(true);
+    setRunError(null);
+    try {
+      const id = nextNodeId(entry.type, graph.map((n) => n.id));
+      const res = await addWorkflowNode(wid, entry.create(id), session.csrf_token);
+      applyNodeResponse(res);
+      setSelectedNode(id);
+      setShowQuickAdd(false);
+    } catch (e) {
+      setRunError(`Could not add the node: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setNodeBusy(false);
+    }
+  };
+
   const startRun = async (dry: boolean) => {
     if (!session || !wid) return;
     setIsRunning(true);
@@ -3034,7 +2795,8 @@ export function WorkflowEditorPage() {
           </button>
           {showQuickAdd && (
             <QuickAddPalette
-              onAdd={(stub) => setYaml((prev) => prev + stub)}
+              busy={nodeBusy}
+              onAdd={addNodeFromPalette}
               onClose={() => setShowQuickAdd(false)}
             />
           )}
@@ -3142,9 +2904,9 @@ export function WorkflowEditorPage() {
                     node={selectedNodeData}
                     nodeState={selectedNodeData ? (nodeStates[selectedNodeData.id] ?? "idle") : undefined}
                     wid={wid!}
-                    yaml={yaml}
+                    allNodeIds={graph.map((n) => n.id)}
                     csrf={session!.csrf_token}
-                    onYamlChange={(newYaml) => { setYaml(newYaml); }}
+                    onNodeChanged={applyNodeResponse}
                   />
                 ) : (
                   <WorkflowIOPanel yaml={yaml} />

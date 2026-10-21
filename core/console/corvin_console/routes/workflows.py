@@ -916,7 +916,13 @@ def _validate_yaml_str(raw: str) -> None:
             _validate_workflow(doc)
         except WorkflowInvalid as exc:
             _log.error("Workflow validation failed", exc_info=True)
-            raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "Workflow validation failed — please check your AWP structure") from exc
+            # WF-11: the rule code and message only echo what the author wrote (node ids,
+            # type names, field names) - no paths or internals - and are the only thing that
+            # tells the author WHICH node to fix.
+            raise HTTPException(
+                http_status.HTTP_400_BAD_REQUEST,
+                f"Workflow validation failed: {str(exc)[:400]}",
+            ) from exc
         except Exception as exc:
             _log.error("Workflow processing error", exc_info=True)
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "Workflow processing failed") from exc

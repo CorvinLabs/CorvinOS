@@ -30,6 +30,15 @@ export interface GraphNode {
   instructions: string;
   tools?: string[];
   config?: Record<string, unknown> | null;  // deliver node: {channel, chat_id, format}
+  /** The node exactly as written in the YAML (every type's fields). */
+  spec?: Record<string, unknown>;
+}
+
+export interface WorkflowNodeResponse {
+  ok: true;
+  id: string;
+  yaml: string;
+  graph: GraphNode[];
 }
 
 export interface ChatEntry {
@@ -182,6 +191,38 @@ export async function putWorkflowYaml(
   csrf: string,
 ): Promise<{ ok: true; id: string; graph: GraphNode[] }> {
   return api(`/workflows/${encodeURIComponent(wid)}/yaml`, { method: "PUT", csrf, body: { yaml } });
+}
+
+export async function addWorkflowNode(
+  wid: string,
+  node: Record<string, unknown>,
+  csrf: string,
+): Promise<WorkflowNodeResponse> {
+  return api(`/workflows/${encodeURIComponent(wid)}/nodes`, { method: "POST", csrf, body: { node } });
+}
+
+export async function putWorkflowNode(
+  wid: string,
+  nodeId: string,
+  node: Record<string, unknown>,
+  csrf: string,
+): Promise<WorkflowNodeResponse> {
+  return api(`/workflows/${encodeURIComponent(wid)}/nodes/${encodeURIComponent(nodeId)}`, {
+    method: "PUT",
+    csrf,
+    body: { node },
+  });
+}
+
+export async function deleteWorkflowNode(
+  wid: string,
+  nodeId: string,
+  csrf: string,
+): Promise<WorkflowNodeResponse> {
+  return api(`/workflows/${encodeURIComponent(wid)}/nodes/${encodeURIComponent(nodeId)}`, {
+    method: "DELETE",
+    csrf,
+  });
 }
 
 export async function listRuns(
