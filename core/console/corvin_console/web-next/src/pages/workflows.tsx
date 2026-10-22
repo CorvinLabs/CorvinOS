@@ -91,6 +91,7 @@ import {
 import { MediaGallery, ImageCard, type MediaItem } from "@/components/media";
 import { WorkflowComposer, type WorkflowComposerHandle } from "@/components/workflows/WorkflowComposer";
 import { NodeSpecEditor } from "@/components/workflows/NodeSpecEditor";
+import { ReadinessPanel } from "@/components/workflows/ReadinessPanel";
 import { NODE_PALETTE, nextNodeId, type PaletteEntry } from "@/lib/workflow-node-types";
 import type { SlashCommand } from "@/components/chat/SlashCommandPalette";
 import { DropOverlay } from "@/components/chat/DropOverlay";
@@ -1548,9 +1549,15 @@ function EditorToolbar({
             <Play className="h-3.5 w-3.5" />
             Test
           </Button>
-          <Button size="sm" variant="outline" onClick={() => onTest(true)} disabled={!yaml.trim()}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onTest(true)}
+            disabled={!yaml.trim()}
+            title="Runs the workflow against a stub: checks structure and the acceptance case, not real execution"
+          >
             <Zap className="h-3.5 w-3.5" />
-            Dry-run
+            Synthetic check
           </Button>
         </>
       ) : (
@@ -2579,7 +2586,7 @@ export function WorkflowEditorPage() {
   const [currentRid, setCurrentRid] = React.useState<string | null>(null);
   const [awaitingApproval, setAwaitingApproval] = React.useState<{ nodeId: string; message: string } | null>(null);
   const [awaitingReply, setAwaitingReply] = React.useState<{ nodeId: string; prompt: string; history: ChatTurn[] } | null>(null);
-  const [inspectorTab, setInspectorTab] = React.useState<"node" | "io">("node");
+  const [inspectorTab, setInspectorTab] = React.useState<"node" | "io" | "ready">("node");
   const abortRef = React.useRef<AbortController | null>(null);
 
   React.useEffect(() => {
@@ -2656,7 +2663,7 @@ export function WorkflowEditorPage() {
       setRunError(evt.message ?? evt.error ?? "The run failed.");
       return "ended";
     } else if (evt.type === "run_completed") {
-      if (!evt.ok) setRunError(evt.error ?? "The run failed.");
+      if (!evt.ok) setRunError(evt.error ?? (evt.synthetic ? "The synthetic check failed." : "The run failed."));
       void qc.invalidateQueries({ queryKey: ["workflow-runs", wid] });
       return "ended";
     }
@@ -3023,6 +3030,14 @@ export function WorkflowEditorPage() {
                   >
                     I/O
                   </button>
+                  <button
+                    className={cn("text-[10px] font-medium uppercase tracking-widest px-1.5 py-0.5 rounded transition-colors",
+                      inspectorTab === "ready" ? "bg-accent/15 text-accent" : "text-muted-foreground hover:text-foreground")}
+                    onClick={() => setInspectorTab("ready")}
+                    data-testid="inspector-tab-ready"
+                  >
+                    Ready
+                  </button>
                 </div>
                 <Button
                   variant="ghost"
@@ -3044,8 +3059,10 @@ export function WorkflowEditorPage() {
                     csrf={session!.csrf_token}
                     onNodeChanged={applyNodeResponse}
                   />
-                ) : (
+                ) : inspectorTab === "io" ? (
                   <WorkflowIOPanel yaml={yaml} />
+                ) : (
+                  <ReadinessPanel wid={wid!} csrf={session!.csrf_token} phase={phase} onPhaseChange={setPhase} />
                 )}
               </div>
             </>
@@ -3159,7 +3176,7 @@ function RunRow({
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <Badge className={cn("text-[10px]", statusColor)}>{run.status}</Badge>
-              {run.dry_run && <Badge variant="outline" className="text-[10px]">dry-run</Badge>}
+              {run.dry_run && <Badge variant="outline" className="text-[10px]">synthetic check</Badge>}
               <span className="font-mono text-[11px] text-muted-foreground">{run.rid}</span>
             </div>
             <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
@@ -3568,7 +3585,7 @@ export function WorkflowRunDetailPage() {
           >
             {run.status === "paused" ? "waiting for an answer" : run.status}
           </Badge>
-          {run.dry_run && <Badge variant="outline">dry-run</Badge>}
+          {run.dry_run && <Badge variant="outline">synthetic check</Badge>}
           <span className="text-muted-foreground">
             Started {formatTs(run.started_at)}
           </span>

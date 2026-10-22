@@ -105,6 +105,9 @@ export interface WorkflowRunEvent {
   timeout_s?: number;
   ok?: boolean;
   dry_run?: boolean;
+  /** Set on the end of a synthetic check (the former dry run): a stub run, not a real one. */
+  synthetic?: boolean;
+  ready?: boolean;
   budget?: Record<string, unknown>;
   output_preview?: string;
   output?: string;            // full node output (up to 50 KB)
@@ -351,4 +354,54 @@ export async function cancelWorkflowRun(
     method: "POST",
     csrf,
   });
+}
+
+// ── Readiness (synthetic check, acceptance case, ready override) ────────────
+
+export type ReadinessStatus = "pass" | "fail" | "unmeasured" | "info";
+
+export interface ReadinessSignal {
+  name: string;
+  status: ReadinessStatus;
+  detail: string;
+  value: number | null;
+}
+
+export interface AcceptanceCase {
+  inputs?: Record<string, unknown>;
+  stub_responses?: Record<string, Record<string, unknown>>;
+  expect: {
+    state?: "complete" | "failed";
+    nodes_reached?: string[];
+    final_contains?: Record<string, string>;
+  };
+}
+
+export interface ReadinessReport {
+  ready: boolean;
+  /** Always true: the check runs against a deterministic stub, never a real engine. */
+  synthetic: boolean;
+  run_state: string | null;
+  elapsed_ms: number;
+  signals: ReadinessSignal[];
+  nodes: { node_id: string; node_type: string; status: "success" | "failed" | "skipped"; error: string | null }[];
+  phase: string;
+  acceptance: AcceptanceCase | null;
+  notice: string;
+}
+
+export async function getReadiness(wid: string): Promise<ReadinessReport> {
+  return api(`/workflows/${encodeURIComponent(wid)}/readiness`);
+}
+
+export async function putAcceptance(wid: string, acceptance: AcceptanceCase, csrf: string): Promise<{ ok: true }> {
+  return api(`/workflows/${encodeURIComponent(wid)}/acceptance`, { method: "PUT", csrf, body: acceptance });
+}
+
+export async function postReadyOverride(
+  wid: string,
+  reason: string,
+  csrf: string,
+): Promise<{ ok: true; phase: "ready" }> {
+  return api(`/workflows/${encodeURIComponent(wid)}/ready-override`, { method: "POST", csrf, body: { reason } });
 }
