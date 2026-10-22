@@ -478,6 +478,35 @@ def workflow_attachment_refused(*, tenant_id: str, wid: str, att_id: str, reason
                    "reason_code": reason_code, "sid_fingerprint": sid_fingerprint})
 
 
+def workflow_readiness_checked(*, tenant_id: str, wid: str, ready: bool, failing: int, unmeasured: int,
+                               elapsed_ms: int, sid_fingerprint: str = "") -> None:
+    """ADR-2275: one record per readiness report served. Counts and a flag only (the check is
+    synthetic, and the record says so); never YAML text, node ids or user text."""
+    _emit("workflow.readiness_checked", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "wid": wid, "ready": bool(ready), "failing": int(failing),
+                   "unmeasured": int(unmeasured), "elapsed_ms": int(elapsed_ms), "synthetic": True,
+                   "sid_fingerprint": sid_fingerprint})
+
+
+DESIGN_REPAIR_CODES = ("yaml_regenerated", "field_added", "node_replaced")
+
+
+def workflow_design_repaired(*, tenant_id: str, wid: str, code: str, count: int) -> None:
+    """ADR-2275: the designer rewrote a draft after a validator error. ``code`` is a closed set."""
+    _emit("workflow.design_repaired", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "wid": wid,
+                   "code": code if code in DESIGN_REPAIR_CODES else "yaml_regenerated", "count": int(count)})
+
+
+def workflow_ready_overridden(*, tenant_id: str, wid: str, reason_len: int, failing: int,
+                              sid_fingerprint: str = "") -> None:
+    """ADR-2275: the operator marked a draft ready past a failing readiness report. The reason's
+    LENGTH is recorded, never its text."""
+    _emit("workflow.ready_overridden", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "wid": wid, "reason_len": int(reason_len),
+                   "failing": int(failing), "sid_fingerprint": sid_fingerprint}, severity="WARNING")
+
+
 def session_denied(
     *,
     reason: str,

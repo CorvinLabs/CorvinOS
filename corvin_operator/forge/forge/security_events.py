@@ -165,6 +165,11 @@ EVENT_SEVERITY: dict[str, str] = {
     # WFB-R1-09 - a DAG-engine (corvin_workflows ClaudeCliEngine) spawn refused by the pre-spawn
     # gates (L44 / L34 / L35 / capability). Metadata only: no prompt text, no refusal wording.
     "workflow.spawn_refused":       "WARNING",
+    # ADR-2275 - workflow readiness gate (console/corvin_console/audit.py::workflow_readiness_*,
+    # workflow_design_repaired). Scalars only: no YAML text, no user text, no node ids.
+    "workflow.readiness_checked":   "INFO",
+    "workflow.design_repaired":     "INFO",
+    "workflow.ready_overridden":    "WARNING",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
     "tool.created":              "INFO",
     "tool.deleted":              "INFO",
@@ -3249,6 +3254,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
                                                "method"}),
     "workflow.attachment_refused": frozenset({"tenant_id", "wid", "att_id", "reason_code", "sid_fingerprint"}),
     "workflow.spawn_refused": frozenset({"tenant_id", "engine_id", "reason_code"}),
+    "workflow.readiness_checked": frozenset({
+        "tenant_id", "wid", "ready", "failing", "unmeasured", "elapsed_ms", "synthetic", "sid_fingerprint",
+    }),
+    "workflow.design_repaired": frozenset({"tenant_id", "wid", "code", "count"}),
+    "workflow.ready_overridden": frozenset({"tenant_id", "wid", "reason_len", "failing", "sid_fingerprint"}),
     "forge_run.finished": frozenset({
         "tenant_id", "run_id", "run_kind", "status", "artifact_kind", "artifact_id", "event_count", "truncated",
     }),

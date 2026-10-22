@@ -105,6 +105,7 @@ from .routes import (
     chat as chat_route,
     chat_groups as chat_groups_route,
     workflow_composer as workflow_composer_route,
+    workflow_readiness as workflow_readiness_route,
     voice as voice_route,
     voice_summary as voice_summary_route,
     remediation_routes,
@@ -433,6 +434,8 @@ except Exception as _workflows_exc:
     )
 # CONCEPT-0115 / ADR-2270 — workflow design chat uses the main chat's composer.
 router.include_router(workflow_composer_route.router, tags=["console-workflow-composer"])
+# ADR-2275 — workflow readiness gate (synthetic check, acceptance case, audited override).
+router.include_router(workflow_readiness_route.router, tags=["console-workflow-readiness"])
 router.include_router(connectors_route.router, tags=["console-connectors"])
 router.include_router(setup_route.router, tags=["console-setup"])
 # Phase D extension — settings file watcher SSE stream.
