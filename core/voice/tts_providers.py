@@ -66,13 +66,18 @@ class OpenAITTSProvider(TTSProviderBase):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.quality_score = 0.95  # High quality
 
+        self.client = None
+        self._imported = False
         try:
             import openai
-            self.client = openai.AsyncOpenAI(api_key=self.api_key)
-            self._imported = True
         except ImportError:
-            self._imported = False
             logger.warning("OpenAI SDK not installed; OpenAI TTS unavailable")
+        else:
+            # Without a key AsyncOpenAI() raises OpenAIError; the provider must report itself
+            # unavailable instead of failing to construct (get_tts_manager() builds it eagerly).
+            if self.api_key:
+                self.client = openai.AsyncOpenAI(api_key=self.api_key)
+                self._imported = True
 
     def is_available(self) -> bool:
         """Check if OpenAI API is configured"""

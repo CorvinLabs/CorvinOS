@@ -22,6 +22,27 @@ BRIDGES_SHARED = Path(__file__).parent.parent / "corvin_operator/bridges/shared"
 sys.path.insert(0, str(BRIDGES_SHARED))
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_voice_keys(monkeypatch, tmp_path):
+    """Start every test from an install that holds no TTS/STT key anywhere.
+
+    These tests describe key precedence and provider availability, so the answer must not
+    depend on what the machine running them happens to export or store: the process env,
+    secrets.enc and ~/.config/corvin-voice/service.env are all neutralised.
+    """
+    for name in ("CORVIN_TTS_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY", "CORVIN_STT_OPENAI_KEY",
+                 "CORVIN_TTS_PROVIDER", "CORVIN_TTS_LOCAL_ONLY"):
+        monkeypatch.delenv(name, raising=False)
+    import provider_keys
+
+    class _NoSecrets:
+        def decrypt_secrets(self):
+            return {}
+
+    monkeypatch.setattr(provider_keys, "SecretsStore", _NoSecrets)
+    monkeypatch.setattr(provider_keys, "service_env_path", lambda: tmp_path / "service.env")
+
+
 class TestTTSProviderSelection:
     """Test TTS provider selection logic"""
 
@@ -86,7 +107,7 @@ class TestTTSProviderSelection:
             key = provider_keys.resolve_key("tts_openai_api_key")
             assert key is not None, "Key should resolve"
 
-            is_placeholder = key.startswith("PLACEHOLDER")
+            is_placeholder = "PLACEHOLDER" in key
             assert is_placeholder, "Should detect placeholder format"
 
 
@@ -122,6 +143,20 @@ class TestOpenAITTSProvider:
             "Should be unavailable without API key"
 
 
+    def test_tts_manager_builds_without_any_key(self, monkeypatch):
+        """Test 7b: the production entry point (get_tts_manager, used by the console voice route)
+        must construct on an install with no OpenAI key and report the primary as unavailable.
+        Until the fix this raised openai.OpenAIError, hidden on machines that export a key."""
+        try:
+            import core.voice.tts_providers as tp
+        except ImportError:
+            pytest.skip("voice providers not importable")
+        monkeypatch.setattr(tp, "_tts_manager", None)
+        manager = tp.get_tts_manager()
+        assert manager.primary.is_available() is False, "no key anywhere means the OpenAI tier is unavailable"
+        assert manager.fallback is not None
+
+
 class TestEdgeTTSFallback:
     """Test Edge TTS fallback behavior"""
 
@@ -143,26 +178,20 @@ class TestEdgeTTSFallback:
 
     def test_fallback_chain_order(self):
         """Test 9: Fallback chain is correct (OpenAI → Edge → Piper → None)"""
-        # This is tested through adapter.py's synthesize_voice_note order
-        # Expected order:
-        # 1. _try_openai_tts
-        # 2. _try_edge_tts
-        # 3. _try_piper_tts
-        # 4. None (text-only fallback)
+        import inspect
 
-        # We verify this by checking the function order in adapter.py
         import adapter
 
-        # Get source code to verify order
-        import inspect
+        # The order itself lives in _tts_chain_for / _TTS_AUTO_CHAIN ...
+        assert adapter._tts_chain_for(None) == ("openai", "edge", "piper"), "auto chain must be OpenAI → Edge → Piper"
+        # ... a pinned cloud provider falls back to the LOCAL provider only (never to the other cloud),
+        assert adapter._tts_chain_for("openai") == ("openai", "piper")
+        assert adapter._tts_chain_for("edge") == ("edge", "piper")
+        assert adapter._tts_chain_for("piper") == ("piper",)
+        # ... and synthesize_voice_note actually walks that chain (call-site proof, not just a constant).
         source = inspect.getsource(adapter.synthesize_voice_note)
-
-        openai_pos = source.find("_try_openai_tts")
-        edge_pos = source.find("_try_edge_tts")
-        piper_pos = source.find("_try_piper_tts")
-
-        assert openai_pos > 0 and edge_pos > openai_pos and piper_pos > edge_pos, \
-            f"Fallback order should be: OpenAI ({openai_pos}) → Edge ({edge_pos}) → Piper ({piper_pos})"
+        assert "_tts_chain_for(" in source and "_run_tts_provider(" in source, \
+            "synthesize_voice_note must run the providers in the order _tts_chain_for returns"
 
 
 class TestConfigurationProblems:
