@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CorvinOS — The console, page by page</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0e1320; color: #e6e9f2; font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  p.sub { margin: 0 0 16px; color: #9aa3b8; }
+  video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  label { color: #9aa3b8; }
+  select, a.btn { background: #1a2236; color: #e6e9f2; border: 1px solid #2c3652; border-radius: 6px; padding: 6px 10px; text-decoration: none; font: inherit; }
+  #err { display: none; margin-top: 12px; color: #f2b8b5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CorvinOS — The console, page by page</h1>
+  <p class="sub">30 min · English · 1080p</p>
+  <video id="v" controls preload="metadata" playsinline>
+    <source src="corvinos-console-tour.en.mp4" type="video/mp4">
+    <source src="https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/docs/media/corvinos-console-tour.en.mp4" type="video/mp4">
+    Your browser cannot play this video. <a href="corvinos-console-tour.en.mp4">Download the MP4</a>.
+  </video>
+  <div class="row">
+    <label for="speed">Speed</label>
+    <select id="speed">
+      <option value="0.75">0.75×</option><option value="1" selected>1×</option>
+      <option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option>
+    </select>
+    <a class="btn" href="corvinos-console-tour.en.mp4" download>Download MP4</a>
+  </div>
+  <p id="err">The video could not be loaded. Use the download button instead.</p>
+</main>
+<script>
+  const v = document.getElementById('v');
+  document.getElementById('speed').addEventListener('change', e => { v.playbackRate = +e.target.value; });
+  v.querySelectorAll('source').forEach(s => s.addEventListener('error', () => {
+    if (v.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) document.getElementById('err').style.display = 'block';
+  }));
+</script>
+</body>
+</html>

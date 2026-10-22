@@ -43,7 +43,7 @@ A 30-minute tour of the CorvinOS operator console: chat, dashboard, learnings, t
   <a href="docs/media/corvinos-console-tour.en.mp4">
     <img src="docs/media/corvinos-console-tour-teaser.gif" alt="Video: CorvinOS console tour (animated preview, plays inline; click for the full MP4)" width="720"/>
   </a><br/>
-  <sub>30 min &middot; English &middot; <a href="docs/media/corvinos-console-tour.en.mp4">full video (MP4, hosted in this repo)</a></sub>
+  <sub>30 min &middot; English &middot; <a href="https://htmlpreview.github.io/?https://github.com/CorvinLabs/CorvinOS/blob/main/docs/media/console-tour-player.html">&#9654; play in web player</a> &middot; <a href="docs/media/corvinos-console-tour.en.mp4">full video (MP4, hosted in this repo)</a></sub>
 </p>
 
 ---
