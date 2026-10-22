@@ -170,6 +170,12 @@ EVENT_SEVERITY: dict[str, str] = {
     "workflow.readiness_checked":   "INFO",
     "workflow.design_repaired":     "INFO",
     "workflow.ready_overridden":    "WARNING",
+    # ADR-2276 - the peer_agent DAG node (core/workflows/corvin_workflows/peer_gate.py). Scalars only:
+    # no instruction text, no peer answer, no instance ids beyond the pinned one.
+    "workflow.peer_delegated":        "INFO",
+    "workflow.peer_completed":        "INFO",
+    "workflow.peer_refused":          "WARNING",
+    "workflow.peer_outcome_unknown":  "WARNING",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
     "tool.created":              "INFO",
     "tool.deleted":              "INFO",
@@ -3258,6 +3264,20 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "tenant_id", "wid", "ready", "failing", "unmeasured", "elapsed_ms", "synthetic", "sid_fingerprint",
     }),
     "workflow.design_repaired": frozenset({"tenant_id", "wid", "code", "count"}),
+    "workflow.peer_delegated": frozenset({
+        "tenant_id", "wid", "rid", "node_id", "endpoint_id", "peer_instance_id", "agent_id", "data_class",
+    }),
+    "workflow.peer_completed": frozenset({
+        "tenant_id", "wid", "rid", "node_id", "endpoint_id", "peer_instance_id", "agent_id", "status",
+        "duration_ms", "reason_code",
+    }),
+    "workflow.peer_refused": frozenset({
+        "tenant_id", "wid", "rid", "node_id", "endpoint_id", "agent_id", "data_class", "reason_code",
+    }),
+    "workflow.peer_outcome_unknown": frozenset({
+        "tenant_id", "wid", "rid", "node_id", "endpoint_id", "peer_instance_id", "agent_id", "status",
+        "reason_code",
+    }),
     "workflow.ready_overridden": frozenset({"tenant_id", "wid", "reason_len", "failing", "sid_fingerprint"}),
     "forge_run.finished": frozenset({
         "tenant_id", "run_id", "run_kind", "status", "artifact_kind", "artifact_id", "event_count", "truncated",
