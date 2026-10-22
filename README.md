@@ -37,13 +37,13 @@
 
 ## 🎥 Video — The console, page by page
 
-A 30-minute tour of the CorvinOS operator console: chat, dashboard, learnings, tasks and every other page, one at a time. The preview below plays right here on GitHub; click it for the full video.
+A 30-minute tour of the CorvinOS operator console: chat, dashboard, learnings, tasks and every other page, one at a time. The preview below plays right here on GitHub; click it to watch the full video on YouTube.
 
 <p align="center">
-  <a href="docs/media/corvinos-console-tour.en.mp4">
-    <img src="docs/media/corvinos-console-tour-teaser.gif" alt="Video: CorvinOS console tour (animated preview, plays inline; click for the full MP4)" width="720"/>
+  <a href="https://www.youtube.com/watch?v=vjTaHDcyIIE" target="_blank" rel="noopener">
+    <img src="docs/media/corvinos-console-tour-teaser.gif" alt="Video: CorvinOS console tour (animated preview, plays inline; click to watch on YouTube)" width="720"/>
   </a><br/>
-  <sub>30 min &middot; English &middot; <a href="https://htmlpreview.github.io/?https://github.com/CorvinLabs/CorvinOS/blob/main/docs/media/console-tour-player.html">&#9654; play in web player</a> &middot; <a href="docs/media/corvinos-console-tour.en.mp4">full video (MP4, hosted in this repo)</a></sub>
+  <sub>30 min &middot; English &middot; <a href="https://www.youtube.com/watch?v=vjTaHDcyIIE" target="_blank" rel="noopener">&#9654; watch on YouTube</a></sub>
 </p>
 
 ---
