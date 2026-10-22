@@ -32,9 +32,17 @@ orchestration:
 `;
 
 async function csrfOf(request: APIRequestContext): Promise<string> {
-  const who = await request.get(`${API}/auth/whoami`);
-  expect(who.status()).toBe(200);
-  return (await who.json()).csrf_token as string;
+  // whoami can answer a transient non-200 while the host is busy (observed once right after a
+  // restart); a short retry keeps the cleanup in afterAll from leaving a qa-wf- workflow behind.
+  let status = 0;
+  for (let i = 0; i < 4; i++) {
+    const who = await request.get(`${API}/auth/whoami`);
+    status = who.status();
+    if (status === 200) return (await who.json()).csrf_token as string;
+    await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+  }
+  expect(status).toBe(200);
+  return "";
 }
 
 test.beforeAll(async ({ playwright }) => {
@@ -83,6 +91,9 @@ test("the Ready tab shows the measured lines and asks for a reason before markin
 
 test("the editor's former Dry-run button is the Synthetic check", async ({ page }) => {
   await page.goto(`/console/app/workflows/${WID}`);
-  await expect(page.getByRole("button", { name: "Synthetic check" })).toBeVisible();
+  // The toolbar renders after the lazily loaded editor chunk and the workflow detail arrive;
+  // under four parallel browsers that took longer than the 5 s default (empty <main> in the
+  // failing run's DOM snapshot), so wait for the page like the composer spec does.
+  await expect(page.getByRole("button", { name: "Synthetic check" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("button", { name: "Dry-run" })).toHaveCount(0);
 });
