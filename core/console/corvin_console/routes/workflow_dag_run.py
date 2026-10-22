@@ -34,7 +34,7 @@ from typing import Any, AsyncIterator, Callable
 _log = logging.getLogger(__name__)
 
 # Node types the console's own executor does not implement (see workflows._stream_run).
-DAG_ONLY_TYPES = frozenset({"code", "merge", "route", "answer", "ask_human", "approval"})
+DAG_ONLY_TYPES = frozenset({"code", "merge", "route", "answer", "ask_human", "approval", "peer_agent"})
 
 _MAX_OUTPUT_CHARS = 50_000
 _TERMINAL_EVENTS = frozenset({"run_completed", "error"})
@@ -287,6 +287,7 @@ def run_first_pass(
         runner = DAGRunner(
             doc, engine=engine, audit_sink=recorder.audit_sink, tenant_id=recorder.tenant_id,
             observer=recorder.observe, console_run=True, cancel_event=cancel_event,
+            workflow_id=recorder.wid,
         )
         result = runner.run(inputs=inputs, run_id=recorder.rid)
         recorder.finish(result, checkpoint=_checkpoint_of(recorder.rid, recorder.tenant_id))
@@ -312,6 +313,7 @@ def run_resume(
             result = resume_workflow(
                 recorder.rid, reply, engine=engine, tenant_id=recorder.tenant_id, replier=None,
                 audit_sink=recorder.audit_sink, observer=recorder.observe, cancel_event=cancel_event,
+                workflow_id=recorder.wid,
             )
         except BaseException:
             # nothing ran (or the claim was released): the run is waiting as before

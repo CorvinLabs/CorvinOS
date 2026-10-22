@@ -95,6 +95,26 @@ def _released_grade(tenant_id: str, endpoint_id: str) -> Any:
     return DataClassification[value.strip().upper()]
 
 
+def _endpoint_registry(sender: Any = None) -> Any:
+    reg = getattr(sender, "_registry", None)
+    if reg is None:
+        _shared_on_path()
+        import remote_trigger_sender as _rts  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        reg = _rts.RemoteEndpointRegistry()
+    return reg
+
+
+def endpoint_is_paired(endpoint_id: str, sender: Any = None) -> bool:
+    """True when ``endpoint_id`` is a paired, enabled endpoint of this installation. Reads only;
+    used by the synthetic readiness check, which never sends. Never raises."""
+    try:
+        _endpoint_registry(sender).load(endpoint_id)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def evaluate_peer_outbound(
     instruction: str, tenant_id: str, endpoint_id: str, *, sender: Any = None,
 ) -> PeerGateDecision:
@@ -118,13 +138,8 @@ def evaluate_peer_outbound(
         if grade > _dc.DataClassification.PUBLIC:
             released = _released_grade(tenant_id, endpoint_id)
 
-        reg = getattr(sender, "_registry", None)
-        if reg is None:
-            import remote_trigger_sender as _rts  # type: ignore[import-not-found]  # noqa: PLC0415
-
-            reg = _rts.RemoteEndpointRegistry()
         try:
-            cfg = reg.load(endpoint_id)
+            cfg = _endpoint_registry(sender).load(endpoint_id)
         except Exception:  # noqa: BLE001 - unknown / disabled / unreadable endpoint
             return PeerGateDecision(False, REASON_NOT_PAIRED, grade_name)
         if not str(cfg.get("instance_id") or "").strip():

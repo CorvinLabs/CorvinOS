@@ -618,6 +618,7 @@ def resume_workflow(
     audit_sink: Callable[[dict[str, Any]], None] | None = None,
     observer: "Callable[[NodeResult], None] | None" = None,
     cancel_event: Any = None,
+    workflow_id: str | None = None,
 ) -> RunResult:
     """Load a paused run's checkpoint, reload its workflow, and continue
     execution with `reply` injected at the paused `ask_human` node
@@ -669,7 +670,8 @@ def resume_workflow(
     try:
         doc = load_workflow(ckpt["workflow_path"])
         runner = DAGRunner(doc, engine=engine, audit_sink=audit_sink, tenant_id=tenant_id,
-                           observer=observer, cancel_event=cancel_event)
+                           observer=observer, cancel_event=cancel_event,
+                           workflow_id=workflow_id)
         result = runner.run(
             inputs=ckpt["inputs"],
             resume=ResumeContext(

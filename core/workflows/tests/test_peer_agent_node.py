@@ -365,3 +365,57 @@ def test_tenant_and_run_come_from_the_runner_not_from_node_config(peer_env):
     for key in ("tenant_id", "run_id", "task_id"):
         with pytest.raises(ValueError, match="unknown key"):
             _validate_node(_node(**{key: "x"}))
+
+
+# ---------------------------------------------------------------------------
+# Synthetic readiness check never sends (S6)
+# ---------------------------------------------------------------------------
+
+def _ready_yaml(extra=""):
+    return _wf(_PEER_WF.format(instr=json.dumps("Review this public text."), extra=extra))
+
+
+def test_readiness_check_runs_the_node_as_a_stub_and_sends_nothing(peer_env):
+    from corvin_workflows.readiness import check_readiness
+
+    home, sender = peer_env
+    acc = {"expect": {"state": "complete", "nodes_reached": ["legal_review"],
+                      "final_contains": {"legal_review.result": "synthetic peer answer"}}}
+    rep = check_readiness(_ready_yaml(), acceptance=acc, repairs=0)
+    assert rep.ready, [s.as_dict() for s in rep.signals]
+    assert rep.synthetic and [n.node_type for n in rep.nodes] == ["peer_agent"]
+    assert sender.calls == [], "the synthetic check must never send"
+    assert "federation.task_delegated" not in _events(home) and "workflow.peer_delegated" not in _events(home)
+    exposure = next(s for s in rep.signals if s.name == "external_exposure")
+    assert "stubbed" in exposure.detail and exposure.value == 1
+
+
+def test_readiness_fails_for_an_endpoint_that_is_not_paired(peer_env, monkeypatch):
+    from corvin_workflows.readiness import check_readiness
+
+    home, sender = peer_env
+    monkeypatch.setattr(_nt, "_PEER_SENDER_FACTORY", lambda: _FakeSenderNoEndpoint())
+    rep = check_readiness(_ready_yaml(), acceptance=None, repairs=0)
+    assert not rep.ready
+    reach = next(s for s in rep.signals if s.name == "reachability")
+    assert reach.status == "fail" and "legal_review" in reach.detail
+    assert sender.calls == []
+
+
+class _FakeSenderNoEndpoint:
+    def __init__(self):
+        def load(_self, _e):
+            raise RuntimeError("unknown_endpoint")
+        self._registry = type("R", (), {"load": load})()
+        self.calls = []
+
+
+def test_acceptance_stub_can_provoke_a_contained_peer_failure(peer_env):
+    from corvin_workflows.readiness import check_readiness
+
+    home, sender = peer_env
+    extra = "      retry:\n        error_strategy: fail_branch\n"
+    acc = {"stub_responses": {"legal_review": {"__raise__": True}}, "expect": {"state": "complete"}}
+    rep = check_readiness(_ready_yaml(extra), acceptance=acc, repairs=0)
+    assert rep.run_state == "complete" and rep.nodes[0].status == "failed"
+    assert sender.calls == []

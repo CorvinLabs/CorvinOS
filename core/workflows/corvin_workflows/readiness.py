@@ -8,7 +8,7 @@ deterministic `StubEngine`, and evaluates the acceptance case on that run.
 The run is synthetic and says so (`ReadinessReport.synthetic`). It proves structure
 and the acceptance case, never real execution: prompts, credentials, rate limits and
 the channels behind `deliver`/`answer`/`ask_human`/`approval` are NOT exercised. Those
-four node types are replaced for this run by recording stubs (their config is already
+five node types (with `peer_agent`: nothing is sent to a peer) are replaced for this run by recording stubs (their config is already
 validated by R10), so the check never writes an outbox envelope and never pauses.
 `code` nodes keep their own sandbox (they are deterministic by contract).
 
@@ -198,7 +198,29 @@ def _shims(stubs: dict[str, dict[str, Any]]) -> dict[str, Any]:
             raise ApprovalRejected(f"approval {node['id']!r} rejected (synthetic)")
         return {"approved": True, "output": "approved", "comment": "synthetic"}
 
-    return {"deliver": deliver, "answer": answer, "ask_human": ask_human, "approval": approval}
+    def peer_agent(*, node, engine, state, inputs, audit):
+        # Nothing leaves the installation: the node is validated (R10), a pinned endpoint must be a
+        # paired one, and the answer is canned. The real executor is never called here.
+        from . import node_types as _nt
+        from .peer_gate import endpoint_is_paired
+
+        audit("synthetic.peer_agent", node_id=node["id"])
+        override = stubs.get(node["id"]) or {}
+        if override.get("__raise__"):
+            raise RuntimeError("synthetic failure requested by the acceptance case")
+        endpoint_id = node.get("endpoint_id")
+        if endpoint_id is not None:
+            sender = _nt._PEER_SENDER_FACTORY() if _nt._PEER_SENDER_FACTORY is not None else None
+            if not endpoint_is_paired(endpoint_id, sender):
+                raise RuntimeError("peer endpoint is not paired on this installation")
+        out = {"status": "ok", "ok": True, "result": "synthetic peer answer", "untrusted": True,
+               "synthetic": True, "peer_instance_id": "", "agent_address": None, "task_id": "",
+               "our_chain_tail": "", "peer_chain_tail": ""}
+        out.update({k: v for k, v in override.items() if k != "__raise__"})
+        return out
+
+    return {"deliver": deliver, "answer": answer, "ask_human": ask_human, "approval": approval,
+            "peer_agent": peer_agent}
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +304,7 @@ def _exposure(doc: WorkflowDoc) -> Signal:
         counts[t] = counts.get(t, 0) + 1
         if node_requires_engine(n):
             engine_nodes += 1
-    stubbed = sum(counts.get(t, 0) for t in ("deliver", "answer", "ask_human", "approval"))
+    stubbed = sum(counts.get(t, 0) for t in ("deliver", "answer", "ask_human", "approval", "peer_agent"))
     return Signal(
         "external_exposure",
         "info",
