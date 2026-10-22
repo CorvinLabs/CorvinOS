@@ -17,6 +17,7 @@ bridge turning the outbox envelopes into chat messages.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -229,3 +230,83 @@ def test_editing_the_workflow_file_after_the_pause_blocks_the_resume(tmp_path):
     with pytest.raises(WorkflowChanged):
         resume_workflow(run.run_id, "yes", engine=eng)
     assert ckpt.load(run.run_id) is not None  # still there, not consumed
+
+
+# ---------------------------------------------------------------------------
+# peer_agent: the eleventh node type. It sends to ANOTHER installation, so it is not part of the
+# example file (the example must run with nothing paired); it is added here, driven through the
+# real runner, outbound gate, delegation ledger and audit chain with a fake at the sender boundary.
+# The real HTTP/HMAC path is tests/federation/test_workflow_peer_agent_e2e.py.
+# ---------------------------------------------------------------------------
+
+def test_example_plus_peer_agent_runs_through_pause_and_resume_sending_exactly_once(tmp_path, monkeypatch, _sandbox):
+    from dataclasses import dataclass, field
+
+    from corvin_workflows import node_types as nt
+
+    repo = Path(__file__).resolve().parents[3]
+    for p in (str(repo / "corvin_operator" / "bridges" / "shared"), str(repo)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    home = tmp_path / "home"
+    (home / "tenants" / "_default" / "global" / "federation").mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+
+    @dataclass
+    class Res:
+        ok: bool = True
+        status: str = "ok"
+        task_id: str = ""
+        instance_id: str = "iid-acme-0001"
+        instance_id_match: bool = True
+        data: dict = field(default_factory=lambda: {"output": "Peer says: fine."})
+        attachments: list = field(default_factory=list)
+        duration_ms: int = 5
+        error_category: str | None = None
+        error: str | None = None
+        our_chain_tail: str = "a" * 64
+        peer_chain_tail: str = "b" * 64
+
+    class Sender:
+        def __init__(self):
+            self.calls = []
+            self._registry = type("R", (), {"load": lambda _s, _e: {"endpoint_id": "ep_acme",
+                                                                    "instance_id": "iid-acme-0001", "enabled": True}})()
+
+        def send(self, endpoint_id, instruction, **kw):
+            self.calls.append((endpoint_id, instruction))
+            r = Res()
+            r.task_id = kw.get("task_id", "")
+            return r
+
+    sender = Sender()
+    monkeypatch.setattr(nt, "_PEER_SENDER_FACTORY", lambda: sender)
+
+    import yaml as _y
+
+    data = _y.safe_load(EXAMPLE.read_text())
+    data["orchestration"]["graph"].append({
+        "id": "peer_review", "type": "peer_agent", "depends_on": ["join"],
+        "endpoint_id": "ep_acme", "agent_id": "reviewer", "instruction_from": "join.report",
+    })
+    p = tmp_path / "with_peer.awp.yaml"
+    p.write_text(_y.safe_dump(data, sort_keys=False))
+    doc = load_workflow(p)
+    validate(doc)
+    assert {n["type"] for n in doc.graph} == set(NODE_TYPES)  # every registered type, peer_agent included
+
+    eng = _stub()
+    run = DAGRunner(doc, engine=eng, console_run=True, tenant_id="_default").run({})
+    assert run.state == "paused" and run.paused_at_node == "confirm"
+    assert sender.calls == []  # same level as `confirm`, which pauses first
+
+    mid = resume_workflow(run.run_id, "yes", engine=eng)
+    assert mid.state == "paused" and mid.paused_at_node == "signoff"
+    peer = mid.nodes["peer_review"]
+    assert peer.status == "success" and peer.output["untrusted"] is True
+    assert peer.output["result"] == "Peer says: fine."
+    assert len(sender.calls) == 1 and "sum-high_path" in sender.calls[0][1]
+
+    done = resume_workflow(run.run_id, "approve", engine=eng)
+    assert done.state == "complete"
+    assert len(sender.calls) == 1, "resuming again must not send the peer task again"
