@@ -104,7 +104,30 @@ test("add the node from the palette, pick a peer agent, save: the server validat
   expect(body).toContain("timeout_s: 120");
 });
 
-test("a stale catalog is named and can be refreshed", async ({ page }) => {
+test("a stale catalog is named and can be refreshed", async ({ page, playwright }) => {
+  // Self-contained: the workflow carries a peer node of its own (written through the real YAML route,
+  // validated by the server), so this test does not depend on what the previous test saved.
+  const ctx = await playwright.request.newContext({ storageState: "./tests/e2e/auth-state.json" });
+  const stale = `awp: "1.0.0"
+workflow:
+  name: qa_peer_stale
+  description: peer agent e2e
+orchestration:
+  engine: dag
+  graph:
+    - id: ask_peer
+      type: peer_agent
+      depends_on: []
+      endpoint_id: ep_old
+      agent_id: reviewer
+      instruction: Review this public text.
+`;
+  const put = await ctx.put(`${API}/workflows/${WID}/yaml`, {
+    headers: { "X-CSRF-Token": await csrfOf(ctx) }, data: { yaml: stale },
+  });
+  expect(put.status(), await put.text()).toBe(200);
+  await ctx.dispose();
+
   await page.route("**/v1/console/federation/peer-agents", (r) => r.fulfill({ json: { agents: [] } }));
   await page.route("**/v1/console/federation/peers", (r) =>
     r.fulfill({ json: { peers: [{ endpoint_id: "ep_old", peer_instance_id: "iid-old-0001", agent_count: 1, fresh: false }] } }),
@@ -114,9 +137,9 @@ test("a stale catalog is named and can be refreshed", async ({ page }) => {
     refreshed += 1;
     return r.fulfill({ json: { endpoint_id: "ep_old", agents: [] } });
   });
-  // the stale row is part of the node inspector: select the node saved by the previous test
   await page.goto(`/console/app/workflows/${WID}`);
-  await page.getByText("peer_agent", { exact: false }).first().click();
+  await page.getByText("ask_peer", { exact: true }).first().click();
+  await expect(page.getByTestId("peer-agent-picker")).toBeVisible();
   const row = page.getByTestId("peer-stale-ep_old");
   await expect(row).toContainText("stale");
   await row.getByRole("button", { name: "Refresh" }).click();
