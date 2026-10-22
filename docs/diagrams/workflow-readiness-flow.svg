@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" font-family="sans-serif" font-size="13">
+  <title>Workflow readiness gate: from a confirmation word to a measured report</title>
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker></defs>
+  <g fill="#f4f1ea" stroke="#555">
+    <rect x="10" y="20" width="170" height="70" rx="8"/>
+    <rect x="230" y="20" width="200" height="70" rx="8"/>
+    <rect x="480" y="20" width="200" height="70" rx="8"/>
+    <rect x="720" y="20" width="170" height="70" rx="8"/>
+    <rect x="230" y="150" width="200" height="70" rx="8"/>
+    <rect x="480" y="150" width="200" height="70" rx="8"/>
+    <rect x="720" y="150" width="170" height="70" rx="8"/>
+    <rect x="230" y="290" width="200" height="70" rx="8"/>
+    <rect x="480" y="290" width="200" height="70" rx="8"/>
+    <rect x="720" y="290" width="170" height="70" rx="8"/>
+  </g>
+  <g fill="#222" text-anchor="middle">
+    <text x="95" y="50">Design chat</text><text x="95" y="70">confirmation in detailing</text>
+    <text x="330" y="50">check_readiness()</text><text x="330" y="70">pure, no network, no channel</text>
+    <text x="580" y="50">validator R1-R11</text><text x="580" y="70">fail: no run is started</text>
+    <text x="805" y="50">Synthetic DAGRunner run</text><text x="805" y="70">StubEngine, wall limit 10 s</text>
+    <text x="330" y="180">deliver / answer / ask_human</text><text x="330" y="200">approval: recording shims</text>
+    <text x="580" y="180">reachability + acceptance</text><text x="580" y="200">unmeasured is never pass</text>
+    <text x="805" y="180">repairs count</text><text x="805" y="200">ceiling 3 per draft</text>
+    <text x="330" y="320">all lines pass</text><text x="330" y="340">phase becomes ready</text>
+    <text x="580" y="320">a line fails / unmeasured</text><text x="580" y="340">phase stays; server names the line</text>
+    <text x="805" y="320">Mark ready anyway</text><text x="805" y="340">reason, audited, not past R1-R11</text>
+  </g>
+  <g stroke="#555" fill="none" marker-end="url(#a)">
+    <path d="M180 55 H228"/><path d="M430 55 H478"/><path d="M680 55 H718"/>
+    <path d="M805 90 V120 H330 V148"/><path d="M330 220 V240 H580 V148" stroke-dasharray="4 3"/>
+    <path d="M680 185 H718"/>
+    <path d="M580 220 V288"/><path d="M330 220 V288" stroke-dasharray="1 0"/>
+    <path d="M680 325 H718"/>
+  </g>
+  <text x="450" y="392" text-anchor="middle" fill="#555">Synthetic: checks structure and the acceptance case, not real execution.</text>
+</svg>

@@ -74,9 +74,23 @@ def max_design_repairs(tenant_id: str) -> int:
     return r.DEFAULT_MAX_REPAIRS
 
 
+class ReadinessBusy(RuntimeError):
+    """Too many readiness checks are running at once."""
+
+
 def compute_report(tenant_id: str, wid: str, *, meta: dict[str, Any] | None = None,
                    yaml_text: str | None = None):
-    """The one place a report is computed (the route and the design-turn gate both call it)."""
+    """The one place a report is computed: the route, the design-turn gate and the synthetic
+    check (dry run) all call it. Blocking (up to the wall limit) - call it from a thread."""
+    if not _CHECK_SLOTS.acquire(blocking=False):
+        raise ReadinessBusy("too many readiness checks running")
+    try:
+        return _compute(tenant_id, wid, meta, yaml_text)
+    finally:
+        _CHECK_SLOTS.release()
+
+
+def _compute(tenant_id: str, wid: str, meta: dict[str, Any] | None, yaml_text: str | None):
     w, r = _wf(), _readiness_mod()
     meta = meta if meta is not None else (w._read_json(w._meta_path(tenant_id, wid)) or {})
     if yaml_text is None:
@@ -92,12 +106,12 @@ def compute_report(tenant_id: str, wid: str, *, meta: dict[str, Any] | None = No
     )
 
 
-def audit_report(rec: session_auth.SessionRecord, wid: str, report) -> None:
+def audit_report(tenant_id: str, sid_fingerprint: str, wid: str, report) -> None:
     console_audit.workflow_readiness_checked(
-        tenant_id=rec.tenant_id, wid=wid, ready=report.ready,
+        tenant_id=tenant_id, wid=wid, ready=report.ready,
         failing=sum(1 for s in report.signals if s.status == "fail"),
         unmeasured=sum(1 for s in report.signals if s.status == "unmeasured"),
-        elapsed_ms=report.elapsed_ms, sid_fingerprint=rec.sid_fingerprint,
+        elapsed_ms=report.elapsed_ms, sid_fingerprint=sid_fingerprint,
     )
 
 
@@ -109,13 +123,12 @@ def get_readiness(
     w = _wf()
     w._validate_wid(wid)
     meta = w._require_workflow(rec.tenant_id, wid)
-    if not _CHECK_SLOTS.acquire(blocking=False):
-        raise HTTPException(http_status.HTTP_429_TOO_MANY_REQUESTS, "too many readiness checks running - try again")
     try:
         report = compute_report(rec.tenant_id, wid, meta=meta)
-    finally:
-        _CHECK_SLOTS.release()
-    audit_report(rec, wid, report)
+    except ReadinessBusy as exc:
+        raise HTTPException(http_status.HTTP_429_TOO_MANY_REQUESTS,
+                            "too many readiness checks running - try again") from exc
+    audit_report(rec.tenant_id, rec.sid_fingerprint, wid, report)
     out = report.as_dict()
     out["phase"] = str(meta.get("phase", "discovering"))
     out["acceptance"] = meta.get("acceptance") if isinstance(meta.get("acceptance"), dict) else None
@@ -188,7 +201,11 @@ async def post_ready_override(
     def measure():
         return compute_report(rec.tenant_id, wid)  # the 10 s check runs outside the YAML lock
 
-    report = await anyio.to_thread.run_sync(measure)
+    try:
+        report = await anyio.to_thread.run_sync(measure)
+    except ReadinessBusy as exc:
+        raise HTTPException(http_status.HTTP_429_TOO_MANY_REQUESTS,
+                            "too many readiness checks running - try again") from exc
     validator = next(s for s in report.signals if s.name == "validator")
     if validator.status != "pass":
         # The gate guards against self-deception, not against the operator - but a draft that

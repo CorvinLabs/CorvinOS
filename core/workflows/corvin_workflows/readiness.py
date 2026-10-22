@@ -60,12 +60,27 @@ class Signal:
 
 
 @dataclass(frozen=True)
+class NodeOutcome:
+    """What the synthetic run did with one node, in execution order (feeds the console's
+    "Synthetic check" event stream). `error` is the exception class name only."""
+
+    node_id: str
+    node_type: str
+    status: str  # "success" | "failed" | "skipped"
+    error: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"node_id": self.node_id, "node_type": self.node_type, "status": self.status, "error": self.error}
+
+
+@dataclass(frozen=True)
 class ReadinessReport:
     ready: bool  # True only when no signal is "fail" or "unmeasured" ("info" is ignored)
     synthetic: bool  # always True in v1, and the UI says so
     signals: tuple[Signal, ...]
     run_state: str | None  # RunResult.state of the synthetic run; None when it did not start
     elapsed_ms: int
+    nodes: tuple[NodeOutcome, ...] = ()
 
     def first_blocker(self) -> Signal | None:
         for s in self.signals:
@@ -80,6 +95,7 @@ class ReadinessReport:
             "run_state": self.run_state,
             "elapsed_ms": self.elapsed_ms,
             "signals": [s.as_dict() for s in self.signals],
+            "nodes": [n.as_dict() for n in self.nodes],
         }
 
 
@@ -290,11 +306,12 @@ def check_readiness(
 ) -> ReadinessReport:
     t0 = time.perf_counter()
 
-    def finish(signals: list[Signal], run_state: str | None) -> ReadinessReport:
+    def finish(signals: list[Signal], run_state: str | None,
+               nodes: tuple[NodeOutcome, ...] = ()) -> ReadinessReport:
         ready = not any(s.status in ("fail", "unmeasured") for s in signals)
         return ReadinessReport(
             ready=ready, synthetic=True, signals=tuple(signals), run_state=run_state,
-            elapsed_ms=int((time.perf_counter() - t0) * 1000),
+            elapsed_ms=int((time.perf_counter() - t0) * 1000), nodes=nodes,
         )
 
     repairs_signal = (
@@ -355,7 +372,12 @@ def check_readiness(
     if "error" in box and run is None:
         reach = Signal("reachability", "fail", f"the synthetic run crashed ({box['error']})")
     acc = _acceptance(acceptance, run, timed_out)
+    outcomes = tuple(
+        NodeOutcome(r.node_id, r.node_type, r.status, (r.error or "").split(":", 1)[0] or None)
+        for r in (run.nodes.values() if run is not None else ())
+    )
     return finish(
         [validator, reach, acc, _exposure(doc), repairs_signal],
         run.state if run is not None else None,
+        outcomes,
     )

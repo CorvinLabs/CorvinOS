@@ -3595,14 +3595,47 @@ async def _stream_run(
         return
 
     if dry_run:
-        # Schema-only: enumerate nodes without executing
-        for node in graph:
-            node_id = str(node.get("id", "?"))
-            yield _emit({"type": "node_started", "node_id": node_id, "ts": time.time()})
-            await asyncio.sleep(0.05)
-            yield _emit({"type": "node_completed", "node_id": node_id, "tokens": 0, "elapsed_s": 0.0, "ts": time.time()})
-        yield _emit({"type": "run_completed", "ok": True, "dry_run": True, "budget": {}, "ts": time.time()})
-        run_meta.update({"status": "complete", "ok": True, "finished_at": time.time()})
+        # "Synthetic check" (ADR-2275): the same readiness report the design chat's gate uses -
+        # validator, then ONE real DAGRunner pass against a deterministic stub (channel and human
+        # nodes recorded, never executed). It is labelled synthetic in every event; it proves
+        # structure and the acceptance case, not a real run. The old schema-only walk (a 50 ms
+        # sleep per node, green by construction) is gone.
+        from . import workflow_readiness as _ready  # noqa: PLC0415
+
+        try:
+            report = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: _ready.compute_report(tenant_id, wid, yaml_text=yaml_text))
+        except Exception as exc:  # noqa: BLE001 - busy or broken: the check did not run, say so
+            busy = isinstance(exc, _ready.ReadinessBusy)
+            _log.warning("synthetic check failed for %s", wid, exc_info=not busy)
+            msg = ("Too many synthetic checks are running - try again." if busy
+                   else "The synthetic check could not run.")
+            yield _emit({"type": "error", "ts": time.time(), "message": msg})
+            run_meta.update({"status": "failed", "ok": False, "error": "synthetic check unavailable",
+                             "finished_at": time.time()})
+            _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
+            return
+        _ready.audit_report(tenant_id, sid_fingerprint, wid, report)
+        sig = {s.name: s for s in report.signals}
+        if sig["validator"].status != "pass":
+            yield _emit({"type": "error", "ts": time.time(),
+                         "message": f"Synthetic check: the workflow does not validate ({sig['validator'].detail})."})
+        for n in report.nodes:
+            yield _emit({"type": "node_started", "node_id": n.node_id, "node_type": n.node_type, "ts": time.time()})
+            if n.status == "success":
+                yield _emit({"type": "node_completed", "node_id": n.node_id, "node_type": n.node_type,
+                             "tokens": 0, "elapsed_s": 0.0, "ts": time.time()})
+            elif n.status == "failed":
+                yield _emit({"type": "node_failed", "node_id": n.node_id, "node_type": n.node_type,
+                             "error": n.error or "failed", "elapsed_s": 0.0, "ts": time.time()})
+            else:
+                yield _emit({"type": "node_skipped", "node_id": n.node_id, "node_type": n.node_type, "ts": time.time()})
+        ok = sig["validator"].status == "pass" and sig["reachability"].status == "pass"
+        yield _emit({"type": "run_completed", "ok": ok, "dry_run": True, "synthetic": True,
+                     "ready": report.ready, "signals": [s.as_dict() for s in report.signals],
+                     "budget": {}, "ts": time.time()})
+        run_meta.update({"status": "complete" if ok else "failed", "ok": ok, "finished_at": time.time(),
+                         "error": None if ok else "synthetic check failed"})
         _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
         return
 
@@ -4671,7 +4704,7 @@ def _build_chat_prompt(
             ),
             "structuring": "Das Gerüst ist auf der Leinwand. Stelle EINE Bestätigungsfrage: 'Sieht die Struktur so richtig aus? Braucht ein Schritt eine Freigabe?'",
             "detailing": "Geh Knoten für Knoten durch — stelle EINE konkrete Frage zum nächsten unkonfigurierten Knoten. Bei Freigabe-Knoten: kläre die Prüfnachricht.",
-            "ready": "Workflow ist fertig. Sage dem Nutzer, dass er bereit ist, und empfehle den Test-Button (oder Dry-run zum Prüfen ohne LLM-Aufrufe).",
+            "ready": "Workflow ist fertig. Sage dem Nutzer, dass er bereit ist, und empfehle den Test-Button (oder Synthetic check zum Prüfen ohne LLM-Aufrufe).",
         }
         lang_instruction = "Antworte auf Deutsch. Kurze, klare Sätze."
         build_hint = "\n\nWICHTIG: Nach deiner Antwort generiert das System automatisch den Workflow-Graphen aus diesem Gespräch." if will_build else ""
@@ -4696,7 +4729,7 @@ def _build_chat_prompt(
             ),
             "structuring": "The skeleton is on the canvas. Ask ONE confirmation: 'Does this structure look right? Any approval steps needed?'",
             "detailing": "Walk through each node — ask ONE specific question about the next unconfigured node. For approval nodes, clarify the review message.",
-            "ready": "Workflow is complete. Tell the user it's ready and suggest using the Test button (or Dry-run to check without LLM calls).",
+            "ready": "Workflow is complete. Tell the user it's ready and suggest using the Test button (or Synthetic check to verify the structure without LLM calls).",
         }
         lang_instruction = "Reply in English. Short, clear sentences."
         build_hint = "\n\nIMPORTANT: After your reply, the system will automatically generate the workflow graph from this conversation." if will_build else ""
@@ -4728,6 +4761,44 @@ def _is_confirmation(msg: str) -> bool:
                  "gut", "prima", "genau", "korrekt", "richtig", "sure", "yep", "👍",
                  "sounds good", "perfect", "great", "go ahead", "proceed"]
     return any(w in lower for w in yes_words)
+
+def _note_repair(tenant_id: str, wid: str, meta: dict[str, Any], code: str) -> int:
+    """Count one designer repair of this draft (ADR-2275): ``meta["repairs"]`` and the audit event.
+    The caller persists ``meta``."""
+    current = meta.get("repairs")
+    count = (current if isinstance(current, int) and not isinstance(current, bool) else 0) + 1
+    meta["repairs"] = count
+    console_audit.workflow_design_repaired(tenant_id=tenant_id, wid=wid, code=code, count=count)
+    return count
+
+
+_READINESS_PHRASES = {
+    "validator": "validation",
+    "reachability": "synthetic run",
+    "acceptance": "acceptance case",
+    "repairs": "designer repairs",
+}
+
+
+async def _readiness_gate(tenant_id: str, wid: str, meta: dict[str, Any], yaml_text: str) -> tuple[bool, str]:
+    """Run the readiness report for a confirmation turn. Returns ``(passed, text)``: ``text`` is
+    appended to the reply (the SERVER's words, never the model's); ``passed`` is True only when
+    every line passes. An error while measuring is a refusal, never a pass."""
+    try:
+        from . import workflow_readiness as _ready  # noqa: PLC0415
+
+        report = await anyio.to_thread.run_sync(
+            lambda: _ready.compute_report(tenant_id, wid, meta=meta, yaml_text=yaml_text))
+        _ready.audit_report(tenant_id, "", wid, report)
+    except Exception:  # noqa: BLE001 - fail closed: an unmeasured draft is not ready
+        _log.warning("workflow readiness gate failed for %s", wid, exc_info=True)
+        return False, "\n\nNot marked ready yet - the readiness check could not run. Try again in a moment."
+    blocker = report.first_blocker()
+    if blocker is None:
+        return True, "\n\nReadiness check passed (synthetic run: structure and the acceptance case, not real execution)."
+    return False, (f"\n\nNot marked ready yet - {_READINESS_PHRASES.get(blocker.name, blocker.name)}: "
+            f"{blocker.detail}. Open the Ready tab to fix it, or mark it ready there anyway.")
+
 
 async def _design_turn(
     tenant_id: str,
@@ -4778,12 +4849,14 @@ async def _design_turn(
         phase_update = "structuring"
     elif phase == "structuring" and _is_confirmation(user_msg):
         phase_update = "detailing"
-    elif phase == "detailing":
-        # Move to ready when user confirms all nodes are fine
+    wants_ready = False
+    if phase == "detailing" and phase_update is None:
+        # The user confirmed the nodes. A keyword never makes a draft "ready" (ADR-2275): the move
+        # is decided below, after this turn's YAML is in place, by the readiness report.
         if _is_confirmation(user_msg) and yaml_text.strip():
             existing_graph = _parse_graph(yaml_text)
             if len(existing_graph) >= 2:
-                phase_update = "ready"
+                wants_ready = True
 
     # ── Current canvas summary for chat prompt ────────────────────────
     nodes_summary = ""
@@ -4833,6 +4906,7 @@ async def _design_turn(
 
     reply = (raw_reply or _scripted_response(phase, user_msg)).strip()
     yaml_update: str | None = None
+    repaired = False
 
     # ── Apply YAML if generated ───────────────────────────────────────
     if new_yaml:
@@ -4845,10 +4919,25 @@ async def _design_turn(
             _write_awpkg_sidecar(tenant_id, wid)
             yaml_update = new_yaml
             meta["updated_at"] = time.time()
+        except HTTPException as e:
+            # The designer's draft failed the validator: it is dropped and the designer must
+            # regenerate it. That is a named, counted degradation (ADR-2275), shown in the
+            # readiness report; a count above the ceiling blocks "ready".
+            _note_repair(tenant_id, wid, meta, "yaml_regenerated")
+            repaired = True
+            reply += f"\n\n_(Note: YAML generation encountered an issue: {e.detail})_"
+            yaml_update = None
         except Exception as e:
             # Don't silently fail — include a note in the reply
             reply += f"\n\n_(Note: YAML generation encountered an issue: {e})_"
             yaml_update = None
+
+    # ── Readiness gate: "ready" is a measured report, not a keyword (ADR-2275) ──
+    if wants_ready:
+        passed, note = await _readiness_gate(tenant_id, wid, meta, yaml_update or yaml_text)
+        reply += note
+        if passed:
+            phase_update = "ready"
 
     # ── Apply phase update ────────────────────────────────────────────
     valid_phases = {"discovering", "structuring", "detailing", "ready"}
@@ -4856,7 +4945,7 @@ async def _design_turn(
         meta["phase"] = phase_update
         meta["updated_at"] = time.time()
 
-    if yaml_update or (phase_update and phase_update in valid_phases):
+    if yaml_update or repaired or (phase_update and phase_update in valid_phases):
         _write_atomic(_meta_path(tenant_id, wid), meta)
 
     return {
@@ -4914,7 +5003,7 @@ def _scripted_response(phase: str, user_msg: str) -> str:
         )
     if phase == "detailing":
         return "Which model should this step use — Haiku (fast) or Sonnet (thorough)?"
-    return "The workflow looks complete. Would you like to run a dry-run to verify the structure?"
+    return "The workflow looks complete. Would you like to run a synthetic check to verify the structure?"
 
 async def _refuse_chat_lock_busy(
     websocket: WebSocket,

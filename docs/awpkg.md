@@ -102,6 +102,11 @@ workflow built purely from `code` / `compute` / `merge` / `static` / `ask_human`
 An engine-requiring workflow with no CLI fails fast with a clean
 `engine_unavailable` result instead of an opaque mid-run node error.
 
+**Readiness.** In the console a draft reaches `ready` only through a measured report (validator, a synthetic
+stub run, an acceptance case, counted designer repairs), and the editor's former "Dry-run" is the **Synthetic
+check** that runs the same report. The package format is unchanged; the acceptance case lives in the
+workflow's console metadata and is not exported. See [claude-ref/workflow-readiness.md](claude-ref/workflow-readiness.md).
+
 ### Chatflow (`orchestration.engine: chat`) and human-in-the-loop
 
 Setting `orchestration.engine: chat` (instead of `dag`) marks a workflow as turn-based. It

@@ -169,3 +169,11 @@ def test_real_node_registry_is_not_mutated():
     before = {k: v["execute"] for k, v in NODE_TYPES.items()}
     check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=0)
     assert before == {k: v["execute"] for k, v in NODE_TYPES.items()}
+
+
+def test_report_carries_per_node_outcomes_in_execution_order():
+    r = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=0)
+    by = {n.node_id: n.status for n in r.nodes}
+    assert by["research"] == "success" and by["low_path"] == "skipped" and by["high_path"] == "success"
+    assert [n.node_id for n in r.nodes][0] == "research"
+    assert r.as_dict()["nodes"][0]["node_id"] == "research"
