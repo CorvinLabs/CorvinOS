@@ -224,6 +224,7 @@ class DAGRunner:
         observer: "Callable[[NodeResult], None] | None" = None,
         console_run: bool = False,
         cancel_event: Any = None,
+        executor_overrides: "dict[str, Callable[..., Any]] | None" = None,
     ) -> None:
         self.doc = doc
         self.engine = engine
@@ -238,6 +239,11 @@ class DAGRunner:
         # WF-07: a threading.Event-like (`is_set()`); checked before each node so a
         # stopped run does not keep spawning engines in the background.
         self._cancel_event = cancel_event
+        # Per-runner executor replacements keyed by node type. The readiness check
+        # (readiness.py) swaps the side-effecting node types for recording stubs this
+        # way; the global NODE_TYPES registry is never mutated, so a concurrent real
+        # run is unaffected.
+        self._executor_overrides = dict(executor_overrides or {})
         # WF-A2: the tenant a run belongs to. Threaded into checkpoint.save so a
         # paused run's checkpoint is stored under ITS tenant, not always _default
         # (which made non-default tenants unable to resume — console resume loads
@@ -339,7 +345,7 @@ class DAGRunner:
                     self._observe(run.nodes[nid])
                     continue
 
-                executor = NODE_TYPES[ntype]["execute"]
+                executor = self._executor_overrides.get(ntype) or NODE_TYPES[ntype]["execute"]
                 try:
                     max_retries, interval_s, error_strategy = _retry_config(node)
                 except Exception as e:  # noqa: BLE001 - a bad retry block fails this node
