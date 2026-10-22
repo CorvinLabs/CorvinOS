@@ -7,6 +7,7 @@ analog to L25-compute's ParallelDriver).
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import time as _time_mod
 from dataclasses import dataclass, field
@@ -226,8 +227,12 @@ class DAGRunner:
         console_run: bool = False,
         cancel_event: Any = None,
         executor_overrides: "dict[str, Callable[..., Any]] | None" = None,
+        workflow_id: str | None = None,
     ) -> None:
         self.doc = doc
+        # The id audit records use for this workflow (the console passes its own id); the document
+        # name when absent.
+        self._workflow_id = workflow_id
         self.engine = engine
         self._audit_sink = audit_sink
         # WF-03: called with every finished NodeResult (success, failed, skipped) so a
@@ -306,6 +311,11 @@ class DAGRunner:
             done = set()
             skipped = set()
             failed = set()
+        # Run context for executors that must not take it from node config (peer_agent, ADR-2276).
+        # Overwritten on resume: a checkpoint never decides which tenant or run a node acts for.
+        state["__tenant_id__"] = self._tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+        state["__run_id__"] = run.run_id
+        state["__workflow__"] = self._workflow_id or self.doc.name
 
         self._audit(
             "run.started" if not resume else "run.resumed",

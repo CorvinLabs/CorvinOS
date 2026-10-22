@@ -24,6 +24,7 @@ Shipped types:
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -1010,8 +1011,149 @@ def _validate_peer_agent(node: dict[str, Any]) -> None:
             raise ValueError(f"peer_agent node: 'timeout_s' must be within 1..{PEER_TIMEOUT_MAX_S}")
 
 
+def peer_task_id(run_id: str, node_id: str) -> str:
+    """Deterministic task id of one (run, node): the exactly-once key (ADR-2276 point 3)."""
+    import hashlib
+
+    return hashlib.sha256(f"{run_id}:{node_id}".encode("utf-8")).hexdigest()[:32]
+
+
+# Test seam, same role as the ``sender=`` parameter of ``delegate()``: a zero-argument callable that
+# returns the sender. ``None`` (production) uses the installation's own ``RemoteTriggerSender``.
+_PEER_SENDER_FACTORY: Callable[[], Any] | None = None
+
+
+def _peer_result_text(data: Any) -> str:
+    """The peer's answer as bounded, sanitised text. Foreign input: normalised and stripped by the
+    sanitiser every inbound A2A instruction passes (NFKC, control characters, framing escape)."""
+    from .peer_gate import _shared_on_path
+
+    if isinstance(data, dict):
+        out = data.get("output")
+        text = out.strip() if isinstance(out, str) else (json.dumps(data, ensure_ascii=False) if data else "")
+    else:
+        text = str(data or "").strip()
+    raw = text.encode("utf-8")
+    if len(raw) > PEER_RESULT_MAX_BYTES:
+        text = raw[:PEER_RESULT_MAX_BYTES].decode("utf-8", errors="ignore")
+    _shared_on_path()
+    try:
+        import a2a_worker  # type: ignore[import-not-found]
+
+        return a2a_worker.sanitize_instruction(text)
+    except Exception as exc:  # noqa: BLE001 - a text the sanitiser refuses is not accepted
+        raise PeerDelegationError("peer_result_rejected") from exc
+
+
 def _execute_peer_agent(*, node, engine, state, inputs, audit) -> dict[str, Any]:
-    raise PeerDelegationError("executor_unavailable")  # replaced by the real executor in the next step
+    """Hand ONE step to an agent of a paired peer installation (ADR-2276). Never calls the engine.
+
+    Order: resolve instruction -> exactly-once check -> outbound gate -> audit-first -> send -> map.
+    The tenant, run and workflow come from the runner (``state["__tenant_id__"]`` etc.), never from
+    the node config. Failure raises ``PeerDelegationError`` with a closed reason code.
+    """
+    import time as _time
+
+    from . import peer_gate
+    from .code_exec import _resolve_selector
+
+    nid = node["id"]
+    tenant = state.get("__tenant_id__")
+    run_id = state.get("__run_id__")
+    wid = str(state.get("__workflow__") or "")
+    if not isinstance(tenant, str) or not tenant or not isinstance(run_id, str) or not run_id:
+        raise PeerDelegationError("context_missing")
+
+    if isinstance(node.get("instruction"), str) and node["instruction"]:
+        text = node["instruction"]
+    else:
+        value = _resolve_selector(node["instruction_from"], state=state, inputs=inputs)
+        text = _stringify_for_chat(value) if value is not None else ""
+    if not text.strip():
+        raise PeerDelegationError("instruction_empty")
+    if len(text.encode("utf-8")) > PEER_INSTRUCTION_MAX_BYTES:
+        raise PeerDelegationError("instruction_too_large")
+
+    delegation = _federation_module("delegation")
+    peer_catalog = _federation_module("peer_catalog")
+    task_id = peer_task_id(run_id, nid)
+    base = {"wid": wid, "rid": run_id, "node_id": nid}
+
+    # (1) exactly-once: a task for this (run, node) that may have reached the peer is never re-sent.
+    # Only a closed, explicit `rejected` (the peer refused before running anything) may be asked again.
+    try:
+        prior = delegation.DelegationLedger(tenant).latest_by_task().get(task_id)
+    except Exception as exc:  # noqa: BLE001 - cannot read the ledger => cannot prove nothing was sent
+        raise PeerDelegationError("ledger_unavailable") from exc
+    if prior is not None and prior.get("status") != "rejected":
+        peer_gate.audit_peer_event(
+            "workflow.peer_outcome_unknown", tenant, **base,
+            endpoint_id=prior.get("endpoint_id"), peer_instance_id=prior.get("peer_instance_id"),
+            agent_id=prior.get("agent_id"), status=str(prior.get("status") or "sent")[:16],
+            reason_code="outcome_unknown",
+        )
+        audit("peer_agent.outcome_unknown", node_id=nid, task_id=task_id)
+        raise PeerOutcomeUnknown("outcome_unknown")
+
+    sender = _PEER_SENDER_FACTORY() if _PEER_SENDER_FACTORY is not None else peer_catalog.default_sender()
+
+    # (2) address: pinned, or the best FRESH peer agent for the capability.
+    endpoint_id, agent_id, capability = node.get("endpoint_id"), node.get("agent_id"), node.get("capability")
+    if endpoint_id is None:
+        try:
+            ranked = delegation.rank_candidates(tenant, capability, include_local=False)
+        except Exception as exc:  # noqa: BLE001
+            raise PeerDelegationError("no_peer_agent") from exc
+        if not ranked:
+            raise PeerDelegationError("no_peer_agent")
+        endpoint_id, agent_id = ranked[0].endpoint_id, ranked[0].agent_id
+
+    # (3) outbound gate on the exact payload; a refusal is final for this node.
+    decision = peer_gate.evaluate_peer_outbound(text, tenant, endpoint_id, sender=sender)
+    if not decision.allowed:
+        peer_gate.audit_peer_event(
+            "workflow.peer_refused", tenant, **base, endpoint_id=endpoint_id, agent_id=agent_id,
+            data_class=decision.data_class or None, reason_code=decision.reason_code,
+        )
+        audit("peer_agent.refused", node_id=nid, reason_code=decision.reason_code)
+        raise PeerDelegationError(decision.reason_code)
+
+    # (4) audit-first: no chained record, nothing leaves (delegate() writes its own before the send).
+    peer_gate.audit_peer_event(
+        "workflow.peer_delegated", tenant, strict=True, **base, endpoint_id=endpoint_id,
+        agent_id=agent_id, data_class=decision.data_class or None,
+    )
+    audit("peer_agent.delegated", node_id=nid, task_id=task_id)
+
+    t0 = _time.perf_counter()
+    timeout = int(node.get("timeout_s", PEER_TIMEOUT_DEFAULT_S))
+    try:
+        res = delegation.delegate(
+            tenant, instruction=text, endpoint_id=endpoint_id, agent_id=agent_id, capability=capability,
+            parent_task_id=run_id, origin_agent_id=None, hop=1, timeout_s=timeout, task_id=task_id,
+            sender=sender,
+        )
+    except Exception as exc:  # noqa: BLE001 - DelegationError, audit-first failure, sender crash
+        reason = "delegation_invalid" if isinstance(exc, delegation.DelegationError) else "send_failed"
+        peer_gate.audit_peer_event(
+            "workflow.peer_completed", tenant, **base, endpoint_id=endpoint_id, agent_id=agent_id,
+            status="error", duration_ms=int((_time.perf_counter() - t0) * 1000), reason_code=reason,
+        )
+        raise PeerDelegationError(reason) from exc
+
+    peer_gate.audit_peer_event(
+        "workflow.peer_completed", tenant, **base, endpoint_id=res.endpoint_id,
+        peer_instance_id=res.peer_instance_id or None, agent_id=res.agent_id, status=res.status,
+        duration_ms=res.duration_ms, reason_code=None if res.ok else (res.error or "peer_refused"),
+    )
+    audit("peer_agent.completed", node_id=nid, status=res.status, ok=res.ok)
+    if not res.ok:
+        raise PeerDelegationError(res.error or "peer_refused")
+    return {
+        "status": res.status, "ok": True, "result": _peer_result_text(res.data), "untrusted": True,
+        "peer_instance_id": res.peer_instance_id, "agent_address": res.address, "task_id": res.task_id,
+        "our_chain_tail": res.our_chain_tail, "peer_chain_tail": res.peer_chain_tail,
+    }
 
 
 # ---------------------------------------------------------------------------
