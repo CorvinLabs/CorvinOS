@@ -35,15 +35,15 @@
 
 ---
 
-## 🎥 Video — Compliance in the AI era
+## 🎥 Video — The console, page by page
 
-A short walkthrough of how CorvinOS keeps AI work compliant with GDPR and the EU AI Act. The preview below plays right here on GitHub.
+A 30-minute tour of the CorvinOS operator console: chat, dashboard, learnings, tasks and every other page, one at a time. The preview below plays right here on GitHub; click it for the full video.
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">
-    <img src="assets/compliance-in-the-ai-era-teaser.gif" alt="Video: Compliance in the AI era (45 s preview, plays inline)" width="720"/>
+  <a href="docs/media/corvinos-console-tour.en.mp4">
+    <img src="docs/media/corvinos-console-tour-teaser.gif" alt="Video: CorvinOS console tour (animated preview, plays inline; click for the full MP4)" width="720"/>
   </a><br/>
-  <sub>45 s preview &middot; <a href="assets/compliance-in-the-ai-era.mp4">full video (MP4, hosted in this repo)</a> &middot; <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">on YouTube</a></sub>
+  <sub>30 min &middot; English &middot; <a href="docs/media/corvinos-console-tour.en.mp4">full video (MP4, hosted in this repo)</a></sub>
 </p>
 
 ---
