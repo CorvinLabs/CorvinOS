@@ -19,6 +19,7 @@ export const SUPPORTED_NODE_TYPES = [
   "answer",
   "ask_human",
   "approval",
+  "peer_agent",
 ] as const;
 
 export type NodeTypeId = (typeof SUPPORTED_NODE_TYPES)[number];
@@ -34,7 +35,7 @@ export function isSupportedNodeType(type: string): type is NodeTypeId {
   return (SUPPORTED_NODE_TYPES as readonly string[]).includes(type);
 }
 
-export type FieldKind = "text" | "textarea" | "number" | "select" | "boolean" | "list" | "pairs";
+export type FieldKind = "text" | "textarea" | "number" | "select" | "boolean" | "list" | "pairs" | "peer";
 
 export interface FieldSpec {
   /** Dotted path into the node, e.g. "config.budget.max_loops". */
@@ -123,6 +124,14 @@ export function fieldsFor(spec: Record<string, unknown>): FieldSpec[] {
       return [
         { path: "message", label: "message", kind: "textarea", hint: "what the reviewer is asked to decide" },
         { path: "timeout_s", label: "timeout_s", kind: "number", hint: "optional, seconds (max 7 days), default 3600" },
+      ];
+    case "peer_agent":
+      return [
+        // Both are set together by the peer picker (kind "peer"), never typed.
+        { path: "endpoint_id", label: "peer", kind: "peer", required: true },
+        { path: "agent_id", label: "peer agent", kind: "peer", required: true },
+        { path: "instruction", label: "instruction", kind: "textarea", required: true, hint: "sent to the peer agent; it leaves this installation" },
+        { path: "timeout_s", label: "timeout_s", kind: "number", hint: "optional, 1-900 seconds, default 300" },
       ];
     default:
       return [];
@@ -238,8 +247,15 @@ export interface PaletteEntry {
   type: NodeTypeId;
   label: string;
   emoji: string;
+  /** True when the node needs a paired peer agent to be valid: the caller supplies one from the catalog. */
+  needsPeer?: boolean;
   /** Builds a node that passes the validator for that type. */
-  create: (id: string) => Record<string, unknown>;
+  create: (id: string, peer?: PeerTarget) => Record<string, unknown>;
+}
+
+export interface PeerTarget {
+  endpoint_id: string;
+  agent_id: string;
 }
 
 export const NODE_PALETTE: readonly PaletteEntry[] = [
@@ -338,6 +354,20 @@ export const NODE_PALETTE: readonly PaletteEntry[] = [
     label: "Approval",
     emoji: "👤",
     create: (id) => ({ id, type: "approval", depends_on: [], message: "Please review and approve or reject to continue.", timeout_s: 3600 }),
+  },
+  {
+    type: "peer_agent",
+    label: "Peer agent",
+    emoji: "🤝",
+    needsPeer: true,
+    create: (id, peer) => ({
+      id,
+      type: "peer_agent",
+      depends_on: [],
+      endpoint_id: peer?.endpoint_id ?? "",
+      agent_id: peer?.agent_id ?? "",
+      instruction: "Describe what the peer agent should do.",
+    }),
   },
 ];
 

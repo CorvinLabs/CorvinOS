@@ -17,7 +17,8 @@ describe("workflow node types", () => {
 
   it("every palette node is created with all required fields filled", () => {
     for (const entry of NODE_PALETTE) {
-      const node = entry.create("x");
+      // A peer node is only valid with a real target; the palette caller supplies one from the catalog.
+      const node = entry.create("x", entry.needsPeer ? { endpoint_id: "ep_x", agent_id: "agent_x" } : undefined);
       expect(node.type).toBe(entry.type);
       expect(missingRequiredFields(node), entry.type).toEqual([]);
     }

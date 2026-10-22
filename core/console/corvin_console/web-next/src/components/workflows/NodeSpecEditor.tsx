@@ -26,6 +26,7 @@ import {
   type FieldSpec,
   type RouteCase,
 } from "@/lib/workflow-node-types";
+import { PeerAgentPicker } from "@/components/workflows/PeerAgentPicker";
 import { deleteWorkflowNode, putWorkflowNode, type GraphNode, type WorkflowNodeResponse } from "@/lib/api/workflows";
 
 function listToText(value: unknown): string {
@@ -403,8 +404,18 @@ export function NodeSpecEditor({
           </Select>
         </div>
       )}
+      {String(draft.type) === "peer_agent" && (
+        <PeerAgentPicker
+          endpointId={typeof draft.endpoint_id === "string" ? draft.endpoint_id : ""}
+          agentId={typeof draft.agent_id === "string" ? draft.agent_id : ""}
+          csrf={csrf}
+          onChange={(endpointId, agentId) =>
+            setDraft((d) => setPath(setPath(d, "endpoint_id", endpointId), "agent_id", agentId))
+          }
+        />
+      )}
       {fieldsFor(draft)
-        .filter((f) => f.path !== "mode")
+        .filter((f) => f.path !== "mode" && f.kind !== "peer")
         .map((f) => (
           <FieldRow key={f.path} field={f} spec={draft} onChange={onField} />
         ))}

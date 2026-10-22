@@ -92,7 +92,9 @@ import { MediaGallery, ImageCard, type MediaItem } from "@/components/media";
 import { WorkflowComposer, type WorkflowComposerHandle } from "@/components/workflows/WorkflowComposer";
 import { NodeSpecEditor } from "@/components/workflows/NodeSpecEditor";
 import { ReadinessPanel } from "@/components/workflows/ReadinessPanel";
-import { NODE_PALETTE, nextNodeId, type PaletteEntry } from "@/lib/workflow-node-types";
+import { NODE_PALETTE, nextNodeId, type PaletteEntry, type PeerTarget } from "@/lib/workflow-node-types";
+import { listPeerAgents } from "@/lib/api/federation";
+import { firstChoice, peerChoices } from "@/lib/peer-agent-choices";
 import type { SlashCommand } from "@/components/chat/SlashCommandPalette";
 import { DropOverlay } from "@/components/chat/DropOverlay";
 import { DEFAULT_COMPOSER_LIMITS, type ComposerAttachmentRef, type ComposerContextAdapter } from "@/components/chat/composer-adapter";
@@ -178,6 +180,7 @@ const NODE_TYPE_COLOR: Record<string, string> = {
   route: "hsl(38 90% 60%)",      // amber — branching, same family as condition
   answer: "hsl(142 60% 44%)",    // emerald — same family as deliver
   ask_human: "hsl(38 85% 55%)",  // amber — same family as approval
+  peer_agent: "hsl(262 52% 60%)",  // violet — same family as delegation_loop (hands work to another agent)
 };
 
 const NODE_TYPE_ICON: Record<string, string> = {
@@ -190,6 +193,7 @@ const NODE_TYPE_ICON: Record<string, string> = {
   route: "⑃",
   answer: "💬",
   ask_human: "🙋",
+  peer_agent: "🤝",
   agent: "→",
 };
 
@@ -2619,7 +2623,20 @@ export function WorkflowEditorPage() {
     setRunError(null);
     try {
       const id = nextNodeId(entry.type, graph.map((n) => n.id));
-      const res = await addWorkflowNode(wid, entry.create(id), session.csrf_token);
+      let peer: PeerTarget | undefined;
+      if (entry.needsPeer) {
+        // A peer node is only valid with a real target: take the first agent of a fresh peer catalog
+        // (the inspector's picker changes it). No paired peer -> say so, add nothing.
+        const first = firstChoice(peerChoices((await listPeerAgents()).agents));
+        if (!first) {
+          setRunError(
+            "No peer agent is available. Pair a peer with this installation and refresh its catalog, then add the node again.",
+          );
+          return;
+        }
+        peer = { endpoint_id: first.endpoint_id, agent_id: first.agent_id };
+      }
+      const res = await addWorkflowNode(wid, entry.create(id, peer), session.csrf_token);
       applyNodeResponse(res);
       setSelectedNode(id);
       setShowQuickAdd(false);
