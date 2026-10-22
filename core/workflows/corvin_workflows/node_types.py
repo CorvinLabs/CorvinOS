@@ -19,6 +19,8 @@ Shipped types:
   answer            — chatflow terminal: sends a turn's output, never pauses (ADR-0188 M6)
   ask_human         — pauses the run for a human reply via checkpoint/resume (ADR-0188 M5/M6)
   approval          — pauses for an operator yes/no; a "no" fails the node (console review step)
+  peer_agent        — hands ONE step to an agent of a paired peer installation (another organisation);
+                      outbound-gated, exactly-once, never retried (ADR-2276)
 """
 from __future__ import annotations
 
@@ -917,6 +919,102 @@ def _execute_route(*, node, engine, state, inputs, audit) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# peer_agent node — delegate one step to an agent of a paired peer installation (ADR-2276)
+# ---------------------------------------------------------------------------
+
+PEER_TIMEOUT_DEFAULT_S = 300
+PEER_TIMEOUT_MAX_S = 900
+PEER_INSTRUCTION_MAX_BYTES = 16 * 1024
+PEER_RESULT_MAX_BYTES = 16 * 1024
+_PEER_NODE_KEYS = frozenset({
+    "id", "type", "depends_on", "retry", "share_output", "branch", "name", "description", "label",
+    "endpoint_id", "agent_id", "capability", "instruction", "instruction_from", "timeout_s",
+})
+
+
+def _federation_module(name: str) -> Any:
+    """Import ``core.federation.<name>``. The CLI and scheduler run with ``core/workflows`` alone on
+    PYTHONPATH, so the repository root is found by walking up (like the claude-engine prompt guard)."""
+    import importlib
+    import os
+    import sys
+
+    full = f"core.federation.{name}"
+    try:
+        return importlib.import_module(full)
+    except ImportError:
+        pass
+    d = os.path.dirname(os.path.abspath(__file__))
+    while d != os.path.dirname(d):
+        if os.path.isdir(os.path.join(d, "core", "federation")):
+            if d not in sys.path:
+                sys.path.insert(0, d)
+            break
+        d = os.path.dirname(d)
+    return importlib.import_module(full)
+
+
+class PeerDelegationError(RuntimeError):
+    """The peer step failed; the message is a closed reason code, never peer-supplied text."""
+
+
+class PeerOutcomeUnknown(PeerDelegationError):
+    """A task for this (run, node) was sent earlier and no result was recorded: it may have run at the
+    peer. The node does not send again; the operator decides (re-run the workflow)."""
+
+
+def _validate_peer_agent(node: dict[str, Any]) -> None:
+    extra = sorted(set(node) - _PEER_NODE_KEYS)
+    if extra:
+        raise ValueError(f"peer_agent node: unknown key {extra[0]!r}")
+    try:
+        peer_catalog = _federation_module("peer_catalog")
+        local_agent = _federation_module("local_agent")
+    except ImportError as e:  # the node cannot run without the federation package
+        raise ValueError("peer_agent node: the federation package is not available") from e
+    endpoint_id, agent_id, capability = node.get("endpoint_id"), node.get("agent_id"), node.get("capability")
+    pinned = endpoint_id is not None or agent_id is not None
+    if pinned == (capability is not None):
+        raise ValueError(
+            "peer_agent node requires exactly one addressing mode: endpoint_id + agent_id (pinned) "
+            "or capability"
+        )
+    if pinned:
+        if endpoint_id is None or agent_id is None:
+            raise ValueError("peer_agent node: endpoint_id and agent_id must be given together")
+        if not peer_catalog._is_id(endpoint_id, 128):
+            raise ValueError("peer_agent node: endpoint_id must be 1-128 characters of A-Z a-z 0-9 - _ .")
+        if not peer_catalog._is_id(agent_id, 128):
+            raise ValueError("peer_agent node: agent_id must be 1-128 characters of A-Z a-z 0-9 - _ .")
+    elif capability not in local_agent._VALID_CAPABILITIES:
+        raise ValueError(
+            f"peer_agent node: capability must be one of {sorted(local_agent._VALID_CAPABILITIES)}"
+        )
+    has_text = isinstance(node.get("instruction"), str) and bool(node["instruction"].strip())
+    has_from = isinstance(node.get("instruction_from"), str) and bool(node["instruction_from"].strip())
+    if "instruction" in node and not has_text:
+        raise ValueError("peer_agent node: 'instruction' must be a non-empty string")
+    if "instruction_from" in node and not has_from:
+        raise ValueError("peer_agent node: 'instruction_from' must be a non-empty selector")
+    if has_text == has_from:
+        raise ValueError(
+            "peer_agent node requires exactly one of 'instruction' (literal) or 'instruction_from' (selector)"
+        )
+    if has_text and len(node["instruction"].encode("utf-8")) > PEER_INSTRUCTION_MAX_BYTES:
+        raise ValueError(f"peer_agent node: 'instruction' exceeds {PEER_INSTRUCTION_MAX_BYTES} bytes")
+    timeout = node.get("timeout_s")
+    if timeout is not None:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout):
+            raise ValueError("peer_agent node: 'timeout_s' must be a finite number")
+        if not 1 <= timeout <= PEER_TIMEOUT_MAX_S:
+            raise ValueError(f"peer_agent node: 'timeout_s' must be within 1..{PEER_TIMEOUT_MAX_S}")
+
+
+def _execute_peer_agent(*, node, engine, state, inputs, audit) -> dict[str, Any]:
+    raise PeerDelegationError("executor_unavailable")  # replaced by the real executor in the next step
+
+
+# ---------------------------------------------------------------------------
 # Registry + extension point
 # ---------------------------------------------------------------------------
 
@@ -934,6 +1032,7 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
     "answer": {"validate": _validate_answer, "execute": _execute_answer},
     "ask_human": {"validate": _validate_ask_human, "execute": _execute_ask_human},
     "approval": {"validate": _validate_approval, "execute": _execute_approval},
+    "peer_agent": {"validate": _validate_peer_agent, "execute": _execute_peer_agent},
 }
 
 
@@ -960,7 +1059,7 @@ def validate_common_fields(node: dict[str, Any]) -> None:
         raise ValueError("'share_output' must be a list of field names")
 
 
-_ENGINE_FREE_TYPES = frozenset({"code", "merge", "answer", "ask_human", "approval", "deliver"})
+_ENGINE_FREE_TYPES = frozenset({"code", "merge", "answer", "ask_human", "approval", "deliver", "peer_agent"})
 
 
 def node_requires_engine(node: dict[str, Any]) -> bool:

@@ -91,7 +91,10 @@ def test_example_uses_every_registered_node_type(_doc):
     doc = _doc()
     validate(doc)
     used = {n["type"] for n in doc.graph}
-    assert used == set(NODE_TYPES), f"missing: {sorted(set(NODE_TYPES) - used)}"
+    # peer_agent sends to another installation: it is not part of an example that tests run end to end
+    # (it needs a paired peer). Its own suites: test_peer_agent_node.py and tests/federation/.
+    expected = set(NODE_TYPES) - {"peer_agent"}
+    assert used == expected, f"missing: {sorted(expected - used)}"
     assert {n["mode"] for n in doc.graph if n["type"] == "route"} == {"condition", "classify"}
 
 

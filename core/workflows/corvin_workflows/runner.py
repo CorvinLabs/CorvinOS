@@ -147,7 +147,8 @@ _MAX_RETRY_INTERVAL_S = 60.0
 # declared retry block. `ask_human` is already excluded structurally (it raises
 # WorkflowPaused, caught before the retry path).
 # WF-20: ask_human writes to the shared outbox, so a retry would send the message twice.
-_NON_RETRYABLE_TYPES = {"deliver", "answer", "ask_human", "approval"}
+# ADR-2276: peer_agent hands a task to another organisation; a repeat is a second task there.
+_NON_RETRYABLE_TYPES = {"deliver", "answer", "ask_human", "approval", "peer_agent"}
 
 
 def _retry_config(node_spec: dict[str, Any]) -> tuple[int, float, str]:

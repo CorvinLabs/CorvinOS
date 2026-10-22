@@ -157,7 +157,7 @@ def _selectors_of(node: dict) -> list[str]:
     """Every selector string a node's executor will resolve against upstream state."""
     out: list[str] = []
     t = node.get("type", "agent")
-    for key in ("text_from", "prompt_from", "chat_id_from", "items_from"):
+    for key in ("text_from", "prompt_from", "chat_id_from", "items_from", "instruction_from"):
         if isinstance(node.get(key), str) and node[key]:
             out.append(node[key])
     if t == "merge" and isinstance(node.get("inputs"), list):
