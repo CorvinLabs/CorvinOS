@@ -28,7 +28,7 @@ per-node `nodes` outcomes of the synthetic run.
 
 A real `DAGRunner` pass with a deterministic `StubEngine`, in a worker thread joined with `wall_limit_s`
 (on timeout the run is cancelled and `reachability` fails with `timeout`). `deliver`, `answer`,
-`ask_human` and `approval` are replaced for this run through `DAGRunner(executor_overrides=...)`: their
+`ask_human`, `approval` and `peer_agent` (nothing is sent to a peer; a pinned endpoint must be paired; see [workflow-peer-agent.md](workflow-peer-agent.md)) are replaced for this run through `DAGRunner(executor_overrides=...)`: their
 config was already validated by R10, they record instead of writing an outbox envelope, and `ask_human` /
 `approval` answer instead of pausing. The global node registry is never touched. `code` nodes keep their
 own sandbox (deterministic by contract); every other node gets the stub's canned or generic reply.

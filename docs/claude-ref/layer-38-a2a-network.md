@@ -1673,6 +1673,8 @@ fact 9 (email field removal), fact 10 (second trust-ring key), and auto-renew.
 
 ## Agent federation — catalog + task over the `federation` field (ADR-2231/2232, 2026-10-06)
 
+Workflows reach a peer agent through the `peer_agent` DAG node (ADR-2276): [workflow-peer-agent.md](workflow-peer-agent.md).
+
 Diagram: `docs/diagrams/30-a2a-agent-federation.svg`.
 
 **What it is.** A paired installation can list a peer's agents and run one

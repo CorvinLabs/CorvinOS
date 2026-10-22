@@ -68,6 +68,7 @@ runs it end to end with the stub engine:
 | `answer` | Chatflow terminal — sends a turn's output, never pauses | No |
 | `ask_human` | Pauses the run for a human reply (see below), resumes with the answer injected into state | No |
 | `approval` | Pauses for an operator approve / reject (`message`, optional `timeout_s`, default 3600, max 7 days). Reply `approve[: comment]` / `reject[: comment]`; any other text goes through the same fail-closed yes/no coercion as `ask_human`. A rejection fails the node like any node failure (so `retry.error_strategy: fail_branch` contains it). Never retried | No |
+| `peer_agent` | Hands ONE step to an agent of a paired peer installation (another organisation): `endpoint_id` + `agent_id` (pinned) or `capability`, `instruction` or `instruction_from`, optional `timeout_s` (default 300, max 900). Outbound-gated (L44, data grade, pairing), audit-first, exactly once per (run, node), never retried; the answer is untrusted text. See [claude-ref/workflow-peer-agent.md](claude-ref/workflow-peer-agent.md) | No |
 
 Every node also accepts an optional `retry: {max_retries, retry_interval_s, error_strategy}`
 block. `error_strategy: fail_branch` contains a failure to that node's downstream subgraph
@@ -131,7 +132,7 @@ reply is never treated as consent). A `route(mode: condition)` decision made *be
 pause is honored again after resume — the skip state survives the checkpoint round-trip.
 
 **Console UI:** a run started from the console (`POST /workflows/{wid}/runs`) whose graph uses
-`code`, `merge`, `route`, `answer`, `ask_human` or `approval` is executed by the same `DAGRunner`
+`code`, `merge`, `route`, `answer`, `ask_human`, `approval` or `peer_agent` is executed by the same `DAGRunner`
 (`core/console/corvin_console/routes/workflow_dag_run.py`, ADR-2273); graphs of only
 agent/fan_out/delegation_loop/deliver still use the console's own executor. The workflow YAML is
 snapshotted next to the run, the run id is the checkpoint key, and every event is appended to the

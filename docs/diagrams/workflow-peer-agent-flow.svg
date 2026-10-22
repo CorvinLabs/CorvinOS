@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 360" font-family="sans-serif" font-size="13">
+  <title>peer_agent node: one step crosses to a peer installation, gated and audited on our side</title>
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker></defs>
+  <g fill="#f4f1ea" stroke="#555">
+    <rect x="10" y="30" width="150" height="70" rx="8"/>
+    <rect x="190" y="30" width="170" height="70" rx="8"/>
+    <rect x="390" y="30" width="190" height="70" rx="8"/>
+    <rect x="610" y="30" width="150" height="70" rx="8"/>
+    <rect x="780" y="30" width="130" height="70" rx="8"/>
+    <rect x="190" y="170" width="170" height="70" rx="8"/>
+    <rect x="390" y="170" width="190" height="70" rx="8"/>
+    <rect x="610" y="170" width="150" height="70" rx="8"/>
+    <rect x="780" y="170" width="130" height="70" rx="8"/>
+  </g>
+  <rect x="600" y="10" width="320" height="260" rx="10" fill="none" stroke="#9a6a2a" stroke-dasharray="6 4"/>
+  <text x="760" y="288" text-anchor="middle" fill="#9a6a2a">peer installation (other organisation)</text>
+  <g fill="#222" text-anchor="middle">
+    <text x="85" y="60">DAGRunner</text><text x="85" y="80">task_id = hash(run, node)</text>
+    <text x="275" y="60">ledger check</text><text x="275" y="80">sent / ok / error: no resend</text>
+    <text x="485" y="60">outbound gate</text><text x="485" y="80">L44, data grade, pairing</text>
+    <text x="685" y="60">signed task</text><text x="685" y="80">HMAC, instance pin</text>
+    <text x="845" y="60">peer agent</text><text x="845" y="80">its own A2A gates</text>
+    <text x="275" y="200">outcome_unknown</text><text x="275" y="220">node fails, nothing sent</text>
+    <text x="485" y="200">refused: closed reason</text><text x="485" y="220">peer_refused, no text</text>
+    <text x="685" y="200">signed answer</text><text x="685" y="220">both chain tails</text>
+    <text x="845" y="200">untrusted text</text><text x="845" y="220">sanitised, data only</text>
+  </g>
+  <g stroke="#555" fill="none" marker-end="url(#a)">
+    <path d="M160 65 H188"/><path d="M360 65 H388"/><path d="M580 65 H608"/><path d="M760 65 H778"/>
+    <path d="M275 100 V168" stroke-dasharray="4 3"/><path d="M485 100 V168" stroke-dasharray="4 3"/>
+    <path d="M845 100 V168"/><path d="M780 205 H762"/>
+  </g>
+  <text x="485" y="125" text-anchor="middle" fill="#555">workflow.peer_delegated, then federation.task_delegated</text>
+  <text x="485" y="141" text-anchor="middle" fill="#555">in the tenant chain BEFORE the send</text>
+  <text x="460" y="335" text-anchor="middle" fill="#555">never retried; the synthetic readiness check replaces this node with a stub that sends nothing</text>
+</svg>
