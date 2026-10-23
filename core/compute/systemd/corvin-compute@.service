@@ -14,10 +14,12 @@ WorkingDirectory=%h/projects/CorvinOS/core/compute
 # of falling back to the refuse-every-call stub).
 Environment=PYTHONPATH=%h/projects/CorvinOS/core/compute:%h/projects/CorvinOS/corvin_operator/forge
 # CORVIN_HOME pins forge.scope.corvin_home() to the same tree the
-# worker's --corvin-home flag points at; without it the walk-up resolver
-# may pick a repo-local .corvin and diverge from compute/runs/.
-Environment=CORVIN_HOME=%h/.corvin
-ExecStart=%h/projects/CorvinOS/core/compute/.venv/bin/python -m corvin_compute --corvin-home %h/.corvin serve --tenant %i
+# worker's --corvin-home flag points at AND to the tree the console (corvin-webui.service) runs on:
+# the console reads <home>/tenants/<tid>/compute/, so a worker on another home is invisible to it.
+Environment=CORVIN_HOME=%h/projects/CorvinOS/.corvin
+# Same interpreter as corvin-webui.service (the uv tool venv); core/compute has no venv of its own,
+# so the previous core/compute/.venv path made the unit fail with status 203/EXEC.
+ExecStart=%h/.local/share/uv/tools/corvinos/bin/python -m corvin_compute --corvin-home %h/projects/CorvinOS/.corvin serve --tenant %i
 Restart=on-failure
 RestartSec=5s
 PrivateTmp=yes

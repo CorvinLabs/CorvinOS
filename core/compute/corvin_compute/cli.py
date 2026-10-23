@@ -119,7 +119,7 @@ def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None 
     """Resolve Forge's runner.run_tool() with a user-scope registry.
 
     The worker's per-iteration runner instantiates a long-lived Registry
-    at the user-scope forge workspace (``<corvin_home>/global/forge``)
+    at the tenant's user-scope forge workspace (``<corvin_home>/tenants/<tid>/forge``)
     and routes every tool call through ``forge.runner.run_tool``. That
     invocation does the full bwrap-sandbox + budget-clamp + audit-emit
     cycle the LLM-driven path uses.
@@ -138,12 +138,15 @@ def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None 
         from forge import runner as forge_runner  # type: ignore[import]
         from forge.registry import Registry  # type: ignore[import]
         from forge.policy import Policy  # type: ignore[import]
-        from forge.scope import corvin_home  # type: ignore[import]
+        from forge.scope import corvin_home, scope_root  # type: ignore[import]
     except ImportError:
         log.warning("forge package not importable — worker will refuse tool calls")
         return None
 
-    user_root = corvin_home() / "global" / "forge"
+    # Tenant-native user scope — the SAME root forge_tool() registers into. The worker used to read
+    # <corvin_home>/global/forge, a path nothing writes to on a tenant-native install, so it saw
+    # zero tools and every run failed with an unknown tool.
+    user_root = scope_root("user", tenant_id=tenant_id)
     user_root.mkdir(parents=True, exist_ok=True)
     try:
         policy = Policy.load(user_root)
