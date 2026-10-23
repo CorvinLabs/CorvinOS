@@ -46,6 +46,8 @@ A 30-minute tour of the CorvinOS operator console: chat, dashboard, learnings, t
   <sub>30 min &middot; English &middot; <a href="https://www.youtube.com/watch?v=vjTaHDcyIIE" target="_blank" rel="noopener">&#9654; watch on YouTube</a></sub>
 </p>
 
+Further video on YouTube: <a href="https://www.youtube.com/watch?v=TYdzwz6MX70" target="_blank" rel="noopener">watch here</a>
+
 ---
 
 ## ⚡ Quick Start
