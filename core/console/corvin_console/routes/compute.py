@@ -327,7 +327,8 @@ def compute_status(
                     "best_iter":     summary.get("best_iter"),
                     "best_loss":     summary.get("best_loss"),
                     "iterations":    iter_count,
-                    "started_at":    manifest.get("started_at"),
+                    # the worker writes accepted_at; started_at is the legacy console-written key
+                    "started_at":    manifest.get("started_at") or manifest.get("accepted_at"),
                     "convergence":   summary.get("convergence_reason"),
                     "submitted_by":  manifest.get("submitted_by"),
                     "session_id":    manifest.get("session_id"),
@@ -1467,7 +1468,8 @@ def get_experiment(
             "run_id":           run_id,
             "tool_name":        manifest.get("tool_name"),
             "strategy":         manifest.get("strategy"),
-            "params":           manifest.get("params", {}),
+            # the worker writes param_grid; "params" is the legacy console-written key
+            "params":           manifest.get("params") or manifest.get("param_grid") or {},
             "best_loss":        summary.get("best_loss"),
             "best_iter":        summary.get("best_iter"),
             "convergence":      summary.get("convergence_reason"),
@@ -1476,7 +1478,7 @@ def get_experiment(
             "budget_max":       (manifest.get("budget") or {}).get("max_iterations"),
             "submitted_by":     manifest.get("submitted_by"),
             "session_label":    manifest.get("session_label"),
-            "started_at":       manifest.get("started_at"),
+            "started_at":       manifest.get("started_at") or manifest.get("accepted_at"),
             "is_baseline":      run_id == exp.get("baseline_run_id"),
             "is_champion":      run_id == exp.get("champion_run_id"),
         })
@@ -1932,7 +1934,7 @@ def export_mlflow(
             base = f"mlruns/{exp_uuid}/{run_uuid}"
 
             # params
-            for k, v in (manifest.get("params") or {}).items():
+            for k, v in (manifest.get("params") or manifest.get("param_grid") or {}).items():
                 zf.writestr(f"{base}/params/{k}", str(v))
             zf.writestr(f"{base}/params/strategy", str(manifest.get("strategy", "")))
 
@@ -1944,7 +1946,7 @@ def export_mlflow(
                                 key=lambda x: int(x.stem.split("_")[-1]) if x.stem.split("_")[-1].isdigit() else 0):
                     d = _read_json(f) or {}
                     if isinstance(d.get("loss"), (int, float)):
-                        ts = int((manifest.get("started_at") or 0) + d.get("iter", 0) * 10) * 1000
+                        ts = int((manifest.get("started_at") or manifest.get("accepted_at") or 0) + d.get("iter", 0) * 10) * 1000
                         metric_lines += f"{ts} {d['loss']} {d.get('iter', 0)}\n"
             zf.writestr(f"{base}/metrics/loss", metric_lines)
             if summary.get("best_loss") is not None:
