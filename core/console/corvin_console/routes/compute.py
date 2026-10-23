@@ -20,6 +20,7 @@ import logging
 import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -486,6 +487,13 @@ def _hac_dir(tid: str) -> Path:
 def _read_stage_summary(stage_dir: Path) -> dict[str, Any]:
     summary = _read_json(stage_dir / "stage_summary.json") or {}
     iters_dir = stage_dir / "iterations"
+    # A stage's iterations are stored with its compute run (compute/runs/<run_id>/iterations); the
+    # coordinator records the run id in stage_summary.json.
+    run_id = summary.get("run_id")
+    if not iters_dir.is_dir() and isinstance(run_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id):
+        compute_root = next((p for p in stage_dir.parents if p.name == "compute"), None)
+        if compute_root is not None:
+            iters_dir = compute_root / "runs" / run_id / "iterations"
     iter_count = 0
     iterations: list[dict[str, Any]] = []
     if iters_dir.is_dir():

@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from .manifest import PipelineManifest, PipelineStore, StageSpec
+from .manifest import PipelineManifest, PipelineStore, StageSpec, _atomic_write_json
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +105,7 @@ class PipelineCoordinator:
                 return
 
             self._completed[stage.stage_id] = result
+            self._write_stage_summary(stage, result)
 
             self._emit("compute.stage_completed", {
                 "pipeline_id": self.pipeline_id,
@@ -337,6 +338,20 @@ class PipelineCoordinator:
             "run_id": run_id,
             "top_k": best_params_raw,
         }
+
+    def _write_stage_summary(self, stage: StageSpec, result: dict) -> None:
+        """Persist what the console's stage card reads: state, best loss, iteration count and the run id
+        that holds the iterations (a stage's iterations live under compute/runs/<run_id>, not in the stage
+        dir — without this file every finished stage showed "0 iter" and no loss curve)."""
+        try:
+            _atomic_write_json(
+                self._store.stage_artifacts_dir(stage.stage_id).parent / "stage_summary.json",
+                {"stage_id": stage.stage_id, "tool_name": stage.tool_name, "strategy": stage.strategy,
+                 "state": "complete", "run_state": result.get("state"), "best_loss": result.get("best_loss"),
+                 "total_iterations": result.get("total_iterations", 0), "run_id": result.get("run_id")},
+            )
+        except OSError:
+            log.warning("stage summary for %s not written", stage.stage_id, exc_info=True)
 
     # -- $ref resolution ----------------------------------------------------------
 
