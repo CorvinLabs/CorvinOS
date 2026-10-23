@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import string
+import time
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +126,8 @@ class PipelineStore:
     # -- manifest -----------------------------------------------------------------
 
     def write_manifest(self, manifest: PipelineManifest) -> None:
-        _atomic_write_json(self.root_dir / "manifest.json", manifest.to_dict())
+        # started_at: the console lists it (routes/compute.py list_pipelines); it was never written.
+        _atomic_write_json(self.root_dir / "manifest.json", {**manifest.to_dict(), "started_at": time.time()})
 
     def read_manifest(self) -> dict:
         return _read_json(self.root_dir / "manifest.json")

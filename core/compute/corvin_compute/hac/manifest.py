@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import string
+import time
 from pathlib import Path
 from typing import Any
 
@@ -81,10 +82,21 @@ class HACStore:
             "hac_id": manifest.hac_id,
             "tenant_id": manifest.tenant_id,
             "manager_ids": [m.manager_id for m in manifest.sub_managers],
+            # The console reads these keys (routes/compute.py list_hac_runs / hac_detail): without
+            # "sub_managers" every real run listed manager_count 0 and the detail view had no managers.
+            "sub_managers": [
+                {"manager_id": m.manager_id, "budget_fraction": m.budget_fraction,
+                 "min_iterations": m.min_iterations, "strategy": m.strategy,
+                 "stage_ids": [str(s.get("stage_id", "")) for s in m.stages]}
+                for m in manifest.sub_managers
+            ],
             "loss_weights": dataclasses.asdict(manifest.loss_weights),
             "budget": manifest.budget,
             "backprop_gate": manifest.backprop_gate,
             "max_backprop_rounds": manifest.max_backprop_rounds,
+            "fluid_reallocation": manifest.fluid_reallocation,
+            "max_transfer_fraction": manifest.max_transfer_fraction,
+            "started_at": time.time(),
         }
         path = self.root / "manifest.json"
         tmp = path.with_suffix(".tmp")
