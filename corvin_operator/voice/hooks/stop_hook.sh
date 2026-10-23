@@ -33,6 +33,20 @@ if [[ -n "${VOICE_HOOK_RECURSION:-}" ]]; then
   exit 0
 fi
 
+# Non-interactive guard: read-aloud is for a person sitting at a Claude Code
+# session. Every programmatic `claude -p` (console chat turns, the L44 classifier
+# that embeds the user's Discord text, Forge repair, context synthesis, workers)
+# runs with an `sdk*` entrypoint and has no listener — speaking its reply read
+# internal prompts, JSON and the user's own messages aloud on an idle desktop.
+# Enforced HERE, once, instead of relying on each spawn site to set
+# VOICE_HOOK_RECURSION (one forgotten site speaks).
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+  sdk*)
+    voice_log "stop_hook: non-interactive session (entrypoint=${CLAUDE_CODE_ENTRYPOINT}), skipping"
+    exit 0
+    ;;
+esac
+
 ENABLED="$(voice_cfg .enabled true)"
 if [[ "$ENABLED" != "true" ]]; then
   voice_log "stop_hook: voice disabled, skipping"

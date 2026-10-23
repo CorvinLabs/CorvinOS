@@ -338,6 +338,16 @@ and passes it via `--audience` to `summarize.py`. The setsid subshell
 inherits `AUDIENCE` as an env var so a `voice_kill_current_tts` doesn't
 strand the value.
 
+**Non-interactive guard:** `stop_hook.sh` skips every session whose
+`CLAUDE_CODE_ENTRYPOINT` starts with `sdk` (all programmatic `claude -p`
+runs: console chat turns, L44 classifier, Forge repair, context synthesis,
+workers) and logs `stop_hook: non-interactive session … skipping`. Read-aloud
+is for a person at a terminal session; `VOICE_HOOK_RECURSION` alone left every
+spawn site that forgot it speaking internal prompts and JSON aloud.
+`voice_cfg` reads booleans with `tostring`, not `// empty` — jq's `//` treats
+`false` as unset, which made `"enabled": false` (and `/voice-off`) a no-op.
+Tests: `corvin_operator/voice/tests/test_stop_hook_noninteractive.py`.
+
 **Bridge-side integration** (`adapter.build_voice_summary`): the bridge
 ALSO has its own voice-note path that does NOT go through `stop_hook.sh`
 — every bridge subprocess is spawned with `VOICE_HOOK_RECURSION=1`, so

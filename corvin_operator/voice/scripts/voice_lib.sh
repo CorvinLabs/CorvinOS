@@ -140,7 +140,10 @@ voice_cfg() {
   local default="${2:-}"
   voice_ensure_config
   local val
-  val="$(jq -r "$path // empty" "$VOICE_CONFIG_FILE" 2>/dev/null)"
+  # NOT `$path // empty`: jq's `//` treats `false` like `null`, so an explicit
+  # `"enabled": false` read as "unset" and fell back to the default `true` — the
+  # off switch (and every other boolean set to false) could never turn anything off.
+  val="$(jq -r "($path) | if . == null then empty else tostring end" "$VOICE_CONFIG_FILE" 2>/dev/null)"
   if [[ -z "$val" || "$val" == "null" ]]; then
     printf '%s' "$default"
   else
