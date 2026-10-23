@@ -1802,7 +1802,7 @@ function ExperimentComparisonTable({ runs, baselineId, championId }: {
                   return (
                     <td key={k} className="px-3 py-2 font-mono">
                       <span className={cn(differs && "rounded px-1")}
-                        style={differs ? { background: PARAM_DIFF_COLOR, fontWeight: 600 } : undefined}>
+                        style={differs ? { background: PARAM_DIFF_COLOR, color: "#78350f", fontWeight: 600 } : undefined}>
                         {formatParam(val)}
                       </span>
                     </td>
