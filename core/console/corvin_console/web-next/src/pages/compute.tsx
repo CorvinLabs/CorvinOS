@@ -46,6 +46,7 @@ import { ComputeGraphView } from "@/components/ComputeGraphView";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AcsTab } from "@/components/AcsTab";
 import { cn } from "@/lib/utils";
+import { formatParam } from "@/lib/format-param";
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1797,12 +1798,12 @@ function ExperimentComparisonTable({ runs, baselineId, championId }: {
                 {allParamKeys.map((k) => {
                   const val = run.params?.[k];
                   const baseVal = baselineRun?.params?.[k];
-                  const differs = baselineRun && val !== undefined && baseVal !== undefined && String(val) !== String(baseVal);
+                  const differs = baselineRun && val !== undefined && baseVal !== undefined && JSON.stringify(val) !== JSON.stringify(baseVal);
                   return (
                     <td key={k} className="px-3 py-2 font-mono">
                       <span className={cn(differs && "rounded px-1")}
                         style={differs ? { background: PARAM_DIFF_COLOR, fontWeight: 600 } : undefined}>
-                        {val != null ? String(val) : "—"}
+                        {formatParam(val)}
                       </span>
                     </td>
                   );
