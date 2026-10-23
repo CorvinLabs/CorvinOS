@@ -1822,78 +1822,78 @@ def export_jupyter(
     if not exp:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "experiment not found")
 
-    try:
-        import nbformat as _nbf
-    except ImportError:
-        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "nbformat not installed")
+    # A notebook is plain JSON (nbformat 4); writing it directly avoids a dependency nothing declared
+    # (the export answered 503 "nbformat not installed" on every fresh install).
+    def _md(text: str) -> dict[str, Any]:
+        return {"cell_type": "markdown", "metadata": {}, "source": text.splitlines(keepends=True)}
 
-    nb = _nbf.v4.new_notebook()
-    cells = []
+    def _code(text: str) -> dict[str, Any]:
+        return {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+                "source": text.splitlines(keepends=True)}
 
-    # Title
-    cells.append(_nbf.v4.new_markdown_cell(
-        f"# {exp.get('name', experiment_id)}\n\n"
-        f"**Hypothesis:** {exp.get('hypothesis', '—')}\n\n"
-        f"**Session:** {exp.get('session_label', '—')}  \n"
-        f"**Champion:** `{exp.get('champion_run_id', '—')}`"
-    ))
-
-    # Data loading — find first stage_1 artifact across pipelines (single scan)
-    first_artifact = None
-    pipelines_root = _pipelines_dir(tid)
-    if pipelines_root.exists():
-        try:
-            for pip_dir in sorted(pipelines_root.iterdir(),
-                                  key=lambda p: p.stat().st_mtime if p.exists() else 0,
-                                  reverse=True):
-                art = pip_dir / "stages" / "stage_1" / "artifacts" / "weekly_chart_aggregates.csv"
-                if art.exists():
-                    first_artifact = str(art)
-                    break
-        except OSError:
-            pass
-
-    cells.append(_nbf.v4.new_code_cell(
-        f"import pandas as pd\nimport matplotlib.pyplot as plt\n\n"
-        f"# Load stage_1 artifact\ndf = pd.read_csv(r'{first_artifact or 'data.csv'}')\n"
-        f"print(f'Rows: {{len(df):,}} | Columns: {{list(df.columns)}}')\ndf.head()"
-    ))
-
-    # Loss curves — use runtime-computed runs_dir, not a hardcoded developer path
+    run_ids = [r for r in exp.get("run_ids", []) if isinstance(r, str) and "/" not in r and not r.startswith("..")]
     runs_base = str(_runs_dir(tid))
-    run_loss_code = (
-        "runs = " + json.dumps(exp.get("run_ids", [])[:4]) + "\n"
-        "import json, os\n"
-        f"runs_base = r'{runs_base}'\n"
-        "fig, ax = plt.subplots(figsize=(10, 5))\n"
-        "for run_id in runs:\n"
-        "    iters_dir = os.path.join(runs_base, run_id, 'iterations')\n"
-        "    if not os.path.isdir(iters_dir): continue\n"
-        "    files = sorted([f for f in os.listdir(iters_dir) if f.endswith('.json')],\n"
-        "                   key=lambda f: int(f.split('_')[-1].split('.')[0]) if f.split('_')[-1].split('.')[0].isdigit() else 0)\n"
-        "    losses = [json.load(open(os.path.join(iters_dir, f)))['loss'] for f in files]\n"
-        "    ax.plot(losses, label=run_id)\n"
-        "ax.set_xlabel('Iteration'); ax.set_ylabel('Loss'); ax.legend(); ax.set_title('Loss Curves')\n"
-        "plt.tight_layout(); plt.show()"
-    )
-    cells.append(_nbf.v4.new_code_cell(run_loss_code))
-
-    # Top tracks
-    cells.append(_nbf.v4.new_markdown_cell("## Top Tracks by Streams"))
-    cells.append(_nbf.v4.new_code_cell(
-        "df.groupby('track_id')['streams_p50'].max().sort_values(ascending=False).head(10)"
-        if first_artifact else "print('No artifact found')"
-    ))
-
-    # Reproduction command
-    cells.append(_nbf.v4.new_markdown_cell(
-        f"## Reproduce Champion Run\n\n"
-        f"```bash\ncorvinctl reproduce pipeline_spotify_chart_pred "
-        f"--params {exp.get('champion_run_id', 'CHAMPION_RUN_ID')}\n```"
-    ))
-
-    nb.cells = cells
-    nb_json = _nbf.writes(nb)
+    champion = exp.get("champion_run_id") or "—"
+    cells = [
+        _md(
+            f"# {exp.get('name', experiment_id)}\n\n"
+            f"**Hypothesis:** {exp.get('hypothesis') or '—'}\n\n"
+            f"**Session:** {exp.get('session_label') or '—'}  \n"
+            f"**Champion:** `{champion}`"
+        ),
+        _md("## Runs of this experiment"),
+        _code(
+            "import json, os\n"
+            f"runs_base = r'{runs_base}'\n"
+            f"run_ids = {json.dumps(run_ids)}\n"
+            "rows = []\n"
+            "for run_id in run_ids:\n"
+            "    d = os.path.join(runs_base, run_id)\n"
+            "    try:\n"
+            "        manifest = json.load(open(os.path.join(d, 'manifest.json')))\n"
+            "        summary = json.load(open(os.path.join(d, 'summary.json')))\n"
+            "    except (OSError, ValueError):\n"
+            "        continue\n"
+            "    rows.append((run_id, manifest.get('strategy'), summary.get('best_loss'), summary.get('total_iterations'), summary.get('state')))\n"
+            "print(f\"{'run':32} {'strategy':10} {'best_loss':>10} {'iters':>6}  state\")\n"
+            "for r in sorted(rows, key=lambda r: (r[2] is None, r[2])):\n"
+            "    print(f\"{r[0]:32} {str(r[1]):10} {str(r[2]):>10} {str(r[3]):>6}  {r[4]}\")"
+        ),
+        _md("## Loss curves"),
+        _code(
+            "import matplotlib.pyplot as plt\n"
+            "fig, ax = plt.subplots(figsize=(10, 5))\n"
+            "for run_id in run_ids[:6]:\n"
+            "    iters_dir = os.path.join(runs_base, run_id, 'iterations')\n"
+            "    if not os.path.isdir(iters_dir):\n"
+            "        continue\n"
+            "    files = sorted([f for f in os.listdir(iters_dir) if f.endswith('.json')],\n"
+            "                   key=lambda f: int(f.split('_')[-1].split('.')[0]) if f.split('_')[-1].split('.')[0].isdigit() else 0)\n"
+            "    losses = [json.load(open(os.path.join(iters_dir, f)))['loss'] for f in files]\n"
+            "    ax.plot(losses, label=run_id)\n"
+            "ax.set_xlabel('Iteration'); ax.set_ylabel('Loss'); ax.legend(); ax.set_title('Loss curves')\n"
+            "plt.tight_layout(); plt.show()"
+        ),
+        _md("## Champion run"),
+        _code(
+            f"champion = {json.dumps(champion)}\n"
+            "d = os.path.join(runs_base, champion)\n"
+            "if os.path.isdir(d):\n"
+            "    summary = json.load(open(os.path.join(d, 'summary.json')))\n"
+            "    manifest = json.load(open(os.path.join(d, 'manifest.json')))\n"
+            "    print('best loss:', summary.get('best_loss'), 'at iteration', summary.get('best_iter'))\n"
+            "    print('strategy:', manifest.get('strategy'), '| tool:', manifest.get('tool_name'))\n"
+            "    print('top-k:', summary.get('top_k'))\n"
+            "else:\n"
+            "    print('no champion run recorded')"
+        ),
+    ]
+    nb_json = json.dumps({
+        "cells": cells,
+        "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                     "language_info": {"name": "python"}},
+        "nbformat": 4, "nbformat_minor": 4,
+    }, indent=1, ensure_ascii=False)
     safe_name = experiment_id.replace("/", "_").replace('"', "").replace("\r", "").replace("\n", "")
     return Response(
         content=nb_json,
