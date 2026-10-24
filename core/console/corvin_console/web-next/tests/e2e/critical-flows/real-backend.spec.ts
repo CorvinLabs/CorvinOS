@@ -14,9 +14,10 @@
 import { test, expect, BrowserContext } from '@playwright/test';
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
+import { resolveConsoleOrigin } from '../sandbox-origin';
 
 const FRONTEND_URL = 'http://localhost:5173/console/';
-const BACKEND_API = 'http://localhost:8765/v1/console';
+const BACKEND_API = `${resolveConsoleOrigin()}/v1/console`;
 
 function getSidFingerprint(): string {
   const authState = JSON.parse(readFileSync('./tests/e2e/auth-state.json', 'utf-8'));

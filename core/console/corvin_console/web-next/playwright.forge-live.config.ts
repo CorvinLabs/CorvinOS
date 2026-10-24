@@ -1,4 +1,4 @@
-// Forge LIVE suite — drives the real console (default :8765) through the four
+// Forge LIVE suite — drives the real console (:8765; refused unless CORVIN_E2E_ALLOW_LIVE=1) through the four
 // Forge generators the way a user does right after a fresh install:
 //
 //   10-robustness      fast, no engine: validation, refusals, restarts, hostile input
@@ -7,7 +7,7 @@
 //
 //   npx playwright test -c playwright.forge-live.config.ts 10          # seconds, no LLM spend
 //   npx playwright test -c playwright.forge-live.config.ts 20          # minutes, spends subscription budget
-//   FORGE_LIVE_URL=http://127.0.0.1:8765 FORGE_LIVE_SKIP_B=1 ...      # without the empty install
+//   CORVIN_E2E_ALLOW_LIVE=1 FORGE_LIVE_URL=http://127.0.0.1:8765 FORGE_LIVE_SKIP_B=1 ...   # without the empty install
 //
 // The e2e_test_* artifacts are KEPT after the run on purpose (the operator wants to see them);
 // FORGE_LIVE_REGEN=1 deletes and re-forges them, otherwise an existing one is reused.

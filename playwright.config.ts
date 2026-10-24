@@ -5,6 +5,10 @@
  */
 
 import { defineConfig, devices } from '@playwright/test';
+import { SANDBOX_COMMAND_PREFIX, resolveConsoleBaseUrl, sandboxServerEnv } from './core/console/corvin_console/web-next/tests/e2e/sandbox-origin';
+
+/* Sandbox origin by default; :8765 (live) only with CORVIN_E2E_ALLOW_LIVE=1. */
+const CONSOLE_URL = resolveConsoleBaseUrl();
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -16,8 +20,11 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: 'python -m corvin_console.standalone --port 8765',
-    url: 'http://127.0.0.1:8765/console',
+    // Throwaway CORVIN_HOME / XDG_CONFIG_HOME / HOME / absolute anchor key, FORGE_ROOT unset:
+    // the standalone console otherwise defaults to the operator's ~/.corvin.
+    command: `${SANDBOX_COMMAND_PREFIX} python -m corvin_console.standalone --port ${new URL(CONSOLE_URL).port}`,
+    env: sandboxServerEnv('root-scripts'),
+    url: CONSOLE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,
   },
@@ -40,7 +47,7 @@ export default defineConfig({
 
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: 'http://127.0.0.1:8765/console',
+    baseURL: CONSOLE_URL,
 
     /* Collect trace when retrying the failed test */
     trace: 'on-first-retry',

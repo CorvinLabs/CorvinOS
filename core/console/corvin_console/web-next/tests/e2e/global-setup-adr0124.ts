@@ -11,6 +11,7 @@ import { chromium, request } from "@playwright/test";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { resolveConsoleOrigin } from "./sandbox-origin";
 
 const _dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,9 +26,9 @@ export const AUTH_STATE_PATH = path.join(_dirname, "auth-state.json");
  * saved storageState never applied to the pages under test: every spec ran
  * anonymous and the console answered 401. Derive both from one value.
  */
-const CONSOLE_ORIGIN = new URL(
-  process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console",
-).origin;
+// Resolved at load time: a :8765 (live) origin without CORVIN_E2E_ALLOW_LIVE=1
+// throws here, before any login request or browser launch.
+const CONSOLE_ORIGIN = resolveConsoleOrigin();
 
 /** Check if the existing auth-state is still valid (whoami returns 200). */
 async function isSessionValid(): Promise<boolean> {

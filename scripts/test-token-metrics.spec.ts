@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { resolveConsoleOrigin } from '../core/console/corvin_console/web-next/tests/e2e/sandbox-origin';
 
 /**
  * Token Metrics Dashboard E2E Tests
@@ -8,7 +9,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Token Metrics Dashboard', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to Console
-    await page.goto('http://localhost:8765/console/app', { waitUntil: 'networkidle' });
+    await page.goto(`${resolveConsoleOrigin()}/console/app`, { waitUntil: 'networkidle' });
 
     // Wait for the app to load
     await page.waitForSelector('[role="navigation"]', { timeout: 10000 });
@@ -133,7 +134,7 @@ test.describe('Token Metrics Dashboard', () => {
 
   test('should filter metrics by session ID from URL params', async ({ page }) => {
     // Navigate with session ID parameter
-    await page.goto('http://localhost:8765/console/app/token-metrics?sessionId=current', { waitUntil: 'networkidle' });
+    await page.goto(`${resolveConsoleOrigin()}/console/app/token-metrics?sessionId=current`, { waitUntil: 'networkidle' });
 
     // Wait for metrics
     await page.waitForTimeout(2000);
@@ -248,7 +249,7 @@ test.describe('Token Metrics Dashboard', () => {
 
 test.describe('Token Metrics - Whitelist Integration', () => {
   test('should only show whitelisted features as enabled', async ({ page }) => {
-    await page.goto('http://localhost:8765/console/app/settings', { waitUntil: 'networkidle' });
+    await page.goto(`${resolveConsoleOrigin()}/console/app/settings`, { waitUntil: 'networkidle' });
     await page.waitForSelector('text=Features', { timeout: 5000 });
 
     // Expected enabled features (whitelist)
@@ -269,7 +270,7 @@ test.describe('Token Metrics - Whitelist Integration', () => {
   });
 
   test('should disable non-whitelisted features', async ({ page }) => {
-    await page.goto('http://localhost:8765/console/app/settings', { waitUntil: 'networkidle' });
+    await page.goto(`${resolveConsoleOrigin()}/console/app/settings`, { waitUntil: 'networkidle' });
     await page.waitForSelector('text=Features', { timeout: 5000 });
 
     // Sample of non-whitelisted features that should be disabled

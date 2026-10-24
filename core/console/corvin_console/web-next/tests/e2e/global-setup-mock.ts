@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +28,7 @@ const MOCK_AUTH_STATE = {
   ],
   origins: [
     {
-      origin: 'http://127.0.0.1:8765',
+      origin: resolveConsoleOrigin(),
       localStorage: [
         {
           name: 'corvin_user_id',

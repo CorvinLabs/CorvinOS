@@ -14,9 +14,10 @@
 import { test, expect, BrowserContext, Page } from "@playwright/test";
 import path from "path";
 import os from "os";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 const BASE_URL = "http://localhost:5173/console";
-const API_BASE  = "http://localhost:8765/v1/console";
+const API_BASE  = `${resolveConsoleOrigin()}/v1/console`;
 
 // Screenshots go directly to the session outputs directory
 const OUTDIR = path.join(

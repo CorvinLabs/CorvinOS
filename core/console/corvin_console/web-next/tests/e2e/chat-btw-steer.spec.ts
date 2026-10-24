@@ -8,12 +8,13 @@
  * through a 1.5 s undo window; Esc puts the transcript in the composer.
  *
  * Costs real API turns — run deliberately:
- *   CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test \
+ *   CORVIN_E2E_ALLOW_LIVE=1 CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test \
  *     tests/e2e/chat-btw-steer.spec.ts --project=chromium
  */
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { resolveUrlVar } from "./sandbox-origin";
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://localhost:5173/console").replace(/\/console\/?$/, "");
+const ORIGIN = resolveUrlVar("CONSOLE_BASE_URL", "http://localhost:5173/console").replace(/\/console\/?$/, "");
 const API_BASE = `${ORIGIN}/v1/console`;
 test.setTimeout(300_000);
 

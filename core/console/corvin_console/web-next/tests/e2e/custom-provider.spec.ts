@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { resolveUrlVar } from "./sandbox-origin";
 
 /**
  * E2E Tests: Custom Provider Creation Workflow
@@ -7,7 +8,8 @@ import { test, expect } from "@playwright/test";
  * Auth: provided via global storageState (auth-state.json).
  */
 
-const BASE_URL = process.env.BASE_URL || "http://localhost:5173/console";
+// The dev server (its /v1 proxy is pinned to the run origin); BASE_URL on :8765 needs CORVIN_E2E_ALLOW_LIVE=1.
+const BASE_URL = resolveUrlVar("BASE_URL", "http://localhost:5173/console");
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

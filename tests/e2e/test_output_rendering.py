@@ -7,6 +7,11 @@ This covers the CRITICAL gap: Execution complete → Output visible.
 import pytest
 import asyncio
 
+from tests.e2e._console_origin import console_origin
+
+# Resolved at import: BASE_URL on :8765 without CORVIN_E2E_ALLOW_LIVE=1 refuses the whole module.
+CONSOLE_ORIGIN = console_origin()
+
 
 @pytest.mark.e2e
 @pytest.mark.high_risk
@@ -16,7 +21,7 @@ class TestOutputRendering:
     async def test_task_result_appears_in_panel(self, page):
         """Task result renders in Console after completion."""
         # Mock successful task completion
-        await page.goto("http://localhost:8765/console/app/task-details/task-123")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/task-details/task-123")
 
         # Mock API response
         async def mock_task_output(route):
@@ -45,7 +50,7 @@ class TestOutputRendering:
 
     async def test_output_format_validation(self, page):
         """Output format is valid HTML/markdown."""
-        await page.goto("http://localhost:8765/console/app/task-details/task-456")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/task-details/task-456")
 
         # Wait for output
         await page.wait_for_selector('[data-testid="task-output"]', timeout=5000)
@@ -60,7 +65,7 @@ class TestOutputRendering:
 
     async def test_output_metadata_displayed(self, page):
         """Output shows metadata (duration, agent, cost)."""
-        await page.goto("http://localhost:8765/console/app/task-details/task-789")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/task-details/task-789")
 
         # Wait for task complete
         await page.wait_for_selector('text=Status: complete', timeout=10000)
@@ -82,7 +87,7 @@ class TestOutputRendering:
     async def test_error_output_formatting(self, page):
         """Task error is clearly formatted and actionable."""
         # Create task that fails
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
         await page.fill('textarea[name="taskInput"]', "Invalid input that causes error")
         await page.click('button:has-text("Submit")')
 
@@ -99,7 +104,7 @@ class TestOutputRendering:
     async def test_output_pagination_large_results(self, page):
         """Large task results are paginated."""
         # Create task with large output (simulated)
-        await page.goto("http://localhost:8765/console/app/task-details/task-large")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/task-details/task-large")
 
         # Wait for output
         await page.wait_for_selector('[data-testid="task-output"]', timeout=5000)
@@ -113,7 +118,7 @@ class TestOutputRendering:
 
     async def test_streaming_output_updates(self, page):
         """Output updates in real-time as task progresses."""
-        await page.goto("http://localhost:8765/console/app/task-details/task-stream")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/task-details/task-stream")
 
         # Collect output updates over time
         outputs_seen = []
@@ -135,7 +140,7 @@ class TestOutputRendering:
 
     async def test_output_copy_to_clipboard(self, page):
         """User can copy output to clipboard."""
-        await page.goto("http://localhost:8765/console/app/task-details/task-123")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/task-details/task-123")
 
         # Wait for output
         await page.wait_for_selector('[data-testid="task-output"]', timeout=5000)
@@ -153,7 +158,7 @@ class TestOutputRendering:
 
     async def test_output_export_functionality(self, page):
         """User can export task output (JSON/CSV)."""
-        await page.goto("http://localhost:8765/console/app/task-details/task-123")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/task-details/task-123")
 
         # Wait for output
         await page.wait_for_selector('[data-testid="task-output"]', timeout=5000)
@@ -170,7 +175,7 @@ class TestOutputRendering:
 
     async def test_output_display_on_different_screen_sizes(self, page):
         """Output renders correctly on mobile/desktop."""
-        await page.goto("http://localhost:8765/console/app/task-details/task-123")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/task-details/task-123")
 
         # Test desktop (1920x1080)
         await page.set_viewport_size({"width": 1920, "height": 1080})

@@ -10,12 +10,13 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { resolveOptionalOrigin } from '../../core/console/corvin_console/web-next/tests/e2e/sandbox-origin';
 
 test.describe('CorvinOS Console — Exhaustive UI Test Suite', () => {
   test.setTimeout(30000);
 
   test.beforeEach(async ({ page }) => {
-    await page.goto('http://127.0.0.1:8765/console/', {
+    await page.goto(`${resolveOptionalOrigin('BASE_URL')}/console/`, {
       waitUntil: 'domcontentloaded',
       timeout: 10000,
     });
@@ -338,7 +339,7 @@ test.describe('CorvinOS Console — Exhaustive UI Test Suite', () => {
   test('25. Page loads within reasonable time', async ({ page }) => {
     const startTime = Date.now();
 
-    await page.goto('http://127.0.0.1:8765/console/', {
+    await page.goto(`${resolveOptionalOrigin('BASE_URL')}/console/`, {
       waitUntil: 'domcontentloaded',
       timeout: 10000,
     });
@@ -365,7 +366,7 @@ test.describe('CorvinOS Console — Exhaustive UI Test Suite', () => {
   // ============================================================================
 
   test('27. Page handles missing routes gracefully', async ({ page }) => {
-    const response = await page.goto('http://127.0.0.1:8765/console/nonexistent-page-xyz', {
+    const response = await page.goto(`${resolveOptionalOrigin('BASE_URL')}/console/nonexistent-page-xyz`, {
       waitUntil: 'domcontentloaded',
     });
 

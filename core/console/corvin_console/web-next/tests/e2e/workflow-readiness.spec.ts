@@ -1,14 +1,15 @@
 /**
  * Workflow Ready tab (readiness-panel) - real browser against the live console.
  *
- * Run: CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test workflow-readiness
+ * Run: CORVIN_E2E_ALLOW_LIVE=1 CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test workflow-readiness
  *
  * A two-step workflow is created through the API (id prefix qa-wf-) and deleted afterwards. No
  * design message is sent (that would spawn a paid engine turn); the report is a synthetic run.
  */
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
+const ORIGIN = (resolveConsoleBaseUrl()).replace(/\/console\/?$/, "");
 const API = `${ORIGIN}/v1/console`;
 const WID = `qa-wf-ready-${Date.now().toString(36)}`;
 

@@ -12,8 +12,9 @@ import path from 'path';
 // csrf_token, under which no raw-fetch mutation can succeed. This spec uses the real
 // session from the global setup and the real API.
 import { test, expect } from '@playwright/test';
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
-const PANEL = `${process.env.CONSOLE_BASE_URL || 'http://127.0.0.1:8765/console'}/app/datahub-unified`;
+const PANEL = `${resolveConsoleBaseUrl()}/app/datahub-unified`;
 
 test.describe('DataHub panel', () => {
   test('analyze → create → list → delete through the real API', async ({ page }) => {

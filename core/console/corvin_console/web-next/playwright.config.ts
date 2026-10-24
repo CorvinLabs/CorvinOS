@@ -1,12 +1,15 @@
 import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { LIVE_ONLY_SPEC_GLOBS, LIVE_OPT_IN_ENV, mayReuseDevServer, resolveConsoleBaseUrl, resolveConsoleOrigin, resolveUrlVar } from './tests/e2e/sandbox-origin';
 
 const _dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',
+  // keep-live specs (SPEC_TRIAGE.md) need the explicit opt-in; the default run leaves them out.
+  testIgnore: process.env[LIVE_OPT_IN_ENV] === '1' ? undefined : LIVE_ONLY_SPEC_GLOBS,
   grep: process.env.PLAYWRIGHT_GREP ? new RegExp(process.env.PLAYWRIGHT_GREP) : undefined,
   grepInvert: process.env.PLAYWRIGHT_GREP_INVERT ? new RegExp(process.env.PLAYWRIGHT_GREP_INVERT) : undefined,
   // MEASURED, do not "fix" this to false without re-measuring. These are integration
@@ -51,7 +54,8 @@ export default defineConfig({
     // 3000, which no server here ever listens on — specs that rely on the
     // managed webServer could not run at all, and the ones that do run point at
     // a live console via their own BASE_URL/GATEWAY env instead.
-    baseURL: process.env.CONSOLE_BASE_URL || 'http://127.0.0.1:8765/console',
+    // Sandbox by default; :8765 (live) only with CORVIN_E2E_ALLOW_LIVE=1. See tests/e2e/sandbox-origin.ts.
+    baseURL: resolveConsoleBaseUrl(),
     trace: 'on-first-retry',
   },
 
@@ -72,8 +76,12 @@ export default defineConfig({
     // Probing the bare origin only ever gets a 302, so Playwright never saw the
     // server as ready and every run without an externally started dev server
     // died on "Timed out waiting 60000ms from config.webServer".
-    url: (process.env.CONSOLE_BASE_URL || 'http://localhost:5173') + '/console/',
-    reuseExistingServer: !process.env.CI,
+    url: resolveUrlVar('CONSOLE_BASE_URL', 'http://localhost:5173') + '/console/',
+    reuseExistingServer: mayReuseDevServer(), // never reuse an unpinned :5173 on a sandbox run
+    // vite.config.ts proxies /v1 and /healthz to CORVIN_GATEWAY_URL, which defaults
+    // to the live :8765. Pin it to the run's own origin so the dev server cannot
+    // carry sandbox traffic to the live console.
+    env: { CORVIN_GATEWAY_URL: resolveConsoleOrigin() },
     timeout: 120_000,
   },
 });

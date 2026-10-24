@@ -3,7 +3,7 @@
  * server, no shared storageState, one worker (they edit shared live state).
  *
  *   npx playwright test -c playwright.live.config.ts
- *   CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test -c playwright.live.config.ts
+ *   CORVIN_E2E_ALLOW_LIVE=1 CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test -c playwright.live.config.ts
  */
 import { defineConfig, devices } from "@playwright/test";
 

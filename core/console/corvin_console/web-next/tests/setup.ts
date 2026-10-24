@@ -24,29 +24,33 @@ const localStorageMock = (() => {
   };
 })();
 
-Object.defineProperty(window, 'localStorage', {
-  value: localStorageMock,
-});
+// Browser-only mocks: skipped for files that opt into `// @vitest-environment node`
+// (e.g. tests/unit/e2e-*.test.ts, which spawn Playwright and scan the repo).
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'localStorage', {
+    value: localStorageMock,
+  });
 
-// Mock SessionStorage
-Object.defineProperty(window, 'sessionStorage', {
-  value: localStorageMock,
-});
+  // Mock SessionStorage
+  Object.defineProperty(window, 'sessionStorage', {
+    value: localStorageMock,
+  });
 
-// Mock window.matchMedia für Theme-Tests
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: vi.fn().mockImplementation((query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
-});
+  // Mock window.matchMedia für Theme-Tests
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
 
 // Mock IntersectionObserver
 global.IntersectionObserver = vi.fn().mockImplementation(() => ({

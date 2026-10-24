@@ -9,8 +9,10 @@
  *   npx playwright test --config=playwright.live.config.ts
  */
 import { test, expect } from "@playwright/test";
+import { resolveOptionalOrigin } from "../e2e/sandbox-origin";
 
-const BASE = process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765";
+// Sandbox by default; the live :8765 console only with CORVIN_E2E_ALLOW_LIVE=1.
+const BASE = resolveOptionalOrigin("CONSOLE_BASE_URL");
 
 test("operator lands on the live console, the Dashboard nav entry works, and the SPA shell is served no-cache", async ({ page }) => {
   const shell = await page.request.get(`${BASE}/console/`);

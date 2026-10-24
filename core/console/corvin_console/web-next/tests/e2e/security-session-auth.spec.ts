@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 /**
  * Security, Session Management & Authentication Tests
@@ -876,7 +877,7 @@ test.describe('Session Management Tests', () => {
       // against that regression reappearing: 11 sequential calls must all
       // succeed (302), none may be 429.
 
-      const LOCAL_LOGIN_URL = 'http://localhost:8765/v1/console/auth/local-login';
+      const LOCAL_LOGIN_URL = `${resolveConsoleOrigin()}/v1/console/auth/local-login`;
 
       // Fresh isolated context — own cookie jar and TCP peer identity.
       const isolatedContext = await browser.newContext();

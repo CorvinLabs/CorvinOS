@@ -8,9 +8,10 @@
  */
 
 import { test as base } from '@playwright/test';
+import { resolveOptionalOrigin } from '../../core/console/corvin_console/web-next/tests/e2e/sandbox-origin';
 
 /** API endpoints */
-export const API_BASE = 'http://127.0.0.1:8765/api';
+export const API_BASE = `${resolveOptionalOrigin('BASE_URL')}/api`;
 export const TASK_GRAPH_ENDPOINT = (taskId: string) => `${API_BASE}/tasks/${taskId}/graph`;
 
 /** Small graph: 10 nodes, 12 edges */

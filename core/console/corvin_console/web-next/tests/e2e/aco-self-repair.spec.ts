@@ -29,10 +29,11 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 import * as url from "url";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
-const GATEWAY   = "http://localhost:8765";
+const GATEWAY   = `${resolveConsoleOrigin()}`;
 const API_BASE  = `${GATEWAY}/v1/console`;
 const CONSOLE_URL = `${GATEWAY}/console`;
 

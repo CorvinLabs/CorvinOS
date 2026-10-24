@@ -22,9 +22,10 @@ import {
 } from "@playwright/test";
 import path from "path";
 import fs from "fs";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 const BASE_URL  = "http://localhost:5173";
-const API_BASE  = "http://localhost:8765/v1/console";
+const API_BASE  = `${resolveConsoleOrigin()}/v1/console`;
 
 const SCREENSHOT_DIR =
   process.env.PLAYWRIGHT_SCREENSHOT_DIR ??

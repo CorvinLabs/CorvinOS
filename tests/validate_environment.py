@@ -20,6 +20,10 @@ from pathlib import Path
 from typing import Tuple, List
 import os
 
+# Run as a script from tests/: put the repo root on the path for the shared origin policy.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tests.e2e._console_origin import SANDBOX_CONSOLE_ORIGIN, resolve_url_var  # noqa: E402
+
 
 # ANSI colors
 GREEN = "\033[92m"
@@ -196,7 +200,8 @@ class EnvironmentValidator:
         """Check if console base URL is reachable."""
         print_header("5. Console Base URL Reachability")
 
-        base_url = os.getenv("CONSOLE_BASE_URL", "http://localhost:8765")
+        # Sandbox by default; :8765 only with CORVIN_E2E_ALLOW_LIVE=1.
+        base_url = resolve_url_var("CONSOLE_BASE_URL", SANDBOX_CONSOLE_ORIGIN)
         print(f"Testing: {base_url}")
 
         try:

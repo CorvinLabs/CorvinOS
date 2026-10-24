@@ -4,8 +4,9 @@
  * when the page, the bundle or the host's `/a2a/feed` shape drifts apart.
  */
 import { test, expect } from "@playwright/test";
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
+const ORIGIN = (resolveConsoleBaseUrl()).replace(/\/console\/?$/, "");
 const API = `${ORIGIN}/v1/console`;
 
 test("live peer chat: a symbol on every message, none without", async ({ page, request }) => {

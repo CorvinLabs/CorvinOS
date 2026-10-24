@@ -138,6 +138,36 @@ const modal = await panelTestPresets.testModal(
 
 ## Running Tests
 
+### Which console a run targets (origin policy)
+
+Test runs never reach the live console (`:8765`) by default. The origin is resolved by
+`tests/e2e/sandbox-origin.ts`, which every Playwright config, global setup and spec uses:
+
+- **Default:** the sandbox origin `http://127.0.0.1:8799` (the isolated backend,
+  `scripts/start-isolated-e2e-backend.sh`, with a throwaway `CORVIN_HOME`). Start it before the run.
+- **Live console:** only with the explicit opt-in `CORVIN_E2E_ALLOW_LIVE=1` together with the variable
+  that names the target (`CONSOLE_BASE_URL`, `FORGE_LIVE_URL` or `BASE_URL`). Any other `:8765` URL
+  makes the run refuse at config or global-setup load, before a login or a browser launch.
+- **Dev server:** a sandbox run never reuses a Vite dev server already listening on `:5173` (it may
+  proxy to the live gateway). Stop it first, or the run fails with "port already used". Only an
+  explicit live run may reuse one (`mayReuseDevServer()`).
+- **Fixture parameters:** Playwright resolves fixtures by property name. To silence the unused-arg
+  lint, alias the binding (`{ panelNav: _panelNav }`); never rename the fixture key (`{ _panelNav }`
+  is an unknown fixture and stops the whole suite from loading).
+- **Never hardcode an origin.** Import from `tests/e2e/sandbox-origin.ts` (`resolveConsoleBaseUrl`,
+  `resolveConsoleOrigin`, `resolveOptionalOrigin`, `resolveUrlVar`). `tests/unit/e2e-static-origin-scan.test.ts`
+  fails on an executable `8765` literal or a direct `process.env.CONSOLE_BASE_URL` / `BASE_URL` /
+  `FORGE_LIVE_URL` read in any Playwright file. A webServer that starts a console backend gets
+  `sandboxServerEnv(...)` (throwaway CORVIN_HOME, XDG_CONFIG_HOME, HOME, absolute anchor key).
+- **A spec whose header says it needs the live console** goes into `LIVE_ONLY_SPEC_GLOBS`; the scan test
+  fails when header and list disagree.
+- **Keep-live specs** (listed in `LIVE_ONLY_SPEC_GLOBS`) are left out of the default run and run only
+  with the opt-in. The full classification is in `tests/e2e/release_demo/SPEC_TRIAGE.md`.
+
+```bash
+CORVIN_E2E_ALLOW_LIVE=1 CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test -c playwright.live.config.ts
+```
+
 ### Basic Commands
 
 ```bash

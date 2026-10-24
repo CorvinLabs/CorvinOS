@@ -1,7 +1,7 @@
 /**
  * Tasks panel — LIVE E2E against the running console (Task-Tracking SSOT).
  *
- *   CONSOLE_BASE_URL=http://127.0.0.1:8765/console \
+ *   CORVIN_E2E_ALLOW_LIVE=1 CONSOLE_BASE_URL=http://127.0.0.1:8765/console \
  *   SHOTS_DIR=/tmp/shots npx playwright test -c playwright.live.config.ts
  *
  * Proves the whole path browser → /v1/console/task-tracking → SQLite store:
@@ -14,8 +14,9 @@
  * Optional screenshots (light + dark, every view) go to $SHOTS_DIR.
  */
 import { test, expect, request as pwRequest, type APIRequestContext, type Page } from "@playwright/test";
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
+const ORIGIN = (resolveConsoleBaseUrl()).replace(/\/console\/?$/, "");
 const PAGE_URL = `${ORIGIN}/console/app/initiatives`;
 const SHOTS = process.env.SHOTS_DIR;
 

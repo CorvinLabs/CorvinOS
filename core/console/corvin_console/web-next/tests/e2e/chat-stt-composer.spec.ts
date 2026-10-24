@@ -9,8 +9,9 @@
  * `result` is ever delivered. This fake mirrors that Chrome behaviour.
  */
 import { test, expect, type BrowserContext } from "@playwright/test";
+import { resolveUrlVar } from "./sandbox-origin";
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://localhost:5173/console").replace(/\/console\/?$/, "");
+const ORIGIN = resolveUrlVar("CONSOLE_BASE_URL", "http://localhost:5173/console").replace(/\/console\/?$/, "");
 const API_BASE = `${ORIGIN}/v1/console`;
 
 let ctx: BrowserContext;

@@ -12,13 +12,20 @@
 import { test, expect, devices } from '@playwright/test';
 import { graphTest, GraphE2EBase } from './base';
 
+// test.use() inside a describe group may not set defaultBrowserType (it forces a new worker);
+// keep the rest of the device descriptor (viewport, user agent, touch).
+const device = (name: string) => {
+  const { defaultBrowserType: _ignored, ...rest } = devices[name];
+  return rest;
+};
+
 // ============================================================================
 // RESPONSIVE DESIGN TESTS
 // ============================================================================
 
 graphTest.describe('Task Graph Component — Responsive Design', () => {
   // Mobile tests
-  test.use({ ...devices['Pixel 5'] });
+  test.use(device('Pixel 5'));
 
   graphTest(
     'Mobile (375px): graph readable, no horizontal scroll',
@@ -73,7 +80,7 @@ graphTest.describe('Task Graph Component — Responsive Design', () => {
   });
 
   // Tablet tests
-  test.use({ ...devices['iPad Pro'] });
+  test.use(device('iPad Pro 11'));
 
   graphTest('Tablet (768px): graph fits with reasonable zoom', async ({
     page,
@@ -160,7 +167,7 @@ graphTest.describe('Task Graph Component — Responsive Design', () => {
     page,
     graphBase,
   }) => {
-    test.use({ ...devices['Pixel 5'] });
+    test.use(device('Pixel 5'));
 
     await graphBase.navigateToGraphPanel(page, 'task_small_001');
     await graphBase.waitForGraphRender(page);

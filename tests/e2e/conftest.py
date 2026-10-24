@@ -5,12 +5,15 @@ from pathlib import Path
 from typing import Generator
 import os
 
+from tests.e2e._console_origin import console_origin
+
 
 @pytest.fixture(scope="session")
 def playwright_config():
     """Playwright configuration for all E2E tests."""
     return {
-        "base_url": os.getenv("BASE_URL", "http://localhost:8765"),
+        # Sandbox by default; the live :8765 console only with CORVIN_E2E_ALLOW_LIVE=1.
+        "base_url": console_origin(),
         "headless": os.getenv("HEADLESS", "true").lower() == "true",
         "slow_mo": int(os.getenv("SLOW_MO", "0")),
         "timeout": int(os.getenv("TIMEOUT", "30000")),  # 30s default

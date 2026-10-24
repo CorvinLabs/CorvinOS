@@ -19,6 +19,7 @@
  * narrowed window would not be reversible.
  */
 import { expect, test } from "@playwright/test";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 test.describe.configure({ mode: "serial" });
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -27,7 +28,7 @@ const MARKER_HEADER =
   "Which model serves each turn, what it costs, and what the selector has learned.";
 
 test.beforeEach(async ({ page, baseURL }) => {
-  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  const origin = new URL(baseURL ?? `${resolveConsoleOrigin()}/console`).origin;
   // Log in through the context's request client (shares the cookie jar) — a
   // page.goto here would 302 to /console/ and that SPA boot races the next
   // navigation ("interrupted by another navigation", seen 2026-09-18).
@@ -46,7 +47,7 @@ const WINDOW_CASE = "window: reset counters to now, then show full history (reve
 test.afterEach(async ({ page, baseURL }, testInfo) => {
   if (testInfo.title !== WINDOW_CASE || windowWasFull !== true) return;
   windowWasFull = null;
-  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  const origin = new URL(baseURL ?? `${resolveConsoleOrigin()}/console`).origin;
   const status = await page.request.get(`${origin}/v1/console/learning/model-cost-optimizer/status`);
   if (!status.ok()) return;
   const body = (await status.json()) as { window?: { active?: boolean } };
@@ -62,7 +63,7 @@ test.afterEach(async ({ page, baseURL }, testInfo) => {
 test(WINDOW_CASE, async ({ page, baseURL }) => {
   // Precondition from the API, not from a paint: a narrowed window cannot be
   // restored to its prior epoch, so the case is skipped rather than destructive.
-  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  const origin = new URL(baseURL ?? `${resolveConsoleOrigin()}/console`).origin;
   const st = await page.request.get(`${origin}/v1/console/learning/model-cost-optimizer/status`);
   expect(st.ok()).toBe(true);
   const before = (await st.json()) as { window?: { active?: boolean } };

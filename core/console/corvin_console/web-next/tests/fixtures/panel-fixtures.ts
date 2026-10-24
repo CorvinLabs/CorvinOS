@@ -19,6 +19,7 @@
 
 import { test as base, expect, Page } from '@playwright/test';
 import { setupMockApis } from './mock-api';
+import { resolveConsoleBaseUrl } from '../e2e/sandbox-origin';
 
 /**
  * Navigation utilities for panels.
@@ -219,7 +220,7 @@ export const test = base.extend<{
     await setupMockApis(page);
 
     // Create navigator instance
-    const navigator = new PanelNavigator(page, baseURL || 'http://127.0.0.1:8765/console');
+    const navigator = new PanelNavigator(page, baseURL || resolveConsoleBaseUrl());
 
     // Provide to test
     await use(navigator);

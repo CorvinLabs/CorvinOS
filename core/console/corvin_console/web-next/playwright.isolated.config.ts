@@ -3,6 +3,7 @@
 // never touched. Playwright owns both server lifecycles for the run's duration.
 import base from './playwright.config';
 import { defineConfig } from '@playwright/test';
+import { mayReuseDevServer } from './tests/e2e/sandbox-origin';
 
 export default defineConfig({
   ...base,
@@ -18,7 +19,7 @@ export default defineConfig({
       // Vite dev server, proxying /v1 + /healthz to the isolated backend.
       command: 'npm run dev',
       url: 'http://localhost:5173',
-      reuseExistingServer: true,
+      reuseExistingServer: mayReuseDevServer(), // the dev server must carry the :8799 pin below
       timeout: 60_000,
       env: { CORVIN_GATEWAY_URL: 'http://127.0.0.1:8799' },
     },

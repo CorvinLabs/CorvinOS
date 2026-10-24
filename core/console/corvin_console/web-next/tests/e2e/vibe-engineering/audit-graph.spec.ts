@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test'
+import { resolveConsoleOrigin } from '../sandbox-origin';
 
 test.describe('Audit Graph Panel (Phase 2)', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to Vibe Dashboard
-    await page.goto('http://127.0.0.1:8765/console/app/vibe-engineering')
+    await page.goto(`${resolveConsoleOrigin()}/console/app/vibe-engineering`)
     // Wait for page load
     await page.waitForLoadState('networkidle')
   })
@@ -138,7 +139,7 @@ test.describe('Audit Graph Panel (Phase 2)', () => {
 
   test('should handle no data gracefully', async ({ page }) => {
     // Navigate to the page
-    await page.goto('http://127.0.0.1:8765/console/app/vibe-engineering')
+    await page.goto(`${resolveConsoleOrigin()}/console/app/vibe-engineering`)
 
     // Mock empty API response
     await page.route('**/api/v1/console/vibe/audit/graph**', route => {

@@ -19,8 +19,9 @@
  */
 
 import { test, expect, BrowserContext } from '@playwright/test';
+import { resolveConsoleOrigin } from './sandbox-origin';
 
-const API_BASE = 'http://localhost:8765/v1/console';
+const API_BASE = `${resolveConsoleOrigin()}/v1/console`;
 const FRONTEND_BASE = 'http://localhost:5173';
 
 // PII detection patterns for audit compliance (GDPR Art. 5)

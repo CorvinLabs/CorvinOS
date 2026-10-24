@@ -16,6 +16,7 @@
 
 import { test, expect } from '@playwright/test';
 import { graphTest, GraphE2EBase } from './base';
+import { resolveOptionalOrigin } from '../../core/console/corvin_console/web-next/tests/e2e/sandbox-origin';
 
 // ============================================================================
 // PERFORMANCE TESTS
@@ -62,7 +63,7 @@ graphTest.describe('Task Graph Component — Performance', () => {
     const startTime = Date.now();
 
     const response = await request.get(
-      'http://127.0.0.1:8765/api/tasks/task_small_001/graph/query',
+      `${resolveOptionalOrigin('BASE_URL')}/api/tasks/task_small_001/graph/query`,
       {
         params: { type: 'reachability', node: 'start_decision' },
       }

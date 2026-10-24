@@ -5,8 +5,10 @@
  * (local-login) and the same /v1/console routes the panels call.
  */
 import { expect, request, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
+import { resolveOptionalOrigin } from '../../e2e/sandbox-origin';
 
-export const BASE = process.env.FORGE_LIVE_URL ?? 'http://127.0.0.1:8765';
+// Sandbox by default; the live :8765 console only with CORVIN_E2E_ALLOW_LIVE=1 and FORGE_LIVE_URL.
+export const BASE = resolveOptionalOrigin('FORGE_LIVE_URL');
 export const API = `${BASE}/v1/console`;
 export const PREFIX = 'e2e_test_';
 export const NAMES = {

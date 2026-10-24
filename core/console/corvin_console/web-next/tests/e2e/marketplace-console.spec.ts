@@ -14,6 +14,7 @@
  * Run: npx playwright test tests/e2e/marketplace-console.spec.ts --project=chromium --workers=1
  */
 import { expect, test } from "@playwright/test";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 test.describe.configure({ mode: "serial" });
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -31,7 +32,7 @@ const REDIRECTS: Array<[string, string]> = [
 ];
 
 test.beforeEach(async ({ page, baseURL }) => {
-  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  const origin = new URL(baseURL ?? `${resolveConsoleOrigin()}/console`).origin;
   const login = await page.request.get(`${origin}/v1/console/auth/local-login`, { maxRedirects: 0 });
   expect([302, 200]).toContain(login.status());
   await expect.poll(async () => (await page.request.get(`${origin}/v1/console/auth/whoami`)).status(),

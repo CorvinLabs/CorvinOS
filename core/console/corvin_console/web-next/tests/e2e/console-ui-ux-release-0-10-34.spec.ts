@@ -472,7 +472,7 @@ test.describe('Console Edge Cases — Error Handling', () => {
     await page.context().setOffline(false);
   });
 
-  test('theme toggle works even if localStorage is unavailable', async ({ page, _context }) => {
+  test('theme toggle works even if localStorage is unavailable', async ({ page, context: _context }) => {
     // This is tested by the theme-toggle component itself, but we verify end-to-end
     await page.goto('/console/app/chat');
 

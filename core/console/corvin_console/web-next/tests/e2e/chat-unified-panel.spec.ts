@@ -16,8 +16,9 @@
  *  8. No uncaught page errors throughout
  */
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
+const ORIGIN = (resolveConsoleBaseUrl()).replace(/\/console\/?$/, "");
 const BASE_URL = `${ORIGIN}/console`;
 const API_BASE = `${ORIGIN}/v1/console`;
 const RUN = Date.now();

@@ -6,6 +6,7 @@
  * Run: npx playwright test tests/e2e/models-redirects.spec.ts --project=chromium --workers=1
  */
 import { expect, test } from "@playwright/test";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 // One live console, one session: run these in order rather than in parallel
 // workers that race each other on the same host.
@@ -35,7 +36,7 @@ test.beforeEach(async ({ page, baseURL }) => {
   // Every test gets a fresh browser context whose stored session may be stale.
   // Log in explicitly (loopback-only, credential-less GET) so the SPA's
   // whoami answers 200 on the very first navigation of each test.
-  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  const origin = new URL(baseURL ?? `${resolveConsoleOrigin()}/console`).origin;
   // Log in through the context's request client (shares the cookie jar) — a
   // page.goto here would 302 to /console/ and that SPA boot races the next
   // navigation ("interrupted by another navigation", seen 2026-09-18).
@@ -88,7 +89,7 @@ test("a deep link with NO session survives the login bounce", async ({ browser, 
   // local-login?next=… → back to the deep link → the router's redirect.
   const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const page = await ctx.newPage();
-  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  const origin = new URL(baseURL ?? `${resolveConsoleOrigin()}/console`).origin;
   await page.goto(`${origin}/console/app/model-cost-optimizer`, { waitUntil: "domcontentloaded" });
   await expect(page.getByText(MARKER_HEADER)).toBeVisible({ timeout: 30_000 });
   await expect

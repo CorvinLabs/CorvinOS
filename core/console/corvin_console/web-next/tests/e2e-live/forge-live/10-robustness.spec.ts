@@ -289,7 +289,8 @@ test.describe('layer forge UI', () => {
 // ── real API negatives against the live console ─────────────────────────────
 
 test.describe('live API contract', () => {
-  const anon = async () => request.newContext({ baseURL: process.env.FORGE_LIVE_URL ?? 'http://127.0.0.1:8765' });
+  // BASE = resolveOptionalOrigin('FORGE_LIVE_URL') (./live): sandbox unless CORVIN_E2E_ALLOW_LIVE=1.
+  const anon = async () => request.newContext({ baseURL: BASE });
 
   test('every generator route refuses an anonymous caller (401) — nothing is spawned', async () => {
     const a = await anon();

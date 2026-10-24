@@ -1,7 +1,7 @@
 /**
  * Workflow `peer_agent` node - real browser against the live console.
  *
- * Run: CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test workflow-peer-agent
+ * Run: CORVIN_E2E_ALLOW_LIVE=1 CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test workflow-peer-agent
  *
  * Needs a console build that knows the node type (backend restarted after the change). A workflow
  * with id prefix qa-wf- is created through the API and deleted afterwards. The peer LISTS the picker
@@ -10,8 +10,9 @@
  * node routes, so the server-side validation of the node is real. Nothing is run, nothing is sent.
  */
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
+const ORIGIN = (resolveConsoleBaseUrl()).replace(/\/console\/?$/, "");
 const API = `${ORIGIN}/v1/console`;
 const WID = `qa-wf-peer-${Date.now().toString(36)}`;
 

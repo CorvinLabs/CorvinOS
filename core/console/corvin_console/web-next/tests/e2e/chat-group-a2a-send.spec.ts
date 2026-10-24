@@ -14,8 +14,9 @@
  */
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
+const ORIGIN = (resolveConsoleBaseUrl()).replace(/\/console\/?$/, "");
 const API_BASE = `${ORIGIN}/v1/console`;
 
 test.describe.configure({ mode: "serial" });

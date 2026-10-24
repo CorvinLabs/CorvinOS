@@ -11,8 +11,9 @@
  */
 
 import { test, expect } from '@playwright/test'
+import { resolveOptionalOrigin } from '../../core/console/corvin_console/web-next/tests/e2e/sandbox-origin';
 
-const CONSOLE_BASE = 'http://127.0.0.1:8765/console'
+const CONSOLE_BASE = `${resolveOptionalOrigin('BASE_URL')}/console`
 
 test.describe('GitHub Integration E2E', () => {
   test('should navigate to GitHub settings page', async ({ page }) => {

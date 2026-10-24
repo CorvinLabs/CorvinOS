@@ -21,6 +21,7 @@ import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import * as path from "path";
 import * as fs from "fs";
 import { fileURLToPath } from "url";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ const DSI_HINT =
 
 // Direct gateway (bypasses Vite proxy timeout) — used for heavy API calls
 // that may run while D-group LLM streams are active.
-const GATEWAY_DIRECT = "http://localhost:8765/v1/console";
+const GATEWAY_DIRECT = `${resolveConsoleOrigin()}/v1/console`;
 
 const OUTPUTS = path.resolve(__dirname_e2e, "../../../../../../outputs");
 function ensureOutputs() {

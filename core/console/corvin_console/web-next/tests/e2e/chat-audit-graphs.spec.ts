@@ -30,9 +30,10 @@ import {
   type Page,
   type BrowserContext,
 } from "@playwright/test";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 const BASE_URL = "http://localhost:5173";
-const API_BASE = "http://localhost:8765/v1/console";
+const API_BASE = `${resolveConsoleOrigin()}/v1/console`;
 
 // Session with confirmed OS-turn data — discovered dynamically in beforeAll
 let KNOWN_SESSION_WITH_DATA = "";

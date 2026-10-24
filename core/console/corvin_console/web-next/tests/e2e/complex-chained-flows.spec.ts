@@ -48,12 +48,13 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const API_BASE = "http://localhost:8765/v1/console";
+const API_BASE = `${resolveConsoleOrigin()}/v1/console`;
 const FRONTEND_BASE = "http://localhost:5173";
 
 // The layer chosen for the LDD toggle in Scenario 1. This layer has no cascade

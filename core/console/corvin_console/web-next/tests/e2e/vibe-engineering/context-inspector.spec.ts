@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { resolveConsoleOrigin } from '../sandbox-origin';
 
 test.describe('Task Context Inspector', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to Vibe Dashboard
-    await page.goto('http://127.0.0.1:8765/console/app/vibe-engineering');
+    await page.goto(`${resolveConsoleOrigin()}/console/app/vibe-engineering`);
 
     // Click on Context Inspector tab
     await page.click('button:has-text("Task Context Inspector")');
@@ -216,7 +217,7 @@ test.describe('Task Context Inspector', () => {
 
 test.describe('Vibe Engineering Tab Navigation', () => {
   test('shows all 4 tabs', async ({ page }) => {
-    await page.goto('http://127.0.0.1:8765/console/app/vibe-engineering');
+    await page.goto(`${resolveConsoleOrigin()}/console/app/vibe-engineering`);
 
     // Verify all tab buttons are present
     const tabs = ['Learning Dashboard', 'Task Context Inspector', 'Audit Graph', 'Skill Composition'];
@@ -228,7 +229,7 @@ test.describe('Vibe Engineering Tab Navigation', () => {
   });
 
   test('switches between tabs correctly', async ({ page }) => {
-    await page.goto('http://127.0.0.1:8765/console/app/vibe-engineering');
+    await page.goto(`${resolveConsoleOrigin()}/console/app/vibe-engineering`);
 
     // Click Context Inspector tab
     await page.click('button:has-text("Task Context Inspector")');
@@ -244,7 +245,7 @@ test.describe('Vibe Engineering Tab Navigation', () => {
   });
 
   test('preserves scroll position when switching tabs', async ({ page }) => {
-    await page.goto('http://127.0.0.1:8765/console/app/vibe-engineering');
+    await page.goto(`${resolveConsoleOrigin()}/console/app/vibe-engineering`);
 
     // Load context inspector
     await page.click('button:has-text("Task Context Inspector")');

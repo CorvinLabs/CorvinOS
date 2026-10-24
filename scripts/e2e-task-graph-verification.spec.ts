@@ -13,8 +13,9 @@
  */
 
 import { test, expect, Page, BrowserContext } from '@playwright/test';
+import { resolveConsoleOrigin } from '../core/console/corvin_console/web-next/tests/e2e/sandbox-origin';
 
-const BASE_URL = 'http://127.0.0.1:8765/console/app/task-graph';
+const BASE_URL = `${resolveConsoleOrigin()}/console/app/task-graph`;
 const TIMEOUT = 15000;
 const NAVIGATION_TIMEOUT = 10000;
 

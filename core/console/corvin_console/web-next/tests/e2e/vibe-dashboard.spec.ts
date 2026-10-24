@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 test('Vibe Dashboard Phase 3+4a', async ({ page }) => {
-  await page.goto('http://127.0.0.1:8765/console/', { waitUntil: 'networkidle' });
+  await page.goto(`${resolveConsoleOrigin()}/console/`, { waitUntil: 'networkidle' });
   
   // 1. Hexagon Radar visible
   const svg = page.locator('svg').first();

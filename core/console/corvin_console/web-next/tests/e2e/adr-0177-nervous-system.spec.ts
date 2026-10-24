@@ -29,6 +29,7 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -47,7 +48,7 @@ test.describe.configure({ timeout: 120_000 });
 // four tenants x ~120 000 records here. That is inherent to what an integrity fiber
 // does, not a defect, but it does mean this endpoint's cost grows with the chain, and
 // four Playwright workers calling it at once queue behind each other.
-const GATEWAY = "http://localhost:8765";
+const GATEWAY = `${resolveConsoleOrigin()}`;
 const API_BASE = `${GATEWAY}/v1/console`;
 
 const __dirname_compat = path.dirname(fileURLToPath(import.meta.url));

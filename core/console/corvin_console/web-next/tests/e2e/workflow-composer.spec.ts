@@ -1,15 +1,16 @@
 /**
  * Workflow editor composer (CONCEPT-0115) — real browser against the live console.
  *
- * Run: CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test workflow-composer
+ * Run: CORVIN_E2E_ALLOW_LIVE=1 CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test workflow-composer
  *
  * Nothing here sends a design message (that would spawn a paid engine turn): the
  * composer is exercised up to Send, and server commands (`/phase`, no spawn) are
  * exercised over the real design WebSocket when the running host serves them.
  */
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
+const ORIGIN = (resolveConsoleBaseUrl()).replace(/\/console\/?$/, "");
 const API = `${ORIGIN}/v1/console`;
 const WID = `e2e_composer_${Date.now().toString(36)}`;
 

@@ -7,9 +7,12 @@
  * server: a stale-bundle/backend mismatch must be visible, not papered over
  * by a fresh dev server.
  *
- *   BASE_URL=http://127.0.0.1:8765 npx playwright test -c playwright.e2e.config.ts
+ *   CORVIN_E2E_ALLOW_LIVE=1 BASE_URL=http://127.0.0.1:8765 npx playwright test -c playwright.e2e.config.ts
+ *
+ * Without BASE_URL the run targets the sandbox origin; :8765 is refused unless CORVIN_E2E_ALLOW_LIVE=1.
  */
 import { defineConfig } from '@playwright/test';
+import { resolveOptionalOrigin } from './core/console/corvin_console/web-next/tests/e2e/sandbox-origin';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -21,7 +24,7 @@ export default defineConfig({
   outputDir: 'playwright-results/root-e2e',
   reporter: [['line'], ['json', { outputFile: 'playwright-results/root-e2e.json' }]],
   use: {
-    baseURL: process.env.BASE_URL || 'http://127.0.0.1:8765',
+    baseURL: resolveOptionalOrigin('BASE_URL'),
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },

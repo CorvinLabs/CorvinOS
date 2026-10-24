@@ -1,0 +1,3016 @@
+{
+  "counts": {
+    "by_kind": {
+      "ai-panels": 1,
+      "button-tab": 88,
+      "deeplink": 20,
+      "manifest": 2,
+      "page": 30,
+      "route": 34,
+      "tabs-trigger": 42
+    },
+    "deeplinks": 20,
+    "nav_static": 28,
+    "panels_inventoried": 28,
+    "panels_registered": 37,
+    "routes": 34,
+    "tabs_triggers": 42
+  },
+  "entries": [
+    {
+      "id": "ai-panels:your-panels",
+      "kind": "ai-panels",
+      "label": "Your panels",
+      "nav": false,
+      "owner": "ai-panels",
+      "panel": false,
+      "route": null,
+      "slug": "ai-panels-your-panels",
+      "sources": [
+        "src/components/layout.tsx useAiPanels (runtime /app/<ai panel id>)"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit-os-view:graph",
+      "kind": "button-tab",
+      "label": "audit-os-view:graph",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-os-view-graph",
+      "sources": [
+        "src/components/WdatAuditPanel.tsx state osView"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit-os-view:list",
+      "kind": "button-tab",
+      "label": "audit-os-view:list",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-os-view-list",
+      "sources": [
+        "src/components/WdatAuditPanel.tsx state osView"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit-view:acs",
+      "kind": "button-tab",
+      "label": "audit-view:acs",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-view-acs",
+      "sources": [
+        "src/components/WdatAuditPanel.tsx type AuditView"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit-view:debug",
+      "kind": "button-tab",
+      "label": "audit-view:debug",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-view-debug",
+      "sources": [
+        "src/components/WdatAuditPanel.tsx type AuditView"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit-view:log",
+      "kind": "button-tab",
+      "label": "audit-view:log",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-view-log",
+      "sources": [
+        "src/components/WdatAuditPanel.tsx type AuditView"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit-view:os",
+      "kind": "button-tab",
+      "label": "audit-view:os",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-view-os",
+      "sources": [
+        "src/components/WdatAuditPanel.tsx type AuditView"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit-view:spans",
+      "kind": "button-tab",
+      "label": "audit-view:spans",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-view-spans",
+      "sources": [
+        "src/components/WdatAuditPanel.tsx type AuditView"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit:dual-track",
+      "kind": "button-tab",
+      "label": "audit:dual-track",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-dual-track",
+      "sources": [
+        "src/pages/chat.tsx state auditTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit:single",
+      "kind": "button-tab",
+      "label": "audit:single",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-single",
+      "sources": [
+        "src/pages/chat.tsx state auditTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#audit:tde-graph",
+      "kind": "button-tab",
+      "label": "audit:tde-graph",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-audit-tde-graph",
+      "sources": [
+        "src/pages/chat.tsx state auditTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#sidebar:a2a",
+      "kind": "button-tab",
+      "label": "sidebar:a2a",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-sidebar-a2a",
+      "sources": [
+        "src/components/chat/ChatContextSidebar.tsx MODES"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#sidebar:chats",
+      "kind": "button-tab",
+      "label": "sidebar:chats",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-sidebar-chats",
+      "sources": [
+        "src/components/chat/ChatContextSidebar.tsx MODES"
+      ]
+    },
+    {
+      "id": "button-tab:/app/chat#sidebar:peers",
+      "kind": "button-tab",
+      "label": "sidebar:peers",
+      "nav": false,
+      "owner": "/app/chat",
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "button-tab-app-chat-sidebar-peers",
+      "sources": [
+        "src/components/chat/ChatContextSidebar.tsx MODES"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:A2A",
+      "kind": "button-tab",
+      "label": "filter:A2A",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-a2a",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:SECURITY",
+      "kind": "button-tab",
+      "label": "filter:SECURITY",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-security",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:acs",
+      "kind": "button-tab",
+      "label": "filter:acs",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-acs",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:all",
+      "kind": "button-tab",
+      "label": "filter:all",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-all",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:chain",
+      "kind": "button-tab",
+      "label": "filter:chain",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-chain",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:console",
+      "kind": "button-tab",
+      "label": "filter:console",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-console",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:delegation",
+      "kind": "button-tab",
+      "label": "filter:delegation",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-delegation",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:forge",
+      "kind": "button-tab",
+      "label": "filter:forge",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-forge",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compliance#filter:os_turn",
+      "kind": "button-tab",
+      "label": "filter:os_turn",
+      "nav": false,
+      "owner": "/app/compliance",
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "button-tab-app-compliance-filter-os-turn",
+      "sources": [
+        "src/pages/compliance.tsx FILTER_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compute#acs",
+      "kind": "button-tab",
+      "label": "acs",
+      "nav": false,
+      "owner": "/app/compute",
+      "panel": false,
+      "route": "/app/compute",
+      "slug": "button-tab-app-compute-acs",
+      "sources": [
+        "src/pages/compute.tsx TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compute#analytics",
+      "kind": "button-tab",
+      "label": "analytics",
+      "nav": false,
+      "owner": "/app/compute",
+      "panel": false,
+      "route": "/app/compute",
+      "slug": "button-tab-app-compute-analytics",
+      "sources": [
+        "src/pages/compute.tsx TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compute#experiments",
+      "kind": "button-tab",
+      "label": "experiments",
+      "nav": false,
+      "owner": "/app/compute",
+      "panel": false,
+      "route": "/app/compute",
+      "slug": "button-tab-app-compute-experiments",
+      "sources": [
+        "src/pages/compute.tsx TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compute#export",
+      "kind": "button-tab",
+      "label": "export",
+      "nav": false,
+      "owner": "/app/compute",
+      "panel": false,
+      "route": "/app/compute",
+      "slug": "button-tab-app-compute-export",
+      "sources": [
+        "src/pages/compute.tsx TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compute#hac",
+      "kind": "button-tab",
+      "label": "hac",
+      "nav": false,
+      "owner": "/app/compute",
+      "panel": false,
+      "route": "/app/compute",
+      "slug": "button-tab-app-compute-hac",
+      "sources": [
+        "src/pages/compute.tsx TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compute#pipelines",
+      "kind": "button-tab",
+      "label": "pipelines",
+      "nav": false,
+      "owner": "/app/compute",
+      "panel": false,
+      "route": "/app/compute",
+      "slug": "button-tab-app-compute-pipelines",
+      "sources": [
+        "src/pages/compute.tsx TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/compute#runs",
+      "kind": "button-tab",
+      "label": "runs",
+      "nav": false,
+      "owner": "/app/compute",
+      "panel": false,
+      "route": "/app/compute",
+      "slug": "button-tab-app-compute-runs",
+      "sources": [
+        "src/pages/compute.tsx TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#audit",
+      "kind": "button-tab",
+      "label": "audit",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-audit",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#autonomous-forge",
+      "kind": "button-tab",
+      "label": "autonomous-forge",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-autonomous-forge",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#bundles",
+      "kind": "button-tab",
+      "label": "bundles",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-bundles",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#generator",
+      "kind": "button-tab",
+      "label": "generator",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-generator",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#generator:layer",
+      "kind": "button-tab",
+      "label": "generator:layer",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-generator-layer",
+      "sources": [
+        "src/pages/forge.tsx GENERATOR_SUBTABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#generator:plugin",
+      "kind": "button-tab",
+      "label": "generator:plugin",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-generator-plugin",
+      "sources": [
+        "src/pages/forge.tsx GENERATOR_SUBTABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#generator:skill",
+      "kind": "button-tab",
+      "label": "generator:skill",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-generator-skill",
+      "sources": [
+        "src/pages/forge.tsx GENERATOR_SUBTABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#generator:tool",
+      "kind": "button-tab",
+      "label": "generator:tool",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-generator-tool",
+      "sources": [
+        "src/pages/forge.tsx GENERATOR_SUBTABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#graph",
+      "kind": "button-tab",
+      "label": "graph",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-graph",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#layers",
+      "kind": "button-tab",
+      "label": "layers",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-layers",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#os-skills",
+      "kind": "button-tab",
+      "label": "os-skills",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-os-skills",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#plugins",
+      "kind": "button-tab",
+      "label": "plugins",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-plugins",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#runs",
+      "kind": "button-tab",
+      "label": "runs",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-runs",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#skills",
+      "kind": "button-tab",
+      "label": "skills",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-skills",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/forge#tools",
+      "kind": "button-tab",
+      "label": "tools",
+      "nav": false,
+      "owner": "/app/forge",
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "button-tab-app-forge-tools",
+      "sources": [
+        "src/pages/forge.tsx FORGE_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/initiatives#activity",
+      "kind": "button-tab",
+      "label": "activity",
+      "nav": false,
+      "owner": "/app/initiatives",
+      "panel": false,
+      "route": "/app/initiatives",
+      "slug": "button-tab-app-initiatives-activity",
+      "sources": [
+        "src/pages/tasks/index.tsx VIEWS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/initiatives#board",
+      "kind": "button-tab",
+      "label": "board",
+      "nav": false,
+      "owner": "/app/initiatives",
+      "panel": false,
+      "route": "/app/initiatives",
+      "slug": "button-tab-app-initiatives-board",
+      "sources": [
+        "src/pages/tasks/index.tsx VIEWS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/initiatives#graph",
+      "kind": "button-tab",
+      "label": "graph",
+      "nav": false,
+      "owner": "/app/initiatives",
+      "panel": false,
+      "route": "/app/initiatives",
+      "slug": "button-tab-app-initiatives-graph",
+      "sources": [
+        "src/pages/tasks/index.tsx VIEWS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/initiatives#table",
+      "kind": "button-tab",
+      "label": "table",
+      "nav": false,
+      "owner": "/app/initiatives",
+      "panel": false,
+      "route": "/app/initiatives",
+      "slug": "button-tab-app-initiatives-table",
+      "sources": [
+        "src/pages/tasks/index.tsx VIEWS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/initiatives#timeline",
+      "kind": "button-tab",
+      "label": "timeline",
+      "nav": false,
+      "owner": "/app/initiatives",
+      "panel": false,
+      "route": "/app/initiatives",
+      "slug": "button-tab-app-initiatives-timeline",
+      "sources": [
+        "src/pages/tasks/index.tsx VIEWS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/initiatives#tree",
+      "kind": "button-tab",
+      "label": "tree",
+      "nav": false,
+      "owner": "/app/initiatives",
+      "panel": false,
+      "route": "/app/initiatives",
+      "slug": "button-tab-app-initiatives-tree",
+      "sources": [
+        "src/pages/tasks/index.tsx VIEWS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/marketplace#browse",
+      "kind": "button-tab",
+      "label": "browse",
+      "nav": false,
+      "owner": "/app/marketplace",
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "button-tab-app-marketplace-browse",
+      "sources": [
+        "src/pages/marketplace/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/marketplace#forged",
+      "kind": "button-tab",
+      "label": "forged",
+      "nav": false,
+      "owner": "/app/marketplace",
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "button-tab-app-marketplace-forged",
+      "sources": [
+        "src/pages/marketplace/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/marketplace#installed",
+      "kind": "button-tab",
+      "label": "installed",
+      "nav": false,
+      "owner": "/app/marketplace",
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "button-tab-app-marketplace-installed",
+      "sources": [
+        "src/pages/marketplace/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/marketplace#packages",
+      "kind": "button-tab",
+      "label": "packages",
+      "nav": false,
+      "owner": "/app/marketplace",
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "button-tab-app-marketplace-packages",
+      "sources": [
+        "src/pages/marketplace/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/marketplace#skills",
+      "kind": "button-tab",
+      "label": "skills",
+      "nav": false,
+      "owner": "/app/marketplace",
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "button-tab-app-marketplace-skills",
+      "sources": [
+        "src/pages/marketplace/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/marketplace#tools",
+      "kind": "button-tab",
+      "label": "tools",
+      "nav": false,
+      "owner": "/app/marketplace",
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "button-tab-app-marketplace-tools",
+      "sources": [
+        "src/pages/marketplace/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/models#catalog",
+      "kind": "button-tab",
+      "label": "catalog",
+      "nav": false,
+      "owner": "/app/models",
+      "panel": false,
+      "route": "/app/models",
+      "slug": "button-tab-app-models-catalog",
+      "sources": [
+        "src/pages/models/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/models#learning",
+      "kind": "button-tab",
+      "label": "learning",
+      "nav": false,
+      "owner": "/app/models",
+      "panel": false,
+      "route": "/app/models",
+      "slug": "button-tab-app-models-learning",
+      "sources": [
+        "src/pages/models/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/models#routing",
+      "kind": "button-tab",
+      "label": "routing",
+      "nav": false,
+      "owner": "/app/models",
+      "panel": false,
+      "route": "/app/models",
+      "slug": "button-tab-app-models-routing",
+      "sources": [
+        "src/pages/models/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/models#usage-cost",
+      "kind": "button-tab",
+      "label": "usage-cost",
+      "nav": false,
+      "owner": "/app/models",
+      "panel": false,
+      "route": "/app/models",
+      "slug": "button-tab-app-models-usage-cost",
+      "sources": [
+        "src/pages/models/tabs.ts TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/rag-hub#discover",
+      "kind": "button-tab",
+      "label": "discover",
+      "nav": false,
+      "owner": "/app/rag-hub",
+      "panel": false,
+      "route": "/app/rag-hub",
+      "slug": "button-tab-app-rag-hub-discover",
+      "sources": [
+        "src/pages/rag-hub.tsx tabs"
+      ]
+    },
+    {
+      "id": "button-tab:/app/rag-hub#top-rated",
+      "kind": "button-tab",
+      "label": "top-rated",
+      "nav": false,
+      "owner": "/app/rag-hub",
+      "panel": false,
+      "route": "/app/rag-hub",
+      "slug": "button-tab-app-rag-hub-top-rated",
+      "sources": [
+        "src/pages/rag-hub.tsx tabs"
+      ]
+    },
+    {
+      "id": "button-tab:/app/rag-hub#trending",
+      "kind": "button-tab",
+      "label": "trending",
+      "nav": false,
+      "owner": "/app/rag-hub",
+      "panel": false,
+      "route": "/app/rag-hub",
+      "slug": "button-tab-app-rag-hub-trending",
+      "sources": [
+        "src/pages/rag-hub.tsx tabs"
+      ]
+    },
+    {
+      "id": "button-tab:/app/skill-manager#available",
+      "kind": "button-tab",
+      "label": "available",
+      "nav": false,
+      "owner": "/app/skill-manager",
+      "panel": false,
+      "route": "/app/skill-manager",
+      "slug": "button-tab-app-skill-manager-available",
+      "sources": [
+        "src/pages/skills/SkillManagerDashboard.tsx TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/skill-manager#installed",
+      "kind": "button-tab",
+      "label": "installed",
+      "nav": false,
+      "owner": "/app/skill-manager",
+      "panel": false,
+      "route": "/app/skill-manager",
+      "slug": "button-tab-app-skill-manager-installed",
+      "sources": [
+        "src/pages/skills/SkillManagerDashboard.tsx TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/skill-manager#upload",
+      "kind": "button-tab",
+      "label": "upload",
+      "nav": false,
+      "owner": "/app/skill-manager",
+      "panel": false,
+      "route": "/app/skill-manager",
+      "slug": "button-tab-app-skill-manager-upload",
+      "sources": [
+        "src/pages/skills/SkillManagerDashboard.tsx TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/vibe-engineering#loops",
+      "kind": "button-tab",
+      "label": "loops",
+      "nav": false,
+      "owner": "/app/vibe-engineering",
+      "panel": false,
+      "route": "/app/vibe-engineering",
+      "slug": "button-tab-app-vibe-engineering-loops",
+      "sources": [
+        "src/pages/vibe-engineering/VibeDashboard.tsx TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/vibe-engineering#maturity",
+      "kind": "button-tab",
+      "label": "maturity",
+      "nav": false,
+      "owner": "/app/vibe-engineering",
+      "panel": false,
+      "route": "/app/vibe-engineering",
+      "slug": "button-tab-app-vibe-engineering-maturity",
+      "sources": [
+        "src/pages/vibe-engineering/VibeDashboard.tsx TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/vibe-engineering#maturity:patterns",
+      "kind": "button-tab",
+      "label": "maturity:patterns",
+      "nav": false,
+      "owner": "/app/vibe-engineering",
+      "panel": false,
+      "route": "/app/vibe-engineering",
+      "slug": "button-tab-app-vibe-engineering-maturity-patterns",
+      "sources": [
+        "src/pages/vibe-engineering/components/MaturityDashboard.tsx type DashboardTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/vibe-engineering#maturity:radar",
+      "kind": "button-tab",
+      "label": "maturity:radar",
+      "nav": false,
+      "owner": "/app/vibe-engineering",
+      "panel": false,
+      "route": "/app/vibe-engineering",
+      "slug": "button-tab-app-vibe-engineering-maturity-radar",
+      "sources": [
+        "src/pages/vibe-engineering/components/MaturityDashboard.tsx type DashboardTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/vibe-engineering#maturity:summary",
+      "kind": "button-tab",
+      "label": "maturity:summary",
+      "nav": false,
+      "owner": "/app/vibe-engineering",
+      "panel": false,
+      "route": "/app/vibe-engineering",
+      "slug": "button-tab-app-vibe-engineering-maturity-summary",
+      "sources": [
+        "src/pages/vibe-engineering/components/MaturityDashboard.tsx type DashboardTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/vibe-engineering#metrics",
+      "kind": "button-tab",
+      "label": "metrics",
+      "nav": false,
+      "owner": "/app/vibe-engineering",
+      "panel": false,
+      "route": "/app/vibe-engineering",
+      "slug": "button-tab-app-vibe-engineering-metrics",
+      "sources": [
+        "src/pages/vibe-engineering/VibeDashboard.tsx TAB_IDS"
+      ]
+    },
+    {
+      "id": "button-tab:/app/workflows#inspector:io",
+      "kind": "button-tab",
+      "label": "inspector:io",
+      "nav": false,
+      "owner": "/app/workflows",
+      "panel": false,
+      "route": "/app/workflows",
+      "slug": "button-tab-app-workflows-inspector-io",
+      "sources": [
+        "src/pages/workflows.tsx state inspectorTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/workflows#inspector:node",
+      "kind": "button-tab",
+      "label": "inspector:node",
+      "nav": false,
+      "owner": "/app/workflows",
+      "panel": false,
+      "route": "/app/workflows",
+      "slug": "button-tab-app-workflows-inspector-node",
+      "sources": [
+        "src/pages/workflows.tsx state inspectorTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/workflows#inspector:ready",
+      "kind": "button-tab",
+      "label": "inspector:ready",
+      "nav": false,
+      "owner": "/app/workflows",
+      "panel": false,
+      "route": "/app/workflows",
+      "slug": "button-tab-app-workflows-inspector-ready",
+      "sources": [
+        "src/pages/workflows.tsx state inspectorTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/workflows#run:log",
+      "kind": "button-tab",
+      "label": "run:log",
+      "nav": false,
+      "owner": "/app/workflows",
+      "panel": false,
+      "route": "/app/workflows",
+      "slug": "button-tab-app-workflows-run-log",
+      "sources": [
+        "src/pages/workflows.tsx state runTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/workflows#run:media",
+      "kind": "button-tab",
+      "label": "run:media",
+      "nav": false,
+      "owner": "/app/workflows",
+      "panel": false,
+      "route": "/app/workflows",
+      "slug": "button-tab-app-workflows-run-media",
+      "sources": [
+        "src/pages/workflows.tsx state runTab"
+      ]
+    },
+    {
+      "id": "button-tab:/app/workflows#run:tables",
+      "kind": "button-tab",
+      "label": "run:tables",
+      "nav": false,
+      "owner": "/app/workflows",
+      "panel": false,
+      "route": "/app/workflows",
+      "slug": "button-tab-app-workflows-run-tables",
+      "sources": [
+        "src/pages/workflows.tsx state runTab"
+      ]
+    },
+    {
+      "id": "button-tab:manifest:video_producer#assets",
+      "kind": "button-tab",
+      "label": "assets",
+      "nav": false,
+      "owner": "manifest:video_producer",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-manifest-video-producer-assets",
+      "sources": [
+        "src/pages/video-producer.tsx STUDIO_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:manifest:video_producer#canvas",
+      "kind": "button-tab",
+      "label": "canvas",
+      "nav": false,
+      "owner": "manifest:video_producer",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-manifest-video-producer-canvas",
+      "sources": [
+        "src/pages/video-producer.tsx STUDIO_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:manifest:video_producer#code",
+      "kind": "button-tab",
+      "label": "code",
+      "nav": false,
+      "owner": "manifest:video_producer",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-manifest-video-producer-code",
+      "sources": [
+        "src/pages/video-producer.tsx STUDIO_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:manifest:video_producer#learning",
+      "kind": "button-tab",
+      "label": "learning",
+      "nav": false,
+      "owner": "manifest:video_producer",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-manifest-video-producer-learning",
+      "sources": [
+        "src/pages/video-producer.tsx STUDIO_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:manifest:video_producer#quality",
+      "kind": "button-tab",
+      "label": "quality",
+      "nav": false,
+      "owner": "manifest:video_producer",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-manifest-video-producer-quality",
+      "sources": [
+        "src/pages/video-producer.tsx STUDIO_TABS"
+      ]
+    },
+    {
+      "id": "button-tab:src:src/components/GenericPluginInspector.tsx#audit",
+      "kind": "button-tab",
+      "label": "audit",
+      "nav": false,
+      "owner": "src:src/components/GenericPluginInspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-src-src-components-genericplugininspector-tsx-audit",
+      "sources": [
+        "src/components/GenericPluginInspector.tsx state activeTab"
+      ]
+    },
+    {
+      "id": "button-tab:src:src/components/GenericPluginInspector.tsx#config",
+      "kind": "button-tab",
+      "label": "config",
+      "nav": false,
+      "owner": "src:src/components/GenericPluginInspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-src-src-components-genericplugininspector-tsx-config",
+      "sources": [
+        "src/components/GenericPluginInspector.tsx state activeTab"
+      ]
+    },
+    {
+      "id": "button-tab:src:src/components/SkillInspector.tsx#audit",
+      "kind": "button-tab",
+      "label": "audit",
+      "nav": false,
+      "owner": "src:src/components/SkillInspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-src-src-components-skillinspector-tsx-audit",
+      "sources": [
+        "src/components/SkillInspector.tsx state activeTab"
+      ]
+    },
+    {
+      "id": "button-tab:src:src/components/SkillInspector.tsx#config",
+      "kind": "button-tab",
+      "label": "config",
+      "nav": false,
+      "owner": "src:src/components/SkillInspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-src-src-components-skillinspector-tsx-config",
+      "sources": [
+        "src/components/SkillInspector.tsx state activeTab"
+      ]
+    },
+    {
+      "id": "button-tab:src:src/components/SkillInspector.tsx#learning",
+      "kind": "button-tab",
+      "label": "learning",
+      "nav": false,
+      "owner": "src:src/components/SkillInspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "button-tab-src-src-components-skillinspector-tsx-learning",
+      "sources": [
+        "src/components/SkillInspector.tsx state activeTab"
+      ]
+    },
+    {
+      "id": "deeplink:/app",
+      "kind": "deeplink",
+      "label": "/app",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app",
+      "slug": "deeplink-app",
+      "sources": [
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/chat",
+      "kind": "deeplink",
+      "label": "/app/chat",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "deeplink-app-chat",
+      "sources": [
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/compliance",
+      "kind": "deeplink",
+      "label": "/app/compliance",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/compliance",
+      "slug": "deeplink-app-compliance",
+      "sources": [
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/compute?tab=pipelines",
+      "kind": "deeplink",
+      "label": "/app/compute?tab=pipelines",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/compute",
+      "slug": "deeplink-app-compute-tab-pipelines",
+      "sources": [
+        "src static ?tab= link"
+      ]
+    },
+    {
+      "id": "deeplink:/app/forge?tab=generator&sub=layer",
+      "kind": "deeplink",
+      "label": "/app/forge?tab=generator&sub=layer",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "deeplink-app-forge-tab-generator-sub-layer",
+      "sources": [
+        "src static ?tab= link"
+      ]
+    },
+    {
+      "id": "deeplink:/app/forge?tab=generator&sub=plugin",
+      "kind": "deeplink",
+      "label": "/app/forge?tab=generator&sub=plugin",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "deeplink-app-forge-tab-generator-sub-plugin",
+      "sources": [
+        "src static ?tab= link"
+      ]
+    },
+    {
+      "id": "deeplink:/app/forge?tab=generator&sub=tool",
+      "kind": "deeplink",
+      "label": "/app/forge?tab=generator&sub=tool",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "deeplink-app-forge-tab-generator-sub-tool",
+      "sources": [
+        "src static ?tab= link"
+      ]
+    },
+    {
+      "id": "deeplink:/app/forge?tab=layers",
+      "kind": "deeplink",
+      "label": "/app/forge?tab=layers",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "deeplink-app-forge-tab-layers",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/forge?tab=skill-forge",
+      "kind": "deeplink",
+      "label": "/app/forge?tab=skill-forge",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "deeplink-app-forge-tab-skill-forge",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/forge?tab=skills",
+      "kind": "deeplink",
+      "label": "/app/forge?tab=skills",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "deeplink-app-forge-tab-skills",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/forge?tab=tools",
+      "kind": "deeplink",
+      "label": "/app/forge?tab=tools",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/forge",
+      "slug": "deeplink-app-forge-tab-tools",
+      "sources": [
+        "src static ?tab= link"
+      ]
+    },
+    {
+      "id": "deeplink:/app/marketplace?tab=browse",
+      "kind": "deeplink",
+      "label": "/app/marketplace?tab=browse",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "deeplink-app-marketplace-tab-browse",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/marketplace?tab=forged",
+      "kind": "deeplink",
+      "label": "/app/marketplace?tab=forged",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "deeplink-app-marketplace-tab-forged",
+      "sources": [
+        "src static ?tab= link"
+      ]
+    },
+    {
+      "id": "deeplink:/app/marketplace?tab=installed",
+      "kind": "deeplink",
+      "label": "/app/marketplace?tab=installed",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "deeplink-app-marketplace-tab-installed",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/marketplace?tab=packages",
+      "kind": "deeplink",
+      "label": "/app/marketplace?tab=packages",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "deeplink-app-marketplace-tab-packages",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/marketplace?tab=tools",
+      "kind": "deeplink",
+      "label": "/app/marketplace?tab=tools",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/marketplace",
+      "slug": "deeplink-app-marketplace-tab-tools",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/models?tab=catalog",
+      "kind": "deeplink",
+      "label": "/app/models?tab=catalog",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/models",
+      "slug": "deeplink-app-models-tab-catalog",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/models?tab=routing",
+      "kind": "deeplink",
+      "label": "/app/models?tab=routing",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/models",
+      "slug": "deeplink-app-models-tab-routing",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/models?tab=usage-cost",
+      "kind": "deeplink",
+      "label": "/app/models?tab=usage-cost",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/models",
+      "slug": "deeplink-app-models-tab-usage-cost",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "deeplink:/app/vibe-engineering?tab=loops",
+      "kind": "deeplink",
+      "label": "/app/vibe-engineering?tab=loops",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "route": "/app/vibe-engineering",
+      "slug": "deeplink-app-vibe-engineering-tab-loops",
+      "sources": [
+        "src static ?tab= link",
+        "src/App.tsx Navigate"
+      ]
+    },
+    {
+      "id": "manifest:corvin_knowledge",
+      "index_id": "plugin:buildin-knowledge_management-corvin_knowledge",
+      "kind": "manifest",
+      "label": "Knowledge Graph",
+      "nav": false,
+      "owner": "manifest",
+      "panel": false,
+      "route": null,
+      "slug": "manifest-corvin-knowledge",
+      "sources": [
+        "core/console/corvin_console/default_plugins.yaml"
+      ]
+    },
+    {
+      "id": "manifest:video_producer",
+      "index_id": "plugin:buildin-media-corvintv",
+      "kind": "manifest",
+      "label": "CorvinTV",
+      "nav": false,
+      "owner": "manifest",
+      "panel": false,
+      "route": null,
+      "slug": "manifest-video-producer",
+      "sources": [
+        "core/console/corvin_console/default_plugins.yaml"
+      ]
+    },
+    {
+      "id": "page:/app/api-keys",
+      "kind": "page",
+      "label": "API Keys",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/api-keys",
+      "slug": "page-app-api-keys",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/bridges",
+      "kind": "page",
+      "label": "Channels",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/bridges",
+      "slug": "page-app-bridges",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/chat",
+      "kind": "page",
+      "label": "Chat",
+      "nav": true,
+      "owner": null,
+      "panel": false,
+      "route": "/app/chat",
+      "slug": "page-app-chat",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS"
+      ]
+    },
+    {
+      "id": "page:/app/compliance",
+      "kind": "page",
+      "label": "Audit & Compliance",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/compliance",
+      "slug": "page-app-compliance",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/compute",
+      "kind": "page",
+      "label": "Agentic Compute",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/compute",
+      "slug": "page-app-compute",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/connectors",
+      "kind": "page",
+      "label": "Connectors",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/connectors",
+      "slug": "page-app-connectors",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/custom-provider",
+      "kind": "page",
+      "label": "Add Provider",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/custom-provider",
+      "slug": "page-app-custom-provider",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/dashboard",
+      "kind": "page",
+      "label": "Dashboard",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/dashboard",
+      "slug": "page-app-dashboard",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/data-sources",
+      "kind": "page",
+      "label": "Databases",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/data-sources",
+      "slug": "page-app-data-sources",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/datahub-unified",
+      "kind": "page",
+      "label": "DataHub",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/datahub-unified",
+      "slug": "page-app-datahub-unified",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/files",
+      "kind": "page",
+      "label": "Files",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/files",
+      "slug": "page-app-files",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/forge",
+      "kind": "page",
+      "label": "Forge",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/forge",
+      "slug": "page-app-forge",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/initiatives",
+      "kind": "page",
+      "label": "Tasks",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/initiatives",
+      "slug": "page-app-initiatives",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/layer-forge-analytics",
+      "kind": "page",
+      "label": "Layer Forge Analytics",
+      "nav": false,
+      "owner": null,
+      "panel": true,
+      "route": "/app/layer-forge-analytics",
+      "slug": "page-app-layer-forge-analytics",
+      "sources": [
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/ldd",
+      "kind": "page",
+      "label": "Quality",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/ldd",
+      "slug": "page-app-ldd",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/license",
+      "kind": "page",
+      "label": "License",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/license",
+      "slug": "page-app-license",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/marketplace",
+      "kind": "page",
+      "label": "Marketplace",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/marketplace",
+      "slug": "page-app-marketplace",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/memory",
+      "kind": "page",
+      "label": "Memory",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/memory",
+      "slug": "page-app-memory",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/models",
+      "kind": "page",
+      "label": "Models",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/models",
+      "slug": "page-app-models",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/otel-telemetry",
+      "kind": "page",
+      "label": "OTEL Telemetry",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/otel-telemetry",
+      "slug": "page-app-otel-telemetry",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/quality",
+      "kind": "page",
+      "label": "Quality Gates",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/quality",
+      "slug": "page-app-quality",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/rag",
+      "kind": "page",
+      "label": "Knowledge",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/rag",
+      "slug": "page-app-rag",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/rag-hub",
+      "kind": "page",
+      "label": "Knowledge Hub",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/rag-hub",
+      "slug": "page-app-rag-hub",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/settings",
+      "kind": "page",
+      "label": "Settings",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/settings",
+      "slug": "page-app-settings",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/settings/github",
+      "kind": "page",
+      "label": "GitHub",
+      "nav": false,
+      "owner": null,
+      "panel": true,
+      "route": "/app/settings/github",
+      "slug": "page-app-settings-github",
+      "sources": [
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/skill-manager",
+      "kind": "page",
+      "label": "Skill Packages",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/skill-manager",
+      "slug": "page-app-skill-manager",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/sync-monitor",
+      "kind": "page",
+      "label": "Sync Monitor",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/sync-monitor",
+      "slug": "page-app-sync-monitor",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/vibe-engineering",
+      "kind": "page",
+      "label": "Learnings",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/vibe-engineering",
+      "slug": "page-app-vibe-engineering",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/voice",
+      "kind": "page",
+      "label": "Voice",
+      "nav": true,
+      "owner": null,
+      "panel": true,
+      "route": "/app/voice",
+      "slug": "page-app-voice",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS",
+        "src/panels/registry.tsx PANELS"
+      ]
+    },
+    {
+      "id": "page:/app/workflows",
+      "kind": "page",
+      "label": "Workflows",
+      "nav": true,
+      "owner": null,
+      "panel": false,
+      "route": "/app/workflows",
+      "slug": "page-app-workflows",
+      "sources": [
+        "src/components/layout.tsx NAV_GROUPS"
+      ]
+    },
+    {
+      "id": "route:/",
+      "kind": "route",
+      "label": "/",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/",
+      "slug": "route-53d6d3fc",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/*",
+      "kind": "route",
+      "label": "/*",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/*",
+      "slug": "route-69f74754",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app",
+      "kind": "route",
+      "label": "/app",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app",
+      "slug": "route-app",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app#index",
+      "kind": "route",
+      "label": "/app/chat",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/chat",
+      "route": "/app",
+      "slug": "route-app-index",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/agent-conversations",
+      "kind": "route",
+      "label": "/app/chat",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/chat",
+      "route": "/app/agent-conversations",
+      "slug": "route-app-agent-conversations",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/agent-hub",
+      "kind": "route",
+      "label": "/app/chat",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/chat",
+      "route": "/app/agent-hub",
+      "slug": "route-app-agent-hub",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/chat",
+      "kind": "route",
+      "label": "/app/chat",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app/chat",
+      "slug": "route-app-chat",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/chat-groups",
+      "kind": "route",
+      "label": "/app/chat",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/chat",
+      "route": "/app/chat-groups",
+      "slug": "route-app-chat-groups",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/chat/:sid",
+      "kind": "route",
+      "label": "/app/chat/:sid",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app/chat/:sid",
+      "slug": "route-app-chat-sid",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/chat/group/:groupId",
+      "kind": "route",
+      "label": "/app/chat/group/:groupId",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app/chat/group/:groupId",
+      "slug": "route-app-chat-group-groupid",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/chat/peer/:peerId",
+      "kind": "route",
+      "label": "/app/chat/peer/:peerId",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app/chat/peer/:peerId",
+      "slug": "route-app-chat-peer-peerid",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/discovery",
+      "kind": "route",
+      "label": "/app/chat",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/chat",
+      "route": "/app/discovery",
+      "slug": "route-app-discovery",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/engine-config",
+      "kind": "route",
+      "label": "/app/models?tab=routing",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/models?tab=routing",
+      "route": "/app/engine-config",
+      "slug": "route-app-engine-config",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/engine-control",
+      "kind": "route",
+      "label": "/app/models?tab=routing",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/models?tab=routing",
+      "route": "/app/engine-control",
+      "slug": "route-app-engine-control",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/engines",
+      "kind": "route",
+      "label": "/app/models?tab=routing",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/models?tab=routing",
+      "route": "/app/engines",
+      "slug": "route-app-engines",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/extensions",
+      "kind": "route",
+      "label": "/app/marketplace?tab=installed",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/marketplace?tab=installed",
+      "route": "/app/extensions",
+      "slug": "route-app-extensions",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/layer-forge",
+      "kind": "route",
+      "label": "/app/forge?tab=layers",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/forge?tab=layers",
+      "route": "/app/layer-forge",
+      "slug": "route-app-layer-forge",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/learning-loops",
+      "kind": "route",
+      "label": "/app/vibe-engineering?tab=loops",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/vibe-engineering?tab=loops",
+      "route": "/app/learning-loops",
+      "slug": "route-app-learning-loops",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/licensing-audit",
+      "kind": "route",
+      "label": "/app/compliance",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/compliance",
+      "route": "/app/licensing-audit",
+      "slug": "route-app-licensing-audit",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/marketplace-hub",
+      "kind": "route",
+      "label": "/app/marketplace?tab=browse",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/marketplace?tab=browse",
+      "route": "/app/marketplace-hub",
+      "slug": "route-app-marketplace-hub",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/mcp-plugins",
+      "kind": "route",
+      "label": "/app/marketplace?tab=tools",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/marketplace?tab=tools",
+      "route": "/app/mcp-plugins",
+      "slug": "route-app-mcp-plugins",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/model-cost-optimizer",
+      "kind": "route",
+      "label": "/app/models?tab=usage-cost",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/models?tab=usage-cost",
+      "route": "/app/model-cost-optimizer",
+      "slug": "route-app-model-cost-optimizer",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/model-selection",
+      "kind": "route",
+      "label": "/app/models?tab=catalog",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/models?tab=catalog",
+      "route": "/app/model-selection",
+      "slug": "route-app-model-selection",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/packages",
+      "kind": "route",
+      "label": "/app/marketplace?tab=packages",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/marketplace?tab=packages",
+      "route": "/app/packages",
+      "slug": "route-app-packages",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/plugin-center",
+      "kind": "route",
+      "label": "/app/marketplace?tab=installed",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/marketplace?tab=installed",
+      "route": "/app/plugin-center",
+      "slug": "route-app-plugin-center",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/plugins",
+      "kind": "route",
+      "label": "/app/marketplace?tab=installed",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/marketplace?tab=installed",
+      "route": "/app/plugins",
+      "slug": "route-app-plugins",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/skill-forge-generator",
+      "kind": "route",
+      "label": "/app/forge?tab=skill-forge",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/forge?tab=skill-forge",
+      "route": "/app/skill-forge-generator",
+      "slug": "route-app-skill-forge-generator",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/skills",
+      "kind": "route",
+      "label": "/app/forge?tab=skills",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": "/app/forge?tab=skills",
+      "route": "/app/skills",
+      "slug": "route-app-skills",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/workflows",
+      "kind": "route",
+      "label": "/app/workflows",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app/workflows",
+      "slug": "route-app-workflows",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/workflows/:wid",
+      "kind": "route",
+      "label": "/app/workflows/:wid",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app/workflows/:wid",
+      "slug": "route-app-workflows-wid",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/workflows/:wid/runs",
+      "kind": "route",
+      "label": "/app/workflows/:wid/runs",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app/workflows/:wid/runs",
+      "slug": "route-app-workflows-wid-runs",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/app/workflows/:wid/runs/:rid",
+      "kind": "route",
+      "label": "/app/workflows/:wid/runs/:rid",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/app/workflows/:wid/runs/:rid",
+      "slug": "route-app-workflows-wid-runs-rid",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/landing",
+      "kind": "route",
+      "label": "/landing",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/landing",
+      "slug": "route-landing",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "route:/login",
+      "kind": "route",
+      "label": "/login",
+      "nav": false,
+      "owner": null,
+      "panel": false,
+      "redirect": null,
+      "route": "/login",
+      "slug": "route-login",
+      "sources": [
+        "src/App.tsx Route"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/AcsTab.tsx#details",
+      "kind": "tabs-trigger",
+      "label": "details",
+      "nav": false,
+      "owner": "src:src/components/AcsTab.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-acstab-tsx-details",
+      "sources": [
+        "src/components/AcsTab.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/AcsTab.tsx#graph",
+      "kind": "tabs-trigger",
+      "label": "graph",
+      "nav": false,
+      "owner": "src:src/components/AcsTab.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-acstab-tsx-graph",
+      "sources": [
+        "src/components/AcsTab.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/AcsTab.tsx#results",
+      "kind": "tabs-trigger",
+      "label": "results",
+      "nav": false,
+      "owner": "src:src/components/AcsTab.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-acstab-tsx-results",
+      "sources": [
+        "src/components/AcsTab.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/chat/PeerManagementDialog.tsx#connect",
+      "kind": "tabs-trigger",
+      "label": "connect",
+      "nav": false,
+      "owner": "src:src/components/chat/PeerManagementDialog.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-chat-peermanagementdialog-tsx-connect",
+      "sources": [
+        "src/components/chat/PeerManagementDialog.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/chat/PeerManagementDialog.tsx#invite",
+      "kind": "tabs-trigger",
+      "label": "invite",
+      "nav": false,
+      "owner": "src:src/components/chat/PeerManagementDialog.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-chat-peermanagementdialog-tsx-invite",
+      "sources": [
+        "src/components/chat/PeerManagementDialog.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/chat/PeerManagementDialog.tsx#peers",
+      "kind": "tabs-trigger",
+      "label": "peers",
+      "nav": false,
+      "owner": "src:src/components/chat/PeerManagementDialog.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-chat-peermanagementdialog-tsx-peers",
+      "sources": [
+        "src/components/chat/PeerManagementDialog.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/chat/PeerManagementDialog.tsx#token",
+      "kind": "tabs-trigger",
+      "label": "token",
+      "nav": false,
+      "owner": "src:src/components/chat/PeerManagementDialog.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-chat-peermanagementdialog-tsx-token",
+      "sources": [
+        "src/components/chat/PeerManagementDialog.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/learning-loop-detail.tsx#events",
+      "kind": "tabs-trigger",
+      "label": "events",
+      "nav": false,
+      "owner": "src:src/components/learning-loop-detail.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-learning-loop-detail-tsx-events",
+      "sources": [
+        "src/components/learning-loop-detail.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/learning-loop-detail.tsx#trend",
+      "kind": "tabs-trigger",
+      "label": "trend",
+      "nav": false,
+      "owner": "src:src/components/learning-loop-detail.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-learning-loop-detail-tsx-trend",
+      "sources": [
+        "src/components/learning-loop-detail.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/learning-loops-view.tsx#detail",
+      "kind": "tabs-trigger",
+      "label": "detail",
+      "nav": false,
+      "owner": "src:src/components/learning-loops-view.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-learning-loops-view-tsx-detail",
+      "sources": [
+        "src/components/learning-loops-view.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/components/learning-loops-view.tsx#grid",
+      "kind": "tabs-trigger",
+      "label": "grid",
+      "nav": false,
+      "owner": "src:src/components/learning-loops-view.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-components-learning-loops-view-tsx-grid",
+      "sources": [
+        "src/components/learning-loops-view.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/bridges.tsx#advanced",
+      "kind": "tabs-trigger",
+      "label": "advanced",
+      "nav": false,
+      "owner": "src:src/pages/bridges.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-bridges-tsx-advanced",
+      "sources": [
+        "src/pages/bridges.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/bridges.tsx#connection",
+      "kind": "tabs-trigger",
+      "label": "connection",
+      "nav": false,
+      "owner": "src:src/pages/bridges.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-bridges-tsx-connection",
+      "sources": [
+        "src/pages/bridges.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/bridges.tsx#qr",
+      "kind": "tabs-trigger",
+      "label": "qr",
+      "nav": false,
+      "owner": "src:src/pages/bridges.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-bridges-tsx-qr",
+      "sources": [
+        "src/pages/bridges.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/bridges.tsx#settings",
+      "kind": "tabs-trigger",
+      "label": "settings",
+      "nav": false,
+      "owner": "src:src/pages/bridges.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-bridges-tsx-settings",
+      "sources": [
+        "src/pages/bridges.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/bridges.tsx#setup",
+      "kind": "tabs-trigger",
+      "label": "setup",
+      "nav": false,
+      "owner": "src:src/pages/bridges.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-bridges-tsx-setup",
+      "sources": [
+        "src/pages/bridges.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/compute.tsx#details",
+      "kind": "tabs-trigger",
+      "label": "details",
+      "nav": false,
+      "owner": "src:src/pages/compute.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-compute-tsx-details",
+      "sources": [
+        "src/pages/compute.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/compute.tsx#graph",
+      "kind": "tabs-trigger",
+      "label": "graph",
+      "nav": false,
+      "owner": "src:src/pages/compute.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-compute-tsx-graph",
+      "sources": [
+        "src/pages/compute.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/corvin-knowledge/index.tsx#graph",
+      "kind": "tabs-trigger",
+      "label": "graph",
+      "nav": false,
+      "owner": "src:src/pages/corvin-knowledge/index.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-corvin-knowledge-index-tsx-graph",
+      "sources": [
+        "src/pages/corvin-knowledge/index.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/corvin-knowledge/index.tsx#settings",
+      "kind": "tabs-trigger",
+      "label": "settings",
+      "nav": false,
+      "owner": "src:src/pages/corvin-knowledge/index.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-corvin-knowledge-index-tsx-settings",
+      "sources": [
+        "src/pages/corvin-knowledge/index.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/inspector.tsx#history",
+      "kind": "tabs-trigger",
+      "label": "history",
+      "nav": false,
+      "owner": "src:src/pages/inspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-inspector-tsx-history",
+      "sources": [
+        "src/pages/inspector.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/inspector.tsx#results",
+      "kind": "tabs-trigger",
+      "label": "results",
+      "nav": false,
+      "owner": "src:src/pages/inspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-inspector-tsx-results",
+      "sources": [
+        "src/pages/inspector.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/inspector.tsx#trends",
+      "kind": "tabs-trigger",
+      "label": "trends",
+      "nav": false,
+      "owner": "src:src/pages/inspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-inspector-tsx-trends",
+      "sources": [
+        "src/pages/inspector.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/inspector.tsx#upload",
+      "kind": "tabs-trigger",
+      "label": "upload",
+      "nav": false,
+      "owner": "src:src/pages/inspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-inspector-tsx-upload",
+      "sources": [
+        "src/pages/inspector.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#overview",
+      "kind": "tabs-trigger",
+      "label": "overview",
+      "nav": false,
+      "owner": "src:src/pages/marketplace/components/skill-details-panel.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-marketplace-components-skill-details-panel-tsx-overview",
+      "sources": [
+        "src/pages/marketplace/components/skill-details-panel.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#reviews",
+      "kind": "tabs-trigger",
+      "label": "reviews",
+      "nav": false,
+      "owner": "src:src/pages/marketplace/components/skill-details-panel.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-marketplace-components-skill-details-panel-tsx-reviews",
+      "sources": [
+        "src/pages/marketplace/components/skill-details-panel.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#technical",
+      "kind": "tabs-trigger",
+      "label": "technical",
+      "nav": false,
+      "owner": "src:src/pages/marketplace/components/skill-details-panel.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-marketplace-components-skill-details-panel-tsx-technical",
+      "sources": [
+        "src/pages/marketplace/components/skill-details-panel.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#versions",
+      "kind": "tabs-trigger",
+      "label": "versions",
+      "nav": false,
+      "owner": "src:src/pages/marketplace/components/skill-details-panel.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-marketplace-components-skill-details-panel-tsx-versions",
+      "sources": [
+        "src/pages/marketplace/components/skill-details-panel.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/rag.tsx#providers",
+      "kind": "tabs-trigger",
+      "label": "providers",
+      "nav": false,
+      "owner": "src:src/pages/rag.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-rag-tsx-providers",
+      "sources": [
+        "src/pages/rag.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/rag.tsx#stats",
+      "kind": "tabs-trigger",
+      "label": "stats",
+      "nav": false,
+      "owner": "src:src/pages/rag.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-rag-tsx-stats",
+      "sources": [
+        "src/pages/rag.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/rag.tsx#tester",
+      "kind": "tabs-trigger",
+      "label": "tester",
+      "nav": false,
+      "owner": "src:src/pages/rag.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-rag-tsx-tester",
+      "sources": [
+        "src/pages/rag.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/vibe-engineering/components/GraphInspector.tsx#chain",
+      "kind": "tabs-trigger",
+      "label": "chain",
+      "nav": false,
+      "owner": "src:src/pages/vibe-engineering/components/GraphInspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-vibe-engineering-components-graphinspector-tsx-chain",
+      "sources": [
+        "src/pages/vibe-engineering/components/GraphInspector.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/vibe-engineering/components/GraphInspector.tsx#json",
+      "kind": "tabs-trigger",
+      "label": "json",
+      "nav": false,
+      "owner": "src:src/pages/vibe-engineering/components/GraphInspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-vibe-engineering-components-graphinspector-tsx-json",
+      "sources": [
+        "src/pages/vibe-engineering/components/GraphInspector.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/vibe-engineering/components/GraphInspector.tsx#proof",
+      "kind": "tabs-trigger",
+      "label": "proof",
+      "nav": false,
+      "owner": "src:src/pages/vibe-engineering/components/GraphInspector.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-vibe-engineering-components-graphinspector-tsx-proof",
+      "sources": [
+        "src/pages/vibe-engineering/components/GraphInspector.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/workflows.tsx#mine",
+      "kind": "tabs-trigger",
+      "label": "mine",
+      "nav": false,
+      "owner": "src:src/pages/workflows.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-workflows-tsx-mine",
+      "sources": [
+        "src/pages/workflows.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/pages/workflows.tsx#templates",
+      "kind": "tabs-trigger",
+      "label": "templates",
+      "nav": false,
+      "owner": "src:src/pages/workflows.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-pages-workflows-tsx-templates",
+      "sources": [
+        "src/pages/workflows.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#collaboration",
+      "kind": "tabs-trigger",
+      "label": "collaboration",
+      "nav": false,
+      "owner": "src:src/panels/datahub-creator/index.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-collaboration",
+      "sources": [
+        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#create",
+      "kind": "tabs-trigger",
+      "label": "create",
+      "nav": false,
+      "owner": "src:src/panels/datahub-creator/index.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-create",
+      "sources": [
+        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#execute",
+      "kind": "tabs-trigger",
+      "label": "execute",
+      "nav": false,
+      "owner": "src:src/panels/datahub-creator/index.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-execute",
+      "sources": [
+        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#export",
+      "kind": "tabs-trigger",
+      "label": "export",
+      "nav": false,
+      "owner": "src:src/panels/datahub-creator/index.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-export",
+      "sources": [
+        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#metrics_dashboard",
+      "kind": "tabs-trigger",
+      "label": "metrics_dashboard",
+      "nav": false,
+      "owner": "src:src/panels/datahub-creator/index.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-metrics-dashboard",
+      "sources": [
+        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
+      ]
+    },
+    {
+      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#optimization_config",
+      "kind": "tabs-trigger",
+      "label": "optimization_config",
+      "nav": false,
+      "owner": "src:src/panels/datahub-creator/index.tsx",
+      "panel": false,
+      "route": null,
+      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-optimization-config",
+      "sources": [
+        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "id": "panel:control-intent-router",
+      "reason": "ADR-2029 control-plane panel with no backend action (registry.tsx:202; panel-nav-wiring.test.ts:79)",
+      "registered": true
+    },
+    {
+      "id": "panel:control-plane-overrides",
+      "reason": "ADR-2029 control-plane panel with no backend action (registry.tsx:205; panel-nav-wiring.test.ts:82)",
+      "registered": true
+    },
+    {
+      "id": "panel:control-plane-plugins",
+      "reason": "ADR-2029 control-plane panel with no backend action (registry.tsx:203; panel-nav-wiring.test.ts:80)",
+      "registered": true
+    },
+    {
+      "id": "panel:control-plane-snapshots",
+      "reason": "ADR-2029 control-plane panel with no backend action (registry.tsx:206; panel-nav-wiring.test.ts:83)",
+      "registered": true
+    },
+    {
+      "id": "panel:control-plane-subsystems",
+      "reason": "ADR-2029 control-plane panel with no backend action (registry.tsx:204; panel-nav-wiring.test.ts:81)",
+      "registered": true
+    },
+    {
+      "id": "panel:flows",
+      "reason": "hidden from the sidebar (registry.tsx:152; NAV_EXEMPT, panel-nav-wiring.test.ts:62)",
+      "registered": true
+    },
+    {
+      "id": "panel:orgs",
+      "reason": "hidden from the sidebar (registry.tsx:145; NAV_EXEMPT, panel-nav-wiring.test.ts:56)",
+      "registered": true
+    },
+    {
+      "id": "panel:people",
+      "reason": "hidden from the sidebar (registry.tsx:146; NAV_EXEMPT, panel-nav-wiring.test.ts:63)",
+      "registered": true
+    },
+    {
+      "id": "panel:voice-summaries",
+      "reason": "hidden from the sidebar (registry.tsx:116; NAV_EXEMPT, panel-nav-wiring.test.ts:60); route stays mounted for deep links",
+      "registered": true
+    },
+    {
+      "id": "panel:agents",
+      "reason": "NAV_EXEMPT (panel-nav-wiring.test.ts:61)",
+      "registered": false
+    },
+    {
+      "id": "panel:audit",
+      "reason": "NAV_EXEMPT: backend routes 404 on the live host (panel-nav-wiring.test.ts:43)",
+      "registered": false
+    },
+    {
+      "id": "panel:releases",
+      "reason": "NAV_EXEMPT: backend routes 404 on the live host (panel-nav-wiring.test.ts:44)",
+      "registered": false
+    },
+    {
+      "id": "panel:space",
+      "reason": "NAV_EXEMPT: removed 2026-09-15 (registry.tsx comment)",
+      "registered": false
+    },
+    {
+      "id": "panel:video-quality-metrics",
+      "reason": "NAV_EXEMPT: folded into the Video Producer studio Quality tab (panel-nav-wiring.test.ts:35)",
+      "registered": false
+    },
+    {
+      "id": "panel:webhooks",
+      "reason": "NAV_EXEMPT: removed; the Register Webhook button never called the GitHub API (panel-nav-wiring.test.ts:53)",
+      "registered": false
+    },
+    {
+      "id": "tabs-trigger:src/pages/orgs.tsx",
+      "reason": "orgs panel is excluded (hidden from the sidebar; EXCLUDED_PANELS)",
+      "registered": true
+    }
+  ],
+  "generator": "tests/e2e/release_demo/inventory/generate.py",
+  "schema": 2,
+  "sources": {
+    "core/console/corvin_console/default_plugins.yaml": "06d1dca35065fa29ebda6dbfb9b11037cc5e2ff4eab2458d3757c0e75b0aef82",
+    "src/App.tsx": "10c24052924326b9b28ad077a9a0c507d3dc334b00cc7b53fce10cae6502aab4",
+    "src/components/chat/ChatContextSidebar.tsx": "c9198042c518ac476da95efc87b83fb4a39da0a8b3a0d81959a25f7bdaf780b5",
+    "src/components/layout.tsx": "39a6d8fd616bafe282c5f34f556305cdba313f80d5421e8a2860ded5a7413433",
+    "src/pages/compliance.tsx": "6ca3704c3467eaeb45beb330ecbcf0803ccd6b4fe3213973d5ec7bafed4858b4",
+    "src/pages/compute.tsx": "a5712f6e05d98d7e5d3bdcb2b24bf6619bf0cdca12e59bcdb32600f46ddab437",
+    "src/pages/forge.tsx": "bcb3c2510871f62e5979571eb9aa732ec64f666ff8dfb5db442a65d206ffd3e0",
+    "src/pages/marketplace/tabs.ts": "9f9683db432642b97561f3350c90d22ddc8204cffa6fceaa7a8db825590a5767",
+    "src/pages/models/tabs.ts": "53c063c065fcfd0f8455a3e3a1f86040cf0cdc8dc68f6c3a0ae70569e5f5f127",
+    "src/pages/rag-hub.tsx": "7faceb2f0d198a74f7b2100cacdc8f00ee8e68406215500ab3eccd39a4c41f8e",
+    "src/pages/skills/SkillManagerDashboard.tsx": "d7d9036cc955c559c4579ad648daafd228463cba46b4da5a5d7d3b2affa49792",
+    "src/pages/tasks/index.tsx": "d4bab92740275339f594447b41ba8b6cfa391ca580e22b886bf909f48640f081",
+    "src/pages/vibe-engineering/VibeDashboard.tsx": "4dc491f27fcafb92a474a80aab1564b2cfdd28494bd3d548665c4c38f7779574",
+    "src/pages/video-producer.tsx": "cbfc6da49a46757e2ba9e01b45cf3833fda0a3e69b58d2d9f3162cd316fbcf51",
+    "src/panels/registry.tsx": "af889ab6bbe863e9f0e43ec62cf76525c81f5d550cbeaabcc42d63543945a306"
+  }
+}

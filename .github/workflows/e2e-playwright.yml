@@ -50,7 +50,7 @@ jobs:
         working-directory: core/console/corvin_console/web-next
         env:
           CI: true
-          CONSOLE_BASE_URL: http://127.0.0.1:8765/console
+          CONSOLE_BASE_URL: http://127.0.0.1:8799/console
         run: npm run test:e2e -- --project=${{ matrix.browser }} --grep="^P0-"
         continue-on-error: false
 
@@ -58,7 +58,7 @@ jobs:
         working-directory: core/console/corvin_console/web-next
         env:
           CI: true
-          CONSOLE_BASE_URL: http://127.0.0.1:8765/console
+          CONSOLE_BASE_URL: http://127.0.0.1:8799/console
         run: npm run test:e2e -- --project=${{ matrix.browser }} --grep="^P[1-3]-"
         continue-on-error: true
 

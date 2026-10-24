@@ -7,9 +7,10 @@
  * ffprobe measured on the job's real artifacts.
  */
 import { test, expect } from "@playwright/test";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 test.describe("Video Quality deep link", () => {
-  const BASE_URL = "http://localhost:8765";
+  const BASE_URL = `${resolveConsoleOrigin()}`;
 
   test("redirects into the Video Producer studio's Quality tab", async ({ page }) => {
     await page.goto(`${BASE_URL}/console/app/video-quality-metrics?job_id=job_2626f1e8`, { waitUntil: "networkidle" });

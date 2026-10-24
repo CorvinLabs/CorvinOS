@@ -17,13 +17,16 @@ import json
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+from tests.e2e._console_origin import console_origin
+
 
 @pytest.mark.e2e
 @pytest.mark.full_pipeline
 class TestFullTaskOrchestrationE2E:
     """Complete task orchestration pipeline tests."""
 
-    BASE_URL = "http://localhost:8765"
+    # Sandbox by default; :8765 only with CORVIN_E2E_ALLOW_LIVE=1 (tests/e2e/_console_origin.py).
+    BASE_URL = console_origin()
     API_BASE = "http://localhost:8000"
     TASK_TIMEOUT = 60000  # 60 seconds
 

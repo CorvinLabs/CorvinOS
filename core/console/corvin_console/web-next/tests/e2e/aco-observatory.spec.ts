@@ -23,11 +23,12 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 // The gateway serves the built SPA at /console; Vite dev server (5173) not required.
-const GATEWAY = "http://localhost:8765";
+const GATEWAY = `${resolveConsoleOrigin()}`;
 const API_BASE = `${GATEWAY}/v1/console`;
 const CONSOLE_URL = `${GATEWAY}/console`;
 

@@ -8,6 +8,11 @@ import pytest
 from typing import Dict, Any
 import json
 
+from tests.e2e._console_origin import console_origin
+
+# Sandbox by default; BASE_URL on :8765 without CORVIN_E2E_ALLOW_LIVE=1 refuses the module.
+CONSOLE_ORIGIN = console_origin()
+
 
 @pytest.mark.e2e
 @pytest.mark.high_risk
@@ -19,7 +24,7 @@ class TestFormAPIContract:
         task_input = test_task_data["simple_qa"]["input"]
 
         # Step 1: Navigate to tasks panel
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
         await page.wait_for_selector('textarea[name="taskInput"]', timeout=5000)
 
         # Step 2: Fill and submit form
@@ -49,7 +54,7 @@ class TestFormAPIContract:
 
     async def test_empty_input_validation(self, page, form_helper):
         """Empty input → form validation error (before API call)."""
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
 
         # Try to submit empty form
         await form_helper.clear_form()
@@ -72,7 +77,7 @@ class TestFormAPIContract:
 
     async def test_form_payload_schema(self, page, api_base_url):
         """Form payload matches expected API schema."""
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
 
         # Intercept and validate request schema
         async def validate_schema(route):
@@ -102,7 +107,7 @@ class TestFormAPIContract:
         """Form correctly encodes special characters in payload."""
         special_input = 'Test with "quotes", \n newlines, & ampersands, <html> tags'
 
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
         await form_helper.fill_task_form(special_input)
 
         # Capture request
@@ -124,7 +129,7 @@ class TestFormAPIContract:
         max_length = 10000  # Typical limit
         too_long_input = "x" * (max_length + 1)
 
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
 
         # Fill with text longer than max
         await page.fill('textarea[name="taskInput"]', too_long_input)
@@ -138,7 +143,7 @@ class TestFormAPIContract:
 
     async def test_form_select_dropdown_options(self, page):
         """Form dropdown has expected options."""
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
 
         # Get all options from dropdown
         options = await page.query_selector_all(
@@ -155,7 +160,7 @@ class TestFormAPIContract:
 
     async def test_form_accessibility_labels(self, page):
         """Form has proper ARIA labels for accessibility."""
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
 
         # Check textarea has label
         textarea = await page.query_selector('textarea[name="taskInput"]')
@@ -169,7 +174,7 @@ class TestFormAPIContract:
 
     async def test_form_loading_state(self, page, screenshot_helper):
         """Form shows loading indicator during submission."""
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
 
         # Slow down network to observe loading state
         await page.route("**/api/v2/task/submit", lambda route: None)  # Stall request
@@ -190,7 +195,7 @@ class TestFormAPIContract:
 
     async def test_form_error_message_display(self, page):
         """Form displays API errors clearly."""
-        await page.goto("http://localhost:8765/console/app/tasks")
+        await page.goto(f"{CONSOLE_ORIGIN}/console/app/tasks")
 
         # Mock API to return error
         async def mock_error(route):

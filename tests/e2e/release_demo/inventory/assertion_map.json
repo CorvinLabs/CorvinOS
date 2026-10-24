@@ -1,0 +1,874 @@
+{
+  "mappings": {
+    "ai-panels:your-panels": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit-os-view:graph": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit-os-view:list": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit-view:acs": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit-view:debug": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit-view:log": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit-view:os": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit-view:spans": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit:dual-track": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit:single": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#audit:tde-graph": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#sidebar:a2a": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#sidebar:chats": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/chat#sidebar:peers": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:A2A": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:SECURITY": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:acs": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:all": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:chain": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:console": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:delegation": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:forge": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compliance#filter:os_turn": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compute#acs": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compute#analytics": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compute#experiments": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compute#export": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compute#hac": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compute#pipelines": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/compute#runs": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#audit": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#autonomous-forge": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#bundles": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#generator": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#generator:layer": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#generator:plugin": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#generator:skill": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#generator:tool": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#graph": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#layers": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#os-skills": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#plugins": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#runs": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#skills": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/forge#tools": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/initiatives#activity": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/initiatives#board": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/initiatives#graph": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/initiatives#table": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/initiatives#timeline": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/initiatives#tree": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/marketplace#browse": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/marketplace#forged": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/marketplace#installed": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/marketplace#packages": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/marketplace#skills": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/marketplace#tools": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/models#catalog": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/models#learning": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/models#routing": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/models#usage-cost": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/rag-hub#discover": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/rag-hub#top-rated": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/rag-hub#trending": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/skill-manager#available": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/skill-manager#installed": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/skill-manager#upload": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/vibe-engineering#loops": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/vibe-engineering#maturity": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/vibe-engineering#maturity:patterns": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/vibe-engineering#maturity:radar": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/vibe-engineering#maturity:summary": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/vibe-engineering#metrics": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/workflows#inspector:io": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/workflows#inspector:node": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/workflows#inspector:ready": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/workflows#run:log": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/workflows#run:media": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:/app/workflows#run:tables": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:manifest:video_producer#assets": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:manifest:video_producer#canvas": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:manifest:video_producer#code": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:manifest:video_producer#learning": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:manifest:video_producer#quality": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:src:src/components/GenericPluginInspector.tsx#audit": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:src:src/components/GenericPluginInspector.tsx#config": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:src:src/components/SkillInspector.tsx#audit": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:src:src/components/SkillInspector.tsx#config": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "button-tab:src:src/components/SkillInspector.tsx#learning": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/chat": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/compliance": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/compute?tab=pipelines": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/forge?tab=generator&sub=layer": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/forge?tab=generator&sub=plugin": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/forge?tab=generator&sub=tool": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/forge?tab=layers": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/forge?tab=skill-forge": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/forge?tab=skills": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/forge?tab=tools": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/marketplace?tab=browse": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/marketplace?tab=forged": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/marketplace?tab=installed": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/marketplace?tab=packages": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/marketplace?tab=tools": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/models?tab=catalog": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/models?tab=routing": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/models?tab=usage-cost": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "deeplink:/app/vibe-engineering?tab=loops": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "manifest:corvin_knowledge": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "manifest:video_producer": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/api-keys": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/bridges": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/chat": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/compliance": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/compute": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/connectors": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/custom-provider": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/dashboard": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/data-sources": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/datahub-unified": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/files": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/forge": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/initiatives": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/layer-forge-analytics": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/ldd": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/license": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/marketplace": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/memory": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/models": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/otel-telemetry": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/quality": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/rag": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/rag-hub": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/settings": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/settings/github": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/skill-manager": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/sync-monitor": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/vibe-engineering": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/voice": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "page:/app/workflows": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/*": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app#index": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/agent-conversations": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/agent-hub": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/chat": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/chat-groups": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/chat/:sid": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/chat/group/:groupId": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/chat/peer/:peerId": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/discovery": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/engine-config": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/engine-control": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/engines": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/extensions": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/layer-forge": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/learning-loops": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/licensing-audit": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/marketplace-hub": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/mcp-plugins": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/model-cost-optimizer": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/model-selection": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/packages": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/plugin-center": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/plugins": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/skill-forge-generator": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/skills": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/workflows": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/workflows/:wid": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/workflows/:wid/runs": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/app/workflows/:wid/runs/:rid": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/landing": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "route:/login": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/AcsTab.tsx#details": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/AcsTab.tsx#graph": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/AcsTab.tsx#results": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/chat/PeerManagementDialog.tsx#connect": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/chat/PeerManagementDialog.tsx#invite": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/chat/PeerManagementDialog.tsx#peers": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/chat/PeerManagementDialog.tsx#token": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/learning-loop-detail.tsx#events": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/learning-loop-detail.tsx#trend": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/learning-loops-view.tsx#detail": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/components/learning-loops-view.tsx#grid": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/bridges.tsx#advanced": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/bridges.tsx#connection": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/bridges.tsx#qr": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/bridges.tsx#settings": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/bridges.tsx#setup": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/compute.tsx#details": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/compute.tsx#graph": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/corvin-knowledge/index.tsx#graph": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/corvin-knowledge/index.tsx#settings": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/inspector.tsx#history": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/inspector.tsx#results": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/inspector.tsx#trends": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/inspector.tsx#upload": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#overview": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#reviews": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#technical": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#versions": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/rag.tsx#providers": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/rag.tsx#stats": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/rag.tsx#tester": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/vibe-engineering/components/GraphInspector.tsx#chain": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/vibe-engineering/components/GraphInspector.tsx#json": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/vibe-engineering/components/GraphInspector.tsx#proof": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/workflows.tsx#mine": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/pages/workflows.tsx#templates": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/panels/datahub-creator/index.tsx#collaboration": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/panels/datahub-creator/index.tsx#create": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/panels/datahub-creator/index.tsx#execute": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/panels/datahub-creator/index.tsx#export": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/panels/datahub-creator/index.tsx#metrics_dashboard": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    },
+    "tabs-trigger:src/panels/datahub-creator/index.tsx#optimization_config": {
+      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
+      "status": "pending"
+    }
+  },
+  "note": "One mapping per inventory entry. status=mapped needs an assertion id; status=pending needs a reason.",
+  "schema": 1
+}

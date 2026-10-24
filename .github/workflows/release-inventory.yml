@@ -1,0 +1,73 @@
+name: release-inventory
+
+# W-0 / W-0b (release readiness): the sandbox origin policy and the derived inventory.
+# Both must pass on every change to the console e2e harness or the inventory it reads.
+
+on:
+  push:
+    paths:
+      - '**/*.spec.ts'
+      - '**/playwright*.config.ts'
+      - 'tests/**/*.py'
+      - 'tests/e2e/**'
+      - 'scripts/*.spec.ts'
+      - 'playwright*.config.ts'
+      - 'core/console/corvin_console/default_plugins.yaml'
+      - 'core/console/corvin_console/web-next/src/**'
+      - 'core/console/corvin_console/web-next/tests/**'
+      - 'core/console/corvin_console/web-next/scripts/**'
+      - 'core/console/corvin_console/web-next/playwright*.config.ts'
+      - '.github/workflows/release-inventory.yml'
+  pull_request:
+    paths:
+      - '**/*.spec.ts'
+      - '**/playwright*.config.ts'
+      - 'tests/**/*.py'
+      - 'tests/e2e/**'
+      - 'scripts/*.spec.ts'
+      - 'playwright*.config.ts'
+      - 'core/console/corvin_console/default_plugins.yaml'
+      - 'core/console/corvin_console/web-next/src/**'
+      - 'core/console/corvin_console/web-next/tests/**'
+      - 'core/console/corvin_console/web-next/scripts/**'
+      - 'core/console/corvin_console/web-next/playwright*.config.ts'
+      - '.github/workflows/release-inventory.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Inventory generator and mapping check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: python -m pip install pytest
+      # --noconftest: the repo conftests import corvin_core (tests/conftest.py ->
+      # tests.fixtures_console), which this pytest-only runner does not install.
+      # These tests need none of it (stdlib + pytest only).
+      - name: Inventory drift and mapping tests
+        run: python -m pytest tests/e2e/release_demo/inventory tests/e2e/test_e2e_console_origin.py -q --noconftest -p no:cacheprovider
+      - name: Inventory consistency check
+        run: python tests/e2e/release_demo/inventory/check.py
+
+  sandbox-origin:
+    name: Test origin never targets the live console (:8765)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core/console/corvin_console/web-next
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: core/console/corvin_console/web-next/package-lock.json
+      - run: npm ci
+      - name: Origin policy, live-refusal proofs and the static :8765 scan
+        run: npx vitest run tests/unit/e2e-sandbox-origin.test.ts tests/unit/e2e-static-origin-scan.test.ts

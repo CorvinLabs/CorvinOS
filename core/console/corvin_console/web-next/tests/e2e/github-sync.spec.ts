@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
+import { resolveConsoleOrigin } from './sandbox-origin';
 
-const CONSOLE_URL = 'http://127.0.0.1:8765/console'
+const CONSOLE_URL = `${resolveConsoleOrigin()}/console`
 const GITHUB_REPO = 'https://github.com/veegee82/tenant-shumway'
 
 test.describe('GitHub Sync — E2E Flow', () => {

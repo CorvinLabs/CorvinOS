@@ -9,8 +9,9 @@
  * increases on screen.
  */
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { resolveUrlVar } from "./sandbox-origin";
 
-const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://localhost:5173/console").replace(/\/console\/?$/, "");
+const ORIGIN = resolveUrlVar("CONSOLE_BASE_URL", "http://localhost:5173/console").replace(/\/console\/?$/, "");
 const BASE_URL = ORIGIN;
 const API_BASE = `${ORIGIN}/v1/console`;
 

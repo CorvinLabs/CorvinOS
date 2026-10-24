@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import path from "path";
 import { fileURLToPath } from "url";
+import { mayReuseDevServer, resolveConsoleOrigin } from "./tests/e2e/sandbox-origin";
 
 const _dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +33,8 @@ export default defineConfig({
   webServer: {
     command: "npm run dev",
     url: "http://localhost:5173",
-    reuseExistingServer: true,
+    reuseExistingServer: mayReuseDevServer(),
+    // Pin the dev server's /v1 proxy to the run's own origin (never the live :8765 by default).
+    env: { CORVIN_GATEWAY_URL: resolveConsoleOrigin() },
   },
 });

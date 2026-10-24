@@ -7,6 +7,16 @@ set -uo pipefail
 R=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)
 export CORVIN_HOME="${CORVIN_E2E_HOME:-/tmp/corvin-e2e-home}"
 mkdir -p "$CORVIN_HOME/tenants/_default/global"
+# Everything else the backend can write stays inside the throwaway root too:
+# XDG config, HOME, an ABSOLUTE audit anchor key (a relative one is refused),
+# and FORGE_ROOT unset (the boot tripwire refuses an audit-chain redirect).
+SANDBOX_ROOT="$(dirname "$CORVIN_HOME")/$(basename "$CORVIN_HOME")-env"
+mkdir -p "$SANDBOX_ROOT/xdg" "$SANDBOX_ROOT/user-home"
+export XDG_CONFIG_HOME="$SANDBOX_ROOT/xdg"
+export HOME="$SANDBOX_ROOT/user-home"
+export CORVIN_AUDIT_ANCHOR_KEY="$CORVIN_HOME/audit-anchor.key"
+export CORVIN_TELEMETRY_OPTIN=false
+unset FORGE_ROOT
 export PYTHONPATH="$R/core/console:$R/core/gateway:$R/core/license:$R/core/compliance:$R/corvin_operator/forge:$R/corvin_operator/skill-forge"
 PORT="${CORVIN_E2E_PORT:-8799}"
 # Tool Forge's PROJECT scope walks up from the cwd to a git checkout, so started

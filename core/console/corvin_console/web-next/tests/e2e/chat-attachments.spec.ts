@@ -23,9 +23,10 @@ import {
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolveConsoleOrigin } from './sandbox-origin';
 
 const BASE_URL = "http://localhost:5173";
-const API_BASE = "http://localhost:8765/v1/console";
+const API_BASE = `${resolveConsoleOrigin()}/v1/console`;
 
 const SCREENSHOT_DIR =
   process.env.PLAYWRIGHT_SCREENSHOT_DIR || "/tmp/corvin-e2e-screenshots";

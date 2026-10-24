@@ -14,6 +14,8 @@ import time
 import re
 from typing import Callable, Dict, List, Optional
 
+from tests.e2e._console_origin import SANDBOX_CONSOLE_ORIGIN, resolve_url_var
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PANEL REGISTRY (from src/panels/registry.tsx)
@@ -74,7 +76,8 @@ ALL_PANELS = CRITICAL_PANELS + SECONDARY_PANELS + [
 @pytest.fixture(scope="session")
 def console_base_url():
     """Console base URL."""
-    return os.getenv("CONSOLE_BASE_URL", "http://localhost:8765")
+    # Sandbox by default; :8765 only with CORVIN_E2E_ALLOW_LIVE=1.
+    return resolve_url_var("CONSOLE_BASE_URL", SANDBOX_CONSOLE_ORIGIN)
 
 
 @pytest.fixture(scope="session")

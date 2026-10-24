@@ -24,9 +24,10 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { resolveConsoleBaseUrl } from './sandbox-origin';
 
 const _dirname = path.dirname(fileURLToPath(import.meta.url));
-const ORIGIN = new URL(process.env.CONSOLE_BASE_URL || 'http://127.0.0.1:8765/console').origin;
+const ORIGIN = new URL(resolveConsoleBaseUrl()).origin;
 const API = `${ORIGIN}/v1/console`;
 
 /** Fictional skills, prefixed so a stray one is obvious and easy to purge. */
