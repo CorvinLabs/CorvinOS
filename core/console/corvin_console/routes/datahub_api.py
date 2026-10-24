@@ -52,6 +52,9 @@ class ArtifactCreateRequest(SourceRequest):
     description: str = Field(..., min_length=1, max_length=2000)
     creation_type: str = Field(..., description="skill, tool, dataset, or pipeline")
     complexity: str = Field("medium", pattern="^(low|medium|high)$")
+    #: A skill's data profile carries counts and aggregates only. True adds the most frequent labels of
+    #: low-cardinality columns (never when the source scan flagged PII or injection text).
+    include_values: bool = False
 
 
 class ArtifactMetadata(BaseModel):
@@ -276,6 +279,7 @@ def create_artifact(
         description=req.description,
         complexity=req.complexity,
         fail_closed=True,
+        profile=hub.profile(include_values=req.include_values),
     ))
 
     artifact_id = uuid.uuid4().hex[:8]
@@ -297,7 +301,7 @@ def create_artifact(
     artifact["source"] = {
         "type": ingestion.source_type.value, "path": ingestion.source_path,
         "sample_rows": req.sample_rows, "sha256": _file_sha256(ingestion.source_path),
-        "complexity": req.complexity,
+        "complexity": req.complexity, "include_values": req.include_values,
     }
     if creation_type == CreationType.SKILL and result.success:
         _register_skill(rec.tenant_id, artifact, req.description)

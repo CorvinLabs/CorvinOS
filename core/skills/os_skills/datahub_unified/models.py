@@ -47,6 +47,8 @@ class CreationRequest:
     # Constraints
     complexity: str = "medium"  # low, medium, high
     fail_closed: bool = True
+    #: ``DataHubSkill.profile()`` of the ingested rows; a SKILL body embeds it as the facts a worker can use.
+    profile: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {

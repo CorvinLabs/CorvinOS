@@ -611,6 +611,11 @@ dynamic_skills:
   call in `_dispatch_workers._run_one` (`acs_runtime.py`).
 - **Proof:** `test_acs_worker_skills.py` runs `_dispatch_workers` against a stub `claude` that records the
   real system-prompt file, with a real `MultiSkillRegistry` (graded and ungraded skill).
+- **The worker is told the skills are already in its prompt** (it must not search the filesystem for them). Measured
+  2026-10-24 with a Data Hub skill: when the manager's task said "find the skill with your tools", the worker ran Bash for
+  77 s and failed although the skill text was in its prompt; with the sentence and a plainer question it answered in
+  10 s with 0 tool calls. Workers are `claude -p` processes with filesystem tools, so a skill's files on disk are
+  also discoverable - an experiment that needs "the worker cannot know X" must keep X out of every reachable file.
 - **Not covered here:** the manager does not choose skills per subtask. Creating tools and skills at run
   time is a separate opt-in, see section 11.
 

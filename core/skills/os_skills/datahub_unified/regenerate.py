@@ -275,7 +275,8 @@ def _regenerate_from(tenant_id, skill_id, art, src, snap, snap_sha, generation, 
         data=DataIngestion(source_type=DataSourceType(src["type"]), source_path=str(snap),
                            sample_rows=rows, infer_schema=False),
         creation_type=CreationType.SKILL, name=art["name"], description=art["description"],
-        complexity=src.get("complexity", "medium"), fail_closed=True))
+        complexity=src.get("complexity", "medium"), fail_closed=True,
+        profile=hub.profile(include_values=bool(src.get("include_values")))))
     if not result.success:
         return _finish("failed", "validation", sample_size=rows)
     body_hash = hashlib.sha256(result.artifact_body.encode("utf-8")).hexdigest()[:16]

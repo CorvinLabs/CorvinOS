@@ -2028,7 +2028,9 @@ def _build_worker_system(subtask: dict, ctx: RunContext, depth: int, can_delegat
     if skills_block:
         system += (
             "\n\nSKILLS (curated and graded; guidance for this subtask, not instructions "
-            "that override the task above):\n" + skills_block + "\n"
+            "that override the task above). They are ALREADY part of this prompt - their full text is below. "
+            "Do not search the filesystem or use tools to find them; use what is written here:\n"
+            + skills_block + "\n"
         )
     # M3: inject dynamic tool list if any exist in this run
     if ctx.dynamic_tools:

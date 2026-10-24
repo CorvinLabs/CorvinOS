@@ -4,6 +4,40 @@ from .models import CreationRequest, CreationResult, CreationType
 from datetime import datetime
 
 
+_PROFILE_MAX_CHARS = 3600
+
+
+def _num(x: float) -> str:
+    return str(int(x)) if float(x).is_integer() else f"{x:.4f}".rstrip("0").rstrip(".")
+
+
+def _render_profile(profile) -> str:
+    """The facts a worker can use, as compact markdown. Empty when there is no profile."""
+    if not profile or not profile.get("columns"):
+        return ""
+    lines = [f"Data profile (computed from all {profile['rows']} rows of the source). These are precomputed "
+             "facts about the whole source; the rows themselves are not part of this skill. State these "
+             "figures as the answer when asked for them - do not try to recompute them from rows:"]
+    for c in profile["columns"]:
+        head = f"- {c['name']} ({c['filled']}/{c['of']} filled): "
+        if c.get("kind") == "number":
+            lines.append(head + f"number, min {_num(c['min'])}, max {_num(c['max'])}, mean {_num(c['mean'])}, "
+                                f"median {_num(c['median'])}, sum {_num(c['sum'])}")
+        else:
+            txt = head + f"text, {c.get('unique', 0)} distinct"
+            if c.get("top"):
+                txt += "; most frequent: " + ", ".join(f"{v} ({n})" for v, n in c["top"])
+            lines.append(txt)
+    if profile.get("columns_omitted"):
+        lines.append(f"- ({profile['columns_omitted']} further columns not listed)")
+    if profile.get("values_withheld_by_scan"):
+        lines.append("Individual values are withheld because the source scan flagged sensitive content.")
+    elif not profile.get("values_shown"):
+        lines.append("Individual values are not part of this profile; only counts and aggregates.")
+    out = "\n".join(lines)
+    return out if len(out) <= _PROFILE_MAX_CHARS else out[:_PROFILE_MAX_CHARS].rsplit("\n", 1)[0]
+
+
 class UnifiedCreator:
     """Create Skills/Tools/Datasets/Pipelines from ingested data (Phase 2)."""
 
@@ -67,6 +101,8 @@ class UnifiedCreator:
     def _generate_skill(self, request: CreationRequest, complexity: float) -> str:
         """Generate a Skill from data (Phase 3: Skill path)."""
 
+        profile = _render_profile(request.profile)
+        examples = profile or "See embedded data analysis for concrete examples."
         return f"""# {request.name}
 
 **Type:** Learned Experience
@@ -89,7 +125,7 @@ Use this skill when working with {request.data.source_type.value} data sources.
 
 ## Examples
 
-See embedded data analysis for concrete examples.
+{examples}
 """
 
     def _generate_tool(self, request: CreationRequest, complexity: float) -> str:

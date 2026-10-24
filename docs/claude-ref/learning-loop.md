@@ -500,7 +500,14 @@ grow.
 
 **Limits, stated.** Operator *ratings* of these skills do not feed the daemon (the ADR-0534 gate admits a rating only for a subject
 with a recorded execution; prompt skills record none) - the live feedback source is the operator's follow-up in the next turn.
-The generator is the template `UnifiedCreator`: regenerating from the same data rebuilds the same text. `os.data_hub` /
+The generator is the template `UnifiedCreator`: regenerating from the same data rebuilds the same text. Since 2026-10-24 a SKILL
+body carries a **data profile** (`DataHubSkill.profile()`: rows, per-column fill, min/max/mean/median/sum, distinct counts) computed
+from ALL ingested rows - before that the body held only the row count and the operator's description, so a worker given the skill
+learned nothing about the data. Default is aggregates only; `include_values: true` on `POST /datahub/create` (kept in the artifact's
+`source`, so regeneration honours it) adds the most frequent labels of low-cardinality columns, never when the ADR-0661 scan flagged
+PII or injection text. The scan is narrow (IBAN, SSN, e-mail+phone pair): a clean scan is NOT proof of "no personal data", which is
+why values are opt-in. ACS workers receive such a skill as text with `dynamic_skills.enabled` (delegation-routing.md section 10);
+proof: `tests/e2e/test_datahub_skill_reaches_acs_worker.py` (live part opt-in via `CORVIN_LIVE_LLM=1`). `os.data_hub` /
 `os.skill_tool_creator` (the 12-phase generator) stay optional and out of scope.
 
 **Must NOT do:** put user text, a path or a skill body into an inbox line or a `learning.regeneration` record · let a producer raise into a
