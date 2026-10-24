@@ -1,7 +1,9 @@
 """Members — combined view of roles + quota + consent + disclosure
 state across every chat the operator owns.
 
-Stores live at:
+Stores live at ``<corvin_home>/tenants/<tid>/global/<kind>/`` (and, for the
+default tenant only, the pre-tenancy ``<corvin_home>/global/<kind>/`` the bridge
+writers still use when they pass no tenant):
   * ``<corvin_home>/global/roles/<channel>__<chat>.json``
   * ``<corvin_home>/global/quota/<channel>__<chat>.json``
   * ``<corvin_home>/global/consent/<channel>__<chat>.json``
@@ -38,8 +40,22 @@ router = APIRouter()
 _STORE_NAMES = ("roles", "quota", "consent", "disclosure")
 
 
-def _store_dir(tid: str, kind: str) -> Path:
-    return _forge_paths.tenant_global_dir(tid) / kind
+# The bridge writers (roles / quota / consent / disclosure) fall back to the
+# pre-tenancy path ``<corvin_home>/global/<kind>`` whenever the adapter passes
+# no tenant. Those records carry no tenant id, so they can only be attributed to
+# the constant default tenant -- any other tenant reads its own directory only
+# (the same rule as the audit tail's legacy chain, S-11a). Before this the
+# reader looked ONLY under tenants/<tid>/ and the Roles card stayed empty on an
+# install whose chats are all written through the legacy path.
+_LEGACY_TENANT = "_default"
+
+
+def _store_dirs(tid: str, kind: str) -> list[Path]:
+    """Directories to read for ``kind``, tenant path first (it wins on conflict)."""
+    dirs = [_forge_paths.tenant_global_dir(tid) / kind]
+    if tid == _LEGACY_TENANT:
+        dirs.append(Path(_forge_paths.corvin_home()) / "global" / kind)
+    return dirs
 
 
 def _enumerate_chat_keys(tid: str) -> list[str]:
@@ -50,28 +66,38 @@ def _enumerate_chat_keys(tid: str) -> list[str]:
     contain any safe filesystem char.
     """
     keys: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for kind in _STORE_NAMES:
-        d = _store_dir(tid, kind)
-        if not d.exists():
-            continue
-        try:
-            for entry in d.iterdir():
-                if entry.is_file() and entry.suffix == ".json":
-                    keys.add(entry.stem)
-        except OSError:
-            continue
+        for d in _store_dirs(tid, kind):
+            try:
+                real = str(d.resolve())
+            except OSError:
+                continue
+            if (kind, real) in seen or not d.exists():
+                continue  # ADR-0007 compat symlinks can make both paths one directory
+            seen.add((kind, real))
+            try:
+                for entry in d.iterdir():
+                    if entry.is_file() and entry.suffix == ".json":
+                        keys.add(entry.stem)
+            except OSError:
+                continue
     return sorted(keys)
 
 
 def _read_store(tid: str, kind: str, chat_key: str) -> dict[str, Any]:
-    path = _store_dir(tid, kind) / f"{chat_key}.json"
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    merged: dict[str, Any] = {}
+    for d in reversed(_store_dirs(tid, kind)):  # legacy first, tenant path overrides
+        path = d / f"{chat_key}.json"
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            merged.update(data)
+    return merged
 
 
 def _split_chat_key(chat_key: str) -> tuple[str, str]:

@@ -140,6 +140,23 @@ export async function registerAuditLayer(
   });
 }
 
+export interface ChainVerifyResult {
+  tenant_id: string;
+  ok: boolean;
+  records: number;
+  problem_count: number;
+  problems: { line: number | null; issue: string }[];
+  chain_size_b: number;
+  verified_at: number;
+  took_ms: number;
+  present: boolean;
+}
+
+/** Verify the tenant audit chain now (server runs the same walker as the boot tripwire). */
+export async function verifyAuditChain(csrf: string): Promise<ChainVerifyResult> {
+  return api("/audit/verify", { method: "POST", csrf, body: {} });
+}
+
 export async function removeAuditLayer(
   layer_id: string,
   csrf: string,
