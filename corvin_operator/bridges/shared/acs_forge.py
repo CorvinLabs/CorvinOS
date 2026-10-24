@@ -82,6 +82,9 @@ class ForgeConfig:
     allowed_namespaces: tuple = ("dynamic",)
     max_tools: int = 5
     max_skills: int = 3
+    # Also register a tool that passed its self-test in the tenant's user-scope Forge, where the other agentic
+    # compute runtimes (sweeps, Bayesian optimisation, HAC, pipelines) resolve tools. Never overwrites a tool.
+    publish: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -96,6 +99,7 @@ def config_from_spec(spec: dict | None) -> ForgeConfig:
     cfg = ForgeConfig()
     cfg.tools_enabled = dt.get("enabled") is True
     cfg.skills_enabled = ds.get("enabled") is True and ds.get("forge") is True
+    cfg.publish = cfg.tools_enabled and dt.get("publish") is True
     ns = dt.get("allowed_namespaces")
     if isinstance(ns, list) and ns and all(isinstance(x, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", x) for x in ns):
         cfg.allowed_namespaces = tuple(ns)
@@ -297,7 +301,53 @@ class RunForge:
             "iteration": iteration, "name": name, "sha256": spec.sha256, "impl_bytes": len(impl.encode("utf-8")),
             "self_test_ms": int(res.duration_s * 1000), "sandbox": res.sandbox,
         })
-        return {"kind": "tool", "name": name, "ok": True, "sha256": spec.sha256}
+        out = {"kind": "tool", "name": name, "ok": True, "sha256": spec.sha256}
+        if self.cfg.publish:
+            out["published"] = self._publish(name, description, schema, impl, test_input, expect, spec.sha256, iteration)
+        return out
+
+    def _publish(self, name: str, description: str, schema: dict, impl: str, test_input: dict,
+                 expect: dict | None, sha: str, iteration: int) -> bool:
+        """Register the vetted tool in the tenant's user-scope Forge so the other compute runtimes can use it.
+
+        Same sandbox self-test again, in the user-scope registry; an existing tool of that name (any case) is never
+        replaced. A failure leaves the tool usable for this run only and is audited with a reason code.
+        """
+        def _skip(reason: str) -> bool:
+            self._emit("acs.tool_publish_rejected", {"iteration": iteration, "name": name[:80], "reason": reason})
+            return False
+
+        try:
+            from forge.policy import Policy
+            from forge.registry import Registry
+            from forge.runner import run_tool
+            from forge.scope import scope_root
+            user_root = scope_root("user", tenant_id=self.tenant_id)
+            user_root.mkdir(parents=True, exist_ok=True)
+            reg = Registry(user_root)
+            folded = name.casefold()
+            if any(t.name.casefold() == folded for t in reg.list()):
+                return _skip(R_DUP)
+            reg.create(name=name, description=description, input_schema=schema, impl=impl, runtime="python",
+                       scope="user", overwrite=False, tenant_id=self.tenant_id,
+                       meta={"origin": "acs", "run_id": self.run_id, "deterministic": False,
+                             "budget": {"cpu_seconds": 5, "wall_seconds": 15}})
+        except PermissionError:
+            return _skip(R_LICENSE)
+        except Exception:  # noqa: BLE001 - publishing is an extra; the run-local tool already works
+            return _skip(R_CREATE)
+        try:
+            res = run_tool(reg, name, dict(test_input), timeout=SELF_TEST_TIMEOUT_S, permission_mode="yes",
+                           use_sandbox=True, policy=Policy())
+            good = (res.ok and res.sandbox == "bwrap" and isinstance(res.data, dict)
+                    and (not expect or subset_match(res.data, expect)))
+        except Exception:  # noqa: BLE001
+            good = False
+        if not good:
+            self._discard(reg, name)
+            return _skip(R_SELFTEST)
+        self._emit("acs.tool_published", {"iteration": iteration, "name": name, "sha256": sha})
+        return True
 
     @staticmethod
     def _discard(registry: Any, name: str) -> None:

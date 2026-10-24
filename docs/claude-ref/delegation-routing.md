@@ -639,6 +639,15 @@ sandbox. Audit events: `acs.tool_forged`, `acs.tool_forge_rejected`, `acs.skill_
 `acs.skill_forge_rejected`, `acs.skill_persist_failed` (reason codes only, never source text). A workflow
 without the keys behaves as before.
 
-Proof: `corvin_operator/bridges/shared/test_acs_runtime_forge.py` (34 boundary tests with the real registry and
+**One Forge for all agentic compute (`dynamic_tools.publish: true`).** The ACS run-local registry is invisible to the
+other runtimes, which resolve tools from the tenant's user-scope Forge (`corvin_compute.cli._build_runner_fn`). With
+`publish`, a tool that passed the self-test is registered there too (re-tested in that registry) and can then be used by
+grid and Bayesian sweeps, HAC and pipelines (also mid-pipeline: forge at the steering gate, then `forge_noted` +
+`add_stage`). It never overwrites or case-shadows an existing tool (`acs.tool_publish_rejected`, reason `duplicate`);
+audit `acs.tool_published`. Without `publish` the tool stays run-local (negative control in the unity test).
+
+Proof: `corvin_operator/bridges/shared/test_acs_forge_compute_unity_e2e.py` (publish, no-overwrite, Bayesian, grid, HAC,
+pipeline, forge mid-pipeline, negative control; real Forge runner, no stubbed runner) and
+`corvin_operator/bridges/shared/test_acs_runtime_forge.py` (34 boundary tests with the real registry and
 sandbox, scripted LLM) and a live run with real `claude -p` manager and worker (`acs-forge-live-e2e/` in the
 claude-playground repo).
