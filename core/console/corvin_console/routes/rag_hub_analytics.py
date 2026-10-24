@@ -14,13 +14,16 @@ from ..deps import require_session
 
 logger = logging.getLogger(__name__)
 
-_HUB = None  # Reference to RAG Hub (initialized elsewhere)
+def _tenant_hub(session: Any) -> Any | None:
+    """The calling tenant's RAG Hub (the same per-tenant instance the /hub routes use).
 
+    Analytics used to read a module global nothing ever set, so every endpoint
+    answered "Hub not initialized" regardless of what had been published.
+    """
+    from .rag_hub import _get_hub  # noqa: PLC0415
 
-def set_hub(hub: Any):
-    """Set the Hub instance for analytics to use."""
-    global _HUB
-    _HUB = hub
+    tenant_id = session.tenant_id if session else "_default"
+    return _get_hub(tenant_id)
 
 
 router = APIRouter(prefix="/hub/analytics", tags=["console-rag-hub-analytics"])
@@ -33,6 +36,7 @@ async def get_analytics_summary(
     _session: Annotated[Any, Depends(require_session)] = None,
 ) -> dict[str, Any]:
     """Get overall Hub analytics summary."""
+    _HUB = _tenant_hub(_session)
     if _HUB is None:
         return {"error": "Hub not initialized"}
 
@@ -73,6 +77,7 @@ async def get_trending_analytics(
     _session: Annotated[Any, Depends(require_session)] = None,
 ) -> dict[str, Any]:
     """Get trending providers over a time period."""
+    _HUB = _tenant_hub(_session)
     if _HUB is None:
         return {"trending": []}
 
@@ -105,6 +110,7 @@ async def get_most_downloaded_analytics(
     _session: Annotated[Any, Depends(require_session)] = None,
 ) -> dict[str, Any]:
     """Get most-downloaded providers."""
+    _HUB = _tenant_hub(_session)
     if _HUB is None:
         return {"providers": []}
 
@@ -138,6 +144,7 @@ async def get_top_rated_analytics(
     _session: Annotated[Any, Depends(require_session)] = None,
 ) -> dict[str, Any]:
     """Get highest-rated providers (min review threshold)."""
+    _HUB = _tenant_hub(_session)
     if _HUB is None:
         return {"providers": []}
 
@@ -170,6 +177,7 @@ async def get_capability_distribution(
     _session: Annotated[Any, Depends(require_session)] = None,
 ) -> dict[str, Any]:
     """Get distribution of capabilities across providers."""
+    _HUB = _tenant_hub(_session)
     if _HUB is None:
         return {"capabilities": {}}
 
@@ -208,6 +216,7 @@ async def get_compliance_insights(
     _session: Annotated[Any, Depends(require_session)] = None,
 ) -> dict[str, Any]:
     """Get compliance zone and classification distribution."""
+    _HUB = _tenant_hub(_session)
     if _HUB is None:
         return {"zones": {}, "classifications": {}}
 

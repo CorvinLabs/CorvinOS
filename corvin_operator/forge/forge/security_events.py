@@ -321,6 +321,12 @@ EVENT_SEVERITY: dict[str, str] = {
     # Metadata only — credentials, raw data, raw watermark values NEVER in chain.
     # watermark fields are sha256[:8] hashes, never raw values.
     "datasource.registered":            "INFO",
+    # RAG provider lifecycle + queries (console custom_provider / rag routes,
+    # bridges/shared/rag_audit_events.py). Content-free: ids, counts, closed enums.
+    "rag.provider_created":             "INFO",
+    "rag.provider_failed":              "WARNING",
+    "rag.query_executed":               "INFO",
+    "rag.query_blocked":                "WARNING",
     "datasource.schema_refreshed":      "INFO",
     "datasource.connection_tested":     "INFO",
     "datasource.connection_failed":     "WARNING",
@@ -1502,6 +1508,12 @@ EVENT_SEVERITY: dict[str, str] = {
     "compute.permit.fail_closed":     "WARNING",
     "datasource.connected":           "INFO",
     "datasource.license_denied":      "WARNING",
+    # Chat tools datasource_query / rag_query (forge MCP server). Metadata only:
+    # the SQL text and the query text are never recorded (a hash stands in).
+    "datasource.query_executed":      "INFO",
+    "datasource.query_refused":       "WARNING",
+    "datasource.query_failed":        "WARNING",
+    "rag.tool_query":                 "INFO",
     "license.enforcement_unavailable": "WARNING",
     "license.capability_decision":    "INFO",
     # context_engineering/stages/{toolforge,skillforge}.py — ADR-0701 licence
@@ -4148,6 +4160,19 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "datasource.preview_generated": frozenset({
         "n_rows_requested", "n_rows_returned", "name", "pii_columns_redacted"
     }),
+    "rag.provider_created": frozenset({
+        "tenant_id", "action", "target_kind", "target_id", "status", "reason"
+    }),
+    "rag.provider_failed": frozenset({
+        "tenant_id", "action", "target_kind", "target_id", "status", "reason"
+    }),
+    "rag.query_executed": frozenset({
+        "tenant_id", "provider_count", "result_count", "latency_ms",
+        "cache_hit", "classification"
+    }),
+    "rag.query_blocked": frozenset({
+        "tenant_id", "reason", "classification"
+    }),
     "datasource.registered": frozenset({
         "adapter", "auth_secret_key_names", "estimated_rows", "name",
         "pii_columns_detected", "region"
@@ -5227,6 +5252,17 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # (already allowlisted on datasource.registered).
     "datasource.connected": frozenset({"adapter", "name"}),
     "datasource.license_denied": frozenset({"adapter"}),
+    "datasource.query_executed": frozenset({
+        "name", "adapter", "row_count", "truncated", "elapsed_ms",
+        "classification", "sql_sha256", "persona"
+    }),
+    "datasource.query_refused": frozenset({"name", "reason", "sql_sha256", "persona"}),
+    "datasource.query_failed": frozenset({
+        "name", "adapter", "reason", "sql_sha256", "persona"
+    }),
+    "rag.tool_query": frozenset({
+        "result_count", "providers_queried", "blocked", "persona"
+    }),
     # reason is the enforcement failure's exception CLASS name (mcp_server
     # forge_tool / forge_promote), never its message; capability is a key of
     # the closed CAPABILITIES matrix.

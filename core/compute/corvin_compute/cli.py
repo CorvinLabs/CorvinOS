@@ -46,73 +46,30 @@ def _default_corvin_home() -> Path:
 COMPUTE_DATASOURCE_PERSONA = "compute-datasource"
 
 
-# A DSI connection name is a single path segment — no traversal, no
-# separators, no leading dot. Mirrors the L38 attachment-name guard.
-_DATASOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
+# A DSI connection name is a single path segment - no traversal, no
+# separators, no leading dot (shared with the chat tool ``datasource_query``).
+from .fabric.datasources.connection_env import (  # noqa: E402
+    DATASOURCE_NAME_RE as _DATASOURCE_NAME_RE,
+    resolve_connection_env as _resolve_connection_env,
+)
 
 
 def _resolve_datasource_env(corvin_home, tenant_id: str,
                             names: list[str]) -> dict[str, str]:
-    """Resolve DSI v1 connection manifests → connection env for the tool.
+    """Resolve DSI v1 connection manifests -> connection env for the tool.
 
-    Reads ``<corvin_home>/tenants/<tid>/datasource_connections/<name>.json``
-    and maps the connection to standard driver env vars. Vault-declared
-    ``secrets`` (env-var NAMES) are resolved through the forge vault.
+    Reads ``<corvin_home>/tenants/<tid>/datasource_connections/<name>.json`` and
+    maps the connection to standard driver env vars. Vault-declared ``secrets``
+    (env-var NAMES) are resolved through the forge secret vault - the store the
+    Databases form writes (``POST /data-sources/_secrets/{NAME}``).
 
     Fail-CLOSED: a *declared* datasource that cannot be resolved (bad name,
-    missing/malformed file) raises — the run must not silently execute under
-    the network-permissive datasource persona with no binding. Names are
-    validated against a strict charset and the resolved path is asserted to
-    stay inside the connections dir (path-traversal / symlink defence).
+    missing/malformed file, missing secret) raises - the run must not silently
+    execute under the network-permissive datasource persona with no binding.
+    The implementation is shared with the chat tool ``datasource_query``
+    (``fabric/datasources/connection_env.py``).
     """
-    import json as _json
-    env: dict[str, str] = {}
-    conn_dir = (Path(corvin_home) / "tenants" / tenant_id
-                / "datasource_connections").resolve()
-    # Optional vault for secret-sourced credentials.
-    try:
-        from forge import secret_vault as _vault  # type: ignore
-    except Exception:  # noqa: BLE001
-        _vault = None  # type: ignore
-    for name in names:
-        if not isinstance(name, str) or not _DATASOURCE_NAME_RE.match(name) \
-                or ".." in name or "/" in name or "\\" in name:
-            raise ValueError(f"invalid datasource name: {name!r}")
-        path = (conn_dir / f"{name}.json").resolve()
-        if conn_dir not in path.parents:
-            raise ValueError(f"datasource path escaped connections dir: {name!r}")
-        try:
-            raw = _json.loads(path.read_text())
-        except Exception as exc:  # noqa: BLE001
-            raise ValueError(
-                f"declared datasource {name!r} not resolvable: {exc}") from exc
-        adapter = str(raw.get("adapter", "")).lower()
-        cfg = raw.get("config") or {}
-        if adapter in ("postgresql", "postgres"):
-            if cfg.get("host"):     env["PGHOST"] = str(cfg["host"])
-            if cfg.get("port"):     env["PGPORT"] = str(cfg["port"])
-            db = cfg.get("dbname") or cfg.get("database")
-            if db:                  env["PGDATABASE"] = str(db)
-            if cfg.get("user"):     env["PGUSER"] = str(cfg["user"])
-        elif adapter in ("mysql", "mariadb"):
-            if cfg.get("host"):     env["MYSQL_HOST"] = str(cfg["host"])
-            if cfg.get("port"):     env["MYSQL_TCP_PORT"] = str(cfg["port"])
-            db = cfg.get("dbname") or cfg.get("database")
-            if db:                  env["MYSQL_DATABASE"] = str(db)
-            if cfg.get("user"):     env["MYSQL_USER"] = str(cfg["user"])
-        # Vault-sourced secrets (passwords / tokens): NAMES only on disk.
-        secrets = [s for s in (raw.get("secrets") or []) if isinstance(s, str)]
-        if secrets:
-            if _vault is None:
-                raise ValueError(
-                    f"datasource {name!r} declares secrets {secrets} but the "
-                    f"forge vault is unavailable")
-            resolved, missing = _vault.resolve_secrets(secrets)
-            if missing:
-                raise ValueError(
-                    f"datasource {name!r} secret(s) missing from vault: {missing}")
-            env.update({k: v for k, v in resolved.items() if isinstance(v, str)})
-    return env
+    return _resolve_connection_env(corvin_home, tenant_id, names)
 
 
 def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None = None):

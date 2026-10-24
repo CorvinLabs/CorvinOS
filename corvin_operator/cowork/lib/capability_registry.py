@@ -214,14 +214,12 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         id="rag.query",
         domain="Knowledge Base (RAG)",
-        status="planned",
-        not_yet_note=(
-            "Querying the tenant's ingested-document knowledge base from "
-            "chat as a distinct tool call (retrieval today happens only as "
-            "an implicit context-injection step, not as something you can "
-            "invoke directly and inspect). Tracked: ADR-0190 M7."
-        ),
-        service_fn="operator.bridges.shared.rag_query_engine.RAGQueryEngine",
+        status="wired",
+        one_liner="Search the knowledge providers registered on the Knowledge page and get the best matching passages with scores, to ground an answer in your own documents.",
+        persona_flag="forge_enabled",
+        mcp_server="forge.mcp_server",
+        tool_names=("mcp__forge__rag_query",),
+        service_fn="operator.bridges.shared.rag_service.run_query",
     ),
     Capability(
         id="a2a.peers",
@@ -281,10 +279,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         id="data.sources",
         domain="Data Sources",
         status="wired",
-        one_liner="Register a typed database/warehouse connection (Postgres, MySQL, Snowflake, BigQuery, S3, ...); adapter access follows your license tier (Free: local_file only).",
+        one_liner="Register a typed database/warehouse connection (Postgres, MySQL, Snowflake, BigQuery, S3, ...), then run a read-only SELECT against it to answer questions from your own data; adapter access follows your license tier (Free: local_file only).",
         persona_flag="forge_enabled",
         mcp_server="forge.mcp_server",
-        tool_names=("mcp__forge__datasource_connect",),
+        tool_names=("mcp__forge__datasource_connect", "mcp__forge__datasource_query"),
         gate_fn="operator.forge.forge.mcp_server._lic_get_limit",
         service_fn="core.compute.corvin_compute.fabric.datasources.registry.DataSourceRegistry",
         test_file="corvin_operator/forge/tests/test_datasource_connect.py",

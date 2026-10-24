@@ -1,4 +1,8 @@
-"""RAG Hub API Routes — Provider Marketplace.
+"""RAG Hub API Routes - the tenant-local provider catalogue.
+
+The Hub is per tenant (``<tenant>/global/rag_hub/``): "publish" stores a provider
+card and its manifest in this tenant's catalogue, "import" registers a catalogue
+entry as a provider. Nothing is shared with other installs.
 
 Endpoints:
 - GET  /hub/providers — list/search providers
@@ -188,6 +192,9 @@ async def publish_provider(
         )
         return {"error": "Hub not available"}
 
+    if "provider_id" in req and "id" not in req:
+        return _publish_registered_provider(req, tenant_id, _session, hub)
+
     try:
         from shared.rag_hub import RAGHubProvider  # noqa: PLC0415
 
@@ -227,6 +234,54 @@ async def publish_provider(
             reason="publish_failed",
         )
         return {"error": "publish_failed"}
+
+
+def _publish_registered_provider(req: dict[str, Any], tenant_id: str, session: Any, hub: Any) -> dict[str, Any]:
+    """Publish a REGISTERED provider: the card is built from its manifest.
+
+    Body: ``{"provider_id": "<registered id>"}``. The card (name, description,
+    classification, zone, capabilities) is read from the manifest on disk, never
+    from the client, and the manifest is stored with the card so it can be
+    imported again. Credentials are never in a manifest (only the env var NAME).
+    """
+    import yaml  # noqa: PLC0415
+    from shared import rag_registry_store as store  # noqa: PLC0415
+    from shared.rag_hub import RAGHubProvider  # noqa: PLC0415
+
+    from ._rag_license_gate import sanitize_provider_id  # noqa: PLC0415
+
+    pid = sanitize_provider_id(str(req.get("provider_id", "")))
+    registry_dir = _forge_paths.tenant_global_dir(tenant_id) / "rag"
+    path = store.find_manifest(registry_dir, pid)
+    if path is None:
+        console_audit.action_failed(
+            tenant_id=tenant_id, sid_fingerprint=session.sid_fingerprint,
+            action="hub.publish", target_kind="rag_provider", target_id=pid,
+            reason="provider_not_found",
+        )
+        raise HTTPException(status_code=404, detail={"error": "provider_not_found"})
+    if hub.get(pid) is not None:
+        raise HTTPException(status_code=409, detail={"error": "already_published"})
+    manifest_yaml = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(manifest_yaml) or {}
+    meta, spec = data.get("metadata") or {}, data.get("spec") or {}
+    card = RAGHubProvider(
+        id=pid,
+        name=str(meta.get("name") or pid),
+        description=str(meta.get("description") or ""),
+        author=str(meta.get("author") or "local"),
+        version=str(meta.get("version") or "1.0"),
+        data_classification=str(spec.get("dataClassification") or "PUBLIC").upper(),
+        compliance_zone=str(spec.get("complianceZone") or "EU"),
+        capabilities=[str(c) for c in (spec.get("capabilities") or [])],
+        manifest_hash=hub.store_manifest(manifest_yaml),
+    )
+    published = hub.publish(card)
+    console_audit.action_performed(
+        tenant_id=tenant_id, sid_fingerprint=session.sid_fingerprint,
+        action="hub.publish", target_kind="rag_provider", target_id=published.id,
+    )
+    return {"status": "published", "provider": published.to_dict()}
 
 
 # ── Analytics ──────────────────────────────────────────────
@@ -421,6 +476,30 @@ async def import_provider(
     # LAN hosts). Same guard, same fail-closed behaviour, applied BEFORE the
     # manifest is written.
     manifest_yaml = req.get("manifest_yaml", "")
+    _hub_card = req.get("hub_provider_id")
+    if _hub_card and not manifest_yaml:
+        # Import a catalogue entry: the manifest comes from THIS tenant's hub
+        # (hash-verified), the target id defaults to the card's id.
+        _hub = _get_hub(tenant_id)
+        manifest_yaml = (_hub.load_manifest(str(_hub_card)) if _hub else None) or ""
+        if not manifest_yaml:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "manifest_unavailable",
+                        "msg": "This catalogue entry has no stored manifest."},
+            )
+        if provider_id is None:
+            provider_id = sanitize_provider_id(str(_hub_card))
+    from shared import rag_registry_store as _rag_store  # noqa: PLC0415
+
+    if provider_id is not None and _rag_store.find_manifest(
+        _forge_paths.tenant_global_dir(tenant_id) / "rag", provider_id
+    ) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "provider_exists",
+                    "msg": f"A provider with id '{provider_id}' is already registered - choose another id."},
+        )
     try:
         _assert_manifest_endpoints_allowed(manifest_yaml)
     except _UnsafeUrl as exc:
@@ -457,10 +536,13 @@ async def import_provider(
             )
             return {"status": "failed", "error": "import_failed"}
 
-        # Track download in Hub
+        # Track download in Hub (only for entries that exist in this catalogue)
         hub = _get_hub(tenant_id)
-        if hub:
-            hub.increment_download_count(imported_id)
+        if hub and _hub_card:
+            hub.increment_download_count(str(_hub_card))
+        from .rag import invalidate_orchestrator  # noqa: PLC0415
+
+        invalidate_orchestrator(tenant_id)
 
         console_audit.action_performed(
             tenant_id=tenant_id,
@@ -502,7 +584,16 @@ async def export_provider(
     try:
         from shared.rag_import_export import RAGProviderImportExport  # noqa: PLC0415
 
-        manifest_file = _forge_paths.tenant_global_dir(tenant_id) / "rag" / f"{req['provider_id']}.yaml"
+        from shared import rag_registry_store as _rag_store  # noqa: PLC0415
+
+        from ._rag_license_gate import sanitize_provider_id  # noqa: PLC0415
+
+        _pid = sanitize_provider_id(str(req["provider_id"]))
+        manifest_file = _rag_store.find_manifest(
+            _forge_paths.tenant_global_dir(tenant_id) / "rag", _pid
+        )
+        if manifest_file is None:
+            raise FileNotFoundError(_pid)
 
         manifest_yaml = RAGProviderImportExport.export_manifest(manifest_file)
         manifest_hash = RAGProviderImportExport.compute_manifest_hash(manifest_yaml)
@@ -518,7 +609,6 @@ async def export_provider(
             "status": "exported",
             "manifest_yaml": manifest_yaml,
             "manifest_hash": manifest_hash,
-            "share_link": f"https://hub.corvin.local/manifest/{manifest_hash}",
         }
     except Exception as e:
         logger.error("Failed to export provider: %s", e)

@@ -2220,7 +2220,9 @@ def awpkg_export_preview(
         for pid in ss.get("rag_providers_queried", []):
             if pid not in seen_rag:
                 seen_rag.add(pid)
-                mf = rag_dir / f"{pid}.yaml"
+                mf = rag_dir / "manifests" / f"{pid}.yaml"
+                if not mf.exists():
+                    mf = rag_dir / f"{pid}.yaml"  # legacy flat layout
                 if mf.exists():
                     try:
                         import yaml as _y

@@ -192,7 +192,12 @@ class RAGQueryEngine:
             .get("circuit_breaker", {})
             .get("timeout_seconds", 30),
         )
-        self.http_client = httpx.AsyncClient() if httpx else None
+        # No long-lived AsyncClient: an httpx client binds its connection pool
+        # to the event loop that first used it, and this engine is driven from
+        # more than one loop (health on the server loop, queries via worker
+        # threads) -> "Event loop is closed" on reuse. A client per request
+        # costs one connect to a provider we already talk to once per query.
+        self.http_client = True if httpx else None
 
     async def execute(self, query: RAGQuery) -> RAGProviderResult:
         """Execute query against provider."""
@@ -221,20 +226,21 @@ class RAGQueryEngine:
             if not self.http_client:
                 raise RuntimeError("httpx not installed")
 
-            if method == "GET":
-                response = await self.http_client.get(
-                    endpoint,
-                    params=provider_query,
-                    headers=headers,
-                    timeout=timeout,
-                )
-            else:
-                response = await self.http_client.post(
-                    endpoint,
-                    json=provider_query,
-                    headers=headers,
-                    timeout=timeout,
-                )
+            async with httpx.AsyncClient() as client:
+                if method == "GET":
+                    response = await client.get(
+                        endpoint,
+                        params=provider_query,
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                else:
+                    response = await client.post(
+                        endpoint,
+                        json=provider_query,
+                        headers=headers,
+                        timeout=timeout,
+                    )
 
             response.raise_for_status()
 
@@ -326,7 +332,7 @@ class RAGQueryEngine:
         """Build HTTP headers with auth."""
         headers = {"Accept": "application/json"}
 
-        auth = self.manifest["spec"]["retrieval"]["auth"]
+        auth = self.manifest["spec"]["retrieval"].get("auth") or {}
         auth_type = auth.get("type", "none")
         token_env_var = auth.get("token_env_var")
 
@@ -346,6 +352,5 @@ class RAGQueryEngine:
         return headers
 
     async def close(self) -> None:
-        """Close HTTP client."""
-        if self.http_client:
-            await self.http_client.aclose()
+        """Nothing to close: clients are per request (see __init__)."""
+        return None

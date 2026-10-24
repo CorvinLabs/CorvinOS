@@ -58,6 +58,10 @@ class RAGCache:
             {
                 "query": query.query,
                 "filters": query.metadata_filters,
+                # A limit-1 answer must not be served to a limit-5 question,
+                # nor one provider's answer to a query that targets another.
+                "limit": query.limit,
+                "providers": sorted(query.preferred_providers or []),
             },
             sort_keys=True,
         )
@@ -101,6 +105,15 @@ class RAGCache:
 # ── Orchestrator ─────────────────────────────────────────────
 
 @dataclass
+class QueryOutcome:
+    """Result of one orchestrated query plus who answered."""
+    items: list[RAGResultItem]
+    provider_ids: list[str] = field(default_factory=list)  # providers that answered OK
+    cache_hit: bool = False
+    queried: list[str] = field(default_factory=list)  # providers that were asked
+
+
+@dataclass
 class RankedResult:
     """Result with relevance score for ranking."""
     item: RAGResultItem
@@ -130,64 +143,72 @@ class RAGOrchestrator:
         self.engines: dict[str, RAGQueryEngine] = {}
 
     async def initialize(self) -> None:
-        """Load providers from registry and initialize engines."""
-        registry_file = self.registry_dir / "registry.json"
-        if not registry_file.exists():
-            logger.warning(f"Registry not found: {registry_file}")
-            return
+        """Load providers from the registry layout and initialize engines.
+
+        The provider set is :func:`rag_registry_store.provider_ids` — every
+        manifest under ``manifests/`` (plus legacy flat files, migrated first),
+        not only the ids listed in ``registry.json``.
+        """
+        import yaml
+
+        from . import rag_registry_store as store
 
         try:
-            with open(registry_file) as f:
-                registry_data = json.load(f)
+            store.migrate_legacy(self.registry_dir)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Legacy RAG layout migration failed: {e}")
 
-            for provider_entry in registry_data.get("providers", []):
-                provider_id = provider_entry.get("id")
-                manifest_file = (
-                    self.registry_dir / "manifests" / f"{provider_id}.yaml"
+        for provider_id in store.provider_ids(self.registry_dir):
+            try:
+                manifest_file = store.find_manifest(self.registry_dir, provider_id)
+                if manifest_file is None:
+                    continue
+                with open(manifest_file) as f:
+                    manifest = yaml.safe_load(f)
+                if not isinstance(manifest, dict):
+                    continue
+                self.engines[provider_id] = RAGQueryEngine(
+                    provider_id, manifest, self.auth_tokens
                 )
-
-                if manifest_file.exists():
-                    # Parse YAML
-                    import yaml
-                    with open(manifest_file) as f:
-                        manifest = yaml.safe_load(f)
-
-                    engine = RAGQueryEngine(provider_id, manifest, self.auth_tokens)
-                    self.engines[provider_id] = engine
-                    logger.info(f"Initialized engine for provider: {provider_id}")
-
-        except Exception as e:
-            logger.error(f"Failed to initialize engines: {e}")
+                logger.info(f"Initialized engine for provider: {provider_id}")
+            except Exception as e:  # noqa: BLE001 - one bad manifest must not hide the rest
+                logger.error(f"Failed to initialize provider {provider_id}: {e}")
 
     async def query(
         self,
         user_query: RAGQuery,
     ) -> list[RAGResultItem]:
         """Execute query across configured providers."""
-        # Check cache first
+        return (await self.query_with_meta(user_query)).items
+
+    async def query_with_meta(self, user_query: RAGQuery) -> "QueryOutcome":
+        """Like :meth:`query` but also reports which providers answered."""
         cached = self.cache.get(user_query)
         if cached:
-            return cached
+            return QueryOutcome(items=cached, provider_ids=[], cache_hit=True)
 
-        # Determine which providers to query
         provider_ids = self._select_providers(user_query)
         if not provider_ids:
             logger.warning("No providers available for query")
-            return []
+            return QueryOutcome(items=[], provider_ids=[], cache_hit=False)
 
-        # Execute queries in parallel
         results = await self._execute_parallel(user_query, provider_ids)
+        answered = [r.provider_id for r in results if r.status == QueryStatus.SUCCESS]
 
-        # Rank and deduplicate
         ranked = self._rank_results(results)
-
-        # Limit to requested count
         final_items = [r.item for r in ranked[: user_query.limit]]
 
-        # Cache results
-        self.cache.set(user_query, final_items, self.cache_ttl_seconds)
+        # Never cache a failure: an empty list from providers that errored (or
+        # an empty answer at all) would be served for the whole TTL.
+        if final_items and answered:
+            self.cache.set(user_query, final_items, self.cache_ttl_seconds)
 
-        return final_items
+        return QueryOutcome(
+            items=final_items,
+            provider_ids=answered,
+            cache_hit=False,
+            queried=list(provider_ids),
+        )
 
     def _select_providers(self, query: RAGQuery) -> list[str]:
         """Select which providers to query."""
@@ -269,6 +290,19 @@ class RAGOrchestrator:
                 "error": result.error_message,
             }
         return results
+
+    async def health_check_one(self, provider_id: str) -> Optional[dict]:
+        """Probe ONE provider (the per-card poll must not hit every provider)."""
+        engine = self.engines.get(provider_id)
+        if engine is None:
+            return None
+        result = await engine.execute(RAGQuery(query="test", limit=1))
+        return {
+            "status": result.status.value,
+            "circuit_state": engine.circuit_breaker.state.value,
+            "latency_ms": result.latency_ms,
+            "error": result.error_message,
+        }
 
     async def close(self) -> None:
         """Close all engine connections."""

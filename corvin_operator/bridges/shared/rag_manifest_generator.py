@@ -32,7 +32,7 @@ class APIConfigInput:
     endpoint: str
     method: Literal["GET", "POST"]
     timeout_ms: int
-    auth_type: Literal["bearer-token", "api-key", "basic", "oauth2"]
+    auth_type: Literal["none", "bearer-token", "api-key", "basic", "oauth2"]
     auth_token_env_var: str
     query_format_sample: str  # Template with {query} and {limit}
 

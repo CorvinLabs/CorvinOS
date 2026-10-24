@@ -75,7 +75,9 @@ async function storeVaultSecret(
   csrf: string,
 ): Promise<void> {
   const ciphertext = await encryptSecret(pubkey, value.trim());
-  const resp = await fetch(`/v1/console/byok/secrets/${keyName}`, {
+  // The credential vault the compute runner reads (NOT the provider-key store
+  // behind /byok, whose key-name rule rejects every database credential name).
+  const resp = await fetch(`/v1/console/data-sources/_secrets/${encodeURIComponent(keyName)}`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
@@ -83,7 +85,8 @@ async function storeVaultSecret(
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    throw new Error((err as { detail?: string }).detail ?? `Could not store ${keyName} in vault`);
+    const detail = (err as { detail?: unknown }).detail;
+    throw new Error(typeof detail === "string" ? detail : `Could not store ${keyName} in the vault`);
   }
 }
 
@@ -485,6 +488,16 @@ function ConnectForm({ db, csrf, onBack, onSuccess }: ConnectFormProps) {
       );
   }, []);
 
+  // Credential names already in the vault (names only): a shared name such as
+  // PGUSER need not be typed again for a second connection.
+  const [storedSecrets, setStoredSecrets] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    fetch("/v1/console/data-sources/_secrets", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { names: [] }))
+      .then((d: { names?: string[] }) => setStoredSecrets(d.names ?? []))
+      .catch(() => setStoredSecrets([]));
+  }, []);
+
   const initConfig = () =>
     Object.fromEntries(db.configFields.map((f) => [f.key, f.defaultValue ?? ""]));
 
@@ -511,6 +524,10 @@ function ConnectForm({ db, csrf, onBack, onSuccess }: ConnectFormProps) {
       const secretNames: string[] = [];
       for (const cred of db.credentials) {
         const val = (creds[cred.envVar] ?? "").trim();
+        if (!val && storedSecrets.includes(cred.envVar)) {
+          secretNames.push(cred.envVar); // keep the credential already in the vault
+          continue;
+        }
         if (!val && !cred.optional) {
           setError(`${cred.label} is required.`);
           setBusy(false);
@@ -663,10 +680,10 @@ function ConnectForm({ db, csrf, onBack, onSuccess }: ConnectFormProps) {
                   <Input
                     data-testid={`cred-${cred.envVar}`}
                     type={cred.isPassword && !showPw[cred.envVar] ? "password" : "text"}
-                    placeholder={cred.placeholder}
                     value={creds[cred.envVar] ?? ""}
                     onChange={(e) => setCreds((p) => ({ ...p, [cred.envVar]: e.target.value }))}
-                    required={!cred.optional}
+                    required={!cred.optional && !storedSecrets.includes(cred.envVar)}
+                    placeholder={storedSecrets.includes(cred.envVar) ? "stored - leave empty to keep" : cred.placeholder}
                     className="pr-8"
                   />
                   {cred.isPassword && (
@@ -1008,11 +1025,13 @@ function AddHttpBridgeDialog({
   const [authType, setAuthType] = React.useState<"none" | "bearer" | "api_key">("none");
   const [authEnvVar, setAuthEnvVar] = React.useState("");
   const [description, setDescription] = React.useState("");
+  const [networkEgress, setNetworkEgress] = React.useState<"none" | "restricted" | "full">("restricted");
   const [error, setError] = React.useState<string | null>(null);
 
   function resetForm() {
     setAdapterId(""); setDisplayName(""); setBaseUrl("");
     setAuthType("none"); setAuthEnvVar(""); setDescription(""); setError(null);
+    setNetworkEgress("restricted");
   }
 
   const registerMut = useMutation({
@@ -1024,6 +1043,9 @@ function AddHttpBridgeDialog({
           base_url: baseUrl,
           auth_type: authType,
           auth_env: authType !== "none" ? authEnvVar : undefined,
+          // Without this the server defaults to "none" and every ping answers
+          // "egress_not_declared".
+          network_egress: networkEgress,
           description: description || undefined,
         },
         csrf,
@@ -1070,10 +1092,23 @@ function AddHttpBridgeDialog({
             </select>
           </div>
 
+          <div>
+            <label className="text-xs font-medium mb-1 block">Network access</label>
+            <select data-testid="adapter-egress-select" className="w-full rounded-md border bg-background px-3 py-2 text-sm" value={networkEgress} onChange={(e) => setNetworkEgress(e.target.value as "none" | "restricted" | "full")}>
+              <option value="restricted">Restricted (ping allowed, public hosts only)</option>
+              <option value="full">Full</option>
+              <option value="none">None (never contacted)</option>
+            </select>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Loopback, private-network and cloud-metadata addresses are always refused.
+            </p>
+          </div>
+
           {authType !== "none" && (
             <div>
               <label className="text-xs font-medium mb-1 block">Auth Env Var</label>
-              <Input data-testid="adapter-auth-env-var-input" placeholder="e.g. MY_BRIDGE_KEY" value={authEnvVar} onChange={(e) => setAuthEnvVar(e.target.value)} />
+              <Input data-testid="adapter-auth-env-var-input" placeholder="e.g. CORVIN_DS_MY_BRIDGE_KEY" value={authEnvVar} onChange={(e) => setAuthEnvVar(e.target.value)} />
+              <p className="text-xs text-muted-foreground mt-0.5">Must start with CORVIN_DS_ and be set in the console&apos;s environment.</p>
             </div>
           )}
 
@@ -1099,13 +1134,35 @@ function AddHttpBridgeDialog({
   );
 }
 
+/** Plain-language text for the ping error codes the server returns. */
+function pingErrorText(code: string | undefined, httpStatus?: number): string {
+  switch (code) {
+    case "egress_not_declared":
+      return "Network access is set to None for this bridge, so it is never contacted. Remove it and add it again with Restricted or Full.";
+    case "egress_blocked":
+      return "Blocked: loopback, private-network and cloud-metadata addresses cannot be reached from a bridge.";
+    case "unreachable":
+      return httpStatus ? `The server answered with HTTP ${httpStatus}.` : "The server did not answer.";
+    default:
+      return "The ping did not complete.";
+  }
+}
+
 function HttpAdapterCard({ adapter, csrf }: { adapter: HttpAdapter; csrf: string }) {
   const qc = useQueryClient();
   const [pingResult, setPingResult] = React.useState<{ ok: boolean; detail?: string } | null>(null);
 
   const pingMut = useMutation({
     mutationFn: () => pingHttpAdapter(adapter.adapter_id, csrf),
-    onSuccess: (data) => setPingResult(data),
+    onSuccess: (data) => {
+      const d = data as { ok: boolean; error?: string; http_status?: number; name?: string; version?: string };
+      setPingResult({
+        ok: d.ok,
+        detail: d.ok
+          ? [d.name, d.version].filter(Boolean).join(" ") || undefined
+          : pingErrorText(d.error, d.http_status),
+      });
+    },
     onError: (err: Error) => setPingResult({ ok: false, detail: err.message }),
   });
   const removeMut = useMutation({
@@ -1175,7 +1232,8 @@ function HttpAdaptersSection({ csrf }: { csrf: string }) {
             HTTP Data Bridges
           </h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Connect any HTTP server implementing /ping, /schema, /query to CorvinOS as a data source.
+            Register an HTTP server that implements /ping, /schema and /query. Bridges are recorded and
+            can be pinged; no compute run or chat tool reads them yet, so they cannot be queried in this build.
           </p>
         </div>
         <Button data-testid="add-http-adapter-btn" onClick={() => setShowAddDialog(true)}>

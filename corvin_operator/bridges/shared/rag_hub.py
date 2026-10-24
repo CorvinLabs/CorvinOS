@@ -1,6 +1,8 @@
 """RAG Hub — Provider Marketplace Backend.
 
-Allows operators to publish provider metadata (no credentials) so others can discover and import.
+Tenant-local catalogue: an operator publishes a provider (metadata + its manifest,
+never credentials) and can later import it again, under the same or another id.
+Nothing leaves the tenant - there is no community or remote hub.
 GDPR compliance: metadata-only storage, no sensitive information, all actions audited via L16.
 """
 from __future__ import annotations
@@ -33,7 +35,7 @@ class RAGHubProvider:
 
     capabilities: list[str]      # keyword-search, semantic-search, etc.
 
-    # Manifest metadata (no actual manifest stored)
+    # Manifest metadata (the manifest itself lives in manifests/<hash>.yaml)
     manifest_hash: str           # SHA256 of original manifest (for dedup)
     manifest_download_url: Optional[str] = None  # User-provided URL or None
 
@@ -109,6 +111,49 @@ class RAGHub:
         self.reviews: dict[str, list[RAGHubReview]] = {}
 
         self._load()
+        self.compute_trending()
+
+    # -- Manifest storage (tenant-local catalogue) ----------------------
+
+    @property
+    def manifests_dir(self) -> Path:
+        return self.hub_dir / "manifests"
+
+    def store_manifest(self, manifest_yaml: str) -> str:
+        """Keep the published manifest so the card can be imported later.
+
+        Returns its sha256. Stored under ``manifests/<sha256>.yaml`` (content
+        addressed: publishing the same manifest twice stores one file).
+        """
+        import hashlib
+        import os
+        import tempfile
+
+        digest = hashlib.sha256(manifest_yaml.encode()).hexdigest()
+        self.manifests_dir.mkdir(parents=True, exist_ok=True)
+        target = self.manifests_dir / f"{digest}.yaml"
+        if not target.exists():
+            fd, tmp = tempfile.mkstemp(dir=str(self.manifests_dir), suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(manifest_yaml)
+            os.replace(tmp, target)
+        return digest
+
+    def load_manifest(self, provider_id: str) -> Optional[str]:
+        """The manifest published with *provider_id*, verified against its hash."""
+        import hashlib
+        import re
+
+        provider = self.providers.get(provider_id)
+        if provider is None or not re.fullmatch(r"[0-9a-f]{64}", provider.manifest_hash or ""):
+            return None
+        path = self.manifests_dir / f"{provider.manifest_hash}.yaml"
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8")
+        if hashlib.sha256(text.encode()).hexdigest() != provider.manifest_hash:
+            return None  # tampered or truncated: refuse, never import it
+        return text
 
     def _load(self):
         """Load providers and reviews from disk."""
@@ -190,6 +235,7 @@ class RAGHub:
 
     def list(self, limit: int = 100, offset: int = 0) -> list[RAGHubProvider]:
         """List all providers (paginated)."""
+        self.compute_trending()
         providers = sorted(
             self.providers.values(),
             key=lambda p: (p.trending_score, p.rating, p.download_count),
@@ -288,15 +334,17 @@ class RAGHub:
             rating_factor = provider.rating / 5.0  # 0.0-1.0
             download_factor = min(provider.download_count / 100.0, 1.0)  # 0.0-1.0
 
+            # Derived value: computed in memory on read, never persisted. It used
+            # to append every provider to the jsonl on EVERY GET /hub/trending,
+            # so the file grew with each 30-second UI poll.
             provider.trending_score = (
                 recency_factor * 0.3 +
                 rating_factor * 0.3 +
                 download_factor * 0.4
             )
-            self._save_provider(provider)
 
     def get_trending(self, limit: int = 10) -> list[RAGHubProvider]:
-        """Get trending providers."""
+        """Get trending providers (scores recomputed in memory, nothing written)."""
         self.compute_trending()
         return sorted(
             self.providers.values(),

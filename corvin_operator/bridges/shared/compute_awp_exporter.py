@@ -331,6 +331,14 @@ def _discover_rag_providers(
                     known[pid] = f
                     break
 
+    # Canonical layout: manifests/<id>.yaml (rag_registry_store). The scan above
+    # also sees the directory itself as a "provider" named manifests - drop it.
+    known.pop("manifests", None)
+    mdir = rag_root / "manifests"
+    if mdir.is_dir():
+        for f in sorted(mdir.glob("*.yaml")):
+            known[f.stem] = f
+
     # Gather candidates from inputs + stage_summary
     candidates: set[str] = set()
     for v in stage.inputs.values():

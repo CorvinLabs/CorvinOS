@@ -225,6 +225,55 @@ def resolve_secrets(
     return resolved, missing
 
 
+def set_secret(key: str, value: str, *, vault_path: Path | None = None) -> Path:
+    """Store ``value`` under ``key`` in the vault (create/replace, atomic, mode 0600).
+
+    The writer half of :func:`load_vault`: the vault is what the compute runner and
+    the forge runner read, so a credential saved here is the one a datasource-bound
+    run actually receives. Existing entries are kept; a vault that is group/world
+    readable or malformed is refused (``VaultError``) rather than rewritten.
+    Returns the vault path.
+    """
+    import tempfile
+
+    if not is_valid_key(key):
+        raise SecretRefError(f"secret name {key!r} is not a valid env-var name")
+    if not isinstance(value, str) or not value:
+        raise VaultError("secret value must be a non-empty string")
+    p = vault_path or default_vault_path()
+    current = load_vault(p) if p.exists() else {}
+    current[key] = value
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        p.parent.chmod(0o700)
+    except OSError:
+        pass
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".secrets.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(current, fh, indent=2)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return p
+
+
+def secret_names(*, vault_path: Path | None = None) -> list[str]:
+    """Names (never values) of the secrets in the vault; ``[]`` when there is none."""
+    try:
+        return sorted(load_vault(vault_path))
+    except VaultError:
+        return []
+
+
 # -- redaction -------------------------------------------------------------
 
 # Anything shorter than this we don't redact — too high a false-positive

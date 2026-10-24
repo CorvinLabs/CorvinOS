@@ -398,7 +398,24 @@ async def create_custom_provider(
         _assert_provider_endpoint_allowed(req.endpoint.strip())
     except _UnsafeUrl as exc:
         raise HTTPException(status_code=400, detail=f"endpoint blocked: {exc}")
-    from ._rag_license_gate import enforce_rag_providers_max  # noqa: PLC0415
+    from ._rag_license_gate import (  # noqa: PLC0415
+        enforce_rag_providers_max,
+        sanitize_provider_id,
+    )
+
+    # An uppercase / malformed id used to pass the wizard and fail at import
+    # with a bare "registration failed" and HTTP 200: refuse it up front.
+    sanitize_provider_id(req.provider_id)
+    from shared import rag_registry_store as _rag_store  # noqa: PLC0415
+
+    if _rag_store.find_manifest(
+        _forge_paths.tenant_global_dir(_tid) / "rag", req.provider_id.strip()
+    ) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "provider_exists",
+                    "msg": f"A provider with id '{req.provider_id.strip()}' is already registered."},
+        )
 
     enforce_rag_providers_max(
         _tid,
@@ -517,14 +534,19 @@ async def create_custom_provider(
                 "error": "registration failed",
             }
 
-        logger.info(f"✅ Custom provider created: {imported_id}")
+        logger.info("Custom provider created: %s", imported_id)
+
+        # The orchestrator cache is keyed on the registry signature, but drop it
+        # explicitly so the very next /rag/providers call builds the new engine.
+        from .rag import invalidate_orchestrator  # noqa: PLC0415
+
+        invalidate_orchestrator(tenant_id)
 
         return {
             "status": "created",
             "provider_id": imported_id,
             "manifest_hash": manifest_hash,
-            "file_path": str(registry_dir / f"{imported_id}.yaml"),
-            "next_step": "Verify with: corvin-rag health <provider_id>",
+            "next_step": "Open Knowledge to see the provider's health and run a test query.",
         }
 
     except Exception as e:

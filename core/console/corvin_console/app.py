@@ -228,7 +228,6 @@ from .routes import (
     # ADR-0906 — Production Monitoring Dashboard
     monitoring_routes as monitoring_route,
     # TRACK I — DataHub Creator (6-phase project workspace + learning visualization)
-    datahub_creator_routes as datahub_creator_route,
     # DataHub Phase 3 — Console UI + HTTP Wiring (ADR-0510)
     datahub_api as datahub_route,
     # Corvin-Knowledge Marketplace Plugin API
@@ -326,7 +325,6 @@ router.include_router(stream4_skill_feedback_route.router, tags=["console-stream
 router.include_router(learning_optimizer_stream2_route.router, tags=["console-learning-optimizer"])
 router.include_router(skill_learning_routes_route.router, tags=["console-skill-learning"])
 # TRACK I — DataHub Creator (6-phase project workspace with skill metrics + learning visualization)
-router.include_router(datahub_creator_route.router, tags=["console-datahub-creator"])
 router.include_router(features_phase2_route.router, tags=["console-phase2-features"])
 router.include_router(deprecated_api_metrics_route.router, tags=["console-deprecated-api-metrics"])
 router.include_router(world_map_route.router, tags=["console-world-map"])
