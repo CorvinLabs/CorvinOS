@@ -1037,7 +1037,14 @@ the file back if `on_load()` fails; uninstall removes the record and the
 instance dir, never the source. For a package: validated, audited, then moved
 atomically into `<CORVIN_HOME>/tenants/<tenant>/packages/installed/` (until 2026-10-24
 it went to `Path.home()/.corvin/packages` and ignored `CORVIN_HOME`; uninstall copies
-`metadata.json` to `packages/archive/` first). For an MCP tool: a
+`metadata.json` to `packages/archive/` first). Install and uninstall are audit-FIRST,
+enforced: `console.action_performed` (`action` `package.install` / `package.uninstall`)
+is written with `strict=True` (`corvin_console.audit.AuditWriteFailed` when the chain write
+does not commit) and the route answers 503 without touching `installed/`. Until
+2026-10-24 the best-effort writer swallowed the failure and the package was installed
+or deleted with no record. The routes are no longer behind the default-off
+`package_marketplace_ui` flag (the flag stays registered; nothing reads it here).
+Diagram: `docs/diagrams/marketplace-packages-corvintv-stores.svg`. For an MCP tool: a
 catalogue entry (+ pinned tarball for github).
 
 **What was deleted rather than consolidated** (a mock button wired to a real

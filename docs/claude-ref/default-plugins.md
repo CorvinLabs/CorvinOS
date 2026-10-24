@@ -62,7 +62,9 @@ settings (`tts_engine`, `max_video_length_minutes` in `plugin.yaml`'s `settings_
 plugin registry record and written through `PluginLifecycle.set_settings` — one store, so they survive a restart
 and cannot disagree with the Installed tab. `PUT /video/settings` records `video_producer.settings_changed`
 (new and previous value) before it writes, `PUT /video/styles/default` records
-`video_producer.style_default_changed`; both refuse with 503 when the record cannot be written. The
+`video_producer.style_default_changed` (also when a saved style is made the default); both refuse with 503
+when the record cannot be written, and a value the plugin schema rejects is a 422 with no record. Diagram:
+`docs/diagrams/marketplace-packages-corvintv-stores.svg`. The
 operator can disable or uninstall the plugin at any time; an uninstall sticks (the ledger remembers it was offered).
 
 **The rename (`replaces:` in `default_plugins.yaml`).** The index id changed (`plugin:contributor-media-video_producer`

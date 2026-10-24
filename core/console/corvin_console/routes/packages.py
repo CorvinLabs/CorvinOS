@@ -352,6 +352,27 @@ def _dependents_of(tenant_id: str, package_id: str) -> list[str]:
     return found
 
 
+def _audit_first(rec: Any, action: str, package_id: str) -> None:
+    """Write ``console.action_performed`` and REQUIRE it to commit. Until 2026-10-24 this went
+    through the best-effort writer, which swallowed a failed chain write, so a package was
+    installed or deleted with no record. Now a failed write answers 503 and the caller stops."""
+    try:
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action=action,
+            target_kind="package",
+            target_id=package_id,
+            strict=True,
+        )
+    except console_audit.AuditWriteFailed as exc:
+        log.warning("package %s refused: audit record did not commit (%s)", action, exc)
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The change could not be recorded in the audit log; nothing was changed",
+        ) from exc
+
+
 def _list_installed_packages(tenant_id: str) -> list[PackageListItem]:
     """List all installed packages for a tenant."""
     pkg_dir = _registry_root(tenant_id) / "installed"
@@ -443,15 +464,9 @@ async def upload_package(
             except json.JSONDecodeError:
                 log.warning(f"Corrupted metadata for {package_id}, will overwrite")
 
-        # **AUDIT BEFORE COMMIT:** Log to audit trail BEFORE writing files (GDPR Art. 30)
-        # If audit fails, exception prevents file write via the outer except handler
-        console_audit.action_performed(
-            tenant_id=rec.tenant_id,
-            sid_fingerprint=rec.sid_fingerprint,
-            action="package.install",
-            target_kind="package",
-            target_id=package_id,
-        )
+        # AUDIT BEFORE COMMIT (GDPR Art. 30), enforced: a record that does not commit
+        # refuses the install with 503 and nothing is moved into installed/.
+        _audit_first(rec, "package.install", package_id)
 
         # Commit the package atomically: create backup, move temp → final, clean old backup
         # (TOCTOU-safe: minimal window between atomic move and cleanup)
@@ -615,15 +630,8 @@ async def uninstall_package(
             detail=f"required by installed package(s): {', '.join(dependents)}",
         )
 
-    # AUDIT BEFORE COMMIT: Log to audit trail BEFORE deleting files (GDPR Art. 30)
-    # If audit fails, exception prevents deletion
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="package.uninstall",
-        target_kind="package",
-        target_id=package_id,
-    )
+    # AUDIT BEFORE COMMIT (GDPR Art. 30), enforced: no committed record, no deletion (503).
+    _audit_first(rec, "package.uninstall", package_id)
 
     archived = False
     try:

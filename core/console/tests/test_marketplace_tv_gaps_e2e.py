@@ -134,6 +134,40 @@ class PackagesTabE2E(unittest.TestCase):
             self.assertEqual(len(_events(home, "tenant_b", "console.action_performed")), 0)
 
 
+class PackagesAuditFirstE2E(unittest.TestCase):
+    """package.install / package.uninstall are audit-FIRST, enforced: a chain write that does not
+    commit answers 503 and leaves the registry untouched. Red on main: the best-effort writer
+    swallowed the failure and the package was installed (200) / deleted with no record."""
+
+    def test_no_committed_record_means_no_install_and_no_uninstall(self):
+        from corvin_console import feature_flags as _ff
+        real = _ff.is_enabled
+        fake_home = Path(tempfile.mkdtemp())
+        with mock.patch.dict(os.environ, {"HOME": str(fake_home)}), \
+                mock.patch.object(_ff, "is_enabled", lambda name, *a, **k: True if name == "package_marketplace_ui" else real(name, *a, **k)), \
+                _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            root = home / "tenants" / "_default" / "packages" / "installed"
+            self.assertEqual(_upload(client, csrf, _zip("kept-pkg")).status_code, 200)
+
+            chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+            saved = chain.with_name("audit.jsonl.saved")
+            chain.rename(saved)
+            chain.mkdir()  # the chain path is now unwritable: no record can commit
+            try:
+                r = _upload(client, csrf, _zip("unrecorded-pkg"))
+                self.assertEqual(r.status_code, 503, r.text)
+                self.assertFalse((root / "unrecorded-pkg").exists(), "installed without a record")
+                d = client.delete(f"{P}/kept-pkg", headers=H(csrf))
+                self.assertEqual(d.status_code, 503, d.text)
+                self.assertTrue((root / "kept-pkg" / "metadata.json").is_file(), "deleted without a record")
+            finally:
+                chain.rmdir()
+                saved.rename(chain)
+            # with the chain back, the same uninstall goes through and is recorded
+            self.assertEqual(client.delete(f"{P}/kept-pkg", headers=H(csrf)).status_code, 200)
+            self.assertEqual(_chain_text(home).count('"package.uninstall"'), 1)
+
+
 class CorvinTvSettingsE2E(unittest.TestCase):
     def test_settings_persist_in_the_plugin_record_and_are_audited(self):
         with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
