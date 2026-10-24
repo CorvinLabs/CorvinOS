@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import sys
 import tempfile
 import time
@@ -32,7 +33,7 @@ from pydantic import BaseModel, Field
 from .. import auth as session_auth
 from .. import audit as console_audit
 from .. import _bootstrap
-from ..deps import require_csrf, require_session
+from ..deps import require_csrf, require_session, verify_reauth
 
 _forge_paths = _bootstrap.forge_paths
 
@@ -79,6 +80,10 @@ except ImportError:
 
 
 router = APIRouter(prefix="/license")
+
+# One Apply Key at a time: the on-disk swap, the in-process reload and a possible
+# restore of the previous key must not interleave with another apply.
+_APPLY_KEY_LOCK = threading.Lock()
 
 _MAX_LICENSE_FILE_SIZE = 10 * 1024  # 10 KB for JWT
 
@@ -270,7 +275,11 @@ async def get_license_status(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Owner access required",
         )
-    _check_license_plugin()
+    # No _check_license_plugin() here: the Enterprise corvin_license plugin is
+    # optional (removed from the repo in 853ee7c54) and _compute_license_status()
+    # already answers from the corvin_operator/license key without it. The guard
+    # made GET /license/status answer 503 on every install without the plugin
+    # (the Dashboard's "licence unavailable" card, F-12).
     return _compute_license_status()
 
 
@@ -694,6 +703,9 @@ async def get_license_info(
 
 class LicenseKeyRequest(BaseModel):
     key: str = Field(..., min_length=10, max_length=8192)
+    # Possession proof (the session fingerprint from /auth/whoami). REQUIRED: replacing the
+    # licence key is a credential change, so an empty token is refused (verify_reauth).
+    re_auth_token: str | None = Field(default=None, max_length=128)
 
     model_config = {"extra": "forbid"}
 
@@ -735,6 +747,23 @@ async def apply_license_key(
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Owner access required",
+        )
+
+    if not verify_reauth(rec, req.re_auth_token, require_token=True):
+        try:
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="license.key_apply",
+                target_kind="license",
+                target_id="pending",
+                reason="reauth-failed",
+            )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            detail="re-auth failed",
         )
 
     token = req.key.strip()
@@ -824,6 +853,74 @@ async def apply_license_key(
     except Exception:
         pass  # unexpected check failure — let load_license_from_env() handle it
 
+    # Pre-check installation binding BEFORE anything is written: a key that is valid
+    # but bound to a different installation used to be written, rejected by the
+    # reload and then unlinked -- taking the previously valid key with it (the
+    # os.replace had already overwritten it). Reject it here, the disk untouched.
+    try:
+        if not _lv._check_instance_id_bound(claims):
+            try:
+                console_audit.action_failed(
+                    tenant_id=rec.tenant_id,
+                    sid_fingerprint=rec.sid_fingerprint,
+                    action="license.key_apply",
+                    target_kind="license",
+                    target_id=(str(claims.get("jti", ""))[:8] or "unknown"),
+                    reason="not_valid_for_installation",
+                )
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="key not valid for this installation",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # unexpected check failure -- the post-reload check below still guards
+
+    return _swap_in_license_key(token, claims, rec, _lv)
+
+
+def _restore_previous_key(key_path: Path, previous: bytes | None) -> None:
+    """Put back exactly what was on disk before an apply (atomic; mode 0600), or
+    remove the file when there was none."""
+    if previous is None:
+        try:
+            key_path.unlink()
+        except OSError:
+            pass
+        return
+    fd, tmp = tempfile.mkstemp(dir=key_path.parent, prefix=".license.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(previous)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, key_path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _swap_in_license_key(token: str, claims: dict, rec: "session_auth.SessionRecord", _lv: Any) -> "LicenseKeyResponse":
+    """Validate-then-swap: write the new key, reload, and on ANY failure restore the
+    previous key byte for byte (and reload it) so a rejected paste never costs the
+    operator a valid licence. Serialised by ``_APPLY_KEY_LOCK``."""
+    with _APPLY_KEY_LOCK:
+        return _swap_in_license_key_locked(token, claims, rec, _lv)
+
+
+def _swap_in_license_key_locked(token: str, claims: dict, rec: "session_auth.SessionRecord", _lv: Any) -> "LicenseKeyResponse":
+    corvin_home = _forge_paths.corvin_home()
+    key_path = corvin_home / "global" / "license.key"
+    previous: bytes | None = None
+    try:
+        previous = key_path.read_bytes() if key_path.is_file() else None
+    except OSError:
+        previous = None
     # Write to corvin_home/global/license.key — validator._find_token() and
     # _find_token_disk_only() read from this exact path.
     try:
@@ -833,8 +930,6 @@ async def apply_license_key(
         # with no CORVIN_HOME env var resolves to <repo>/.corvin here too,
         # rather than diverging to ~/.corvin and silently writing the key
         # where reload_from_disk() will never look for it.
-        corvin_home = _forge_paths.corvin_home()
-        key_path = corvin_home / "global" / "license.key"
         key_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         # tempfile.mkstemp + os.replace, not os.open(key_path, O_CREAT|O_TRUNC):
         # the O_TRUNC form only applies its mode argument when the file is
@@ -879,15 +974,24 @@ async def apply_license_key(
     # load_license_from_env() is idempotent after boot — use reload_from_disk()
     # which bypasses the idempotency guard while keeping frozen path snapshots
     # (ADR-0144 F-04, ADR-0138 C1/C2/C4).
+    reload_failed = False
     try:
         _lv.reload_from_disk()
     except Exception:
-        pass
+        reload_failed = True
 
     tier = _lic_active_tier()
     loaded = _lic_is_loaded()
     issued_to: str | None = claims.get("issued_to") or None
     expires_at: int | None = claims.get("exp") or None
+    # The NEW key is active only if the reload ran AND the active licence is the one
+    # just pasted (a failed reload can leave the old licence "loaded").
+    try:
+        active_jti = str((_lv._ACTIVE_LICENSE or {}).get("jti", ""))
+    except Exception:
+        active_jti = ""
+    new_jti = str(claims.get("jti", ""))
+    loaded = bool(loaded) and not reload_failed and (not new_jti or active_jti == new_jti)
 
     # LIC-5: the signature/semantic pre-checks above can pass while enforcement
     # still correctly declines to activate — e.g. a token valid but bound to a
@@ -898,8 +1002,9 @@ async def apply_license_key(
     # loaded, roll back the just-written key and report the failure honestly.
     if not loaded:
         try:
-            key_path.unlink()
-        except OSError:
+            _restore_previous_key(key_path, previous)
+            _lv.reload_from_disk()
+        except Exception:
             pass
         try:
             console_audit.action_failed(

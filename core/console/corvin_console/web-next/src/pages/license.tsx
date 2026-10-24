@@ -113,7 +113,7 @@ export function LicensePage() {
 
   const applyMutation = useMutation({
     mutationFn: (key: string) =>
-      applyLicenseKey(key, session!.csrf_token),
+      applyLicenseKey(key, session!.csrf_token, session!.fingerprint),
     onSuccess: (res) => {
       setKeyInput("");
       setApplySuccess(`Key applied — tier: ${res.tier}${res.issued_to ? ` (${res.issued_to})` : ""}`);
