@@ -47,15 +47,18 @@ def _skill_create(tenant_id: str, name: str, body: str, session_id: str = None) 
     CEL skills are marked with lifecycle="turn" (default) for auto-cleanup.
     session_id tags the skill for session-close deletion if needed.
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
+    # `SkillRegistry.create` has no lifecycle/session_id/created_at parameters: passing them
+    # raised TypeError, which this stage's fail-safe `except` swallowed, so no CEL skill was ever
+    # persisted (4 red tests in test_forge_stages_adr0283 / test_live_pipeline_e2e). They are
+    # recorded in `meta`, the registry's own free-form field.
     _skill_registry(tenant_id).create(
         name=name, type="learned-experience", body_md=body,
         description=(body[:120].replace("\n", " ").strip() or name),
         claim={}, scope="session", overwrite=True,
         created_by="context_engineering",
-        lifecycle="turn",
-        session_id=session_id,
-        created_at=datetime.utcnow().isoformat())
+        meta={"lifecycle": "turn", "session_id": session_id,
+              "created_at": datetime.now(timezone.utc).isoformat()})
 
 
 def _skill_exists(tenant_id: str, name: str) -> bool:

@@ -747,6 +747,11 @@ EVENT_SEVERITY: dict[str, str] = {
     "acs.delegation":           "INFO",
     "acs.worker_spawned":        "INFO",
     "acs.worker_skills_injected": "INFO",
+    "acs.tool_forged":           "INFO",
+    "acs.tool_forge_rejected":   "WARNING",
+    "acs.skill_forged":          "INFO",
+    "acs.skill_forge_rejected":  "WARNING",
+    "acs.skill_persist_failed":  "WARNING",
     "acs.worker_traced":         "INFO",
     "acs.manager_decided":       "INFO",
     "acs.worker_error":         "WARNING",
@@ -3637,6 +3642,15 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "run_id", "worker_id", "iteration", "depth", "skill_count", "skills",
         "instruction_hash",
     }),
+    # Runtime forging (acs_forge.py). Identifiers, hashes, sizes and REASON CODES only: never source
+    # code, never a skill body, never free text produced by the manager.
+    "acs.tool_forged": frozenset({
+        "run_id", "iteration", "name", "sha256", "impl_bytes", "self_test_ms", "sandbox",
+    }),
+    "acs.tool_forge_rejected": frozenset({"run_id", "iteration", "name", "reason"}),
+    "acs.skill_forged": frozenset({"run_id", "iteration", "name", "body_bytes", "persisted"}),
+    "acs.skill_forge_rejected": frozenset({"run_id", "iteration", "name", "reason"}),
+    "acs.skill_persist_failed": frozenset({"run_id", "iteration", "name", "reason"}),
     # engine_attestation is a nested dict {engine_id, model_id, locality} —
     # top-level key must be allowlisted so it passes the M2 gate; _audit_scrub
     # recursively cleans its contents via the denylist floor.

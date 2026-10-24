@@ -611,6 +611,34 @@ dynamic_skills:
   call in `_dispatch_workers._run_one` (`acs_runtime.py`).
 - **Proof:** `test_acs_worker_skills.py` runs `_dispatch_workers` against a stub `claude` that records the
   real system-prompt file, with a real `MultiSkillRegistry` (graded and ungraded skill).
-- **Not covered:** the manager does not choose skills per subtask, and a skill the manager would like
-  but the tenant does not have is not created at run time (the module header's "self-tooling" M3 has no
-  call site).
+- **Not covered here:** the manager does not choose skills per subtask. Creating tools and skills at run
+  time is a separate opt-in, see section 11.
+
+## 11. Runtime forging in ACS (opt-in, 2026-10-24)
+
+The manager of an ACS run can forge a **tool** and a **skill** mid-run and hand them to its workers
+(`corvin_operator/bridges/shared/acs_forge.py`, wired in `acs_runtime.py`). Opt-in per workflow:
+
+```yaml
+dynamic_tools:  {enabled: true, allowed_namespaces: [dynamic], max_tools: 3}
+dynamic_skills: {enabled: true, forge: true, max_skills: 3}   # forging needs BOTH keys on the skills side
+```
+
+The manager adds a `"forge": {"tools": [...], "skills": [...]}` object to a DELEGATE decision. A tool request
+carries `name` (`namespace.name`), `description`, `input_schema`, `impl` (Python), `test_input` and `expect`.
+
+A tool reaches workers only after all of these pass:
+- shape and size caps, namespace allow-list, case-insensitive uniqueness, per-run and per-iteration limits;
+- the Forge static import check plus extra forbidden imports (network, `importlib`, `pickle`, `asyncio`, ...);
+- member licence (free tier is refused with `license_required`);
+- a self-test in the real `bwrap` sandbox (no network, throw-away `/tmp`, rlimits); no sandbox means refusal;
+- the self-test output matches `expect` (subset match) and the tool is not an echo of its input.
+
+Workers run a forged tool only through the `forge.py ... call` command in their system prompt, i.e. in the same
+sandbox. Audit events: `acs.tool_forged`, `acs.tool_forge_rejected`, `acs.skill_forged`,
+`acs.skill_forge_rejected`, `acs.skill_persist_failed` (reason codes only, never source text). A workflow
+without the keys behaves as before.
+
+Proof: `corvin_operator/bridges/shared/test_acs_runtime_forge.py` (34 boundary tests with the real registry and
+sandbox, scripted LLM) and a live run with real `claude -p` manager and worker (`acs-forge-live-e2e/` in the
+claude-playground repo).

@@ -162,7 +162,7 @@ class ForgeStagesTests(unittest.TestCase):
         b.scratch["needs"] = {"skills": [{"name": "notes", "body": "# hijacked\n"}]}
         created: list = []
         with patch.object(self.sf, "_skill_create",
-                          side_effect=lambda t, n, body: created.append(n)):
+                          side_effect=lambda t, n, body, session_id=None: created.append(n)):
             b, _ = self.stages.get_stage("skillforge").run(b, self.Ctx(tenant_id="_default"))
         self.assertEqual(created, ["cel_notes"],
                          "an operator's own 'notes' session skill is untouched")

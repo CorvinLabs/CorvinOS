@@ -659,6 +659,11 @@ class RunContext:
     worker_attributions: list = field(default_factory=list)  # list[dict] per-iteration — ADR-0105 M4
     datasource_env: dict = field(default_factory=dict)     # ADR-0127 — DSI conn env for ClaudeCode workers
     trace: RunTrace = field(default_factory=RunTrace)      # per-step record for the user
+    # Runtime forging (acs_forge.RunForge) — None unless the workflow opts in with `dynamic_tools.enabled`
+    # and/or `dynamic_skills.{enabled,forge}`. Shared by reference through every `dataclasses.replace`
+    # (recursive sub-budgets), so a tool forged once is visible to the whole tree.
+    run_forge: Any | None = None
+    forge_feedback: list = field(default_factory=list)     # results of the manager's last `forge` request
     # Adversarial review finding: BudgetEnvelope.check() was called ONLY at
     # the top-level manager loop, against the ROOT budget. Recursive
     # delegation (_dispatch_workers → _run_one → DELEGATE → _dispatch_workers
@@ -1268,6 +1273,15 @@ def _build_manager_prompt(ctx: RunContext) -> str:
     if ctx.iteration == 0 and ctx.workflow_spec.get("state", {}).get("initial"):
         initial = json.dumps(ctx.workflow_spec["state"]["initial"], indent=2)
         lines += ["INITIAL STATE:", _truncate(initial, 2000), ""]
+
+    # Runtime forging: teach the protocol and report what happened to the last request. Absent for a
+    # workflow that did not opt in, so its manager prompt stays byte-identical.
+    _run_forge = getattr(ctx, "run_forge", None)
+    if _run_forge is not None:
+        lines += [_run_forge.manager_protocol(), ""]
+        _fb = _run_forge.feedback_block(getattr(ctx, "forge_feedback", []))
+        if _fb:
+            lines += [_fb, ""]
 
     lines += ["Return your Manager Decision as JSON now."]
     return "\n".join(lines)
@@ -2025,6 +2039,11 @@ def _build_worker_system(subtask: dict, ctx: RunContext, depth: int, can_delegat
             f"\n\nDYNAMIC TOOLS AVAILABLE (created this run):\n{tool_list}\n"
             "Use these tools if they match your task; they were forged mid-loop.\n"
         )
+    _rf = getattr(ctx, "run_forge", None)
+    if _rf is not None:
+        _forge_block = _rf.worker_block()
+        if _forge_block:
+            system += "\n\n" + _forge_block + "\n"
     return system
 
 
@@ -3047,6 +3066,16 @@ async def _manager_loop(
                         "loss_gap": round(gap, 4),
                     })
 
+            # Runtime forging: the manager's `forge` request is processed BEFORE the fan-out, so the workers of
+            # this very iteration already see a freshly forged (and sandbox-tested) tool or skill. The tool
+            # self-test runs a sandboxed subprocess, hence a worker thread - never the event loop.
+            if ctx.run_forge is not None and decision.get("forge"):
+                try:
+                    ctx.forge_feedback = await asyncio.to_thread(
+                        ctx.run_forge.apply, decision.get("forge"), ctx.iteration)
+                except Exception as _fexc:  # noqa: BLE001 - forging must never abort the run
+                    log.warning("acs: runtime forge failed: %s", type(_fexc).__name__)
+                    ctx.forge_feedback = [{"kind": "request", "name": "", "ok": False, "reason": "forge_error"}]
             worker_results = await _dispatch_workers(
                 subtasks, ctx, depth=0, manager_model=manager_model, worker_model=worker_model,
                 spawn_nonce=_iter_spawn_nonce,  # ADR-0109 M2: causality link
@@ -3552,6 +3581,15 @@ class ACSRuntime:
             datasource_env=_ds_env,                             # ADR-0127
             trace=_trace,
         )
+        # Runtime forging is opt-in per workflow (`dynamic_tools.enabled` / `dynamic_skills.{enabled,forge}`).
+        try:
+            import acs_forge as _acs_forge  # noqa: PLC0415 - same directory as this module
+            _fcfg = _acs_forge.config_from_spec(spec)
+            if _fcfg.enabled:
+                ctx.run_forge = _acs_forge.RunForge(
+                    run_dir=run_dir, tenant_id=self._tenant_id, run_id=rid, cfg=_fcfg, audit=_write_audit)
+        except Exception as _fexc:  # noqa: BLE001 - no forge module: the run behaves as before
+            log.warning("acs: runtime forge unavailable: %s", type(_fexc).__name__)
 
         # Write run manifest
         _write_json_safe(
