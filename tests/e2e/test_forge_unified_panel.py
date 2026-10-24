@@ -123,14 +123,14 @@ class TestForgeUnifiedPanel:
             assert data.get("tool_id") == "test_tool"
 
     async def test_skill_rollback_endpoint(self, client):
-        """POST /v1/console/forge/skills/{id}/rollback reverts to version."""
+        """SkillForge keeps no version history: rollback answers 501 and writes no audit record.
+
+        Until 2026-10-24 this returned 200 ``rolled_back`` and wrote ``forge_skill_rollback``
+        to the chain while changing nothing (a fictional record). Pinned by the sandbox suite
+        (tests/sandbox/test_gap_forge_wf_compute.py::test_G2_skill_rollback_is_501_and_writes_nothing).
+        """
         response = client.post("/v1/console/forge/skills/test_skill/rollback?version=1.0.0")
-        assert response.status_code in [200, 401, 403, 500]
-        if response.status_code == 200:
-            data = response.json()
-            assert data.get("status") == "rolled_back"
-            assert data.get("skill_id") == "test_skill"
-            assert data.get("version") == "1.0.0"
+        assert response.status_code == 501, response.text
 
     async def test_os_skill_config_endpoint(self, client):
         """POST /v1/console/forge/os-skills/{id}/config updates OS-Skill params."""

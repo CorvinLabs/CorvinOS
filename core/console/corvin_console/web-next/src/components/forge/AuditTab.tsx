@@ -4,11 +4,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { HistoryIcon, Download } from 'lucide-react';
 
+/** Resource kinds the Forge audit endpoint reports (plus 'all' for the filter). */
+export type ForgeAuditFilterType =
+  | 'all' | 'tool' | 'skill' | 'os-skill' | 'plugin' | 'layer' | 'run' | 'bundle';
+
 interface AuditEvent {
   id: string;
   timestamp: string;
   type: string;
-  resource_type: 'tool' | 'skill' | 'os-skill';
+  resource_type: string;
   resource_id: string;
   resource_name: string;
   action: string;
@@ -20,7 +24,7 @@ interface AuditEvent {
 
 interface AuditTabProps {
   searchQuery: string;
-  filterType: 'all' | 'tool' | 'skill' | 'os-skill';
+  filterType: ForgeAuditFilterType;
 }
 
 export default function AuditTab({ searchQuery, filterType }: AuditTabProps) {
@@ -28,6 +32,8 @@ export default function AuditTab({ searchQuery, filterType }: AuditTabProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedAction, setSelectedAction] = useState<'all' | 'create' | 'update' | 'delete' | 'enable' | 'disable'>('all');
+  // false when the server's scan window ended before the 7-day lookback did.
+  const [complete, setComplete] = useState(true);
 
   useEffect(() => {
     const fetchAudit = async () => {
@@ -38,6 +44,7 @@ export default function AuditTab({ searchQuery, filterType }: AuditTabProps) {
         if (!res.ok) throw new Error('Failed to fetch audit events');
         const data = await res.json();
         setEvents(data.events ?? []);
+        setComplete(data.complete !== false);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
@@ -52,7 +59,8 @@ export default function AuditTab({ searchQuery, filterType }: AuditTabProps) {
     return events.filter((event) => {
       const matchesSearch =
         searchQuery === '' ||
-        event.resource_name.toLowerCase().includes(searchQuery.toLowerCase());
+        event.resource_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        event.type.toLowerCase().includes(searchQuery.toLowerCase());
 
       const matchesType =
         filterType === 'all' || event.resource_type === filterType;
@@ -90,6 +98,14 @@ export default function AuditTab({ searchQuery, filterType }: AuditTabProps) {
         return 'Skill';
       case 'tool':
         return 'Tool';
+      case 'plugin':
+        return 'Plugin';
+      case 'layer':
+        return 'Layer';
+      case 'run':
+        return 'Run';
+      case 'bundle':
+        return 'Bundle';
       default:
         return type;
     }
@@ -124,7 +140,8 @@ export default function AuditTab({ searchQuery, filterType }: AuditTabProps) {
         <div>
           <h2 className="text-xl font-semibold">Audit Trail</h2>
           <p className="text-sm text-muted-foreground">
-            Complete hash-chained history of all Forge changes
+            Hash-chained Forge events from the last 7 days (newest 100)
+            {!complete && ' - older records exist beyond the window read'}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={handleExport}>

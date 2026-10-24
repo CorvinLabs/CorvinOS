@@ -14,7 +14,7 @@ import OSSkillsTab from '@/components/forge/OSSkillsTab';
 import PluginsTab from '@/components/forge/PluginsTab';
 import LayersTab, { ForgeLayerPanel } from '@/components/forge/LayersTab';
 import GraphTab from '@/components/forge/GraphTab';
-import AuditTab from '@/components/forge/AuditTab';
+import AuditTab, { type ForgeAuditFilterType } from '@/components/forge/AuditTab';
 import AutonomousForgePanel from '@/components/forge/AutonomousForgePanel';
 import ForgeCreatorPanel from '@/components/forge/ForgeCreatorPanel';
 import { SkillForgePanel } from '@/components/SkillForgePanel';
@@ -149,7 +149,7 @@ export default function ForgePage() {
   const reloadToolsRef = React.useRef<(() => Promise<void>) | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'enabled' | 'disabled'>('all');
-  const [filterType, setFilterType] = useState<'all' | 'tool' | 'skill' | 'os-skill'>('all');
+  const [filterType, setFilterType] = useState<ForgeAuditFilterType>('all');
 
   const [tools, setTools] = useState<ForgeTool[]>([]);
   const [skills, setSkills] = useState<ForgeSkill[]>([]);
@@ -242,13 +242,17 @@ export default function ForgePage() {
           </select>
           <select
             value={filterType}
-            onChange={(e) => setFilterType(e.target.value as 'all' | 'tool' | 'skill' | 'os-skill')}
+            onChange={(e) => setFilterType(e.target.value as ForgeAuditFilterType)}
             className="flex h-10 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm"
           >
             <option value="all">All Types</option>
             <option value="tool">Tools</option>
             <option value="skill">Skills</option>
             <option value="os-skill">OS-Skills</option>
+            <option value="plugin">Plugins</option>
+            <option value="layer">Layers</option>
+            <option value="run">Runs</option>
+            <option value="bundle">Bundles</option>
           </select>
         </div>
       </div>

@@ -3,10 +3,13 @@
  * catalogue: search, filter by domain/tier, sort, and open a skill's full
  * metadata. It lists what SkillInstaller (ADR-0680) has installed on THIS
  * host, so it offers no install button: the one Phase 6 shipped called a
- * route that answered "queued" and installed nothing. A skill arrives as a
- * package — the empty state links to the Packages tab.
+ * route that answered "queued" and installed nothing. A skill arrives through
+ * the Skill Manager upload (/app/skill-manager, the ONLY writer of the store
+ * this tab reads) — the empty state links there. The Packages tab uses a
+ * different store and does not feed this catalogue.
  */
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Search, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -123,9 +126,11 @@ export function SkillsTab({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
           <CardContent className="py-8 text-center space-y-3">
             <Sparkles className="w-8 h-8 mx-auto text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              No skills are installed on this host yet. Skills arrive as skill packages.
+              No skills are installed on this host yet. Install a skill package in Skill Packages (owner or admin).
             </p>
-            <Button variant="outline" size="sm" onClick={() => onGoTo("packages")}>Open Packages</Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/app/skill-manager">Open Skill Packages</Link>
+            </Button>
           </CardContent>
         </Card>
       )}

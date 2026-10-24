@@ -134,20 +134,6 @@ export default function SkillsTab({
     });
   }, [skills, searchQuery, filterStatus]);
 
-  const _handleRollback = async (skillId: string, version: string) => {
-    try {
-      const res = await fetch(`/v1/console/forge/skills/${skillId}/rollback?version=${version}`, {
-        method: 'POST',
-      });
-      if (!res.ok) throw new Error('Failed to rollback skill');
-
-      const updated = await res.json();
-      setSkills(skills.map((s) => (s.id === skillId ? updated : s)));
-    } catch (err) {
-      console.error('Error rolling back skill:', err);
-    }
-  };
-
   const handleToggle = async (skillId: string) => {
     const skill = skills.find((s) => s.id === skillId);
     if (!skill) return;
@@ -324,18 +310,6 @@ export default function SkillsTab({
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    {skill.versions && skill.versions.length > 1 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Show rollback menu
-                        }}
-                      >
-                        Rollback
-                      </Button>
-                    )}
                     <Button
                       variant="ghost"
                       size="sm"

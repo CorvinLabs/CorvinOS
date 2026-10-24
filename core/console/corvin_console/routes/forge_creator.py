@@ -292,11 +292,13 @@ def _summary(dest: Path, prov: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@router.get("/plugins")
-async def list_forged(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-) -> Dict[str, Any]:
-    root = _forged_root(rec.tenant_id)
+def forged_summaries(tenant_id: str) -> List[Dict[str, Any]]:
+    """Summaries of this tenant's staged forged plugins, newest first.
+
+    Shared by ``GET /forge-creator/plugins`` and the Forge panel's Plugins tab
+    (``GET /forge/plugins``) so the two cannot list different sets.
+    """
+    root = _forged_root(tenant_id)
     items: List[Dict[str, Any]] = []
     if root.is_dir():
         for dest in sorted(root.iterdir()):
@@ -306,6 +308,14 @@ async def list_forged(
             if prov is not None:
                 items.append(_summary(dest, prov))
     items.sort(key=lambda i: i.get("created_at") or 0, reverse=True)
+    return items
+
+
+@router.get("/plugins")
+async def list_forged(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> Dict[str, Any]:
+    items = forged_summaries(rec.tenant_id)
     return {"plugins": items, "count": len(items)}
 
 

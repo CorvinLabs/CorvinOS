@@ -330,33 +330,18 @@ def apply_gate_threshold(
     Output (failure):
         {status: "FAILED", error: "..."}
     """
-    from core.orchestration.layer_forge import audit
-    from core.orchestration.layer_forge.audit import LayerForgeAuditError
-
-    try:
-        # Audit the gate threshold application (fail-closed if chain write fails)
-        audit.emit(
-            "layer_forge.gate_threshold_applied",
-            tenant_id=rec.tenant_id,
-            gate_id=body.gate_id,
-            old_threshold=1.0,  # Placeholder (real system tracks actual thresholds)
-            new_threshold=body.new_threshold,
-            reason=body.reason,
-            actor="console",
-        )
-        return {
-            "status": "SUCCESS",
-            "gate_id": body.gate_id,
-            "new_threshold": body.new_threshold,
-            "reason": body.reason,
-            "audit_event": "layer_forge.gate_threshold_applied",
-            "message": "Gate threshold applied (audited, not yet persisted to registry)",
-        }
-    except LayerForgeAuditError as e:
-        raise HTTPException(
-            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": f"Gate threshold apply failed: {e}"},
-        ) from None
+    # Nothing persists a gate threshold: the registry stores none and no gate
+    # reads one. This route used to emit ``layer_forge.gate_threshold_applied``
+    # with a hard-coded ``old_threshold=1.0`` and answer "not yet persisted",
+    # i.e. a fictional record in the hash chain. It answers 501 and writes
+    # nothing until a real threshold store exists (analyze above stays real).
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail=("Gate-threshold apply is not implemented on this build: no store "
+                "holds a gate threshold and no gate reads one, so a success would "
+                "be cosmetic. Use /layer-forge/gate-thresholds/analyze for the "
+                "tuning signal."),
+    )
 
 
 @router.get("/layer-forge/analytics")

@@ -52,6 +52,7 @@ import { Link } from "react-router-dom";
 import { Loader2, AlertCircle, ChevronRight, Sparkles, Download, Upload } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -387,7 +388,32 @@ function ListView({ definitions, onSelect, onDownload }: { definitions: LayerDef
   );
 }
 
-function DetailView({ definition, onBack, onDownload }: { definition: LayerDefinition | null; onBack: () => void; onDownload: (id: string, version: string) => void }) {
+const TRANSITION_LABELS: Record<string, string> = {
+  proposed: "Revert to Proposed",
+  accepted: "Accept",
+  deployed: "Deploy",
+  superseded: "Supersede",
+};
+
+const TRANSITION_CONFIRM: Record<string, string> = {
+  proposed: "The layer returns to Proposed and is no longer treated as accepted.",
+  accepted: "The layer is marked Accepted after its quality gates and review.",
+  deployed: "The layer is Deployed and its enforcement rules apply.",
+  superseded: "The layer is Superseded and stops applying. This cannot be undone.",
+};
+
+function DetailView({ definition, onBack, onDownload, onTransitioned }: {
+  definition: LayerDefinition | null;
+  onBack: () => void;
+  onDownload: (id: string, version: string) => void;
+  onTransitioned?: (next: LayerDefinition) => void;
+}) {
+  const { session } = useAuth();
+  const [pending, setPending] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   if (!definition) return null;
 
   const transitionStates: Record<string, string[]> = {
@@ -398,6 +424,32 @@ function DetailView({ definition, onBack, onDownload }: { definition: LayerDefin
   };
 
   const nextStates = transitionStates[definition.status] || [];
+
+  // POST .../transition: audit-first on the server (layer_forge.definition_transitioned);
+  // a FLAGGED review needs an explicit override reason, which the operator types here.
+  const runTransition = async (to: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const reason = overrideReason.trim();
+      await api(`${BASE}/definitions/${encodeURIComponent(definition.id)}/${encodeURIComponent(definition.version)}/transition`, {
+        method: "POST",
+        csrf: session?.csrf_token,
+        body: {
+          to_status: to,
+          override_review_flags: reason !== "",
+          override_reason: reason,
+        },
+      });
+      setPending(null);
+      setOverrideReason("");
+      onTransitioned?.({ ...definition, status: to as LayerDefinition["status"], _promoted_at: Date.now() / 1000 });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Transition failed");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -498,17 +550,24 @@ function DetailView({ definition, onBack, onDownload }: { definition: LayerDefin
           <CardContent>
             <div className="flex gap-2">
               {nextStates.map((state) => (
-                <Button key={state} size="sm" disabled>
-                  {state === "proposed" && "Revert to Proposed"}
-                  {state === "accepted" && "Accept"}
-                  {state === "deployed" && "Deploy"}
-                  {state === "superseded" && "Supersede"}
+                <Button
+                  key={state}
+                  size="sm"
+                  variant={state === "superseded" ? "destructive" : "default"}
+                  disabled={busy}
+                  data-testid={`layer-transition-${state}`}
+                  onClick={() => { setError(null); setPending(state); }}
+                >
+                  {TRANSITION_LABELS[state]}
                 </Button>
               ))}
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              Transitions are audit-first and require CSRF token. Implement via POST to the transition endpoint.
+              A transition is recorded in the audit chain before it takes effect. If the chain cannot be written, nothing changes.
             </p>
+            {error && !pending && (
+              <p className="text-xs text-destructive mt-2" role="alert">{error}</p>
+            )}
           </CardContent>
         </Card>
       )}
@@ -520,6 +579,35 @@ function DetailView({ definition, onBack, onDownload }: { definition: LayerDefin
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={pending !== null} onOpenChange={(o) => { if (!o && !busy) { setPending(null); setError(null); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {pending ? `${TRANSITION_LABELS[pending]}: ${definition.id}@${definition.version}?` : ""}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">{pending ? TRANSITION_CONFIRM[pending] : ""}</p>
+          <div className="space-y-1">
+            <Label htmlFor="layer-override-reason" className="text-xs">
+              Override reason (only needed when the review is flagged)
+            </Label>
+            <Input
+              id="layer-override-reason"
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              placeholder="Leave empty for a normal transition"
+            />
+          </div>
+          {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={() => { setPending(null); setError(null); }}>Cancel</Button>
+            <Button disabled={busy} data-testid="layer-transition-confirm" onClick={() => pending && runTransition(pending)}>
+              {busy ? "Working..." : "Confirm"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -538,7 +626,22 @@ export default function LayersTab() {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["layer-forge", "definitions"],
-    queryFn: ({ signal }) => api<LayerForgeListResponse>(`${BASE}/definitions`, { signal }),
+    // The registry omits empty lists (a definition with no enforcement rules has no
+    // `enforcement_rules` key); the views below read `.length` / `.map`, so normalise here
+    // instead of letting one such definition blank the whole Forge page.
+    queryFn: async ({ signal }) => {
+      const res = await api<LayerForgeListResponse>(`${BASE}/definitions`, { signal });
+      return {
+        ...res,
+        items: (res.items ?? []).map((d) => ({
+          ...d,
+          targets: d.targets ?? [],
+          quality_gates: d.quality_gates ?? [],
+          enforcement_rules: d.enforcement_rules ?? [],
+          dependencies: d.dependencies ?? [],
+        })),
+      };
+    },
     refetchInterval: 60_000,
     retry: false,
   });
@@ -646,7 +749,15 @@ export default function LayersTab() {
       </div>
 
       {selectedDef ? (
-        <DetailView definition={selectedDef} onBack={() => setSelectedDef(null)} onDownload={handleDownloadSingle} />
+        <DetailView
+          definition={selectedDef}
+          onBack={() => setSelectedDef(null)}
+          onDownload={handleDownloadSingle}
+          onTransitioned={(next) => {
+            setSelectedDef(next);
+            void qc.invalidateQueries({ queryKey: ["layer-forge", "definitions"] });
+          }}
+        />
       ) : (
         <Card>
           <CardHeader>
