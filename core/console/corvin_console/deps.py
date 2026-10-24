@@ -77,10 +77,20 @@ def require_session_csrf_on_mutation(
     return require_session(corvin_console_sid=corvin_console_sid)
 
 
-def verify_reauth(rec: session_auth.SessionRecord, presented_token: str | None) -> bool:
+def verify_reauth(
+    rec: session_auth.SessionRecord,
+    presented_token: str | None,
+    *,
+    require_token: bool = False,
+) -> bool:
     """Possession-proof re-authentication check.
 
-    When ``presented_token`` is absent or empty the check passes: CSRF
+    With ``require_token=True`` (destructive / credential routes: API-key delete,
+    licence apply) an absent or empty token is REJECTED — the caller must present
+    ``rec.sid_fingerprint`` (``/auth/whoami`` returns it to the session holder).
+
+    Default (``require_token=False``, the legacy routes whose UI sends no token
+    yet): when ``presented_token`` is absent or empty the check passes: CSRF
     (already enforced by ``require_csrf`` on every mutation endpoint)
     provides sufficient possession proof that the caller holds the active
     session cookie.
@@ -93,6 +103,8 @@ def verify_reauth(rec: session_auth.SessionRecord, presented_token: str | None) 
     proper token-verification call; the call-sites stay unchanged.
     """
     if not presented_token:
+        if require_token:
+            return False
         # No token presented — CSRF upstream is the possession gate.
         return True
     return hmac.compare_digest(presented_token, rec.sid_fingerprint)
