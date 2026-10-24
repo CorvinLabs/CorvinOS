@@ -1,0 +1,45 @@
+# Obvious real artist, track, label and brand names that must never appear in a synthetic name.
+# A small hygiene guard only: generic public names, no operator data, no dataset rows.
+# Multi-word entries match as a substring of the lowercased name; single words match a whole
+# token, or (5+ characters) any substring of a token.
+Taylor Swift
+Drake
+Bad Bunny
+The Weeknd
+Ed Sheeran
+Billie Eilish
+Harry Styles
+Dua Lipa
+Coldplay
+Beyonce
+Adele
+Rihanna
+Eminem
+BTS
+SZA
+Miley Cyrus
+Kill Bill
+Komet
+Tattoo
+Jolie
+Flowers
+Spotify
+Universal
+Sony
+Warner
+Atlantic Records
+Columbia
+Interscope
+Republic Records
+Island Records
+Def Jam
+Apple
+Google
+Amazon
+Disney
+Netflix
+Corvin
+Oster
+Vantablack
+Tesseract
+Ostrava

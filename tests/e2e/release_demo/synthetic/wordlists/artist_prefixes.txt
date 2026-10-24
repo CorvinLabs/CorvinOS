@@ -1,0 +1,46 @@
+# Invented artist-name prefixes. An artist is "<prefix> <suffix>"; prefixes and suffixes
+# are shuffled and paired one to one, so no two artists share a prefix or a suffix.
+# Rule (tested): after stripping a plural s, no 4-character substring is shared between
+# the artist, track, album and label lists (label words include "Records"), and no two
+# artist entries share a 4-character substring.
+Quillen
+Ulvaster
+Lumavo
+Kestrin
+Mirawen
+Pelloran
+Zephrandel
+Ilvar
+Ombrine
+Eskarin
+Glimmerow
+Iridel
+Kellavar
+Moravine
+Nerelith
+Orvanne
+Quorrin
+Rhalune
+Umbrane
+Xandrel
+Adrevan
+Belquist
+Delvira
+Esmarel
+Kaldria
+Mardisse
+Quindra
+Ulrinde
+Vaskel
+Yselde
+Darvelle
+Fendris
+Pirka
+Tolven
+Yarno
+Zabet
+Cuvia
+Dovrik
+Elsk
+Gwyth
+Hesk

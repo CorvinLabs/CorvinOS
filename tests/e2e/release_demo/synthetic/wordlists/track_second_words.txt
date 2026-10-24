@@ -1,0 +1,40 @@
+# Invented track-title second words (one per line).
+# Rule (tested): after stripping a plural s, no 4-character substring is shared between
+# the artist, track, album and label lists (label words include "Records"), and no two
+# artist entries share a 4-character substring.
+Orchard
+Lantern
+Harborline
+Meridian
+Beacon
+Ember
+Comet
+Carousel
+Fjordside
+Thimble
+Anchorhold
+Pavilion
+Gossamer
+Thicket
+Compassrose
+Lighthouse
+Quayfront
+Foghorn
+Larkspur
+Millrace
+Shellwork
+Hearthstone
+Juniperfall
+Skylark
+Tarnpool
+Wrenhollow
+Cobbleway
+Driftline
+Marigold
+Silverkeel
+Starboard
+Bellwether
+Cairnfield
+Dovecote
+Eddystone
+Flintway

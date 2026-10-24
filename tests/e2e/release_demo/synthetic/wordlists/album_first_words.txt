@@ -1,0 +1,24 @@
+# Invented album-title first words. An album is "<first> <second>".
+# Rule (tested): after stripping a plural s, no 4-character substring is shared between
+# the artist, track, album and label lists (label words include "Records"), and no two
+# artist entries share a 4-character substring.
+Collected
+Halfway
+Unfolding
+Lowland
+Longshore
+Overland
+Waystation
+Crossway
+Upland
+Farshore
+Moorland
+Byways
+Faraway
+Homeward
+Inkwell
+Jubilee
+Keepsake
+Mapmaker
+Nocturne
+Offshore

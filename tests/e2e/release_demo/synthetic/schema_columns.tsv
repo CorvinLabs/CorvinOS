@@ -1,0 +1,40 @@
+# Column list of the reference spotify_charts.db (schema only, no row data).
+# Extracted once on 2026-10-24 with PRAGMA table_info / index_info, read-only.
+# Columns: kind  object  cid  column  declared_type  ("-" = no declared type, e.g. view expressions)
+table	albums	0	album_uri	TEXT
+table	albums	1	album_name	TEXT
+table	albums	2	artist_names	TEXT
+table	albums	3	label	TEXT
+table	albums	4	release_date	TEXT
+table	artists	0	artist_uri	TEXT
+table	artists	1	artist_name	TEXT
+table	charts_songs_daily	0	chart_date	TEXT
+table	charts_songs_daily	1	country	TEXT
+table	charts_songs_daily	2	rank	INTEGER
+table	charts_songs_daily	3	track_uri	TEXT
+table	charts_songs_daily	4	artist_names	TEXT
+table	charts_songs_daily	5	track_name	TEXT
+table	charts_songs_daily	6	label	TEXT
+table	charts_songs_daily	7	peak_rank	INTEGER
+table	charts_songs_daily	8	previous_rank	INTEGER
+table	charts_songs_daily	9	days_on_chart	INTEGER
+table	charts_songs_daily	10	streams	INTEGER
+table	charts_songs_daily	11	entry_status	TEXT
+table	songs	0	track_uri	TEXT
+table	songs	1	track_name	TEXT
+table	songs	2	artist_names	TEXT
+table	songs	3	label	TEXT
+table	songs	4	release_date	TEXT
+view	artist_summary	0	artist_names	TEXT
+view	artist_summary	1	tracks	-
+view	artist_summary	2	countries	-
+view	artist_summary	3	total_streams	-
+view	artist_summary	4	best_rank	-
+view	top_tracks_by_country	0	country	TEXT
+view	top_tracks_by_country	1	track_name	TEXT
+view	top_tracks_by_country	2	artist_names	TEXT
+view	top_tracks_by_country	3	total_streams	-
+view	top_tracks_by_country	4	best_rank	-
+view	top_tracks_by_country	5	days_charted	-
+index	ix_c_country_date	charts_songs_daily	country,chart_date	-
+index	ix_c_track	charts_songs_daily	track_uri	-

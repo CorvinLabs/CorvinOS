@@ -1,0 +1,16 @@
+# Invented label-name words. A label is "<word> Records".
+# Rule (tested): after stripping a plural s, no 4-character substring is shared between
+# the artist, track, album and label lists (label words include "Records"), and no two
+# artist entries share a 4-character substring.
+Halcyonic
+Marrowgate
+Parallaxo
+Fennimorrow
+Ravenmoss
+Sablecrest
+Peregrove
+Wayfarer's
+Ferrovane
+Zinnober
+Malachyte
+Feldspar

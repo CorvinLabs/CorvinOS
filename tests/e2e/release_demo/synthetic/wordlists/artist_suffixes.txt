@@ -1,0 +1,45 @@
+# Invented artist-name suffixes (one per line).
+# Rule (tested): after stripping a plural s, no 4-character substring is shared between
+# the artist, track, album and label lists (label words include "Records"), and no two
+# artist entries share a 4-character substring.
+Signalmere
+Wovenring
+Quarrymoon
+Verdigris Court
+Drumlin Vale
+Parchment Kings
+Ripplesmith
+Ironkin
+Saddlers
+Glaziers' Guild
+Bargemen
+Brickyard Choir
+Furnace Boys
+Drydock
+Dynamo Club
+Velour Youth
+Buckram Sons
+Jackdaw Radio
+Bivouac
+Kazoo Society
+Juke Royal
+Bodkin
+Kayak Union
+Opal Mob
+Druid Bay
+Voxlid
+Rubicund
+Buzzard Ark
+Jigsaw Kids
+Ruby Gauge
+Vulcan Daze
+Zigurd
+Cudgel
+Dirigible
+Zydeco Uncle
+Ziggurat
+Hullabaloo
+Brouhaha
+Kerfuffle
+Rigmarole
+Hobnail Trio

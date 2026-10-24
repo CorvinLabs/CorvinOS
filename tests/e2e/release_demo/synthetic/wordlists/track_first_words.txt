@@ -1,0 +1,40 @@
+# Invented track-title first words. A title is "<first> <second>".
+# Rule (tested): after stripping a plural s, no 4-character substring is shared between
+# the artist, track, album and label lists (label words include "Records"), and no two
+# artist entries share a 4-character substring.
+Copperlight
+Velvetine
+Paperweight
+Hollowed
+Ambergrease
+Glasswind
+Northerly
+Quietude
+Distantia
+Silverrun
+Mothlight
+Saltgarden
+Unspoken
+Lowtide
+Brackish
+Tinselmoss
+Stonecrow
+Driftwood
+Candlewick
+Frostbloom
+Oakleaf
+Redwater
+Thistledown
+Galewalk
+Ivorywing
+Dusklamp
+Pewterhill
+Riverbend
+Sunderlight
+Wintergreen
+Myrrhsong
+Cloudberry
+Hazelrun
+Kindlewood
+Lichenfall
+Nettlebright

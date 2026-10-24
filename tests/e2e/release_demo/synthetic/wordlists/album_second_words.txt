@@ -1,0 +1,24 @@
+# Invented album-title second words (one per line).
+# Rule (tested): after stripping a plural s, no 4-character substring is shared between
+# the artist, track, album and label lists (label words include "Records"), and no two
+# artist entries share a 4-character substring.
+Sessions
+Almanac
+Volumes
+Ledger
+Logbook
+Portraits
+Postcards
+Diaries
+Sketches
+Studies
+Letters
+Etchings
+Gazetteer
+Notebooks
+Panoramas
+Anthology
+Dispatches
+Excerpts
+Folios
+Inventory
