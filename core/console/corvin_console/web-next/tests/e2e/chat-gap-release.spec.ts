@@ -172,3 +172,22 @@ test("/new opens a new chat; /audit shows events; /create workflow is honest", a
   await page.screenshot({ path: path.join(SHOTS, "slash-new.png") });
   await page.close();
 });
+
+// Real-engine acceptance: a chat turn made through the console WebSocket with the
+// real claude engine (GC_REAL_SID = that chat, GC_REAL_MODEL = the model the turn
+// reported) must appear in the Audit panel opened from the chat header.
+test("a real engine turn appears in the Audit panel (OS-Turn Audit list)", async () => {
+  const sid = process.env.GC_REAL_SID ?? "";
+  const model = process.env.GC_REAL_MODEL ?? "";
+  test.skip(!sid || !model, "needs GC_REAL_SID and GC_REAL_MODEL from a real engine turn");
+  const page = await ctx.newPage();
+  await openChat(page, sid);
+  await page.getByTestId("chat-audit-toggle").click();
+  await page.getByRole("button", { name: "OS-Turn Audit", exact: true }).click();
+  await expect(page.getByText(/OS-Turn Audit \(EU AI Act Art\. 12\) — 1 turns/)).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "List", exact: true }).click();
+  await expect(page.getByText(model, { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("ok", { exact: true }).first()).toBeVisible();
+  await page.screenshot({ path: path.join(SHOTS, "real-turn-os-audit.png") });
+  await page.close();
+});
