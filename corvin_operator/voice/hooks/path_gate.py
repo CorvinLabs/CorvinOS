@@ -584,11 +584,90 @@ def _python_ast_check(code: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _extract_python_snippets(cmd: str) -> list[tuple[str, str]]:
+# ----- Pinned trusted tools: the ONE exception to the Python AST gate ----------
+#
+# Corvin-Knowledge's CLI (scripts/kb.py) imports ``subprocess`` for git, so the AST gate refuses it - which kept the
+# knowledge base (kb new / kb task / kb check) out of reach of every agent session. The exception below is as narrow
+# as it can be made:
+#   * the script must be written in the command as EXACTLY the pinned absolute path (plain string comparison: no
+#     normalisation, no wildcard, no relative form, no "..", no symlink, no quoting);
+#   * every file of the tool's bundle (kb.py plus the sibling modules it imports from its own directory - Python puts
+#     the script directory first on sys.path, so an unpinned sibling would run under the exception) must be a regular
+#     file whose SHA-256, computed FRESH from the bytes on every call, equals the value pinned here;
+#   * a missing file, a symlink, an unreadable file or a hash mismatch DENIES the command (fail closed) - it does not
+#     fall back to "not my business";
+#   * the command may not carry anything that makes the tool run other code (--reviewer-cmd / --drafter-cmd start
+#     arbitrary commands by design; PYTHON*= / LD_*= / BASH_ENV= re-route interpreter start-up).
+# Nothing else in this gate is relaxed: write-target detection, protected paths and every other Python snippet in the
+# same command are still checked. The pin lives in this source file on purpose: changing it is a reviewed commit to
+# the hook itself, not an edit of a data file next to the tool.
+#
+# RE-PIN after a reviewed change of the tool:   sha256sum kb.py kb_lib.py kb_model.py   (in the scripts/ directory),
+# then update the three values below in the same commit that justifies the change.
+# Residual risk (stated, not hidden): the hash is checked when the hook runs, not when python opens the file; an
+# attacker who can already write the tool's directory concurrently could swap a file in between.
+def _pin_root() -> Path:
+    """<projects>/Corvin-Knowledge/scripts, derived from this hook's own location (CorvinOS is its sibling repo)."""
+    try:
+        return Path(__file__).resolve().parents[3].parent / "Corvin-Knowledge" / "scripts"
+    except IndexError:
+        return Path("/nonexistent-pin-root")
+
+
+_PINNED_PYTHON_TOOLS: dict[str, dict[str, str]] = {
+    str(_pin_root() / "kb.py"): {
+        "kb.py": "1321506414271146ec8bf749548a90193f67dd71da865dce690239d0749ea027",
+        "kb_lib.py": "1e0add58952fb0e2e7af754498084796e37ef4ca5a2d510346ecf1ff154f0bea",
+        "kb_model.py": "20365628ab203c1736e4a75992e504020a05126dc299fcd4537b37dbecc15fa0",
+    },
+}
+
+_PIN_REFUSED_CMD_RE = re.compile(
+    r"--reviewer-cmd|--drafter-cmd|\bPYTHON[A-Z_]*=|\bLD_[A-Z_]+=|\bBASH_ENV=|\bsitecustomize\b"
+)
+
+
+def _pinned_tool_gate(cmd: str) -> tuple[frozenset[str], str]:
+    """Return (exempt script strings, deny reason).
+
+    ``exempt`` holds the pinned script paths of this command whose whole bundle verified; the caller skips only
+    those for AST analysis. A non-empty ``deny reason`` means a pinned path WAS named but could not be trusted:
+    the command is refused.
+    """
+    import hashlib  # noqa: PLC0415
+    import hmac  # noqa: PLC0415
+
+    exempt: set[str] = set()
+    for m in _PY_FILE_RE.finditer(cmd):
+        script = m.group(1)
+        bundle = _PINNED_PYTHON_TOOLS.get(script)          # exact string match, nothing else counts
+        if bundle is None:
+            continue
+        if _PIN_REFUSED_CMD_RE.search(cmd):
+            return frozenset(), (f"pinned tool {script!r} refused: the command carries an option or environment "
+                                 f"that makes it run other code")
+        base = Path(script).parent
+        for name, want in bundle.items():
+            p = base / name
+            try:
+                if p.is_symlink() or not p.is_file():
+                    return frozenset(), f"pinned tool file {name!r} is missing or not a regular file"
+                got = hashlib.sha256(p.read_bytes()).hexdigest()
+            except OSError:
+                return frozenset(), f"pinned tool file {name!r} is unreadable"
+            if not hmac.compare_digest(got, want):
+                return frozenset(), (f"pinned tool file {name!r} changed (sha256 mismatch); review it, then "
+                                     f"update the pin in path_gate.py")
+        exempt.add(script)
+    return frozenset(exempt), ""
+
+
+def _extract_python_snippets(cmd: str, exempt: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
     """Extract Python code strings from a Bash command for AST analysis.
 
     Returns list of (code, label) tuples. label is used only for the
-    audit detail field — never emitted in plain text.
+    audit detail field — never emitted in plain text. ``exempt`` lists script
+    paths already verified by ``_pinned_tool_gate``; only those are skipped.
     """
     results: list[tuple[str, str]] = []
 
@@ -600,6 +679,8 @@ def _extract_python_snippets(cmd: str) -> list[tuple[str, str]]:
 
     for m in _PY_FILE_RE.finditer(cmd):
         pyfile = m.group(1)
+        if pyfile in exempt:
+            continue
         try:
             p = Path(pyfile)
             if p.is_file() and p.stat().st_size <= _PY_FILE_SIZE_LIMIT:
@@ -1548,7 +1629,11 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
 
         # Gate 1: Python AST analysis — inspect any Python code that would
         # be executed by this Bash command before it runs.
-        snippets = _extract_python_snippets(cmd)
+        exempt, pin_deny = _pinned_tool_gate(cmd)
+        if pin_deny:
+            _emit_code_exec_audit(payload, outcome="blocked", blocked_reason=pin_deny)
+            return False, f"path_gate: {pin_deny}"
+        snippets = _extract_python_snippets(cmd, exempt)
         for code, label in snippets:
             safe, reason = _python_ast_check(code)
             if not safe:
@@ -1562,6 +1647,8 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
                 return False, msg
         if snippets:
             _emit_code_exec_audit(payload, outcome="allowed")
+        if exempt:
+            _emit_code_exec_audit(payload, outcome="allowed_pinned")
 
     elif tool == "WebFetch":
         url = inp.get("url", "")

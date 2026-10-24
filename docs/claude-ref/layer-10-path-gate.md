@@ -66,6 +66,34 @@ boundary** (the real perimeter), the **hash-chained audit log** (tamper-evident:
 encryption** (L37). The path-gate blocks the common and moderate-effort shell
 destructive forms; the interpreter class is the sandbox's responsibility.
 
+## Pinned trusted tool: the one exception to the Python AST gate
+
+The AST gate (Gate 1, `_python_ast_check`) refuses any `python3 <file>.py` whose file imports `subprocess`, `socket`,
+`importlib`, ... . Corvin-Knowledge's CLI `scripts/kb.py` imports `subprocess` for git, so every agent session was
+locked out of `kb new` / `kb task` / `kb check`. `_PINNED_PYTHON_TOOLS` in `path_gate.py` is the **single** exception:
+
+- the script must appear in the command as **exactly** `<projects>/Corvin-Knowledge/scripts/kb.py` (plain string
+  comparison - no normalisation, no wildcard, no relative form, no `..`, no quoting, no symlink); the root is derived
+  from the hook's own location (CorvinOS' sibling repo), so on an install without that sibling the table matches nothing;
+- the whole bundle - `kb.py`, `kb_lib.py`, `kb_model.py` (what `kb.py` imports from its own directory, which Python
+  puts first on `sys.path`) - must be regular files whose SHA-256, computed **fresh from the bytes on every call**,
+  equals the value pinned in the source. Missing file, symlink, unreadable file or mismatch = **deny** (fail closed);
+- refused even with a matching hash: `--reviewer-cmd` / `--drafter-cmd` (kb runs those commands by design) and
+  `PYTHON*=`, `LD_*=`, `BASH_ENV=`, `sitecustomize` in the command (they re-route interpreter start-up);
+- nothing else is relaxed: write-target detection, protected paths and every other Python snippet of the same command
+  are still checked. Audit: `code.exec_attempt` with `outcome=allowed_pinned`, or `code.exec_blocked` with the reason.
+
+The pin lives in the hook's source on purpose - changing it is a reviewed commit to the hook, not an edit of a data
+file next to the tool. **Re-pin** after a reviewed change of the tool: `sha256sum kb.py kb_lib.py kb_model.py` in
+`scripts/`, update the three values in the same commit. Stated residual risk: the hash is checked when the hook runs,
+not when python opens the file (an attacker who can already write that directory could swap a file in between).
+Tests: `corvin_operator/voice/hooks/test_path_gate_pinned_tools.py` (25, each "allowed" case has an unpinned control;
+five deliberate breakages of the mechanism were each caught).
+
+Open, separate from the exception: a **relative** script path (or one after `cd`) is resolved against the hook's
+working directory, and an unfound file is skipped ("do not block on absence"), so the AST gate can be sidestepped by
+choosing a spelling the hook cannot resolve. Not changed here (it would also tighten every legitimate workflow).
+
 ## Enabling the hook (operator action — the platform cannot do this for you)
 
 `corvin_operator/voice/hooks/hooks.json` registers `path_gate.py` on
@@ -97,6 +125,8 @@ never a non-blocking hook error.
 - Don't fail-open the gate (an unparseable protected-path command must deny —
   and so must an exception inside `check()`).
 - Don't add an env kill-switch or "path-gate off" mode.
+- Don't add a second entry to `_PINNED_PYTHON_TOOLS` without pinning every sibling module the tool imports, and don't
+  make the exception match on a basename, a prefix, a pattern or a normalised path.
 - Don't narrow `_touches_corvin_tree` for *direct* targets (ancestor protection
   on `rm -rf ~` is load-bearing); the at-or-under narrowing applies ONLY to the
   chdir context.
