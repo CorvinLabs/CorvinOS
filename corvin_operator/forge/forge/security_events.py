@@ -32,6 +32,7 @@ import collections
 import fcntl
 import hashlib
 import errno
+import heapq
 import hmac
 import json
 import math
@@ -2522,6 +2523,218 @@ def iter_chain_records(
                         yield rec
         except OSError:
             continue
+
+
+#: Read granularity of the backward reader. A last-N view touches roughly
+#: ``max_records`` lines, so one chunk covers the common case.
+_REVERSE_CHUNK = 64 * 1024
+#: Default byte budget of ``last_chain_records`` (mirrored by the forwarder).
+LAST_N_DEFAULT_MAX_BYTES = 1 << 20
+#: Lines per file that are re-sorted by ts before they enter the merge.
+#: ``write_event`` stamps ``ts`` before it takes the chain lock, so concurrent
+#: writers leave small inversions in file order; a window absorbs those and
+#: lets an isolated low-ts record sink below the older lines around it.
+_REORDER_WINDOW = 256
+
+
+def _iter_lines_newest_first(
+    path: Path, max_scan_bytes: int | None = None,
+) -> Iterator[bytes]:
+    """Raw lines of *path*, last line first, read backwards in chunks.
+
+    I/O is lazy: a chunk is read only when the consumer asks for a line beyond
+    the ones already read. That bounds I/O by what the caller CONSUMES, which
+    is not the same as what it returns: lines a caller skips (a needle filter,
+    a torn line) are read too. ``max_scan_bytes`` caps the bytes read from the
+    end of this file; the line cut at that boundary is yielded only if it is
+    complete (the byte before it is a newline).
+
+    A missing or unreadable file yields nothing. A line split across two chunks
+    is reassembled. If a read returns fewer bytes than requested (the file
+    shrank under the reader), iteration stops: joining a short block to the
+    carried tail would yield a line that was never written.
+    """
+    try:
+        fh = path.open("rb")
+    except OSError:
+        return
+    with fh:
+        try:
+            pos = fh.seek(0, os.SEEK_END)
+        except OSError:
+            return
+        carry = b""
+        scanned = 0
+        while pos > 0:
+            step = min(_REVERSE_CHUNK, pos)
+            if max_scan_bytes is not None:
+                step = min(step, max_scan_bytes - scanned)
+                if step <= 0:
+                    break
+            pos -= step
+            try:
+                fh.seek(pos)
+                block = fh.read(step)
+            except OSError:
+                return
+            if len(block) != step:
+                return  # the file shrank: stop rather than glue the wrong bytes
+            scanned += step
+            parts = (block + carry).split(b"\n")
+            carry = parts[0]  # may continue in the previous chunk
+            for part in reversed(parts[1:]):
+                yield part
+        if pos == 0:
+            yield carry  # the first line of the file
+            return
+        # Stopped at the scan limit: the carried piece is a whole line only if
+        # the byte before it ends the previous line.
+        try:
+            fh.seek(pos - 1)
+            if fh.read(1) == b"\n":
+                yield carry
+        except OSError:
+            return
+
+
+def _newest_first_entries(
+    path: Path, needles: tuple[bytes, ...] | None,
+    max_scan_bytes: int | None = None,
+) -> Iterator[tuple[float, int, dict[str, Any]]]:
+    """``(key, bytes, record)`` of one file, newest first, with ``key``
+    non-increasing — the precondition of the k-way merge.
+
+    File order is not strictly ts order (see ``_REORDER_WINDOW``), and a
+    record may carry no ts. So: records pass through a heap of
+    ``_REORDER_WINDOW`` lines that releases the largest ts first (equal ts:
+    newer file position first); the released key is clamped to the running
+    minimum of the keys released before it, so one stream can never stall
+    behind the others. A record without a parseable, finite ts takes the ts
+    of the record read just before it (its newer neighbour); untimed lines at
+    the very end of a file take the ts of the first timed line below them. A
+    file with no timed record at all sorts after every timed record.
+
+    A torn, blank or non-object line is skipped.
+    """
+    window = max(0, int(_REORDER_WINDOW))
+    heap: list[tuple[float, int, int, dict[str, Any]]] = []
+    seq = 0
+    prev_ts: float | None = None
+    head_untimed: list[tuple[int, dict[str, Any]]] = []
+    floor = math.inf
+
+    def _release() -> tuple[float, int, dict[str, Any]]:
+        nonlocal floor
+        neg_key, _seq, nbytes, rec = heapq.heappop(heap)
+        key = min(-neg_key, floor)
+        floor = key
+        return (key, nbytes, rec)
+
+    for raw in _iter_lines_newest_first(path, max_scan_bytes):
+        if needles is not None and not any(n in raw for n in needles):
+            continue
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line.decode("utf-8", errors="replace"))
+        except Exception:  # noqa: BLE001 — a torn line is normal
+            continue
+        if not isinstance(rec, dict):
+            continue
+        nbytes = len(raw) + 1
+        ts = _record_epoch(rec.get("ts", rec.get("timestamp")))
+        if ts is not None and not math.isfinite(ts):
+            ts = None  # NaN / inf would break the ordering
+        if ts is None:
+            if prev_ts is None:
+                head_untimed.append((nbytes, rec))
+                continue
+            key = prev_ts
+        else:
+            key = ts
+            prev_ts = ts
+            for h_nbytes, h_rec in head_untimed:  # newer position: pushed first
+                heapq.heappush(heap, (-key, seq, h_nbytes, h_rec))
+                seq += 1
+            head_untimed.clear()
+        heapq.heappush(heap, (-key, seq, nbytes, rec))
+        seq += 1
+        while len(heap) > window:
+            yield _release()
+    for h_nbytes, h_rec in head_untimed:  # the file has no timed record at all
+        heapq.heappush(heap, (math.inf, seq, h_nbytes, h_rec))  # key -inf
+        seq += 1
+    while heap:
+        yield _release()
+
+
+def _merged_newest_first(
+    chain_path: Path, *, include_history: bool, needles: tuple[str, ...] | None,
+    max_scan_bytes: int | None = None,
+) -> Iterator[tuple[float, int, dict[str, Any]]]:
+    """The canonical chain and its seam-linked history, merged on the per-file
+    keys of ``_newest_first_entries`` (newest first). Each file is read lazily
+    from its end, so the merge pulls roughly what its caller consumes plus
+    ``_REORDER_WINDOW`` lines per file."""
+    paths: list[Path] = list(chain_history_files(chain_path)) if include_history else []
+    paths.append(Path(chain_path))
+    nd = None if needles is None else tuple(n.encode("utf-8") for n in needles)
+    streams = [_newest_first_entries(p, nd, max_scan_bytes) for p in paths]
+    return heapq.merge(*streams, key=lambda e: e[0], reverse=True)
+
+
+def last_chain_records(
+    chain_path: Path, *, max_records: int,
+    max_bytes: int | None = LAST_N_DEFAULT_MAX_BYTES,
+    include_history: bool = True, needles: tuple[str, ...] | None = None,
+    max_scan_bytes: int | None = None,
+) -> list[dict[str, Any]]:
+    """The newest records of *chain_path* and its seam-linked history, newest
+    first, for a LAST-N VIEW.
+
+    The caps apply AFTER the k-way merge on record ``ts``: ``max_records`` is
+    the number of globally newest records, and ``max_bytes`` (raw line bytes
+    plus one newline each) cuts the merged order as a prefix, never skipping
+    ahead. The newest record is returned even when it alone exceeds
+    ``max_bytes``, so ``[]`` always means "no matching record", never "cap
+    reached". A legacy history file that still receives appends can hold
+    records newer than the canonical tail, so the canonical file alone is not
+    "the last N". Ordering within one file: see ``_newest_first_entries``.
+
+    ``needles``: as in ``iter_chain_records``, a line is JSON-decoded only if it
+    contains one of them. Skipped lines do not count against ``max_records``,
+    so with a rare needle the reader keeps reading; ``max_scan_bytes`` bounds
+    the bytes read from the end of EACH file (canonical and every history
+    file), at the cost of not seeing anything older than that.
+
+    NOT for aggregates. A total over a window (ADR-0760 usage, cost, counts)
+    must read the whole window with the forward readers; capping it silently
+    under-counts. Blocking file I/O: call it off the event loop. Never raises
+    on a torn, shrinking or missing file.
+    """
+    if max_records < 0:
+        raise ValueError("max_records must be >= 0")
+    if max_bytes is not None and max_bytes < 0:
+        raise ValueError("max_bytes must be >= 0")
+    if max_scan_bytes is not None and max_scan_bytes < 0:
+        raise ValueError("max_scan_bytes must be >= 0")
+    if max_records == 0:
+        return []
+    out: list[dict[str, Any]] = []
+    used = 0
+    merged = _merged_newest_first(
+        Path(chain_path), include_history=include_history, needles=needles,
+        max_scan_bytes=max_scan_bytes,
+    )
+    for _key, nbytes, rec in merged:
+        if len(out) >= max_records:
+            break
+        if max_bytes is not None and out and used + nbytes > max_bytes:
+            break
+        out.append(rec)
+        used += nbytes
+    return out
 
 
 def note_chain_rotation(chain_path: Path, *, link_hash: str) -> None:
