@@ -523,8 +523,14 @@ def collect_active_skills(
     task_text: str | None = None,
     persona: str | None = None,
     tenant_id: str | None = None,
+    include_core: bool = True,
 ) -> str | None:
     """Return a markdown block of currently active skills, or None.
+
+    ``include_core=False`` leaves out the always-on core quality skills
+    (``adr_gate``, ``e2e-wiring-proof``). An ACS worker is a narrow, isolated
+    subtask (ADR-0217); the core disciplines are written for a whole task and
+    would add their full bodies to every worker prompt.
 
     ADR-2175 (T-0104): when this process booted an audited Skills registry, every
     selected skill is decided by ``registry.execute("prompt.<name>")`` within a
@@ -580,7 +586,7 @@ def collect_active_skills(
     if profile.get("inject_skills") is False:
         return None
 
-    core_pairs = _load_core_quality_skills()
+    core_pairs = _load_core_quality_skills() if include_core else []
     core_pairs = _apply_quality_layer_filter(core_pairs)
     core_bodies = {spec.name: spec.body for _scope, spec in core_pairs}  # type: ignore[attr-defined]
 

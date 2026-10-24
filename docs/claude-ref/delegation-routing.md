@@ -583,3 +583,34 @@ dict per step (no prompt, worker or result text) and the run result carries them
   run: without it the spoken summary narrated "der ACS-Lauf wurde ausdrücklich ... angefordert".
 - **Proof:** `test_acs_run_trace_e2e.py` (real manager loop + gate chain), `test_acs_process_one_e2e.py`
   (inbox envelope in, outbox files out) and the console routing E2E.
+
+## 10. Skills in ACS workers (opt-in `dynamic_skills`, 2026-10-24)
+
+A workflow can let its ACS workers use graded SkillForge skills. It is **off unless the spec asks**:
+
+```yaml
+dynamic_skills:
+  enabled: true      # must be the boolean true; any other value leaves the workflow unchanged
+  max_skills: 3      # per worker; clamped to 1..5, a malformed value falls back to 3
+```
+
+- **What a worker gets:** the skill BODY as prompt text, appended to its system prompt under a
+  `SKILLS (curated and graded ...)` heading and capped at 12 000 characters. This keeps the ADR-0279
+  reach boundary: no binding crosses the fan-out (no `allowed_tools` change, no `mcp__forge__` ref).
+  Tools are deliberately NOT part of this - a forged tool needs a binding, and ToolForge's same-turn
+  implementation is still the echo template (ADR-0283 amendment R8).
+- **Selection:** `skill_inject.collect_active_skills(include_core=False, task_text=<subtask instructions>)`.
+  The same primitive as chat turns, so the grade gate (an ungraded skill is never injected), canary and
+  pin handling, wrapper sanitising and the per-skill body cap all apply. The core quality skills
+  (`adr_gate`, `e2e-wiring-proof`) are left out: they are written for a whole task. Skills of the
+  tenant's user, project and session scopes are all candidates, ranked by relevance to the subtask.
+- **Audit:** `acs.worker_skills_injected` (run, worker, iteration, depth, `skill_count`, `skills` = names,
+  instruction hash). Never a body.
+- **Fail-safe:** a failing lookup yields no skills and the worker still runs.
+- **Code:** `_dynamic_skills_config`, `_worker_skills_block`, `_build_worker_system(skills_block=)` and the
+  call in `_dispatch_workers._run_one` (`acs_runtime.py`).
+- **Proof:** `test_acs_worker_skills.py` runs `_dispatch_workers` against a stub `claude` that records the
+  real system-prompt file, with a real `MultiSkillRegistry` (graded and ungraded skill).
+- **Not covered:** the manager does not choose skills per subtask, and a skill the manager would like
+  but the tenant does not have is not created at run time (the module header's "self-tooling" M3 has no
+  call site).

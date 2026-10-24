@@ -745,6 +745,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "acs.manager_parse_error":  "WARNING",
     "acs.delegation":           "INFO",
     "acs.worker_spawned":        "INFO",
+    "acs.worker_skills_injected": "INFO",
     "acs.worker_traced":         "INFO",
     "acs.manager_decided":       "INFO",
     "acs.worker_error":         "WARNING",
@@ -3417,6 +3418,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "acs.worker_spawned": frozenset({
         "run_id", "worker_id", "iteration", "depth", "engine_id", "model_id",
         "instruction_hash", "spawn_nonce", "parent_worker_id", "can_delegate",
+    }),
+    # Metadata only: skill NAMES and a count, never a skill body (ADR-0279 text-only).
+    "acs.worker_skills_injected": frozenset({
+        "run_id", "worker_id", "iteration", "depth", "skill_count", "skills",
+        "instruction_hash",
     }),
     # engine_attestation is a nested dict {engine_id, model_id, locality} —
     # top-level key must be allowlisted so it passes the M2 gate; _audit_scrub

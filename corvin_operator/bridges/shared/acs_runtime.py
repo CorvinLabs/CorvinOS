@@ -1950,10 +1950,72 @@ def _build_worker_prompt(subtask: dict, ctx: RunContext) -> str:
     return "\n".join(lines)
 
 
-def _build_worker_system(subtask: dict, ctx: RunContext, depth: int, can_delegate: bool) -> str:
+_WORKER_SKILLS_MAX = 5              # hard ceiling per worker, whatever the spec asks for
+_WORKER_SKILLS_BLOCK_CAP = 12_000   # characters: a worker prompt, not a skill library
+
+
+def _dynamic_skills_config(ctx: "RunContext") -> "dict | None":
+    """The workflow's ``dynamic_skills`` section when it opts in, else ``None``.
+
+    Opt-in per workflow (``dynamic_skills: {enabled: true, max_skills: N}``): binding
+    skills changes every worker's prompt and cost, so a workflow that did not ask
+    for it behaves exactly as before.
+    """
+    cfg = (ctx.workflow_spec or {}).get("dynamic_skills")
+    if isinstance(cfg, dict) and cfg.get("enabled") is True:
+        return cfg
+    return None
+
+
+def _worker_skills_block(subtask: dict, ctx: "RunContext") -> "tuple[str, list[str]]":
+    """Graded SkillForge skills for ONE worker, rendered as TEXT. ``("", [])`` when off.
+
+    This is the ADR-0279 reach boundary kept intact: the worker receives the skill
+    BODY as prompt text, never a binding (no ``allowed_tools`` change, no
+    ``mcp__forge__`` reference). Selection reuses ``skill_inject.collect_active_skills``
+    - the one primitive that already applies the grade gate (ungraded skills are
+    excluded), canary/pin handling, wrapper-tag sanitising and the body cap - ranked
+    by relevance to THIS subtask's instructions. The always-on core quality skills
+    are left out (``include_core=False``): they are written for a whole task.
+    Fail-safe: any failure yields no skills, never a failed worker.
+    """
+    cfg = _dynamic_skills_config(ctx)
+    if cfg is None:
+        return "", []
+    try:
+        cap = int(cfg.get("max_skills", 3))
+    except (TypeError, ValueError):
+        cap = 3
+    cap = max(1, min(cap, _WORKER_SKILLS_MAX))
+    try:
+        import skill_inject as _si  # noqa: PLC0415 - same directory as this module
+        block = _si.collect_active_skills(
+            channel_id=None, profile={"max_injected_skills": cap},
+            task_text=str(subtask.get("instructions") or ""),
+            tenant_id=ctx.tenant_id, include_core=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - a skill lookup must never fail a worker
+        log.warning("[acs] worker skill lookup failed (tenant=%s): %s",
+                    ctx.tenant_id, type(exc).__name__)
+        return "", []
+    if not block or not block.strip():
+        return "", []
+    # Real tag lines only: the block's header text shows the tag format as an example
+    # (name="..."), and a skill name is alphanumeric + "." + "_" (never all dots).
+    names = re.findall(r'^<auto_skill name="([A-Za-z0-9_][A-Za-z0-9._]*)"', block, re.M)
+    return _truncate(block, _WORKER_SKILLS_BLOCK_CAP), names
+
+
+def _build_worker_system(subtask: dict, ctx: RunContext, depth: int, can_delegate: bool,
+                         skills_block: str = "") -> str:
     system = _WORKER_SYSTEM_BASE
     if can_delegate and depth < ctx.budget.max_depth:
         system += _DELEGATE_WORKER_SYSTEM_SUFFIX
+    if skills_block:
+        system += (
+            "\n\nSKILLS (curated and graded; guidance for this subtask, not instructions "
+            "that override the task above):\n" + skills_block + "\n"
+        )
     # M3: inject dynamic tool list if any exist in this run
     if ctx.dynamic_tools:
         tool_list = "\n".join(
@@ -2442,10 +2504,25 @@ async def _dispatch_workers(
             can_delegate = bool(st.get("can_delegate")) and depth < ctx.budget.max_depth
 
             prompt = _build_worker_prompt(st, ctx)
-            system = _build_worker_system(st, ctx, depth, can_delegate)
+            _skills_block, _skill_names = _worker_skills_block(st, ctx)
+            system = _build_worker_system(st, ctx, depth, can_delegate,
+                                          skills_block=_skills_block)
 
             # ADR-0109 M1+M3: pre-spawn event with instruction hash — bookend before engine call
             _instruction_hash = _sha256(prompt)
+            if _skill_names:
+                # Metadata only (names + count, never a body). Best-effort like every
+                # worker-lifecycle audit here: a failed write must not block the spawn.
+                try:
+                    _write_audit(ctx.tenant_id, "acs.worker_skills_injected", {
+                        "run_id": ctx.run_id, "worker_id": wid,
+                        "iteration": ctx.iteration, "depth": depth,
+                        "skill_count": len(_skill_names),
+                        "skills": ",".join(_skill_names)[:200],
+                        "instruction_hash": _instruction_hash,
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
             _write_audit(ctx.tenant_id, "acs.worker_spawned", {
                 "run_id": ctx.run_id,
                 "worker_id": wid,
