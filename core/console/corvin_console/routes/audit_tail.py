@@ -26,6 +26,9 @@ _forge_paths = _bootstrap.forge_paths
 
 router = APIRouter()
 
+# The only tenant that may see the instance-wide (pre-tenancy) legacy chain.
+_LEGACY_CHAIN_TENANT = "_default"
+
 # Keys allowed in the 'details' blob returned to console clients.
 # 'user' and raw sender identifiers are deliberately excluded — they are
 # present in the chain for forensics but must not be re-served via the API
@@ -171,7 +174,15 @@ def audit_tail(
     total_size = 0
     seen_inodes: set[int] = set()  # avoid double-counting when symlinks converge paths
 
-    for chain in (forge_chain, tenant_chain, bridge_chain):
+    # S-11a: the instance-wide chain predates tenancy — its records carry no
+    # tenant_id, so it can only be attributed to the constant default tenant.
+    # Any other tenant reads its own chains only (never current_tenant(): that
+    # reads the environment, which console routing must not).
+    chains = [forge_chain, tenant_chain]
+    if tid == _LEGACY_CHAIN_TENANT:
+        chains.append(bridge_chain)
+
+    for chain in chains:
         if not chain.exists():
             continue
         try:

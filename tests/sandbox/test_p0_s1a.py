@@ -21,17 +21,10 @@ from . import harness  # noqa: E402
 from .conftest import MARKER_A, MEMORY_DELETE_TARGET, MEMORY_FILE_A  # noqa: E402
 
 
-def _open_s1a(cause: str):
-    return pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-        f"S-1a open: {cause}; turns green with S-1a (remove every ~/.claude access from memory "
-        "routes; developer view dropped per Q7, F-26 later); remove this mark in the fixing commit"))
-
-
 def _dev_memory(sandbox):
     return harness.tree_hashes(sandbox.home / ".claude" / "projects", "*/memory/*")
 
 
-@_open_s1a("routes/memory.py:33-61,64,116-117 serve ~/.claude/projects/<slug>/memory to every tenant")
 def test_P_S1a_no_memory_route_returns_the_dev_memory_marker(server, sandbox, planted, routes,
                                                              sess_a, sess_b):
     # Controls that survive the fix: GET /memory is either gone (404/405/410 — the fix may
@@ -57,22 +50,31 @@ def test_P_S1a_no_memory_route_returns_the_dev_memory_marker(server, sandbox, pl
     assert not hits, f"dev-memory marker served by memory routes: {hits}"
 
 
-@_open_s1a("routes/memory.py:197 PUT writes into ~/.claude/projects/<slug>/memory")
 def test_P_S1a_put_writes_nothing_under_dev_memory(server, sandbox, planted, sess_b):
     before = _dev_memory(sandbox)
     r = harness.fetch(server, sess_b, "/memory/user_sbx_put_probe.md", method="PUT",
                       json_body={"body": "probe"})
     after = _dev_memory(sandbox)
+    assert r.status_code in (404, 405), f"PUT /memory still routed: {r.status_code} {r.text[:200]}"
     assert after == before, f"PUT /memory changed the dev-memory dir (status {r.status_code}): " \
                             f"{sorted(set(after) ^ set(before))}"
 
 
-@_open_s1a("routes/memory.py:281 DELETE removes from ~/.claude/projects/<slug>/memory")
 def test_P_S1a_delete_removes_nothing_under_dev_memory(server, sandbox, planted, sess_b):
     before = _dev_memory(sandbox)
     assert any(k.endswith(MEMORY_DELETE_TARGET) for k in before)
     r = harness.fetch(server, sess_b, f"/memory/{MEMORY_DELETE_TARGET}", method="DELETE",
                       json_body={})
     after = _dev_memory(sandbox)
+    assert r.status_code in (404, 405), f"DELETE /memory still routed: {r.status_code} {r.text[:200]}"
     assert after == before, f"DELETE /memory removed a dev-memory file (status {r.status_code}): " \
                             f"{sorted(set(after) ^ set(before))}"
+
+
+def test_P_S1a_get_memory_is_an_honest_empty_state_without_a_path(server, sess_a):
+    r = harness.fetch(server, sess_a, "/memory")
+    assert r.status_code == 200, r.text[:300]
+    body = r.json()
+    assert body["tenant_id"] == harness.TENANT_A
+    assert body["available"] is False and body["files"] == [] and body["count"] == 0
+    assert "memory_dir" not in body and ".claude" not in r.text, r.text[:300]

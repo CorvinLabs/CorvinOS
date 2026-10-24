@@ -348,11 +348,13 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
         return "Active skills are listed in the **Skills** tab."
 
     if cmd == "/memory":
-        return "Your memory is shown in the **Memory** tab."
+        return ("The **Memory** tab does not show per-workspace memory yet; "
+                "it is not available on this build.")
 
     if cmd == "/forget":
-        return ("To delete your data (GDPR Art. 17), use `/erase` or the "
-                "**Memory** tab — this performs the audited erasure flow.")
+        return ("To delete your data (GDPR Art. 17), use `/erase` — this "
+                "performs the audited erasure flow. The **Memory** tab cannot "
+                "delete anything.")
 
     if cmd == "/browser":
         # ADR-0193 retired the classifier-routed /browser dispatch in favour of
