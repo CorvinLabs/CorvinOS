@@ -18,6 +18,7 @@ on:
       - 'pyproject.toml'
       - '**.service'
       - 'scripts/zero_caller_baseline.json'
+      - 'scripts/path_composition_baseline.json'
       - '.github/workflows/zero-caller-sweep.yml'
   push:
     branches:
@@ -29,6 +30,7 @@ on:
       - 'pyproject.toml'
       - '**.service'
       - 'scripts/zero_caller_baseline.json'
+      - 'scripts/path_composition_baseline.json'
       - '.github/workflows/zero-caller-sweep.yml'
 
 jobs:
@@ -54,3 +56,28 @@ jobs:
         run: |
           python3 -m pip install --quiet pytest
           python3 -m pytest -q -p no:tests.fixtures_console tests/scripts/test_zero_caller_sweep.py
+
+  # C-1 path composition guard (measuring mode): no NEW hand-built tenant/chain
+  # path composition, counts only shrink. Baseline:
+  # scripts/path_composition_baseline.json (ratcheted; additions need
+  # --accept KEY --reason TEXT). Same stdlib-only baseline-gate shape as the
+  # sweep, but its own job so one gate's failure does not skip the other.
+  path-composition-guard:
+    name: No new hand-built tenant/chain path composition
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Path composition guard (gate)
+        run: bash scripts/path_composition_guard.sh --check
+
+      - name: Run guard tests
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest -q -p no:tests.fixtures_console tests/scripts/test_path_composition_guard.py
