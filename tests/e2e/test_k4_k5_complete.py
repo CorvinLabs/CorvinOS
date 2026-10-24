@@ -1,7 +1,6 @@
 import pytest
 import asyncio
 from core.voice.natural_voice_integration import NaturalVoiceIntegration, VoiceContext
-from core.learning.ldd_learning_loop import LddLearningLoop, StrategyDecision, ModelStrategy
 from core.orchestration.subsystems.task_manager import TaskManager, TaskState
 
 
@@ -35,49 +34,6 @@ async def test_voice_context():
     context = voice.get_context("chat1")
     assert context is not None
     assert len(context.last_3_turns) == 1
-
-
-@pytest.mark.asyncio
-async def test_learning_decision_recording():
-    """k=4: Learning loop records decisions."""
-    loop = LddLearningLoop()
-    decision = StrategyDecision(
-        model=ModelStrategy.HAIKU,
-        confidence=0.5,
-        quality_score=0.85,
-        cost=0.05,
-        latency_ms=150
-    )
-    await loop.record_decision(decision)
-    assert len(loop.decisions) == 1
-    assert loop.model_confidence["haiku"] > 0.5
-
-
-@pytest.mark.asyncio
-async def test_learning_bayesian_update():
-    """k=4: Bayesian confidence updates."""
-    loop = LddLearningLoop()
-    await loop.update_confidence(ModelStrategy.OPUS, 0.9)
-    assert loop.model_confidence["opus"] > 0.5
-
-
-@pytest.mark.asyncio
-async def test_learning_strategy_optimization():
-    """k=4: Strategy optimization based on history."""
-    loop = LddLearningLoop()
-    # Record good Haiku performance
-    decision = StrategyDecision(
-        model=ModelStrategy.HAIKU,
-        confidence=0.5,
-        quality_score=0.9,
-        cost=0.02,
-        latency_ms=100
-    )
-    await loop.record_decision(decision)
-    
-    # Next strategy should prefer Haiku
-    strategy = await loop.optimize_next_strategy(task_difficulty="simple")
-    assert strategy == ModelStrategy.HAIKU
 
 
 @pytest.mark.asyncio

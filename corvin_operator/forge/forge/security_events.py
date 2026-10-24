@@ -1141,7 +1141,8 @@ EVENT_SEVERITY: dict[str, str] = {
     # Registry CORE-plugin replacement (core/plugins/corvin_plugins/registry.py)
     "plugin.replaced":                  "WARNING",
     "plugin.replace_failed":            "ERROR",
-    # Learning outcome sink A2 (core/learning/outcome_sink_a2.py)
+    # Learning outcome sink A2: the emitter (core/learning/outcome_sink_a2.py) was deleted on
+    # 2026-10-25 (no production caller); the chain record type stays registered, never reused.
     "learning.outcome_processed":       "INFO",
     # Infinite session (core/infinite_session/, also registered at runtime)
     "infinite_session.bridge_created":  "INFO",
