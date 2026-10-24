@@ -91,7 +91,7 @@
   <rect x="60" y="635" width="860" height="68" rx="10" fill="#0f172a" stroke="#0f172a" stroke-width="1.5"/>
   <text x="80" y="660" font-size="14" font-weight="700" fill="#22d3ee">audit chain — every authority change is recorded</text>
   <text x="80" y="680" font-size="10" fill="#cbd5e1">grant.issued · grant.denied · grant.revoked · grant.left · grant.revoke_denied · grant.expired (lazy prune)</text>
-  <text x="80" y="697" font-size="10" fill="#94a3b8">SHA-256-chained file at &lt;corvin_home&gt;/global/forge/audit.jsonl — voice-audit verify walks the chain</text>
+  <text x="80" y="697" font-size="10" fill="#94a3b8">SHA-256-chained file at &lt;corvin_home&gt;/tenants/&lt;tid&gt;/global/forge/audit.jsonl — voice-audit verify walks the chain</text>
 
   <defs>
     <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">

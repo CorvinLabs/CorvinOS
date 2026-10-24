@@ -100,7 +100,7 @@
   <!-- audit chain -->
   <rect x="312" y="468" width="456" height="56" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
   <text x="540" y="488" text-anchor="middle" font-size="12" font-weight="700" fill="#9a3412">Unified hash-chain audit log (Layer 5)</text>
-  <text x="540" y="506" text-anchor="middle" font-size="10" fill="#0f172a">single ~/.corvin/global/forge/audit.jsonl · SHA-chained · `voice-audit verify` · daily timer</text>
+  <text x="540" y="506" text-anchor="middle" font-size="10" fill="#0f172a">per tenant: tenants/&lt;tid&gt;/global/forge/audit.jsonl · SHA-chained · daily verify</text>
   <text x="540" y="518" text-anchor="middle" font-size="9" fill="#475569">tamper-evident; CRITICAL chain-break fans out via bridge notification relay</text>
 
   <!-- LDD discipline -->
