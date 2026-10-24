@@ -16,6 +16,10 @@
 </p>
 
 <p align="center">
+  <a href="https://www.youtube.com/@CorvinLabs" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/YouTube-%40CorvinLabs-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="CorvinLabs on YouTube"/></a>
+</p>
+
+<p align="center">
   <code>git clone https://github.com/CorvinLabs/CorvinOS.git && cd CorvinOS && ./install.sh</code>
 </p>
 
