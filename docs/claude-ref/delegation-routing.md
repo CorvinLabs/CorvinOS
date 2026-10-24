@@ -662,3 +662,5 @@ real Forge runner, no stubbed runner) and `corvin_operator/bridges/shared/test_a
 with the real registry and sandbox, scripted LLM) and live runs with a real `claude -p` manager and worker
 (`acs-forge-live-e2e/` in the claude-playground repo). Test-fake note: a scripted `_call_worker_sync` must return a
 dict as its third value (the attestation), as the real one does; `None` makes `_run_one` die after the call.
+
+→ ADR: `corvin_decisions/decisions/ADR-2279-acs-forges-tools-and-skills-at-run-time-and-publishes-vetted.md`

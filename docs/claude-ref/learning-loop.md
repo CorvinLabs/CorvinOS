@@ -507,7 +507,7 @@ learned nothing about the data. Default is aggregates only; `include_values: tru
 `source`, so regeneration honours it) adds the most frequent labels of low-cardinality columns, never when the ADR-0661 scan flagged
 PII or injection text. The scan is narrow (IBAN, SSN, e-mail+phone pair): a clean scan is NOT proof of "no personal data", which is
 why values are opt-in. ACS workers receive such a skill as text with `dynamic_skills.enabled` (delegation-routing.md section 10);
-proof: `tests/e2e/test_datahub_skill_reaches_acs_worker.py` (live part opt-in via `CORVIN_LIVE_LLM=1`). `os.data_hub` /
+proof: `tests/e2e/test_datahub_skill_reaches_acs_worker.py` (live part opt-in via `CORVIN_LIVE_LLM=1`); decision: ADR-2279 D6. `os.data_hub` /
 `os.skill_tool_creator` (the 12-phase generator) stay optional and out of scope.
 
 **Must NOT do:** put user text, a path or a skill body into an inbox line or a `learning.regeneration` record · let a producer raise into a
