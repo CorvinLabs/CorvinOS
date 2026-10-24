@@ -82,6 +82,8 @@ except ImportError:
         _FREE_TIER: dict = {}
     _lic_get_limit = _FREE_TIER.get  # type: ignore[assignment]
 
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
 _COWORK_DIR = _REPO / "corvin_operator" / "cowork"
 _ORIGINS_DEFAULT = _COWORK_DIR / "remote_origins"
 _ENDPOINTS_DEFAULT = _COWORK_DIR / "remote_endpoints"
@@ -451,6 +453,24 @@ def pair_generate(
     # Persist pending invite (one-time; deleted on accept).
     _write_secure(_pending_dir() / f"{accept_id}.json", invite)
 
+    # Record it in the SAME InviteRegistry the "Pending invites" list and the
+    # revoke endpoint read. Until now only the CLI-token flow registered, so every
+    # UI-generated code was invisible and unrevokable. accept_id is the ikey.
+    import a2a_invite_registry as _reg  # type: ignore[import-not-found]
+    try:
+        _reg.InviteRegistry().create(_reg.InviteEntry(
+            ikey=accept_id,
+            oid=body.peer_origin_id,
+            lbl=body.label or "",
+            iat=time.time(),
+            exp=expires_at,
+            su=True,
+        ))
+    except _reg.InviteLockBusy:
+        # Never hand out a code the registry cannot list or revoke.
+        (_pending_dir() / f"{accept_id}.json").unlink(missing_ok=True)
+        raise _refuse_lock_busy(rec, "a2a.pair.generate", "a2a_invite", accept_id) from None
+
     invite_code = base64.urlsafe_b64encode(
         json.dumps(invite).encode()
     ).decode()
@@ -678,6 +698,14 @@ def pair_accept(body: AcceptRequest) -> dict[str, Any]:
         pending_file.unlink(missing_ok=True)
         raise HTTPException(status_code=410, detail="Invite expired")
 
+    # A revoked invite must not be redeemable (revoke also removes the pending
+    # file; this covers a revoke that raced a read).
+    import a2a_invite_registry as _reg  # type: ignore[import-not-found]
+    _entry = _reg.InviteRegistry().get(body.accept_id)
+    if _entry is not None and _entry.get("revoked"):
+        pending_file.unlink(missing_ok=True)
+        raise HTTPException(status_code=410, detail="Invite revoked")
+
     accept_key: str = invite["accept_key"]
     check_payload: dict[str, Any] = {
         "accept_id": body.accept_id,
@@ -774,6 +802,10 @@ def pair_accept(body: AcceptRequest) -> dict[str, Any]:
 
     # Delete processed invite — one-time use enforced.
     processed_file.unlink(missing_ok=True)
+    try:
+        _reg.InviteRegistry().claim(body.accept_id)  # list shows "accepted"
+    except Exception:  # noqa: BLE001 — bookkeeping must not undo a completed pairing
+        _log.warning("a2a invite registry: could not mark %s accepted", body.accept_id[:8])
 
     console_audit.action_performed(
         tenant_id="_default",
@@ -1010,6 +1042,10 @@ def revoke_invite(
         raise _refuse_lock_busy(rec, "a2a.invite.revoked", "a2a_invite", ikey) from None
     if not ok:
         raise HTTPException(status_code=404, detail=f"invite {ikey!r} not found")
+    # UI-generated invite codes (3-step flow): the ikey is the accept_id and the
+    # secret material sits in the pending file. Revoking must make it unusable.
+    if _UUID_RE.fullmatch(ikey):
+        (_pending_dir() / f"{ikey}.json").unlink(missing_ok=True)
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,

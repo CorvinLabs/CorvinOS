@@ -470,12 +470,14 @@ export interface RepairResponse {
 
 export async function repairSession(
   sid: string,
+  csrf: string,
   dryRun = false,
   signal?: AbortSignal,
 ): Promise<RepairResponse> {
+  // POST mutation: the backend's require_csrf rejects it without the token.
   return api<RepairResponse>(
     `/chat/sessions/${encodeURIComponent(sid)}/aco/repair`,
-    { method: "POST", body: { dry_run: dryRun }, signal },
+    { method: "POST", body: { dry_run: dryRun }, signal, csrf },
   );
 }
 

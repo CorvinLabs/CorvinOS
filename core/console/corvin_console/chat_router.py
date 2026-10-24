@@ -14,7 +14,9 @@ Design invariants (ADR-0168):
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
@@ -42,7 +44,7 @@ class ActionResult:
     action_id: str
     entity_type: str
     entity_id: str | None
-    status: str           # "created" | "queued" | "error" | "not_implemented"
+    status: str           # "created" | "error" | "not_implemented" | "not_available" | "confirmation_required"
     message: str = ""
     payload: dict[str, Any] | None = None
 
@@ -104,6 +106,7 @@ async def _route_ats_task(
             entity_type="ats_task",
             entity_id=task_id,
             status="created",
+            message=f"Task `{task_id}` created.",
             payload={
                 "name": slots.get("name", task_id),
                 "status": "pending",
@@ -122,50 +125,63 @@ async def _route_ats_task(
         )
 
 
-async def _route_workflow(action_id: str, tenant_id: str, slots: dict) -> ActionResult:
-    """Stub: workflow creation (ADR-0168 M2 — wires to WorkerEngine in M2.1)."""
-    # Full integration with WorkerEngine scheduler is M2.1.
-    # This stub returns a well-formed ActionResult so M3 pub/sub and M5 UI work.
-    workflow_id = "wf_" + uuid.uuid4().hex[:8]
+def _not_available(action_id: str, entity_type: str, what: str, where: str) -> ActionResult:
+    """Honest refusal for a chat command that has no creator behind it.
+
+    These three routes used to mint a random ``wf_``/``tool_``/``skill_`` id and
+    answer "queued" while nothing was created, nothing was queued and no
+    subsystem was called (release-readiness gap, 2026-10-24). The WebSocket turn
+    pipeline ends the turn on this status, so no model turn is spent either.
+    """
     return ActionResult(
         action_id=action_id,
-        entity_type="workflow",
-        entity_id=workflow_id,
-        status="queued",
-        message="Workflow queued. Full WorkerEngine wiring is ADR-0168 M2.1.",
-        payload={
-            "name":           slots.get("name", workflow_id),
-            "schedule":       slots.get("schedule"),
-            "target":         slots.get("target"),
-            "execution_mode": slots.get("execution_mode", "foreground"),
-            "status":         "queued",
-            "created_at":     time.time(),
-        },
+        entity_type=entity_type,
+        entity_id=None,
+        status="not_available",
+        message=(f"Creating a {what} from chat is not available on this build — "
+                 f"nothing was created. Use the {where} panel."),
     )
+
+
+async def _route_workflow(action_id: str, tenant_id: str, slots: dict) -> ActionResult:
+    return _not_available(action_id, "workflow", "workflow", "**Workflows**")
 
 
 async def _route_forge_tool(action_id: str, slots: dict) -> ActionResult:
-    tool_id = "tool_" + uuid.uuid4().hex[:8]
-    return ActionResult(
-        action_id=action_id,
-        entity_type="forge_tool",
-        entity_id=tool_id,
-        status="queued",
-        message="Forge tool creation queued. Wiring to ForgePlugin is ADR-0168 M2.2.",
-        payload={"name": slots.get("name", tool_id), "status": "queued"},
-    )
+    return _not_available(action_id, "forge_tool", "tool", "**Forge**")
 
 
 async def _route_skill(action_id: str, slots: dict) -> ActionResult:
-    skill_id = "skill_" + uuid.uuid4().hex[:8]
-    return ActionResult(
-        action_id=action_id,
-        entity_type="skill",
-        entity_id=skill_id,
-        status="queued",
-        message="Skill creation queued. Wiring to SkillForgePlugin is ADR-0168 M2.3.",
-        payload={"name": slots.get("name", skill_id), "status": "queued"},
-    )
+    return _not_available(action_id, "skill", "skill", "**Skills**")
+
+
+# ── /erase confirmation (two-step, one-time token) ────────────────────────────
+#
+# L36 erasure is irreversible. `/erase user uid=<id>` used to run it on the first
+# send. Now the first send only ISSUES a code; the same command plus
+# `confirm=<code>` executes. The code is bound to (tenant, subject), single use
+# and short-lived; it lives in this process only, so a restart simply asks again.
+
+_ERASE_CONFIRM_TTL_S = 120.0
+_ERASE_PENDING: "dict[tuple[str, str], tuple[str, float]]" = {}
+
+
+def _issue_erase_code(tenant_id: str, subject_id: str) -> str:
+    now = time.monotonic()
+    for k in [k for k, (_c, exp) in _ERASE_PENDING.items() if exp <= now]:
+        _ERASE_PENDING.pop(k, None)
+    code = secrets.token_urlsafe(9)
+    _ERASE_PENDING[(tenant_id, subject_id)] = (code, now + _ERASE_CONFIRM_TTL_S)
+    return code
+
+
+def _consume_erase_code(tenant_id: str, subject_id: str, supplied: str) -> bool:
+    """True exactly once for the issued code; any wrong attempt burns it."""
+    entry = _ERASE_PENDING.pop((tenant_id, subject_id), None)
+    if entry is None:
+        return False
+    code, exp = entry
+    return time.monotonic() < exp and hmac.compare_digest(code, supplied)
 
 
 async def _route_erasure(
@@ -182,12 +198,31 @@ async def _route_erasure(
             status="error",
             message="Erasure request requires uid=<subject_id> in the prompt (GDPR Art. 17).",
         )
+    subject_id = str(slots.get("subject_id"))
+    supplied = str(slots.get("confirm") or "")
+    if not supplied:
+        code = _issue_erase_code(tenant_id, subject_id)
+        return ActionResult(
+            action_id=action_id, entity_type="erasure_request", entity_id=None,
+            status="confirmation_required",
+            message=("This permanently erases every personal-data record held for the "
+                     "subject you named, in all layers (GDPR Art. 17). **Nothing has "
+                     "been erased.** To proceed, send the same command with the code: "
+                     f"`/erase user uid=<same id> confirm={code}` "
+                     f"(one use, valid {int(_ERASE_CONFIRM_TTL_S)} s)."),
+        )
+    if not _consume_erase_code(tenant_id, subject_id, supplied):
+        return ActionResult(
+            action_id=action_id, entity_type="erasure_request", entity_id=None,
+            status="error",
+            message=("The confirmation code is wrong, already used or expired. "
+                     "Nothing was erased — send `/erase user uid=<id>` again to get a new code."),
+        )
     # F-A9 (2026-09-07): wired to the REAL L36 ErasureOrchestrator with the
     # real per-layer handler chain — no more "queued" placeholder that erased
     # nothing. The orchestrator is synchronous (disk + SQL), so it runs in a
     # worker thread; the trail lands at <tenant>/global/erasure/<request_id>.json
     # and every layer outcome is audited on the hash chain (codes only).
-    subject_id = str(slots.get("subject_id"))
     try:
         result = await asyncio.to_thread(_execute_erasure, tenant_id, subject_id)
     except ValueError as exc:  # invalid subject id / tenant scope
@@ -269,7 +304,7 @@ async def _route_audit_query(action_id: str, slots: dict) -> ActionResult:
         entity_type="audit_query",
         entity_id=None,
         status="not_implemented",
-        message="Audit queries from CCC are read-only. Use /audit <filter> in the Audit tab.",
+        message="Audit queries are read-only. Send /audit [last <n>] or use the Audit panel.",
     )
 
 
@@ -285,7 +320,6 @@ async def _route_rag_source(
         - name: display name (optional)
         - type: "pdf" | "url" | "github" (optional, auto-detect)
     """
-    source_id = "rag_" + uuid.uuid4().hex[:8]
     source_url = slots.get("url", "").strip()
 
     if not source_url:
@@ -308,21 +342,7 @@ async def _route_rag_source(
             message=f"Unknown source type '{source_type}'. Use: pdf, url, github, or auto.",
         )
 
-    return ActionResult(
-        action_id=action_id,
-        entity_type="rag_source",
-        entity_id=source_id,
-        status="queued",
-        message="RAG source registered. Ingestion queued.",
-        payload={
-            "source_id": source_id,
-            "url": source_url,
-            "name": slots.get("name", source_url),
-            "type": source_type,
-            "status": "ingesting",
-            "created_at": time.time(),
-        },
-    )
+    return _not_available(action_id, "rag_source", "knowledge source", "**Knowledge**")
 
 
 # ── Public dispatch entry point ───────────────────────────────────────────────

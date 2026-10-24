@@ -74,6 +74,16 @@ REAL `ErasureOrchestrator` (real chain + stub backfill, exactly like
 `corvin-erasure run`) in a worker thread; the result carries the request id and
 per-layer statuses (never the subject id). The "queued" placeholder is gone.
 
+**Two-step confirmation (gap/chat, 2026-10-24).** The first `/erase user uid=<id>`
+executes nothing: it answers `confirmation_required` with a one-time code
+(`secrets.token_urlsafe`, bound to tenant + subject, 120 s, process-local,
+`hmac.compare_digest`, single use — a wrong attempt burns it). Only the same
+command plus `confirm=<code>` runs the orchestrator. The code is never in the
+action card payload or the audit record (confidential entity type). A typed
+`/erase` is dispatched even when the `ccc_command_routing` flag is off (the flag
+governs only the implicit per-turn extraction from free text) and the result IS
+the reply: no model turn is spent. Proof: `tests/sandbox/test_gap_chat.py::test_G4_*`.
+
 ---
 
 ## Design tension (resolved in ADR)

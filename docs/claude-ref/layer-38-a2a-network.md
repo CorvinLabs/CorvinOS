@@ -1958,3 +1958,13 @@ a plain `/ask @peer` carries none) · `tests/unit/a2a-feed.test.ts`
 component renders all four role labels from a mixed feed, labels an
 Observer-mode reply, and the banner's Stop button ends a running
 conversation and collapses).
+
+## UI invite codes are registered (gap/chat, 2026-10-24)
+
+`POST /remote-trigger/pair/generate` (the 3-step invite-code flow) now also records the code in
+the `InviteRegistry` (`ikey = accept_id`, `su=True`), so `GET /remote-trigger/pair/invites`
+lists it ("Pending invites") and `DELETE .../invites/{ikey}` revokes it. A revoke also deletes
+the pending file (the secret material) and `pair/accept` refuses a revoked `accept_id` with
+410; a successful accept marks the entry `accepted`. A registry lock timeout refuses the
+generation (503, nothing handed out): never a code the registry cannot list or revoke.
+Proof: `tests/sandbox/test_gap_chat.py::test_G6_*`.

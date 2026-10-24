@@ -52,6 +52,7 @@ import {
 import { chatDebugLog } from "@/lib/chat-registry";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 
 // ── Theme detection ───────────────────────────────────────────────────────────
 function useIsDark(): boolean {
@@ -1227,6 +1228,7 @@ const ANOMALY_SEVERITY_COLOR: Record<string, string> = {
 };
 
 function AnomalyPanel({ sid }: { sid: string }) {
+  const { session: authSession } = useAuth();
   const [repairing, setRepairing] = React.useState(false);
   const [repairMsg, setRepairMsg] = React.useState<string | null>(null);
 
@@ -1241,7 +1243,7 @@ function AnomalyPanel({ sid }: { sid: string }) {
     setRepairing(true);
     setRepairMsg(null);
     try {
-      const result = await repairSession(sid, false);
+      const result = await repairSession(sid, authSession?.csrf_token ?? "", false);
       if (result.convergence_reached) {
         setRepairMsg(`✓ Converged — delta_loss=${result.delta_loss}, 0 CRITICAL/HIGH remaining`);
       } else {
@@ -1256,7 +1258,7 @@ function AnomalyPanel({ sid }: { sid: string }) {
     } finally {
       setRepairing(false);
     }
-  }, [sid, q]);
+  }, [sid, q, authSession]);
 
   if (q.isPending) return (
     <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">

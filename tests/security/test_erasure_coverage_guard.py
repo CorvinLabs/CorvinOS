@@ -132,6 +132,8 @@ def test_ccc_erase_dispatch_runs_the_real_orchestrator(home):
     from entity_extract import EntityPlan  # type: ignore
 
     plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": SUBJECT}, confidence=1.0)
+    # /erase asks for a one-time code first; take the one the router would have shown the user.
+    plan.slots["confirm"] = chat_router._issue_erase_code("_default", plan.slots["subject_id"])
     result = asyncio.run(chat_router.dispatch(plan, "_default"))
     assert result.entity_type == "erasure_request"
     assert result.status == "created", result
@@ -155,6 +157,8 @@ def test_ccc_erase_rejects_invalid_subject(home):
     from entity_extract import EntityPlan  # type: ignore
 
     plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": "alice@example.com"}, confidence=1.0)
+    # /erase asks for a one-time code first; take the one the router would have shown the user.
+    plan.slots["confirm"] = chat_router._issue_erase_code("_default", plan.slots["subject_id"])
     result = asyncio.run(chat_router.dispatch(plan, "_default"))
     assert result.status == "error" and result.entity_id is None
 
@@ -541,6 +545,8 @@ def test_unattributable_layer_reaches_the_real_erase_route(home):
     (path / ".corvin-sysprompt-guard.txt").write_text("synthetic prompt body")
 
     plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": SUBJECT}, confidence=1.0)
+    # /erase asks for a one-time code first; take the one the router would have shown the user.
+    plan.slots["confirm"] = chat_router._issue_erase_code("_default", plan.slots["subject_id"])
     result = asyncio.run(chat_router.dispatch(plan, "_default"))
     assert result.status == "created", result
     layers = {l["layer_id"]: l for l in result.payload["layers"]}
@@ -555,6 +561,8 @@ def test_every_covered_entry_survives_nothing_through_the_real_erase_route(home)
 
     planted = {e: _plant(e, SUBJECT, OTHER) for e in _covered_entries()}
     plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": SUBJECT}, confidence=1.0)
+    # /erase asks for a one-time code first; take the one the router would have shown the user.
+    plan.slots["confirm"] = chat_router._issue_erase_code("_default", plan.slots["subject_id"])
     result = asyncio.run(chat_router.dispatch(plan, "_default"))
     assert result.status == "created", result
     assert result.payload["status"] in ("completed", "partial"), result.payload
@@ -751,6 +759,8 @@ def test_live_llm_reply_captured_by_cel_anchor_is_erased(home):
 
     plan = EntityPlan(entity_type="erasure_request",
                       slots={"subject_id": SUBJECT}, confidence=1.0)
+    # /erase asks for a one-time code first; take the one the router would have shown the user.
+    plan.slots["confirm"] = chat_router._issue_erase_code("_default", plan.slots["subject_id"])
     result = asyncio.run(chat_router.dispatch(plan, "_default"))
     assert result.status == "created", result
     layers = {l["layer_id"]: l for l in result.payload["layers"]}

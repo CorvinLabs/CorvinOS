@@ -30,14 +30,21 @@ export interface SlashCommand {
 // `extraCommands` below; every `/` line it sends goes through
 // `sendPeerThreadCommand`, never `sendA2AFeedMessage`.
 
+// Every entry below ACTS: it is answered by the server dispatcher
+// (`slash_commands.py`), by the WebSocket loop (`/btw`, `/resume`), by the turn
+// pipeline (`/delegate`, `/use-engine`, `/debug-engine`, `/create task`, `/erase`)
+// or by the composer itself (`/new`, `/stop`). Commands that only existed on the
+// messaging bridges (/go /propose /share /persona) or that merely pointed at a
+// tab (/skills /memory /dialectic-* /forget /clear /reset) are NOT listed: a
+// palette entry that does nothing is worse than none.
+// `tests/unit/slash-palette-honest.test.ts` pins this list against the server.
 export const SLASH_COMMANDS = [
   // ── Help ──
   { cmd: "/help",              args: "",               desc: "List available console commands" },
   // ── Session management ──
   { cmd: "/stop",             args: "",                desc: "Abort the running task (aliases: /cancel, /halt)" },
-  { cmd: "/new",              args: "",                desc: "Start a new session" },
-  { cmd: "/clear",            args: "",                desc: "Clear conversation history" },
-  { cmd: "/reset",            args: "",                desc: "Reset session and history" },
+  { cmd: "/new",              args: "",                desc: "Start a new chat (the current one keeps its history)" },
+  { cmd: "/resume",           args: "<task_id>",       desc: "Scope this chat to a task and restore its saved context" },
   // ── Agentic compute (ADR-0214) ──
   { cmd: "/use-engine tiered_delegation", args: "<task>", desc: "TDE: parallel three-gate delegation — needs Settings → Worker Engine = tde" },
   { cmd: "/use-engine acs",   args: "<task>",          desc: "Force ACS manager/worker fan-out" },
@@ -45,28 +52,17 @@ export const SLASH_COMMANDS = [
   { cmd: "/delegate",         args: "<task>",          desc: "Force ACS delegation for this turn" },
   { cmd: "/engine-auto",      args: "<task>",          desc: "Explicit auto-detection (normal behavior)" },
   { cmd: "/debug-engine",     args: "<task>",          desc: "Show engine-selection signals for this turn" },
-  // ── CCC — entity creation (ADR-0168 M6) ──
-  { cmd: "/create workflow",  args: '[name="…"] [schedule="*/5 * * * *"]', desc: "CCC: create a workflow" },
-  { cmd: "/create task",      args: '[name="…"]',      desc: "CCC: create an ATS task" },
-  { cmd: "/create tool",      args: '[name="…"]',      desc: "CCC: forge a new tool" },
-  { cmd: "/create skill",     args: '[name="…"]',      desc: "CCC: create a skill" },
-  { cmd: "/erase",            args: "user uid=<id>",   desc: "CCC: GDPR Art. 17 erasure request" },
-  { cmd: "/audit",            args: "[last <n>]",      desc: "Show recent audit events" },
-  // ── Config ──
-  { cmd: "/engine",           args: "<name>",          desc: "Switch engine: claude_code · codex · opencode · copilot" },
-  { cmd: "/persona",          args: "<name>",          desc: "Pin a persona for this chat" },
-  { cmd: "/forget",           args: "",                desc: "Delete your memory (GDPR Art. 17)" },
+  // ── CCC — entity commands (ADR-0168) ──
+  { cmd: "/create task",      args: '[name="…"]',      desc: "Create an ATS task" },
+  { cmd: "/erase",            args: "user uid=<id>",   desc: "GDPR Art. 17 erasure — asks you to confirm before anything is erased" },
+  { cmd: "/audit",            args: "[last <n>]",      desc: "Show the most recent audit events (event types and times only)" },
+  // ── Info ──
+  { cmd: "/engine",           args: "",                desc: "Show the configured engine (change it in the Engines tab)" },
   { cmd: "/quota",            args: "",                desc: "Check your message quota" },
-  { cmd: "/share",            args: "",                desc: "Grant single-session consent (this console session)" },
-  { cmd: "/go",               args: "[steering]",      desc: "Execute a pending proposal" },
-  { cmd: "/propose",          args: "<text>",          desc: "Queue a proposal" },
   { cmd: "/btw",              args: "<text>",          desc: "Inject a note into an active stream" },
-  { cmd: "/skills",           args: "",                desc: "List active skills" },
-  { cmd: "/memory",           args: "",                desc: "Show memory summary" },
   { cmd: "/whoami",           args: "",                desc: "Show your identity and role" },
   { cmd: "/role",             args: "",                desc: "Show your current role" },
-  { cmd: "/dialectic-on",     args: "",                desc: "Enable dialectic reasoning" },
-  { cmd: "/dialectic-off",    args: "",                desc: "Disable dialectic reasoning" },
+  { cmd: "/federation",       args: "[capability]",    desc: "List your local agents and the agents your A2A peers advertise" },
   // ── Plugin Builder (ADR-0253) ──
   { cmd: "/plugin-builder",   args: "[status|cancel]", desc: "Interview-driven plugin design (Idea/Architecture/ADR/Plan + scaffold)" },
 ] as const;

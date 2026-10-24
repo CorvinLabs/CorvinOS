@@ -49,7 +49,9 @@ import logging
 log = logging.getLogger("corvin.console.slash_commands")
 
 # CCC commands are handled downstream (entity_extract) — never intercept them.
-_CCC_CMDS = frozenset({"/create", "/erase", "/audit"})
+# (/audit is NOT in this set any more: it is answered right here from the tenant
+# chain, see _audit_tail. /create and /erase still run through the turn pipeline.)
+_CCC_CMDS = frozenset({"/create", "/erase"})
 
 # Force-delegation verb (ADR-0114). Handled downstream by stream_turn's
 # ``_force_delegate`` branch — it must pass THROUGH this dispatcher, not be
@@ -97,23 +99,82 @@ _HELP = (
     "- `/help` — this list\n"
     "- `/whoami`, `/role` — your identity, tier and role\n"
     "- `/quota` — your daily chat-turn limit\n"
-    "- `/engine [name]` — show the configured engine (change it in the Engines tab)\n"
-    "- `/skills`, `/memory` — open the matching tab to manage these\n"
-    "- `/dialectic-on`, `/dialectic-off` — toggle in the Engines/Settings tab\n"
-    "- `/create workflow|task|tool|skill`, `/erase`, `/audit` — CCC entity actions\n"
+    "- `/engine` — show the configured engine (change it in the Engines tab)\n"
+    "- `/audit [last <n>]` — the most recent audit events (types and times only)\n"
+    "- `/create task [name=\"…\"]` — create an ATS task\n"
+    "- `/erase user uid=<id>` — GDPR Art. 17 erasure; it first asks you to confirm "
+    "with a one-time code and erases nothing until you do\n"
     "- `/delegate <task>` — force ACS delegation for this turn\n"
     "- `/use-engine tiered_delegation|acs|claude_code <task>` — force a specific "
     "engine for this turn\n"
     "- `/engine-auto <task>` — explicit auto-detection (normal behavior)\n"
     "- `/debug-engine <task>` — show engine-selection signals for this turn\n"
+    "- `/btw <note>` — steer the reply that is running right now\n"
     "- `/plugin-builder` — interview-driven plugin design (Idea/Architecture/ADR"
     "/Plan + scaffold), `/plugin-builder status|cancel` — check or stop it\n"
     "- `/federation [capability]` — your local agents and the agents your A2A "
     "peers advertise (delegate via the Federation API)\n"
     "- `/resume <task_id>` — scope this chat to a task and restore its saved "
     "context, if any (handled before this dispatcher — see routes/chat.py)\n"
-    "- `/stop` (Stop button), `/new`, `/clear`, `/reset` — session controls\n"
+    "- `/new` — open a new chat; `/stop` (or the Stop button) — end the running reply\n"
+    "\n"
+    "Workflows, tools and skills are created in their own panels "
+    "(**Workflows**, **Forge**, **Skills**), not from chat.\n"
 )
+
+
+def _audit_tail(tenant_id: str, arg: str) -> str:
+    """``/audit [last <n>]`` — the newest records of THIS tenant's chain.
+
+    Read-only and content-free: event type and time only, never ``details``
+    (GDPR Art. 5). Reads the canonical chain (``tenant_audit_chain``) so the
+    answer is the same trail the boot tripwire verifies.
+    """
+    import json
+    import re
+    import time
+
+    m = re.search(r"\d+", arg or "")
+    n = max(1, min(50, int(m.group(0)))) if m else 10
+    try:
+        from core.paths.tenant import tenant_audit_chain  # noqa: PLC0415
+        path = tenant_audit_chain(tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        return f"The audit chain could not be located ({type(exc).__name__})."
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return "No audit records yet for this tenant."
+    window = 1_048_576  # newest ~1 MiB is enough for 50 records
+    try:
+        with path.open("rb") as fh:
+            if size > window:
+                fh.seek(size - window)
+                fh.readline()  # drop the partial first line
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError as exc:
+        return f"The audit chain could not be read ({type(exc).__name__})."
+    rows: "list[str]" = []
+    for raw in reversed(lines):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            ev = json.loads(raw)
+            et = str(ev.get("event_type") or ev.get("event") or "")
+            ts = float(ev.get("ts") or 0.0)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if not et:
+            continue
+        stamp = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime(ts)) if ts else "unknown time"
+        rows.append(f"- {stamp} `{''.join(c for c in et if c.isalnum() or c in '._-:')[:80]}`")
+        if len(rows) >= n:
+            break
+    if not rows:
+        return "No audit records yet for this tenant."
+    return (f"**Last {len(rows)} audit events** (newest first; types and times only — "
+            "open the **Audit** panel for details)\n" + "\n".join(rows))
 
 
 def _federation_overview(tenant_id: str, capability: str) -> str:
@@ -304,6 +365,9 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
     cmd = head.lower().strip()
     arg = arg.strip()
 
+    if cmd == "/audit":
+        return _audit_tail(tenant_id, arg)
+
     # CCC → downstream entity-extract pipeline.
     if cmd in _CCC_CMDS:
         return None
@@ -350,9 +414,15 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
     if cmd == "/memory":
         return "Your memory is shown in the **Memory** tab."
 
+    if cmd == "/persona":
+        return ("Personas are bound per chat by the operator (`cowork` binding), "
+                "not selectable from the web console. The console always talks "
+                "to the **assistant** persona.")
+
     if cmd == "/forget":
-        return ("To delete your data (GDPR Art. 17), use `/erase` or the "
-                "**Memory** tab — this performs the audited erasure flow.")
+        return ("`/forget` does nothing by itself. To delete your data "
+                "(GDPR Art. 17) use `/erase user uid=<id>` — it asks you to "
+                "confirm before anything is erased.")
 
     if cmd == "/browser":
         # ADR-0193 retired the classifier-routed /browser dispatch in favour of
@@ -373,7 +443,7 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
             "/stop": ("the **Stop** button", "stop the running reply"),
             "/cancel": ("the **Stop** button", "cancel the running reply"),
             "/halt": ("the **Stop** button", "halt the running reply"),
-            "/new": ("the **New chat** button", "start a new chat"),
+            "/new": ("the **New chat** button (or send `/new` from the composer)", "start a new chat"),
             "/clear": ("the **New chat** button", "clear this chat"),
             "/reset": ("the **New chat** button", "reset this chat"),
         }[cmd]

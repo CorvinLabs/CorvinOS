@@ -6962,6 +6962,10 @@ async def _stream_turn_impl(
                     status="ok" if rc == 0 else ("cancelled" if rc == -1 else "error"),
                     duration_ms=int((time.monotonic() - _os_turn_start) * 1000),
                     tool_call_count=_os_tools_called,
+                    # The START carries these; without them the END is attributed to
+                    # no chat, the per-session engine-spans view never pairs it and
+                    # every console OS span reads "unfinished".
+                    channel=CHANNEL, chat_key=sess.chat_key,
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -7113,7 +7117,16 @@ async def _stream_turn_impl(
     # Yields a "ccc_action" event to the WebSocket; the LLM turn continues
     # normally — CCC is additive, not a bypass.
     import os as _os_ccc  # noqa: PLC0415 — local import to keep module-level clean
-    if (_feature_flags.is_enabled("ccc_command_routing", sess.tenant_id)
+    # An EXPLICIT slash command (/create, /erase) is the user's own instruction and
+    # is always dispatched; the flag only governs the implicit per-turn extraction
+    # from free text. Without this, the palette's /create and /erase went to the
+    # model as plain prose on every install that has the flag at its default.
+    try:
+        from . import slash_commands as _ccc_sc  # noqa: PLC0415
+        _ccc_slash = _ccc_sc.is_ccc(_task_text.strip())
+    except Exception:  # noqa: BLE001
+        _ccc_slash = False
+    if ((_ccc_slash or _feature_flags.is_enabled("ccc_command_routing", sess.tenant_id))
             and _os_ccc.environ.get("CORVIN_CCC_M1_ENABLED", "1") != "0"):
         try:
             from entity_extract import extract as _ccc_extract  # type: ignore  # noqa: PLC0415
@@ -7167,6 +7180,51 @@ async def _stream_turn_impl(
                     "message":     _ccc_result.message,
                     "payload":     _ws_payload,
                 }
+                # A typed slash command is answered by the command itself: the
+                # result IS the reply, no model turn is spent on it. (Before:
+                # the reply card was followed by a full LLM turn that "answered"
+                # the literal command text; /create workflow|tool|skill even
+                # invented queued ids.) Free-text hits stay additive.
+                if _ccc_slash:
+                    _ccc_msg = _ccc_result.message or (
+                        f"{_ccc_result.entity_type}: {_ccc_result.status}")
+                    _ccc_ok = _ccc_result.status in ("created", "confirmation_required")
+                    _os_audit("os_turn.started", {"model": _os_model_used})
+                    tm.record_event(task_id, (
+                        {"event": "task.completed", "exit_code": 0} if _ccc_ok else
+                        {"event": "task.failed", "exit_code": 1,
+                         "error": f"ccc command {_ccc_result.status}"}))
+                    _audit_emit(sess, "web.turn.completed", rc=0 if _ccc_ok else 1,
+                                result_chars=len(_ccc_msg), usage=None,
+                                reason="ccc_slash_command")
+                    _route_meta["no_engine"] = True
+                    _os_emit_completed(0 if _ccc_ok else 1)
+                    yield {"type": "delta", "text": _ccc_msg}
+                    yield {"type": "result", "text": _ccc_msg, "usage": None}
+                    touch(sess, increment_turn=True)
+                    _append_turn(sess, "assistant", [{"kind": "text", "text": _ccc_msg}])
+                    yield {"type": "done"}
+                    return
+            elif _ccc_slash:
+                # `/create banana`: a typed command nobody handles. Say so; never
+                # hand the literal command text to the model as a prompt.
+                _ccc_msg = ("Unknown `/create` target. Supported: `/create task "
+                            "[name=\"…\"]`. Workflows, tools and skills are created in "
+                            "their own panels (**Workflows**, **Forge**, **Skills**).")
+                _os_audit("os_turn.started", {"model": _os_model_used})
+                tm.record_event(task_id, {"event": "task.failed", "exit_code": 1,
+                                          "error": "ccc command unknown target"})
+                _audit_emit(sess, "web.turn.completed", rc=1,
+                            result_chars=len(_ccc_msg), usage=None,
+                            reason="ccc_slash_command")
+                _route_meta["no_engine"] = True
+                _os_emit_completed(1)
+                yield {"type": "delta", "text": _ccc_msg}
+                yield {"type": "result", "text": _ccc_msg, "usage": None}
+                touch(sess, increment_turn=True)
+                _append_turn(sess, "assistant", [{"kind": "text", "text": _ccc_msg}])
+                yield {"type": "done"}
+                return
         except ImportError:
             pass  # entity_extract not installed — skip CCC (degraded mode)
         except Exception as _ccc_err:  # noqa: BLE001

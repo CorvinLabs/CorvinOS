@@ -26,10 +26,14 @@ def test_plain_text_passes_through():
 
 
 def test_ccc_commands_pass_through():
-    for t in ("/create workflow name=x", "/create task", "/erase user uid=1", "/audit last 5"):
+    for t in ("/create workflow name=x", "/create task", "/erase user uid=1"):
         assert _h(t) is None, f"{t!r} must fall through to entity_extract"
     assert SC.is_ccc("/create tool") is True
+    assert SC.is_ccc("/erase user uid=1") is True
     assert SC.is_ccc("/whoami") is False
+    # /audit is answered by the dispatcher itself (real events), not by the pipeline
+    assert SC.is_ccc("/audit last 5") is False
+    assert _h("/audit last 5") is not None
 
 
 def test_delegate_passes_through_to_stream_turn():
@@ -58,6 +62,11 @@ def test_use_engine_family_passes_through_to_stream_turn():
 def test_help_lists_commands():
     out = _h("/help")
     assert out and "/whoami" in out and "/engine" in out
+    # only commands that act are advertised
+    for dead in ("`/skills`", "`/memory`", "`/dialectic-on`", "`/clear`", "`/reset`", "`/go`", "`/propose`", "`/share`"):
+        assert dead not in out, dead
+    for live in ("/audit", "/federation", "/resume", "/new", "/btw"):
+        assert live in out, live
 
 
 def test_whoami_and_role_show_identity():
@@ -81,11 +90,11 @@ def test_engine_shows_configured_engine():
 
 # ── informational pointers (no LLM leak) ─────────────────────────────
 def test_pointer_commands_return_guidance():
-    assert "Personas" in _h("/persona")
+    assert "persona" in _h("/persona").lower() and "Unknown" not in _h("/persona")
     assert "Skills" in _h("/skills")
     assert "Memory" in _h("/memory")
     assert "Engines" in _h("/dialectic-on") and "Engines" in _h("/dialectic-off")
-    assert "erase" in _h("/forget").lower()
+    assert "/erase" in _h("/forget") and "confirm" in _h("/forget").lower()
 
 
 def test_bridge_only_commands_are_explained():

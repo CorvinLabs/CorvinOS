@@ -18,6 +18,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  ShieldCheck,
   Sparkles,
   Square,
   Trash2,
@@ -412,6 +413,7 @@ export function ChatPage() {
             key={activeSid}
             sid={activeSid}
             session={list.data?.sessions.find((s) => s.sid === activeSid)}
+            onNewChat={() => createMut.mutate()}
           />
         ) : (
           <EmptyState onNew={() => createMut.mutate()} pending={createMut.isPending} />
@@ -715,9 +717,12 @@ const HISTORY_CAP = 1000;
 function ChatPane({
   sid,
   session: meta,
+  onNewChat,
 }: {
   sid: string;
   session?: ChatSessionSummary;
+  /** `/new` in the composer: open a fresh chat (the current one keeps running). */
+  onNewChat?: () => void;
 }) {
   const { session: auth, refresh: refreshAuth } = useAuth();
   const csrf = auth!.csrf_token;
@@ -1208,6 +1213,12 @@ function ChatPane({
       return;
     }
     const trimmed = text.trim();
+    // `/new` is a client action: it creates a session, it is never sent to the model.
+    if (onNewChat && !hasAttachments && /^\/new\s*$/i.test(trimmed)) {
+      setInput("");
+      onNewChat();
+      return;
+    }
     if (streaming) {
       if (/^\/(stop|cancel|halt)\s*$/i.test(trimmed)) {
         setInput("");
@@ -1558,6 +1569,17 @@ function ChatPane({
             </Button>
           )}
           <Button
+            variant={auditOpen ? "accent" : "ghost"}
+            size="sm"
+            onClick={() => setAuditOpen((v) => !v)}
+            title="Audit Trail"
+            aria-pressed={auditOpen}
+            data-testid="chat-audit-toggle"
+          >
+            <ShieldCheck className="h-4 w-4" />
+            Audit
+          </Button>
+          <Button
             variant={voiceOut ? "accent" : "ghost"}
             size="sm"
             onClick={handleVoiceToggle}
@@ -1656,6 +1678,15 @@ function ChatPane({
               }`}
             >
               TDE Graph
+            </button>
+            <button
+              onClick={() => setAuditOpen(false)}
+              className="ml-auto mr-2 rounded p-1 text-muted-foreground hover:text-foreground"
+              title="Close audit trail"
+              aria-label="Close audit trail"
+              data-testid="chat-audit-close"
+            >
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
           {/* panel body */}

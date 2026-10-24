@@ -259,6 +259,8 @@ class DataLifecycleE2E(unittest.TestCase):
             from entity_extract import EntityPlan  # type: ignore[import-not-found]
 
             plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": subject}, confidence=1.0)
+            # /erase asks for a one-time code first; take the one the router would have shown the user.
+            plan.slots["confirm"] = chat_router._issue_erase_code("tenant_a", plan.slots["subject_id"])
             result = asyncio.run(chat_router.dispatch(plan, "tenant_a"))
             self.assertEqual(result.status, "created", result)
             layers = {lr["layer_id"]: lr for lr in result.payload["layers"]}

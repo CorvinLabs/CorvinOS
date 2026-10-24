@@ -111,6 +111,8 @@ _TARGET = re.compile(
 
 # uid / user reference for erasure
 _UID = re.compile(r"\buid\s*[=:]\s*([\w@._-]{1,128})\b", re.I)
+# one-time confirmation code for an erasure (issued by the router's first answer)
+_CONFIRM = re.compile(r"\bconfirm\s*[=:]\s*([A-Za-z0-9_-]{8,64})(?![\w-])", re.I)
 
 # ── Domain-prefix patterns — Pass 1 ──────────────────────────────────────────
 
@@ -175,6 +177,8 @@ def _extract_slots(text: str, entity_type: str) -> dict[str, Any]:
     if entity_type == ENTITY_ERASURE:
         if m := _UID.search(text):
             slots["subject_id"] = m.group(1)
+        if m := _CONFIRM.search(text):
+            slots["confirm"] = m.group(1)
 
     # Background mode
     if re.search(r"\bhintergrund\b|\bbackground\b|\brecurring\b|\bscheduled?\b", text, re.I):

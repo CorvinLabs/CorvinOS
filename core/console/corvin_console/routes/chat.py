@@ -55,6 +55,53 @@ from .. import task_manager as tm_module
 from ..deps import require_csrf, require_session
 from ..utils import read_json_or_empty as _read_json_safe
 
+
+def _session_chain_paths(tenant_id: str) -> "list[Path]":
+    """Audit-chain files a per-session audit view must read, canonical first.
+
+    Every writer (bridge adapter ``audit_event``, console ``_os_audit``, the
+    engine-span emitter, the ACS runtime) resolves ``tenant_audit_chain(tenant_id)``
+    (ADR-0654). The views used to read the host-global bridge file and
+    ``tenants/<tid>/global/<chain file>`` instead, so a fresh turn never showed
+    up in them (S-11b). The pre-ADR-0654 files stay readable as history
+    (append-only, never merged); callers filter every row by the session's
+    ``chat_key`` / run dir, and duplicates are dropped by resolved path.
+    """
+    from forge import paths as _fp  # type: ignore[import-untyped]
+    paths = [_fp.tenant_audit_chain(tenant_id)]
+    try:
+        paths.extend(_fp.legacy_audit_chains(tenant_id).values())
+    except Exception:  # noqa: BLE001 — history is best-effort, canonical is not
+        pass
+    out: "list[Path]" = []
+    seen: set[str] = set()
+    for p in paths:
+        key = str(Path(p).resolve())
+        if key not in seen:
+            seen.add(key)
+            out.append(Path(p))
+    return out
+
+
+def _iter_chain_lines(tenant_id: str, needles: "tuple[str, ...]" = ()):
+    """Stream the raw lines of the chains from ``_session_chain_paths``.
+
+    A line is yielded only when it contains one of ``needles`` (cheap pre-filter:
+    a legacy chain can be hundreds of MB and holds every event family). An
+    unreadable or missing file is skipped. Always a generator, hence truthy.
+    """
+    for p in _session_chain_paths(tenant_id):
+        try:
+            if not p.is_file():
+                continue
+            with p.open("r", encoding="utf-8") as fh:
+                for raw in fh:
+                    if needles and not any(n in raw for n in needles):
+                        continue
+                    yield raw
+        except OSError:
+            continue
+
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
@@ -932,6 +979,16 @@ async def chat_stream(
                 _engine_msg = chat_runtime.get_engine_unavailable_message(rec.tenant_id)
                 if _engine_msg and chat_runtime.will_delegate(sess, prompt):
                     _engine_msg = None
+                # /create task and /erase are answered by the command itself
+                # (chat_runtime CCC hook) — they need no engine, so a missing
+                # engine must not turn them into a 503.
+                if _engine_msg:
+                    try:
+                        from .. import slash_commands as _slash_ccc  # noqa: PLC0415
+                        if _slash_ccc.is_ccc(prompt):
+                            _engine_msg = None
+                    except Exception:  # noqa: BLE001
+                        pass
                 if _engine_msg:
                     await websocket.send_json({
                         "type": "error", "code": 503,
@@ -1663,11 +1720,11 @@ def get_session_wdat_graph(
     # engine_timing[worker_id] = {started_at, completed_at, duration_ms, tokens_used, engine_id, model_id}
     engine_timing_by_worker: dict[str, dict[str, Any]] = {}
 
-    audit_path = _fp.corvin_home() / "tenants" / rec.tenant_id / "global" / "audit.jsonl"
-    if audit_path.exists():
+    _chain_lines = _iter_chain_lines(rec.tenant_id, ("forge.tool_executed", "acs.engine_"))
+    if _chain_lines:
         try:
             raw_tool_calls: list[dict[str, Any]] = []
-            for line in audit_path.read_text(encoding="utf-8").splitlines():
+            for line in _chain_lines:
                 line = line.strip()
                 if not line:
                     continue
@@ -1757,12 +1814,11 @@ def get_worker_trace(
     # to avoid the empty-string Path("").expanduser() == Path(".") pitfall.
     from forge import paths as _fp  # type: ignore[import-untyped]
 
-    audit_path = _fp.corvin_home() / "tenants" / rec.tenant_id / "global" / "audit.jsonl"
-
     tool_calls: list[dict[str, Any]] = []
-    if audit_path.exists():
+    _chain_lines = _iter_chain_lines(rec.tenant_id, ("forge.tool_executed",))
+    if _chain_lines:
         try:
-            for line in audit_path.read_text(encoding="utf-8").splitlines():
+            for line in _chain_lines:
                 line = line.strip()
                 if not line:
                     continue
@@ -1834,16 +1890,13 @@ def list_session_os_turns(
     # migrated install corvin_home()/global is the ADR-0007 compat symlink
     # to tenants/_default/global, so this converges with the tenant path.
     # Exposure stays per-session via the chat_key filter below.
-    audit_path = _fp.corvin_home() / "global" / "forge" / "audit.jsonl"
-    if not audit_path.is_file():
-        return {"sid": sid, "chat_key": chat_key, "count": 0, "turns": []}
 
     # Single pass: collect os_turn.* events for this chat_key, group by turn_id.
     turns_by_id: dict[str, dict[str, Any]] = {}
     turns_order: list[str] = []
 
     try:
-        with audit_path.open("r", encoding="utf-8") as fh:
+        with contextlib.nullcontext(_iter_chain_lines(rec.tenant_id, ('"os_turn.',))) as fh:
             for raw in fh:
                 raw = raw.strip()
                 if not raw:
@@ -1978,15 +2031,8 @@ def get_session_execution_log(
     chat_key = sess.chat_key
     from forge import paths as _fp  # type: ignore[import-untyped]
 
-    corvin_home = _fp.corvin_home()
-    # Two separate audit chains:
-    # • os_turn.* events → bridge audit = global/forge/audit.jsonl
-    #   (written by audit.audit_event() which resolves to corvin_home/global/forge/)
-    # • acs.* events → tenant audit = tenants/<tid>/global/audit.jsonl
-    audit_paths = [
-        corvin_home / "global" / "forge" / "audit.jsonl",
-        corvin_home / "tenants" / rec.tenant_id / "global" / "audit.jsonl",
-    ]
+    # ONE canonical chain (+ pre-ADR-0654 history): see _session_chain_paths.
+    audit_paths = _session_chain_paths(rec.tenant_id)
 
     def _parse_chain(path: Any) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -2088,11 +2134,7 @@ def list_session_engine_spans(
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
     chat_key = sess.chat_key
     from forge import paths as _fp  # type: ignore[import-untyped]
-    corvin_home = _fp.corvin_home()
-    audit_paths = [
-        corvin_home / "global" / "forge" / "audit.jsonl",                 # OS spans
-        corvin_home / "tenants" / rec.tenant_id / "global" / "audit.jsonl",  # worker spans
-    ]
+    audit_paths = _session_chain_paths(rec.tenant_id)
     # Run dirs that belong to this session (persisted + canonical home — same
     # stale-workdir fallback as /wdat so a home change can't hide spans).
     _run_roots = []
