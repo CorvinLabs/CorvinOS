@@ -1239,6 +1239,10 @@ EVENT_SEVERITY: dict[str, str] = {
     "video_producer.web_slides_install_requested": "INFO",
     "video_producer.web_slides_install_finished": "INFO",
     "video_producer.capture_setting_changed": "INFO",
+    # 2026-10-24: narration engine / maximum length (stored in the plugin registry record, the
+    # single source of truth) and the tenant's default video style; both audit-first.
+    "video_producer.settings_changed":   "INFO",
+    "video_producer.style_default_changed": "INFO",
     "video_producer.capture_started":    "INFO",
     "video_producer.capture_finished":   "INFO",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
@@ -4786,6 +4790,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "video_producer.asset_updated": frozenset({"tenant_id", "asset_id", "hotspot_count", "caption_changed",
                                                "step_count"}),  # ADR-2260: board reveal steps assigned
     "video_producer.capture_setting_changed": frozenset({"tenant_id", "enabled"}),
+    "video_producer.settings_changed": frozenset({
+        "tenant_id", "changed", "tts_engine", "previous_tts_engine",
+        "max_duration_minutes", "previous_max_duration_minutes",
+    }),
+    "video_producer.style_default_changed": frozenset({"tenant_id", "style_id", "previous_style_id"}),
     "video_producer.capture_started": frozenset({"tenant_id", "host", "url_sha256_prefix", "viewport"}),
     "video_producer.capture_finished": frozenset({
         "tenant_id", "host", "url_sha256_prefix", "viewport", "outcome", "refusal", "asset_id", "bytes",

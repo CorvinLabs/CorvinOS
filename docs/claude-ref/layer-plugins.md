@@ -1026,7 +1026,7 @@ page, as a second "Marketplace" sidebar entry). `/app/packages`, `/app/plugins`,
 |---|---|---|
 | Browse | `GET /api/v1/marketplace/plugins` (index/plugins.json of the Corvin-Marketplace checkout, ADR-0511) — each entry now carries `registry_id`, `installable`, `install_blocker`, `installed`, `enabled`, `runtime_loaded`, computed by the SAME resolution the install route runs (`marketplace_resolve.manifest_plugin_id`) and the same tenant registry `/plugins` reads | Install (`POST …/plugins/{index_id}/install`, synchronous job; the response's final status is rendered, never a progress bar). A contributor-tier entry shows its blocker and no button — only builtin ids with a `plugin.yaml` under a trusted root install (ADR-0643) |
 | Installed | `GET /plugins` (tenant `registry.yaml` + what runs in this process) | enable (with consent for non-builtin origin), disable, settings (JSON, schema-validated), uninstall (refused while enabled — the backend's rule, mirrored as a disabled button) |
-| Packages | `packages.py` (ADR-0268 skill package ZIPs) | upload (multipart — the one call not through `api()`, same base and CSRF header), details, uninstall |
+| Packages | `packages.py` (ADR-0268 skill package ZIPs) | upload (multipart — the one call not through `api()`, same base and CSRF header), details, uninstall (manifest archived; refused with 409 while another installed package lists it under `dependencies`). A REGISTRY only: the contents of a package are not activated, and the tab says so |
 | MCP tools | `mcp_plugins.py` (ADR-0096) | install from `npm:`/`pip:`/`github:` (SHA-256 pinned), activate/deactivate for the console's two scopes (user, tenant), remove. A 503 renders "not available on this build", never an empty catalogue |
 
 **What "install" is.** For a marketplace plugin: a `PluginRecord` written to
@@ -1035,7 +1035,9 @@ plus an instance dir — the source runs IN PLACE from the marketplace checkout
 (operator rule: plugin source lives only there); enable hot-loads it and rolls
 the file back if `on_load()` fails; uninstall removes the record and the
 instance dir, never the source. For a package: validated, audited, then moved
-atomically into `<home>/packages/<tenant>/installed/`. For an MCP tool: a
+atomically into `<CORVIN_HOME>/tenants/<tenant>/packages/installed/` (until 2026-10-24
+it went to `Path.home()/.corvin/packages` and ignored `CORVIN_HOME`; uninstall copies
+`metadata.json` to `packages/archive/` first). For an MCP tool: a
 catalogue entry (+ pinned tarball for github).
 
 **What was deleted rather than consolidated** (a mock button wired to a real
@@ -1048,7 +1050,12 @@ enable/disable/delete echoed success, tenant from a request header);
 `core/marketplace/installer.py` (an explicit mock); the dead SPA components
 (`panels/marketplace.tsx`, `MarketplaceTab`, `InstalledTab`,
 `components/marketplace/*`, `CustomRepositories*`, `PackageMarketplace`) and the
-Playwright specs that drove them.
+Playwright specs that drove them. A second dead cluster went on 2026-10-24:
+`pages/marketplace/discovery-api.ts` and `components/{skill-details-panel,
+discovery-browse,skill-card,skill-collections}.tsx` had no importer (the API
+module called `/api/v1/marketplace/...` paths through the console `api()` base and
+the "reviews" tab had no submit route). The backend `marketplace_discovery_routes.py`
+remains mounted and tested but has no UI caller.
 The skill install / uninstall / list surface that remains is
 `routes/skill_manager.py`, mounted at `/v1/console/skills-manager`: every route
 needs a live console session; install and uninstall additionally need the CSRF

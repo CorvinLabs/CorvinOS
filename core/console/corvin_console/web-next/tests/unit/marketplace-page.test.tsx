@@ -120,7 +120,7 @@ describe("Marketplace — tab ↔ URL", () => {
     renderAt("/app/marketplace?tab=packages");
     expect(screen.getByText(MARKER_HEADER)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Packages" })).toHaveAttribute("aria-selected", "true");
-    await screen.findByText(/skill packages installed for this tenant/);
+    await screen.findByText(/skill packages registered for this tenant/);
   });
   it("rewrites a bogus tab to browse with REPLACE", async () => {
     server.use(...baseHandlers());

@@ -7,14 +7,14 @@
       "manifest": 2,
       "page": 30,
       "route": 34,
-      "tabs-trigger": 42
+      "tabs-trigger": 38
     },
     "deeplinks": 20,
     "nav_static": 28,
     "panels_inventoried": 28,
     "panels_registered": 37,
     "routes": 34,
-    "tabs_triggers": 42
+    "tabs_triggers": 38
   },
   "entries": [
     {
@@ -2675,58 +2675,6 @@
       "slug": "tabs-trigger-src-pages-inspector-tsx-upload",
       "sources": [
         "src/pages/inspector.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#overview",
-      "kind": "tabs-trigger",
-      "label": "overview",
-      "nav": false,
-      "owner": "src:src/pages/marketplace/components/skill-details-panel.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-pages-marketplace-components-skill-details-panel-tsx-overview",
-      "sources": [
-        "src/pages/marketplace/components/skill-details-panel.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#reviews",
-      "kind": "tabs-trigger",
-      "label": "reviews",
-      "nav": false,
-      "owner": "src:src/pages/marketplace/components/skill-details-panel.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-pages-marketplace-components-skill-details-panel-tsx-reviews",
-      "sources": [
-        "src/pages/marketplace/components/skill-details-panel.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#technical",
-      "kind": "tabs-trigger",
-      "label": "technical",
-      "nav": false,
-      "owner": "src:src/pages/marketplace/components/skill-details-panel.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-pages-marketplace-components-skill-details-panel-tsx-technical",
-      "sources": [
-        "src/pages/marketplace/components/skill-details-panel.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#versions",
-      "kind": "tabs-trigger",
-      "label": "versions",
-      "nav": false,
-      "owner": "src:src/pages/marketplace/components/skill-details-panel.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-pages-marketplace-components-skill-details-panel-tsx-versions",
-      "sources": [
-        "src/pages/marketplace/components/skill-details-panel.tsx <TabsTrigger>"
       ]
     },
     {
