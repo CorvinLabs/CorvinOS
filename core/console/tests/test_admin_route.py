@@ -64,8 +64,13 @@ def _sandbox(tmp_path: Path, *, tenants: tuple[str, ...] = ("_default",)):
         (home / "tenants" / tenant_id / "global" / "console" / "sessions").mkdir(parents=True)
 
     prev = {k: os.environ.get(k) for k in
-            ("CORVIN_HOME", "CORVIN_TENANT_ID", "VOICE_AUDIT_PATH")}
+            ("CORVIN_HOME", "CORVIN_TENANT_ID", "VOICE_AUDIT_PATH", "CORVIN_PLUGIN_SLOT_DIR")}
     os.environ["CORVIN_HOME"] = str(home)
+    # SkillForge mirrors every skill it registers to a "plugin slot". Unset, that slot is
+    # <repo>/corvin_operator/skill-forge/skills/dyn/ - so each sandboxed test that created a skill left a SKILL.md in
+    # the working tree (dozens of assistant_datahub_* dirs since 2026-10-12), where later runs and `claude -p` workers
+    # can read it. Keep the slot inside the sandbox.
+    os.environ["CORVIN_PLUGIN_SLOT_DIR"] = str(home / "plugin-slot")
     os.environ["CORVIN_TENANT_ID"] = tenants[0]
     # Keep the real GDPR chain out of the test run (tests/conftest.py convention).
     os.environ["VOICE_AUDIT_PATH"] = str(home / "audit.jsonl")

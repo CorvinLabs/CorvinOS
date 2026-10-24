@@ -8,6 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from corvin_compute import license_gate as LG
@@ -26,6 +28,10 @@ def test_revoked_license_is_denied(monkeypatch):
 def test_non_revoked_falls_through_to_normal_flow(monkeypatch):
     # Not revoked + no license file -> normal trial path (revocation check is a
     # no-op, it does not break the licensed/trial flow).
+    # Forcing _LICENSE_PLUGIN_AVAILABLE=True is only coherent when corvin_license really imports: the
+    # gate's names (load_license_from_disk, LicenseFileMissing, ...) exist only after that import, so on
+    # an Apache-only build this raised NameError (it failed on origin/main before any change here).
+    pytest.importorskip("corvin_license.verifier")
     monkeypatch.setattr(LG, "_LICENSE_PLUGIN_AVAILABLE", True)
     monkeypatch.setattr(LG, "_is_license_revoked", lambda: False)
     with tempfile.TemporaryDirectory() as td:

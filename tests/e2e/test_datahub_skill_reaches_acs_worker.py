@@ -119,27 +119,32 @@ QUESTION = (
 )
 
 
-def _derived_rows() -> list[dict]:
-    """The REAL rows with total_streams transformed (x3 + 11). The first live run (2026-10-24) showed the worker
-    finding the original CSV on disk by the table name and cross-checking against it, so 'the right number' could
-    not tell skill from file. No file anywhere holds this transformed sum: only the skill does."""
+def _derived_rows(a: int, b: int) -> list[dict]:
+    """The REAL rows with total_streams transformed (x a + b), with (a, b) drawn fresh for EVERY run.
+
+    Why a per-run secret: workers are `claude -p` processes with filesystem tools, so anything on disk is
+    discoverable. Live runs on 2026-10-24 found (1) the original CSV by the table name, (2) a SKILL.md left by an
+    earlier run (the skill registry mirrored it into the repo tree, corvin_operator/skill-forge/skills/dyn/, until
+    test_admin_route._sandbox set CORVIN_PLUGIN_SLOT_DIR; leftovers of older runs may still lie there). A transformed sum that is
+    new each run cannot be present in any earlier artefact, report or leftover skill, so finding it proves the
+    worker read THIS run's skill."""
     with open(REAL_CSV, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     for r in rows:
-        r["total_streams"] = str(int(float(r["total_streams"])) * 3 + 11)
+        r["total_streams"] = str(int(float(r["total_streams"])) * a + b)
     return rows
 
 
-def _write_derived(path: Path) -> None:
-    rows = _derived_rows()
+def _write_derived(path: Path, a: int, b: int) -> None:
+    rows = _derived_rows(a, b)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
 
 
-def _truth() -> dict:
-    rows = _derived_rows()
+def _truth(a: int, b: int) -> dict:
+    rows = _derived_rows(a, b)
     return {"rows": len(rows), "distinct_countries": len({r["country"] for r in rows}),
             "streams_sum": sum(int(r["total_streams"]) for r in rows)}
 
@@ -184,10 +189,12 @@ def _run_acs(home: Path, *, skills: bool, tmp: Path) -> dict:
 @live
 def test_live_datahub_skill_from_real_csv_reaches_the_acs_worker_and_is_used(tmp_path):
     (tmp_path / "project").mkdir()
-    truth = _truth()
+    import secrets
+    a, b = 2 + secrets.randbelow(8), 100 + secrets.randbelow(900)        # a fresh secret per run, see _derived_rows
+    truth = _truth(a, b)
     # the skill is built from the transformed real rows; that file is deleted right after the skill exists
     src = tmp_path / "table.csv"
-    _write_derived(src)
+    _write_derived(src, a, b)
 
     # CONTROL first, in a home where no skill exists anywhere. Workers are `claude -p` processes with filesystem
     # tools: run 3 (2026-10-24) showed one reading a SKILL.md left by an earlier test under /tmp, which made the
@@ -197,7 +204,6 @@ def test_live_datahub_skill_from_real_csv_reaches_the_acs_worker_and_is_used(tmp
     (control_home / "tenants" / "_default").mkdir(parents=True)
     off = _run_acs(control_home, skills=False, tmp=tmp_path)
 
-    home = None
     try:
         return _treatment(tmp_path, src, truth, off)
     finally:
@@ -219,6 +225,8 @@ def _treatment(tmp_path, src, truth, off):
         assert meta["status"] == "completed" and meta["row_count"] == truth["rows"]
         skill_name = meta["skill_name"]
         assert skill_name and skill_name.startswith("assistant.datahub_"), meta
+        # nothing may land in the repo tree (the sandbox now owns the plugin slot, see test_admin_route._sandbox)
+        assert not (_REPO / "corvin_operator" / "skill-forge" / "skills" / "dyn" / skill_name.replace(".", "_")).exists()
         body = client.get(f"/v1/console/datahub/{meta['artifact_id']}").json()["body"]
     # the facts are in the skill - computed independently above from the file
     assert f"computed from all {truth['rows']} rows" in body

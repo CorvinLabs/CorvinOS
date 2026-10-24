@@ -644,6 +644,11 @@ sandbox. Audit events: `acs.tool_forged`, `acs.tool_forge_rejected`, `acs.skill_
 `acs.skill_forge_rejected`, `acs.skill_persist_failed` (reason codes only, never source text). A workflow
 without the keys behaves as before.
 
+**Platform limit (fail-closed).** The sandbox is `bwrap`, which exists on Linux only. On Windows and macOS (or a Linux
+without usable bwrap) every tool request is refused with `sandbox_unavailable`; nothing is ever run unsandboxed. Skills
+need no sandbox and work everywhere. Recursive delegation: a child worker at depth 1 gets the same forged tools (children
+share the parent's `RunForge`), proven in `test_a_child_worker_at_depth_one_uses_the_forged_tool_too`.
+
 **One Forge for all agentic compute (`dynamic_tools.publish: true`).** The ACS run-local registry is invisible to the
 other runtimes, which resolve tools from the tenant's user-scope Forge (`corvin_compute.cli._build_runner_fn`). With
 `publish`, a tool that passed the self-test is registered there too (re-tested in that registry) and can then be used by
@@ -651,8 +656,9 @@ grid and Bayesian sweeps, HAC and pipelines (also mid-pipeline: forge at the ste
 `add_stage`). It never overwrites or case-shadows an existing tool (`acs.tool_publish_rejected`, reason `duplicate`);
 audit `acs.tool_published`. Without `publish` the tool stays run-local (negative control in the unity test).
 
-Proof: `corvin_operator/bridges/shared/test_acs_forge_compute_unity_e2e.py` (publish, no-overwrite, Bayesian, grid, HAC,
-pipeline, forge mid-pipeline, negative control; real Forge runner, no stubbed runner) and
-`corvin_operator/bridges/shared/test_acs_runtime_forge.py` (34 boundary tests with the real registry and
-sandbox, scripted LLM) and a live run with real `claude -p` manager and worker (`acs-forge-live-e2e/` in the
-claude-playground repo).
+Proof: `corvin_operator/bridges/shared/test_acs_forge_compute_unity_e2e.py` (publish, no-overwrite, Bayesian, grid, HAC incl.
+Bayesian sub-managers and the backprop gate with budget reallocation, pipeline, forge mid-pipeline, negative control;
+real Forge runner, no stubbed runner) and `corvin_operator/bridges/shared/test_acs_runtime_forge.py` (boundary tests
+with the real registry and sandbox, scripted LLM) and live runs with a real `claude -p` manager and worker
+(`acs-forge-live-e2e/` in the claude-playground repo). Test-fake note: a scripted `_call_worker_sync` must return a
+dict as its third value (the attestation), as the real one does; `None` makes `_run_one` die after the call.

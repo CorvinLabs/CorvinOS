@@ -129,7 +129,7 @@ class Harness:
                 env = json.loads(cp.stdout)
                 self.tool_outputs.append(env)
                 out["result"] = {"tool": m.group(2), "data": env.get("data")}
-            return json.dumps(out), 30, None
+            return json.dumps(out), 30, {}
         return fake_worker
 
     def run(self, manager_script, spec, tool_input=None):
@@ -186,6 +186,11 @@ def test_a_forged_tool_is_sandbox_tested_reaches_the_worker_and_runs_in_the_sand
     assert spec is not None and spec.call_count >= 2, "self-test + the worker's call"
     assert spec.meta.get("origin") == "acs"
     assert result is not None
+    # the worker's result travelled the whole way back: its engine completed and the next manager prompt shows it.
+    # (The first version of this fake returned `None` as the attestation; _run_one then died after the tool call
+    # and these tests still passed, because the tool had already run - so assert the end of the path too.)
+    assert h.events("acs.engine_completed") and not h.events("acs.engine_error")
+    assert str(_expected_first_bytes(ITEMS)[0]) in h.manager_prompts[-1]
 
 
 def test_the_manager_is_told_the_protocol_and_sees_the_outcome_of_its_request(tmp_path):
@@ -393,6 +398,45 @@ def test_expect_matching_is_a_subset_with_float_tolerance_and_strict_booleans(ac
 def test_only_a_real_true_enables_forging(spec, tools, skills):
     cfg = _af.config_from_spec(spec)
     assert (cfg.tools_enabled, cfg.skills_enabled) == (tools, skills)
+
+
+def test_a_child_worker_at_depth_one_uses_the_forged_tool_too(tmp_path):
+    """Recursive delegation: worker A (depth 0) delegates, its child (depth 1) must see the forged tool in its own
+    system prompt and run it in the sandbox. Children get ``dataclasses.replace(ctx, ...)``, i.e. the same RunForge."""
+    class DelegatingHarness(Harness):
+        def _worker(self, tool_input):
+            calls = {"n": 0}
+
+            def fake_worker(prompt, system, *a, **k):
+                calls["n"] += 1
+                self.worker_systems.append(system)
+                if calls["n"] == 1:        # depth 0 worker: split the job
+                    child = {"id": "child", "instructions": "hash these items: " + json.dumps(ITEMS),
+                             "expected_output": {"type": "object"}, "success_criteria": "done",
+                             "priority": "normal", "budget_allocation": {"max_tokens": 2000, "max_tool_calls": 4}}
+                    return json.dumps({"status": "success", "confidence": 0.9,
+                                       "result": {"decision": "DELEGATE", "subtasks": [child]}}), 30, {}
+                m = re.search(r"call: (.+? call --name (\S+) --input) '<one-line JSON object>'", system)
+                assert m, "the child's prompt has no forged-tool call line"
+                cp = subprocess.run(shlex.split(m.group(1)) + [json.dumps(tool_input)],
+                                    capture_output=True, text=True, timeout=90)
+                env = json.loads(cp.stdout)
+                self.tool_outputs.append(env)
+                return json.dumps({"status": "success", "confidence": 0.9,
+                                   "result": {"tool": m.group(2), "data": env.get("data")}}), 30, {}
+            return fake_worker
+
+    h = DelegatingHarness(tmp_path)
+    decision = _decision_delegate(forge={"tools": [SHA_TOOL]})
+    decision["subtasks"][0]["can_delegate"] = True
+    spec = _spec(**DYN)
+    spec["orchestration"]["delegation_loop"] = {"budget": {"max_depth": 2, "max_loops": 3, "max_total_workers": 6}}
+    result = h.run([decision, COMPLETE], spec, tool_input={"items": ITEMS})
+    assert result.status == "success", result.error
+    assert len(h.worker_systems) == 2 and all("call --name" in s for s in h.worker_systems), ("both depths need the line", " ".join(str(a[1]) + str({k: v for k, v in (a[2] if len(a) > 2 else {}).items() if k in ("reason", "error", "depth")}) for a in h.audit))
+    assert len(h.tool_outputs) == 1 and h.tool_outputs[0]["ok"] is True
+    assert h.tool_outputs[0]["data"]["first_bytes"] == _expected_first_bytes(ITEMS)
+    assert any(a[1] == "acs.delegation" and a[2].get("depth") == 1 for a in h.audit if len(a) >= 3), "no depth-1 delegation"
 
 
 def test_limits_are_clamped():

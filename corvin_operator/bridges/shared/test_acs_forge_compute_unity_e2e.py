@@ -181,6 +181,56 @@ def test_hac_drives_two_sub_managers_over_the_forged_tool(runner, forged, tmp_pa
     assert _user_registry().get("dynamic.quad_loss").call_count >= 32
 
 
+def test_hac_with_bayesian_sub_managers_and_a_backprop_gate_over_the_forged_tool(runner, forged, tmp_path):
+    """Bayesian sub-managers (GP, sklearn) and the human/agent backprop gate: round 0 parks at the gate, the budget of
+    m1 is moved to m2, the gate resumes with m2 re-run, and the loop ends in a terminal state with real losses."""
+    pytest.importorskip("sklearn")
+    import time
+    from corvin_compute.engine_protocol import ComputeSpec, GateAction
+    from corvin_compute.hac.engine import HACEngine
+
+    events = []
+    engine = HACEngine(corvin_home=tmp_path / "hac-gate-home", runner_fn=runner,
+                       audit_emit=lambda e, sev=None, d=None, **k: events.append(e))
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    engine.set_loop(loop)
+    cont = {"x": {"type": "float_uniform", "low": 0, "high": 1}, "y": {"type": "float_uniform", "low": 0, "high": 1}}
+    stage = {"stage_id": "s1", "tool_name": "dynamic.quad_loss", "param_grid": cont}
+    try:
+        job = engine.submit(ComputeSpec(
+            engine="hac", tenant_id="_default", budget={"max_iterations": 40, "max_wall_clock_s": 180},
+            extra={"sub_managers": [
+                {"manager_id": "m1", "stages": [stage], "budget_fraction": 0.4, "min_iterations": 12, "strategy": "bayesian"},
+                {"manager_id": "m2", "stages": [stage], "budget_fraction": 0.4, "min_iterations": 12, "strategy": "bayesian"}],
+                "backprop_gate": True, "backprop_gate_timeout_s": 120, "max_backprop_rounds": 2,
+                "convergence_epsilon": 0.005, "convergence_window": 2}))
+        deadline = time.monotonic() + 150
+        opened = 0
+        while engine.status(job).state not in ("converged", "budget", "failed", "aborted"):
+            assert time.monotonic() < deadline, engine.status(job)
+            if engine.status(job).state == "gate_open":
+                if opened == 0:
+                    engine.gate_action(job, GateAction("reallocate_budget",
+                                                       {"from_manager": "m1", "to_manager": "m2", "fraction": 0.25}))
+                engine.gate_action(job, GateAction("resume", {"re_run": ["m2"]}))
+                opened += 1
+                time.sleep(0.5)
+            time.sleep(0.2)
+        res = engine.result(job, wait_s=30)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=5)
+    assert opened >= 1, "the backprop gate never opened"
+    assert res.state in ("converged", "budget"), res
+    managers = res.result["managers"]
+    assert set(managers) == {"m1", "m2"} and all(m["best_loss"] is not None and m["best_loss"] < 0.05
+                                               for m in managers.values()), res.result
+    assert len(res.result["root_loss_history"]) >= 2, res.result          # round 0 + at least one re-run
+    assert "compute.backprop_gate_opened" in events and "compute.hac_budget_reallocated" in events
+
+
 def test_pipeline_runs_two_stages_over_the_forged_tool(runner, forged, tmp_path):
     from corvin_compute.engine_protocol import ComputeSpec
     from corvin_compute.pipeline.engine import PipelineEngine
