@@ -24,6 +24,7 @@ import {
   Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -80,6 +81,15 @@ async function encryptWithRsaOaep(pubkey: CryptoKey, plaintext: string): Promise
   const data = encoder.encode(plaintext);
   const ciphertext = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, pubkey, data);
   return btoa(String.fromCharCode(...new Uint8Array(ciphertext)));
+}
+
+/** Remove a stored key. The re-auth token is the session fingerprint (server: require_token). */
+async function deleteSecret(keyName: string, csrf: string, reAuthToken: string): Promise<void> {
+  await api(`/byok/secrets/${keyName}`, {
+    method: "DELETE",
+    csrf,
+    body: { re_auth_token: reAuthToken },
+  });
 }
 
 async function postSecret(keyName: string, value: string, pubkey: CryptoKey, csrf: string): Promise<RotateResult> {
@@ -168,6 +178,25 @@ function KeyCard({ keyName, label, hint, present, pubkey, csrf, onRotated }: Key
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<RotateResult | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
+  const { session } = useAuth();
+
+  async function handleDelete() {
+    if (!window.confirm(`Delete the stored ${label} key? Consumers stop using it.`)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteSecret(keyName, csrf, session?.fingerprint ?? "");
+      setValue("");
+      setRevealed(null);
+      setSuccess(null);
+      onRotated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   async function handleToggleReveal() {
     if (showValue) { setShowValue(false); return; }
@@ -276,6 +305,18 @@ function KeyCard({ keyName, label, hint, present, pubkey, csrf, onRotated }: Key
             )}
             <span className="ml-1.5">{loading ? "Saving…" : present ? "Rotate" : "Save"}</span>
           </Button>
+          {present && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-testid="delete-key-btn"
+              disabled={deleting || loading}
+              onClick={() => void handleDelete()}
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </Button>
+          )}
         </div>
 
         {revealed !== null && !error && (

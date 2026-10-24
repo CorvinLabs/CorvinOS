@@ -211,7 +211,7 @@ export function DashboardPage() {
           value={
             dataSources.isError
               ? "unavailable"
-              : `${dsCount} connected`
+              : `${dsCount} configured`
           }
           hint={
             dsCount === 0

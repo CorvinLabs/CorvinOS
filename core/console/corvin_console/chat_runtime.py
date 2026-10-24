@@ -2121,14 +2121,54 @@ def _install_generated_panels(tenant_id: str, workdir: "Path") -> list[dict]:
             return []
     except Exception:  # noqa: BLE001
         return []
+    from . import audit as _console_audit  # lazy: avoid import cycle at module load
+    from types import SimpleNamespace
+    from .routes.license_gates import _gate  # same forge.create gate as POST /panels
     out: list[dict] = []
-    for f in sorted(wd.glob("corvin-panel*.html")):
+    files = sorted(wd.glob("corvin-panel*.html"))
+    if not files:
+        return []
+    # The chat path is a second route into the panel store: it gets the SAME
+    # capability gate as POST /panels (forge.create, 402 on deny, 503 fail-closed)
+    # and the same audit record. A denied install is audited and the generated
+    # file is consumed, so it is not retried on every later turn.
+    try:
+        _gate(
+            SimpleNamespace(tenant_id=tenant_id),
+            capability="forge.create",
+            entry_point="console:chat:panel_install",
+            deny_reason="Forge is a member-only feature",
+            upgrade_url="https://corvin-labs.com/upgrade",
+        )
+        gate_ok, deny_reason = True, ""
+    except Exception as exc:  # noqa: BLE001 — deny or enforcement failure: fail closed
+        gate_ok = False
+        deny_reason = "forge-create-denied"
+        _ = exc
+    for f in files:
         try:
+            if not gate_ok:
+                _console_audit.action_denied(
+                    tenant_id=tenant_id, sid_fingerprint="system",
+                    action="panel.install", target_kind="console_panel",
+                    target_id="ai-chat", reason=deny_reason,
+                )
+                f.unlink(missing_ok=True)
+                continue
             html = f.read_text(encoding="utf-8", errors="replace")
             if not html.strip():
                 continue
             title = extract_title(html)
-            meta = store_panel(tenant_id, slugify(title), title, html, created_by="ai-chat")
+            panel_id = slugify(title)
+            meta = store_panel(tenant_id, panel_id, title, html, created_by="ai-chat")
+            try:
+                _console_audit.panel_created(
+                    tenant_id=tenant_id, panel_id=panel_id, title=title,
+                    nav_group=meta.get("nav_group", "ai"), icon=meta.get("icon", "Sparkles"),
+                    sid_fingerprint="system", created_by="ai-chat",
+                )
+            except Exception:  # noqa: BLE001 — the audit must not undo a stored panel silently
+                pass
             out.append(meta)
             f.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001 — one bad file must not stop the rest

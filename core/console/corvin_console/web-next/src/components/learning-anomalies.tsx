@@ -35,7 +35,7 @@ const TITLE: Record<string, string> = {
 export const LearningAnomalies: React.FC = () => {
   const q = useQuery({
     queryKey: ["learning-daemon-anomalies"],
-    queryFn: () => api<{ data: { anomalies?: LearningAnomaly[]; saved_at: string | null } }>("/v1/console/api/learning/daemon"),
+    queryFn: () => api<{ data: { anomalies?: LearningAnomaly[]; saved_at: string | null } }>("/api/learning/daemon"),
     refetchInterval: 60_000,
   });
   const anomalies = q.data?.data.anomalies ?? [];
