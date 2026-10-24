@@ -30,7 +30,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
