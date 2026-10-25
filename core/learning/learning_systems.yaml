@@ -467,3 +467,57 @@ systems:
       - core/orchestration/cli.py
       - core/orchestration/__main__.py
       - core/orchestration/subsystems/**
+
+# ADR-2281 §6: the unreachable core/vibe_engineering modules, classified before
+# any retirement there (classified 2026-10-25, T-0260). Evidence for every one:
+# unreachable per scripts/learning_reachability.py (listed in its baseline);
+# its name importers are tests, siblings in this same unreachable package, or
+# same-named modules elsewhere; and none keeps learned state, adjusts a
+# parameter from an outcome, or measures a learning system. None is a learning
+# system, so none gets a register entry; retiring or wiring them is not a
+# learning decision. tests/learning/test_learning_systems_register.py fails
+# when an unreachable module there is neither classified here nor listed by a
+# register entry.
+classified_not_learning:
+  - path: core/vibe_engineering/background_monitor.py
+    reason: task monitor that posts status notifications; no learned state
+  - path: core/vibe_engineering/checkpoint_fallback.py
+    reason: graceful degradation when a checkpoint write fails
+  - path: core/vibe_engineering/feature_flags.py
+    reason: flag resolver for this package (the live registry is corvin_core.feature_flags)
+  - path: core/vibe_engineering/feature_flags_tier1.py
+    reason: flag constants, documented in the file as read by nothing in production
+  - path: core/vibe_engineering/graph_events.py
+    reason: emits graph-build events to an event bus
+  - path: core/vibe_engineering/logging_config.py
+    reason: structured JSON logging setup
+  - path: core/vibe_engineering/measure_coverage.py
+    reason: developer script that measures code coverage
+  - path: core/vibe_engineering/measurement.py
+    reason: >-
+      appends autonomy latency/error samples (ADR-0222) to a JSONL file; nothing
+      adjusts from them and they do not measure a learning system
+  - path: core/vibe_engineering/notification_router.py
+    reason: routes task/phase events to the originating messenger
+  - path: core/vibe_engineering/orchestration_events.py
+    reason: event bridge from the task orchestrator to notifications and voice
+  - path: core/vibe_engineering/run_tests.py
+    reason: local test-runner script
+  - path: core/vibe_engineering/run_validation_rounds_2_3.py
+    reason: >-
+      fault-injection validation script; its stress case writes skill grades as
+      load, it does not learn from them
+  - path: core/vibe_engineering/session_renewal_engine.py
+    reason: renews a session at the token limit
+  - path: core/vibe_engineering/task_cli.py
+    reason: CLI for task resume and monitoring
+  - path: core/vibe_engineering/task_heartbeat.py
+    reason: periodic status updates for long-running phases
+  - path: core/vibe_engineering/task_orchestrator.py
+    reason: DAG-based phase executor
+  - path: core/vibe_engineering/task_registry.py
+    reason: persistent registry of in-flight tasks and phases
+  - path: core/vibe_engineering/vector_store.py
+    reason: semantic vector storage with an in-memory fallback; stores, does not learn
+  - path: core/vibe_engineering/vibe_orchestrator_worker_integration.py
+    reason: wires a worker pool into the orchestrator

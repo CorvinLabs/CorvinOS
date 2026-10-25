@@ -141,3 +141,22 @@ def test_retiring_decisions_resolve_in_corvin_knowledge():
                     "Corvin-Knowledge/, or the corvin_decisions submodule)")
     for adr in ids:
         assert list(d.glob(f"{adr}-*.md")), f"{adr} does not resolve in {d}"
+
+
+def test_vibe_engineering_unreachable_modules_are_classified():
+    """ADR-2281 §6: each unreachable core/vibe_engineering module is classified
+    as learning (a register entry lists it) or not-learning (with a reason)."""
+    data = yaml.safe_load(REGISTER.read_text(encoding="utf-8"))
+    not_learning = {c["path"]: c for c in data.get("classified_not_learning", [])}
+    for c in not_learning.values():
+        assert str(c.get("reason") or "").strip(), f"{c['path']}: no reason"
+        assert (REPO / c["path"]).is_file(), (
+            f"{c['path']} is gone; drop its classification")
+    in_register = {str(p.relative_to(REPO)) for s in data["systems"]
+                   for m in s.get("modules", []) for p in _matches(m)}
+    baseline = json.loads(REACH_BASELINE.read_text(encoding="utf-8"))["unreachable"]
+    ve = [b for b in baseline if b.startswith("core/vibe_engineering/")]
+    assert ve, "positive control: the baseline lists no core/vibe_engineering module"
+    for path in ve:
+        assert path in not_learning or path in in_register, (
+            f"{path} is unreachable and not classified (learning or not-learning)")
