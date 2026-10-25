@@ -207,6 +207,32 @@ producing a guard that quietly allows what its own table forbids:
   resolved, never falling back to the engine default. **Not wired yet:** nothing in
   production calls `validate_provider` or passes `provider=`; the reroute that does is
   T-0219. Until then this is a tested mechanism, not a live guarantee.
+* **The sensitive-route setting and its API (T-0218, ADR-2268).**
+  `spec.data_classification.sensitive_route: {enabled, provider, model_id}` names the
+  declared provider and model a turn would run on instead of being refused. The
+  predicates are defined once in `corvin_operator/bridges/shared/sensitive_route.py` and
+  read by the gate and the console alike: `ROUTE_BLOCK` (a mapping; `null` is absent),
+  `ROUTE_ON` (`enabled` is the boolean `true`), `ROUTE_MALFORMED` (`enabled` present but
+  not a boolean, or an enabled block whose `provider` / `model_id` is missing or outside
+  its charset; `model_id` is `[A-Za-z0-9._:@/-]{1,200}` and stored verbatim). A provider is
+  **eligible** only with an explicit `provider_compliance` entry of locality exactly
+  `local` or `eu_cloud`, never the native `anthropic` provider, never an aggregator
+  (`model_source: openrouter`) or a provider behind `proxy_base_url`, and only while its
+  current egress host still equals the declared `endpoint_host` (a platform provider is
+  judged on the host rendered from its DECLARED region and resource, not the
+  environment). API on the engine router: `GET /v1/console/settings/engine/sensitive-route`
+  (the stored value plus `eligible_providers` with `admitted_classes`; an empty
+  declaration set gives an empty list), `PUT …/sensitive-route`
+  (`{enabled, provider, model_id}`; `422 target_not_eligible` or `policy_invalid`;
+  disabling always works) and `PUT …/provider-compliance` (the server fills
+  `endpoint_host`; `422` with `locality_not_admissible`, `network_egress_not_admissible`,
+  `unknown_provider`, `native_provider`, `aggregator`, `proxy_provider`,
+  `platform_incomplete`). An unparseable tenant file is `422 policy_invalid` and is never
+  written; the file is written at mode `0o600`; every write is audited as
+  `engine_setting_updated`, every refusal as `engine.setting.update`. The console reads
+  and writes the home through `spawn_gates._resolve_corvin_home`, the resolver the gate
+  uses. **Not wired:** nothing reads `sensitive_route` at spawn time yet (T-0219), so
+  enabling it changes no routing today.
 
 `SECRET` is the only row kept local-only by default. It fires solely on literal
 credentials (API keys, private keys, `password = …`) detected by regex, occurs

@@ -100,10 +100,20 @@ _CLAUDE_MODELS = [
 # ---------------------------------------------------------------------------
 
 def _corvin_home() -> Path:
-    env = os.environ.get("CORVIN_HOME")
-    if env:
-        return Path(os.path.expanduser(os.path.expandvars(env)))
-    return Path.home() / ".corvin"
+    """The home the tenant file is read AND written from: the resolver the gates use.
+
+    ``CORVIN_HOME``, else this checkout's repo-marker home (``spawn_gates._resolve_corvin_home``).
+    This used to be ``CORVIN_HOME`` or ``~/.corvin``, so on a checkout without ``CORVIN_HOME``
+    the console wrote a policy file the L34/L35 gates never read (T-0218, ADR-2268).
+    """
+    try:
+        from spawn_gates import _resolve_corvin_home  # type: ignore  # noqa: PLC0415
+        return _resolve_corvin_home(None)
+    except Exception:  # noqa: BLE001 — a stripped layout keeps the old rule
+        env = os.environ.get("CORVIN_HOME")
+        if env:
+            return Path(os.path.expanduser(os.path.expandvars(env)))
+        return Path.home() / ".corvin"
 
 
 def _tenant_yaml_path(tenant_id: str) -> Path:
@@ -852,3 +862,216 @@ def detect_engines(
             "needs_bootstrap": True,
             "error": "detection_failed",
         }
+
+
+# ---------------------------------------------------------------------------
+# Sensitive-data route (ADR-2268, T-0218)
+#
+# Two operator settings under spec.data_classification: ``provider_compliance`` (facts about a
+# provider: locality, egress, region/models for a platform provider; the SERVER fills
+# ``endpoint_host``) and ``sensitive_route`` (which declared provider + model serves a turn that
+# L34 would otherwise refuse). These routes never use ``_load_tenant_yaml`` / ``_save_tenant_yaml``
+# as is: an unparseable file is ``422 policy_invalid`` and is never written (T-0227), and they
+# resolve the home through the SAME resolver the gate reads.
+# ---------------------------------------------------------------------------
+
+class ProviderComplianceBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    provider: str = Field(..., max_length=63)
+    locality: str = Field(..., max_length=32)
+    network_egress: str = Field("external", max_length=32)
+    region: str = Field("", max_length=64)
+    project: str = Field("", max_length=128)
+    resource: str = Field("", max_length=128)
+    models: list[str] = Field(default_factory=list, max_length=200)
+
+
+class SensitiveRouteBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    enabled: bool
+    provider: str = Field("", max_length=63)
+    model_id: str = Field("", max_length=400)
+
+
+def _refuse(rec: session_auth.SessionRecord, target_id: str, code: str, message: str) -> "HTTPException":
+    """Audit the refusal (``engine.setting.update``) and build the 422 with a stable code."""
+    try:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="engine.setting.update", target_kind="engine_setting",
+            target_id=target_id, reason=code,
+        )
+    except Exception:  # noqa: BLE001 — an audit hiccup never changes the answer
+        pass
+    return HTTPException(
+        status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={"code": code, "message": message},
+    )
+
+
+def _load_policy(rec: session_auth.SessionRecord, target_id: str) -> dict[str, Any]:
+    """The tenant mapping for a read-modify-write, or ``422 policy_invalid`` (never a write)."""
+    path = _tenant_yaml_path(rec.tenant_id)
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text())
+    except Exception as exc:
+        _log.error("tenant YAML at %s is unparseable; refusing the sensitive-route request", path)
+        raise _refuse(rec, target_id, "policy_invalid",
+                      "tenant configuration is unparseable; fix or restore it first") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise _refuse(rec, target_id, "policy_invalid", "tenant configuration is not a mapping")
+    return data
+
+
+def _dc_section(rec: session_auth.SessionRecord, target_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    """``spec.data_classification`` as a mutable mapping, created when absent, refused when mistyped."""
+    spec = data.setdefault("spec", {})
+    if spec is None:
+        spec = data["spec"] = {}
+    if not isinstance(spec, dict):
+        raise _refuse(rec, target_id, "policy_invalid", "spec is not a mapping")
+    section = spec.setdefault("data_classification", {})
+    if section is None:
+        section = spec["data_classification"] = {}
+    if not isinstance(section, dict):
+        raise _refuse(rec, target_id, "policy_invalid", "spec.data_classification is not a mapping")
+    return section
+
+
+def _route_payload(rec: session_auth.SessionRecord, target_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    import sensitive_route as _sr  # type: ignore  # noqa: PLC0415
+    from engine_models import load_providers  # type: ignore  # noqa: PLC0415
+
+    parsed = _sr.parse_sensitive_route(data)
+    stored = parsed.stored
+    try:
+        eligible = _sr.eligible_providers(data, load_providers())
+    except ValueError as exc:
+        raise _refuse(rec, target_id, "policy_invalid", "the data classification policy is invalid") from exc
+    return {
+        "enabled": parsed.on,
+        "provider": stored.provider if stored else "",
+        "model_id": stored.model_id if stored else "",
+        "eligible_providers": eligible,
+    }
+
+
+def _audit_updated(rec: session_auth.SessionRecord, target_id: str) -> None:
+    try:
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="engine_setting_updated", target_kind="engine", target_id=target_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@router.get("/sensitive-route")
+def get_sensitive_route(
+    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """The stored route and the providers it may target (never a sample)."""
+    return _route_payload(_rec, "sensitive_route", _load_policy(_rec, "sensitive_route"))
+
+
+@router.put("/provider-compliance")
+def put_provider_compliance(
+    body: ProviderComplianceBody,
+    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _csrf: Annotated[None, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Declare the locality of one provider. The server fills ``endpoint_host``."""
+    import data_classification as _dc  # type: ignore  # noqa: PLC0415
+    import sensitive_route as _sr  # type: ignore  # noqa: PLC0415
+    from engine_models import load_providers  # type: ignore  # noqa: PLC0415
+
+    target = "provider_compliance"
+    providers = load_providers()
+    ps = providers.get(body.provider)
+    if ps is None:
+        raise _refuse(_rec, target, "unknown_provider", f"unknown provider {body.provider!r}")
+    if body.locality not in ("local", "eu_cloud"):
+        raise _refuse(_rec, target, "locality_not_admissible",
+                      "only 'local' or 'eu_cloud' can be declared for a sensitive route")
+    if body.network_egress not in ("external", "local"):
+        raise _refuse(_rec, target, "network_egress_not_admissible",
+                      "network_egress must be 'external' or 'local' for a provider")
+    draft = _dc.ProviderCompliance(
+        provider=body.provider, locality=body.locality, network_egress=body.network_egress,
+        endpoint_host="", region=body.region, project=body.project, resource=body.resource,
+        models=tuple(body.models),
+    )
+    host = _sr.current_provider_host(ps, draft)
+    declared = _dc.ProviderCompliance(**{**draft.__dict__, "endpoint_host": host})
+    ok, why = _sr.provider_eligibility(body.provider, declared={body.provider: declared}, providers=providers)
+    if not ok:
+        raise _refuse(_rec, target, why, f"provider {body.provider!r} cannot be a sensitive target ({why})")
+
+    data = _load_policy(_rec, target)
+    section = _dc_section(_rec, target, data)
+    entries = section.get("provider_compliance")
+    if entries is None:
+        entries = []
+    if not isinstance(entries, list):
+        raise _refuse(_rec, target, "policy_invalid", "provider_compliance is not a list")
+    entry: dict[str, Any] = {
+        "provider": body.provider, "locality": body.locality,
+        "network_egress": body.network_egress, "endpoint_host": host,
+    }
+    if getattr(ps, "is_platform", False):
+        entry["platform"] = True
+    for key in ("region", "project", "resource"):
+        if getattr(body, key):
+            entry[key] = getattr(body, key)
+    if body.models:
+        entry["models"] = list(body.models)
+    # Replace this provider's entry, keep every other one (even ones this parser rejects).
+    section["provider_compliance"] = [
+        e for e in entries if not (isinstance(e, dict) and e.get("provider") == body.provider)
+    ] + [entry]
+    _save_tenant_yaml(_rec.tenant_id, data)
+    _audit_updated(_rec, target)
+    return _route_payload(_rec, target, data)
+
+
+@router.put("/sensitive-route")
+def put_sensitive_route(
+    body: SensitiveRouteBody,
+    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _csrf: Annotated[None, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Enable, change or disable the route. Disabling always works."""
+    import data_classification as _dc  # type: ignore  # noqa: PLC0415
+    import sensitive_route as _sr  # type: ignore  # noqa: PLC0415
+    from engine_models import load_providers  # type: ignore  # noqa: PLC0415
+
+    target = "sensitive_route"
+    data = _load_policy(_rec, target)
+    section = _dc_section(_rec, target, data)
+    well_formed = bool(_sr.PROVIDER_ID_RE.fullmatch(body.provider) and _sr.MODEL_ID_RE.fullmatch(body.model_id))
+    if body.enabled:
+        if not well_formed:
+            raise _refuse(_rec, target, "policy_invalid",
+                          "provider and model_id are required (model_id: letters, digits and . _ : @ / -, up to 200)")
+        declared, _rejected = _dc.parse_provider_compliance(data)
+        providers = load_providers()
+        ok, why = _sr.provider_eligibility(body.provider, declared=declared, providers=providers)
+        if not ok:
+            raise _refuse(_rec, target, "target_not_eligible",
+                          f"provider {body.provider!r} cannot be a sensitive target ({why})")
+        if not _sr.model_allowed(body.provider, body.model_id, declared=declared, providers=providers):
+            raise _refuse(_rec, target, "target_not_eligible",
+                          f"model {body.model_id!r} is not served by provider {body.provider!r}")
+    route: dict[str, Any] = {"enabled": body.enabled}
+    if well_formed:
+        route.update(provider=body.provider, model_id=body.model_id)
+    section["sensitive_route"] = route
+    _save_tenant_yaml(_rec.tenant_id, data)
+    _audit_updated(_rec, target)
+    return _route_payload(_rec, target, data)
