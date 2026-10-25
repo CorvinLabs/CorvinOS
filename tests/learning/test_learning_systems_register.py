@@ -202,3 +202,29 @@ def test_router_entries_record_the_readiness_measurement(sys_id):
         assert {"ready", "reason", "decisions", "join_rate"} <= set(row), f"{sys_id}: {surface} incomplete"
     # Phase 2 stays off here: a measurement that says ready must come with a proposed decision.
     assert not any(m[s]["ready"] for s in ("bridge", "console")) or "decision" in m["verdict"].lower()
+
+
+READINESS_SRC = REPO / "core" / "skills" / "os_skills" / "monitoring" / "readiness.py"
+
+
+def _readiness_reasons() -> set:
+    """Every reason readiness.evaluate() can return, read from its source (a trailing
+    colon marks the ``reason:<bucket>`` variants)."""
+    src = READINESS_SRC.read_text(encoding="utf-8")
+    fixed = set(re.findall(r'Readiness\((?:True|False),\s*"([a-z_]+)"', src))
+    prefixed = set(re.findall(r'Readiness\(False,\s*f"([a-z_]+):\{', src))
+    return fixed | {p + ":" for p in prefixed}
+
+
+@pytest.mark.parametrize("sys_id", ["L05", "L12"])
+def test_recorded_readiness_reasons_are_ones_the_evaluator_can_return(sys_id):
+    reasons = _readiness_reasons()
+    assert {"insufficient_samples", "console_soak_incomplete", "ready"} <= reasons, (
+        "positive control: the reason scan found too little in readiness.py")
+    m = next(s for s in _load() if s["id"] == sys_id)["measured"]
+    for surface in ("bridge", "console"):
+        row = m[surface]
+        ok = row["reason"] in reasons or any(
+            p.endswith(":") and row["reason"].startswith(p) for p in reasons)
+        assert ok, f"{sys_id}/{surface}: {row['reason']!r} is not a reason evaluate() returns"
+        assert row["ready"] == (row["reason"] == "ready")
