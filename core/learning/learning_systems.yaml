@@ -1,0 +1,102 @@
+# Register of the learning systems (PLAN-0964, Welle 1).
+#
+# One entry per system that learns or measures learning. The state is:
+#   A  live: a production caller reaches it, and it changes or reports behaviour
+#   B  partly wired: a writer or a reader is missing, or it runs in shadow only
+#   D  dead: no production path (kept here only until it is deleted)
+#
+# `callers` lists production call sites as "path:line". `tests` lists the test
+# files that exercise the system. tests/learning/test_learning_systems_register.py
+# checks that every caller exists and that its line is in range. It checks
+# well-formedness, not truth: that a caller really runs is the E2E test's job.
+systems:
+  - id: L01
+    name: Learning host and Data Hub daemon
+    state: A
+    callers:
+      - core/gateway/corvin_gateway/app.py:530
+      - core/console/corvin_console/app.py:898
+      - core/console/corvin_console/standalone.py:369
+    tests:
+      - core/background/test_learning_host.py
+
+  - id: L02
+    name: Anomaly monitor
+    state: A
+    callers:
+      - core/background/learning_host.py:52
+    tests:
+      - tests/learning/test_anomaly_monitor.py
+
+  - id: L03
+    name: Event store and outcome sink
+    state: A
+    callers:
+      - core/console/corvin_core/task_manager.py:474
+    tests:
+      - core/console/tests/test_learning_loop_routes_e2e.py
+
+  - id: L06
+    name: Skill grades, injection gate, promotion
+    state: A
+    callers:
+      - corvin_operator/bridges/shared/skill_inject.py:1033
+      - corvin_operator/bridges/shared/skill_inject.py:628
+    tests:
+      - corvin_operator/skill-forge/tests/test_grading.py
+
+  - id: L07
+    name: CEL turn grades
+    state: B
+    callers:
+      - corvin_operator/context_engineering/stages/grades.py:120
+      - core/console/corvin_console/chat_runtime.py:196
+    tests:
+      - corvin_operator/context_engineering/tests/test_grades_adr0285.py
+
+  - id: L08
+    name: Model selector learner (descriptive only)
+    state: B
+    callers:
+      - corvin_operator/bridges/shared/model_selector_shadow.py:155
+    tests:
+      - corvin_operator/bridges/shared/test_model_selector_shadow.py
+
+  - id: L09
+    name: Savings meter
+    state: A
+    callers:
+      - core/console/corvin_console/routes/settings.py:686
+    tests:
+      - corvin_operator/bridges/shared/test_savings_cap.py
+
+  - id: L12
+    name: Routing ledger and rollback judge
+    state: B
+    callers:
+      - core/console/corvin_console/chat_runtime.py:4506
+    tests:
+      - core/console/tests/test_l5_routing_loop_console_e2e.py
+      - tests/e2e/test_l5_routing_loop_bridge_e2e.py
+
+  - id: L13
+    name: Flow-guard learning route
+    state: B
+    callers:
+      - core/console/corvin_console/routes/flow_guard.py:40
+    tests: []
+
+  - id: L14
+    name: Layer Forge learning integration
+    state: A
+    callers:
+      - core/orchestration/layer_forge/orchestrator.py:28
+    tests: []
+
+  - id: L19
+    name: Autonomous Forge (off by default)
+    state: B
+    callers:
+      - core/console/corvin_console/app.py:292
+    tests:
+      - core/console/tests/test_autonomous_forge_canary_e2e.py
