@@ -1,6 +1,6 @@
-"""Learning-loop anomalies, computed from what the loop already persisted (ADR-2044 Phase 3).
+"""Learning-loop anomalies, computed from what the loop already persisted (ADR-2044 Phase 3, ADR-2284).
 
-Three conditions, each a measurement over stored data — never a value someone writes:
+Four conditions, each a measurement over stored data — never a value someone writes:
 
 * ``skill.high_rejection_rate`` — the ADR-0534 gate refused more than 20 % of the feedback on one
   subject in the last 24 h (``<tenant>/learning/feedback_gate/decisions.jsonl``, at least 10).
@@ -8,6 +8,10 @@ Three conditions, each a measurement over stored data — never a value someone 
   (``<tenant>/skills/<skill>_config.json``).
 * ``skill.confidence_regression`` — the mean ``output.confidence`` of a skill's ``skill_executed``
   events in the last 24 h is at least 0.10 below the six days before (at least 20 each side).
+* ``skill.convergence_stall`` (ADR-2284) — a skill's newest OUTCOME learning events (at least 20, at
+  most ``STALL_MAX_EVENTS``), split chronologically into four equal windows: the loss
+  ``1 - success_rate`` stays above 0.20 in every window and moves less than 0.02 between them
+  (max - min). Success is the signal's ``success`` bool, else ``passed``; other events are skipped.
 
 Edge-triggered: a condition is recorded once when it starts (audit-first — the caller marks it
 active only after the chain record committed) and again only after it cleared. The consumer is the
@@ -35,11 +39,19 @@ CONFIDENCE_BASELINE_S = 7 * 24 * 3600
 CONFIDENCE_MIN_SAMPLES = 20
 CONFIDENCE_DROP = 0.10
 
+STALL_MIN_EVENTS = 20
+STALL_MAX_EVENTS = 200
+STALL_WINDOWS = 4
+STALL_MIN_LOSS = 0.20
+STALL_MAX_SPREAD = 0.02
+
 EVENTS = {
     "skill.high_rejection_rate": ("skill_id", "rejection_count", "sample_count", "rate", "window_seconds"),
     "skill.config_oscillation": ("skill_id", "param_name", "change_count", "window_seconds"),
     "skill.confidence_regression": ("skill_id", "confidence_before", "confidence_after",
                                     "samples_before", "samples_after"),
+    "skill.convergence_stall": ("skill_id", "sample_count", "window_count", "loss_min", "loss_max",
+                                "loss_spread"),
 }
 
 
@@ -150,6 +162,43 @@ def _regression_anomalies(events: Iterable[Any], now: float) -> list[Anomaly]:
     return out
 
 
+def _outcome_success(event: Any) -> Optional[bool]:
+    signal = getattr(event, "signal", None)
+    if not isinstance(signal, dict):
+        return None
+    for key in ("success", "passed"):
+        value = signal.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _stall_anomalies(events: Iterable[Any]) -> list[Anomaly]:
+    """``events`` chronological (oldest first); the newest ``STALL_MAX_EVENTS`` per skill count."""
+    per_skill: dict[str, list[bool]] = {}
+    for ev in events:
+        ok = _outcome_success(ev)
+        skill = getattr(ev, "skill_id", None)
+        if ok is None or not skill:
+            continue
+        per_skill.setdefault(str(skill), []).append(ok)
+    out = []
+    for skill, results in sorted(per_skill.items()):
+        results = results[-STALL_MAX_EVENTS:]
+        size = len(results) // STALL_WINDOWS
+        if len(results) < STALL_MIN_EVENTS or size == 0:
+            continue
+        results = results[len(results) - size * STALL_WINDOWS:]  # drop the oldest remainder
+        losses = [1.0 - sum(results[i * size:(i + 1) * size]) / size for i in range(STALL_WINDOWS)]
+        spread = max(losses) - min(losses)
+        if min(losses) > STALL_MIN_LOSS and spread < STALL_MAX_SPREAD:
+            out.append(Anomaly("skill.convergence_stall", skill, {
+                "sample_count": size * STALL_WINDOWS, "window_count": STALL_WINDOWS,
+                "loss_min": round(min(losses), 4), "loss_max": round(max(losses), 4),
+                "loss_spread": round(spread, 4)}))
+    return out
+
+
 def scan(tenant_id: str, *, now: Optional[float] = None) -> list[Anomaly]:
     """Every anomaly that holds right now for ``tenant_id`` (read-only)."""
     from core.learning.event_store import EventStore  # noqa: PLC0415
@@ -166,6 +215,9 @@ def scan(tenant_id: str, *, now: Optional[float] = None) -> list[Anomaly]:
         tenant_id, event_type=EventType.SKILL_EXECUTED,
         since=(since - timedelta(days=1)).date().isoformat(), limit=20000)
     found += _regression_anomalies(events, now)
+    outcomes = EventStore(home, tenant_id=tenant_id).query_events(
+        tenant_id, event_type=EventType.OUTCOME, limit=20000)
+    found += _stall_anomalies(outcomes)
     return found
 
 

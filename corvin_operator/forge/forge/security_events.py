@@ -1452,6 +1452,9 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2283 — the flow-guard learning route (console /flow/feedback) via the strict
     # CoreAuditBackend, which dots LearningEvent's ``skill_feedback`` type.
     "skill.feedback": "INFO",
+    # core/learning/anomaly_monitor.py via core/background/learning_host.py (ADR-2284 §2),
+    # edge-triggered, emitted at WARNING.
+    "skill.convergence_stall": "WARNING",
     "skill.manually.disabled": "INFO",
     "skill.manually.enabled": "INFO",
     "workflow_config_updated": "INFO",
@@ -5338,6 +5341,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "skill.feedback": frozenset({
         "tenant_id", "skill_id", "feedback_type", "data_class", "destination_engine",
         "result", "rule_effect", "confidence_before", "event_id", "lom", "audit_ref",
+    }),
+    # core/learning/anomaly_monitor.py (ADR-2284 §2) — a skill id, counts and loss ratios.
+    "skill.convergence_stall": frozenset({
+        "skill_id", "sample_count", "window_count", "loss_min", "loss_max", "loss_spread",
+        "tenant_id", "lom", "component",
     }),
     # corvin_operator/license/capability_api.py::_audit_capability_decision —
     # reason is a closed code from _evaluate() (unknown_capability /

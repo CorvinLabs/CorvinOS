@@ -526,7 +526,7 @@ defaults until the gate, one chained record per change, the gate's throttle refu
 
 ## Learning anomalies (ADR-2044 Phase 3, 2026-10-13)
 
-`core/learning/anomaly_monitor.py` measures three conditions over data the loop already stores;
+`core/learning/anomaly_monitor.py` measures its conditions over data the loop already stores;
 `LearningHost.tick` runs it every 300 s (`ANOMALY_CHECK_S`), edge-triggered and audit-first: an
 anomaly is recorded once when it starts (`audit_sink.emit`, WARNING) and marked active only after
 the record committed; it is forgotten when the condition clears.
@@ -536,10 +536,18 @@ the record committed; it is forgotten when the condition clears.
 | `skill.high_rejection_rate` | > 20 % of ≥ 10 gate decisions on one subject refused in 24 h | `<tenant>/learning/feedback_gate/decisions.jsonl` |
 | `skill.config_oscillation` | > 3 config versions of one skill in 1 h | `<tenant>/skills/*_config.json` |
 | `skill.confidence_regression` | mean `output.confidence` of the last 24 h ≥ 0.10 below the 6 days before (≥ 20 each) | `skill_executed` learning events |
+| `skill.convergence_stall` (ADR-2284) | newest ≥ 20 (≤ 200) OUTCOME events of a skill in four equal windows: loss `1 − success_rate` > 0.20 in every window, max − min < 0.02 | OUTCOME learning events (`signal.success`, else `signal.passed`) |
+
+Every condition's event is registered statically in `EVENT_SEVERITY` / `_EVENT_ALLOWLIST` for the
+ADR-2284 ones (metadata only: skill id, counts, ratios) and at runtime through
+`audit_sink.register_events(anomaly_monitor.EVENTS)` for all.
 
 Consumer: the host's persisted state (`anomalies`), returned by `GET /v1/console/api/learning/daemon`
-and shown in the "Anomalies" card of the Learning Loops view. Nothing acts on them automatically.
-Proof: `tests/learning/test_anomaly_monitor.py`, `core/console/tests/test_learning_anomalies_e2e.py`.
+and shown in the "Anomalies" card of the Learning Loops view (an ADR-2284 event shows its event name
+there; the card has no dedicated wording for it yet). Nothing acts on them automatically.
+Proof: `tests/learning/test_anomaly_monitor.py`, `core/console/tests/test_learning_anomalies_e2e.py`,
+`tests/learning/test_adr_2284_anomaly_conditions.py` (seeded store → one learning-host tick → one
+chained record → the daemon route; no second record on further ticks).
 
 ## Data Hub learning loop (PLAN-0948, ADR-2255, 2026-10-12)
 
