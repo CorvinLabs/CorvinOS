@@ -943,6 +943,10 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
+  "core/learning/conflict_resolver.py::ConflictResolver.__init__::self.corvin_home / 'tenants'": {
+    "count": 1,
+    "reason": "measured-2026-10-24, not yet triaged"
+  },
   "core/learning/feedback_signature.py::FeedbackSignatureValidator._key_dir::self.corvin_home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -964,6 +968,10 @@
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "core/learning/model_selection_learner.py::compute_learned_thresholds::_bootstrap.forge_paths.tenant_global_dir(tenant_id) / 'forge' / 'audit.jsonl'": {
+    "count": 1,
+    "reason": "measured-2026-10-24, not yet triaged"
+  },
+  "core/learning/rollback_guard.py::RollbackGuard.__init__::self.corvin_home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },

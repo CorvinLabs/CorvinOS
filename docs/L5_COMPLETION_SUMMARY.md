@@ -1,8 +1,6 @@
 # L5 COMPLETE — 100% Production-Ready
 
 > **Status note (2026-09-27, adversarial review):** `core/learning/feedback_ingestion.py` has no production caller; "production-ready" below does not make it part of the running system.
->
-> **Update 2026-10-25 (PLAN-0964):** the L5 K3–K5 modules `core/learning/conflict_resolver.py`, `quality_gate.py`, `rollback_guard.py` and `utils.py`, their tests, `scripts/validate_l5_k3_k5.py` and `docs/claude-ref/l5-k3-k5-complete-stack.md` were deleted: none had a production caller (confirmed by the repo's own `scripts/zero_caller_sweep.py` import graph). The references below are history.
 
 **Status:** ALL 10 GAPS CLOSED ✅  
 **Date:** 2026-09-04  

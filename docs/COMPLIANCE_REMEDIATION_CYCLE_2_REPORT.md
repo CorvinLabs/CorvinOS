@@ -19,7 +19,6 @@
 > `core/compliance/operator_approval_system.py`, which this report presents as
 > implemented compliance mechanisms, have **no production caller** (both carry
 > the "NOT WIRED" marker); their simulated results now fail closed.
-> `outcome_sink_a2.py` was deleted on 2026-10-25 (PLAN-0964).
 >
 > Real checks for the claims below: `forge.security_events.verify_chain` on
 > `forge.paths.tenant_audit_chain(<tenant>)` (hash-chain integrity) and the

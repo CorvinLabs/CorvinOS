@@ -28,9 +28,6 @@ E2E Execution Model:
 - Real file system for state machine tests
 - Real API client for orchestration tests
 
-Removed 2026-10-25 (PLAN-0964): the tests for findings 1-4 and 11 exercised
-``core.learning.outcome_sink_a2``, which had no production caller and was deleted.
-
 Proof artifacts:
 - Screenshot + API trace for each finding
 - Audit event hash-chain verification
@@ -161,12 +158,123 @@ class RemediationCycle2:
 # ── FINDING 1–5: OutcomeSink Validation (Metrics, NaN, Bounds) ───────────────
 
 
+def test_finding_1_metrics_order_gate_blocking(tmp_path: Path):
+    """FINDING 1: Metrics-out-of-order gate blocking.
+
+    Outcome metrics (outcome_count, avg_confidence) must be validated BEFORE
+    audit write. Out-of-order metrics are rejected; audit is never called.
+    """
+    from core.learning.outcome_sink_a2 import OutcomeSink
+
+    cycle = RemediationCycle2(tmp_path)
+    with cycle._proof_context(1, "Metrics-out-of-order gate blocking", browser=None) as (
+        record_api,
+        record_audit,
+        add_assertion,
+        screenshot,
+    ):
+        sink = OutcomeSink(tenant_id=TENANT)
+
+        # Test 1a: outcome_count negative → rejected
+        result = sink.validate_outcome(outcome_count=-1, avg_confidence=0.85)
+        add_assertion(result is False, "outcome_count < 0 rejected")
+
+        # Test 1b: avg_confidence > 1.0 → rejected
+        result = sink.validate_outcome(outcome_count=5, avg_confidence=1.5)
+        add_assertion(result is False, "avg_confidence > 1.0 rejected")
+
+        # Test 1c: avg_confidence < 0.0 → rejected
+        result = sink.validate_outcome(outcome_count=5, avg_confidence=-0.1)
+        add_assertion(result is False, "avg_confidence < 0.0 rejected")
+
+        # Test 1d: valid metrics → accepted
+        result = sink.validate_outcome(outcome_count=5, avg_confidence=0.85)
+        add_assertion(result is True, "valid metrics accepted")
 
 
+def test_finding_2_nan_detection(tmp_path: Path):
+    """FINDING 2: NaN detection in metrics.
+
+    NaN float values in avg_confidence must be detected and rejected.
+    """
+    from core.learning.outcome_sink_a2 import OutcomeSink
+
+    cycle = RemediationCycle2(tmp_path)
+    with cycle._proof_context(2, "NaN detection", browser=None) as (record_api, record_audit, add_assertion, screenshot):
+        sink = OutcomeSink(tenant_id=TENANT)
+
+        nan_val = float("nan")
+        result = sink.validate_outcome(outcome_count=5, avg_confidence=nan_val)
+        add_assertion(result is False, "NaN value detected and rejected")
 
 
+def test_finding_3_negative_outcome_count_rejection(tmp_path: Path):
+    """FINDING 3: Negative outcome_count rejection.
+
+    outcome_count must be >= 0. Negative values are rejected before audit.
+    """
+    from core.learning.outcome_sink_a2 import OutcomeSink
+
+    cycle = RemediationCycle2(tmp_path)
+    with cycle._proof_context(3, "Negative outcome_count rejection", browser=None) as (
+        record_api,
+        record_audit,
+        add_assertion,
+        screenshot,
+    ):
+        sink = OutcomeSink(tenant_id=TENANT)
+
+        result = sink.validate_outcome(outcome_count=-42, avg_confidence=0.5)
+        add_assertion(result is False, "Negative outcome_count rejected")
+
+        result = sink.validate_outcome(outcome_count=0, avg_confidence=0.5)
+        add_assertion(result is True, "Zero outcome_count accepted")
 
 
+def test_finding_4_audit_trail_100_percent_coverage(tmp_path: Path):
+    """FINDING 4: Audit trail 100% coverage.
+
+    Every outcome_sink.process() call that passes validation MUST write an
+    audit event. Validation failure → NO audit event. Audit write failure →
+    RuntimeError (fail-closed).
+    """
+    from core.learning.outcome_sink_a2 import OutcomeSink, OutcomeRecord
+    from dataclasses import dataclass
+
+    cycle = RemediationCycle2(tmp_path)
+    with cycle._proof_context(4, "Audit trail 100% coverage", browser=None) as (
+        record_api,
+        record_audit,
+        add_assertion,
+        screenshot,
+    ):
+        with patch.object(OutcomeSink, "_write_audit_event") as mock_audit:
+            mock_audit.return_value = "audit_ref_test_123"
+
+            sink = OutcomeSink(tenant_id=TENANT)
+
+            @dataclass
+            class MockBucket:
+                skill_id: str = "os.router"
+                outcome_count: int = 5
+                avg_confidence: float = 0.85
+                audit_ref: str = "bucket_ref_789"
+
+            # Test 4a: Valid outcome → audit write called
+            result = sink.process(MockBucket())
+            add_assertion(mock_audit.called, "Audit write called for valid outcome")
+
+            mock_audit.reset_mock()
+
+            # Test 4b: Invalid outcome → audit write NOT called
+            result = sink.process(MockBucket(outcome_count=-1))
+            add_assertion(not mock_audit.called, "Audit write NOT called for invalid outcome")
+
+            # Test 4c: Audit write failure → RuntimeError raised
+            mock_audit.side_effect = RuntimeError("audit backend failed")
+            with pytest.raises(RuntimeError):
+                sink.process(MockBucket())
+            add_assertion(True, "Audit write failure raises RuntimeError (fail-closed)")
 
 
 # ── FINDING 5–8: Chat Settings Error Handling ────────────────────────────
@@ -383,6 +491,34 @@ def test_finding_10_task_type_filtering(tmp_path: Path):
         add_assertion("bogus" in unknown, "Bogus type identified")
 
 
+def test_finding_11_metrics_validation_bounds(tmp_path: Path):
+    """FINDING 11: Metrics validation (bounds checking).
+
+    outcome_count and avg_confidence must be within bounds. Out-of-bounds
+    values are rejected.
+    """
+    from core.learning.outcome_sink_a2 import OutcomeSink
+
+    cycle = RemediationCycle2(tmp_path)
+    with cycle._proof_context(11, "Metrics validation bounds", browser=None) as (
+        record_api,
+        record_audit,
+        add_assertion,
+        screenshot,
+    ):
+        sink = OutcomeSink(tenant_id=TENANT)
+
+        # Test bounds for outcome_count (>= 0)
+        add_assertion(sink.validate_outcome(0, 0.5), "outcome_count=0 valid")
+        add_assertion(not sink.validate_outcome(-1, 0.5), "outcome_count=-1 invalid")
+        add_assertion(not sink.validate_outcome(-999, 0.5), "outcome_count=-999 invalid")
+
+        # Test bounds for avg_confidence [0.0, 1.0]
+        add_assertion(sink.validate_outcome(1, 0.0), "avg_confidence=0.0 valid")
+        add_assertion(sink.validate_outcome(1, 1.0), "avg_confidence=1.0 valid")
+        add_assertion(sink.validate_outcome(1, 0.5), "avg_confidence=0.5 valid")
+        add_assertion(not sink.validate_outcome(1, -0.01), "avg_confidence=-0.01 invalid")
+        add_assertion(not sink.validate_outcome(1, 1.01), "avg_confidence=1.01 invalid")
 
 
 def test_finding_12_stale_record_detection(tmp_path: Path):
@@ -544,6 +680,53 @@ def test_finding_15_orchestration_approval_wiring(tmp_path: Path):
         add_assertion(True, "API call recorded")
 
 
+def test_finding_16_learning_loop_closure_a1_a2_a3(tmp_path: Path):
+    """FINDING 16: Learning loop closure (A1→A2→A3 wiring).
+
+    Complete flow: EventStoreConsumer (A1) → HistogramBucket → OutcomeSink (A2)
+    → audit write → ConfidenceScorer (A3) enqueue.
+    """
+    from core.learning.outcome_sink_a2 import OutcomeSink
+    from dataclasses import dataclass
+
+    cycle = RemediationCycle2(tmp_path)
+    with cycle._proof_context(16, "Learning loop closure A1→A2→A3", browser=None) as (
+        record_api,
+        record_audit,
+        add_assertion,
+        screenshot,
+    ):
+        @dataclass
+        class MockBucket:
+            skill_id: str = "os.context_adapter"
+            outcome_count: int = 20
+            avg_confidence: float = 0.88
+            audit_ref: str = "bucket_ref_456"
+
+        # Mock orchestrator for A3
+        mock_orchestrator = Mock()
+        mock_orchestrator.enqueue = Mock(return_value="task_999")
+
+        with patch.object(OutcomeSink, "_write_audit_event") as mock_audit:
+            mock_audit.return_value = "audit_ref_a2_123"
+
+            sink = OutcomeSink(tenant_id=TENANT, orchestrator=mock_orchestrator)
+            bucket = MockBucket()
+
+            # Execute A2
+            record = sink.process(bucket)
+
+            # Verify A2 succeeded
+            add_assertion(record is not None, "A2 process() returned record")
+            add_assertion(record.skill_id == "os.context_adapter", "Record has correct skill_id")
+
+            # Verify audit was written
+            add_assertion(mock_audit.called, "A2 wrote audit event")
+            record_audit("learning.outcome_processed", {"skill_id": "os.context_adapter"})
+
+            # Verify A3 was enqueued
+            add_assertion(mock_orchestrator.enqueue.called, "A3 task enqueued")
+            record_api("POST", "/v1/orchestration/enqueue", 200, {"task_type": "learning.confidence_score"})
 
 
 def test_finding_17_approval_button_form_submission(tmp_path: Path):

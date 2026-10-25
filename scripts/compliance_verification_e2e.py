@@ -551,11 +551,62 @@ class ComplianceVerifier:
             )
 
     # ========================================================================
-    # FINDING #9 (learning loop): removed 2026-10-25 (PLAN-0964).
-    # It "proved" the loop by feeding a mock bucket to core.learning.outcome_sink_a2,
-    # a module no production code called; the module is deleted. The real loop is
-    # covered by core/console/tests/test_learning_loop_routes_e2e.py.
+    # FINDING #11-12: Learning Loop Integration
     # ========================================================================
+
+    def test_finding_9_learning_loop(self) -> ComplianceProof:
+        """ADR-0314 + ADR-0613: Learning loop closure with audit-first"""
+        try:
+            from core.learning.outcome_sink_a2 import OutcomeSink, OutcomeRecord
+
+            # Create outcome sink
+            sink = OutcomeSink(tenant_id="_default", orchestrator=None)
+
+            # Create mock bucket
+            class MockBucket:
+                def __init__(self):
+                    self.skill_id = "os.delegation_router"
+                    self.outcome_count = 10
+                    self.avg_confidence = 0.85
+                    self.audit_ref = "evt-bucket-123"
+
+            bucket = MockBucket()
+
+            # Process (validates + audits)
+            result = sink.process(bucket)
+
+            # PROOF: Outcome processed with validation + audit
+            proof = ComplianceProof(
+                finding_id=9,
+                finding_name="ADR-0314 + ADR-0613 - Learning Loop",
+                gate_name="learning_outcome_audit_first",
+                passed=result is not None and isinstance(result, OutcomeRecord),
+                evidence={
+                    "skill_id": result.skill_id if result else None,
+                    "outcome_count": result.outcome_count if result else 0,
+                    "avg_confidence": result.avg_confidence if result else 0.0,
+                    "audit_ref": result.audit_ref if result else None,
+                },
+            )
+            return proof
+        except ImportError:
+            return ComplianceProof(
+                finding_id=9,
+                finding_name="ADR-0314 + ADR-0613 - Learning Loop",
+                gate_name="learning_outcome_audit_first",
+                passed=False,
+                evidence={"skipped": "module not found"},
+                error_message="OutcomeSink not importable",
+            )
+        except Exception as e:
+            return ComplianceProof(
+                finding_id=9,
+                finding_name="ADR-0314 + ADR-0613 - Learning Loop",
+                gate_name="learning_outcome_audit_first",
+                passed=False,
+                evidence={},
+                error_message=str(e),
+            )
 
     # ========================================================================
     # FINDING #13-15: Overall Compliance Status
@@ -615,6 +666,7 @@ class ComplianceVerifier:
             ("Finding 6", self.test_finding_6_operator_approval),
             ("Finding 7", self.test_finding_7_rollback_transparency),
             ("Finding 8", self.test_finding_8_boot_tripwire),
+            ("Finding 9", self.test_finding_9_learning_loop),
             ("Finding 10", self.test_finding_10_adr_compliance_drift),
         ]
 
