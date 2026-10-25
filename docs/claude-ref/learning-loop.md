@@ -242,6 +242,18 @@ of them.
 | `skill.executed` | core | `CoreAuditBackend` on every registry execution (incl. shadow) |
 | `learning.skill_executed` / `learning.outcome` / `learning.feedback` / `learning.config_updated` / `learning.preference` | core (content-free: event_id, event_type, skill_id, skill_version, lom) | `EventStore.write_event` (audit-first) |
 | `action_performed` — `learning.feedback_received:*`, `skill_config_updated:hypothesis_accepted`, `skill_config_updated:rollback`, `learning.config_rollback`, `learning.preference_confirmed` | console tenant chain | `method_discovery_api.py` |
+| `skill.approval.requested` / `.granted` / `.denied` / `.revoked` | core (metadata only: ids, metric name, confidence, closed codes, `operator_ref` = sha256 prefix, `audit_ref`; never a reason text or raw operator id) | L5 k=2 `OperatorApprovalGate` via the gateway's STRICT `CoreAuditBackend` (ADR-2283) |
+
+**Strict core-chain backend (ADR-2283).** `CoreAuditBackend(tenant_id, strict=True)`
+(`core/skills/skill_registry_phase1.py`) is the fail-closed dict backend for learning paths
+whose contract is "no decision without its record": it raises `AuditNotCommitted` when the
+writer is absent, raises, or reports the record did not commit, and returns the record's
+`audit_ref`. The default (`strict=False`, the Skills registry) is unchanged: log, count,
+continue. It dots the event type (`skill_approval_granted` → `skill.approval.granted`);
+register the dotted name. Live users: the gateway's approval gate
+(`corvin_gateway/app.py::_init_approval_gate`, `/v1/approvals/...`; a non-committing write
+answers 500 and the approval stays pending) — E2E
+`tests/learning/test_adr_2283_approval_gate_audit_e2e.py`.
 
 ## What is learned from — and what is only audited
 

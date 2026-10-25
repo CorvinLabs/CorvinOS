@@ -35,6 +35,7 @@ import logging
 import re
 import sys
 import threading
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -415,6 +416,10 @@ def _register_skill_audit_allowlists() -> bool:
 _register_skill_audit_allowlists()
 
 
+class AuditNotCommitted(RuntimeError):
+    """A strict :class:`CoreAuditBackend` could not commit its record (ADR-2283)."""
+
+
 class CoreAuditBackend:
     """Audit backend that writes Skill events into the hash-chained core audit log.
 
@@ -423,15 +428,28 @@ class CoreAuditBackend:
     the same chain as plugin lifecycle events (GDPR Art. 30/32). When no callable
     is given, the core writer (``audit.audit_event``) is resolved lazily; an
     absent writer is logged, never silently ignored.
+
+    ``strict=True`` (ADR-2283) makes the backend FAIL-CLOSED for callers whose
+    contract is "no decision without its record" (the L5 k=2
+    ``OperatorApprovalGate``, the flow-guard learning route): an absent writer,
+    a writer that raises, or a writer that reports the record did NOT commit
+    (``audit.audit_event`` returns ``False``) raises :class:`AuditNotCommitted`
+    instead of being logged and swallowed. A strict backend counts a write as
+    committed only on an explicit ``True`` from the writer — an injected
+    ``audit_emit`` that returns nothing is treated as not committed. The
+    default (``strict=False``) is unchanged: log, count, continue.
     """
 
     def __init__(
         self,
         tenant_id: str = "_default",
-        audit_emit: Optional[Callable[[str, dict], None]] = None,
+        audit_emit: Optional[Callable[[str, dict], Any]] = None,
+        *,
+        strict: bool = False,
     ):
         self.tenant_id = tenant_id
         self._audit_emit = audit_emit
+        self.strict = bool(strict)
         self.write_failures = 0
 
     def _resolve_emit(self) -> Optional[Callable[[str, dict], None]]:
@@ -445,13 +463,17 @@ class CoreAuditBackend:
 
         tenant_id = self.tenant_id
 
-        def emit(event_type: str, details: dict) -> None:
-            audit_event(event_type, details=details, tenant_id=tenant_id)
+        def emit(event_type: str, details: dict) -> bool:
+            # audit_event reports whether the core chain write committed.
+            return audit_event(event_type, details=details, tenant_id=tenant_id)
 
         self._audit_emit = emit
         return emit
 
-    def write_event(self, event: Dict[str, Any]) -> None:
+    def write_event(self, event: Dict[str, Any]) -> Optional[str]:
+        """Chain one dict event. Non-strict: returns ``None``. Strict: returns the
+        record's ``audit_ref`` (a fresh uuid4 hex written INTO the chained details,
+        so the id a caller keeps resolves to exactly one chain record)."""
         emit = self._resolve_emit()
         if emit is None:
             self.write_failures += 1
@@ -459,15 +481,29 @@ class CoreAuditBackend:
                 "core audit writer unavailable — skill event %s NOT chained",
                 event.get("event_type"),
             )
+            if self.strict:
+                raise AuditNotCommitted("core audit writer unavailable")
             return
         event_type = str(event.get("event_type", "SKILL_EXECUTED")).lower().replace("_", ".")
         details = dict(event)
         details.pop("event_type", None)
+        audit_ref = None
+        if self.strict:
+            audit_ref = uuid.uuid4().hex
+            details["audit_ref"] = audit_ref
         try:
-            emit(event_type, details)
+            committed = emit(event_type, details)
         except Exception as exc:  # noqa: BLE001
             self.write_failures += 1
             logger.error("skill audit emit failed (%s)", type(exc).__name__)
+            if self.strict:
+                raise AuditNotCommitted(f"audit emit failed ({type(exc).__name__})") from None
+            return
+        if self.strict and committed is not True:
+            self.write_failures += 1
+            logger.error("skill audit record %s did NOT commit to the core chain", event_type)
+            raise AuditNotCommitted(f"{event_type} did not commit to the core audit chain")
+        return audit_ref
 
 
 class LearningEmitterBackend:

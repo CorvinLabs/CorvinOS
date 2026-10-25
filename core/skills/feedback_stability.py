@@ -273,6 +273,26 @@ class OperatorApprovalRecord:
     revoke_reason: Optional[str] = None     # Why revoked
 
 
+#: Closed reason codes the approval routes send (``ApprovalActionReasonEnum``).
+#: Only these reach the audit chain as ``reason_code``; any other reason string
+#: is recorded as ``has_reason`` only — never its text (ADR-2283).
+_AUDITABLE_REASON_CODES = frozenset({"approved", "denied", "revoked", "requires_review"})
+
+
+def _operator_ref(operator_id: str) -> str:
+    """Pseudonymous operator attribution for the chain (sha256 prefix, never the raw id) —
+    the same transform the deployment approval paths use for ``operator_ref``."""
+    import hashlib
+
+    return hashlib.sha256(str(operator_id).encode()).hexdigest()[:12] if operator_id else ""
+
+
+def _reason_fields(reason: str) -> Dict[str, object]:
+    if reason in _AUDITABLE_REASON_CODES:
+        return {"reason_code": reason, "has_reason": True}
+    return {"has_reason": bool(reason)}
+
+
 class OperatorApprovalGate:
     """
     L5 k=2: Fail-Closed Learning Control Gate.
@@ -589,6 +609,7 @@ class OperatorApprovalGate:
             "confidence": confidence,
             "auto_approved": auto_approved,
             "reason_code": scrubbed.reason_code.value,
+            "ttl_expires": record.ttl_expires,
         }
 
         try:
@@ -709,7 +730,8 @@ class OperatorApprovalGate:
                 "tenant_id": self.tenant_id,
                 "event_type": "skill_approval_granted",
                 "approval_id": approval_id,
-                "operator_id": operator_id,
+                # Pseudonymous attribution only — never the raw operator id (ADR-2283).
+                "operator_ref": _operator_ref(operator_id),
                 "skill_id": skill_id,
                 "metric_name": metric_name,
             }
@@ -795,10 +817,11 @@ class OperatorApprovalGate:
                 "tenant_id": self.tenant_id,
                 "event_type": "skill_approval_denied",
                 "approval_id": approval_id,
-                "operator_id": operator_id,
+                "operator_ref": _operator_ref(operator_id),
                 "skill_id": skill_id,
                 "metric_name": metric_name,
-                "reason": reason,
+                # A closed reason code or has_reason — never the reason text (ADR-2283).
+                **_reason_fields(reason),
             }
 
             try:
@@ -868,10 +891,11 @@ class OperatorApprovalGate:
                 "tenant_id": self.tenant_id,
                 "event_type": "skill_approval_revoked",
                 "approval_id": approval_id,
-                "operator_id": operator_id,
+                "operator_ref": _operator_ref(operator_id),
                 "skill_id": skill_id,
                 "metric_name": metric_name,
-                "reason": reason,
+                # A closed reason code or has_reason — never the reason text (ADR-2283).
+                **_reason_fields(reason),
             }
 
             try:

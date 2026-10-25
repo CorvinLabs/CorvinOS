@@ -443,20 +443,21 @@ def test_the_gateway_mounts_the_approval_routes():
 
     paths = set(_paths(app_mod.app.routes))
     assert any(p.startswith("/v1/approvals/") for p in paths), sorted(paths)[:20]
-    # The lifespan's init block (app.py "L5 k=2 — OperatorApprovalGate"), line
-    # for line: it is what used to die on the import above.
-    import os
-
-    from corvin_plugins.providers import audit_backend
-
+    # The lifespan's init step (app.py ``_init_approval_gate``): it is what used to
+    # die on the import above. Since ADR-2283 it hands the gate a STRICT core-chain
+    # backend instead of the provider module (which has no ``write_event``).
     from core.gateway.routes import approval_routes
-    from core.skills.feedback_stability import OperatorApprovalGate
-    gate = OperatorApprovalGate(
-        tenant_id="_default", auto_approval_confidence_threshold=0.8,
-        approval_ttl_hours=12, audit_backend=audit_backend,
-        corvin_home=os.environ.get("CORVIN_HOME"),
-    )
-    approval_routes.set_approval_gate(gate)
+    from core.skills.skill_registry_phase1 import CoreAuditBackend
+
+    previous_route_gate = approval_routes._approval_gate
+    previous_state_gate = getattr(app_mod.app.state, "approval_gate", None)
+    try:
+        gate = app_mod._init_approval_gate(app_mod.app)
+        assert gate is not None
+        assert isinstance(gate.audit_backend, CoreAuditBackend) and gate.audit_backend.strict
+    finally:
+        approval_routes.set_approval_gate(previous_route_gate)
+        app_mod.app.state.approval_gate = previous_state_gate
 
 
 # ============================================================================

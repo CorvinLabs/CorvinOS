@@ -36,7 +36,27 @@ Derived from **Dialectical Reasoning (ADR-0572 Phase B reasoning phase)**, all f
 - `skill_approval_denied` — operator rejects
 - `skill_approval_revoked` — operator revokes previously-approved change
 
-Events carry: `approval_id`, `operator_id`, `skill_id`, `metric_name`, `tenant_id`, `timestamp`.
+**On the chain (ADR-2283, 2026-10-25):** the gateway (`corvin_gateway/app.py::_init_approval_gate`,
+called by the lifespan) hands the gate a STRICT core-chain backend,
+`CoreAuditBackend(tenant_id="_default", strict=True)`. `CoreAuditBackend` dots the event
+type, so the names that reach the hash chain are **`skill.approval.requested` /
+`skill.approval.granted` / `skill.approval.denied` / `skill.approval.revoked`** — these
+dotted names are the ones registered in `EVENT_SEVERITY` and `_EVENT_ALLOWLIST`. Strict means
+fail-closed: an absent writer, a writer that raises, or a record that does not commit
+(`audit.audit_event` returns `False`) raises `AuditNotCommitted`, the gate raises, the
+decision is not taken and `/v1/approvals/...` answers 500. A strict write returns the
+record's `audit_ref` (a uuid4 hex written into the chained details); the gate stores it as
+`OperatorApprovalRecord.audit_event_id`. Until 2026-10-25 the gateway passed the provider
+MODULE `corvin_plugins.providers.audit_backend`, which has no `write_event` (and must never
+get one — boot tripwire `TRAIL_OWNING_ATTRS`): every decision raised and none was recorded.
+
+Events carry metadata only: `approval_id`, `skill_id`, `metric_name`, `tenant_id`,
+`audit_ref`; the request adds `confidence`, `auto_approved`, `reason_code` (the scrubbed
+drift enum) and `ttl_expires`; a decision adds `operator_ref` — `sha256(operator_id)[:12]`,
+never the raw operator id — and deny/revoke add `has_reason` plus `reason_code` only when
+the reason is one of the routes' closed codes (`approved`/`denied`/`revoked`/
+`requires_review`). A free-text reason never reaches the chain. Nothing in production fills
+the queue yet (ADR-2283 leaves the producer open): the gate is correct but idle.
 
 **Proof:** See `tests/unit/test_skills_feedback_stability_l5_k2.py::TestAuditLinearity`.
 
@@ -220,7 +240,7 @@ gate = OperatorApprovalGate(
 Request approval for a learning delta.
 
 - **Returns:** `(OperatorApprovalRecord, auto_approved: bool)`
-- **Raises:** Nothing (fail-closed: audit failure is logged but does not block approval)
+- **Raises:** `RuntimeError` when the audit record does not commit (fail-closed — no state change without its record; ADR-2283)
 - **Audit:** `skill_approval_requested` event
 
 **`operator_approve(approval_id, operator_id, audit_backend=None) → bool`**

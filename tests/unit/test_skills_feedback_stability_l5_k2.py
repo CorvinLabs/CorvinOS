@@ -9,6 +9,7 @@ from core.skills.feedback_stability import (
     OperatorApprovalRecord,
     ApprovalReasonCode,
     ApprovalDecision,
+    _operator_ref,
 )
 
 
@@ -94,7 +95,9 @@ class TestAuditLinearity:
 
         events = audit.get_events_by_type("skill_approval_granted")
         assert len(events) == 1
-        assert events[0]["operator_id"] == "operator:alice"
+        # ADR-2283: pseudonymous attribution only, never the raw operator id.
+        assert events[0]["operator_ref"] == _operator_ref("operator:alice")
+        assert "operator_id" not in events[0]
         assert events[0]["approval_id"] == approval_id
 
     def test_approval_rejection_emits_audit_event(self):
@@ -126,8 +129,11 @@ class TestAuditLinearity:
 
         events = audit.get_events_by_type("skill_approval_denied")
         assert len(events) == 1
-        assert events[0]["operator_id"] == "operator:bob"
-        assert "risky" in events[0]["reason"]
+        assert events[0]["operator_ref"] == _operator_ref("operator:bob")
+        # ADR-2283: a free-text reason never reaches the audit record.
+        assert "reason" not in events[0]
+        assert events[0]["has_reason"] is True
+        assert "reason_code" not in events[0]
 
 
 # ============================================================================
@@ -447,7 +453,9 @@ class TestOperatorRevoke:
         events = audit.get_events_by_type("skill_approval_revoked")
         assert len(events) == 1
         assert events[0]["approval_id"] == record.approval_id
-        assert "Regression" in events[0]["reason"]
+        assert "reason" not in events[0]
+        assert "Regression" not in repr(events[0])
+        assert events[0]["has_reason"] is True
 
     def test_cannot_revoke_non_approved(self):
         """Cannot revoke a rejected or pending approval."""

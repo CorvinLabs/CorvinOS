@@ -1442,6 +1442,13 @@ EVENT_SEVERITY: dict[str, str] = {
     "skill_executed": "INFO",
     "skill_feedback": "INFO",
     "skill_config_updated": "INFO",
+    # ADR-2283 — the L5 k=2 OperatorApprovalGate (core/skills/feedback_stability.py),
+    # written through the strict CoreAuditBackend, which dots the gate's
+    # ``skill_approval_*`` names: these dotted names are what reaches the chain.
+    "skill.approval.requested": "INFO",
+    "skill.approval.granted": "INFO",
+    "skill.approval.denied": "INFO",
+    "skill.approval.revoked": "WARNING",
     "skill.manually.disabled": "INFO",
     "skill.manually.enabled": "INFO",
     "workflow_config_updated": "INFO",
@@ -5296,6 +5303,25 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "skill_config_updated": frozenset({
         "skill_id", "tenant_id", "param_name", "old_value", "old_value_sha256",
         "new_value", "new_value_sha256", "reason_code", "lom",
+    }),
+    # ADR-2283 — OperatorApprovalGate decisions (dotted by CoreAuditBackend). Metadata
+    # only: ids, a metric NAME, a confidence number, closed reason codes, the TTL
+    # timestamp, the record's own audit_ref, and the operator as ``operator_ref``
+    # (sha256 prefix) — never the raw operator id, never a reason text.
+    "skill.approval.requested": frozenset({
+        "tenant_id", "approval_id", "skill_id", "metric_name", "confidence",
+        "auto_approved", "reason_code", "ttl_expires", "audit_ref",
+    }),
+    "skill.approval.granted": frozenset({
+        "tenant_id", "approval_id", "skill_id", "metric_name", "operator_ref", "audit_ref",
+    }),
+    "skill.approval.denied": frozenset({
+        "tenant_id", "approval_id", "skill_id", "metric_name", "operator_ref",
+        "reason_code", "has_reason", "audit_ref",
+    }),
+    "skill.approval.revoked": frozenset({
+        "tenant_id", "approval_id", "skill_id", "metric_name", "operator_ref",
+        "reason_code", "has_reason", "audit_ref",
     }),
     # corvin_operator/license/capability_api.py::_audit_capability_decision —
     # reason is a closed code from _evaluate() (unknown_capability /

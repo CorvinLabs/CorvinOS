@@ -318,7 +318,9 @@ async def test_02_operator_id_spoofing_weak_validation(approval_gate, mock_audit
     approval_events = [e for e in audit_events if e.get("event_type") == "skill_approval_granted"]
 
     assert len(approval_events) > 0
-    assert approval_events[-1].get("operator_id") == "admin", "Spoofed operator_id in audit"
+    # ADR-2283: the record carries the operator pseudonymously (operator_ref), never the raw id.
+    from core.skills.feedback_stability import _operator_ref
+    assert approval_events[-1].get("operator_ref") == _operator_ref("admin"), "Spoofed operator in audit"
 
     print(f"[VULN] Operator ID spoofing: accepted arbitrary operator_id='admin'")
     print(f"[IMPACT] Approval record falsely attributed to 'admin' (not authenticated)")

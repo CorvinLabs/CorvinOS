@@ -269,6 +269,48 @@ def _deployment_identity() -> tuple[str, str]:
     )
 
 
+def _init_approval_gate(app: FastAPI):
+    """Build the L5 k=2 ``OperatorApprovalGate`` and mount it on ``/v1/approvals``.
+
+    ADR-2283: the gate's audit backend is a STRICT core-chain dict backend
+    (``CoreAuditBackend(strict=True)``) — a decision whose record does not commit
+    to the tenant's hash chain raises and is not taken. Until 2026-10-25 this
+    passed the provider MODULE ``corvin_plugins.providers.audit_backend``, which
+    has no ``write_event`` (and must never get one: the boot tripwire's
+    ``TRAIL_OWNING_ATTRS``), so every decision raised and none was recorded.
+    Best-effort for the gateway boot: a failure leaves the approval routes
+    answering 503, it never blocks the gateway. Returns the gate or ``None``.
+    """
+    import logging as _appr_log
+
+    try:
+        from core.skills.feedback_stability import OperatorApprovalGate as _OperatorApprovalGate
+        from core.skills.skill_registry_phase1 import CoreAuditBackend as _CoreAuditBackend
+
+        _approval_gate = _OperatorApprovalGate(
+            tenant_id="_default",
+            auto_approval_confidence_threshold=0.8,
+            approval_ttl_hours=12,
+            audit_backend=_CoreAuditBackend(tenant_id="_default", strict=True),
+            corvin_home=os.environ.get("CORVIN_HOME"),
+        )
+        app.state.approval_gate = _approval_gate
+
+        # Wire approval gate into routes (enable /v1/approvals endpoints)
+        from core.gateway.routes import approval_routes as _approval_routes_module
+        _approval_routes_module.set_approval_gate(_approval_gate)
+
+        _appr_log.getLogger("corvin.approval_gate").info(
+            "OperatorApprovalGate initialized for L5 k=2 learning control"
+        )
+        return _approval_gate
+    except Exception as e:
+        _appr_log.getLogger("corvin.approval_gate").warning(
+            "Failed to initialize OperatorApprovalGate (approval endpoints disabled): %s", e
+        )
+        return None
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create the dispatcher on startup, drain in-flight on shutdown.
@@ -335,34 +377,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.dispatcher = RunDispatcher()
     if not hasattr(app.state, "rate_limiter") or app.state.rate_limiter is None:
         app.state.rate_limiter = _rate_limit.RateLimiter()
-    # L5 k=2 — OperatorApprovalGate for learning feedback control
-    # Initialize approval gate with audit backend for operator-gated skill learning
-    try:
-        from core.skills.feedback_stability import OperatorApprovalGate as _OperatorApprovalGate
-        from corvin_plugins.providers import audit_backend as _approval_audit_backend
-
-        _approval_gate = _OperatorApprovalGate(
-            tenant_id="_default",
-            auto_approval_confidence_threshold=0.8,
-            approval_ttl_hours=12,
-            audit_backend=_approval_audit_backend,
-            corvin_home=os.environ.get("CORVIN_HOME"),
-        )
-        app.state.approval_gate = _approval_gate
-
-        # Wire approval gate into routes (enable /v1/approvals endpoints)
-        from core.gateway.routes import approval_routes as _approval_routes_module
-        _approval_routes_module.set_approval_gate(_approval_gate)
-
-        import logging as _appr_log
-        _appr_log.getLogger("corvin.approval_gate").info(
-            "OperatorApprovalGate initialized for L5 k=2 learning control"
-        )
-    except Exception as e:
-        import logging as _appr_log_err
-        _appr_log_err.getLogger("corvin.approval_gate").warning(
-            "Failed to initialize OperatorApprovalGate (approval endpoints disabled): %s", e
-        )
+    # L5 k=2 — OperatorApprovalGate for learning feedback control (ADR-2283).
+    _init_approval_gate(app)
     # ADR-0407 Phase 1 — Deployment State Registration (drift prevention)
     # Register this instance with the deployment state manager.
     # Enables multi-instance drift detection (code version, config, plugins).
