@@ -1,15 +1,25 @@
-# Register of the learning systems (PLAN-0964, Welle 1).
+# Register of the learning systems (ADR-2281; PLAN-0964 inventory L01-L19, H01-H03, D01-D12).
 #
-# One entry per system that learns or measures learning. The state is:
-#   A  live: a production caller reaches it, and it changes or reports behaviour
-#   B  partly wired: a writer or a reader is missing, or it runs in shadow only
-#   D  dead: no production path (kept here only until it is deleted)
+# The single statement of which learning systems exist. One entry per system
+# that learns or measures learning. The state is:
+#   A  live and read: a reachable production caller runs it AND something reads
+#      its output (a decision, a prompt, an operator-facing number)
+#   B  live, but its output is shadow or has no reader yet; `intake` states the
+#      condition under which the output may act
+#   D  dead and scheduled for retirement; `retired_by` names the decision and
+#      `modules` the paths it deletes (globs allowed). The entry leaves the
+#      register in the same change that deletes its last module.
 #
-# `callers` lists production call sites as "path:line". `tests` lists the test
-# files that exercise the system. tests/learning/test_learning_systems_register.py
-# checks that every caller exists and that its line is in range. It checks
-# well-formedness, not truth: that a caller really runs is the E2E test's job.
+# `callers` lists production call sites as "path:line"; every line was read
+# when it was recorded (2026-10-25) and points at the call or import itself.
+# `tests` lists the test files that exercise the system.
+# tests/learning/test_learning_systems_register.py checks well-formedness, not
+# truth: that a caller really runs is the job of the tests named here and of
+#
+# Unreachable modules in the learning scopes are tracked separately by the
+# reachability ratchet (scripts/learning_reachability.py + its baseline).
 systems:
+  # ── A / B: reachable ──────────────────────────────────────────────────────
   - id: L01
     name: Learning host and Data Hub daemon
     state: A
@@ -19,12 +29,13 @@ systems:
       - core/console/corvin_console/standalone.py:369
     tests:
       - core/background/test_learning_host.py
+      - core/console/tests/test_datahub_learning_loop_e2e.py
 
   - id: L02
-    name: Anomaly monitor
+    name: Anomaly monitor (learning host, every 300 s)
     state: A
     callers:
-      - core/background/learning_host.py:52
+      - core/background/learning_host.py:271
     tests:
       - tests/learning/test_anomaly_monitor.py
 
@@ -32,71 +43,415 @@ systems:
     name: Event store and outcome sink
     state: A
     callers:
-      - core/console/corvin_core/task_manager.py:474
+      - core/console/corvin_core/task_manager.py:485
     tests:
+      - core/learning/tests/test_outcome_sink.py
+      - core/console/tests/test_task_manager_outcome_sink.py
       - core/console/tests/test_learning_loop_routes_e2e.py
+
+  - id: L04
+    name: Feedback gate (throttle, reality check, trust weight)
+    state: A
+    callers:
+      - core/learning/event_store.py:149
+      - core/console/corvin_console/routes/stream4_skill_feedback.py:161
+    tests:
+      - core/learning/tests/test_operator_feedback.py
+      - core/console/tests/test_learning_loop_routes_e2e.py
+
+  - id: L05
+    name: Delegation-router config loop (os.delegation_router learned config)
+    state: B
+    callers:
+      - core/console/corvin_console/routes/stream4_skill_feedback.py:283
+      - core/skills/feedback/loop_closure.py:407
+      - core/skills/os_skills/delegation_router.py:138
+    tests:
+      - tests/e2e/test_stream4_skill_feedback_console_e2e.py
+    intake: >-
+      ADR-2092 gates G0-G4. The writer is live (operator feedback -> SkillAdapter
+      config); the only reader is the Phase-2 branch of the router, which runs only
+      with CORVIN_ACP_PHASE=phase2_dual_write AND the readiness gates holding on the
+      live ledger (Skill booted, no rollback, >=500 joined decisions per surface,
+      join rate >=0.95, proxy evidence). Until then the learned threshold changes
+      no routing.
 
   - id: L06
     name: Skill grades, injection gate, promotion
     state: A
     callers:
-      - corvin_operator/bridges/shared/skill_inject.py:1033
+      - corvin_operator/bridges/shared/adapter.py:3268
       - corvin_operator/bridges/shared/skill_inject.py:628
+      - corvin_operator/bridges/shared/adapter.py:12643
+      - corvin_operator/bridges/shared/adapter.py:13285
+      - corvin_operator/skill-forge/skill_forge/mcp_server.py:490
     tests:
       - corvin_operator/skill-forge/tests/test_grading.py
+      - corvin_operator/bridges/shared/test_adapter_skill_inject.py
 
   - id: L07
     name: CEL turn grades
     state: B
     callers:
-      - corvin_operator/context_engineering/stages/grades.py:120
-      - core/console/corvin_console/chat_runtime.py:196
+      - core/console/corvin_console/chat_runtime.py:8296
+      - core/console/corvin_console/chat_runtime.py:8947
     tests:
       - corvin_operator/context_engineering/tests/test_grades_adr0285.py
+    intake: >-
+      Advisory only. The native console path records success=True for every
+      completed turn (chat_runtime.py:8947), so the grade means "turn completed",
+      not "the stage helped"; behind the outcome_feedback_loop flag (default off).
+      An automatic grade never makes a stage default-eligible, only an operator
+      grade does. It may steer stage selection only with a measured outcome
+      source (T-0128 was cancelled for want of one) and a decision naming it.
 
   - id: L08
     name: Model selector learner (descriptive only)
     state: B
     callers:
-      - corvin_operator/bridges/shared/model_selector_shadow.py:155
+      - corvin_operator/bridges/shared/adapter.py:5311
+      - corvin_operator/bridges/shared/adapter.py:6802
+      - core/console/corvin_core/task_manager.py:676
     tests:
       - corvin_operator/bridges/shared/test_model_selector_shadow.py
+    intake: >-
+      Descriptive statistic, never read by the model selection. Its only input is
+      the binary proxy 0.85 / 0.2 (the turn ended with or without an error,
+      model_selector_shadow.py:162). It may influence selection only with a real
+      quality signal (IDEA-0002) and a decision naming the consumer.
 
   - id: L09
-    name: Savings meter
+    name: Savings meter (Free-tier cost.optimize allowance)
     state: A
     callers:
-      - core/console/corvin_console/routes/settings.py:686
+      - core/console/corvin_console/routes/settings.py:687
+      - corvin_operator/bridges/shared/savings_cap.py:224
     tests:
       - corvin_operator/bridges/shared/test_savings_cap.py
+      - corvin_operator/bridges/shared/test_savings_cap_wiring.py
+      - core/console/tests/test_cost_optimize_settings_e2e.py
+
+  - id: L10
+    name: User model distillation (L28)
+    state: A
+    callers:
+      - corvin_operator/bridges/shared/adapter.py:13409
+      - corvin_operator/bridges/shared/adapter.py:3587
+    tests:
+      - corvin_operator/bridges/shared/test_user_model.py
+      - corvin_operator/bridges/shared/test_adapter_recall.py
+
+  - id: L11
+    name: Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter)
+    state: B
+    callers:
+      - corvin_operator/bridges/shared/adapter.py:3164
+      - corvin_operator/bridges/shared/spawn_gates.py:250
+      - corvin_operator/bridges/shared/auth_elevation.py:219
+      - corvin_operator/context_engineering/stages/l10_adapter.py:138
+    tests:
+      - tests/skills/test_workflow_optimizer_skill_shadow_e2e.py
+      - tests/skills/test_flow_guard_skill_shadow_e2e.py
+      - tests/skills/test_security_orchestrator_skill_shadow_e2e.py
+      - tests/e2e/test_os_context_adapter_l10_production.py
+    intake: >-
+      ADR-0532 shadow intake: each call compares the skill's advice with the
+      production decision and audits it (skill.executed / context.adapted); the
+      advice is never applied and nothing consumes it. A skill may act only
+      through a new decision that names its consumer, after a readiness
+      measurement on live data in the ADR-2092 shape (>=500 joined decisions per
+      surface). os.flow_guard may never weaken an L34 decision.
 
   - id: L12
     name: Routing ledger and rollback judge
     state: B
     callers:
-      - core/console/corvin_console/chat_runtime.py:4506
+      - core/console/corvin_console/chat_runtime.py:4529
+      - core/console/corvin_console/chat_runtime.py:4548
+      - corvin_operator/bridges/shared/adapter.py:9516
+      - corvin_operator/bridges/shared/adapter.py:9550
     tests:
       - core/console/tests/test_l5_routing_loop_console_e2e.py
       - tests/e2e/test_l5_routing_loop_bridge_e2e.py
+    intake: >-
+      ADR-2092 gates G0-G4 (see L05). The ledger is written on every OS turn on
+      both surfaces; the rollback judge and readiness evaluation act only for
+      Phase 2, which is refused and audited until the gates hold. Measured
+      2026-10-11: no delegating decision on either surface (no_delegation_subject).
 
   - id: L13
     name: Flow-guard learning route
     state: B
     callers:
       - core/console/corvin_console/routes/flow_guard.py:40
+      - core/console/corvin_console/app.py:268
     tests: []
+    intake: >-
+      No feedback source exists (T-0169 cancelled). The route's learning writes
+      outside the audit chain until ADR-2283 repairs it; it never loosens an L34
+      decision (ADR-2049 invariants). Advisory learning may come back only after
+      the ADR-2264 classifier fix, as a new decision (ADR-2282).
 
   - id: L14
-    name: Layer Forge learning integration
+    name: Layer Forge learning integration (emit_*_confidence / *_outcome)
     state: A
     callers:
-      - core/orchestration/layer_forge/orchestrator.py:28
+      - core/forge_bundle/item_import.py:374
+      - core/orchestration/layer_forge/orchestrator.py:136
+      - core/orchestration/layer_forge/orchestrator.py:170
+      - core/orchestration/layer_forge/orchestrator.py:211
     tests: []
 
-  - id: L19
-    name: Autonomous Forge (off by default)
+  - id: L15
+    name: KB learning (kb guidance run, guidance skills)
+    state: A
+    callers:
+      - core/console/corvin_console/kb_projection.py:527
+    tests:
+      - core/console/tests/test_kb_projection_e2e.py
+
+  - id: L16
+    name: Compute search strategies (grid, random, bayes) and HAC attribution
+    state: A
+    callers:
+      - core/compute/corvin_compute/worker.py:370
+      - core/compute/corvin_compute/cli.py:247
+    tests:
+      - core/compute/tests/test_strategies.py
+      - core/compute/tests/test_bayesian.py
+
+  - id: L17
+    name: Learning and maturity panels (report health, not learning)
+    state: A
+    callers:
+      - core/console/corvin_console/app.py:322
+      - core/console/corvin_console/app.py:337
+    tests:
+      - tests/e2e/test_learning_loops_dashboard_e2e.py
+      - core/console/tests/test_learning_loop_routes_e2e.py
+
+  - id: L18
+    name: Video learning feedback API
     state: B
     callers:
-      - core/console/corvin_console/app.py:292
+      - core/console/corvin_console/app.py:405
+    tests:
+      - tests/skills/test_video_producer_phase4b_console_api.py
+    intake: >-
+      Job feedback is recorded and counted (/jobs/{id}/feedback, /learning/stats),
+      but nothing reads it to change a video decision; the four model-selection /
+      confidence endpoints answer 501 by design. It may act only with a consumer
+      and a decision (PLAN-0964 E10).
+
+  - id: L19
+    name: Autonomous Forge (autopilot off by default)
+    state: B
+    callers:
+      - core/console/corvin_console/app.py:291
     tests:
       - core/console/tests/test_autonomous_forge_canary_e2e.py
+    intake: >-
+      Autopilot is off by default; it acts only after the operator turns it on
+      (POST /autonomous-forge/autopilot) for the tenant. Whether it runs on the
+      live install is not verified (PLAN-0964).
+
+  - id: H03
+    name: Plugin-declared learning loops (manifest discovery)
+    state: B
+    callers:
+      - core/console/corvin_console/routes/capabilities.py:705
+    tests: []
+    intake: >-
+      The mechanism is reachable through the console manifest, but no installed
+      plugin declares a learning loop (ADR-0906/0907 proposed). It shows a loop
+      only once a plugin declares one and those decisions are accepted.
+
+  # ── D: retired by ADR-2282 (one entry per group of its decision table) ────
+  # PLAN-0964's H01 is R17, H02 is R18, D01-D12 fall into R01-R19.
+  - id: R01
+    name: L5 K3-K5 approval/conflict/rollback helpers
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/quality_gate.py
+      - core/learning/conflict_resolver.py
+      - core/learning/rollback_guard.py
+      - core/learning/utils.py
+      - scripts/validate_l5_k3_k5.py
+
+  - id: R02
+    name: LDD in-task learning loop
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/ldd_learning_loop.py
+      - core/learning/base.py
+      - core/skills/os_skills/definition_of_done_verifier/learning_integration.py
+      - core/skills/os_skills/definition_of_done_verifier/hardening.py
+
+  - id: R03
+    name: Advanced loss signals
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/loss_signals/**
+
+  - id: R04
+    name: Outcome sink A2
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/outcome_sink_a2.py
+
+  - id: R05
+    name: Completion detectors and notification package
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/completion_detectors/**
+      - core/notification/**
+
+  - id: R06
+    name: Token accounting helpers
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/token_accounting.py
+      - core/learning/token_metrics_aggregator.py
+      - core/console/corvin_console/routes/vibe_metrics_api.py
+
+  - id: R07
+    name: Skill optimizers outside SkillForge
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/skills/skill_learning_loop.py
+      - core/skills/skill_optimizer.py
+      - core/learning/skill_optimizer.py
+      - core/engine/meta_skills.py
+      - core/engine/skill_learning_loop.py
+      - core/console/corvin_console/routes/skill_learning_routes.py
+      - core/console/corvin_console/web-next/src/pages/skill-learning-dashboard.tsx
+
+  - id: R08
+    name: Auto-grading
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/auto_grading.py
+
+  - id: R09
+    name: Operator profiles and strategy
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/operator_fingerprint.py
+      - core/learning/adaptive_strategy.py
+      - core/learning/confidence_optimizer.py
+      - core/learning/tool_ranking.py
+      - core/learning/tool_ranking_cache.py
+
+  - id: R10
+    name: core/vibe loss signals and hub
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/vibe/loss_signal_emitter.py
+      - core/vibe/learning_loop_tracker.py
+      - core/vibe/_chain_audit.py
+      - core/vibe/vibe_hub_core.py
+      - core/vibe/marketplace_unified.py
+
+  - id: R11
+    name: Legacy console routes directory
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/console/routes/**
+
+  - id: R12
+    name: Flow-guard learning modules
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/skills/os_skills/flow_guard/data_classifier_learned.py
+      - core/skills/os_skills/flow_guard/exception_system.py
+      - core/skills/os_skills/flow_guard/feedback_handler.py
+      - core/skills/os_skills/flow_guard/learning_loop_phase3.py
+      - core/skills/os_skills/flow_guard/policy_confidence_scorer.py
+      - core/skills/os_skills/flow_guard/threshold_tuner.py
+
+  - id: R13
+    name: Workflow-optimizer confidence weights
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/skills/os_skills/workflow_optimizer_skill/confidence_calculator.py
+
+  - id: R14
+    name: CEL stages selective injection, memory pruning, ADR reranking
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - corvin_operator/context_engineering/stages/selective_injection_stage.py
+      - corvin_operator/context_engineering/stages/memory_pruning_stage.py
+      - corvin_operator/context_engineering/stages/adr_reranking_stage.py
+      - corvin_operator/context_engineering/selective_injection.py
+      - corvin_operator/context_engineering/memory_pruning.py
+      - corvin_operator/context_engineering/adr_reranking.py
+
+  - id: R15
+    name: Marketplace learning and distribution
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/marketplace/plugin_signing.py
+      - core/marketplace/plugin_tier_system.py
+      - core/marketplace/plugin_distribution.py
+      - core/marketplace/plugin_learning_loop.py
+      - core/marketplace/community_submissions.py
+      - core/marketplace/plugin_registry.py
+      - core/marketplace/registry_v3_api.py
+      - core/marketplace/distribution.py
+      - core/marketplace/ecosystem_monitoring.py
+      - core/marketplace/skill_ecosystem_launcher.py
+      - core/marketplace/manifest_validator.py
+
+  - id: R16
+    name: Learning-loop manifests (Flask blueprint)
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/console/corvin_console/routes/learning_loops.py
+      - core/learning/learning_loop_manifest.py
+      - core/learning/learning_loop_audit_integration.py
+      - core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx
+
+  - id: R17
+    name: Live experiment collector (PLAN-0964 H01)
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/learning/live_experiment_collector.py
+
+  - id: R18
+    name: Stream-2 optimizer (PLAN-0964 H02)
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/console/corvin_console/routes/learning_optimizer_routes_stream2.py
+      - core/learning/*_stream2.py
+      - core/console/corvin_console/web-next/src/components/learning/**
+
+  - id: R19
+    name: Brain hub and its subsystems
+    state: D
+    retired_by: ADR-2282
+    modules:
+      - core/orchestration/hub.py
+      - core/orchestration/brain.py
+      - core/orchestration/brain_startup.py
+      - core/orchestration/config.py
+      - core/orchestration/cli.py
+      - core/orchestration/__main__.py
+      - core/orchestration/subsystems/**

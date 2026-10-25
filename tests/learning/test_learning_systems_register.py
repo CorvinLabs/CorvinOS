@@ -1,11 +1,21 @@
 """Checks the learning-system register (core/learning/learning_systems.yaml).
 
-PLAN-0964, Welle 1. The register is the list of every learning system with its
-production callers. These tests check that the register is well-formed and that
-each recorded caller still exists at the recorded line. They do not check that
-a caller really runs: that is the job of the E2E tests named in `tests`.
+ADR-2281 §2 (PLAN-0964). The register is the list of every learning system with
+its production callers. These tests check that the register is well-formed and
+that each recorded caller still exists at the recorded line. They do not check
+that a caller really runs: that is the job of the E2E tests named in `tests`.
+
+Per state: every A has a caller; every B has a caller and an `intake` (the
+condition under which its output may act); every D names the decision that
+retires it (`retired_by`, an ADR id that must resolve in Corvin-Knowledge) and
+still has at least one of its `modules` on disk (the entry leaves the register
+with its last module). The core/vibe_engineering classification (ADR-2281 §6)
+is checked against the reachability baseline.
 """
 
+import json
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -13,7 +23,25 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 REGISTER = REPO / "core" / "learning" / "learning_systems.yaml"
+REACH_BASELINE = REPO / "scripts" / "learning_reachability_baseline.json"
 STATES = {"A", "B", "D"}
+ADR_ID = re.compile(r"^ADR-\d{4}$")
+
+
+def _decisions_dir() -> Path | None:
+    """The Corvin-Knowledge decisions directory, or None when no checkout is
+    reachable: CORVIN_KB_REPO, a ``Corvin-Knowledge`` sibling of the repo or of
+    any parent (a worktree lives below the main checkout), then the
+    ``corvin_decisions`` submodule."""
+    cands = []
+    if os.environ.get("CORVIN_KB_REPO"):
+        cands.append(Path(os.environ["CORVIN_KB_REPO"]) / "decisions")
+    cands += [p / "Corvin-Knowledge" / "decisions" for p in REPO.parents]
+    cands.append(REPO / "corvin_decisions" / "decisions")
+    for c in cands:
+        if c.is_dir() and any(c.glob("ADR-*.md")):
+            return c
+    return None
 
 
 def _load() -> list[dict]:
@@ -67,3 +95,49 @@ def test_caller_exists_at_recorded_line(sys_id, path, line):
 )
 def test_listed_test_file_exists(sys_id, test_path):
     assert (REPO / test_path).is_file(), f"{sys_id}: test file missing: {test_path}"
+
+
+def test_shadow_systems_state_their_intake():
+    for s in _load():
+        if s["state"] == "B":
+            assert s.get("callers"), f"{s['id']} is B but lists no caller"
+            assert str(s.get("intake") or "").strip(), (
+                f"{s['id']} is B but has no intake: state when its output may act")
+
+
+def test_dead_systems_name_their_retiring_decision():
+    for s in _load():
+        if s["state"] != "D":
+            continue
+        assert ADR_ID.match(str(s.get("retired_by") or "")), (
+            f"{s['id']} is D but names no retiring ADR id (retired_by)")
+        assert s.get("modules"), f"{s['id']} is D but lists no modules"
+
+
+def _matches(pattern: str) -> list[Path]:
+    if any(ch in pattern for ch in "*?["):
+        if pattern.endswith("**"):   # "dir/**" yields directories only on 3.11
+            pattern += "/*"
+        return [p for p in REPO.glob(pattern) if p.is_file()]
+    p = REPO / pattern
+    return [p] if p.is_file() else []
+
+
+@pytest.mark.parametrize("sys_id", [s["id"] for s in _load() if s["state"] == "D"])
+def test_dead_entry_still_has_a_module(sys_id):
+    s = next(x for x in _load() if x["id"] == sys_id)
+    left = [m for m in s["modules"] if _matches(m)]
+    assert left, (f"{sys_id}: every module is gone; remove the D entry in the same "
+                  f"change that deleted its last module ({s['retired_by']})")
+
+
+def test_retiring_decisions_resolve_in_corvin_knowledge():
+    ids = sorted({s["retired_by"] for s in _load() if s["state"] == "D"})
+    if not ids:
+        pytest.skip("no D entry")
+    d = _decisions_dir()
+    if d is None:
+        pytest.skip("no Corvin-Knowledge checkout reachable (CORVIN_KB_REPO, a sibling "
+                    "Corvin-Knowledge/, or the corvin_decisions submodule)")
+    for adr in ids:
+        assert list(d.glob(f"{adr}-*.md")), f"{adr} does not resolve in {d}"
