@@ -1,5 +1,5 @@
 /**
- * Maturity Metrics Dashboard — 9D Learning Loops Visualization
+ * Maturity Metrics Dashboard — 12-loop Learning Loops Visualization
  *
  * Shows: Hexagon Radar Chart + Score Header + Tier Breakdown Cards
  * Scoring: (Tier1_Avg * 0.40) + (Tier2_Avg * 0.35) + (Meta * 0.25)
@@ -155,7 +155,7 @@ export function MaturityDashboard() {
             <div className="lg:col-span-2">
               <div className="bg-card border border-border rounded-lg p-6">
                 <h3 className="text-sm font-semibold mb-4 text-foreground">
-                  Learning Loops — 9D Maturity Radar (click loop for details)
+                  Learning Loops — 12 loops + meta (click a loop for details)
                 </h3>
                 <HexagonRadar
                   loopScores={loopScores}

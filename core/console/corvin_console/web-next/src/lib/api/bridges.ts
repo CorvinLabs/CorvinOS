@@ -3,6 +3,7 @@
  * Public surface is unchanged; re-exported via the ../api.ts barrel.
  */
 
+import { getReauthToken } from "@/lib/reauth";
 import { api } from "./client";
 
 // ── Bridges ────────────────────────────────────────────────────────
@@ -55,7 +56,7 @@ export async function putBridgeSettings(
   return api(`/bridges/${encodeURIComponent(channel)}/settings`, {
     method: "PUT",
     csrf,
-    body: { settings, re_auth_token: reAuthToken || null },
+    body: { settings, re_auth_token: reAuthToken || getReauthToken() },
   });
 }
 
@@ -78,7 +79,7 @@ export async function setBridgeEnabled(
     {
       method: "PUT",
       csrf,
-      body: { enabled, re_auth_token: reAuthToken || null },
+      body: { enabled, re_auth_token: reAuthToken || getReauthToken() },
     },
   );
 }
@@ -111,7 +112,7 @@ export async function disconnectBridge(
     {
       method: "POST",
       csrf,
-      body: { mode, re_auth_token: reAuthToken || null },
+      body: { mode, re_auth_token: reAuthToken || getReauthToken() },
     },
   );
 }

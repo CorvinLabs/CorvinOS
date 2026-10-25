@@ -315,6 +315,40 @@ def write_key(key_name: str, value: str, *, path_override: Path | None = None) -
         pass
 
 
+def remove_key(key_name: str, *, path_override: Path | None = None) -> bool:
+    """Remove every service.env line for the canonical env var of *key_name*.
+
+    Returns True when a line was removed. Atomic (temp file + replace, 0600). The
+    inverse of :func:`write_key`; used by the BYOK delete path so a deleted key stops
+    resolving in voice/STT/engines on their next read."""
+    candidates = _candidates_for(key_name)
+    if candidates is None:
+        raise ValueError(f"unknown key_name: {key_name!r}")
+    env_var = candidates[0]
+    path = path_override if path_override is not None else service_env_path()
+    if not path.exists():
+        return False
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    kept = []
+    removed = False
+    for raw in lines:
+        m = _ENV_LINE_RE.match(raw.strip())
+        if m and m.group(1) == env_var:
+            removed = True
+            continue
+        kept.append(raw)
+    if not removed:
+        return False
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        pass
+    tmp.replace(path)
+    return True
+
+
 # ── Phase 1b: Encrypted secrets management ────────────────────────────────────
 #
 # SecretsStore provides tenant-scoped encryption of provider keys using Fernet.

@@ -69,8 +69,16 @@ def test_owner_only_reads(con, path):
     assert viewer.get(f"{BASE}/{path}").status_code == 403
     assert con.anonymous().get(f"{BASE}/{path}").status_code == 401
     owner = con.client.get(f"{BASE}/{path}")
-    assert owner.status_code == 503, owner.text
-    assert owner.json()["detail"] == "License plugin not installed"
+    if path == "audit-tail":
+        # reads the optional Enterprise plugin's audit file: honestly 503 without it
+        assert owner.status_code == 503, owner.text
+        assert owner.json()["detail"] == "License plugin not installed"
+    else:
+        # F-12: /status answers from the corvin_operator licence key; it must NOT 503
+        # just because the optional Enterprise corvin_license plugin is absent.
+        assert owner.status_code == 200, owner.text
+        body = owner.json()
+        assert body["tier"] == "free" and body["mode"] == "free", body
 
 
 def test_apply_key_requires_csrf(con):
@@ -87,8 +95,25 @@ def test_apply_key_requires_owner(con):
     assert any(e.get("details", {}).get("action") == "license.key_apply" for e in denied)
 
 
+def _fingerprint(con) -> str:
+    return con.client.get("/v1/console/auth/whoami").json()["fingerprint"]
+
+
+def test_apply_key_refuses_an_empty_or_wrong_reauth_token(con):
+    for body in ({"key": "CORVIN-test-key-0000"},
+                 {"key": "CORVIN-test-key-0000", "re_auth_token": ""},
+                 {"key": "CORVIN-test-key-0000", "re_auth_token": "not-the-fingerprint"}):
+        resp = con.client.post(f"{BASE}/key", json=body, headers=con.h)
+        assert resp.status_code == 401, (body, resp.text)
+    assert not list(con.home.rglob("license.key"))
+    failed = [e for e in con.audit_events() if e.get("event_type") == "console.action_failed"
+              and e.get("details", {}).get("reason") == "reauth-failed"]
+    assert failed
+
+
 def test_apply_unverifiable_key_is_rejected_and_not_written(con):
-    resp = con.client.post(f"{BASE}/key", json={"key": "CORVIN-test-key-0000"}, headers=con.h)
+    resp = con.client.post(f"{BASE}/key", json={"key": "CORVIN-test-key-0000",
+                                                 "re_auth_token": _fingerprint(con)}, headers=con.h)
     assert resp.status_code == 400, resp.text
     assert "signature verification failed" in resp.json()["detail"]
     assert not list(con.home.rglob("license.key"))

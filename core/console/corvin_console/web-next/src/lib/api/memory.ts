@@ -6,6 +6,7 @@
 import { ApiError, api, isCsrfError, notifyCsrfError } from "./client";
 
 // ── Memory API ────────────────────────────────────────────────────────────
+// Read-only empty state: the per-tenant memory view is not built yet (S-1a).
 
 export interface MemoryFileSummary {
   name: string;
@@ -17,51 +18,15 @@ export interface MemoryFileSummary {
 
 export interface MemoryIndex {
   tenant_id: string;
-  memory_dir: string;
   present: boolean;
-  ts?: number;
+  available?: boolean;
+  reason?: string;
   count: number;
   files: MemoryFileSummary[];
 }
 
-export interface MemoryFileDetail {
-  name: string;
-  type: string;
-  path: string;
-  size_bytes: number;
-  modified: number;
-  body: string;
-}
-
 export function getMemoryIndex(signal?: AbortSignal): Promise<MemoryIndex> {
   return api("/memory", { signal });
-}
-
-export function getMemoryFile(name: string, signal?: AbortSignal): Promise<MemoryFileDetail> {
-  return api(`/memory/${encodeURIComponent(name)}`, { signal });
-}
-
-export function putMemoryFile(
-  name: string,
-  body: string,
-  csrf: string,
-): Promise<{ name: string; size_bytes: number; modified: number; ok: boolean }> {
-  return api(`/memory/${encodeURIComponent(name)}`, {
-    method: "PUT",
-    body: { body, re_auth_token: null },
-    csrf,
-  });
-}
-
-export function deleteMemoryFile(
-  name: string,
-  csrf: string,
-): Promise<{ name: string; found: boolean; ok: boolean }> {
-  return api(`/memory/${encodeURIComponent(name)}`, {
-    method: "DELETE",
-    body: { re_auth_token: null },
-    csrf,
-  });
 }
 
 /** One segment of the FULL read-aloud (ADR-0194 Phase 3). */

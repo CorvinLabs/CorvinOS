@@ -1121,6 +1121,21 @@ effect — new token, tier change — is still recorded.
 - `import anthropic` from `clag.py` (CI AST lint enforces).
 
 
+## Console hardening — release readiness, 2026-10-24 (Memory, Files, audit tail, re-auth, licence, API keys, panels)
+
+Full reference, including the gate-order diagram: [console-security-surfaces.md](console-security-surfaces.md).
+
+| Item | Where | Rule |
+|---|---|---|
+| S-1a Memory | `routes/memory.py` | no `~/.claude` access for any tenant; honest empty state; PUT/DELETE removed |
+| S-2i Files | `routes/files.py` | `connector_vault.json`, `github-*`, `recovered/`, `recall.db-*` / `audit.jsonl.*` families are `none`; ledger/CEL/web_chat/consent/grants/disclosure/roles/quota/memory/plugins refuse writes; delete/mkdir grade raw AND resolved path; a symlink is deleted as a link; denials audited without the path |
+| S-11a audit tail | `routes/audit_tail.py` | the pre-tenancy instance chain is merged for `_default` only |
+| Re-auth | `deps.verify_reauth` | absent/empty token refused on every re-auth route (16 call sites); no opt-out parameter |
+| Verify chain | `POST /audit/verify` | boot tripwire's walker over the tenant chain, from the Audit & Compliance page |
+| Licence | `routes/license.py` | Apply Key validate-then-swap (previous key restored on failure); `/license/status` no 503 without the Enterprise plugin |
+| API keys | `DELETE /byok/secrets/{key}` | vault + service.env, re-auth, audited, 501 hosted |
+| AI panels | `chat_runtime._install_generated_panels` | same `forge.create` gate + `console.panel_created` as `POST /panels` |
+
 ## Console hardening — adversarial round 1, 2026-09-07 (F-C3/F-C4/F-C5/F-C9, XSS, SSRF)
 
 Guard test for the whole class: `core/console/tests/test_route_auth_guard.py`

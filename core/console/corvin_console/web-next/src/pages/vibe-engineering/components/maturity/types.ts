@@ -1,5 +1,5 @@
 /**
- * 9D Learning Loops Maturity Score types
+ * 12-loop Learning Loops Maturity Score types
  */
 
 export interface LoopScores {

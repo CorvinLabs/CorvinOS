@@ -3,6 +3,7 @@
  * Public surface is unchanged; re-exported via the ../api.ts barrel.
  */
 
+import { getReauthToken } from "@/lib/reauth";
 import { ApiError, BASE, api } from "./client";
 import { ChatSessionSummary } from "./sessions";
 
@@ -164,7 +165,7 @@ export async function patchChatSettings(
   return api(`/chat-settings/${encodeURIComponent(channel)}/${encodeURIComponent(chatKey)}`, {
     method: "PATCH",
     csrf,
-    body: { ...patch },
+    body: { ...patch, re_auth_token: getReauthToken() },
   });
 }
 

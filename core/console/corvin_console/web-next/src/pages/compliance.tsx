@@ -26,6 +26,8 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   auditTail,
+  verifyAuditChain,
+  type ChainVerifyResult,
   dashboard,
   listMembers,
   listAuditLayers,
@@ -278,8 +280,8 @@ interface LearningAuditEvent {
 
 function GuaranteesCard() {
   // These are structural — never derived from runtime state, so they're
-  // safe to render statically. The "Verify Now" button in the chain
-  // card is the dynamic check.
+  // safe to render statically. The "Verify chain" button in the chain
+  // card is the dynamic check (POST /audit/verify, the boot tripwire's walker).
   const guarantees = [
     "Hash-chained audit log (`audit.jsonl` + daily verify)",
     "Per-user consent gate (deny-by-default, TTL-capped)",
@@ -310,10 +312,19 @@ function GuaranteesCard() {
 }
 
 function AuditChainCard() {
+  const { session } = useAuth();
   const q = useQuery({
     queryKey: ["dashboard"],
     queryFn: ({ signal }) => dashboard(signal),
     refetchInterval: 30_000,
+  });
+  const [verifyResult, setVerifyResult] = React.useState<ChainVerifyResult | null>(null);
+  const verifyMut = useMutation({
+    mutationFn: () => verifyAuditChain(session!.csrf_token),
+    onSuccess: (res) => {
+      setVerifyResult(res);
+      void q.refetch();
+    },
   });
   return (
     <Card>
@@ -323,8 +334,8 @@ function AuditChainCard() {
           <CardTitle className="text-base">Hash chain</CardTitle>
         </div>
         <CardDescription>
-          `voice-audit verify` is the canonical integrity check; this card surfaces the tail
-          summary.
+          Verify walks every record of this workspace's chain and checks each hash link; the
+          host command `voice-audit verify` runs the same check from a shell.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
@@ -365,10 +376,39 @@ function AuditChainCard() {
                 </span>
               }
             />
-            <div className="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              For a full integrity verification:{" "}
-              <span className="font-mono">voice-audit verify</span> on the host.
+            <div className="flex items-center gap-3">
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="verify-chain-btn"
+                disabled={verifyMut.isPending || !session?.csrf_token}
+                onClick={() => verifyMut.mutate()}
+              >
+                {verifyMut.isPending ? "Verifying…" : "Verify chain"}
+              </Button>
+              {verifyMut.isError && (
+                <span data-testid="verify-chain-error" className="text-xs text-destructive">
+                  Verification could not run.
+                </span>
+              )}
             </div>
+            {verifyResult && (
+              <div
+                data-testid="verify-chain-result"
+                className={cn(
+                  "rounded-md border px-3 py-2 text-xs",
+                  verifyResult.ok
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                    : "border-destructive/40 bg-destructive/10 text-destructive",
+                )}
+              >
+                {verifyResult.ok
+                  ? `Chain intact — ${verifyResult.records.toLocaleString("en-US")} records verified in ${verifyResult.took_ms} ms.`
+                  : `Chain NOT intact — ${verifyResult.problem_count} problem(s), first: ${
+                      verifyResult.problems[0]?.issue ?? "unknown"
+                    }${verifyResult.problems[0]?.line ? ` (line ${verifyResult.problems[0].line})` : ""}.`}
+              </div>
+            )}
           </>
         )}
       </CardContent>
@@ -878,7 +918,7 @@ function AuditTailCard() {
           </div>
         </div>
         <CardDescription>
-          Both audit chains merged · newest-first · chain size:{" "}
+          This workspace's audit chain · newest-first · chain size:{" "}
           <span className="font-mono">{formatBytes(q.data?.chain_size_b)}</span>.
           GDPR Art. 30/32 — metadata only, no prompts or outputs.
         </CardDescription>

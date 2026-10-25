@@ -34,14 +34,6 @@ from .conftest import GATEWAY_RESUME_TENANT, GATEWAY_RESUME_URL, stop_checked, w
 from .harness import Server  # noqa: E402
 
 
-def _open_s9i(cause: str):
-    return pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-        f"S-9i open: {cause}; turns green with S-9i (verified flag checked inside "
-        "GitHubSyncWorker.start() and its loop, /verify 'saved, not verified' with auto_sync False, "
-        "/auto-sync refuses while unverified, audited auto_sync reset, /status 'configured · "
-        "unverified'); remove this mark in the fixing commit"))
-
-
 def _url(tenant: str) -> str:
     return f"https://github.com/sbx-owner/{tenant}-repo"
 
@@ -67,7 +59,6 @@ def _git_calls(sandbox, tenant: str, url: str, wait: float = 5.0) -> list[str]:
     return sandbox.git_calls_for(url + " ", f"github-sync-{tenant}")
 
 
-@_open_s9i("routes/github.py:145 starts the worker -> github_sync.py:124 -> github_git_wrapper.py:56-60 git clone")
 def test_P_S9i_a_verify_runs_no_git(server, sandbox, session_for):
     sess = session_for("sbx9a")
     assert _verify(server, sess).status_code == 200
@@ -75,7 +66,6 @@ def test_P_S9i_a_verify_runs_no_git(server, sandbox, session_for):
     assert calls == [], f"git subprocess for the saved config: {calls[:3]}"
 
 
-@_open_s9i("routes/github.py:129 saves auto_sync True, :145 starts the worker on /verify")
 def test_P_S9i_b_verify_starts_no_worker(server, session_for):
     sess = session_for("sbx9b")
     assert _verify(server, sess).status_code == 200
@@ -94,7 +84,6 @@ def _refused(r) -> bool:
                                        or body.get("success") is False)
 
 
-@_open_s9i("routes/github.py:150 answers connected True unchecked; no verified flag saved")
 def test_P_S9i_c_verify_is_not_reported_connected(server, sandbox, session_for):
     sess = session_for("sbx9c")
     r = _verify(server, sess)
@@ -105,7 +94,6 @@ def test_P_S9i_c_verify_is_not_reported_connected(server, sandbox, session_for):
     assert saved.get("verified") is False, f"saved config must carry verified=false: {saved}"
 
 
-@_open_s9i("routes/github.py:247 /worker/start starts the worker for an unverified config")
 def test_P_S9i_d_worker_start_refused_while_unverified(server, sandbox, session_for):
     sess = session_for("sbx9d")
     write_github_config(sandbox, sess.tenant, url=_url(sess.tenant), auto_sync=False)
@@ -115,7 +103,6 @@ def test_P_S9i_d_worker_start_refused_while_unverified(server, sandbox, session_
     assert not _worker_running(server, sess)
 
 
-@_open_s9i("routes/github.py:286 /auto-sync enabled:true starts the worker for an unverified config")
 def test_P_S9i_e_auto_sync_enable_refused_while_unverified(server, sandbox, session_for):
     sess = session_for("sbx9e")
     write_github_config(sandbox, sess.tenant, url=_url(sess.tenant), auto_sync=False)
@@ -124,7 +111,6 @@ def test_P_S9i_e_auto_sync_enable_refused_while_unverified(server, sandbox, sess
     assert not _worker_running(server, sess)
 
 
-@_open_s9i("routes/github.py:177 /status says connected True whenever a config file exists")
 def test_P_S9i_f_status_not_connected_while_unverified(server, sandbox, session_for):
     sess = session_for("sbx9f")
     write_github_config(sandbox, sess.tenant, url=_url(sess.tenant), auto_sync=False)
@@ -146,7 +132,6 @@ def restarted_console(sandbox, server, live_tripwire):
     stop_checked(srv)
 
 
-@_open_s9i("routes/github_sync.py:248-250 resume_auto_sync via console lifespan app.py:873-879")
 def test_P_S9i_g_console_restart_resumes_no_worker(restarted_console, sandbox, session_for):
     sess = session_for(RESTART_TENANT)
     assert not _worker_running(restarted_console, sess), \
@@ -155,7 +140,6 @@ def test_P_S9i_g_console_restart_resumes_no_worker(restarted_console, sandbox, s
     assert calls == [], f"git subprocess after console restart: {calls[:3]}"
 
 
-@_open_s9i("corvin_gateway/app.py:510 -> routes/github_sync.py:248-250 resume_auto_sync at gateway boot")
 def test_P_S9i_h_gateway_boot_resumes_no_worker(gateway, sandbox, session_for):
     sess = session_for(GATEWAY_RESUME_TENANT)
     assert not _worker_running(gateway, sess), \

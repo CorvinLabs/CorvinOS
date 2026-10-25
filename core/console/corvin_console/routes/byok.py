@@ -250,6 +250,81 @@ def post_secret(
     }
 
 
+class BYOKDeleteRequest(BaseModel):
+    # Possession proof (session fingerprint). Required: deleting a provider key is
+    # a credential change and an empty token is refused.
+    re_auth_token: str | None = Field(default=None, max_length=128)
+    model_config = {"extra": "forbid"}
+
+
+@router.delete("/secrets/{key_name}", status_code=200)
+def delete_secret(
+    key_name: str,
+    body: BYOKDeleteRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Remove a stored provider key from the vault and service.env (self-hosted).
+
+    Audit: ``console.action_performed`` ``byok.secret_deleted`` (key_name only) on
+    success; ``console.action_failed`` with a reason on refusal. A hosted install
+    answers 501: the Instance Agent has no delete endpoint, so nothing is faked.
+    """
+    from ..deps import verify_reauth  # noqa: PLC0415
+
+    def _failed(reason: str) -> None:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="byok.secret_deleted",
+            target_kind="api_key",
+            target_id=key_name,
+            reason=reason,
+        )
+
+    if not verify_reauth(rec, body.re_auth_token):
+        _failed("reauth-failed")
+        raise HTTPException(status_code=http_status.HTTP_401_UNAUTHORIZED, detail="re-auth failed")
+
+    try:
+        from agent.byok import validate_key_name  # type: ignore
+        validate_key_name(key_name)
+    except ImportError:
+        pass
+    except Exception as exc:
+        _failed("invalid-key-name")
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    if _is_hosted():
+        _failed("hosted-not-supported")
+        raise HTTPException(
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail="deleting a key is not available on a hosted instance",
+        )
+
+    try:
+        from agent.byok import delete_byok_secret  # type: ignore
+        result = delete_byok_secret(key_name, tenant_id=rec.tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        _failed("io-error")
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"could not delete secret: {exc}",
+        )
+
+    if not result.get("deleted"):
+        _failed("not-stored")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="no such stored key")
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="byok.secret_deleted",
+        target_kind="api_key",
+        target_id=key_name,
+    )
+    return {"ok": True, "key_name": key_name, "deleted": True}
+
+
 # ── GET /byok/secrets ────────────────────────────────────────────────────
 
 @router.get("/secrets")

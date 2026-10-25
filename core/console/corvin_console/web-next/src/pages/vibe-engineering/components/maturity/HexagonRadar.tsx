@@ -1,5 +1,5 @@
 /**
- * Hexagon Radar Chart — 9D Learning Loops Visualization
+ * Hexagon Radar Chart — 12-loop Learning Loops Visualization
  *
  * Displays:
  * - Outer hexagon: Tier 1 loops (6 vertices)

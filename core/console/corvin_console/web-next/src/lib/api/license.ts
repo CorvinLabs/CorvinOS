@@ -101,10 +101,11 @@ export interface LicenseKeyResponse {
 export async function applyLicenseKey(
   key: string,
   csrf: string,
+  reAuthToken: string,
 ): Promise<LicenseKeyResponse> {
   return api<LicenseKeyResponse>("/license/key", {
     method: "POST",
-    body: { key },
+    body: { key, re_auth_token: reAuthToken },
     csrf,
   });
 }

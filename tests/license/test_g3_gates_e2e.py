@@ -74,8 +74,11 @@ def test_member_can_create_a_panel(con):
 ])
 def test_member_passes_the_gate_on_promote(con, route):
     """Past the gate the route's own logic answers (unknown artifact), never 402."""
+    # the SPA sends the session fingerprint as re_auth_token (lib/reauth.ts); the route's own
+    # re-auth check then passes and the test reaches the artifact lookup
+    fp = con.client.get("/v1/console/auth/whoami").json()["fingerprint"]
     with member_tier():
-        resp = con.client.post(route, json={"to": "project"}, headers=con.h)
+        resp = con.client.post(route, json={"to": "project", "re_auth_token": fp}, headers=con.h)
     assert resp.status_code not in (401, 402, 403, 503), resp.text
     assert resp.status_code == 404, resp.text
 

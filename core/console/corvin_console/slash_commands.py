@@ -412,7 +412,8 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
         return "Active skills are listed in the **Skills** tab."
 
     if cmd == "/memory":
-        return "Your memory is shown in the **Memory** tab."
+        return ("The **Memory** tab does not show per-workspace memory yet; "
+                "it is not available on this build.")
 
     if cmd == "/persona":
         return ("Personas are bound per chat by the operator (`cowork` binding), "
@@ -422,7 +423,8 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
     if cmd == "/forget":
         return ("`/forget` does nothing by itself. To delete your data "
                 "(GDPR Art. 17) use `/erase user uid=<id>` — it asks you to "
-                "confirm before anything is erased.")
+                "confirm before anything is erased. The **Memory** tab cannot "
+                "delete anything.")
 
     if cmd == "/browser":
         # ADR-0193 retired the classifier-routed /browser dispatch in favour of

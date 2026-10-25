@@ -27,10 +27,6 @@ def _append(path, rec):
         fh.write(json.dumps(rec) + "\n")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "S-11a open: routes/audit_tail.py:168,174 merge the instance-wide legacy chain into every "
-    "tenant's tail; turns green with S-11a (merge only for rec.tenant_id == '_default'); "
-    "remove this mark in the fixing commit"))
 def test_P_S11a_tenant_b_tail_has_no_legacy_record(server, sandbox, session_for, sess_b):
     _append(sandbox.corvin_home / "global" / "forge" / "audit.jsonl",
             {"ts": time.time(), "event_type": LEGACY_EVENT_S11A, "severity": "INFO", "details": {}})

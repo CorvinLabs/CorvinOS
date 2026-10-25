@@ -240,6 +240,73 @@ def apply_byok_secret(
     }
 
 
+def delete_byok_secret(
+    key_name: str,
+    *,
+    vault_dir: Path | None = None,
+    service_env_path: Path | None = None,
+    tenant_id: str | None = None,
+) -> dict[str, Any]:
+    """Remove *key_name* from the L16 vault AND service.env. Returns
+    ``{key_name, deleted, vault_removed, env_removed}``. Never raises for "absent":
+    deleting a key that is not stored answers ``deleted: False``.
+
+    Both stores are cleared, so the key stops resolving everywhere the next time a
+    consumer reads it (the same two stores :func:`apply_byok_secret` writes)."""
+    validate_key_name(key_name)
+    vault_removed = False
+    if vault_dir is not None:
+        import json
+        index_file = vault_dir / "vault" / "INDEX.json"
+        item_path = vault_dir / "vault" / f"{key_name}.json"
+        if item_path.exists():
+            item_path.unlink()
+            vault_removed = True
+        if index_file.exists():
+            try:
+                existing = json.loads(index_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                existing = []
+            kept = [e for e in existing if e.get("name") != key_name]
+            if len(kept) != len(existing):
+                index_file.write_text(json.dumps(kept, indent=2))
+                vault_removed = True
+    else:
+        here = Path(__file__).resolve()
+        for parent in [here, *here.parents]:
+            if (parent / "corvin_operator").is_dir():
+                shared = parent / "corvin_operator" / "bridges" / "shared"
+                if str(shared) not in sys.path:
+                    sys.path.insert(0, str(shared))
+                break
+        import vault as _vault  # type: ignore
+        vault_removed = bool(_vault.forget_item(key_name))
+
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / "corvin_operator").is_dir():
+            shared = parent / "corvin_operator" / "bridges" / "shared"
+            if str(shared) not in sys.path:
+                sys.path.insert(0, str(shared))
+            break
+    import provider_keys  # type: ignore
+    env_removed = provider_keys.remove_key(key_name, path_override=service_env_path)
+
+    deleted = bool(vault_removed or env_removed)
+    if deleted:
+        try:
+            from .audit import agent_event
+            agent_event(
+                "vault.secret_deleted",
+                tenant_id=tenant_id or os.environ.get("CORVIN_TENANT_ID", "_default"),
+                details={"key_name": key_name},
+            )
+        except Exception:  # noqa: BLE001 - best effort, like _emit_vault_rotated
+            pass
+    return {"key_name": key_name, "deleted": deleted,
+            "vault_removed": vault_removed, "env_removed": env_removed}
+
+
 def _emit_vault_rotated(key_name: str, *, tenant_id: str | None) -> None:
     """Best-effort audit emit.  Never raises."""
     try:

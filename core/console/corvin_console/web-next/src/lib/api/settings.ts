@@ -3,6 +3,7 @@
  * Public surface is unchanged; re-exported via the ../api.ts barrel.
  */
 
+import { getReauthToken } from "@/lib/reauth";
 import { api } from "./client";
 
 // ── Global Commands Reference ─────────────────────────────────────
@@ -34,7 +35,7 @@ export async function updateSettingsFile(
   return api(`/settings/${encodeURIComponent(label)}`, {
     method: "PUT",
     csrf,
-    body: { body },
+    body: { body, re_auth_token: getReauthToken() },
   });
 }
 
@@ -55,7 +56,7 @@ export function setAutoUpdate(enabled: boolean, csrf: string): Promise<{ enabled
   return api("/settings/auto-update", {
     method: "PUT",
     csrf,
-    body: { enabled },
+    body: { enabled, re_auth_token: getReauthToken() },
   });
 }
 
@@ -194,7 +195,7 @@ export function setWorkerEngine(
   return api("/settings/worker-engine", {
     method: "PUT",
     csrf,
-    body: { mode },
+    body: { mode, re_auth_token: getReauthToken() },
   });
 }
 

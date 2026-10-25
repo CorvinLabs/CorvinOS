@@ -184,22 +184,20 @@ class UpdateEngineKeyReauthTests(unittest.TestCase):
             performed = [e for e in events if e["event_type"] == "console.action_performed"]
             self.assertFalse(performed)
 
-    def test_absent_reauth_token_passes_on_csrf_alone_documented_fail_open(self):
-        """Documents the CURRENT contract: verify_reauth() treats a missing
-        re_auth_token as automatically satisfied, relying on the CSRF check
-        (already enforced by require_csrf upstream) as the sole possession
-        proof. If EngineKeyUpdate's default ever changes such that this
-        silently starts requiring/ignoring a token differently, this test
-        pins today's behavior so the change is visible."""
+    def test_absent_reauth_token_is_refused_and_nothing_is_written(self):
+        """Contract since 2026-10-24 (S-1a follow-up): verify_reauth refuses an absent token.
+        Until then CSRF alone was accepted as possession proof, so this write succeeded.
+        The opt-out header stops the test-only shim (core/console/tests/_reauth_shim.py)
+        from supplying the token, so the request goes out exactly as written."""
         with _sandbox() as ctx:
             r = ctx["client"].put(
                 "/v1/console/setup/engines/anthropic",
-                headers=_auth_headers(ctx),
-                json={"value": "sk-ant-no-token-fail-open"},
+                headers={**_auth_headers(ctx), "X-Sbx-No-Reauth-Shim": "1"},
+                json={"value": "sk-ant-no-token-must-not-persist"},
             )
-            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.status_code, 401, r.text)
             env = _read_service_env(ctx)
-            self.assertEqual(env.get("ANTHROPIC_API_KEY"), "sk-ant-no-token-fail-open")
+            self.assertNotEqual(env.get("ANTHROPIC_API_KEY"), "sk-ant-no-token-must-not-persist")
 
     def test_write_without_csrf_returns_403(self):
         """The CSRF gate (require_csrf) sits upstream of verify_reauth --

@@ -1,5 +1,5 @@
 /**
- * useLiveMaturityData — Load 9D maturity scores from the live maturity endpoint.
+ * useLiveMaturityData — Load the 12-loop + meta maturity scores from the live maturity endpoint.
  *
  * The backend (`/v1/console/vibe/maturity/measurements`) computes one live
  * measurement ON DEMAND from real sources — the ADR-0314 learning EventStore and

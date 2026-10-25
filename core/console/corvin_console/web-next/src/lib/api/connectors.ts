@@ -3,6 +3,7 @@
  * Public surface is unchanged; re-exported via the ../api.ts barrel.
  */
 
+import { getReauthToken } from "@/lib/reauth";
 import { ApiError, BASE, api } from "./client";
 import { GraphNode, WorkflowMeta } from "./workflows";
 
@@ -61,7 +62,7 @@ export async function updateEngineKey(
   return api(`/setup/engines/${encodeURIComponent(engineId)}`, {
     method: "PUT",
     csrf,
-    body: { value },
+    body: { value, re_auth_token: getReauthToken() },
   });
 }
 

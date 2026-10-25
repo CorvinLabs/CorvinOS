@@ -18,13 +18,16 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 
 from .. import auth as session_auth
-from ..deps import require_session
+from ..deps import require_csrf, require_session
 
 from .. import _bootstrap
 _forge_paths = _bootstrap.forge_paths
 
 
 router = APIRouter()
+
+# The only tenant that may see the instance-wide (pre-tenancy) legacy chain.
+_LEGACY_CHAIN_TENANT = "_default"
 
 # Keys allowed in the 'details' blob returned to console clients.
 # 'user' and raw sender identifiers are deliberately excluded — they are
@@ -52,14 +55,31 @@ _DETAIL_PII_KEYS: frozenset[str] = frozenset({
 })
 
 
-def _sanitize_details(details: dict) -> dict:
+def _sanitize_details(details: dict, extra_keys: frozenset[str] | set[str] = frozenset()) -> dict:
+    """Project ``details`` to the keys the panel may show. ``extra_keys`` are the
+    fields the tenant itself declared for a custom audit layer's event type (they
+    were admitted through the writer's floor at emit time); the PII key list still
+    wins over them."""
     result = {}
     for k, v in details.items():
         if k in _DETAIL_PII_KEYS:
             continue
-        if k in _SAFE_DETAIL_KEYS:
+        if k in _SAFE_DETAIL_KEYS or k in extra_keys:
             result[k] = v
     return result
+
+
+def _layer_fields_by_event(tid: str) -> dict[str, set[str]]:
+    """``{event_type: declared fields}`` over the tenant's custom audit layers."""
+    from .audit_layers import _list_layers  # noqa: PLC0415
+
+    out: dict[str, set[str]] = {}
+    for layer in _list_layers(tid):
+        fields = {f for f in (layer.get("allowed_fields") or []) if isinstance(f, str)}
+        for et in layer.get("event_types") or []:
+            if isinstance(et, str):
+                out.setdefault(et, set()).update(fields)
+    return out
 
 
 def _tail_lines(path: Path, *, byte_budget: int = 256 * 1024) -> list[str]:
@@ -93,6 +113,7 @@ def _parse_chain_file(
     severity: str | None,
     event_prefix: str | None,
     since: float | None = None,
+    layer_fields: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Parse one audit chain file and return filtered event dicts."""
     raw_lines = _tail_lines(path)
@@ -126,7 +147,7 @@ def _parse_chain_file(
             "hash_prefix":  h[:8] if h else None,
             "run_id":       rec_obj.get("run_id", "") or None,
             "tool":         rec_obj.get("tool", "") or None,
-            "details":      _sanitize_details(rec_obj.get("details") or {}),
+            "details":      _sanitize_details(rec_obj.get("details") or {}, (layer_fields or {}).get(et, frozenset())),
         })
     return events
 
@@ -171,7 +192,16 @@ def audit_tail(
     total_size = 0
     seen_inodes: set[int] = set()  # avoid double-counting when symlinks converge paths
 
-    for chain in (forge_chain, tenant_chain, bridge_chain):
+    # S-11a: the instance-wide chain predates tenancy — its records carry no
+    # tenant_id, so it can only be attributed to the constant default tenant.
+    # Any other tenant reads its own chains only (never current_tenant(): that
+    # reads the environment, which console routing must not).
+    layer_fields = _layer_fields_by_event(tid)
+    chains = [forge_chain, tenant_chain]
+    if tid == _LEGACY_CHAIN_TENANT:
+        chains.append(bridge_chain)
+
+    for chain in chains:
         if not chain.exists():
             continue
         try:
@@ -179,7 +209,8 @@ def audit_tail(
         except OSError:
             continue
         inode = (st.st_dev, st.st_ino)
-        all_events.extend(_parse_chain_file(chain, severity=severity, event_prefix=event_prefix, since=since))
+        all_events.extend(_parse_chain_file(chain, severity=severity, event_prefix=event_prefix, since=since,
+                                            layer_fields=layer_fields))
         if inode not in seen_inodes:
             seen_inodes.add(inode)
             total_size += st.st_size
@@ -207,4 +238,56 @@ def audit_tail(
         "count":         len(deduped),
         "chain_size_b":  total_size,
         "events":        deduped,
+    }
+
+
+@router.post("/audit/verify")
+def audit_verify(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Verify the caller's tenant audit chain NOW (the "Verify chain" button).
+
+    Runs the SAME walker the boot tripwire uses (``verify_chain_incremental``:
+    identical verdict to ``verify_chain``, the already-proven prefix of an
+    append-only chain is not re-walked) over
+    ``<tenant>/global/forge/audit.jsonl`` -- the canonical chain, never the legacy
+    instance chain. The verdict is never softened: any problem makes ``ok`` false.
+    The operator action itself is recorded (``audit.chain_verify``: performed when
+    intact, failed with the first problem code when not)."""
+    from .. import audit as console_audit  # noqa: PLC0415
+    from ..audit import _security_events  # noqa: PLC0415
+
+    chain = Path(_forge_paths.tenant_audit_chain(rec.tenant_id))
+    t0 = time.time()
+    try:
+        ok, problems, total_lines = _security_events.verify_chain_incremental(chain)
+    except Exception as exc:  # noqa: BLE001 - the walker must not take the route down
+        ok, problems, total_lines = False, [{"line": 0, "issue": f"verifier_error:{type(exc).__name__}"}], 0
+    shaped = [{"line": p.get("line"), "issue": str(p.get("issue", "unknown"))[:64]}
+              for p in problems[:20] if isinstance(p, dict)]
+    try:
+        size = chain.stat().st_size
+    except OSError:
+        size = 0
+    if ok:
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="audit.chain_verify", target_kind="audit_chain", target_id="tenant-chain",
+        )
+    else:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="audit.chain_verify", target_kind="audit_chain", target_id="tenant-chain",
+            reason=(shaped[0]["issue"] if shaped else "unknown")[:64],
+        )
+    return {
+        "tenant_id":     rec.tenant_id,
+        "ok":            bool(ok),
+        "records":       total_lines,
+        "problem_count": len(problems),
+        "problems":      shaped,
+        "chain_size_b":  size,
+        "verified_at":   time.time(),
+        "took_ms":       int((time.time() - t0) * 1000),
+        "present":       chain.exists(),
     }

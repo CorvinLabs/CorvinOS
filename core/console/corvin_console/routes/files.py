@@ -19,6 +19,7 @@ Access levels:
 from __future__ import annotations
 
 import mimetypes
+import os
 import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -72,6 +73,32 @@ _NO_ACCESS: frozenset[str] = frozenset({
     # secrets, DB credentials). These names are global/-subtree machine state,
     # not user data, so blocking them does not weaken the Art. 15 file browser.
     "tenant.corvin.yaml",
+    # S-2i (2026-10): plaintext connector API keys, the GitHub integration's
+    # private audit file / config / worker state, and the recovered/ dir that
+    # holds renamed audit chains. Components, so they bind wherever they sit.
+    "connector_vault.json", "github-audit.jsonl", "github-config.json",
+    "github-worker-status.json", "recovered",
+})
+
+# Names of machine files that grow SIBLINGS with a suffix after a "." or "-":
+# SQLite ``recall.db-wal`` / ``-shm`` / ``-journal``, rotated or salvaged audit
+# files ``audit.jsonl.postloss-*`` / ``audit.backup-*``. The exact-name set above
+# never matched them. Anchored at the tenant root: not applied under the user's
+# own ``files/`` zone, so ``files/vault-notes.txt`` stays a user file.
+_NO_ACCESS_FAMILIES: tuple[str, ...] = (
+    "audit.jsonl", "audit.backup", "recall.db", "secrets.json", "secrets.enc",
+    "connector_vault.json", "github-audit.jsonl",
+)
+
+# Components whose contents the console may READ (GDPR Art. 15 access) but must
+# never WRITE: delete / upload / mkdir are refused. They are the stores whose
+# integrity other mechanisms rely on (session ledger, CEL anchors, console chat
+# logs, consent / grants / disclosure / roles / quota state, plugin registry).
+# Anchored at the tenant root like the families above.
+_WRITE_PROTECTED: frozenset[str] = frozenset({
+    "session_ledger", ".corvin-ledger", "cel_anchors", "pending_notifications",
+    "web_chat", "consent", "grants", "disclosure", "roles", "quota", "memory",
+    "plugins",
 })
 
 # Directory components whose entire contents are machine secrets (private keys,
@@ -131,9 +158,53 @@ def _access(rel_path: str) -> Literal["full", "read", "none"]:
     # parent dir — catches secret files the name-only set doesn't enumerate.
     if any(Path(p).suffix.casefold() in _NO_ACCESS_SUFFIXES for p in parts):
         return "none"
+    # Family rule (S-2i): ``recall.db-wal``, ``audit.jsonl.postloss-1`` ... Not
+    # applied inside the user's own files/ zone.
+    if normed and normed[0] != "files":
+        for n in normed:
+            for fam in _NO_ACCESS_FAMILIES:
+                if n.startswith(fam + ".") or n.startswith(fam + "-"):
+                    return "none"
     if any(n in read_only for n in normed):
         return "read"
     return "full"
+
+
+def _write_protected_class(root: Path, rel: str) -> str | None:
+    """The protected-store component a WRITE (delete / upload / mkdir) would
+    touch, judged on BOTH the raw and the symlink-resolved path, or None.
+    Anchored at the tenant root: nothing under the user's ``files/`` zone."""
+    def _scan(r: str) -> str | None:
+        parts = [p.casefold().rstrip(".") for p in Path(r).parts] if r else []
+        if not parts or parts[0] == "files":
+            return None
+        for p in parts:
+            if p in _WRITE_PROTECTED:
+                return p
+        return None
+
+    hit = _scan(rel)
+    if hit:
+        return hit
+    try:
+        resolved_rel = (root / rel).resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return None
+    return _scan(str(resolved_rel))
+
+
+def _deny(rec: session_auth.SessionRecord, verb: str, protected_class: str) -> HTTPException:
+    """Audit a refused access (class + verb only: paths carry chat ids) and
+    return the 403 to raise."""
+    console_audit.action_denied(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=f"files.{verb}",
+        target_kind="file",
+        target_id=protected_class,
+        reason="protected",
+    )
+    return HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
 
 
 def _effective_access(root: Path, rel: str) -> Literal["full", "read", "none"]:
@@ -235,7 +306,7 @@ def files_tree(
 
     acc = _effective_access(root, path)
     if acc == "none":
-        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
+        raise _deny(rec, "tree", "protected")
 
     children = _list_dir(target, path, 0, depth)
     size, mtime = _entry_meta(target)
@@ -273,7 +344,7 @@ def files_content(
 
     acc = _effective_access(root, path)
     if acc == "none":
-        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
+        raise _deny(rec, "content", "protected")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="file not found")
 
@@ -324,7 +395,7 @@ def files_download(
 
     acc = _effective_access(root, path)
     if acc == "none":
-        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
+        raise _deny(rec, "download", "protected")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="file not found")
 
@@ -350,10 +421,17 @@ async def files_upload(
 
     acc = _effective_access(root, dir)
     if acc in ("none", "read"):
+        console_audit.action_denied(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="files.upload", target_kind="file", target_id=acc, reason="protected",
+        )
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="destination directory is read-only or protected",
         )
+    wp = _write_protected_class(root, dir)
+    if wp:
+        raise _deny(rec, "upload", wp)
 
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -366,6 +444,9 @@ async def files_upload(
     # writable dir with a protected FILENAME (e.g. dir="global", name=
     # "secrets.enc") overwrote the tenant's secrets/keys. Grade the final path.
     final_rel = f"{dir.rstrip('/')}/{safe_name}" if dir else safe_name
+    wp = _write_protected_class(root, final_rel)
+    if wp:
+        raise _deny(rec, "upload", wp)
     if _effective_access(root, final_rel) != "full":
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
@@ -426,17 +507,40 @@ def files_delete(
 ) -> dict[str, Any]:
     """Delete a file or an empty directory."""
     root = _forge_paths.tenant_home(rec.tenant_id)
-    target = _resolve_safe(root, path)
 
-    acc = _access(path)
+    # A symlink is deleted AS A LINK. ``_resolve_safe`` follows links, so
+    # unlinking its result would remove whatever the link points at -- a
+    # protected file the raw name never revealed. Detect a link first (its
+    # PARENT must still resolve inside the tenant root), judge the link's own
+    # location, and unlink only the link. Anything else is judged on the
+    # stricter of the raw and the resolved path.
+    lexical = Path(os.path.normpath(root / path)) if path else root
+    is_link = False
+    if lexical != root and lexical.is_symlink():
+        _resolve_safe(root, str(Path(path).parent))
+        is_link = True
+        target = lexical
+    else:
+        target = _resolve_safe(root, path)
+    if is_link:
+        acc = _access(path)
+        parent = str(Path(path).parent)
+        wp = _write_protected_class(root, parent) if parent != "." else None
+    else:
+        acc = _effective_access(root, path)
+        wp = _write_protected_class(root, path)
     if acc in ("none", "read"):
-        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
+        raise _deny(rec, "delete", acc)
+    if wp:
+        raise _deny(rec, "delete", wp)
     if target == root:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="cannot delete tenant root")
-    if not target.exists():
+    if not is_link and not target.exists():
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="path not found")
 
-    if target.is_file():
+    if is_link:
+        lexical.unlink()
+    elif target.is_file():
         target.unlink()
     elif target.is_dir():
         try:
@@ -472,9 +576,12 @@ def files_mkdir(
     root = _forge_paths.tenant_home(rec.tenant_id)
     target = _resolve_safe(root, body.path)
 
-    acc = _access(body.path)
+    acc = _effective_access(root, body.path)
     if acc in ("none", "read"):
-        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
+        raise _deny(rec, "mkdir", acc)
+    wp = _write_protected_class(root, body.path)
+    if wp:
+        raise _deny(rec, "mkdir", wp)
 
     target.mkdir(parents=True, exist_ok=True)
     console_audit.action_performed(

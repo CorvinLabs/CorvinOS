@@ -46,6 +46,26 @@ _FORBIDDEN_FIELDS = frozenset({
 })
 
 
+def _register_floor_allowlist(event_types: list[str], allowed_fields: list[str]) -> None:
+    """Admit a layer's declared fields through the core writer's details floor.
+
+    ``write_event`` keeps only keys from a registered per-event allowlist (or, with
+    none, the universal vocabulary), so a custom layer's ``allowed_fields`` used to
+    gate the INPUT while the stored record kept just ``layer_id`` and listed the
+    rest under ``_dropped_fields`` (D1). Registration is idempotent and additive;
+    a field name the floor refuses (content/PII key names) raises
+    ``AuditAllowlistRefused`` -> the caller answers 400, never a silent drop."""
+    for et in event_types:
+        _security_events.register_event_allowlist(et, set(allowed_fields) | {"layer_id"})
+
+
+def _floor_refusal(exc: Exception) -> HTTPException:
+    return HTTPException(
+        http_status.HTTP_400_BAD_REQUEST,
+        f"the audit chain refuses these field names: {exc}",
+    )
+
+
 # ── Storage ───────────────────────────────────────────────────────────────────
 
 def _layers_dir(tid: str) -> Path:
@@ -183,6 +203,11 @@ def register_audit_layer(
                 f"invalid field name {f!r}",
             )
 
+    try:
+        _register_floor_allowlist(body.event_types, body.allowed_fields)
+    except _security_events.AuditAllowlistRefused as exc:
+        raise _floor_refusal(exc) from exc
+
     existing = _load_layer(rec.tenant_id, layer_id)
     is_update = existing is not None
 
@@ -288,6 +313,12 @@ def emit_custom_event(
             http_status.HTTP_400_BAD_REQUEST,
             f"severity must be one of {sorted(valid_severities)}",
         )
+
+    # A layer registered before this process started has no floor allowlist yet.
+    try:
+        _register_floor_allowlist([body.event_type], list(allowed_fields))
+    except _security_events.AuditAllowlistRefused as exc:
+        raise _floor_refusal(exc) from exc
 
     chain = _audit_chain_path(rec.tenant_id)
     try:
