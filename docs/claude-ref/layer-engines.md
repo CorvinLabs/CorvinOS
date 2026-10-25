@@ -2258,6 +2258,27 @@ operator deployment:
     third spawn site for `claude_code` MUST call
     `resolve_claude_code_provider_env` too** — do not re-derive the redirect
     inline again.
+  - **Third call site, the console (T-0230, 2026-10-25).** The console OS turn
+    (`chat_runtime.stream_turn`) built its `claude` env from `os.environ` and never
+    applied the redirect, while `_spawn_gates.check_console_spawn_or_refusal` (L35)
+    validated the host of the assigned provider. A turn could be admitted for the
+    provider and still reach `api.anthropic.com`, or an inherited
+    `ANTHROPIC_BASE_URL`. The bridge and the console now both call
+    **`engine_models.apply_claude_code_provider_env(env, tenant_id)`**: it drops
+    `ANTHROPIC_BASE_URL`, `CORVIN_CC_PROVIDER` and `CORVIN_CC_LOCAL_MODE` from the
+    inherited env, applies the redirect, and returns a refusal reason when a provider
+    IS assigned (so L35 validated its host) but no route could be built (no model for an
+    OpenAI-format provider, a resolver error). The console refuses such a turn; the
+    bridge logs the reason and still spawns (its strict refusal belongs to T-0229).
+    `ANTHROPIC_API_KEY` is not dropped: it is the operator's native credential.
+    A tenant without an assignment, or one assigned `anthropic`, never refuses here.
+  - **One home resolver.** `engine_models._corvin_home()` now calls
+    `spawn_gates._resolve_corvin_home(None)`: `CORVIN_HOME`, else the checkout's
+    repo-marker home. It used to be `CORVIN_HOME` or `~/.corvin`, so on a checkout without
+    `CORVIN_HOME` the gate and the provider assignment read different tenant files.
+    Proof: `core/console/tests/test_console_provider_route_e2e.py` (real subprocess that
+    dumps the env it received, egress policy denying `api.anthropic.com`) and
+    `corvin_operator/bridges/shared/test_claude_code_route_agreement.py`.
 
 **BYOK key types** (`corvin_operator/bridges/shared/provider_keys.py::CANONICAL_ENV_VAR`):
 `openrouter_api_key` → `OPENROUTER_API_KEY`, `ollama_api_key` →
