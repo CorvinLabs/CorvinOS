@@ -200,12 +200,10 @@ def test_l10_turn_path_injects_the_stored_user_model(bridge):
         "the stored user model was not injected: the adapter's user-model read is gone")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Defect found 2026-10-25 (T-0259): user_model.distill() asks conversation_recall."
-    "recall('') for the chat's recent turns; recall wraps the empty query as the FTS5 "
-    "phrase '\"\"', which matches no row, so every production distill ends "
-    "'recall-empty' and no user model is ever distilled. Flips to XPASS once fixed."))
 def test_l10_a_real_turn_yields_a_distilled_model(bridge):
+    # Was a strict xfail until 2026-10-25: recall('') went into FTS5 MATCH and matched no row,
+    # so no user model was ever distilled. conversation_recall.recall now treats an empty query
+    # as "this chat's newest turns" (chat-scoped only).
     adapter, base, home = bridge
     _channel_settings(base, {"user_model_enabled": True, "user_model_distill_every_n_turns": 1})
     _send(adapter, base, "chat-l10c", "I want short answers about the audit chain")

@@ -39,7 +39,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | L07 | CEL turn grades | B |
 | L08 | Model selector learner (descriptive only) | B |
 | L09 | Savings meter (Free-tier cost.optimize allowance) | A |
-| L10 | User model distillation (L28, opt-in per chat) | B |
+| L10 | User model distillation (L28, opt-in per chat) | A |
 | L11 | Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter) | B |
 | L12 | Routing ledger and rollback judge | B |
 | L13 | Flow-guard learning route | B |
@@ -53,10 +53,12 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | R01–R19 | Modules retired by ADR-2282 (one entry per group of its table) | D |
 <!-- register-table:end -->
 
-Two B entries carry findings of 2026-10-25: **L10** — both adapter call sites run, but
-`user_model.distill()` queries `conversation_recall.recall('')`, an empty FTS5 phrase that
-matches nothing, so no model is ever distilled (strict xfail in the pins); **L08** — the
-selector learner's only input is the 0.85 / 0.2 "turn ended without an error" proxy and the
+Findings of 2026-10-25: **L10** (now A) — both adapter call sites ran, but
+`user_model.distill()` queried `conversation_recall.recall('')`, an empty FTS5 phrase that
+matched nothing, so no model was ever distilled. `recall()` now answers an empty query that
+names a chat with that chat's newest turns (oldest first; without a chat it still returns
+nothing), and the pin `test_l10_a_real_turn_yields_a_distilled_model` passes through
+`adapter.process_one`. **L08** (B) — the selector learner's only input is the 0.85 / 0.2 "turn ended without an error" proxy and the
 selection never reads it. The 19 unreachable `core/vibe_engineering` modules are classified
 not-learning in the register (`classified_not_learning`), none is retired by ADR-2281.
 

@@ -520,23 +520,38 @@ def recall(
         ``tenant_id`` argument resolves the DB path BEFORE the
         connection opens.
 
+    An EMPTY *query* means "the newest turns" — but only inside one chat: with
+    *chat_key* given it returns that chat's newest *limit* turn-pairs, oldest
+    first, score 0.0; without *chat_key* it returns nothing, as before (an empty
+    query must not become a cross-chat dump). Until 2026-10-25 an empty query went
+    into ``MATCH ''`` and always returned nothing, so ``user_model.distill`` (which
+    asks for exactly this) never produced a user model (ADR-2281, register L10).
+
     Emits ``memory.recall_query`` (INFO) into the audit chain with
     metadata only (query character count, NOT the query text).
     """
     limit = max(1, min(int(limit), 100))
-    q = _escape_fts(query)
-    sql = (
-        "SELECT t.ts, t.channel, t.chat_key, t.persona, t.msg_id,"
-        "       t.run_id, t.user_text, t.asst_text,"
-        "       bm25(turns_fts) AS score"
-        " FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid"
-        " WHERE turns_fts MATCH ?"
-    )
-    params: list[Any] = [q]
+    recent_mode = not (query or "").strip()
+    if recent_mode:
+        sql = (
+            "SELECT t.ts, t.channel, t.chat_key, t.persona, t.msg_id,"
+            "       t.run_id, t.user_text, t.asst_text, 0.0 AS score"
+            " FROM turns t WHERE t.chat_key = ?"
+        )
+        params: list[Any] = [chat_key or ""]
+    else:
+        sql = (
+            "SELECT t.ts, t.channel, t.chat_key, t.persona, t.msg_id,"
+            "       t.run_id, t.user_text, t.asst_text,"
+            "       bm25(turns_fts) AS score"
+            " FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid"
+            " WHERE turns_fts MATCH ?"
+        )
+        params = [_escape_fts(query)]
     if channel:
         sql += " AND t.channel = ?"
         params.append(channel)
-    if chat_key:
+    if chat_key and not recent_mode:
         sql += " AND t.chat_key = ?"
         params.append(chat_key)
     if since is not None:
@@ -545,13 +560,18 @@ def recall(
     if until is not None:
         sql += " AND t.ts <= ?"
         params.append(float(until))
-    sql += " ORDER BY score ASC LIMIT ?"
+    sql += " ORDER BY t.ts DESC LIMIT ?" if recent_mode else " ORDER BY score ASC LIMIT ?"
     params.append(limit)
-    try:
-        conn = _connect(tenant_id)
-        rows = list(conn.execute(sql, params))
-    except sqlite3.OperationalError:
+    if recent_mode and not chat_key:
         rows = []
+    else:
+        try:
+            conn = _connect(tenant_id)
+            rows = list(conn.execute(sql, params))
+        except sqlite3.OperationalError:
+            rows = []
+        if recent_mode:
+            rows.reverse()  # oldest first, like a transcript
     results = [
         Recall(
             ts=float(r[0]), channel=str(r[1]), chat_key=str(r[2]),

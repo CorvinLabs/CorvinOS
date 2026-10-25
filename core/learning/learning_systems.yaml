@@ -134,7 +134,7 @@ systems:
 
   - id: L10
     name: User model distillation (L28, opt-in per chat)
-    state: B
+    state: A
     callers:
       - corvin_operator/bridges/shared/adapter.py:13409
       - corvin_operator/bridges/shared/adapter.py:3587
@@ -142,15 +142,9 @@ systems:
       - corvin_operator/bridges/shared/test_user_model.py
       - corvin_operator/bridges/shared/test_adapter_recall.py
       - tests/learning/test_learning_call_site_pins.py
-    intake: >-
-      Both call sites run (pinned through process_one), but the writer yields
-      nothing: user_model.distill() asks conversation_recall.recall('') for the
-      chat's turns, the empty query becomes the FTS5 phrase '""' which matches no
-      row, so every distill ends "recall-empty" and no model is ever written
-      (found 2026-10-25, pinned as a strict xfail). The injection then reads only
-      models written by other means. It becomes A once distill reads the chat's
-      recent turns without a text query, and only for chats whose profile sets
-      user_model_enabled (GDPR Art. 6 opt-in).
+    # A since 2026-10-25: distill() asked recall('') and the empty query matched no FTS5 row, so
+    # no model was ever written; recall() now answers an empty, chat-scoped query with that
+    # chat's newest turns. Only chats whose profile sets user_model_enabled distill (GDPR Art. 6).
 
   - id: L11
     name: Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter)

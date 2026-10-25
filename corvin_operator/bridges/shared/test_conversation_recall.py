@@ -423,7 +423,39 @@ def case_persona_acl_helper() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_empty_query_is_this_chats_newest_turns() -> None:
+    """An empty query = the chat's newest turns (what user_model.distill asks for), never cross-chat.
+
+    Until 2026-10-25 recall('') went into FTS5 MATCH and returned nothing, so no user model was
+    ever distilled (ADR-2281 register L10)."""
+    _section("L28.1/14: empty query = this chat's newest turns, oldest first; no chat → nothing")
+    tmp = Path(tempfile.mkdtemp(prefix="cr-14-"))
+    try:
+        mod = _fresh_module(tmp)
+        for i in range(5):
+            mod.index_turn(channel="discord", chat_key="cX", user_text=f"turn {i} in chat X",
+                           assistant_text="ok", msg_id=f"x{i}", persona="assistant",
+                           ts=1700000000.0 + i)
+        mod.index_turn(channel="discord", chat_key="cY", user_text="other chat",
+                       assistant_text="ok", msg_id="y0", persona="assistant", ts=1700000100.0)
+        got = mod.recall("", chat_key="cX", limit=3)
+        assert [r.user_text for r in got] == ["turn 2 in chat X", "turn 3 in chat X",
+                                              "turn 4 in chat X"], [r.user_text for r in got]
+        assert all(r.chat_key == "cX" for r in got)
+        assert mod.recall("", chat_key="cX", channel="telegram") == []
+        assert mod.recall("") == []          # unscoped empty query stays empty
+        assert mod.recall("   ") == []
+        print("  passed")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_empty_query_is_this_chats_newest_turns() -> None:
+    case_empty_query_is_this_chats_newest_turns()
+
+
 if __name__ == "__main__":
+    case_empty_query_is_this_chats_newest_turns()
     case_redact_patterns()
     case_redact_invariants()
     case_index_round_trip()
