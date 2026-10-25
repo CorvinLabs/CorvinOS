@@ -296,6 +296,7 @@ producing a guard that quietly allows what its own table forbids:
   itself, so a rerouted turn may carry less history than the provider would be allowed to see
   (over-withholding, never leaking), and `ClaudeCodeEngine` still strips a `provider/` prefix
   from a Claude-lineage model id.
+  Adversarial record (T-0223, `test_sensitive_route_adversarial.py`): the detector folds zero-width/format characters and compatibility forms (NFKC) and scans original and folded text, so a zero-width space or a full-width `@` no longer hides an address. **Known limit:** a spelled-out address (`jane dot doe at example dot com`) is not detected; the `[class:...]` marker and the matrix are the mitigation. No route case degrades to the default endpoint: a missing credential, unknown or undeclared provider, illegal model id or changed host raises `ProviderRouteError`.
   E2E: `test_bridge_sensitive_reroute_e2e.py`, `core/console/tests/test_console_sensitive_reroute_e2e.py`.
 
 `SECRET` is the only row kept local-only by default. It fires solely on literal

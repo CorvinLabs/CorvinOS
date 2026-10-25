@@ -149,12 +149,37 @@ def _phone_digits_ok(match: str) -> bool:
     return True
 
 
+def _fold(text: str) -> str:
+    """*text* with format characters removed and compatibility forms folded (NFKC).
+
+    A zero-width space inside an address or a full-width ``@`` costs a human nothing to read and
+    defeats a regex. The detector scans the original AND the folded text, so folding can only
+    add a finding, never remove one.
+    """
+    import unicodedata  # noqa: PLC0415
+    kept = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return unicodedata.normalize("NFKC", kept)
+
+
 def detect(text: str) -> tuple[str, ...]:
     """Sorted, de-duplicated category names found in *text*. Never returns matched text."""
     if not isinstance(text, str):
         raise DetectorError("text is not a string")
     if not text:
         return ()
+    try:
+        folded = _fold(text)
+        found = set(_scan(text))
+        if folded != text:
+            found |= set(_scan(folded))
+        return tuple(sorted(found))
+    except DetectorError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any failure is a refusal upstream, not a PUBLIC turn
+        raise DetectorError(type(exc).__name__) from exc
+
+
+def _scan(text: str) -> tuple[str, ...]:
     try:
         found: set[str] = set()
         if any(r.search(text) for r in _KEY_RES):
