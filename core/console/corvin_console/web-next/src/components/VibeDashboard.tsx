@@ -1,9 +1,9 @@
 /**
  * Vibe Engineering Dashboard
- * 9D Maturity visualization with live voice integration
+ * Maturity visualization (12 loops + meta) with live voice integration
  *
  * Displays:
- * - 9-dimensional maturity score (hexagon radar)
+ * - maturity score over 12 loops + meta (two hexagon radars)
  * - Live skill execution traces
  * - Voice narration of metrics
  * - Learning loop feedback

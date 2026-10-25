@@ -92,6 +92,10 @@ Every entitlement is a **capability** with an enforcement class per CONCEPT-0041
 - Transport: secure file, 0600 permissions
 - Renewal: automatic, every 3h (cadence; uses permit for transport)
 - Usage: read by `capability_api::active_tier()` for class-L decisions
+- Console **Apply Key** (`POST /v1/console/license/key`): owner + CSRF + re-auth token; signature,
+  claims, revocation, device and installation binding are checked BEFORE the file is touched; the
+  swap keeps the previous bytes and restores them when the reload raises or the pasted licence is not
+  the active one — a rejected paste never removes a valid key (`console-security-surfaces.md`).
 
 ### Class N Credentials (Network-Verified)
 

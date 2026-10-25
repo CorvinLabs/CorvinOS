@@ -3,7 +3,7 @@
  *
  * Covers:
  * - Data fetching from API
- * - Loss metrics → 9D loop scores transformation
+ * - Loss metrics → 12-loop scores transformation
  * - Time window filtering
  * - Error handling and fallback to test data
  * - Refresh intervals
