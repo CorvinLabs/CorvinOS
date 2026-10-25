@@ -109,6 +109,7 @@ def test_checkpoints_are_the_real_skill_config_versions(tmp_path: Path):
             assert emit_task_outcome(tenant_id=sb.tenant_id, task_id=f"t{i}", status="completed", exit_code=0,
                                      duration_ms=10, engine="native", task_type="chat", emitter=emitter)
         emitter.stop()  # flush the worker so the optimizer epoch sees all ten
+        _seed_execution(sb, "os.delegation_router")  # ADR-0534: feedback needs a real execution
         r = sb.client.post(
             "/v1/console/learning/feedback",
             json={"task_id": "t9", "outcome_quality": "excellent", "would_repeat": True},

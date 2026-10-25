@@ -75,6 +75,13 @@ def _console(tmp_path: Path):
             audit_emit=lambda *_a, **_k: None,
             learning_backend=LearningEmitterBackend(emitter, session_id="test"),
         )
+        # ADR-0534: the feedback gate accepts feedback only for a skill that ran.
+        from core.learning.learning_events import EventType, LearningEvent
+
+        emitter.write_sync(LearningEvent.create(
+            event_type=EventType.SKILL_EXECUTED, skill_id="os.delegation_router", tenant_id=TENANT,
+            signal={"status": "success", "output": {"ok": True}},
+            lom="core/skills/skill_registry_phase1.py:execute"))
 
         rec = _auth.create_session(tenant_id=TENANT, token_fingerprint="outcomes-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)

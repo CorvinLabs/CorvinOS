@@ -50,13 +50,30 @@ def _reset_modules():
             del sys.modules[key]
 
 
+def _seed_router_execution(emitter, tenant_id: str) -> None:
+    """One recorded ``skill_executed`` for the tunable skill.
+
+    ADR-0534's reality check accepts feedback only for a skill that really ran
+    in the last 24 h; in production every OS turn records one. The write is
+    synchronous so the execution exists before the first feedback is posted.
+    """
+    from core.learning.learning_events import EventType, LearningEvent
+
+    emitter.write_sync(LearningEvent.create(
+        event_type=EventType.SKILL_EXECUTED, skill_id="os.delegation_router", tenant_id=tenant_id,
+        signal={"status": "success", "output": {"ok": True}},
+        lom="core/skills/skill_registry_phase1.py:execute"))
+
+
 @contextmanager
-def _sandbox(tmp_path: Path, *, grant_feedback_consent: bool = True):
+def _sandbox(tmp_path: Path, *, grant_feedback_consent: bool = True, seed_execution: bool = True):
     """Sandboxed console app + live session + BOOTED ACP registry with learning.
 
     ``grant_feedback_consent`` records an active ``learning_feedback`` consent
     for the sandbox session in the tenant's consent store — the feedback route
-    is deny-by-default without it (GDPR Art. 6).
+    is deny-by-default without it (GDPR Art. 6). ``seed_execution`` records the
+    execution the feedback gate requires (ADR-0534); a test of the rejection
+    passes ``False``.
     """
     home = tmp_path / "corvin_home"
     tenant_id = "_default"
@@ -89,6 +106,8 @@ def _sandbox(tmp_path: Path, *, grant_feedback_consent: bool = True):
             audit_emit=lambda *_a, **_k: None,
             learning_backend=LearningEmitterBackend(emitter, session_id="test"),
         )
+        if seed_execution:
+            _seed_router_execution(emitter, tenant_id)
 
         rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint="test-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
@@ -205,6 +224,39 @@ class LearningLoopRoutesE2E(unittest.TestCase):
             cfg = home / "tenants" / tenant_id / "skills" / "os_delegation_router_config.json"
             self.assertTrue(cfg.is_file(), cfg)
             self.assertEqual(json.loads(cfg.read_text())["optimizer"]["epoch"], 4)  # 1 + 3 hypotheses
+
+    def test_feedback_the_trust_gate_rejects_never_reaches_the_optimizer(self):
+        """ADR-0534 on the live route: no matching execution → 422, nothing learned.
+
+        Until 2026-10-25 the route queued the event, answered "recorded" and ran
+        the optimizer epoch on the hypotheses — while the gate dropped the event
+        on the emitter's worker (``Failed to write learning event (LOST)``).
+        """
+        with _sandbox(Path(self._tmp), seed_execution=False) as (client, home, tenant_id, emitter, chain):
+            cfg = home / "tenants" / tenant_id / "skills" / "os_delegation_router_config.json"
+            epoch_before = json.loads(cfg.read_text())["optimizer"]["epoch"] if cfg.is_file() else 0
+            r = client.post(
+                "/v1/console/learning/feedback",
+                json={"task_id": "task-1", "outcome_quality": "excellent", "would_repeat": True,
+                      "reason": "was fast and clear"},
+            )
+            self.assertEqual(r.status_code, 422, r.text)
+            detail = r.json()["detail"]
+            self.assertEqual(detail["error"], "feedback_rejected")
+            self.assertEqual(detail["reason"], "no_corresponding_execution")
+            self.assertTrue(detail["audit_ref"])  # the rejection is on the chain
+
+            emitter.stop(timeout=5.0)
+            # nothing became learnable state ...
+            self.assertEqual([e for e in _events_on_disk(home, tenant_id) if e["event_type"] == "feedback"], [])
+            # ... and the optimizer never spent an epoch on it
+            epoch_after = json.loads(cfg.read_text())["optimizer"]["epoch"] if cfg.is_file() else 0
+            self.assertEqual(epoch_after, epoch_before)
+            # the decision is on the record: gate ledger and console chain
+            ledger = home / "tenants" / tenant_id / "learning" / "feedback_gate" / "decisions.jsonl"
+            self.assertIn('"rejected"', ledger.read_text())
+            denied = [c for c in _console_chain(home, tenant_id) if "feedback_rejected" in json.dumps(c)]
+            self.assertGreaterEqual(len(denied), 1)
 
     def test_invalid_feedback_rejected(self):
         with _sandbox(Path(self._tmp)) as (client, home, tenant_id, emitter, chain):

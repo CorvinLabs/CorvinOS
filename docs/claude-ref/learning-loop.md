@@ -39,7 +39,14 @@ operator ──► POST /v1/console/learning/feedback   {task_id, outcome_qualit
                  • GDPR Art. 6 consent gate FIRST: scope "learning_feedback", deny-by-default;
                    no consent ⇒ 403, audited as console.action_denied
                    (action learning.feedback, reason consent_required); nothing else runs
-                 • FEEDBACK event (closed enums only; the free text never enters a chain)
+                 • FEEDBACK event (closed enums only; the free text never enters a chain),
+                   written SYNCHRONOUSLY through the ADR-0534 trust gate (throttle → reality check
+                   → trust weight; EventEmitter.write_sync). Rejected ⇒ 422
+                   {error: feedback_rejected, reason, audit_ref}, console action_denied
+                   (reason feedback_rejected:<reason>); not recorded, optimizer never runs.
+                   Not committed ⇒ 503 learning_event_not_recorded. Until 2026-10-25 the event was
+                   only queued: a gate rejection was lost on the worker AFTER "recorded" was
+                   answered and the optimizer still ran on the hypotheses.
                  • FeedbackInterpreter → ConfigHypothesis[]   (deterministic rules, ADR-0549)
                  • SkillAdapter.run_optimizer_epoch(hyp, recent_outcomes(tenant, 10))
                         50-epoch baseline → hypothesis phase → accept iff Δsuccess ≥ MDE (0.05)
@@ -71,7 +78,7 @@ next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tena
 | Method · path | Answer | Audit |
 |---|---|---|
 | `GET config-versions?skill_id=` | real version history; `[]` until a hypothesis is accepted | — |
-| `POST feedback` | requires the per-user consent scope `learning_feedback` (deny-by-default; missing ⇒ 403). Then `{status: recorded, hypotheses[…accepted, optimizer_reason], recent_outcomes, current_config, current_version}` | denial: console `action_denied` (action `learning.feedback`, reason `consent_required`; a 503 with reason `consent_unverifiable` when the consent store cannot answer). Else console `learning.feedback_received:<quality>` + chain `learning.feedback` (+ `skill_config_updated` on accept) |
+| `POST feedback` | requires the per-user consent scope `learning_feedback` (deny-by-default; missing ⇒ 403). The feedback must pass the ADR-0534 gate (needs a `skill_executed` of the skill in the last 24 h; else 422 `feedback_rejected`). Then `{status: recorded, hypotheses[…accepted, optimizer_reason], recent_outcomes, current_config, current_version}` | denial: console `action_denied` (action `learning.feedback`, reason `consent_required`; a 503 with reason `consent_unverifiable` when the consent store cannot answer). Else console `learning.feedback_received:<quality>` + chain `learning.feedback` (+ `skill_config_updated` on accept) |
 | `POST config/rollback?to_version=` | real rollback; **404** on unknown version | console `learning.config_rollback` + chain `learning.config_updated` |
 | `GET preferences` | derived from recorded OUTCOME events per task_type; `{}` without outcomes | — |
 | `POST preferences/confirm?task_type=` | PREFERENCE event | console `learning.preference_confirmed` |

@@ -6,7 +6,6 @@ aggregated stats across the cluster.
 
 from __future__ import annotations
 
-import os
 import json
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
@@ -210,12 +209,10 @@ class InstanceRegistry:
 
 
 def _default_registry_path() -> Path:
-    try:
-        from core.paths.tenant import corvin_home
-        return corvin_home() / "instances.json"
-    except Exception:  # noqa: BLE001 - resolver unavailable (unusual layout)
-        root = os.environ.get("CORVIN_HOME", "").strip()
-        return (Path(root).expanduser() if root else Path.home() / ".corvin") / "instances.json"
+    # The one resolver (CORVIN_HOME, else ~/.corvin). A private fallback copy of it is how
+    # learning paths once ended up outside the live install (adversarial review F25).
+    from core.paths.tenant import corvin_home
+    return corvin_home() / "instances.json"
 
 
 # Singleton instance registry (module-level)

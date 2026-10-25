@@ -39,6 +39,7 @@ Compliance:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -233,6 +234,38 @@ def _emit_learning(
         return False
 
 
+def _write_feedback_gated(tenant_id: str, request: Any) -> None:
+    """Persist this feedback as a FEEDBACK learning event, THROUGH the ADR-0534 gate, now.
+
+    Returns only when the event was accepted and committed (core chain first,
+    then disk). ``_emit_learning`` cannot serve here: it only queues, the gate
+    runs later on the emitter's worker, and a rejection (throttle, no matching
+    execution, untrusted source) was then LOST after the route had already
+    answered "recorded" and let the optimizer act on the feedback. The caller
+    owns the refusal: ``FeedbackRejected`` (gate) or ``RuntimeError`` /
+    ``IOError`` / ``ValueError`` (nothing was recorded) propagate.
+    """
+    em = learning_emitter() if learning_emitter else None
+    if em is None:
+        raise RuntimeError("learning emitter not booted")
+    from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+
+    ev = LearningEvent.create(
+        event_type=EventType.FEEDBACK,
+        skill_id=TUNABLE_SKILLS[0],
+        tenant_id=tenant_id,
+        signal={
+            "task_id": request.task_id,
+            "outcome_quality": request.outcome_quality,
+            "would_repeat": request.would_repeat,
+            "has_reason": bool(request.reason),  # the text itself never enters a chain
+            "source": "console.learning",
+        },
+        lom="core/console/corvin_console/routes/method_discovery_api.py:_write_feedback_gated",
+    )
+    em.write_sync(ev)
+
+
 def _version_dto(v: Any) -> ConfigVersionDTO:
     return ConfigVersionDTO(
         version_id=v.version_id,
@@ -268,7 +301,9 @@ async def submit_feedback(
 ) -> FeedbackResponse:
     """User feedback on a task → hypotheses → one optimizer epoch (ADR-0549).
 
-    1. ``UserFeedback`` (validated, tenant from the session)
+    1. ``UserFeedback`` (validated, tenant from the session); the ``feedback``
+       learning event is written synchronously through the ADR-0534 trust gate —
+       rejected (422) or not committed (503), nothing below runs
     2. ``FeedbackInterpreter`` → deterministic ``ConfigHypothesis`` list
     3. each hypothesis → ``SkillAdapter.run_optimizer_epoch`` fed with the
        REAL recent task outcomes (``outcome_sink.recent_outcomes``)
@@ -305,6 +340,37 @@ async def submit_feedback(
         reason=request.reason,
     )
 
+    # ADR-0534 trust boundary, BEFORE anything is interpreted or optimized: the
+    # feedback must be accepted and recorded, or the optimizer never sees it.
+    from core.learning.feedback_gate import FeedbackRejected  # noqa: PLC0415
+
+    try:
+        await asyncio.to_thread(_write_feedback_gated, rec.tenant_id, request)
+    except FeedbackRejected as exc:
+        console_audit.action_denied(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="learning.feedback",
+            target_kind="task",
+            target_id=request.task_id,
+            reason=f"feedback_rejected:{exc.reason}",
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "feedback_rejected", "reason": exc.reason, "audit_ref": exc.audit_ref},
+        ) from None
+    except (RuntimeError, OSError, ValueError) as exc:
+        logger.error("learning feedback not recorded: %s", type(exc).__name__)
+        console_audit.action_denied(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="learning.feedback",
+            target_kind="task",
+            target_id=request.task_id,
+            reason="learning_event_not_recorded",
+        )
+        raise HTTPException(status_code=503, detail={"error": "learning_event_not_recorded"}) from None
+
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -312,17 +378,7 @@ async def submit_feedback(
         target_kind="task",
         target_id=request.task_id,
     )
-    queued = _emit_learning(
-        "feedback",
-        rec.tenant_id,
-        TUNABLE_SKILLS[0],
-        {
-            "task_id": request.task_id,
-            "outcome_quality": request.outcome_quality,
-            "would_repeat": request.would_repeat,
-            "has_reason": bool(request.reason),  # the text itself never enters a chain
-        },
-    )
+    queued = True  # accepted by the gate and committed (the field name is the legacy API)
 
     try:
         # Same store, same identity as the gate above (defence in depth).

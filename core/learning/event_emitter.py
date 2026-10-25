@@ -116,6 +116,24 @@ class EventEmitter:
         logger.warning(f"Queue full, dropping event {event.event_id} (dropped so far: {dropped})")
         return False  # Queue full, drop event
 
+    def write_sync(self, event: LearningEvent) -> str:
+        """Write one event on the CALLER's thread and return its ``audit_ref``.
+
+        For a caller that must know whether the event was accepted before it
+        acts on it. ``emit()`` only says "queued": a FEEDBACK event the ADR-0534
+        trust gate rejects, or whose chain write fails, is lost on the worker
+        thread after the caller already answered. Whatever the store raises
+        (``FeedbackRejected``, ``RuntimeError``, ``IOError``, ``ValueError``) is
+        raised to the caller, which owns the refusal; it is not counted as a
+        worker loss.
+        """
+        if not event.tenant_id or not isinstance(event.tenant_id, str):
+            raise ValueError(f"invalid tenant_id={event.tenant_id!r}")
+        ref = self.store.write_event(event)
+        with self._stats_lock:
+            self.written += 1
+        return ref
+
     def stop(self, timeout: float = 5.0) -> None:
         """Stop accepting, then wait for every accepted event to be written.
 
