@@ -489,6 +489,11 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   decisions, bridge 560, 0 delegating); `console_soak_incomplete` now carries the
   bridge's real counts instead of a hard 0. Unblocking Phase 2 therefore needs
   delegating traffic (an operator decision on `web_chat.worker_engine`), not time.
+  Measured again 2026-10-25 (T-0280, read-only on the live tenant, recorded in the
+  register entries L05/L12): both surfaces now delegate and neither is ready. Console:
+  365 decisions, join 0.923, 36 delegating, 0 disagreements → `insufficient_samples`
+  (and the join rate is below 0.95). Bridge: 962 decisions, join 0.989, 26 delegating,
+  1 disagreement → `console_soak_incomplete`. No Phase-2 decision is proposed.
 * `DelegationRouterSkill` advises in model tiers (`claude-haiku-4 / sonnet-4 /
   opus-5`), not in `delegation_policy` engine ids (`native / acs / tde`); the
   shadow record carries both so agreement is measurable, but the advice cannot
