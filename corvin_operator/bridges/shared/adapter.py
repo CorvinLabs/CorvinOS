@@ -4642,9 +4642,13 @@ def _ledger_data_flow_withhold(engine_name: str, *, channel: str, chat_key: str)
     def _check(rec: dict):
         try:
             from data_classification import classify_task  # type: ignore  # noqa: PLC0415
+            from spawn_gates import detector_on as _detector_on  # type: ignore  # noqa: PLC0415
             texts = (rec.get("user"), rec.get("observer_text"), rec.get("assistant"))
             persona = rec.get("persona") or None   # as the pre-spawn gate classified it
-            classes = {classify_task(str(t), persona=persona) for t in texts if t}
+            # ADR-2268: the tenant's detector opt-in, so a turn the detector raised is also
+            # withheld from a non-sensitive engine when it is re-supplied.
+            det = _detector_on(tid)
+            classes = {classify_task(str(t), persona=persona, detector=det) for t in texts if t}
         except Exception:  # noqa: BLE001
             return "data_flow"
         return None if all(_allowed(c) for c in classes) else "data_flow"

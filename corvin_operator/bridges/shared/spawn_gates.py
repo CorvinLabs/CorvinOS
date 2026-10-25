@@ -141,6 +141,23 @@ def _load_l34_guard(tenant_id: str, corvin_home: Path | None):
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
+def detector_on(tenant_id: str, corvin_home: "Path | None" = None) -> bool:
+    """Is the additive detector switched on for this tenant (ADR-2268)?
+
+    True when the tenant's ``sensitive_route`` is enabled and well formed. Every caller that
+    classifies text itself (the ADR-2102 history gates, the A2A worker) passes it as
+    ``classify_task(..., detector=...)`` so the turn gate, the reroute and the history gate
+    all see the same class. A tenant without a policy, or a guard that failed to load, is
+    ``False``: those paths refuse or allow elsewhere.
+    """
+    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        guard = _load_l34_guard(tenant, corvin_home)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(getattr(guard, "detector_on", False))
+
+
 def check_l34(
     engine_id: str,
     tenant_id: str,
@@ -198,10 +215,21 @@ def check_l34(
             "data_classification module and tenant.corvin.yaml::spec.data_classification."
         )
 
+    if getattr(guard, "route_malformed", False):
+        # ADR-2268 R1a: a malformed sensitive_route block refuses EVERY turn of the tenant
+        # until it is fixed (only a hand edit produces it; the PUT route validates).
+        _log.warning("spawn_gates.check_l34: sensitive_route is malformed — refusing (fail-closed)")
+        return (
+            "[data-flow] Spawn rejected: the tenant's sensitive_route setting is malformed "
+            f"(engine '{engine_id}'). Fail-closed per tenant data-classification policy. "
+            "Operator: fix tenant.corvin.yaml::spec.data_classification.sensitive_route."
+        )
+
     if classification is None:
         try:
             from data_classification import classify_task  # type: ignore
-            cls_val = classify_task(prompt or "", persona=persona)
+            cls_val = classify_task(prompt or "", persona=persona,
+                                    detector=bool(getattr(guard, "detector_on", False)))
         except Exception as exc:  # noqa: BLE001
             # Fail CLOSED (round-2): a tenant policy IS present (guard is not
             # None) but the task could not be classified — we cannot prove it is

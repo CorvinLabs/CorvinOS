@@ -509,6 +509,11 @@ class DataFlowGuard:
     #: Parsed in its own step; a rejected declaration is listed, never applied.
     provider_compliance: dict[str, ProviderCompliance] = field(default_factory=dict)
     provider_compliance_rejected: list[dict[str, str]] = field(default_factory=list)
+    #: ADR-2268 — the tenant's sensitive route is enabled and well formed, so every classifier
+    #: caller passes ``classify_task(..., detector=guard.detector_on)``.
+    detector_on: bool = False
+    #: ADR-2268 R1a — the ``sensitive_route`` block is malformed: every turn of the tenant is refused.
+    route_malformed: bool = False
 
     # ----- factories --------------------------------------------------
 
@@ -700,6 +705,8 @@ class DataFlowGuard:
         # ADR-2268: provider_compliance has its OWN parse step and can only add or drop
         # providers; it never touches the matrix or engine_compliance above.
         _providers, _rejected = parse_provider_compliance(tenant_config)
+        import sensitive_route as _sr  # noqa: PLC0415 - lazy: sensitive_route imports this module
+        _route = _sr.parse_sensitive_route(tenant_config)
 
         return cls(
             matrix=matrix,
@@ -707,6 +714,8 @@ class DataFlowGuard:
             audit_writer=audit_writer,
             provider_compliance=_providers,
             provider_compliance_rejected=_rejected,
+            detector_on=_route.on,
+            route_malformed=_route.malformed,
         )
 
     # ----- core API ---------------------------------------------------
@@ -1027,11 +1036,53 @@ class _JwtPattern:
 _SECRET_PATTERNS.append(_JwtPattern())  # type: ignore[arg-type]  # JWT bearer tokens
 
 
+class ClassifierError(RuntimeError):
+    """A classifier step failed for a tenant that opted into the detector (ADR-2268).
+
+    For such a tenant a failing or missing step must refuse the turn. The legacy path swallowed
+    it and let the turn become ``PUBLIC``, a silent false-negative source. The caller treats this
+    exception as a refusal, never as ``PUBLIC``.
+    """
+
+
+def _classify_task_opted_in(
+    task: str, persona: "str | None", patterns: "list[re.Pattern[str]]",
+) -> DataClassification:
+    """``max(marker, secret bank, personal_data zone, detector)``; fail-closed (ADR-2268 Decision 6)."""
+    if not isinstance(task, str):
+        raise ClassifierError("task is not a string")
+    if not task.strip():
+        return DataClassification.PUBLIC
+    for pat in patterns:
+        if pat.search(task):
+            return DataClassification.SECRET
+    best = DataClassification.PUBLIC
+    m = _CLASS_MARKER_RE.match(task)
+    if m:
+        best = max(best, DataClassification[m.group(1).upper()])
+    try:
+        try:
+            from .compliance_zone_classifier import classify_zone  # type: ignore
+        except ImportError:
+            from compliance_zone_classifier import classify_zone  # type: ignore
+        z = classify_zone(task, persona)
+    except Exception as exc:  # noqa: BLE001 — fail closed: a policy opted into detection
+        raise ClassifierError(f"compliance zone classifier: {type(exc).__name__}") from exc
+    if isinstance(z, dict) and z.get("zone") == "personal_data":
+        best = max(best, DataClassification.CONFIDENTIAL)
+    try:
+        import sensitive_detector as _sd  # type: ignore  # noqa: PLC0415
+        return _sd.raise_class(best, task)
+    except Exception as exc:  # noqa: BLE001 — DetectorError or an import failure
+        raise ClassifierError(f"detector: {type(exc).__name__}") from exc
+
+
 def classify_task(
     task: str,
     persona: str | None = None,
     *,
     secret_patterns: list[re.Pattern[str]] | None = None,
+    detector: bool = False,
 ) -> DataClassification:
     """Heuristic classifier. Default is ``PUBLIC`` — users opt in to restriction.
 
@@ -1051,7 +1102,15 @@ def classify_task(
 
     ``secret_patterns`` is injectable for tests; defaults to the
     module-level :data:`_SECRET_PATTERNS` bank.
+
+    ``detector=True`` is the per-tenant opt-in of ADR-2268 (an enabled sensitive route): the
+    class is ``max(marker, secret bank, personal_data zone, detector)``, a marker can only raise,
+    and a failing step raises :class:`ClassifierError` instead of becoming ``PUBLIC``. Callers
+    take it from ``DataFlowGuard.detector_on``. Without it nothing here changes.
     """
+    if detector:
+        return _classify_task_opted_in(
+            task, persona, secret_patterns if secret_patterns is not None else _SECRET_PATTERNS)
     if not isinstance(task, str) or not task.strip():
         return DataClassification.PUBLIC
 

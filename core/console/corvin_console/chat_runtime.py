@@ -3025,8 +3025,11 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
             # forbidden turn is withheld, the rest stays (R7-4, R9-1/R9-2).
             try:
                 from data_classification import classify_task  # type: ignore  # noqa: PLC0415
-                from spawn_gates import check_l34 as _l34  # type: ignore  # noqa: PLC0415
-                for cls in {classify_task(str(t)) for t in (rec.get("user"), rec.get("assistant")) if t}:
+                from spawn_gates import check_l34 as _l34, detector_on as _detector_on  # type: ignore  # noqa: PLC0415
+                # ADR-2268: the tenant's detector opt-in, shared with the turn gate.
+                _det = _detector_on(sess.tenant_id)
+                for cls in {classify_task(str(t), detector=_det)
+                            for t in (rec.get("user"), rec.get("assistant")) if t}:
                     if cls not in verdict:
                         verdict[cls] = _l34(engine, sess.tenant_id, classification=cls,
                                             channel=CHANNEL, chat_key=sess.chat_key) is None

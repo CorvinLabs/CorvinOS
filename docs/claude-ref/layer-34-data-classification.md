@@ -254,8 +254,23 @@ producing a guard that quietly allows what its own table forbids:
   secret) and the test pins the miss set exactly. **That corpus is not real traffic: do
   not read these numbers as a rate.** Not detected at all: names, postal addresses,
   health or financial prose, birth dates, any value outside the categories above.
-  **Not wired:** `classify_task()` does not call the detector yet (T-0219 changes it and
-  its four production callers), so no turn is classified differently today.
+  **Wired (T-0219):** `classify_task(..., detector=True)` is the per-tenant opt-in. The
+  class is then `max(marker, secret bank, personal_data zone, detector)`; a marker can only
+  raise, so `[class:public]` no longer switches classification off; a failing step raises
+  `ClassifierError` (fail-closed) instead of becoming `PUBLIC`. The opt-in is
+  `DataFlowGuard.detector_on` (an enabled, well-formed `sensitive_route`), read by the four
+  production callers of ADR-2268: the turn gate `spawn_gates.check_l34`, the bridge history
+  gate `adapter._ledger_data_flow_withhold`, the console history gate
+  `chat_runtime._session_ledger_block` and the A2A worker `a2a_worker.spawn_a2a_worker`.
+  A malformed `sensitive_route` (`guard.route_malformed`) refuses every turn of the tenant
+  in `check_l34` and in the A2A worker. `core/console/tests/test_detector_call_sites_e2e.py`
+  drives each caller with a text only the detector recognises. **Still on the legacy
+  path:** `delegation.py` and `peer_gate.py` also call `classify_task` and were not on the
+  ADR's list; they do not run the detector.
+  Measured on the same synthetic corpus (not real traffic): the legacy path flags 29 of 48
+  sensitive texts but also 10 of 27 harmless ones; the detector alone flags 39 of 48 and
+  1 harmless one; their union flags 41 of 48. A `[class:public]` prefix turns 41 of the 48
+  sensitive texts `PUBLIC` on the legacy path and none of them in opt-in mode.
 * **The reroute decision (T-0219, ADR-2268 outcome table).**
   `spawn_gates.resolve_l34_route(engine_id, tenant_id, classification=|prompt=, ...)`
   returns one `RouteOutcome`: `native` (exactly where `check_l34` allows today: no policy,
