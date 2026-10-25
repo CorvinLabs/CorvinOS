@@ -155,6 +155,25 @@ filter because it is the receiver's own statement about completeness. Files the 
 counted (the first was asked for, the second must not tell a hostile worker what the filter caught).
 Proof: `corvin_operator/bridges/shared/test_a2a_attachments_dropped_e2e.py`.
 
+**What a worker can do with each media type (measured, not assumed).** The protocol accepts any media type as bytes;
+what the receiving worker does with the file depends on its engine and its tool grant. Measured on 2026-10-25 with a
+real `claude_code` worker behind a real HTTP receiver, origin granted `allow_read_files` only (no Bash, no network), one
+run per file, a marker string that exists only inside the file
+(`tests/e2e/test_a2a_media_matrix_live.py`, gated by `CORVIN_A2A_MEDIA_LIVE=1`, spends tokens):
+
+| File | Worker read the content? | How / why not |
+|---|---|---|
+| PNG image | yes (marker quoted) | `Read` tool renders the image |
+| PDF | yes (marker quoted) | `Read` tool |
+| CSV | yes (marker quoted) | `Read` tool (text) |
+| DOCX | no | zip container: `Read` refuses binary, `Grep` sees entry names only, no unzip tool without Bash |
+| WAV, MP3 | no | `Read` refuses binary, no transcription tool |
+| MP4 | no | only container atoms found, no frame decoding |
+
+This is the read-only grant; a grant with `allow_bash` or a worker with a transcription/decoding tool may do more, which
+was not measured. The catalogue does not yet advertise media capabilities (PLAN-0965 F-04): until it does, a sender
+should assume images, PDF and plain text work and audio, video and Office files do not.
+
 ---
 
 ## EU AI Act + GDPR Compliance
