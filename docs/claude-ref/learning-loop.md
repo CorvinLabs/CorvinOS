@@ -406,7 +406,9 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   `learning_analytics.py` + `loop_discovery.py`, ADR-0908), the live experiment collector
   (successor `maturity_live.build_measurement`) and the Stream-2 optimizer route with its eight
   `*_stream2.py` modules and `components/learning/` (successor `stream4_skill_feedback`, same
-  feedback gate). Registered audit
+  feedback gate), and the Brain hub (`hub`/`brain`/`brain_startup`/`config`/`cli` and
+  `core/orchestration/subsystems/`, except `notification_daemon.py`, which the unreachable
+  `core/skill_forge/skill_forge_v2.py` still imports). Registered audit
   event types of retired emitters stay in `EVENT_SEVERITY`/`_EVENT_ALLOWLIST` (old chain
   records may carry them).
 * **The one closed feedback path is race-tested across processes.** `SkillAdapter.apply_config_delta`

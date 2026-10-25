@@ -36,13 +36,16 @@ def test_known_live_modules_are_reachable():
 
 def test_known_dead_context_bridges_are_flagged():
     dead = {(d["file"], d["class"]) for d in _real()[3]["dead"]}
-    assert ("core/orchestration/subsystems/context_bridge.py", "ContextBridge") in dead
+    # The Brain-hub ContextBridge subsystem (and every other Brain subsystem)
+    # was retired by ADR-2282; the real-tree positive control for "dead" is now
+    # a copy-and-edit plugin template, which nothing imports by design.
+    assert ("core/plugins/templates/summary_provider_plugin.py", "MySummaryPlugin") in dead
     # phase1's ContextBridge is imported (package __init__ re-export, pulled in
     # by a mounted console route) but never instantiated — reachable by import,
     # so NOT flagged; "imported" is not "used" (review R2-C16).
     assert ("core/skills/os_skills/phase1/context_bridge.py", "ContextBridge") not in dead
-    # review R1-C10: the skill_registry_phase1 `Skill` base and unscheduled stages
-    assert ("core/skills/workflow_optimizer.py", "WorkflowOptimizerSkill") in dead
+    # review R1-C10's real-tree subject, core/skills/workflow_optimizer.py, no
+    # longer exists (deleted before ADR-2282; this assertion failed since then).
     # The real tree's three unscheduled CEL stages (ADR-0394) were retired by
     # ADR-2282; the unscheduled-stage detector keeps a synthetic positive
     # control in test_unscheduled_cel_stage_is_flagged.

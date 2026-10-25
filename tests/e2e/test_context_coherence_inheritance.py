@@ -25,7 +25,6 @@ import pytest
 from core.orchestration.context_coherence_manager import ContextCoherenceManager
 from core.orchestration.context_coherence import ToolCoherence, ToolSuccessRate
 from core.context_engineering.execution_context import ExecutionContext, ContextStack
-from core.orchestration.brain_startup import ContextInitializer
 
 
 @pytest.fixture

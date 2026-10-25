@@ -16,49 +16,6 @@ from core.vibe_engineering.graph_queries import GraphQueries
 from core.vibe_engineering.task_graph import TaskGraphBuilder, TaskGraph, Node, Edge
 
 
-class TestBlocker1ToolForgeRegister:
-    """Blocker 1: ToolForge register() API exposed to Brain."""
-
-    def test_register_api_exists(self):
-        """Verify register() method exists on AsyncForgeRegistry."""
-        from core.orchestration.subsystems.tool_forge_subsystem import AsyncForgeRegistry
-
-        # Create async registry with no underlying registry (testing mode)
-        registry = AsyncForgeRegistry(registry=None, max_workers=2)
-
-        # Verify method exists and is callable
-        assert hasattr(registry, "register")
-        assert callable(registry.register)
-
-    def test_register_stores_tool_spec(self):
-        """Verify register() stores tool spec in cache."""
-        import asyncio
-        from core.orchestration.subsystems.tool_forge_subsystem import (
-            AsyncForgeRegistry,
-            ToolSpec,
-        )
-
-        registry = AsyncForgeRegistry(registry=None, max_workers=2)
-
-        # Create tool spec
-        spec = ToolSpec(
-            name="test_tool",
-            description="Test tool",
-            input_schema={"type": "object"},
-            runtime="python",
-            impl_path="/tmp/test.py",
-        )
-
-        # Register tool (async)
-        async def run_test():
-            tool_id = await registry.register("test_id", spec)
-            assert tool_id == "test_id"
-            assert "test_tool" in registry._tools_cache
-            assert registry._tools_cache["test_tool"] == spec
-
-        asyncio.run(run_test())
-
-
 class TestBlocker2SkillAutoGrade:
     """Blocker 2: Skill auto_grade() implementation with Bayesian updates."""
 
@@ -140,35 +97,6 @@ class TestBlocker2SkillAutoGrade:
 
         grade = auto_grade(result, prior_confidence=0.99)
         assert 0.0 <= grade.score <= 1.0
-
-
-class TestBlocker3AutoPromotion:
-    """Blocker 3: Skill auto_promotion wiring and integration."""
-
-    def test_auto_promotion_method_exists(self):
-        """Verify _maybe_auto_promote method exists on SkillForgeSubsystem."""
-        from core.orchestration.subsystems.skill_forge_subsystem import (
-            SkillForgeSubsystem,
-        )
-
-        subsystem = SkillForgeSubsystem()
-
-        assert hasattr(subsystem, "_maybe_auto_promote")
-        assert callable(subsystem._maybe_auto_promote)
-
-    def test_skill_auto_grade_handler_exists(self):
-        """Verify skill_auto_grade request handler is registered."""
-        from core.orchestration.subsystems.skill_forge_subsystem import (
-            SkillForgeSubsystem,
-        )
-
-        subsystem = SkillForgeSubsystem()
-
-        # Verify handle_request supports skill_auto_grade
-        import inspect
-
-        source = inspect.getsource(subsystem.handle_request)
-        assert "skill_auto_grade" in source
 
 
 class TestBlocker4GraphCycleDetection:

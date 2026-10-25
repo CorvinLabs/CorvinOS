@@ -17,7 +17,7 @@ root and ``tests/``) and resolves to whichever was imported first.
 # collide with same-named modules under core/ --
 #
 #     marketplace -> core/plugins/marketplace.py       (wins, wrong module)
-#     cli         -> core/orchestration/cli.py         (wins, wrong module)
+#     (cli -> core/orchestration/cli.py used to win too; that file was retired by ADR-2282)
 #
 # so a bare `import marketplace` silently binds the wrong file. Loading by
 # explicit file path is the only form that cannot be shadowed, which is what

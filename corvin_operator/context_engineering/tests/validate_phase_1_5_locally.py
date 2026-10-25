@@ -53,43 +53,10 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================================================
-# PHASE 2: Token Budget Allocation
+# PHASE 2: Token Budget Allocation — RETIRED
 # ============================================================================
-print("\n[PHASE 2] Testing: Token Budget Allocation (Stage-Based)")
-print("-" * 80)
-
-try:
-    from orchestration.subsystems.token_budget import TokenBudget
-
-    budget = TokenBudget(pool_tokens=4000)
-    stats = budget.get_stats()
-
-    # Extract per-stage allocations
-    allocations = {stage: stats[stage]["allocated"] for stage in ["memory", "graph", "skill", "synthesis"]}
-
-    # Test 1: Allocations sum to total
-    total_allocated = sum(allocations.values())
-    assert abs(total_allocated - 4000) < 1, f"Should sum to 4000, got {total_allocated}"
-
-    # Test 2: All stages have non-zero allocation
-    assert all(v > 0 for v in allocations.values()), "All stages should have allocation"
-
-    # Test 3: Percentages
-    memory_pct = (allocations.get("memory", 0) / 4000) * 100
-    assert 25 <= memory_pct <= 35, f"Memory should be ~30%, got {memory_pct}%"
-
-    print(f"  ✅ Budget allocation: PASS")
-    print(f"    Memory: {allocations['memory']}/4000 tokens")
-    print(f"    Graph: {allocations['graph']}/4000 tokens")
-    print(f"    Skill: {allocations['skill']}/4000 tokens")
-    print(f"    Synthesis: {allocations['synthesis']}/4000 tokens")
-    print(f"  ✅ Phase 2: ALL TESTS PASS")
-
-except Exception as e:
-    print(f"  ❌ Phase 2 FAILED: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
+# core/orchestration/subsystems/token_budget.py left with the Brain hub (ADR-2282).
+print("\n[PHASE 2] Retired by ADR-2282 (Brain-hub token budget removed)")
 
 # ============================================================================
 # PHASE 3: Adaptive Routing (Task Complexity Classifier)
@@ -172,7 +139,7 @@ print("=" * 80)
 
 print("\nValidation Results:")
 print("  ✅ Phase 1 (Measurement): Canary routing works deterministically")
-print("  ✅ Phase 2 (Budgeting): Token allocation cascades correctly")
+print("  ℹ Phase 2 (Budgeting): retired by ADR-2282")
 print("  ✅ Phase 3 (Adaptive): Task complexity classification works")
 print("  ✅ Phase 4 (ML): Architecture validated")
 print("  ℹ Phase 5 (Selective): retired by ADR-2282")

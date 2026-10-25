@@ -177,7 +177,6 @@ class TestEmitterWiring:
         store, never pass (tenant_home, tenant_id) or nothing (L-08)."""
         repo = Path(__file__).resolve().parents[3]
         sites = [
-            repo / "core/orchestration/subsystems/tool_forge_subsystem.py",
             repo / "core/console/corvin_console/standalone.py",
             repo / "core/learning/token_measurement_hook.py",
         ]

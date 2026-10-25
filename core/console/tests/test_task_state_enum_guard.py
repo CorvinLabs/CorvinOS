@@ -45,8 +45,6 @@ REGISTERED: dict[str, str] = {
         "autonomous-engine vocabulary (paused/complete/escalated), not converted in P1",
     "core/orchestration/interrupt_protocol.py:TaskState":
         "interrupt-protocol vocabulary (paused/resumed/redirected), not converted in P1",
-    "core/orchestration/subsystems/task_manager.py:TaskState":
-        "orchestration subsystem vocabulary (queued/running/completed/failed), not converted in P1",
     "core/vibe_engineering/status_snapshot.py:TaskState":
         "vibe-engineering snapshot vocabulary (idle/awaiting_input/blocked), not converted in P1",
 }

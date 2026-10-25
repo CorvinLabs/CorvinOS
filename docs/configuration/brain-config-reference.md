@@ -1,5 +1,7 @@
 # CorvinOS Brain Configuration Reference
 
+> **Retired (2026-10-25, ADR-2282):** the Brain hub and its config loader (`core/orchestration/config.py`) were deleted; this configuration is read by nothing. This document is historical.
+
 ## File Location
 
 **Default:** `~/.corvin/brain-config.yaml`

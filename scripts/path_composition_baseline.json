@@ -1099,10 +1099,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/orchestration/subsystems/tool_forge_subsystem.py::ToolForgeSubsystem._learning_tenant_dir::Path.home() / '.corvin' / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/package_manager/corvin_package_manager.py::PackageManager._get_packages_dir::corvin_home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"

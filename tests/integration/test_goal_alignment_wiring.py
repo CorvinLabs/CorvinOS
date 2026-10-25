@@ -3,7 +3,6 @@
 Tests:
 - ExecutionContext initialization with goal from task_template
 - Goal alignment monitoring integration with LDD loop
-- SubsystemHub alert routing for goal drift
 - Audit trail logging of goal drift alerts
 
 ADR-0407: Session Manager Phase 2.2
@@ -16,7 +15,6 @@ from typing import Optional
 from core.context_engineering.execution_context import ExecutionContext, ContextStack
 from core.session_manager.monitors.goal_alignment import GoalAlignmentMonitor, GoalAlignmentState
 from core.session_manager.lifecycle import SessionLifecycleManager, SessionSplitTrigger
-from core.orchestration.hub import SubsystemHub
 
 
 class TestGoalAlignmentInitialization:
@@ -165,57 +163,6 @@ class TestGoalAlignmentChecking:
 
         alert = ctx.check_goal_alignment("Some work", check_interval=5)
         assert alert is None
-
-
-class TestGoalAlignmentWithSubsystemHub:
-    """Test goal alignment alert routing through SubsystemHub."""
-
-    def test_hub_publishes_goal_drift_alert(self):
-        """SubsystemHub should publish goal drift alerts as events."""
-        hub = SubsystemHub()
-        events_received = []
-
-        def capture_event(event_name: str, event_data: dict):
-            events_received.append((event_name, event_data))
-
-        # Subscribe to goal drift events
-        hub.subscribe("monitor.goal_drift_detected", capture_event)
-
-        # Create alert via monitor
-        monitor = GoalAlignmentMonitor()
-        state = monitor.create_or_get_state("session-009", "task-009", "default")
-        state.original_goal = "Implement authentication"
-        state.metadata["current_work"] = "Unrelated work"
-
-        # Manually set up for alert
-        monitor.similarity_threshold = 0.1  # Very low to force alert
-        monitor.hub = hub
-
-        alert = monitor.check(state)
-
-        # Should have generated an alert
-        # (Actual alert depends on similarity calculation)
-
-    def test_goal_drift_alert_includes_metadata(self):
-        """Goal drift alert should include similarity score and context."""
-        monitor = GoalAlignmentMonitor()
-        state = monitor.create_or_get_state("session-010", "task-010", "default")
-        state.original_goal = "Implement user authentication"
-
-        # Unrelated work that should have low similarity
-        state.metadata["current_work"] = "Writing documentation for API endpoints"
-
-        # Force low threshold to trigger alert
-        monitor.similarity_threshold = 0.9
-        monitor.consecutive_low_count = 1
-
-        alert = monitor.check(state)
-
-        if alert:
-            assert "similarity_score" in alert.metadata
-            assert "original_goal" in alert.metadata
-            assert "current_work" in alert.metadata
-            assert alert.severity == "warning"
 
 
 class TestGoalAlignmentAuditTrail:

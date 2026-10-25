@@ -1,5 +1,7 @@
 # CorvinOS Brain — Quick Start Guide
 
+> **Retired (2026-10-25, ADR-2282):** the Brain hub — `core/orchestration/{hub,brain,brain_startup,config,cli,__main__}.py` and `core/orchestration/subsystems/` — was deleted; nothing reachable ever started it. Workers get Forge and SkillForge through the MCP servers injected into every worker. `quota_gate.py`, `layer_forge/` and `corvin_orchestration/` stay. This document is historical.
+
 ## What is the Brain?
 
 The CorvinOS Brain is an autonomous task orchestration system that:

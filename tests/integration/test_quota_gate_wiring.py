@@ -52,51 +52,6 @@ class TestQuotaGateWiring:
         assert callable(increment_and_check), "increment_and_check must be callable"
         assert callable(get_today_count), "get_today_count must be callable"
 
-    def test_brain_run_invokes_quota_gate_functional_proof(self, monkeypatch, tmp_path):
-        """Phase 2: Functional proof — TaskBrain.run_task() actually calls quota_gate.
-
-        quota_gate.increment_and_check is imported INSIDE run_task, so patching
-        the module attribute is observed by the real call site.
-        """
-        import asyncio
-        from core.orchestration.brain import TaskBrain
-
-        # TaskBrain boots the ADR-0232 tripwire, which refuses ANY env redirect
-        # of the audit chain that is not the resolver's own chain under
-        # CORVIN_HOME (no pytest exemption). The sandbox CORVIN_HOME already
-        # isolates the chain, so drop the redirects instead of depending on
-        # where FORGE_ROOT / VOICE_AUDIT_PATH happen to point.
-        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin-home"))
-        monkeypatch.delenv("FORGE_ROOT", raising=False)
-        monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
-
-        mock_increment = MagicMock(return_value=1)
-        monkeypatch.setattr(
-            "core.orchestration.quota_gate.increment_and_check", mock_increment
-        )
-
-        brain = TaskBrain(corvin_home=str(tmp_path))
-
-        # Downstream (context init / subsystems) may fail in a sandbox — the
-        # quota gate is the FIRST thing run_task does, before any of that.
-        try:
-            asyncio.run(
-                brain.run_task(
-                    task_id="test-task", tenant_id="test-tenant", task_type="analysis"
-                )
-            )
-        except Exception:  # noqa: BLE001 — downstream, see above
-            pass
-
-        assert mock_increment.called, (
-            "quota_gate.increment_and_check must be called when a brain task runs. "
-            "This proves the wiring is live (not dead code)."
-        )
-        args = mock_increment.call_args.args
-        assert args[0] == Path(str(tmp_path)), "configured corvin_home wins"
-        assert args[1] == "brain_tasks_per_day"
-        assert args[2] == "test-tenant"
-
     def test_quota_gate_resolves_corvin_home_correctly(self, monkeypatch, tmp_path):
         """Verify quota_gate resolves CORVIN_HOME with correct precedence:
         1. Configured root (from context initializer)
@@ -150,53 +105,6 @@ class TestQuotaGateWiring:
             assert op_error is not None, "Should be able to import LicenseLimitError"
         except ImportError as e:
             pytest.skip(f"corvin_operator/ module not available in test environment: {e}")
-
-    def test_quota_gate_multiple_call_sites_use_same_path(self, monkeypatch):
-        """Verify all three subsystems (brain, skill_forge, tool_forge) use quota_gate.
-
-        Grep proof: All three import from core.orchestration.quota_gate
-        """
-        # These grep checks prove the call sites are correctly wired
-        import subprocess
-
-        repo_root = Path(__file__).resolve().parents[2]
-
-        # Check brain.py
-        result = subprocess.run(
-            ["grep", "-n", "from core.orchestration.quota_gate import", "core/orchestration/brain.py"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, "brain.py must import from core.orchestration.quota_gate"
-
-        # Check skill_forge_subsystem.py
-        result = subprocess.run(
-            [
-                "grep",
-                "-n",
-                "from core.orchestration.quota_gate import",
-                "core/orchestration/subsystems/skill_forge_subsystem.py",
-            ],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, "skill_forge_subsystem.py must import from core.orchestration.quota_gate"
-
-        # Check tool_forge_subsystem.py
-        result = subprocess.run(
-            [
-                "grep",
-                "-n",
-                "from core.orchestration.quota_gate import",
-                "core/orchestration/subsystems/tool_forge_subsystem.py",
-            ],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, "tool_forge_subsystem.py must import from core.orchestration.quota_gate"
 
     def test_quota_gate_fail_closed_on_quota_exceeded(self, tmp_path):
         """Quota gate must fail-closed: quota exceeded → LicenseLimitError raised.

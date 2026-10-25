@@ -106,58 +106,6 @@ class TestLicensingAuditEventsEndpoint:
 class TestMonitoringMetricsEndpoint:
     """Tests for /v1/monitoring/metrics endpoint"""
 
-    @pytest.mark.asyncio
-    async def test_monitoring_metrics_returns_system_health(self):
-        """Verify metrics endpoint returns health monitor data"""
-        mock_monitor = AsyncMock()
-        mock_monitor.get_status.return_value = {
-            "avg_latency": 125,
-            "error_rate": 0.02,
-            "convergence": 0.82,
-            "success_rate": 0.98,
-        }
-
-        with patch('core.orchestration.brain.HealthMonitor', return_value=mock_monitor):
-            from core.console.corvin_console.routes.features_phase2 import get_metrics
-
-            response = await get_metrics(range="1h")
-
-            # Verify response structure
-            assert "metrics" in response
-            assert "alerts" in response
-            assert "timestamp" in response
-            assert "range" in response
-            assert response["range"] == "1h"
-
-            # Verify metric data
-            metrics = response["metrics"]
-            assert len(metrics) == 4  # skill_latency, error_rate, convergence, success_rate
-            assert metrics[0]["name"] == "skill_latency_ms"
-            assert metrics[0]["value"] == 125
-            assert metrics[0]["status"] == "ok"
-
-    @pytest.mark.asyncio
-    async def test_monitoring_metrics_status_transitions(self):
-        """Metrics transition status based on thresholds"""
-        mock_monitor = AsyncMock()
-        mock_monitor.get_status.return_value = {
-            "avg_latency": 250,  # > 200 = warning
-            "error_rate": 0.08,  # > 0.05 = critical
-            "convergence": 0.55,  # < 0.7 = warning
-            "success_rate": 0.92,  # < 0.95 = warning
-        }
-
-        with patch('core.orchestration.brain.HealthMonitor', return_value=mock_monitor):
-            from core.console.corvin_console.routes.features_phase2 import get_metrics
-
-            response = await get_metrics(range="1h")
-
-            metrics = {m["name"]: m for m in response["metrics"]}
-            assert metrics["skill_latency_ms"]["status"] == "warning"
-            assert metrics["skill_error_rate"]["status"] == "critical"
-            assert metrics["convergence_mean"]["status"] == "warning"
-
-
 class TestModelsEndpoint:
     """Tests for /v1/models/available endpoint"""
 
