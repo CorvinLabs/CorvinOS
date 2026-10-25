@@ -187,7 +187,27 @@ def test_cli_output_is_accepted_by_claude_code(tmp_path):
 
     test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
     assert test.returncode == 0, test.stdout + test.stderr
-    assert "0 fail" in test.stdout and "7 pass" in test.stdout
+    assert "0 fail" in test.stdout and "15 pass" in test.stdout  # 7 quiz-gate + 8 skill-info tests
+
+
+@pytest.mark.skipif(_CLAUDE is None, reason="the claude CLI is not installed, so Claude Code cannot be driven")
+def test_info_only_mod_for_a_store_without_any_quiz_is_complete_and_tested(tmp_path):
+    """The phase 2 shape: many skills, no quiz section anywhere -> one info mod WITH its own tests."""
+    root = _store(tmp_path, {f"assistant.s{i}": "# no quiz here\n" for i in range(25)})
+    out = tmp_path / "mod"
+    proc = _run_cli("--store", str(root), "--out", str(out), "--name", "skills-info-mod", "--info")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"mod": "skills-info-mod", "skills": 25, "cards": 0, "files": 5}
+    assert (out / "tests" / "info.test.ts").is_file()
+    assert not (out / "tests" / "gate.test.ts").exists()
+    js = (out / "hooks" / "register.js").read_text(encoding="utf-8")
+    assert "command: 'quiz'" not in js and "skill-info" in js
+
+    validate = subprocess.run([_CLAUDE, "plugin", "validate", str(out)], capture_output=True, text=True, timeout=120)
+    assert "Validation passed" in validate.stdout, validate.stdout + validate.stderr
+    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
+    assert test.returncode == 0, test.stdout + test.stderr
+    assert "0 fail" in test.stdout and "8 pass" in test.stdout
 
 
 @pytest.mark.skipif(_CLAUDE is None, reason="the claude CLI is not installed, so Claude Code cannot be driven")

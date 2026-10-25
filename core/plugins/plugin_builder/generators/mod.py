@@ -189,6 +189,8 @@ def generate_mod_files(
     }
     if cards:
         files["tests/gate.test.ts"] = _render_tests(mod_name, cards[0])
+    if info:
+        files["tests/info.test.ts"] = _TESTS_INFO.replace("__MOD__", json.dumps(mod_name))
     return files
 
 
@@ -448,6 +450,12 @@ _INFO_HANDLER = """\
     const skill = skills.find((s) => s.name === wanted)
     if (!skill) throw new Error(MOD + ': no skill named ' + wanted)
     const mean = skill.n_grades > 0 ? skill.mean_score.toFixed(2) : 'none'
+    // ADR-2285: reading skill metadata through the CorvinOS servers is an action too. Mod-reported,
+    // metadata only (no score: nothing was graded). The gateway sets the tenant.
+    await $.mcp.call(AUDIT_SERVER, 'audit_write_event', {
+      event_type: 'mod.command_executed',
+      details: { mod: MOD, command: 'skill-info', skill: skill.name },
+    })
     return { text: skill.name + ': type ' + skill.type + ', scope ' + skill.scope + ', ' + skill.n_grades + ' grade(s), mean ' + mean }
   })
 
@@ -569,6 +577,125 @@ test('only forge missing: nothing is graded either (no half write)', async ($, o
   expect(out.text).toBe(DEFAULT)
   expect(calls.some((c) => c.tool === 'skill_grade')).toBe(false)
   expect(writes.length).toBe(0)
+})
+"""
+
+_TESTS_INFO = """\
+import { expect, mock, test } from 'claude-code/testing'
+
+// Generated with the mod (CONCEPT-0118). A hook that throws is skipped (fail-open); the stub below stands
+// for Claude Code's own answer to a command nobody handled, so getting it back proves the mod did NOT answer.
+const DEFAULT = 'CLAUDE-CODE-DEFAULT'
+const MOD = __MOD__
+
+type Opts = { adapter?: boolean; skillForge?: boolean; forge?: boolean; skills?: any[] }
+
+const SKILLS = [
+  { name: 'assistant.graded', type: 'domain', scope: 'user', n_grades: 2, mean_score: 0.65 },
+  { name: 'assistant.ungraded', type: 'learned-experience', scope: 'user', n_grades: 0, mean_score: 0 },
+]
+
+function wire(on: any, opts: Opts = {}) {
+  const adapter = opts.adapter ?? true
+  const skillForge = opts.skillForge ?? true
+  const forge = opts.forge ?? true
+  const skills = opts.skills ?? SKILLS
+  mock.env(on, adapter ? { CORVIN_CHANNEL_ID: 'discord:test' } : {})
+  const calls: { raw: string; tool: string }[] = []
+  const registered: string[] = []
+  on('command.register', ($: any, e: any) => {
+    registered.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('mcp.call', ($: any, e: any) => {
+    const raw = JSON.stringify(e)
+    const tool = ['skill_list', 'forge_list', 'skill_grade', 'audit_write_event'].find((t) => raw.includes(t)) ?? '?'
+    calls.push({ raw, tool })
+    const isForge = tool === 'forge_list' || tool === 'audit_write_event'
+    if (isForge && !forge) return { deny: 'forge not connected' }
+    if (!isForge && !skillForge) return { deny: 'skill_forge not connected' }
+    if (tool === 'skill_list') {
+      return { value: { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { ok: true, skills } }) }] } }
+    }
+    return { value: { content: [] } }
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.run', () => ({ text: DEFAULT }))
+  return { calls, registered }
+}
+
+const START = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
+
+test('adapter session: /skill-info is registered', async ($, on) => {
+  const { registered } = wire(on)
+  await $.session.start(START)
+  expect(registered.some((r) => r.includes('skill-info'))).toBe(true)
+})
+
+test('adapter session: a graded skill is described, then audited, nothing is graded', async ($, on) => {
+  const { calls } = wire(on)
+  const out = await $.command.run({ command: 'skill-info', args: 'assistant.graded' })
+  expect(out.text).toContain('assistant.graded')
+  expect(out.text).toContain('type domain')
+  expect(out.text).toContain('scope user')
+  expect(out.text).toContain('2 grade(s)')
+  expect(out.text).toContain('mean 0.65')
+  expect(calls.map((c) => c.tool)).toEqual(['skill_list', 'forge_list', 'skill_list', 'audit_write_event'])
+  const audit = calls.find((c) => c.tool === 'audit_write_event')!
+  expect(audit.raw).toContain('mod.command_executed')
+  expect(audit.raw).toContain('skill-info')
+  expect(audit.raw).toContain(MOD)
+  expect(calls.some((c) => c.tool === 'skill_grade')).toBe(false)
+})
+
+test('adapter session: an ungraded skill says mean none', async ($, on) => {
+  wire(on)
+  const out = await $.command.run({ command: 'skill-info', args: 'assistant.ungraded' })
+  expect(out.text).toContain('0 grade(s)')
+  expect(out.text).toContain('mean none')
+})
+
+test('adapter session: every skill the store lists is found (200 synthetic skills)', async ($, on) => {
+  const many = Array.from({ length: 200 }, (_, i) => ({
+    name: 'assistant.s' + i, type: 'domain', scope: 'user', n_grades: i % 3, mean_score: 0.5,
+  }))
+  wire(on, { skills: many })
+  for (const i of [0, 1, 99, 199]) {
+    const out = await $.command.run({ command: 'skill-info', args: 'assistant.s' + i })
+    expect(out.text).toContain('assistant.s' + i + ':')
+  }
+})
+
+test('adapter session: an unknown skill or no name is not answered and not audited', async ($, on) => {
+  const { calls } = wire(on)
+  const unknown = await $.command.run({ command: 'skill-info', args: 'assistant.nope' })
+  const empty = await $.command.run({ command: 'skill-info', args: '  ' })
+  expect(unknown.text).toBe(DEFAULT)
+  expect(empty.text).toBe(DEFAULT)
+  expect(calls.some((c) => c.tool === 'audit_write_event')).toBe(false)
+})
+
+test('normal session: nothing is registered, answered or called', async ($, on) => {
+  const { registered, calls } = wire(on, { adapter: false })
+  await $.session.start(START)
+  expect(registered.length).toBe(0)
+  const out = await $.command.run({ command: 'skill-info', args: 'assistant.graded' })
+  expect(out.text).toBe(DEFAULT)
+  expect(calls.length).toBe(0)
+})
+
+test('servers missing: no answer and no audit event', async ($, on) => {
+  const { calls } = wire(on, { skillForge: false, forge: false })
+  const out = await $.command.run({ command: 'skill-info', args: 'assistant.graded' })
+  expect(out.text).toBe(DEFAULT)
+  expect(calls.some((c) => c.tool === 'audit_write_event')).toBe(false)
+})
+
+test('only forge missing: no answer and no audit event', async ($, on) => {
+  const { calls } = wire(on, { forge: false })
+  const out = await $.command.run({ command: 'skill-info', args: 'assistant.graded' })
+  expect(out.text).toBe(DEFAULT)
+  expect(calls.some((c) => c.tool === 'audit_write_event')).toBe(false)
 })
 """
 
