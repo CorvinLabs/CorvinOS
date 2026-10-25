@@ -499,6 +499,31 @@ Learned Definition-of-Done weights persist per tenant in
 loaded back, so the confidence gate survives a restart.
 Proof: `tests/learning/test_adr_2283_dod_weights_tenant_path.py`.
 
+The loop (`core/console/corvin_console/routes/dod_verifier_dashboard.py`):
+
+1. `POST /v1/console/api/dod/verify` scores with `DoD_WeightOptimizer.recommend_next_weights(task_type)`
+   (injected into `DoD_VerifierSkill` as `weights_for`): per weight the learned value only when its
+   confidence is > 0.5 (ADR-0723), else the default; then clamped to [0.05, 0.6] and normalised to
+   sum 1. The response says `weights_source: default|learned`. It records a `SKILL_EXECUTED` and an
+   `OUTCOME` learning event, both carrying `task_type` — the first is the execution the ADR-0534
+   reality check needs (without it every DoD rating was refused, and the route answered 500).
+2. `POST /v1/console/api/dod/feedback {task_id, check_name, feedback}` looks up the newest verification
+   of `task_id` (none → 422), requires a learnable task type (`cli_command`, `api_endpoint`,
+   `lib_function`, `plugin`, `skill`, `feature` — anything else → 422; it is never folded into another
+   type's bucket) and a live check key (else 422), then writes FEEDBACK through
+   `EventStore.write_event` (the ADR-0534 gate: throttled → 429, refused → 422).
+3. The verdict maps to a signed delta (`accurate` −0.20 → the check's weight up, `inaccurate` +0.20 →
+   down, `not_applicable` +0.10 → down by half a step; the optimizer caps one rating at 0.05) and
+   `observe_feedback` runs on the tenant's restored state. The change is chained FIRST as
+   `skill_config_updated` (`param_name weights.<task_type>`, `task_type`, `old_weights`, `new_weights`,
+   `confidence` — numbers only, never the `note`); a change that cannot be chained is not persisted (500).
+   Then the tenant file is written.
+
+Each rating raises the confidence of one weight by 0.1, so a weight is first applied after its sixth
+accepted rating. Feedback traffic is near zero today: the loop is wired but mostly idle.
+Proof: `tests/learning/test_adr_2284_dod_weight_loop_e2e.py` (verify → 6 ratings → verify over HTTP;
+defaults until the gate, one chained record per change, the gate's throttle refuses a burst).
+
 ## Learning anomalies (ADR-2044 Phase 3, 2026-10-13)
 
 `core/learning/anomaly_monitor.py` measures three conditions over data the loop already stores;

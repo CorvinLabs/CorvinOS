@@ -2,10 +2,12 @@
 
 **Canonical Reference:** [ADR-0721](../../corvin_decisions/decisions/ADR-0721-dod-verifier-skill-architecture.md), [ADR-0722](../../corvin_decisions/decisions/ADR-0722-dod-loss-signal-learning-integration.md), [ADR-0723](../../corvin_decisions/decisions/ADR-0723-dod-implementation-plan.md)
 
-**Last Updated:** 2026-10-01
+**Last Updated:** 2026-10-25
 **Status:** Implemented and reachable through the console API; HTTP-level E2E in
-`core/console/tests/test_dod_verify_route_e2e.py`. No UI panel calls it, and no
-optimizer consumes DoD feedback yet.
+`core/console/tests/test_dod_verify_route_e2e.py`. No UI panel calls it. Since
+2026-10-25 (ADR-2284) `POST …/feedback` tunes per-task-type weights — see
+[learning-loop.md § DoD weight loop](learning-loop.md) and
+`tests/learning/test_adr_2284_dod_weight_loop_e2e.py`.
 
 ---
 
@@ -21,6 +23,9 @@ timeout every time, and the audit check looked for a top-level `task_id` that no
 record carries. Those two checks are 45 % of the weight, so the ceiling was 55 %.
 
 ## The five checks
+
+The weights below are the defaults. A tenant's learned weights replace them per task type
+once a weight's confidence is > 0.5, clamped to [0.05, 0.6] and summing to 1.
 
 | Check | Weight | Passes when | Implementation |
 |---|---|---|---|
@@ -38,7 +43,8 @@ core/skills/os_skills/definition_of_done_verifier/
   ├── skill_base_wrapper.py # DoD_VerifierSkillWrapper: chains the result, then returns it
   ├── checks/               # the five checks above
   ├── scoring.py            # weighted score, threshold 0.80
-  ├── weight_optimizer.py   # exists; nothing feeds it DoD feedback yet
+  ├── weight_optimizer.py   # learns from POST /feedback; confidence gate + clamp (ADR-2284)
+  ├── weight_persistence.py # <tenant_home>/global/forge/dod_weights.json (ADR-2283)
   └── hardening.py
 ```
 
@@ -84,6 +90,7 @@ Response:
   "passed": true,
   "checks": {"reachability": {"passed": true, "evidence": "…", "check_name": "reachability"}, "…": {}},
   "weights": {"w_reach": 0.2, "w_audit": 0.25, "w_test": 0.2, "w_docs": 0.2, "w_repro": 0.15},
+  "weights_source": "default",
   "reason": "Task complete. DoD score: 80.0%",
   "audit_event_id": "<sha256 of the verification>",
   "timestamp": "2026-10-01T…"
@@ -93,13 +100,20 @@ Response:
 Exactly one `skill.executed` record (`skill_id: os.definition_of_done_verifier`, input
 and output hashed) is chained per verification. If it cannot be written the route
 answers `500 "Verification audit failed. Task cannot be marked done."` and returns no
-score. The result is also stored as a learning `OUTCOME` event, which `/history` reads.
+score. The result is also stored as a learning `SKILL_EXECUTED` and `OUTCOME` event
+(both with `task_type`); `/history` reads the OUTCOME, `/feedback` looks the task type up in it.
 
 ### POST /v1/console/api/dod/feedback
 
-`{"task_id": "…", "check_name": "…", "feedback": "accurate" | "inaccurate" | "not_applicable", "note": "…"}`
-→ `{"accepted": true, "feedback_id": "…"}`. Stored as a learning `FEEDBACK` event; the
-free-text `note` is not persisted. No weight is adjusted.
+`{"task_id": "…", "check_name": "<a check key>", "feedback": "accurate" | "inaccurate" | "not_applicable", "note": "…"}`
+→ `{"accepted": true, "feedback_id": "…", "task_type": "…", "weights_changed": true, "old_weights": {…},
+"new_weights": {…}, "confidence": {…}, "applied_weights": {…}}`.
+
+422 when the task has no recorded verification, its task type is not learnable, or
+`check_name` is not one of the five check keys; 429/422 when the ADR-0534 feedback gate
+throttles/refuses it. The rating is stored as a learning `FEEDBACK` event (the free-text
+`note` is not persisted), the weight change is chained as `skill_config_updated` and then
+written to the tenant's weight file.
 
 ### GET /v1/console/api/dod/history/{task_id}?limit=10
 

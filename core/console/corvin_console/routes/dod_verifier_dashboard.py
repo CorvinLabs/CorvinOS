@@ -3,7 +3,8 @@
 Provides REST endpoints for Definition-of-Done verification:
   - POST /api/dod/verify — run verification on a project
   - GET /api/dod/history/{task_id} — fetch verification history
-  - POST /api/dod/feedback — submit feedback on DoD checks
+  - POST /api/dod/feedback — submit feedback on DoD checks; it tunes the tenant's
+    per-task-type weights (ADR-2284 decision 1, audit-first ``skill_config_updated``)
 
 Tenant isolation enforced. All operations audit-logged.
 
@@ -20,6 +21,7 @@ import json
 import logging
 
 import re
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 
@@ -56,6 +58,15 @@ except ImportError:
     from core.skills.os_skills.audit_integration import emit_skill_executed_event
 
 from core.learning.learning_events import EventType, LearningEvent
+from core.learning.feedback_gate import FeedbackRejected
+from core.skills.os_skills.audit_integration import emit_skill_config_updated_event
+from core.skills.os_skills.definition_of_done_verifier.weight_optimizer import (
+    CHECK_TO_WEIGHT,
+    DoD_WeightOptimizer,
+)
+from core.skills.os_skills.definition_of_done_verifier.weight_persistence import (
+    WeightPersistence,
+)
 
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
@@ -69,6 +80,33 @@ router = APIRouter(prefix="/api/dod", tags=["dod-verifier"])
 # Global DoD Verifier instance (per-tenant)
 _verifiers: Dict[str, DoD_VerifierSkillWrapper] = {}
 _event_stores: Dict[str, EventStore] = {}
+# One read-modify-write of a tenant's weight file at a time (feedback is rare; a lock per
+# tenant is enough inside one process).
+_weight_locks: Dict[str, threading.Lock] = {}
+_weight_locks_guard = threading.Lock()
+
+#: ADR-2284 decision 1: a verdict on one check -> the optimizer's signed delta.
+#: ``accurate``: the check carried real signal -> its weight goes UP (negative delta,
+#: "the skill was too lenient about it"). ``inaccurate``: it misjudged -> its weight goes DOWN.
+#: ``not_applicable``: it should not count for this task type -> DOWN by half a step.
+#: |delta| * LEARNING_RATE is capped at 0.05 per rating by the optimizer.
+FEEDBACK_DELTA = {"accurate": -0.20, "inaccurate": 0.20, "not_applicable": 0.10}
+
+
+def _weight_lock(tenant_id: str) -> threading.Lock:
+    with _weight_locks_guard:
+        return _weight_locks.setdefault(tenant_id, threading.Lock())
+
+
+def _optimizer(tenant_id: str) -> DoD_WeightOptimizer:
+    """The tenant's optimizer, restored from its persisted weights AND confidence."""
+    return DoD_WeightOptimizer.from_state(WeightPersistence(tenant_id=tenant_id).load_state())
+
+
+def _applied_weights(tenant_id: str, task_type: str) -> Dict[str, float]:
+    """What the verifier scores ``task_type`` with: learned weights only past the ADR-0723
+    confidence gate (> 0.5), clamped to [0.05, 0.6], summing to 1; else the defaults."""
+    return _optimizer(tenant_id).recommend_next_weights(task_type)
 
 
 def _tenant_home(tenant_id: str) -> Path:
@@ -123,6 +161,7 @@ def get_verifier(tenant_id: str) -> DoD_VerifierSkillWrapper:
             audit_trail=RealAuditTrail(tenant_id),
             audit_path=_default_audit_path(tenant_id),
             cwd=REPO_ROOT,
+            weights_for=lambda task_type, _t=tenant_id: _applied_weights(_t, task_type),
         )
 
     return _verifiers[tenant_id]
@@ -219,13 +258,30 @@ async def run_dod_verification(
         # takes a LearningEvent: the dict passed here before raised
         # AttributeError on every call, so no verification was ever recorded
         # and /history could never return one.
+        #
+        # ADR-2284: the OUTCOME carries the task type, which /feedback looks up by
+        # task_id. The SKILL_EXECUTED event is the execution the ADR-0534 reality check
+        # requires before it admits feedback on this skill (without it every DoD rating
+        # was refused). Ids, enums and numbers only.
         try:
             event_store = get_event_store(tenant_id)
+            event_store.write_event(LearningEvent.create(
+                EventType.SKILL_EXECUTED, _DOD_SKILL_ID, tenant_id,
+                signal={
+                    "kind": "dod_verification",
+                    "task_id": result.task_id,
+                    "task_type": input_data.task_type,
+                    "status": "success",
+                    "output": {"score": float(result.score), "passed": bool(result.passed)},
+                },
+                lom=f"{__name__}:run_dod_verification",
+            ))
             event_store.write_event(LearningEvent.create(
                 EventType.OUTCOME, _DOD_SKILL_ID, tenant_id,
                 signal={
                     "kind": "dod_verification",
                     "task_id": result.task_id,
+                    "task_type": input_data.task_type,
                     "score": float(result.score),
                     "passed": bool(result.passed),
                 },
@@ -241,6 +297,8 @@ async def run_dod_verification(
             "passed": result.passed,
             "checks": result.checks,
             "weights": result.weights,
+            "weights_source": (
+                "default" if result.weights == DoD_WeightOptimizer.DEFAULT_WEIGHTS else "learned"),
             "reason": result.reason,
             "audit_event_id": result.audit_event_id,
             "timestamp": result.timestamp,
@@ -262,56 +320,121 @@ async def submit_dod_feedback(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = None,
     csrf: Annotated[str, Depends(require_csrf)] = None,
 ) -> Dict[str, Any]:
-    """Submit feedback on a DoD verification.
-
-    Used by Learning Loop (ADR-0314) to tune check weights.
+    """Submit feedback on one check of a recorded DoD verification (ADR-2284 decision 1).
 
     Request body:
     {
         "task_id": "task_123",
-        "check_name": "test_coverage",
-        "feedback": "accurate",  # or "inaccurate", "not_applicable"
-        "note": "Tests are comprehensive"
+        "check_name": "reproducibility",   # a live check key
+        "feedback": "accurate",            # or "inaccurate", "not_applicable"
+        "note": "..."                      # never persisted
     }
 
-    Response:
-    {
-        "accepted": true,
-        "feedback_id": "feedback_abc123",
-        "weight_adjustment": -0.02
-    }
+    Order: the verification is looked up by ``task_id`` (its recorded task type; unknown
+    task / unlearnable type / unknown check -> 422) -> FEEDBACK through
+    ``EventStore.write_event`` (the ADR-0534 gate: throttled -> 429, refused -> 422) ->
+    ``DoD_WeightOptimizer.observe_feedback`` -> ``skill_config_updated`` chained FIRST ->
+    the tenant's weight file. A change that cannot be chained is not persisted (500).
     """
     tenant_id = rec.tenant_id
 
     if not payload.get("task_id"):
         raise HTTPException(status_code=400, detail="task_id required")
+    task_id = str(payload["task_id"])[:200]
 
     feedback = str(payload.get("feedback", ""))
-    if feedback not in {"accurate", "inaccurate", "not_applicable"}:
+    if feedback not in FEEDBACK_DELTA:
         raise HTTPException(status_code=400, detail="feedback must be accurate|inaccurate|not_applicable")
+    check_name = str(payload.get("check_name") or "")
+    if check_name not in CHECK_TO_WEIGHT:
+        raise HTTPException(status_code=422,
+                            detail=f"check_name must be one of {sorted(CHECK_TO_WEIGHT)}")
 
     try:
         event_store = get_event_store(tenant_id)
-        # A LearningEvent (the dict passed before made every call a 500). The
-        # free-text ``note`` is deliberately NOT persisted — only the verdict.
+        verifications = [
+            e for e in event_store.query_events(
+                tenant_id, event_type=EventType.OUTCOME, skill_id=_DOD_SKILL_ID)
+            if (e.signal or {}).get("kind") == "dod_verification"
+            and (e.signal or {}).get("task_id") == task_id
+        ]
+    except Exception:
+        logger.exception("DoD verification lookup failed")
+        raise HTTPException(status_code=500, detail="Feedback failed")
+    if not verifications:
+        raise HTTPException(status_code=422, detail="no recorded verification for this task_id")
+    task_type = str((verifications[-1].signal or {}).get("task_type") or "")
+    if not DoD_WeightOptimizer.is_learnable(task_type):
+        raise HTTPException(
+            status_code=422,
+            detail=f"task_type of this verification is not learnable "
+                   f"(one of {DoD_WeightOptimizer.TASK_TYPES})")
+
+    # FEEDBACK through the ADR-0534 gate (throttle -> reality check -> trust weight). The
+    # free-text ``note`` is deliberately NOT persisted — only the verdict.
+    try:
         event = LearningEvent.create(
             EventType.FEEDBACK, _DOD_SKILL_ID, tenant_id,
             signal={
                 "kind": "dod_feedback",
-                "task_id": str(payload["task_id"])[:200],
-                "check_name": str(payload.get("check_name") or "")[:100],
+                "task_id": task_id,
+                "task_type": task_type,
+                "check_name": check_name,
                 "feedback": feedback,
             },
             lom=f"{__name__}:submit_dod_feedback",
         )
         event_store.write_event(event)
+    except FeedbackRejected as rej:
+        code = 429 if rej.reason == "rate_limit_exceeded" else 422
+        raise HTTPException(status_code=code, detail=f"feedback rejected: {rej.reason}")
     except Exception:
         logger.exception("DoD feedback submission failed")
         raise HTTPException(status_code=500, detail="Feedback failed")
 
-    # No optimizer consumes DoD feedback yet: say so instead of reporting a
-    # "weight_adjustment".
-    return {"accepted": True, "feedback_id": event.event_id}
+    with _weight_lock(tenant_id):
+        persistence = WeightPersistence(tenant_id=tenant_id)
+        optimizer = DoD_WeightOptimizer.from_state(persistence.load_state())
+        before_conf = dict(optimizer.confidence[task_type])
+        result = optimizer.observe_feedback(task_type, FEEDBACK_DELTA[feedback], [check_name])
+        changed = (result.new_weights != result.old_weights
+                   or result.confidence != before_conf)
+        if changed:
+            # Audit-first: no chain record -> nothing persisted. Metadata only: the task
+            # type, the two weight vectors and the per-weight confidence (numbers).
+            ok = emit_skill_config_updated_event(
+                skill_id=_DOD_SKILL_ID,
+                tenant_id=tenant_id,
+                param_name=f"weights.{task_type}",
+                old_value=None,
+                new_value=None,
+                reason="dod_feedback",
+                details={
+                    "task_type": task_type,
+                    "old_weights": {k: round(v, 6) for k, v in result.old_weights.items()},
+                    "new_weights": {k: round(v, 6) for k, v in result.new_weights.items()},
+                    "confidence": {k: round(v, 6) for k, v in result.confidence.items()},
+                    "lom": f"{__name__}:submit_dod_feedback",
+                },
+            )
+            if not ok:
+                logger.error("DoD weight change was not chained; not persisted")
+                raise HTTPException(status_code=500, detail="Weight change audit failed")
+            if not persistence.save_weights(optimizer.weights, optimizer.confidence,
+                                            optimizer.sample_count):
+                raise HTTPException(status_code=500, detail="Weight change could not be stored")
+
+    return {
+        "accepted": True,
+        "feedback_id": event.event_id,
+        "task_type": task_type,
+        "weights_changed": changed,
+        "old_weights": result.old_weights,
+        "new_weights": result.new_weights,
+        "confidence": result.confidence,
+        # what the next verification of this task type scores with (confidence gate applied)
+        "applied_weights": optimizer.recommend_next_weights(task_type),
+    }
 
 
 @router.get("/history/{task_id}")

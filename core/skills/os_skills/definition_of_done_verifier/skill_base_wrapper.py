@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # Try direct import, fall back to sys.path insert
 try:
@@ -87,6 +87,7 @@ class DoD_VerifierSkillWrapper(BaseSkill[DoD_VerificationResult]):
         audit_trail: AuditTrail,
         audit_path: Optional[Path] = None,
         cwd: Optional[Path] = None,
+        weights_for: Optional[Callable[[str], Optional[dict]]] = None,
     ):
         """Initialize DoD Verifier Skill.
 
@@ -95,6 +96,7 @@ class DoD_VerifierSkillWrapper(BaseSkill[DoD_VerificationResult]):
             audit_trail: Audit trail implementation
             audit_path: Path to audit chain (default: the tenant's chain)
             cwd: Working directory for checks (default: this checkout)
+            weights_for: task_type -> weights to score with, or None for the defaults
         """
         super().__init__(tenant_id, audit_trail)
 
@@ -103,7 +105,7 @@ class DoD_VerifierSkillWrapper(BaseSkill[DoD_VerificationResult]):
         if cwd is None:
             cwd = REPO_ROOT
 
-        self.verifier = DoD_VerifierSkill(audit_path=audit_path, cwd=cwd)
+        self.verifier = DoD_VerifierSkill(audit_path=audit_path, cwd=cwd, weights_for=weights_for)
         self.tenant_id = tenant_id
 
     def execute(self, input_data: DoD_VerifierInput) -> DoD_VerificationResult:

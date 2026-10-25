@@ -1,4 +1,9 @@
-"""DoD_WeightOptimizer: Online learning from feedback (ADR-0722)."""
+"""DoD_WeightOptimizer: Online learning from feedback (ADR-0722, ADR-2284 decision 1).
+
+Fed by ``POST /v1/console/api/dod/feedback`` (``routes/dod_verifier_dashboard.py``); the
+verifier applies ``recommend_next_weights`` (confidence > 0.5 per weight, clamped to
+[0.05, 0.6], sum 1). Unknown task types are refused, never folded into another bucket.
+"""
 
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -15,6 +20,54 @@ class OptimizationResult:
     confidence: Dict[str, float]
 
 
+class UnknownTaskType(ValueError):
+    """A task type with no weight bucket. It is refused, never learned into another type."""
+
+
+#: Live check keys (``skill.py``'s five checks) -> weight names. A name outside this map
+#: adjusts nothing (it used to fall back to ``w_reach`` silently).
+CHECK_TO_WEIGHT = {
+    "reachability": "w_reach",
+    "audit_trail": "w_audit",
+    "test_evidence": "w_test",
+    "docs_sync": "w_docs",
+    "reproducibility": "w_repro",
+}
+
+
+def project_weights(weights: Dict[str, float], lo: float, hi: float) -> Dict[str, float]:
+    """Clamp every weight into ``[lo, hi]`` and renormalise to sum 1 (ADR-2284 decision 1).
+
+    Iterative: scale the free weights to the remaining mass, pin the ones that leave the box at
+    the violated bound, repeat. Feasible whenever ``n*lo <= 1 <= n*hi`` (5 weights, [0.05, 0.6]).
+    """
+    keys = list(weights)
+    if not keys:
+        return {}
+    fixed: Dict[str, float] = {}
+    for _ in range(len(keys) + 1):
+        free = [k for k in keys if k not in fixed]
+        if not free:
+            break
+        remaining = 1.0 - sum(fixed.values())
+        total = sum(max(0.0, weights[k]) for k in free)
+        scaled = {k: (max(0.0, weights[k]) / total * remaining) if total > 0 else remaining / len(free)
+                  for k in free}
+        low = {k for k, v in scaled.items() if v < lo - 1e-12}
+        high = {k for k, v in scaled.items() if v > hi + 1e-12}
+        if not low and not high:
+            fixed.update(scaled)
+            break
+        # pin one side per round: the side with the larger total violation
+        if sum(lo - scaled[k] for k in low) >= sum(scaled[k] - hi for k in high):
+            fixed.update({k: lo for k in low})
+        else:
+            fixed.update({k: hi for k in high})
+    out = {k: min(hi, max(lo, fixed.get(k, lo))) for k in keys}
+    total = sum(out.values())
+    return {k: v / total for k, v in out.items()} if total > 0 else out
+
+
 class DoD_WeightOptimizer:
     """Learn task-type-specific weights from operator feedback."""
 
@@ -26,7 +79,16 @@ class DoD_WeightOptimizer:
         "w_repro": 0.15,
     }
 
-    TASK_TYPES = ["cli_command", "api_endpoint", "lib_function", "plugin", "skill"]
+    #: One bucket per type. ``feature`` is the console verify route's default task type
+    #: (ADR-2284 review: it used to be learned into ``cli_command`` silently).
+    TASK_TYPES = ["cli_command", "api_endpoint", "lib_function", "plugin", "skill", "feature"]
+
+    #: ADR-2284 decision 1: every applied weight lies in [MIN_WEIGHT, MAX_WEIGHT], sum 1.
+    MIN_WEIGHT = 0.05
+    MAX_WEIGHT = 0.6
+
+    #: ADR-0723: a learned weight is used only when its confidence is ABOVE this.
+    CONFIDENCE_GATE = 0.5
 
     #: Hard cap on how far ONE feedback event may move ONE weight, before
     #: normalisation. Without it `adjustment = delta * LEARNING_RATE` is
@@ -66,20 +128,51 @@ class DoD_WeightOptimizer:
         # Sample count per task type (for convergence detection)
         self.sample_count = {task_type: 0 for task_type in self.TASK_TYPES}
 
+    # ── persistence ──────────────────────────────────────────────────────────
+
+    @classmethod
+    def from_state(cls, state: Dict[str, Dict]) -> "DoD_WeightOptimizer":
+        """An optimizer holding a persisted state (``WeightPersistence.load_state()``).
+
+        Only known task types and weight names are taken; numbers only. Weights and
+        confidence are both restored, so the confidence gate survives a restart.
+        """
+        opt = cls()
+        weights = state.get("weights") or {}
+        confidence = state.get("confidence") or {}
+        samples = state.get("sample_count") or {}
+        for tt in cls.TASK_TYPES:
+            for name, value in (weights.get(tt) or {}).items():
+                if name in cls.DEFAULT_WEIGHTS and _is_number(value):
+                    opt.weights[tt][name] = float(value)
+            for name, value in (confidence.get(tt) or {}).items():
+                if name in cls.DEFAULT_WEIGHTS and _is_number(value):
+                    opt.confidence[tt][name] = min(1.0, max(0.0, float(value)))
+            if _is_number(samples.get(tt)):
+                opt.sample_count[tt] = int(samples[tt])
+            opt.weights[tt] = project_weights(opt.weights[tt], cls.MIN_WEIGHT, cls.MAX_WEIGHT)
+        return opt
+
+    @classmethod
+    def is_learnable(cls, task_type: str) -> bool:
+        return task_type in cls.TASK_TYPES
+
+    # ── learning ─────────────────────────────────────────────────────────────
+
     def observe_feedback(self, task_type: str, delta: float, affected_checks: List[str]) -> OptimizationResult:
         """
         Process operator feedback → adjust weights.
 
         Args:
-            task_type: "cli_command", "api_endpoint", etc.
+            task_type: one of ``TASK_TYPES``; any other raises ``UnknownTaskType``
             delta: Operator correction (positive = skill was too harsh)
-            affected_checks: Which checks to adjust
+            affected_checks: Which checks to adjust (live check keys; others adjust nothing)
 
         Returns:
             OptimizationResult with old/new weights + confidence
         """
         if task_type not in self.TASK_TYPES:
-            task_type = "cli_command"  # Fallback
+            raise UnknownTaskType(task_type)
 
         old_weights = self.weights[task_type].copy()
 
@@ -116,11 +209,10 @@ class DoD_WeightOptimizer:
                         self.confidence[task_type][w_name] + self.CONFIDENCE_STEP, 10
                     )
 
-        # Normalize weights to sum to 1.0
-        total = sum(self.weights[task_type].values())
-        if total > 0:
-            for w in self.weights[task_type]:
-                self.weights[task_type][w] /= total
+        # Clamp into [MIN_WEIGHT, MAX_WEIGHT] and normalise to sum 1 (ADR-2284): repeated
+        # one-sided feedback can no longer drive a weight to 0 or past 0.6.
+        self.weights[task_type] = project_weights(
+            self.weights[task_type], self.MIN_WEIGHT, self.MAX_WEIGHT)
 
         # Cap confidence at 1.0
         for w in self.confidence[task_type]:
@@ -139,31 +231,29 @@ class DoD_WeightOptimizer:
         )
 
     def recommend_next_weights(self, task_type: str) -> Dict[str, float]:
-        """
-        Return current best estimate of weights.
+        """The weights the verifier applies for ``task_type`` (ADR-0723, ADR-2284).
 
-        Uses learned weights if confidence >= 0.8, else defaults.
+        Per weight: the learned value only when its confidence is > ``CONFIDENCE_GATE``
+        (0.5), else the default; then clamped to [0.05, 0.6] and normalised to sum 1. An
+        unknown task type gets the defaults (nothing is ever learned for it).
         """
         if task_type not in self.TASK_TYPES:
-            task_type = "cli_command"
+            return self.DEFAULT_WEIGHTS.copy()
 
         result = {}
-        for w_name, w_value in self.weights[task_type].items():
+        for w_name, default in self.DEFAULT_WEIGHTS.items():
             conf = self.confidence[task_type].get(w_name, 0.0)
-            if conf >= 0.8:
-                # Use learned weight
-                result[w_name] = w_value
-            else:
-                # Use default (low confidence)
-                result[w_name] = self.DEFAULT_WEIGHTS[w_name]
+            result[w_name] = (self.weights[task_type][w_name] if conf > self.CONFIDENCE_GATE
+                              else default)
+        if not self.uses_learned(task_type):
+            return result  # exactly the defaults
+        return project_weights(result, self.MIN_WEIGHT, self.MAX_WEIGHT)
 
-        # Re-normalize
-        total = sum(result.values())
-        if total > 0:
-            for w in result:
-                result[w] /= total
-
-        return result
+    def uses_learned(self, task_type: str) -> bool:
+        """True when at least one weight of ``task_type`` is past the confidence gate."""
+        if task_type not in self.TASK_TYPES:
+            return False
+        return any(c > self.CONFIDENCE_GATE for c in self.confidence[task_type].values())
 
     def is_converged(self, task_type: str, threshold: float = 0.8) -> bool:
         """
@@ -177,16 +267,13 @@ class DoD_WeightOptimizer:
         confs = self.confidence[task_type].values()
         return all(c >= threshold for c in confs)
 
-    def _check_to_weight(self, check_name: str) -> str:
-        """Map check name to weight name."""
-        mapping = {
-            "reachability": "w_reach",
-            "audit_trail": "w_audit",
-            "test_evidence": "w_test",
-            "docs_sync": "w_docs",
-            "reproducibility": "w_repro",
-        }
-        return mapping.get(check_name, "w_reach")
+    def _check_to_weight(self, check_name: str) -> Optional[str]:
+        """Map a live check key to its weight name; ``None`` for anything else."""
+        return CHECK_TO_WEIGHT.get(check_name)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
 
 
 # Unit Tests
@@ -243,12 +330,13 @@ class TestDoD_WeightOptimizer:
         # Not converged initially
         assert not opt.is_converged("api_endpoint")
 
-        # Simulate 8+ feedback events (confidence = 0.8+)
+        # Simulate 8+ feedback events (confidence = 0.8+) on EVERY check: convergence
+        # means all five weights are confident, so feedback on one check never converges.
         for _ in range(8):
             opt.observe_feedback(
                 task_type="api_endpoint",
                 delta=0.10,
-                affected_checks=["audit_trail"]
+                affected_checks=list(CHECK_TO_WEIGHT),
             )
 
         # Should be converged

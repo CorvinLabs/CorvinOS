@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from .checks.reachability import ReachabilityCheck
 from .checks.audit_trail import AuditTrailCheck
@@ -92,8 +92,14 @@ class DoD_VerifierSkill:
         self,
         audit_path: Path = None,
         cwd: Path = None,
+        weights_for: Optional[Callable[[str], Optional[Dict[str, float]]]] = None,
     ):
-        """Initialize Skill with paths."""
+        """Initialize Skill with paths.
+
+        ``weights_for(task_type)`` returns the weights to score with (the console passes the
+        tenant's learned weights, ADR-2284: confidence-gated, clamped, summing to 1) or
+        ``None`` for the defaults. It is asked once per verification.
+        """
         if audit_path is None:
             audit_path = _default_audit_path("_default")
         if cwd is None:
@@ -101,6 +107,7 @@ class DoD_VerifierSkill:
 
         self.audit_path = audit_path
         self.cwd = cwd
+        self.weights_for = weights_for
         self.scoring_engine = ScoringEngine()
 
     def execute(
@@ -186,8 +193,13 @@ class DoD_VerifierSkill:
 
         # Compute score
         check_bools = {k: v["passed"] for k, v in checks.items()}
-        score = self.scoring_engine.compute_score(check_bools)
-        passed = self.scoring_engine.is_passed(score)
+        engine = self.scoring_engine
+        if self.weights_for is not None:
+            learned = self.weights_for(task_type)
+            if learned:
+                engine = ScoringEngine(dict(learned))
+        score = engine.compute_score(check_bools)
+        passed = engine.is_passed(score)
 
         # Determine reason
         if passed:
@@ -205,7 +217,7 @@ class DoD_VerifierSkill:
             score=score,
             passed=passed,
             checks=checks,
-            weights=self.scoring_engine.get_weights(),
+            weights=engine.get_weights(),
             reason=reason,
         )
         audit_event_hash = audit_event.compute_hash()
@@ -215,7 +227,7 @@ class DoD_VerifierSkill:
             score=score,
             passed=passed,
             checks=checks,
-            weights=self.scoring_engine.get_weights(),
+            weights=engine.get_weights(),
             reason=reason,
             audit_event_id=audit_event_hash,
             timestamp=timestamp,

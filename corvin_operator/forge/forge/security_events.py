@@ -5303,9 +5303,13 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "skill_feedback": frozenset({
         "skill_id", "tenant_id", "feedback_type", "signal", "signal_sha256", "lom",
     }),
+    # ADR-2284 decision 1 (DoD weight loop, routes/dod_verifier_dashboard.py): task_type is
+    # a closed enum (DoD_WeightOptimizer.TASK_TYPES); old_weights / new_weights / confidence
+    # are {weight_name: number} maps over the five fixed weight names — numbers only.
     "skill_config_updated": frozenset({
         "skill_id", "tenant_id", "param_name", "old_value", "old_value_sha256",
         "new_value", "new_value_sha256", "reason_code", "lom",
+        "task_type", "old_weights", "new_weights", "confidence",
     }),
     # ADR-2283 — OperatorApprovalGate decisions (dotted by CoreAuditBackend). Metadata
     # only: ids, a metric NAME, a confidence number, closed reason codes, the TTL
