@@ -87,3 +87,53 @@ def test_convergence_stall_is_recorded_once_and_shown_by_the_daemon_route(tmp_pa
 
         stall = [a for a in _daemon_anomalies(sb) if a["event"] == "skill.convergence_stall"]
         assert [(a["skill_id"], a["loss_min"]) for a in stall] == [("os.stalled_probe", 0.4)]
+
+
+def _write_executions(sb, skill_id: str, latencies: list[float], ts: float) -> None:
+    from core.deployment.audit_sink import _forge
+
+    se, fp = _forge()
+    chain = fp.tenant_audit_chain(sb.tenant_id)
+    for i, latency in enumerate(latencies):
+        se.write_event(chain, "skill.executed", tool=skill_id, ts=ts + i,
+                       details={"skill_id": skill_id, "latency_ms": latency,
+                                "tenant_id": sb.tenant_id, "status": "success"})
+
+
+def test_latency_regression_is_recorded_once_from_the_chained_executions(tmp_path):
+    with console_client(tmp_path) as sb:
+        now = time.time()
+        three_days_ago = now - 3 * 86400
+        two_hours_ago = now - 2 * 3600
+        # slower: p95 100 ms -> 200 ms (2x > 1.5x)
+        _write_executions(sb, "os.slow_probe", [100.0] * 20, three_days_ago)
+        _write_executions(sb, "os.slow_probe", [200.0] * 20, two_hours_ago)
+        # steady: 100 -> 140 ms (1.4x) -> no anomaly
+        _write_executions(sb, "os.steady_probe", [100.0] * 20, three_days_ago)
+        _write_executions(sb, "os.steady_probe", [140.0] * 20, two_hours_ago)
+        # slower but only 19 recent records -> not enough data
+        _write_executions(sb, "os.thin_probe", [100.0] * 20, three_days_ago)
+        _write_executions(sb, "os.thin_probe", [500.0] * 19, two_hours_ago)
+        # baseline older than 7 days -> ignored
+        _write_executions(sb, "os.old_probe", [10.0] * 20, now - 9 * 86400)
+        _write_executions(sb, "os.old_probe", [500.0] * 20, two_hours_ago)
+
+        from core.background.learning_host import LearningHost
+
+        host = LearningHost(sb.tenant_id)
+        _tick(host, now=now)
+        recs = _records(sb, "skill.latency_regression")
+        assert len(recs) == 1, recs
+        d = recs[0]["details"]
+        assert d["skill_id"] == "os.slow_probe"
+        assert (d["p95_before_ms"], d["p95_after_ms"], d["ratio"]) == (100.0, 200.0, 2.0)
+        assert (d["samples_before"], d["samples_after"]) == (20, 20)
+        assert recs[0]["severity"] == "WARNING" and recs[0].get("hash")
+
+        # edge-triggered: no second record from the same or a restarted host
+        _tick(host, now=now + 1)
+        _tick(LearningHost(sb.tenant_id), now=now + 2)
+        assert len(_records(sb, "skill.latency_regression")) == 1
+
+        lat = [a for a in _daemon_anomalies(sb) if a["event"] == "skill.latency_regression"]
+        assert [(a["skill_id"], a["ratio"]) for a in lat] == [("os.slow_probe", 2.0)]

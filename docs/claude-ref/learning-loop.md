@@ -537,6 +537,7 @@ the record committed; it is forgotten when the condition clears.
 | `skill.config_oscillation` | > 3 config versions of one skill in 1 h | `<tenant>/skills/*_config.json` |
 | `skill.confidence_regression` | mean `output.confidence` of the last 24 h ≥ 0.10 below the 6 days before (≥ 20 each) | `skill_executed` learning events |
 | `skill.convergence_stall` (ADR-2284) | newest ≥ 20 (≤ 200) OUTCOME events of a skill in four equal windows: loss `1 − success_rate` > 0.20 in every window, max − min < 0.02 | OUTCOME learning events (`signal.success`, else `signal.passed`) |
+| `skill.latency_regression` (ADR-2284) | p95 of `latency_ms` over the last 24 h > 1.5 × the p95 of the 6 days before (≥ 20 each side, nearest-rank p95) | `skill.executed` records of the tenant CORE chain (legacy `skill_executed` too; newest ≤ 50 000 read, needle-filtered) — the learning store's `SKILL_EXECUTED` signal carries `execution_time_ms`, not `latency_ms`, so the chain is the stored source |
 
 Every condition's event is registered statically in `EVENT_SEVERITY` / `_EVENT_ALLOWLIST` for the
 ADR-2284 ones (metadata only: skill id, counts, ratios) and at runtime through

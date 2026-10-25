@@ -1455,6 +1455,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # core/learning/anomaly_monitor.py via core/background/learning_host.py (ADR-2284 §2),
     # edge-triggered, emitted at WARNING.
     "skill.convergence_stall": "WARNING",
+    "skill.latency_regression": "WARNING",
     "skill.manually.disabled": "INFO",
     "skill.manually.enabled": "INFO",
     "workflow_config_updated": "INFO",
@@ -5345,6 +5346,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # core/learning/anomaly_monitor.py (ADR-2284 §2) — a skill id, counts and loss ratios.
     "skill.convergence_stall": frozenset({
         "skill_id", "sample_count", "window_count", "loss_min", "loss_max", "loss_spread",
+        "tenant_id", "lom", "component",
+    }),
+    # core/learning/anomaly_monitor.py (ADR-2284 §2) — p95 latencies (ms), counts, a ratio.
+    "skill.latency_regression": frozenset({
+        "skill_id", "p95_before_ms", "p95_after_ms", "samples_before", "samples_after", "ratio",
         "tenant_id", "lom", "component",
     }),
     # corvin_operator/license/capability_api.py::_audit_capability_decision —
