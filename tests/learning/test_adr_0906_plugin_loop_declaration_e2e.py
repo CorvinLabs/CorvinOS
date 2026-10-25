@@ -154,3 +154,29 @@ def test_registry_without_loops_round_trips_unchanged():
     with_loops = PluginRecord(plugin_id="with-loops", version="1.0.0", display_name="With", plugin_type="web_surface",
                               learning_loops=[{"id": "x", "description": "a declared loop"}])
     assert PluginRecord.from_dict(with_loops.to_dict()).learning_loops == with_loops.learning_loops
+
+
+def test_an_installed_older_record_gets_the_declaration_through_the_update_route(sb):
+    """The live situation: a record installed BEFORE the plugin declared its loop. Update refreshes it from
+    the Marketplace manifest, keeps the enabled state, and the loop appears in the panel."""
+    import dataclasses
+
+    from corvin_console.routes.plugins import _load
+
+    _install(sb)
+    reg = _load(sb.tenant_id)
+    current = reg.records["video_producer"]
+    assert current.learning_loops, "the install should already carry the declaration"
+    reg.records["video_producer"] = dataclasses.replace(current, version="1.7.0", learning_loops=[])
+    reg.save()
+
+    assert LOOP_ID not in _plugin_rows(sb, limit=61), "positive control: the old record lists no loop"
+    r = sb.client.post(f"/v1/console/api/v1/marketplace/plugins/{INDEX_ID}/update", json={}, headers=sb.csrf_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["from_version"], body["enabled"]) == ("1.7.0", True), body
+
+    row = _plugin_rows(sb, limit=62).get(LOOP_ID)
+    assert row is not None, "the loop must appear after the update"
+    assert row["skill_id"] == "os.video_producer"
+    assert _load(sb.tenant_id).records["video_producer"].learning_loops[0]["id"] == "scene_feedback"
