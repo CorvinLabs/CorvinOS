@@ -1000,6 +1000,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "plugin.initialization_failed":     "WARNING", # L4: plugin boot error
     "plugin.execution_timeout":         "WARNING", # L4: plugin execution timeout
     "plugin.health_check_failed":       "WARNING", # L4: plugin health check failed (ADR-0923)
+    # ADR-2285: an action triggered by a Claude Code mod, REPORTED BY THE MOD (attribution, not proof).
+    # Metadata only: mod, command, skill, score. NEVER: answer text, prompts, tool input/output.
+    "mod.command_executed":             "INFO",
     # CONCEPT-0112 P3: the shared failure class of an interrupted turn (corvin_core/failure_classes.py).
     # Metadata only: class code, reason code, which surface classified it, the exit status.
     "turn.failure_classified":          "INFO",
@@ -4416,6 +4419,10 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "plugin.execution_timeout": frozenset({
         "plugin_id", "boot_layer", "timeout_ms", "tenant_id",
+    }),
+    # ADR-2285 — mod-reported action. Metadata only; the mod's own words are never stored.
+    "mod.command_executed": frozenset({
+        "mod", "command", "skill", "score", "tenant_id",
     }),
     # Layer Forge (ADR-2222) — mirrored in core/orchestration/layer_forge/audit.py::ALLOWED_FIELDS.
     "layer_forge.definition_proposed": frozenset({

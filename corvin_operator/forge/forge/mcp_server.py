@@ -3037,6 +3037,13 @@ class MCPServer:
         })
         details = {k: v for k, v in raw_details.items()
                    if k not in _FORBIDDEN and isinstance(k, str)}
+        # The tenant is the SERVER's, never the caller's. A mod or a worker could otherwise claim
+        # another tenant in a record of this chain. Only for events whose allowlist carries the field
+        # (ADR-2285: mod.command_executed); any value the caller sent is overwritten.
+        from .security_events import _EVENT_ALLOWLIST as _AL  # noqa: PLC0415
+        if "tenant_id" in _AL.get(event_type, frozenset()):
+            from .tenants import current_tenant as _current_tenant  # noqa: PLC0415
+            details["tenant_id"] = _current_tenant()
         # Inject delegation_id as a top-level detail if provided.
         dlg_id = args.get("delegation_id")
         if isinstance(dlg_id, str) and dlg_id:
