@@ -28,7 +28,9 @@ below derive their security from this single root of trust.
 **Flow:**
 
 ```
-Local instance                    features.corvinlabs.io
+Local instance                    Corvin Labs pairing service
+     │                             (default https://corvin-features-production.up.railway.app,
+     │                              `_A2A_FEATURES_SERVER_PROD` in corvin_a2a.py)
      │                                     │
      │── POST /v1/pair/authorize ──────────▶│
      │   { instance_id, sest_fp,           │
@@ -48,6 +50,13 @@ the origin JSON file alongside the HMAC keys.
 **Fail-closed:** network errors or a 403 from the gate abort the pairing. Use
 `--offline-pair` for isolated / air-gapped networks that do not connect to
 Corvin Labs.
+
+**What this means for "no central server":** the traffic between two paired installations is peer-to-peer
+(direct or through a relay), but ONLINE pairing is checked once against a hosted Corvin Labs service, and the
+certificate it issues lasts 30 days. An offline pair skips that check, carries no network attestation, and
+is refused by M2 receivers after the attestation grace period (`corvin_a2a.py` `--offline-pair` help). The
+network gate itself (`a2a.network`, member seats) is local deterrence; the peer-side Member Credential check
+(ADR-0702) is accepted but not built. Do not describe A2A as "no central server" without these three facts.
 
 ```bash
 # Standard (requires network + valid SesT):
