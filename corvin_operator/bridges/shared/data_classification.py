@@ -505,6 +505,10 @@ class DataFlowGuard:
         default_factory=lambda: dict(DEFAULT_ENGINE_COMPLIANCE)
     )
     audit_writer: AuditWriter | None = None
+    #: ADR-2268 — operator-declared facts about providers a rerouted claude_code turn may use.
+    #: Parsed in its own step; a rejected declaration is listed, never applied.
+    provider_compliance: dict[str, ProviderCompliance] = field(default_factory=dict)
+    provider_compliance_rejected: list[dict[str, str]] = field(default_factory=list)
 
     # ----- factories --------------------------------------------------
 
@@ -693,10 +697,16 @@ class DataFlowGuard:
                     notes=notes,
                 )
 
+        # ADR-2268: provider_compliance has its OWN parse step and can only add or drop
+        # providers; it never touches the matrix or engine_compliance above.
+        _providers, _rejected = parse_provider_compliance(tenant_config)
+
         return cls(
             matrix=matrix,
             engine_compliance=engine_compliance,
             audit_writer=audit_writer,
+            provider_compliance=_providers,
+            provider_compliance_rejected=_rejected,
         )
 
     # ----- core API ---------------------------------------------------
@@ -773,6 +783,70 @@ class DataFlowGuard:
             cls, engine_id,
             persona=persona, channel=channel, chat_key=chat_key,
         )
+
+    def validate_provider(
+        self,
+        *,
+        classification: "DataClassification | str | int | None",
+        engine_id: str,
+        provider: str,
+        current_host: "str | None",
+        persona: str | None = None,
+        channel: str | None = None,
+        chat_key: str | None = None,
+    ) -> FlowDecision:
+        """Judge the pair (``claude_code``, *provider*) for a rerouted turn (ADR-2268).
+
+        Reads the operator's ``provider_compliance`` instead of the engine's locality: a
+        rerouted turn keeps the engine and changes only the endpoint. Fail-closed on every
+        doubt. Never raises. Emits one audit event per call, naming ``<engine>@<provider>``
+        and never the prompt.
+
+        Denied: an engine other than ``claude_code``; ``SECRET`` always (the CLI is not
+        zero-egress whatever the endpoint is); a provider with no valid declaration; a
+        *current_host* that is unknown or differs from the declared ``endpoint_host`` (the
+        locality is bound to the endpoint it was declared for); a locality outside the
+        matrix row of the class.
+        """
+        label = f"{engine_id}@{provider}"
+        where = dict(persona=persona, channel=channel, chat_key=chat_key)
+        cls = DataClassification.parse(classification)
+        if cls is None:
+            return self._deny(
+                DataClassification.SECRET, label,
+                reason=f"classification {classification!r} is not a known level",
+                matched_rule="unknown_classification", **where)
+        if engine_id != "claude_code" or engine_id not in self.engine_compliance:
+            return self._deny(
+                cls, label, reason="only claude_code can be rerouted to a provider",
+                matched_rule="provider_engine", **where)
+        if cls == DataClassification.SECRET:
+            return self._deny(
+                cls, label,
+                reason="SECRET is never rerouted: the claude_code CLI is not zero-egress",
+                matched_rule="secret_provider", **where)
+        decl = self.provider_compliance.get(provider)
+        if decl is None:
+            return self._deny(
+                cls, label, reason=f"provider {provider!r} has no valid provider_compliance entry",
+                matched_rule="provider_not_declared", **where)
+        if not isinstance(current_host, str) or not current_host.strip():
+            return self._deny(
+                cls, label, reason="the provider's current egress host is unknown",
+                matched_rule="endpoint_unknown", **where)
+        if current_host.strip().rstrip(".").lower() != decl.endpoint_host.rstrip("."):
+            return self._deny(
+                cls, label,
+                reason="the provider's egress host differs from the declared endpoint_host; declare it again",
+                matched_rule="endpoint_changed", **where)
+        allowed_localities = self.matrix.get(cls)
+        if allowed_localities is None or decl.locality not in allowed_localities:
+            return self._deny(
+                cls, label,
+                reason=(f"provider locality={decl.locality!r} not in allowed "
+                        f"{sorted(allowed_localities or [])} for {cls.name}"),
+                matched_rule="matrix", **where)
+        return self._approve(cls, label, persona=persona, channel=channel, chat_key=chat_key)
 
     def validate_or_raise(self, **kwargs: Any) -> FlowDecision:
         """Strict variant: raise :class:`DataFlowDenied` on deny.

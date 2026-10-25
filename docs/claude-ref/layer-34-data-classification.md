@@ -189,6 +189,24 @@ producing a guard that quietly allows what its own table forbids:
   rejected entries once (log plus the audit event `data_flow.relabel_rejected`,
   ids and field only). Not covered here: `claude_code` can still be relabelled
   `eu_cloud` (ADR-2268 records it as an open weakness).
+* **Provider declarations and `validate_provider` (T-0228, ADR-2268).** For a turn that
+  keeps `claude_code` and changes only the endpoint, the operator declares facts about
+  the provider under `spec.data_classification.provider_compliance` (`provider`,
+  `locality`, `network_egress`, `endpoint_host`, and for a platform provider `platform`,
+  `region`, `models`). `parse_provider_compliance` reads them in their OWN step and
+  can only add or drop a provider; it never touches the matrix or `engine_compliance`.
+  Stricter than `engine_compliance`: `unknown` locality, egress `none`, a missing
+  `endpoint_host`, a duplicate declaration and a platform provider without region and
+  models are each rejected for that provider only (`guard.provider_compliance_rejected`
+  lists them). `DataFlowGuard.validate_provider(classification, engine_id, provider,
+  current_host)` judges the pair `claude_code@<provider>` from the declaration and the
+  matrix row, and denies: any engine other than `claude_code`; `SECRET` always (the
+  CLI is not zero-egress); an undeclared provider; an unknown current host; a current
+  host that differs from the declared `endpoint_host`. `spawn_gates.check_l35(...,
+  provider=)` judges that provider's host and refuses a provider whose host cannot be
+  resolved, never falling back to the engine default. **Not wired yet:** nothing in
+  production calls `validate_provider` or passes `provider=`; the reroute that does is
+  T-0219. Until then this is a tested mechanism, not a live guarantee.
 
 `SECRET` is the only row kept local-only by default. It fires solely on literal
 credentials (API keys, private keys, `password = …`) detected by regex, occurs

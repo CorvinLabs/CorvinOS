@@ -769,12 +769,18 @@ def active_platform_provider(source_env: "dict[str, str] | None" = None) -> "Pro
     return None
 
 
-def resolve_engine_egress(tenant_id: str, engine_id: str) -> "ProviderSpec | None":
+def resolve_engine_egress(
+    tenant_id: str, engine_id: str, provider: "str | None" = None,
+) -> "ProviderSpec | None":
     """ADR-0181 M3 — the effective provider an engine egresses to for this tenant
     (or None to fall back to the engine's default host). The single source of
     truth for both the L35 egress-host check and the spawn env injection, so they
-    can never disagree about where the engine actually sends inference."""
-    pid = get_tenant_engine_provider(tenant_id, engine_id)
+    can never disagree about where the engine actually sends inference.
+
+    ``provider`` (ADR-2268, T-0228) names the provider of ONE rerouted turn; it takes the
+    place of the tenant's standing assignment for that call only. ``None`` keeps today's
+    behaviour exactly."""
+    pid = provider or get_tenant_engine_provider(tenant_id, engine_id)
     if not pid:
         return None
     spec = load_providers().get(pid)
@@ -794,10 +800,13 @@ def resolve_engine_egress(tenant_id: str, engine_id: str) -> "ProviderSpec | Non
     return spec if (spec.proxy_base_url or spec.base_url) else None
 
 
-def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:
+def resolve_engine_egress_host(
+    tenant_id: str, engine_id: str, provider: "str | None" = None,
+) -> str | None:
     """The host an engine actually egresses to when a provider is assigned (the
-    proxy host if configured, else the provider host). None → use the default."""
-    spec = resolve_engine_egress(tenant_id, engine_id)
+    proxy host if configured, else the provider host). None → use the default.
+    ``provider`` names the provider of one rerouted turn (ADR-2268, T-0228)."""
+    spec = resolve_engine_egress(tenant_id, engine_id, provider)
     if spec is None:
         return None
     from urllib.parse import urlparse

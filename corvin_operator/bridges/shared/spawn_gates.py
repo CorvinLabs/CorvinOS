@@ -689,6 +689,15 @@ def _load_l35_gate(tenant_id: str, corvin_home: "Path | None"):
     return gate
 
 
+def _l35_provider_unresolved(engine_id: str, provider: str) -> str:
+    """Refusal for a rerouted turn whose provider host cannot be determined (fail-closed)."""
+    return (
+        f"[egress] Spawn rejected: provider '{provider}' for engine '{engine_id}' has no "
+        f"resolvable egress host. A rerouted turn is never sent to the engine's default host. "
+        f"Operator: check the provider on the Engines page."
+    )
+
+
 def check_l35(
     engine_id: str,
     tenant_id: str,
@@ -697,8 +706,13 @@ def check_l35(
     channel: str = "",
     chat_key: str = "",
     corvin_home: "Path | None" = None,
+    provider: "str | None" = None,
 ) -> "str | None":
     """ADR-0043 / L35 pre-spawn network-egress gate.
+
+    ``provider`` (ADR-2268, T-0228) names the provider of ONE rerouted turn: the gate then
+    judges THAT provider's host, and a provider whose host cannot be resolved is refused,
+    never replaced by the engine's default host.
 
     Returns ``None`` when the spawn is permitted (policy disabled, gate
     passes, or operational error — fail-open).  Returns a user-facing
@@ -726,11 +740,14 @@ def check_l35(
         # localhost-default engine would bypass the deny policy).
         try:
             from engine_models import resolve_engine_egress_host  # type: ignore
-            _phost = resolve_engine_egress_host(tenant, engine_id)
+            _phost = resolve_engine_egress_host(tenant, engine_id, provider)
             if _phost:
                 host = _phost
+            elif provider:
+                return _l35_provider_unresolved(engine_id, provider)
         except Exception:  # noqa: BLE001
-            pass
+            if provider:
+                return _l35_provider_unresolved(engine_id, provider)
         decision = gate.validate(
             host,
             engine_id=engine_id,
