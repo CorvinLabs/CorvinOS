@@ -63,6 +63,56 @@ def _forge_registry_paths(tid: str) -> list[tuple[str, Path]]:
     return pairs
 
 
+_MOD_MODULE: Any = False  # False = not tried yet, None = not available on this build
+
+
+def _mod_generator() -> Any:
+    """The mod generator module, loaded from its FILE so the quiz-card grammar has ONE definition.
+
+    ``plugin_builder/generators/mod.py`` is stdlib-only, so loading it by path does not run the
+    plugin-builder package ``__init__`` (which pulls in the scaffold writer) inside the console process.
+    ``None`` when the file is not there — a wheel build without the plugin-builder.
+    """
+    global _MOD_MODULE
+    if _MOD_MODULE is not False:
+        return _MOD_MODULE
+    import importlib.util  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    path = Path(__file__).resolve().parents[3] / "plugins" / "plugin_builder" / "generators" / "mod.py"
+    _MOD_MODULE = None
+    if path.is_file():
+        spec = importlib.util.spec_from_file_location("_corvin_mod_generator", path)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["_corvin_mod_generator"] = module  # dataclasses resolve their module through sys.modules
+            try:
+                spec.loader.exec_module(module)
+                _MOD_MODULE = module
+            except Exception:  # noqa: BLE001 - an unreadable generator means "not available", never a 500
+                sys.modules.pop("_corvin_mod_generator", None)
+    return _MOD_MODULE
+
+
+def _quiz_card_count(name: str, skill_dir: Path) -> int | None:
+    """Quiz cards in a skill's ``SKILL.md``, counted with the mod generator's own parser.
+
+    ``None`` means "unknown" (no generator on this build, an unreadable file or a malformed quiz line) and
+    must render as unknown, never as 0: a malformed quiz is not the same thing as a skill without one.
+    """
+    gen = _mod_generator()
+    if gen is None:
+        return None
+    try:
+        body = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        return len(gen.parse_quiz_cards(name, body))
+    except gen.ModSpecError:
+        return None
+
+
 def _skill_records(tid: str) -> list[dict[str, Any]]:
     """Every SkillForge skill for this tenant, from the ONE real source.
 
@@ -92,6 +142,7 @@ def _skill_records(tid: str) -> list[dict[str, Any]]:
             proj = _project(meta, scope_label, entry)
             proj["updated_at"] = meta.get("updated_at")
             proj["version"] = meta.get("version")
+            proj["quiz_cards"] = _quiz_card_count(proj["name"], entry)
             by_key[(proj["name"], scope_label)] = proj
     return sorted(by_key.values(),
                   key=lambda r: (r["scope_source"] != "user", r["name"] or ""))
@@ -237,6 +288,8 @@ async def list_skills(
                 "learning_state": learning_state,
                 "grade_count": proj["grade_count"],
                 "mean_score": proj["mean_score"],
+                # The same quiz-card count a generated mod serves; null = unknown, not zero.
+                "quiz_cards": proj.get("quiz_cards"),
                 # SkillForge stores no version, no version history and no
                 # per-skill disable flag — verified across every meta.json on
                 # disk. The previous code defaulted these to "1.0.0"/[]/enabled,
@@ -263,6 +316,71 @@ async def list_skills(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+#: How much of the END of the tenant chain /mod-activity reads. The chain grows by thousands of records a
+#: day, so this is a window, not the history — and the response says so.
+_MOD_ACTIVITY_WINDOW_BYTES = 4 * 1024 * 1024
+_MOD_ACTIVITY_LIMIT = 50
+_MOD_EVENT = "mod.command_executed"
+
+
+@router.get("/mod-activity")
+async def mod_activity(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Recent actions reported by Claude Code mods, from this tenant's audit chain (read-only).
+
+    The events are MOD-REPORTED (ADR-2285): attribution, not proof of what the mod did. The tenant comes
+    from the authenticated session and picks the chain file; a record that names another tenant is skipped.
+
+    Only the last ``_MOD_ACTIVITY_WINDOW_BYTES`` of the chain are read, so ``window.complete`` is false for a
+    long chain and the UI must show the window next to the list — a short list is "none in the window", never
+    "none ever".
+    """
+    from .audit_tail import _tail_lines  # noqa: PLC0415
+
+    tid = rec.tenant_id
+    chain = _forge_paths.tenant_audit_chain(tid)
+    try:
+        size = chain.stat().st_size
+    except OSError:
+        size = 0
+    events: list[dict[str, Any]] = []
+    for line in reversed(_tail_lines(chain, byte_budget=_MOD_ACTIVITY_WINDOW_BYTES) if size else []):
+        if _MOD_EVENT not in line:  # cheap pre-check before parsing megabytes of JSON
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("event_type") != _MOD_EVENT:
+            continue
+        d = obj.get("details") or {}
+        if d.get("tenant_id") not in (None, tid):
+            continue
+        events.append({
+            "ts": obj.get("ts"),
+            "mod": d.get("mod"),
+            "command": d.get("command"),
+            "skill": d.get("skill"),
+            "score": d.get("score"),
+        })
+        if len(events) >= _MOD_ACTIVITY_LIMIT:
+            break
+    return {
+        "tenant_id": tid,
+        "timestamp": time.time(),
+        "reported_by": "mod",
+        "window": {
+            "bytes_scanned": min(size, _MOD_ACTIVITY_WINDOW_BYTES),
+            "chain_bytes": size,
+            "complete": size <= _MOD_ACTIVITY_WINDOW_BYTES,
+        },
+        "limit": _MOD_ACTIVITY_LIMIT,
+        "count": len(events),
+        "events": events,
+    }
 
 
 # SkillForge keeps no version history (``versions`` is always [] above), so there

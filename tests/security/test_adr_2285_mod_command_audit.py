@@ -118,6 +118,21 @@ def test_gateway_overwrites_a_tenant_claimed_by_the_caller(chain, monkeypatch):
     assert rec["details"]["tenant_id"] != "another-tenant"
 
 
+def test_the_writer_itself_refuses_an_event_for_another_tenant(chain):
+    """Second line of defence behind the gateway: a record naming a tenant other than the process tenant
+    is refused by the writer, so a mod cannot place an event in another tenant's trail even if it tried."""
+    with pytest.raises(se.AuditTenantMismatch):
+        se.write_event(
+            chain, EVENT,
+            details={"mod": "m", "command": "c", "skill": "s", "tenant_id": "another-tenant"},
+        )
+    records = _records(chain) if chain.exists() else []
+    assert [r for r in records if r.get("event_type") == EVENT] == []
+    # The refusal itself is on the record, naming the dropped type (not as an event of that type).
+    refusals = [r for r in records if r.get("event_type") == "audit.tenant_mismatch"]
+    assert refusals and refusals[-1]["details"]["dropped_event_type"] == EVENT
+
+
 def test_answer_text_is_dropped_not_stored(chain):
     se.write_event(
         chain,

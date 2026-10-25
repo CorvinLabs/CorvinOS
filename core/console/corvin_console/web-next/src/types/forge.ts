@@ -39,6 +39,8 @@ export interface ForgeSkill {
   };
   grade_count?: number;
   mean_score?: number;
+  /** Quiz cards in the skill's SKILL.md. null = unknown (malformed quiz, or no generator on this build), not zero. */
+  quiz_cards?: number | null;
   injectable?: boolean;
 }
 

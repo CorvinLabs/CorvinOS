@@ -12,6 +12,8 @@ import {
   type PromoteTarget,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import ModActivity from '@/components/forge/ModActivity';
+import { quizBadge } from '@/lib/mod-activity';
 import {
   exportSingleItem,
   exportBatchItems,
@@ -252,6 +254,8 @@ export default function SkillsTab({
         </div>
       </div>
 
+      <ModActivity />
+
       {filtered.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -294,6 +298,11 @@ export default function SkillsTab({
                         {skill.learning_state && (
                           <Badge variant="secondary" className="text-[10px]">
                             {skill.learning_state.confidence.toFixed(2)} confidence
+                          </Badge>
+                        )}
+                        {quizBadge(skill.quiz_cards) && (
+                          <Badge variant="outline" className="text-[10px]" data-testid="quiz-badge">
+                            {quizBadge(skill.quiz_cards)}
                           </Badge>
                         )}
                       </div>
