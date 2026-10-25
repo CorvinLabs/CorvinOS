@@ -400,6 +400,22 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   import. Method note: a package's `__init__` runs when ANY child is imported, so a live module
   also makes its parents' eager imports live; the first draft of this round missed that and
   would have broken four live packages (caught by a dangling-import check before any commit).
+* **Third round, by decision (ADR-2282, 2026-10-25).** The never-wired learning code that
+  accepted decisions still described was retired together with those decisions, group by
+  group (T-0264..T-0272), each named with its live successor: L5 K3–K5
+  (`quality_gate`/`conflict_resolver`/`rollback_guard`/`utils`), the LDD in-task loop and
+  `base.LearningLoop` (DoD learning moves to `weight_optimizer`), `loss_signals` (successor
+  `anomaly_monitor`), `outcome_sink_a2` (successor `outcome_sink.emit_task_outcome`),
+  `completion_detectors` + `core/notification` (successor `completion_notify` + the
+  workflows outbox), `token_accounting`/`token_metrics_aggregator`/`vibe_metrics_api`
+  (successor `engine_span.usage_split`), the legacy `core/console/routes/` tree, the six
+  flow-guard learning modules (`threshold_tuner` lowered an L34 threshold and
+  `exception_system` forced ALLOW — both contradicted ADR-2049; L34 itself is unchanged),
+  `workflow_optimizer_skill/confidence_calculator.py`, and the CEL stages
+  `selective_injection`/`memory_pruning`/`adr_reranking` (in no shipped pipeline; their
+  "embedding" was a salted `hash()`; `context_priority` is the live stage). Registered audit
+  event types of retired emitters stay in `EVENT_SEVERITY`/`_EVENT_ALLOWLIST` (old chain
+  records may carry them).
 * **The one closed feedback path is race-tested across processes.** `SkillAdapter.apply_config_delta`
   is a read-modify-write of `<skill>_config.json` shared by the console and the bridge;
   `tests/skills/test_skill_adapter_cross_process_race.py` runs 4 real processes x 6 deltas and

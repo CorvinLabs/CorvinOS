@@ -1,5 +1,7 @@
 # Phase 5: Advanced Context Optimizations (ADR-0394)
 
+> **Retired (2026-10-25, ADR-2282):** `selective_injection`, `memory_pruning` and `adr_reranking` (modules, stage wrappers and tests) were deleted. No shipped pipeline ever scheduled them, and their "embedding" was a salted `hash()`, i.e. pseudo-random selection. The live priority stage is `context_priority` (ADR-2098). This document is historical.
+
 ## Overview
 
 Phase 5 implements intelligent context reduction through three orthogonal optimization techniques:

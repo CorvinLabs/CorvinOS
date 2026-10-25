@@ -28,8 +28,8 @@ from . import explicit_skill  # noqa: F401,E402  (honor user-named on-disk skill
 from .grades import (  # noqa: E402  (ADR-0285)
     grade_stage, get_grade, bootstrap_seed, is_default_eligible, record_turn_outcome,
 )
-# Phase 5: Advanced Context Optimizations (ADR-0394)
-from . import selective_injection_stage, memory_pruning_stage, adr_reranking_stage  # noqa: F401,E402
+# (Phase 5's selective_injection / memory_pruning / adr_reranking stages, ADR-0394,
+# were in no shipped pipeline and were retired by ADR-2282.)
 # Phase 2b: L10 Context Adapter Skill (ADR-0532)
 from . import l10_adapter  # noqa: F401,E402
 # Context Source Priority Resolver (ADR-2098) — in DEFAULT_PIPELINE + ACTIVE_PIPELINE

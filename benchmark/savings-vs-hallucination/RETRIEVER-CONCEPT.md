@@ -1,6 +1,7 @@
 # Concept — Context Retriever Redesign (precision-first, benchmark-driven)
 
 **Status:** proposed (concept only)
+**Note (2026-10-25):** `selective_injection.py` and its hash stub were retired by ADR-2282; a real retriever is new work, not a stub replacement.
 **Date:** 2026-09-05
 **Author:** Claude (Opus), from a request by shumway
 **Location:** `benchmark/savings-vs-hallucination/`

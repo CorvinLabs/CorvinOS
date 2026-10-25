@@ -156,43 +156,12 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================================================
-# PHASE 5: Advanced Optimizations (Structural validation)
+# PHASE 5: Advanced Optimizations — RETIRED
 # ============================================================================
-print("\n[PHASE 5] Testing: Advanced Context Optimizations")
-print("-" * 80)
-
-try:
-    # Test 1: Selective injection exists
-    selective_file = operator_root / "context_engineering" / "selective_injection.py"
-    assert selective_file.exists(), "Selective injection module should exist"
-
-    # Test 2: Memory pruning exists
-    pruning_file = operator_root / "context_engineering" / "memory_pruning.py"
-    assert pruning_file.exists(), "Memory pruning module should exist"
-
-    # Test 3: ADR reranking exists
-    reranking_file = operator_root / "context_engineering" / "adr_reranking.py"
-    assert reranking_file.exists(), "ADR reranking module should exist"
-
-    # Test 4: All have expected classes
-    selective_content = selective_file.read_text()
-    assert "SelectiveInjector" in selective_content, "Should have SelectiveInjector"
-
-    pruning_content = pruning_file.read_text()
-    assert "MemoryPruner" in pruning_content, "Should have MemoryPruner"
-
-    reranking_content = reranking_file.read_text()
-    assert "ADRRanker" in reranking_content, "Should have ADRRanker"
-
-    print(f"  ✅ Phase 5 structure validation: PASS")
-    print(f"    - SelectiveInjector class exists")
-    print(f"    - MemoryPruner class exists")
-    print(f"    - ADRRanker class exists")
-    print(f"  ✅ Phase 5: ALL TESTS PASS")
-
-except Exception as e:
-    print(f"  ❌ Phase 5 FAILED: {e}")
-    sys.exit(1)
+# selective_injection / memory_pruning / adr_reranking (ADR-0394) were in no
+# shipped pipeline and their 'embedding' was a salted hash(); they were retired
+# by ADR-2282. context_priority (ADR-2098) is the live stage.
+print("\n[PHASE 5] Retired by ADR-2282 (no shipped pipeline scheduled it)")
 
 # ============================================================================
 # FINAL SUMMARY
@@ -206,7 +175,7 @@ print("  ✅ Phase 1 (Measurement): Canary routing works deterministically")
 print("  ✅ Phase 2 (Budgeting): Token allocation cascades correctly")
 print("  ✅ Phase 3 (Adaptive): Task complexity classification works")
 print("  ✅ Phase 4 (ML): Architecture validated")
-print("  ✅ Phase 5 (Selective): Advanced optimizations implemented")
+print("  ℹ Phase 5 (Selective): retired by ADR-2282")
 
 print("\nImplementation Status:")
 print("  ✅ 110+ tests passing (verified locally + agent reports)")

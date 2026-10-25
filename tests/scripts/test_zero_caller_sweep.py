@@ -43,7 +43,23 @@ def test_known_dead_context_bridges_are_flagged():
     assert ("core/skills/os_skills/phase1/context_bridge.py", "ContextBridge") not in dead
     # review R1-C10: the skill_registry_phase1 `Skill` base and unscheduled stages
     assert ("core/skills/workflow_optimizer.py", "WorkflowOptimizerSkill") in dead
-    assert any(d["file"].endswith("adr_reranking_stage.py") for d in _real()[3]["dead"])
+    # The real tree's three unscheduled CEL stages (ADR-0394) were retired by
+    # ADR-2282; the unscheduled-stage detector keeps a synthetic positive
+    # control in test_unscheduled_cel_stage_is_flagged.
+
+
+def test_unscheduled_cel_stage_is_flagged(tmp_path, monkeypatch):
+    """A registered CEL stage that no shipped pipeline list in stages/config.py
+    names is reported; a scheduled one is not."""
+    stages = "corvin_operator/context_engineering/stages"
+    _tree(tmp_path, {
+        f"{stages}/config.py": 'DEFAULT_PIPELINE = ["memory"]\n',
+        f"{stages}/memory.py": 'class MemoryStage:\n    id = "memory"\n',
+        f"{stages}/orphan.py": 'class OrphanStage:\n    id = "orphan"\n',
+    })
+    _sandbox(monkeypatch, tmp_path)
+    found = {(d["file"], d["class"]) for d in z.unscheduled_stages()}
+    assert found == {(f"{stages}/orphan.py", "OrphanStage")}
 
 
 def test_plugin_contract_is_the_real_lifecycle_shape_on_the_real_tree():

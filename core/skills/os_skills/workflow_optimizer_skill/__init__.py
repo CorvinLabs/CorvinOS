@@ -1,15 +1,12 @@
-"""Workflow Optimizer Skill (Phase 10, Stream 1).
+"""Workflow Optimizer Skill (Phase 10, Stream 1) — package husk.
 
-NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Every
-importer of this package is a test; L5 routing does not read these weights.
-
-Phase 2 (Week 2-3): Learning loop integration via ADR-0314.
-
-Modules:
-- feedback_handler: Receives operator feedback, emits LearningEvents
-- confidence_calculator: Computes Bayesian confidence scores, updates routing weights
+NOT WIRED. Its last module, ``confidence_calculator.py``, was retired by ADR-2282
+(2026-10-25): its consumer was deleted in T-0140 and L5 routing never read these
+weights. The trust-weight invariant it carried lives in
+``core/learning/operator_feedback.py`` and ``core/learning/adversarial_detector.py``.
+The package stays only because the ADR-2281 learning register scans this directory.
 """
 
 __version__ = "1.0.0"
 __phase__ = "Phase 10 Stream 1"
-__status__ = "Phase 1: Week 2 (Feedback + Confidence Calculator)"
+__status__ = "retired (ADR-2282)"
