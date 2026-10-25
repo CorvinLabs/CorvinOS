@@ -1694,7 +1694,16 @@ class RemoteTriggerReceiver:
         # If after filtering we have zero fields AND no attachments, the
         # response is "filtered" (caller's schema accepted nothing).
         out_atts = list(getattr(worker_result, "out_attachments", []))
-        if pass_count == 0 and not out_atts:
+        # PLAN-0965 F-02: files the worker wrote that did not reach this response (count / byte cap,
+        # unreadable, bad name) used to vanish without a trace. The closed-reason COUNTS are signed into
+        # the response data and recorded; a name or content never is. Added after the schema filter on
+        # purpose: it is the receiver's own statement about completeness, not worker output.
+        _dropped = getattr(worker_result, "attachments_dropped", None) or {}
+        _dropped = {str(k): int(v) for k, v in _dropped.items() if isinstance(v, int) and v > 0}
+        n_dropped = sum(_dropped.values())
+        if n_dropped:
+            filtered = {**filtered, "attachments_dropped": {"count": n_dropped, "reasons": _dropped}}
+        if pass_count == 0 and not out_atts and not n_dropped:
             status_out = "filtered"
         else:
             status_out = "ok"
@@ -1705,7 +1714,8 @@ class RemoteTriggerReceiver:
              "filter_pass_count": pass_count,
              "filter_reject_count": reject_count,
              "status": status_out,
-             "attachments_out_count": len(out_atts)},
+             "attachments_out_count": len(out_atts),
+             "attachments_dropped_count": n_dropped},
         )
         return status_out, filtered, out_atts
 

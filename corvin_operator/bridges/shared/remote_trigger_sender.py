@@ -194,8 +194,9 @@ _CONNECT_TIMEOUT_S = 10
 
 # Maximum response body the sender will read from a remote receiver.
 # Mirrors the inbound cap in a2a_http_server.py (4 MiB). A valid response
-# carrying max attachments (16 × 1 MiB base64-expanded) can reach ~5.5 MiB
-# of JSON; we cap at 6 MiB to leave headroom without accepting unbounded streams.
+# carrying max attachments (16 files, 1 MiB raw IN TOTAL: a2a_attachments.MAX_ATTACHMENTS_TOTAL_BYTES,
+# about 1.4 MiB base64-expanded) stays well under 2 MiB of JSON; we cap at 6 MiB to leave
+# headroom without accepting unbounded streams.
 # Rogue receivers that stream more raise TransportError("response_too_large")
 # (ADR-0099 iter-5 finding MED-IT5-03).
 _MAX_RESPONSE_BYTES = 6 * 1024 * 1024  # 6 MiB

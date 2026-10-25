@@ -3625,7 +3625,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         ("A2A.response_rejected", {"http_status", "error_category", "error_detail",
                                    "instance_id_match"}),
         ("A2A.result_filtered", {"filter_pass_count", "filter_reject_count",
-                                 "attachments_out_count"}),
+                                 "attachments_out_count", "attachments_dropped_count"}),
         ("A2A.request_rejected", {"nonce_prefix"}),
         ("A2A.engine_spawned", {"persona", "engine_id"}),
         ("A2A.chain_anchor_sent", {"nonce_prefix", "our_chain_tail"}),

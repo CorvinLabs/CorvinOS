@@ -275,6 +275,11 @@ class WorkerResult:
     # text that may carry exception names or gate wording and stays on this instance;
     # the code is what travels to the sender in the signed response. "" = no refusal.
     reason_code: str = ""
+    # Output files the worker wrote that did NOT reach the response, by closed reason
+    # (``count_cap``, ``byte_cap``, ``unreadable``, ``bad_name``). Counts only: never a name or a
+    # byte of content. Empty = nothing was dropped. The receiver signs it into the response data
+    # and the audit record so the sender can tell a partial result from a complete one (PLAN-0965 F-02).
+    attachments_dropped: dict = field(default_factory=dict)
 
 
 # ── System prompt (the structural defence) ────────────────────────────────
@@ -1122,7 +1127,7 @@ def spawn_a2a_worker(
     parsed = parse_worker_output(raw, result_schema)
 
     # 7. Harvest output attachments.
-    out_attachments = _harvest_outputs(out_dir, result_schema or {})
+    out_attachments, attachments_dropped = _harvest_report(out_dir, result_schema or {})
 
     # 8. Cleanup.
     shutil.rmtree(workspace, ignore_errors=True)
@@ -1147,6 +1152,7 @@ def spawn_a2a_worker(
         out_attachments=out_attachments,
         reason_code=_classify_engine_failure(err, "engine_error") if err else "",
         error=err,
+        attachments_dropped=attachments_dropped,
     )
 
 
@@ -1229,17 +1235,26 @@ def _collect_within_ttl(engine: Any, prompt: str, spawn_kwargs: dict, ttl_s: flo
 
 
 def _harvest_outputs(out_dir: Path, result_schema: dict) -> list:
-    """Pick files from ``out_dir`` and build :class:`Attachment` records.
+    """Attachment list only; see :func:`_harvest_report` for the same harvest with its drop report."""
+    return _harvest_report(out_dir, result_schema)[0]
+
+
+def _harvest_report(out_dir: Path, result_schema: dict) -> tuple[list, dict]:
+    """Pick files from ``out_dir`` and build :class:`Attachment` records, and report what was left out.
 
     Filter rules (in order):
       1. Only regular files at the top level (no subdir descent).
       2. Name must pass :func:`a2a_attachments.validate_attachment_name`.
       3. If ``result_schema['attachments_out_allowed']`` is set, name
          must be in that list.
-      4. The full list is then validated via
-         :func:`a2a_attachments.validate_attachments` — count + total-byte
-         caps still apply; anything over the cap is dropped silently
-         from the tail of the list.
+      4. The count and total-byte caps apply from the head of the sorted list; the first file over a cap
+         and every eligible file after it are left out.
+
+    Returns ``(attachments, dropped)``. ``dropped`` maps a closed reason to a count of files that WERE
+    eligible but did not make it: ``count_cap``, ``byte_cap``, ``unreadable``, ``bad_name``. It carries
+    no name and no content. Not counted on purpose: files the sender's own ``attachments_out_allowed``
+    list excluded (the sender asked for that), and symlinks, hardlinks and paths that escape ``out/``
+    (security refusals: reporting them would tell a hostile worker what the filter caught).
     """
     try:
         from a2a_attachments import (  # type: ignore[import-not-found]
@@ -1262,9 +1277,11 @@ def _harvest_outputs(out_dir: Path, result_schema: dict) -> list:
             allowed_names = [str(n) for n in raw_allowed]
 
     out: list = []
+    dropped: dict[str, int] = {}
+    capped = ""
     total_bytes = 0
     if not out_dir.exists():
-        return out
+        return out, dropped
     out_dir_resolved = out_dir.resolve()
 
     for entry in sorted(out_dir.iterdir()):
@@ -1300,22 +1317,32 @@ def _harvest_outputs(out_dir: Path, result_schema: dict) -> list:
         try:
             validate_attachment_name(entry.name)
         except AttachmentError:
+            dropped["bad_name"] = dropped.get("bad_name", 0) + 1
             continue
         if allowed_names is not None and entry.name not in allowed_names:
             continue
+        if capped:
+            # A cap was already hit: everything eligible after it stays out, and is counted.
+            dropped[capped] = dropped.get(capped, 0) + 1
+            continue
         if len(out) >= MAX_ATTACHMENTS_COUNT:
-            break
+            capped = "count_cap"
+            dropped[capped] = dropped.get(capped, 0) + 1
+            continue
         size = entry.stat().st_size
         if total_bytes + size > MAX_ATTACHMENTS_TOTAL_BYTES:
-            break
+            capped = "byte_cap"
+            dropped[capped] = dropped.get(capped, 0) + 1
+            continue
         try:
             att = Attachment.from_file(entry)
         except Exception:
+            dropped["unreadable"] = dropped.get("unreadable", 0) + 1
             continue
         out.append(att.to_dict())
         total_bytes += size
 
-    return out
+    return out, dropped
 
 
 def quota_exhausted_now() -> bool:

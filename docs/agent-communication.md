@@ -130,6 +130,17 @@ path — success, failure, and timeout.
 Attachment names are validated against `[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}` —
 no leading dot, no path separators, no `..` — as a path-traversal defence.
 
+**Output files that did not fit are reported, not lost silently.** The caps (16 files, 1 MiB raw in
+total) apply from the head of the name-sorted list; the first file over a cap and every eligible file
+after it stay out. The receiver adds `attachments_dropped` to the signed response `data`
+(`{"count": N, "reasons": {"count_cap" | "byte_cap" | "unreadable" | "bad_name": n}}`) and records
+`attachments_dropped_count` in `A2A.result_filtered`. The field is present only when something was
+dropped, carries counts only (never a name or content), and sits outside the sender's `result_schema`
+filter because it is the receiver's own statement about completeness. Files the sender's
+`attachments_out_allowed` list excluded, and symlinks / hardlinks / paths escaping `out/`, are not
+counted (the first was asked for, the second must not tell a hostile worker what the filter caught).
+Proof: `corvin_operator/bridges/shared/test_a2a_attachments_dropped_e2e.py`.
+
 ---
 
 ## EU AI Act + GDPR Compliance
@@ -491,7 +502,7 @@ to run and produce a result.
 | `A2A.envelope_received` | On valid HTTP receipt | task_id, origin_id, nonce_prefix, sender_instance_id, ttl_s, purpose_id (v4) |
 | `A2A.envelope_sent` | After signing an outbound TaskEnvelope | task_id, endpoint_id, ttl_s |
 | `A2A.engine_spawned` | Before worker spawn | task_id, engine_id, persona, channel, chat_key |
-| `A2A.result_filtered` | After result_schema filter | task_id, filter_pass_count, filter_reject_count |
+| `A2A.result_filtered` | After result_schema filter | task_id, filter_pass_count, filter_reject_count, attachments_out_count, attachments_dropped_count |
 | `A2A.response_signed` | Before sending ResponseEnvelope | task_id, instance_id, endpoint_id, http_status, duration_ms |
 | `A2A.response_received` | On valid ResponseEnvelope receipt | task_id, endpoint_id, instance_id_match, http_status |
 | `A2A.request_rejected` | On any validation failure | task_id, origin_id, reason (e.g. rate_limited, purpose_not_allowed, attachment_classification_exceeded, consent_not_granted) |
