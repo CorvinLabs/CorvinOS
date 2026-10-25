@@ -228,3 +228,24 @@ def test_recorded_readiness_reasons_are_ones_the_evaluator_can_return(sys_id):
             p.endswith(":") and row["reason"].startswith(p) for p in reasons)
         assert ok, f"{sys_id}/{surface}: {row['reason']!r} is not a reason evaluate() returns"
         assert row["ready"] == (row["reason"] == "ready")
+
+
+def _stale_classifications(classified: set, unreachable: set) -> list:
+    """Classified-as-not-learning paths that are no longer unreachable.
+
+    A classification answers "is this unreachable module a learning system?". Once the module
+    is wired (or deleted) the question is gone and the entry is dead weight that a reader
+    would still trust; the ratchet baseline shrinks, so the classification must shrink with it."""
+    return sorted(p for p in classified if p not in unreachable)
+
+
+def test_not_learning_classifications_are_still_about_unreachable_modules():
+    """T-0260: a core/vibe_engineering classification does not outlive its module's
+    unreachability."""
+    data = yaml.safe_load(REGISTER.read_text(encoding="utf-8"))
+    classified = {c["path"] for c in data.get("classified_not_learning", [])}
+    unreachable = set(json.loads(REACH_BASELINE.read_text(encoding="utf-8"))["unreachable"])
+    assert classified, "positive control: the register classifies no module"
+    assert _stale_classifications(classified, unreachable) == []
+    # the detector itself: a path missing from the baseline is reported, one inside is not
+    assert _stale_classifications({"a.py", "b.py"}, {"a.py"}) == ["b.py"]
