@@ -7,7 +7,10 @@ Implements the Autonomous Compute Shell runtime:
 
 Architecture:
   - Manager runs as ``claude -p`` subprocess (like helper_model.py)
-  - Workers run via L22 engine fleet (ClaudeCodeEngine by default)
+  - Workers run as ``claude -p`` subprocesses spawned by ``_call_worker_sync``
+    (subprocess.Popen, JSON output), NOT through the L22 WorkerEngine classes
+    (ClaudeCodeEngine and friends). ``_resolve_worker_engine`` only picks the
+    engine id and model; the "M3 WorkerEngine fold-in" never happened (T-0237).
   - Budget envelope: hard abort on any limit breach
   - L16 audit events wired via shared audit.py (best-effort, never blocks)
   - L34 gate called before every worker engine spawn

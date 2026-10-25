@@ -2311,10 +2311,12 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
     on PATH. Returns None when the claude path is good to go.
 
     This guards the direct OS-turn subprocess path only, which drives nothing
-    but ``claude_code``. Delegated turns do not use it: the delegated branch of
-    ``stream_turn`` dispatches through the WorkerEngine layer via
-    ``_worker_engine_target``. So instead of a raw "claude binary not found" we
-    name the configured engine and point the operator at the Engines page.
+    but ``claude_code``. Delegated turns do not use it: ``_worker_engine_target``
+    routes the delegated branch of ``stream_turn`` to ACS or TDE, and ACS spawns
+    each worker itself as a ``claude -p`` subprocess (``acs_runtime._call_worker_sync``),
+    not through the L22 WorkerEngine classes (T-0237). So instead of a raw
+    "claude binary not found" we name the configured engine and point the operator
+    at the Engines page.
     """
     # 1. Engines removed by ADR-2091 (Hermes / local Ollama) map to claude_code.
     engine_id = _normalize_legacy_engine_id(engine_id) or "claude_code"
