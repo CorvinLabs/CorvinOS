@@ -24,6 +24,7 @@ root (path traversal) is refused.
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Tuple
@@ -53,6 +54,9 @@ except ImportError:  # pragma: no cover - stripped install without core/plugins
 
 class MarketplaceResolveError(Exception):
     """The index-id could not be resolved to a local builtin plugin directory."""
+
+
+_log = logging.getLogger(__name__)
 
 
 def available() -> bool:
@@ -223,7 +227,20 @@ def record_from_manifest(manifest: dict, *, plugin_dir: Path) -> "PluginRecord":
         # by this projection until 2026-09-20, so no marketplace-installed
         # plugin could ever put a panel in the sidebar.
         console_panel=dict(manifest["console_panel"]) if isinstance(manifest.get("console_panel"), dict) else None,
+        # Learning loops the plugin declares (ADR-0906): only entries that pass the schema reach the
+        # registry, so a malformed declaration costs the plugin its loop, never the install.
+        learning_loops=_declared_learning_loops(manifest),
     )
+
+
+def _declared_learning_loops(manifest: dict) -> list[dict]:
+    """The manifest's ``learning_loops`` that validate, as plain dicts (``[]`` when none or all invalid)."""
+    from core.plugins.validators.learning_loop_validator import extract_learning_loops_from_manifest
+
+    valid, warnings = extract_learning_loops_from_manifest(manifest)
+    for warning in warnings:
+        _log.warning("plugin %s: %s", manifest.get("plugin_id"), warning)
+    return [loop.model_dump(mode="json") for loop in valid]
 
 
 def _settings_defaults(schema: dict) -> dict:

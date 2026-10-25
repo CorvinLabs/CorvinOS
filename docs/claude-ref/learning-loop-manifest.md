@@ -1,6 +1,6 @@
 # Learning Loop Manifest — ADR-0906 Feature 1 Documentation
 
-**Status:** Manifest schema + parser implemented; plugin scan, health and Console route NOT live (see below)
+**Status (2026-10-26):** ADR-0906/0907 accepted. Schema, parser and the install-time projection onto the registry record are live and proven through the real install route; metrics are measured from the owner skill's events (see `learning-loops-panel.md`, "How a declaration reaches the panel"). The 2026-09-27 notes below describe retired code and are kept as history.
 
 > **Retired (2026-10-25, ADR-2282):** `core/learning/learning_loop_manifest.py`, `core/learning/learning_loop_audit_integration.py`, the Flask `routes/learning_loops.py` and `web-next/src/pages/learning-loops-dashboard.tsx` were deleted with their tests. The live loop surface is `routes/learning_analytics.py` (`/v1/console/learning-loops/*`) + `capabilities.py` + `core/learning/loop_discovery.py` (ADR-0908). The plugin-manifest validator `core/plugins/validators/learning_loop_validator.py` is separate and stays. Everything below is historical.
 

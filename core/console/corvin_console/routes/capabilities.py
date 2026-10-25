@@ -573,75 +573,47 @@ def _get_nav_groups(panels: list[dict], flags: dict[str, bool]) -> list[dict]:
 
 
 def _get_learning_loops(tenant_id: str = "_default") -> list[dict]:
-    """Get all learning loops declared by installed plugins (ADR-0906).
+    """Learning loops declared by the tenant's installed, enabled plugins (ADR-0906).
 
-    Extracts learning_loops sections from plugin manifests and formats them
-    for inclusion in the console manifest. Gracefully degrades if plugins are
-    unavailable.
+    The declarations were validated when the plugin was installed
+    (``marketplace_resolve.record_from_manifest``) and live on its registry record,
+    exactly like ``console_panel``. Until 2026-10-26 this function imported a
+    ``PluginRegistry`` that ``plugin_manager_v2`` does not define; the ``ImportError``
+    was swallowed, so it returned ``[]`` for every install and no plugin loop could
+    ever appear. A record that is installed but disabled declares nothing: its loop
+    cannot produce events.
 
-    Returns:
-        List of learning loop summaries (empty if no loops or plugins unavailable)
+    Fail-closed: an unreadable registry yields no loops, never a guess. Runtime
+    metrics are NOT part of a declaration and are not invented here; the panel
+    measures them (``learning_analytics``).
     """
-    loops: list[dict] = []
     try:
-        from core.plugins.schema.learning_loop_schema import LearningLoopsManifestResponse
-        from core.plugins.validators.learning_loop_validator import (
-            extract_learning_loops_from_manifest,
-        )
+        from .plugins import _PLUGINS_AVAILABLE, _load
+
+        if not _PLUGINS_AVAILABLE:
+            return []
+        records = _load(tenant_id).records
     except Exception:  # noqa: BLE001
-        # Schema/validators unavailable; fail-closed with empty list
         return []
 
-    try:
-        # Get plugin manifests from the registry
-        from core.plugins.plugin_manager_v2 import PluginRegistry
-
-        try:
-            registry = PluginRegistry(tenant_id=tenant_id)
-            plugins = registry.list_all()
-        except Exception:  # noqa: BLE001
-            # Registry unavailable; return empty list
-            return []
-
-        # Extract loops from each plugin manifest
-        for plugin in plugins:
-            try:
-                plugin_manifest = getattr(plugin, "manifest", None)
-                if not plugin_manifest:
-                    continue
-
-                # Extract validated loops from the manifest
-                valid_loops, _ = extract_learning_loops_from_manifest(plugin_manifest)
-
-                # Format for response
-                plugin_id = getattr(plugin, "plugin_id", None) or plugin_manifest.get(
-                    "id", "unknown"
-                )
-                for loop in valid_loops:
-                    loops.append({
-                        "loop_id": f"{plugin_id}:{loop.id}",
-                        "plugin_id": plugin_id,
-                        "description": loop.description,
-                        "event_source": loop.event_source,
-                        "feedback_types": loop.feedback_types,
-                        "aggregation": loop.aggregation,
-                        "health_threshold": loop.health_threshold,
-                        "dormancy_alert_hours": loop.dormancy_alert_hours,
-                        "owner_skill": loop.owner_skill,
-                        # Runtime metrics (will be populated by KG MCP in Phase 2)
-                        "last_event_ts": None,
-                        "event_count_7d": 0,
-                        "health_score": 0.0,
-                        "status": "active",
-                    })
-            except Exception:  # noqa: BLE001
-                # Skip plugins that fail to parse
+    loops: list[dict] = []
+    for plugin_id, record in sorted(records.items()):
+        if not getattr(record, "enabled", False):
+            continue
+        for loop in getattr(record, "learning_loops", None) or []:
+            if not isinstance(loop, dict) or not loop.get("id"):
                 continue
-
-    except Exception:  # noqa: BLE001
-        # Fallback: return empty list on any error
-        pass
-
+            loops.append({
+                "loop_id": f"{plugin_id}:{loop['id']}",
+                "plugin_id": plugin_id,
+                "description": loop.get("description", ""),
+                "event_source": loop.get("event_source", ""),
+                "feedback_types": list(loop.get("feedback_types") or []),
+                "aggregation": loop.get("aggregation", "rolling_mean_7d"),
+                "health_threshold": loop.get("health_threshold"),
+                "dormancy_alert_hours": loop.get("dormancy_alert_hours", 24),
+                "owner_skill": loop.get("owner_skill"),
+            })
     return loops
 
 

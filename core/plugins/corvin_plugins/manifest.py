@@ -436,6 +436,16 @@ class PluginRecord:
     # "component"?, "src"?} — see PluginPanelRegistry.PanelEntry.
     console_panel: Optional[Dict[str, Any]] = None
 
+    #: Learning loops the plugin declares in its manifest (ADR-0906): validated
+    #: ``LearningLoopManifest`` dicts, copied here at install time exactly like
+    #: ``console_panel``. The registry is the one place the console reads
+    #: "which loops do installed plugins declare" from
+    #: (``capabilities._get_learning_loops``). Persisted only when non-empty, so
+    #: a registry written before this field existed round-trips unchanged and an
+    #: older reader (which rejects unknown keys) is not broken by a plugin that
+    #: declares nothing.
+    learning_loops: List[Dict[str, Any]] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         if self.plugin_type not in KNOWN_PLUGIN_TYPES:
             raise UnknownPluginType(
@@ -516,7 +526,7 @@ class PluginRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise every persisted field (full round-trip, no silent loss)."""
-        return {
+        data = {
             "plugin_id": self.plugin_id,
             "version": self.version,
             "display_name": self.display_name,
@@ -545,6 +555,9 @@ class PluginRecord:
             "error_count": self.error_count,
             "console_panel": self.console_panel,
         }
+        if self.learning_loops:
+            data["learning_loops"] = [dict(loop) for loop in self.learning_loops]
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> PluginRecord:
@@ -611,6 +624,8 @@ class PluginRecord:
                 last_error_type=data.get("last_error_type"),
                 error_count=int(data.get("error_count", 0)),
                 console_panel=data.get("console_panel"),
+                learning_loops=[dict(loop) for loop in data.get("learning_loops") or []
+                                if isinstance(loop, dict)],
             )
         except KeyError as exc:
             raise PluginError(f"registry record missing required field {exc}") from exc

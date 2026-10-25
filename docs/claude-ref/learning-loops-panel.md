@@ -75,7 +75,7 @@ wiring the hook.
 |---|---|---|---|
 | **OS skills** | `os_skill` | One loop per skill the tenant records learning events for — executions, task outcomes and operator feedback | `core.learning.event_store.EventStore`, the same store `GET /v1/console/learning/status` reports from |
 | **CEL stages** | `cel_stage` | One loop per context-engineering pipeline stage; confidence earned from every turn's outcome | `ce_stage_grades.json` (ADR-0269 G4 / ADR-0285 G3) — the store `core.learning.earned_tree` projects |
-| **Plugin-declared** | `plugin` | A loop an installed plugin declares via `learning_loops:` (ADR-0906) | the tenant loop index (ADR-0907) |
+| **Plugin-declared** | `plugin` | A loop an enabled plugin declares via `learning_loops:` (ADR-0906) | the registry record names it (index = ADR-0907); the numbers come from the owner skill's events |
 
 ### Sibling tabs on the Learnings dashboard
 
@@ -90,20 +90,38 @@ through the unknown-tab branch onto Maturity Metrics.
 
 The first two are discovered live by `core/learning/loop_discovery.py`. They are
 deliberately **not** indexed: their store already is the record, so reading it
-live cannot drift from it the way a cached copy would. The third is indexed,
-because a manifest declaration carries no metrics of its own — `/list`
-reconciles the index against the installed plugins in-process, at most once
-every five minutes, by calling `capabilities._get_learning_loops()` directly
-rather than issuing an authenticated HTTP request to its own manifest endpoint.
-Removed loops are archived (audited), never dropped.
+live cannot drift from it the way a cached copy would. The third is indexed for
+WHICH loops exist, because a manifest declaration carries no metrics of its own.
 
-Plugin-loop metrics fill in via `EventStore._update_kg_index`
-(`core/learning/event_persistence.py`), which updates health, event count and
-status for every learning event carrying both `plugin_id` and
-`learning_loop_id`.
+How a declaration reaches the panel (every link has a test through its real entry
+point, `tests/learning/test_adr_0906_plugin_loop_declaration_e2e.py`):
 
-**As of 2026-09-21 this install shows 14 loops** — 6 OS skills and 8 CEL
-stages — and no installed plugin declares a `learning_loops:` section.
+1. The plugin's `plugin.yaml` carries `learning_loops:` (CorvinTV declares
+   `scene_feedback`, owner skill `os.video_producer`).
+2. Installing it (`POST /v1/console/api/v1/marketplace/plugins/{id}/install`) validates
+   the section with `learning_loop_validator` and copies the valid entries onto the
+   registry record (`PluginRecord.learning_loops`, written to `registry.yaml` only when
+   non-empty) — the same route `console_panel` takes.
+3. `capabilities._get_learning_loops()` lists the loops of **enabled** records; a
+   disabled plugin declares nothing.
+4. `/list` compares that set with the last one it indexed and writes the index only when
+   it changed (a plugin installed right after a listing appears on the next one; archived
+   when it no longer declares the loop).
+5. The row's numbers are measured from the **owner skill's own events** (the same live
+   read the OS-skill rows use). A loop that names no owner skill, or whose skill recorded
+   nothing, is `unknown` with no health score — never `0.0` and never `active`.
+
+What was wrong before 2026-10-26: step 3 imported a `PluginRegistry` that
+`plugin_manager_v2` does not define and swallowed the `ImportError`, so no plugin loop
+could ever be listed; and `EventStore._update_kg_index` (which was to fill the index
+metrics) returns early for every event, because `LearningEvent` carries no `plugin_id`
+or `learning_loop_id`. The index therefore holds declarations only; its health, status
+and counts are not read.
+
+**On this install** the panel shows the OS-skill and CEL-stage loops. CorvinTV's
+declaration is in the Marketplace manifest, but the installed `video_producer` record
+(1.7.0) predates it, so its row appears once that record is refreshed from the
+Marketplace (register entry H03).
 
 ### A health score means something measured one
 

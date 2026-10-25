@@ -395,8 +395,11 @@ def _get_learning_loop_service(tenant_id: str) -> Optional['LearningLoopService'
         return None
 
 
-_MANIFEST_SYNC_TTL = 300  # 5 minutes
-_manifest_sync_at: dict[str, datetime] = {}
+# The declared loops last reconciled into the index, per tenant. Reading them is one registry
+# read, so every listing re-reads and compares; the index is written only when the declared set
+# changed. A 5-minute timer used to gate the whole sync, which hid a plugin installed right after
+# a listing for up to five minutes.
+_manifest_synced: dict[str, frozenset] = {}
 _manifest_sync_lock = threading.Lock()
 
 
@@ -422,13 +425,6 @@ def _sync_index_from_manifest(service: 'LearningLoopService', tenant_id: str) ->
     logged and swallowed — a stale index degrades the panel, an exception
     would take the route down.
     """
-    now = datetime.now(timezone.utc)
-    with _manifest_sync_lock:
-        last = _manifest_sync_at.get(tenant_id)
-        if last is not None and (now - last).total_seconds() < _MANIFEST_SYNC_TTL:
-            return
-        _manifest_sync_at[tenant_id] = now
-
     try:
         from .capabilities import _get_learning_loops
 
@@ -436,6 +432,10 @@ def _sync_index_from_manifest(service: 'LearningLoopService', tenant_id: str) ->
             (d["plugin_id"], d["loop_id"]): d
             for d in _get_learning_loops(tenant_id)
         }
+        signature = frozenset(declared)
+        with _manifest_sync_lock:
+            if _manifest_synced.get(tenant_id) == signature:
+                return
         indexed = {(e.plugin_id, e.loop_id) for e in service.list_loops()}
 
         for key, d in declared.items():
@@ -457,7 +457,10 @@ def _sync_index_from_manifest(service: 'LearningLoopService', tenant_id: str) ->
         for plugin_id, loop_id in indexed - set(declared):
             service.archive_loop(plugin_id, loop_id)
             logger.info("Archived learning loop %s:%s", plugin_id, loop_id)
+        with _manifest_sync_lock:
+            _manifest_synced[tenant_id] = signature
     except Exception as exc:  # noqa: BLE001
+        # not recorded as synced: the next listing retries
         logger.warning("Learning loop manifest sync failed: %s", exc)
 
 
@@ -612,6 +615,43 @@ def _core_loop_summaries(tenant_id: str) -> tuple[List[LoopSummary], ListWindow]
     return summaries, ListWindow(scanned_events=result.scanned, truncated=result.truncated)
 
 
+def _plugin_loop_summary(entry: Any, measured_by_skill: dict) -> LoopSummary:
+    """One plugin-declared loop, measured from its owner skill's own events.
+
+    The index (ADR-0907) records WHICH loops plugins declare; its health, status and
+    counts were never fed by anything (``LearningEvent`` carries no ``plugin_id`` /
+    ``learning_loop_id``, so ``EventStore._update_kg_index`` always returns early) and
+    read as ``0.0`` / ``active`` for every loop. A loop that names an ``owner_skill``
+    is measured from that skill's events, the same live read the OS-skill rows use; one
+    that names none, or whose skill recorded nothing, is reported as not measured
+    rather than as healthy or failing.
+    """
+    measured = measured_by_skill.get(entry.owner_skill) if entry.owner_skill else None
+    if measured is not None:
+        health = LoopHealthScore(
+            score=measured.health.score,
+            trend="flat",
+            previous_score=None,
+            basis=(f"events of owner skill {entry.owner_skill}: {measured.health.basis}"
+                   if measured.health.basis else ""),
+        )
+        return LoopSummary(
+            loop_id=entry.loop_id, plugin_id=entry.plugin_id, skill_id=entry.owner_skill,
+            status=measured.status, health=health, last_event=measured.last_event,
+            event_count_7d=measured.event_count_7d, event_count_total=measured.event_count_total,
+            description=entry.description, origin="plugin",
+            event_source=f"declared by plugin; measured from {entry.owner_skill} events",
+        )
+    return LoopSummary(
+        loop_id=entry.loop_id, plugin_id=entry.plugin_id, skill_id=entry.owner_skill,
+        status="unknown", health=LoopHealthScore(score=None, trend="flat", previous_score=None, basis=""),
+        last_event=None, event_count_7d=0, event_count_total=0,
+        description=entry.description, origin="plugin",
+        event_source=("declared by plugin; owner skill recorded no events" if entry.owner_skill
+                      else "declared by plugin; no owner skill, so nothing measures it"),
+    )
+
+
 @router.get("/list", response_model=LoopListResponse)
 async def list_learning_loops(
     session: SessionRecord = Depends(require_session),
@@ -659,27 +699,11 @@ async def list_learning_loops(
         # Pick up loops declared by plugins installed since the last sync.
         _sync_index_from_manifest(service, tenant_id)
         try:
+            measured_by_skill = {
+                c.skill_id: c for c in core_loops if c.origin == "os_skill" and c.skill_id
+            }
             for e in service.list_loops():
-                indexed.append(
-                    LoopSummary(
-                        loop_id=e.loop_id,
-                        plugin_id=e.plugin_id,
-                        skill_id=e.owner_skill,
-                        status=e.status,
-                        health=LoopHealthScore(
-                            score=e.health_score,
-                            trend=_trend_direction(None),  # no dated history in the index
-                            previous_score=None,
-                            basis="index health score",
-                        ),
-                        last_event=e.last_event_ts,
-                        event_count_7d=e.event_count_7d,
-                        event_count_total=e.event_count_7d,
-                        description=e.description,
-                        origin="plugin",
-                        event_source="learning loop index",
-                    )
-                )
+                indexed.append(_plugin_loop_summary(e, measured_by_skill))
         except Exception as exc:  # noqa: BLE001
             logger.warning("Indexed loop listing failed: %s", exc)
     elif not core_loops:
