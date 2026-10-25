@@ -2844,11 +2844,16 @@ browser ──WS──► chat_stream                     routes/chat.py:556
                  ▼
                _manager_loop                    acs_runtime.py:2546
                  │ each iteration: ctx.budget.check() (:2617); breach → audit acs.budget_exhausted, stop
+                 │   → chat gets a result "Budget erreicht … kein Fehler" and done (bounded stop, ADR-0195)
                  │ manager decides DELEGATE → _dispatch_workers   acs_runtime.py:2765
                  ▼
                _dispatch_workers                acs_runtime.py:2128
+                 │ root budget re-checked first; breach → audit acs.budget_breach, no worker starts
                  │ workers of one stage run concurrently; a sub-manager recurses (:2465)
                  │ per worker: start span (model_id=""), worker call, end span
+                 │ worker call = _call_worker_sync → `claude -p` via subprocess.Popen (not a WorkerEngine)
+                 │ user sends {"type":"cancel"} → every running worker: end span status=error,
+                 │   acs.worker_traced status=failed; chat gets done without a result; no next stage
                  ▼
                worker end span (ok)             acs_runtime.py:2427-2440
                    model_id = attestation["reported_model"]   (_reported_model :1797, set :1977)
@@ -2867,15 +2872,21 @@ browser ──WS──► chat_stream                     routes/chat.py:556
 
 ### Fictional workflows and the E2E test
 
-- Fixtures: `core/console/tests/fixtures/delegation_workflows/` — four JSON files, each with
-  `manager` decisions, `workers` and `expect`:
+- Fixtures: `core/console/tests/fixtures/delegation_workflows/` — six JSON files, each with
+  `manager` decisions, `workers` and `expect` (worker count, stages = dependencies):
+  `single_worker.json` (the simplest form: one worker, no fan-out; explicit `/delegate`),
   `simple_fan_out_fan_in.json` (3 parallel workers, one synthesis),
   `complex_dag.json` (3 stages, parallel branches, fan-in nodes),
   `partial_failure.json` (worker `w2` raises; the manager must see `[w2] status=failed`),
-  `artifact_output.json` (a worker writes a deliverable that must stream before `done`).
-- Test: `core/console/tests/test_web_delegation_workflows_e2e.py` — 7 tests in 4 classes
-  (`SimpleFanOutFanInE2E`, `ComplexDagE2E`, `PartialFailureE2E`, `ArtifactOutputE2E`).
-  Run: `.venv/bin/python -m pytest core/console/tests/test_web_delegation_workflows_e2e.py` → 7 passed.
+  `artifact_output.json` (a worker writes a deliverable that must stream before `done`),
+  `abort_mid_fan_out.json` (three stage-1 workers block; the user cancels; stage 2 must never start).
+- Test: `core/console/tests/test_web_delegation_workflows_e2e.py` — 12 tests in 7 classes
+  (`SingleWorkerE2E`, `SimpleFanOutFanInE2E`, `ComplexDagE2E`, `PartialFailureE2E`,
+  `ArtifactOutputE2E`, `BudgetStopE2E`, `AbortMidFanOutE2E`).
+  Run: `.venv/bin/python -m pytest core/console/tests/test_web_delegation_workflows_e2e.py` → 12 passed
+  (2026-10-25). It runs on every push through `corvin_operator/bridges/run-all-tests.sh`, together
+  with `test_m2_1_artifact_registration_e2e.py`, `shared/test_acs_worker_span_attestation.py` and
+  `shared/test_acs_worker_spawn_path.py`.
 - Boundary, as the test docstring states: only the model-call boundary
   (`_call_manager_sync` / `_call_worker_sync`) is faked, plus house rules, spawn gates,
   licence quota and engine resolution. The WebSocket, `stream_turn`, `ACSRuntime`, the span
@@ -2884,8 +2895,24 @@ browser ──WS──► chat_stream                     routes/chat.py:556
   `threading.Barrier` per stage (a serial dispatch breaks it); every worker end span is priced
   with `model_id` and the four-way token split; a failed worker is reported as `acs.worker_error`
   and the healthy results still reach the manager; the artifact streams before `done`.
-- What they do **not** prove: budget stop (`acs.budget_exhausted`) and cancellation have no
-  assertion in this test file.
+- Budget stop (`BudgetStopE2E`): the operator budget `max_total_workers=3`, written to
+  `delegation_budget.json` like the Settings UI does, lets round 1 fan out to three workers;
+  the check before round 2 stops the run. The chat gets a result saying the budget was reached
+  and that this is not an error, then `done` without an `error` event; the chain holds exactly
+  one `acs.budget_exhausted` naming `max_total_workers=3`.
+- Cancellation (`AbortMidFanOutE2E`): `{"type": "cancel"}` while stage 1 runs ends the turn with
+  `done` and no `result`; stage 2 never starts and no second planning round happens; all three
+  started worker spans are closed with `status=error` and an empty `model_id` (unpriced), and
+  each worker has an `acs.worker_traced` record with `status=failed`.
+- How a worker runs (T-0237): `acs_runtime._call_worker_sync` starts `claude -p` itself with
+  `subprocess.Popen` (JSON output, prompt on stdin). No L22 WorkerEngine object
+  (`agents.claude_code.ClaudeCodeEngine`) is involved; the "M3 WorkerEngine fold-in" named in
+  ADR-0114 did not happen. `shared/test_acs_worker_spawn_path.py` pins this.
+- What they do **not** prove: the console audit record `chat.turn.cancelled` is not asserted.
+- Known gap, not fixed: `max_loops=1` stops a run before any worker starts. The loop counter is
+  incremented for the current round before `_dispatch_workers` re-checks the root budget, so a
+  one-round budget refuses its own round (`acs.budget_breach`, no worker). A one-round budget
+  therefore delegates nothing.
 
 ---
 
