@@ -519,6 +519,61 @@ def _stability_channel(home: Path) -> Dict[str, Any]:
     }
 
 
+def _model_usage_channel(home: Path) -> Dict[str, Any]:
+    from corvin_core.aco import htrace_consent as hc
+    from corvin_core.aco.htrace_uploader import _PING_BASE
+
+    try:
+        import model_usage_live as mu  # type: ignore  # bridges/shared is on the console's path
+    except Exception:  # noqa: BLE001
+        mu = None
+    enabled = hc.ping_enabled(home)
+    st = mu.read_state(home) if mu is not None else {}
+    endpoint = st.get("url") or f"{_PING_BASE}/api/telemetry/model-usage"
+    last_success = st.get("last_success")
+    if not enabled:
+        status = "disabled"
+    elif mu is None:
+        status = "not_wired"
+    elif last_success:
+        status = "sent"
+    elif st.get("attempts"):
+        status = "failing"
+    else:
+        status = "unknown"
+    return {
+        "id": "model_usage",
+        "title": "Model usage (live)",
+        "purpose": "Which model actually served a finished engine turn, for the public model ranking on corvin-labs.com/stats. The model the engine reported, never the configured one.",
+        "enabled": enabled,
+        "opt_out": "spec.telemetry.ping_enabled: false (the same flag as the ping and the heartbeat)",
+        "legal_basis": "GDPR Art. 6(1)(f) legitimate interest",
+        "cadence": "one record per finished engine turn, sent as it finishes (not batched)",
+        "endpoint": endpoint,
+        "endpoint_host": _host(endpoint),
+        "transport": "HTTPS POST (JSON), 5 s timeout, https-only, no redirects",
+        "headers": ["Authorization: Bearer <telemetry token>", "X-HTTrace-Instance-Token", "X-HTrace-Instance-Id", "User-Agent"],
+        "payload_fields": [
+            "model_id", "engine_id", "role", "status",
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+        ],
+        "wired": mu is not None,
+        "last_attempt": st.get("last_attempt"),
+        "last_success": last_success,
+        "last_sent": last_success,
+        "last_detail": st.get("last_detail"),
+        "attempts": int(st.get("attempts") or 0),
+        "successes": int(st.get("successes") or 0),
+        "consecutive_failures": int(st.get("consecutive_failures") or 0),
+        "state_file": str(mu.state_path(home).relative_to(home)) if mu is not None and mu.state_path(home).exists() else None,
+        "status": status,
+        "note": (
+            "The sender module is not importable in this host; nothing is sent." if mu is None
+            else None if st else "Nothing recorded yet — the first record follows the first finished engine turn."
+        ),
+    }
+
+
 @router.get("/channels", summary="Every outbound telemetry channel: what it collects, what it sends, when it last did")
 async def get_channels(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -535,6 +590,7 @@ async def get_channels(
         ("geo", lambda: _geo_channel(home)),
         ("otlp_export", lambda: _otlp_channel(home)),
         ("stability", lambda: _stability_channel(home)),
+        ("model_usage", lambda: _model_usage_channel(home)),
     ):
         try:
             channels.append(fn())

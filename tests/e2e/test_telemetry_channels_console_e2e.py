@@ -127,7 +127,7 @@ def test_seeded_install_reports_each_channel_from_its_own_state(client, home):
     body = r.json()
     assert body["errors"] == {} and body["corvin_home"] == str(home)
     ch = _by_id(body)
-    assert set(ch) == {"ping", "heartbeat", "healing_traces", "error_reports", "geo", "otlp_export", "stability"}
+    assert set(ch) == {"ping", "heartbeat", "healing_traces", "error_reports", "geo", "otlp_export", "stability", "model_usage"}
 
     ping = ch["ping"]
     assert ping["status"] == "sent" and ping["enabled"] is True
@@ -161,6 +161,14 @@ def test_seeded_install_reports_each_channel_from_its_own_state(client, home):
     assert ch["otlp_export"]["status"] == "unknown" and ch["otlp_export"]["wired"] is True
     assert ch["otlp_export"]["endpoint_host"] == "corvin-features-production.up.railway.app"
     assert ch["stability"]["status"] == "not_wired" and ch["stability"]["endpoint_host"] == "corvin-features-production.up.railway.app"
+    # live model-usage channel: wired, listed with its closed field set, nothing sent yet
+    mu = ch["model_usage"]
+    assert mu["wired"] is True and mu["enabled"] is True and mu["status"] == "unknown"
+    assert mu["endpoint_host"] == "corvin-labs.com"
+    assert mu["payload_fields"] == [
+        "model_id", "engine_id", "role", "status",
+        "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+    ]
 
     # secrets never travel: the tokens are only reported as present/absent
     text = r.text
@@ -178,6 +186,7 @@ def test_opt_outs_in_tenant_yaml_disable_the_channels(client, home):
     assert ch["healing_traces"]["status"] == "disabled"
     assert ch["error_reports"]["status"] == "disabled"
     assert ch["otlp_export"]["status"] == "disabled" and ch["stability"]["status"] == "disabled"
+    assert ch["model_usage"]["status"] == "disabled" and ch["model_usage"]["enabled"] is False
     assert ch["geo"]["effective_tier"] == 1 and "Nothing extra" in ch["geo"]["what_leaves"]
 
 

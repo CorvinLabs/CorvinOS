@@ -14,11 +14,18 @@ which is always a bug in the test's isolation.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent
+
+# The live model-usage signal (ADR-0851) POSTs to the public stats endpoint once
+# per finished engine span. No test may reach production: the default is off for
+# the whole run. The one E2E test that exercises the sender sets it back to "1"
+# against a local HTTP server.
+os.environ.setdefault("CORVIN_MODEL_USAGE_LIVE", "0")
 
 # The protected paths, resolved ONCE at import time — before any test can patch
 # `HOME` or `Path.home`.

@@ -158,9 +158,21 @@ def emit_start(audit_event_fn, **kw: Any) -> None:
 
 
 def emit_end(audit_event_fn, **kw: Any) -> None:
-    """Emit engine.span.end (see emit_start)."""
-    audit_event_fn(ENGINE_SPAN_END, details=end_details(**_split(kw)[0]),
+    """Emit engine.span.end (see emit_start). The live model-usage signal (ADR-0851)
+    goes out right after the audit write, from the same details."""
+    details = end_details(**_split(kw)[0])
+    audit_event_fn(ENGINE_SPAN_END, details=details,
                    severity="INFO", **_split(kw)[1])
+    _live_model_usage(details)
+
+
+def _live_model_usage(details: dict[str, Any]) -> None:
+    """Fail-soft hand-off to the live stats sender; never touches the audit write."""
+    try:
+        import model_usage_live  # type: ignore  # noqa: PLC0415
+        model_usage_live.send_span_end(details)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 _WRITER_KEYS = frozenset({"tenant_id", "channel", "chat_key"})
