@@ -251,6 +251,11 @@ PYTHONPATH=. python -m plugin_builder.generators.mod_cli \
   before it writes. The marker is an environment variable, not a credential.
 - **Writes:** one `skill_grade` call and one `mod.command_executed` audit event per answer; never the answer
   text. The audit gateway sets `tenant_id` itself and overwrites any value a caller sends.
+- **Console:** the Forge Skills tab shows the same figures a mod serves. `GET /v1/console/forge/skills` carries
+  `grade_count`, `mean_score` and `quiz_cards` (counted with this module's own parser; `null` = unknown, never
+  zero), and `GET /v1/console/forge/mod-activity` lists recent `mod.command_executed` records of the session's
+  tenant from the END of the audit chain, with the window it read (`window.complete` is false for a long
+  chain). The records are mod-reported, not verified.
 - **Not done here:** the adapter does not load generated mods yet (nothing passes `--plugin-dir`).
 
 Tests: `tests/test_mod_generator.py`. They include an end-to-end test that runs the CLI as a subprocess and
