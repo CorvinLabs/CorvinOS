@@ -1,13 +1,64 @@
-# ACP Learning Loop — closed end-to-end (ADR-0613)
+# ACP Learning Loop (ADR-0613) and the learning-system register (ADR-2281)
 
-**Status:** live since 2026-09-06 · **ADR:** ADR-0613 (Corvin-Knowledge) · depends on ADR-0314, ADR-0532, ADR-0549, ADR-0555
+**Status:** as the register says (below) — the writer side of the loop is state A (event
+store, outcome sink, feedback gate); the delegation router reads the learned config only in a
+cleared Phase 2, so the router loop is state B · **ADRs:** ADR-0613, ADR-2281 (Corvin-Knowledge)
+· depends on ADR-0314, ADR-0532, ADR-0549, ADR-0555, ADR-2092
 
 Until 2026-09-06 the ADR-0314 "learning loop" was a **log, not a loop**: Skills
 were booted and unit-tested, but the L5/L10 entry points had zero production
 callers, no task outcome was ever recorded, the optimizer modules had no
 importer outside tests, the learning store bypassed the audit chain, and the
-Learning Dashboard answered with hard-coded mock data. This page is the
-source of truth for what runs now.
+Learning Dashboard answered with hard-coded mock data. This page describes the
+mechanisms; **which system is live is stated only by the register**.
+
+## The register (ADR-2281) — single statement of state
+
+`core/learning/learning_systems.yaml` lists every learning system with its production
+callers (`path:line`, re-read when recorded), its tests and its state: **A** live and read ·
+**B** live but shadow / no reader yet, with an `intake` naming when its output may act ·
+**D** dead, retired by the named decision (ADR-2282) until its last module is deleted. Nothing
+here, in CLAUDE.md or elsewhere may call a system "wired", "live" or "complete" unless its
+register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
+
+| Check | File | Fails on |
+|---|---|---|
+| Register | `tests/learning/test_learning_systems_register.py` | a caller file/line that does not exist, a missing test file, an A without caller, a B without `intake`, a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
+| Reachability ratchet | `scripts/learning_reachability.py` + `scripts/learning_reachability_baseline.json`, `tests/learning/test_learning_reachability_ratchet.py` | a NEW unreachable module in the learning scopes (same graph as `zero_caller_sweep`), and a STALE baseline entry (module reachable again or deleted). Shrink-only |
+| Call-site pins | `tests/learning/test_learning_call_site_pins.py` | L06 injection gate / follow-up grade and L10 distill scheduling / injection through `adapter.process_one`; L14 `emit_*_confidence` through `POST /v1/console/forge-bundles/import`. Each was shown red with its call site cut |
+
+<!-- register-table:start (kept equal to core/learning/learning_systems.yaml by the register test) -->
+| Id | System | State |
+|---|---|---|
+| L01 | Learning host and Data Hub daemon | A |
+| L02 | Anomaly monitor (learning host, every 300 s) | A |
+| L03 | Event store and outcome sink | A |
+| L04 | Feedback gate (throttle, reality check, trust weight) | A |
+| L05 | Delegation-router config loop (os.delegation_router learned config) | B |
+| L06 | Skill grades, injection gate, promotion | A |
+| L07 | CEL turn grades | B |
+| L08 | Model selector learner (descriptive only) | B |
+| L09 | Savings meter (Free-tier cost.optimize allowance) | A |
+| L10 | User model distillation (L28, opt-in per chat) | B |
+| L11 | Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter) | B |
+| L12 | Routing ledger and rollback judge | B |
+| L13 | Flow-guard learning route | B |
+| L14 | Layer Forge learning integration (emit_*_confidence / *_outcome) | A |
+| L15 | KB learning (kb guidance run, guidance skills) | A |
+| L16 | Compute search strategies (grid, random, bayes) and HAC attribution | A |
+| L17 | Learning and maturity panels (report health, not learning) | A |
+| L18 | Video learning feedback API | B |
+| L19 | Autonomous Forge (autopilot off by default) | B |
+| H03 | Plugin-declared learning loops (manifest discovery) | B |
+| R01–R19 | Modules retired by ADR-2282 (one entry per group of its table) | D |
+<!-- register-table:end -->
+
+Two B entries carry findings of 2026-10-25: **L10** — both adapter call sites run, but
+`user_model.distill()` queries `conversation_recall.recall('')`, an empty FTS5 phrase that
+matches nothing, so no model is ever distilled (strict xfail in the pins); **L08** — the
+selector learner's only input is the 0.85 / 0.2 "turn ended without an error" proxy and the
+selection never reads it. The 19 unreachable `core/vibe_engineering` modules are classified
+not-learning in the register (`classified_not_learning`), none is retired by ADR-2281.
 
 ## The loop
 
@@ -71,7 +122,7 @@ next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tena
 | Config adapter | `core/skills/os_skills/skill_adapter.py` | under `<CORVIN_HOME>/tenants/<t>/skills/os_delegation_router_config.json`; versions persisted WITH config snapshots; epoch persisted; `rollback()` works after restart and records `active_version` (the version whose config is live — NOT the last list entry: a rollback restores an older config and keeps the newer versions, and reporting `versions[-1]` named the wrong version in the audit trail and the routing ledger); `load_skill_config()` is the read side (mtime-cached, never writes; files written before `active_version` existed fall back to the last entry) |
 | Router consumption | `core/skills/os_skills_phase1.py::DelegationRouterSkill.execute` | optional `tenant_id` input → learned `confidence_threshold`; `shadow`/`bundled_engine` echoed |
 | Console API | `core/console/corvin_console/routes/method_discovery_api.py` | see table below; ALL real, ALL audited; CSRF on mutations; tenant from `SessionRecord` |
-| Panel | `web-next/src/panels/LearningDashboard.tsx` | reads `data.patterns` envelope from `routes/learning.py` (ADR-0548); flag `learning_enabled` (registered, in `GATED_FLAGS`, in the whitelist template) |
+| Panels | Learning Loops view (`routes/learning_analytics.py`), maturity (`routes/api_vibe_maturity.py`) | register L17 (A): they report the loops' health, they do not learn. The former `web-next/src/panels/LearningDashboard.tsx` no longer exists (checked 2026-10-25), and no web-next file reads the `learning_enabled` flag |
 
 ## Console endpoints (`/v1/console/learning/…`)
 
@@ -137,55 +188,22 @@ exactly like `skill_registry_phase1` does for `skill.*`. Without it the
 `audit_ref` the commit check reads back is scrubbed and every learning write
 fails closed. Adding a detail key to a learning record means adding it there.
 
-### 9D / meta loop (`nine_d_loss.py`, `meta_optimizer.py`, `watchdog.py`)
+### Deleted: 9D / meta loop and the "staged but unwired" modules
 
-`NineD_LossOptimizer` drives the real `DivergenceWatchdog` (checkpoint →
-`apply_gradients` → `validate_state` → `restore_checkpoint` on divergence);
-checkpoints persist under `<CORVIN_HOME>/tenants/<t>/learning/meta_checkpoints/`.
-Tier 2 loops learn with the meta loop's `α_infra`/`damping_infra` (no hardcoded
-0.01/0.95). `MetaOptimizer.compute_loss` reads both key conventions
-(`core_loss`/`prev_core_loss` and `loss_delta_core`); a non-finite delta scores
-1.0 (never a silent 0). Every hyperparameter change — gradient step, feedback
-step, `set_state`/rollback — is committed to the core chain FIRST as
-`learning.hyperparameter_changed {changes{param{old,new}}, reason}` and is NOT
-applied when the chain write fails; `set_state` validates NaN/Inf/bounds.
-The 9D optimizer has no production caller yet (it is exercised by tests only).
-`L_core` is a CONSTANT while that holds: `core_loop_losses` is six literals and
-`update_core_loop_loss()` — its only writer — has no caller outside tests, so
-`0.6 · L_core` contributes a fixed 0.081, about 58 % of a typical `L_total`.
-`tier1_is_connected()` reports this and `get_convergence_metrics()` returns it
-as `tier1_connected`; a convergence number taken here describes the Tier-2
-loops plus a constant, not the 9D system. `check_convergence()` additionally
-rejects a run the watchdog reports as oscillating (a permanent limit cycle has
-low variance and is not convergence), and a non-finite loss or gradient raises
-`NonFiniteLossError` instead of being clamped by `max(0.0, min(1.0, nan))`.
-Tier-2 gradients go through `GradientValidator` (hard clipping + NaN/Inf,
-fail-closed) — its first non-test caller, added 2026-09-07.
+`nine_d_loss`, `meta_optimizer`, `watchdog`, `unified_loss`, `weight_smoother`,
+`weight_updater`, `alert_policy`, `alert_dispatcher`, `geo_validator`,
+`feedback_validator`, `outcome_validator`, `metrics_exporter`, `export_import`,
+`divergence_detector`, `consistency_checker` and `gradient_backprop` no longer
+exist (deleted with the unwired scaffolding on 2026-10-11, T-0125; checked
+2026-10-25). The security mitigations once attributed to them (feedback HMAC,
+gradient clipping, tiered damping, stale-feedback TTL, oscillation detection,
+export HMAC, alert nonce, geo validation) are therefore NOT guarantees of this
+install, implemented or otherwise. Which learning systems are live is the
+register's A entries, nothing else.
 
-### Staged but UNWIRED — do not cite these as live guarantees
+### Live experiment collector (`live_experiment_collector.py`) — register R17, state D
 
-Thirteen further `core/learning` modules are reachable only from tests and from
-each other: `unified_loss`, `weight_smoother`, `weight_updater`, `alert_policy`,
-`alert_dispatcher`, `geo_validator`, `feedback_validator`, `outcome_validator`,
-`feedback_sink`, `metrics_exporter`, `export_import`, `divergence_detector`,
-`consistency_checker` (plus `gradient_backprop`, now reached from `nine_d_loss`
-only). No systemd unit, console route, CLI, skill or plugin imports any of them.
-
-The security mitigations attributed to them — feedback HMAC (#1), gradient
-clipping / NaN-Inf (#4), tiered damping (#5), stale-feedback TTL (#6),
-oscillation detection (#7), audit-first weight updates (#8), export HMAC (#10),
-alert nonce (#11), geo validation (#12) — are implemented and unit-tested.
-They are **not live guarantees**, because they have no live subject. Same rule
-as CLAUDE.md's `user_backend` note: say "implemented", never "enforced", until
-something calls it. `docs/PHASE_2B_PRODUCTION_SIGNOFF.md` claimed "PRODUCTION
-READY" for exactly this code until 2026-09-07 and now carries the same caveat.
-
-What IS live in the learning subsystem: the audit-first `EventStore`, the
-outcome sink, the console `/v1/console/learning/*` routes, the `SkillAdapter`
-config the delegation router reads, and the live experiment collector's
-schema — everything described in the sections above this one.
-
-### Live experiment collector — retired (ADR-2282, 2026-10-25)
+Retired by ADR-2282 and deleted on 2026-10-25 (T-0271).
 
 `core/learning/live_experiment_collector.py` and its `corvin-live-collector` console
 script were deleted. Its last data was from 2026-09-06, its user unit was disabled, and its
@@ -384,8 +402,8 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
 
 ## Known limits (stated, not hidden)
 
-* The L10 entry point `adapt_context_l10` (`os.context_adapter`) is shadow-wired
-  since 2026-09-26: the CEL stage `l10_adapter` calls it once per turn from
+* The L10 entry point `adapt_context_l10` (`os.context_adapter`) runs in shadow
+  since 2026-09-26 (register L11, state B): the CEL stage `l10_adapter` calls it once per turn from
   `pipeline.build_context`, audits `skill.executed` + `context.adapted`
   (`adaptation_type=l10_shadow`) and never changes the served brief. The Skill
   receives content-free inputs only (no task text), so its advice carries almost
@@ -401,9 +419,10 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   in `core/learning/` (about 39 000 lines, e.g. `unified_loss_optimizer`, `feedback_batcher`,
   `phase2b_*`, `nine_d_loss`, variants such as `confidence_scorer_a3`, `meta_optimizer_a4`,
   `phase7_orchestrator_bridge` and the ADR-0393 classifier family) had no path from any production root and were removed together with the
-  tests that exercised only them. The live loop is: `EventStore` / `outcome_sink` (events),
-  `stream4_skill_feedback` -> `loop_closure.apply_outcome_to_skill` -> `SkillAdapter` (the one
-  closed feedback path), `model_selection_*` (descriptive statistics) and the dashboards. There
+  tests that exercised only them. What remains: `EventStore` / `outcome_sink` (events, register
+  L03, A), `stream4_skill_feedback` -> `loop_closure.apply_outcome_to_skill` -> `SkillAdapter`
+  (the one feedback path that writes a config, register L05, B: its reader is the gated Phase 2),
+  `model_selection_*` (descriptive statistics, L08, B) and the dashboards (L17, A). There
   is no automatic optimizer: nothing reads a learned router threshold outside the gated Phase 2
   path, so an optimizer for it would close no loop. Method note: a plain importer graph MISSES
   names re-exported by `core/learning/__init__.py` (`from core.learning import LearningIntegration`
@@ -451,7 +470,7 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   and `core/vibe/` (successor `anomaly_monitor`). Registered audit
   event types of retired emitters stay in `EVENT_SEVERITY`/`_EVENT_ALLOWLIST` (old chain
   records may carry them).
-* **The one closed feedback path is race-tested across processes.** `SkillAdapter.apply_config_delta`
+* **The one config-writing feedback path (register L05) is race-tested across processes.** `SkillAdapter.apply_config_delta`
   is a read-modify-write of `<skill>_config.json` shared by the console and the bridge;
   `tests/skills/test_skill_adapter_cross_process_race.py` runs 4 real processes x 6 deltas and
   requires 24 unique gapless versions and the exact end value (with the `flock` removed only 6-7

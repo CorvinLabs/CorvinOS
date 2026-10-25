@@ -1540,7 +1540,7 @@ at runtime per `adapter.py` system prompt — that is runtime behavior, not repo
 
 ## Phase 3: Learning Infrastructure (ADR-0314+)
 
-**Status:** Phase 3.1 (ADR-0314) COMPLETE ✅  
+**Status:** Phase 3.1 (ADR-0314) COMPLETE ✅ (event store + outcome sink = register L03, state A)  
 **Scope:** Event schema, persistence, async emission  
 **Tests:** 34 learning + 174 skill tests (208 total) green
 
@@ -1576,14 +1576,25 @@ Phase 3 builds the learning layer on top of Phase 2 (Skill System). It enables c
 
 → Full spec: See Corvin-Knowledge repo for ADR-0314 (learning-infrastructure-event-schema)
 
-**Loop closure (ADR-0613, 2026-09-06 — load-bearing):** the loop is CLOSED, not a log.
-Source = `delegation_policy.resolve_worker_engine` executes `os.delegation_router` in
-SHADOW mode (bundled answer stands; decision audited + emitted). Sink =
-`TaskManager.record_event` → `core/learning/outcome_sink.py` (OUTCOME per finished task,
-tenant from the task's own metadata). Store = `event_store.EventStore.write_event` is
-audit-FIRST (core chain record, then disk; no chain commit → no disk record). Consumption =
-`SkillAdapter` config (versioned, under `CORVIN_HOME`, rollback-able) is READ by
-`DelegationRouterSkill`. Console `/v1/console/learning/*` is real and audited — never mock.
+**Learning-system register (ADR-2281, load-bearing):** `core/learning/learning_systems.yaml` is
+the single statement of which learning systems exist and their state — **A** live and read,
+**B** live but shadow / no reader (with its `intake`), **D** retired by ADR-2282. Never call a
+system wired, live or complete here or in docs unless its register entry is A. CI holds it:
+`tests/learning/test_learning_systems_register.py` (callers exist, B has intake, D resolves,
+docs table equal), the reachability ratchet (`scripts/learning_reachability.py`, shrink-only
+baseline; a new unreachable learning module fails) and the call-site pins
+(`tests/learning/test_learning_call_site_pins.py`). → [learning-loop.md](docs/claude-ref/learning-loop.md) § register
+
+**Loop closure (ADR-0613, 2026-09-06 — load-bearing), as the register states it:** the writer
+side is A — Sink = `TaskManager.record_event` → `core/learning/outcome_sink.py` (OUTCOME per
+finished task, tenant from the task's own metadata; register L03), Store =
+`event_store.EventStore.write_event` audit-FIRST (core chain record, then disk; no chain commit →
+no disk record), feedback through the ADR-0534 gate (L04). The router side is B — Source =
+`delegation_policy.route_and_record` runs `os.delegation_router` in SHADOW (bundled answer
+stands; decision audited + ledgered, L12), and the `SkillAdapter` config (versioned, under
+`CORVIN_HOME`, rollback-able) that operator feedback writes is READ by `DelegationRouterSkill`
+only in a cleared Phase 2 (L05, ADR-2092 gates). Console `/v1/console/learning/*` is real and
+audited — never mock.
 **Must NOT do:** let the shadow path alter routing · hard-wire `~/.corvin` anywhere in
 learning/skills (`core/paths/tenant.py::corvin_home` honours `CORVIN_HOME`) · reintroduce
 mock answers on learning endpoints · persist the free-text feedback `reason`.
@@ -1598,14 +1609,15 @@ by making **Skills 2.0 the unified control plane**. Every subsystem (routing, st
 learning, deployment) becomes a swappable Skill — written in hybrid code (deterministic Python + LLM-generated
 logic), versioned, composable, and self-learning via ADR-0314's feedback loop.
 
-**Core Principle:** A Skill is NOT a static prompt; it is a **program** that:
-- ✅ Owns a domain (delegation routing, context adaptation, workflow optimization, security enforcement)
-- ✅ Executes deterministic Python (sync I/O, caching, local decisions — fail-fast, auditable)
-- ✅ Calls LLM on demand (e.g., `/router classify_request` → LLM picks delegation strategy)
-- ✅ Learns via feedback (confidence scoring, outcome signals, optimizer loop per ADR-0314)
-- ✅ Composes with other Skills (dependencies declared, topological sort, DAG validation per ADR-0535)
-- ✅ Versioned & deployed (semantic versioning, canary rollout, in-flight freeze per ADR-0533)
-- ✅ Observable (telemetry, execution traces, decision logs → Vibe dashboard)
+**Core Principle (design intent — what is live is the register's A entries, not this list):**
+A Skill is NOT a static prompt; it is a **program** that:
+- Owns a domain (delegation routing, context adaptation, workflow optimization, security enforcement)
+- Executes deterministic Python (sync I/O, caching, local decisions — fail-fast, auditable)
+- Calls LLM on demand (e.g., `/router classify_request` → LLM picks delegation strategy)
+- Learns via feedback (confidence scoring, outcome signals, optimizer loop per ADR-0314)
+- Composes with other Skills (dependencies declared, topological sort, DAG validation per ADR-0535)
+- Versioned & deployed (semantic versioning, canary rollout, in-flight freeze per ADR-0533)
+- Observable (telemetry, execution traces, decision logs → Vibe dashboard)
 
 **Why now:** ADR-0314 (Learning) + ADR-0532-0535 (OS-Skills) together unlock this. Learning infra provides
 feedback signals; Skills infra provides the execution model. Together they make Skills self-optimizing.
@@ -1615,21 +1627,23 @@ feedback signals; Skills infra provides the execution model. Together they make 
 The **Status** column is the load-bearing one: a Skill that is registered at boot
 is NOT thereby wired. Before 2026-10-11 this table said two of the five had no production
 caller; L22, L16 and L34 do have shadow call sites (below). Saying a Skill is wired when it
-is not is what made a whole "E2E wiring proof" suite vacuous (2026-09-07 round-4 review, F6). Update this column in the same commit that adds or removes a call site.
+is not is what made a whole "E2E wiring proof" suite vacuous (2026-09-07 round-4 review, F6). Update this column in the same commit that adds or removes a call site. Since 2026-10-25 each status
+is the state of the system's entry in `core/learning/learning_systems.yaml` (ADR-2281); all five are
+**B** — their call sites run in shadow and nothing acts on their output yet.
 
-| Layer | Today | Tomorrow (Skills 2.0) | Status (2026-10-11) | ADR | Timeline |
+| Layer | Today | Tomorrow (Skills 2.0) | Status (2026-10-25, = register) | ADR | Timeline |
 |---|---|---|---|---|---|
-| **L5: Routing** | Hardcoded persona → engine mapping | `os.delegation_router` Skill (LLM-classified by task type) | **WIRED on bridge + console, shadow by default** — `delegation_policy.py::route_and_record`, one ledger row per OS turn (`<tenant>/learning/routing/routing_ledger.jsonl`) joined to its outcome. Phase 2 (`CORVIN_ACP_PHASE=phase2_dual_write`) is REFUSED and audited until the ADR-2092 gates hold (Skill booted, no rollback, ≥500 decisions + join ≥0.95 + proxy evidence per surface); then the Skill may only de-escalate to native, audit-first. `phase2_real` is always refused. Bridge boots the registry since 2026-09-28 (before: zero L5 records, 43 MB chain). **Measured 2026-10-11: Phase 2 had no subject** — the bundled rule never delegated on either surface (console 131, bridge 560 decisions, 0 delegating; the Skill only de-escalates TO native). `monitoring/readiness.py` now says `no_delegation_subject` instead of `insufficient_samples`. `spec.web_chat.worker_engine` was set to `acs` on 2026-10-11 (operator decision) and the first delegating decision followed; the learned router config (`confidence_threshold`) is still read only by the gated Phase 2 path | ADR-0532 Phase 1, ADR-2092 | Weeks 2–4 |
-| **L10: Context** | Snapshot → prompt injection | `os.context_adapter` Skill (learns user/task patterns) | **WIRED, shadow mode** (2026-09-26) — CEL stage `l10_adapter` (`corvin_operator/context_engineering/stages/l10_adapter.py`, in DEFAULT + ACTIVE pipeline) calls `adapt_context_l10` per turn via `pipeline.build_context` when `vibe_engineering` is on. Audited (`skill.executed` + `context.adapted`), never changes the served brief. Runs ONLY where `boot_skills` booted an audited registry for the turn tenant — gateway/console, and since 2026-09-28 the bridge adapter boots one too (`adapter._boot_acp_skills`, ADR-2092 G0), so the stage is no longer skipped there for want of a registry. NOT yet proven by a bridge E2E: the bridge runs CEL only on the real-spawn path, which `ADAPTER_FAKE_CLAUDE` bypasses. E2E: `tests/e2e/test_os_skills_l5_l10_wiring.py::TestL10ProductionCallSite`. **A hand-authored `spec.context_engineering.pipeline` replaces the defaults and must list `l10_adapter` itself** — the live tenant did not, so the stage never ran there (0 `context.adapted`) until 2026-10-11; `resolve_pipeline` now warns once when it is missing | ADR-0532 Phase 1 | Weeks 2–4 |
-| **L22: Workflow** | Stateless request/response | `os.workflow_optimizer` Skill (learns execution chains) | **WIRED, shadow** — `adapter.py::_resolve_os_model_bundled` (via `workflow_optimizer_wrapper`) compares per turn and never changes the answer; 636 live `skill.executed` (2026-10-11). Nothing consumes its advice yet | ADR-0532 Phase 2 | Weeks 6–10 |
-| **L16: Security** | Config-driven gates | `os.security_orchestrator` Skill (learns attack patterns) | **WIRED, shadow, rarely reached** — `auth_elevation.py` runs a shadow comparison only on elevation attempts; 0 live `skill.executed` so far (plausible, unproven) | ADR-0532 Phase 3 | Weeks 11–18 |
-| **L34: Data Flow** | Hardcoded validators | `os.flow_guard` Skill (learns safe data shapes) | **WIRED, shadow** — `spawn_gates.py::check_l34` compares per spawn and never changes the gate; 1974 live `skill.executed` (2026-10-11). Nothing consumes its advice yet | ADR-0532 Phase 4 | Weeks 19–24 |
+| **L5: Routing** | Hardcoded persona → engine mapping | `os.delegation_router` Skill (LLM-classified by task type) | **B (register L05 + L12): shadow call sites on bridge + console** — `delegation_policy.py::route_and_record`, one ledger row per OS turn (`<tenant>/learning/routing/routing_ledger.jsonl`) joined to its outcome. Phase 2 (`CORVIN_ACP_PHASE=phase2_dual_write`) is REFUSED and audited until the ADR-2092 gates hold (Skill booted, no rollback, ≥500 decisions + join ≥0.95 + proxy evidence per surface); then the Skill may only de-escalate to native, audit-first. `phase2_real` is always refused. Bridge boots the registry since 2026-09-28 (before: zero L5 records, 43 MB chain). **Measured 2026-10-11: Phase 2 had no subject** — the bundled rule never delegated on either surface (console 131, bridge 560 decisions, 0 delegating; the Skill only de-escalates TO native). `monitoring/readiness.py` now says `no_delegation_subject` instead of `insufficient_samples`. `spec.web_chat.worker_engine` was set to `acs` on 2026-10-11 (operator decision) and the first delegating decision followed; the learned router config (`confidence_threshold`) is still read only by the gated Phase 2 path | ADR-0532 Phase 1, ADR-2092 | Weeks 2–4 |
+| **L10: Context** | Snapshot → prompt injection | `os.context_adapter` Skill (learns user/task patterns) | **B (register L11): shadow** (2026-09-26) — CEL stage `l10_adapter` (`corvin_operator/context_engineering/stages/l10_adapter.py`, in DEFAULT + ACTIVE pipeline) calls `adapt_context_l10` per turn via `pipeline.build_context` when `vibe_engineering` is on. Audited (`skill.executed` + `context.adapted`), never changes the served brief. Runs ONLY where `boot_skills` booted an audited registry for the turn tenant — gateway/console, and since 2026-09-28 the bridge adapter boots one too (`adapter._boot_acp_skills`, ADR-2092 G0), so the stage is no longer skipped there for want of a registry. NOT yet proven by a bridge E2E: the bridge runs CEL only on the real-spawn path, which `ADAPTER_FAKE_CLAUDE` bypasses. E2E: `tests/e2e/test_os_skills_l5_l10_wiring.py::TestL10ProductionCallSite`. **A hand-authored `spec.context_engineering.pipeline` replaces the defaults and must list `l10_adapter` itself** — the live tenant did not, so the stage never ran there (0 `context.adapted`) until 2026-10-11; `resolve_pipeline` now warns once when it is missing | ADR-0532 Phase 1 | Weeks 2–4 |
+| **L22: Workflow** | Stateless request/response | `os.workflow_optimizer` Skill (learns execution chains) | **B (register L11): shadow** — `adapter.py::_resolve_os_model_bundled` (via `workflow_optimizer_wrapper`) compares per turn and never changes the answer; 636 live `skill.executed` (2026-10-11). Nothing consumes its advice yet | ADR-0532 Phase 2 | Weeks 6–10 |
+| **L16: Security** | Config-driven gates | `os.security_orchestrator` Skill (learns attack patterns) | **B (register L11): shadow, rarely reached** — `auth_elevation.py` runs a shadow comparison only on elevation attempts; 0 live `skill.executed` so far (plausible, unproven) | ADR-0532 Phase 3 | Weeks 11–18 |
+| **L34: Data Flow** | Hardcoded validators | `os.flow_guard` Skill (learns safe data shapes) | **B (register L11): shadow** — `spawn_gates.py::check_l34` compares per spawn and never changes the gate; 1974 live `skill.executed` (2026-10-11). Nothing consumes its advice yet | ADR-0532 Phase 4 | Weeks 19–24 |
 
 **Implementation Roadmap (3 Phases, 8–12 weeks, ~2600 LoC + skills library):**
 
 **Phase 1 (Weeks 1–4): Foundation**
 - Deliver `os.delegation_router` Skill + `os.context_adapter` Skill (2 minimal skills)
-- Wire into L5 (auto-routing) + L10 (context engineering) — **L5 done on bridge + console (ADR-2092, E2E through `adapter.process_one`); L10 done on console, registry now booted on the bridge but its bridge run is unproven**
+- Wire into L5 (auto-routing) + L10 (context engineering) — **both in shadow, register state B: L5 call sites on bridge + console (L05/L12, ADR-2092, E2E through `adapter.process_one`); L10 stage on console (L11), registry now booted on the bridge but its bridge run is unproven**
 - Prove E2E: real requests flow through Skills, learning events emitted to ADR-0314
 - Tests: 25 E2E, 12 adversarial (crash recovery, timeout isolation, PII leakage)
 - Blocker: ADR-0532 Phase 1 + ADR-0533 manifest schema + ADR-0808 feedback integration ready

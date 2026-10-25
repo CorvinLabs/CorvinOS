@@ -10,7 +10,8 @@ condition under which its output may act); every D names the decision that
 retires it (`retired_by`, an ADR id that must resolve in Corvin-Knowledge) and
 still has at least one of its `modules` on disk (the entry leaves the register
 with its last module). The core/vibe_engineering classification (ADR-2281 §6)
-is checked against the reachability baseline.
+is checked against the reachability baseline, and the register table in
+docs/claude-ref/learning-loop.md must name the same state per system.
 """
 
 import json
@@ -141,6 +142,33 @@ def test_retiring_decisions_resolve_in_corvin_knowledge():
                     "Corvin-Knowledge/, or the corvin_decisions submodule)")
     for adr in ids:
         assert list(d.glob(f"{adr}-*.md")), f"{adr} does not resolve in {d}"
+
+
+def test_docs_register_table_equals_the_register():
+    """ADR-2281 / T-0262: docs/claude-ref/learning-loop.md carries the register's
+    table; every A/B row there must name the same state as the register, every
+    A/B system must have a row, and the D entries are summarised as one row."""
+    doc = (REPO / "docs" / "claude-ref" / "learning-loop.md").read_text(encoding="utf-8")
+    start, end = "<!-- register-table:start", "<!-- register-table:end -->"
+    assert start in doc and end in doc, "the register table markers are missing from learning-loop.md"
+    block = doc.split(start, 1)[1].split(end, 1)[0]
+    rows = {}
+    for line in block.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 3 and cells[0] not in ("Id", "---"):
+            rows[cells[0]] = cells[2]
+    systems = _load()
+    for s in systems:
+        if s["state"] == "D":
+            continue
+        assert rows.get(s["id"]) == s["state"], (
+            f"learning-loop.md says {s['id']} is {rows.get(s['id'])!r}, the register says {s['state']!r}")
+    d_ids = sorted(s["id"] for s in systems if s["state"] == "D")
+    if d_ids:
+        d_row = f"{d_ids[0]}–{d_ids[-1]}"
+        assert rows.get(d_row) == "D", f"learning-loop.md lacks the D summary row {d_row!r}"
+    known = {s["id"] for s in systems} | ({f"{d_ids[0]}–{d_ids[-1]}"} if d_ids else set())
+    assert set(rows) <= known, f"learning-loop.md lists ids the register lacks: {set(rows) - known}"
 
 
 def test_vibe_engineering_unreachable_modules_are_classified():
