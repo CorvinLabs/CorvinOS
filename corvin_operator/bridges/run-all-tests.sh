@@ -881,6 +881,8 @@ run "Python: compliance gaps G-006/G-008/G-009/G-010 (ADR-0073)" python3 shared/
 # ── Learning systems (ADR-2281): register well-formedness + reachability ratchet ──
 run "Python: learning-system register (ADR-2281)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../tests/learning/test_learning_systems_register.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: learning reachability ratchet (ADR-2281)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../tests/learning/test_learning_reachability_ratchet.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+# Adapter turns: own systemd scope when available (the adapter's unit sweep must never see the runner's cgroup).
+run "Python: learning call-site pins L06/L10/L14 (ADR-2281)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; S=(); systemd-run --user --scope --quiet true >/dev/null 2>&1 && S=(systemd-run --user --scope --quiet); "${S[@]}" "$PYTEST" ../../tests/learning/test_learning_call_site_pins.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 
 run "Python: plugin system (L4, ADR-0233/0345)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; env -u FORGE_ROOT "$PYTEST" ../../core/plugins/tests -q --import-mode=importlib >/dev/null 2>&1' || fails=$((fails+1))
 

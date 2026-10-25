@@ -88,6 +88,7 @@ systems:
     tests:
       - corvin_operator/skill-forge/tests/test_grading.py
       - corvin_operator/bridges/shared/test_adapter_skill_inject.py
+      - tests/learning/test_learning_call_site_pins.py
 
   - id: L07
     name: CEL turn grades
@@ -132,14 +133,24 @@ systems:
       - core/console/tests/test_cost_optimize_settings_e2e.py
 
   - id: L10
-    name: User model distillation (L28)
-    state: A
+    name: User model distillation (L28, opt-in per chat)
+    state: B
     callers:
       - corvin_operator/bridges/shared/adapter.py:13409
       - corvin_operator/bridges/shared/adapter.py:3587
     tests:
       - corvin_operator/bridges/shared/test_user_model.py
       - corvin_operator/bridges/shared/test_adapter_recall.py
+      - tests/learning/test_learning_call_site_pins.py
+    intake: >-
+      Both call sites run (pinned through process_one), but the writer yields
+      nothing: user_model.distill() asks conversation_recall.recall('') for the
+      chat's turns, the empty query becomes the FTS5 phrase '""' which matches no
+      row, so every distill ends "recall-empty" and no model is ever written
+      (found 2026-10-25, pinned as a strict xfail). The injection then reads only
+      models written by other means. It becomes A once distill reads the chat's
+      recent turns without a text query, and only for chats whose profile sets
+      user_model_enabled (GDPR Art. 6 opt-in).
 
   - id: L11
     name: Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter)
@@ -200,7 +211,8 @@ systems:
       - core/orchestration/layer_forge/orchestrator.py:136
       - core/orchestration/layer_forge/orchestrator.py:170
       - core/orchestration/layer_forge/orchestrator.py:211
-    tests: []
+    tests:
+      - tests/learning/test_learning_call_site_pins.py
 
   - id: L15
     name: KB learning (kb guidance run, guidance skills)
