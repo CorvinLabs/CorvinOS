@@ -9,7 +9,10 @@
 export interface ModActivityWindow {
   bytes_scanned: number;
   chain_bytes: number;
+  /** The whole chain was read AND the list was not cut at the limit. */
   complete: boolean;
+  /** The list was cut at its limit: older records may exist even if the whole chain was read. */
+  limit_reached?: boolean;
 }
 
 export interface ModActivityEvent {
@@ -38,6 +41,8 @@ function mib(bytes: number): string {
 /** The part of the audit chain that was read — always shown next to the list. */
 export function describeWindow(w: ModActivityWindow): string {
   if (w.complete) return `Whole audit chain read (${mib(w.chain_bytes)} MiB).`;
+  // Cut at the limit: how much was read is beside the point, the list is "the newest N", not "all".
+  if (w.limit_reached) return "Showing only the newest mod activity; older records are not shown.";
   return `Only the last ${mib(w.bytes_scanned)} MiB of ${mib(w.chain_bytes)} MiB were read; older mod activity is not shown.`;
 }
 

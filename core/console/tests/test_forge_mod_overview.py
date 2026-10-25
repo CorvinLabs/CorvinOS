@@ -226,13 +226,69 @@ def test_the_window_is_reported_and_a_short_window_is_not_the_whole_history(tmp_
 
         monkeypatch.setattr(forge_unified, "_MOD_ACTIVITY_WINDOW_BYTES", 1500)
         body = clients["_default"].get("/v1/console/forge/mod-activity").json()
-        assert body["window"] == {"bytes_scanned": 1500, "chain_bytes": size, "complete": False}
+        assert body["window"] == {
+            "bytes_scanned": 1500, "chain_bytes": size, "complete": False, "limit_reached": False,
+        }
         assert [e["skill"] for e in body["events"]] == ["new"], "'old' is outside the window and must not appear"
 
         monkeypatch.setattr(forge_unified, "_MOD_ACTIVITY_WINDOW_BYTES", size + 10)
         full = clients["_default"].get("/v1/console/forge/mod-activity").json()
         assert full["window"]["complete"] is True
         assert [e["skill"] for e in full["events"]] == ["new", "old"]
+
+
+def test_records_split_by_chunk_boundaries_are_found_exactly_once(tmp_path, monkeypatch):
+    """The scan reads backwards in chunks. A tiny chunk puts a boundary inside almost every record, so a
+    reader that parses each chunk on its own would lose or double records. The result must equal the
+    full-chain read, in order."""
+    with _sandbox(tmp_path) as (clients, _anon, home):
+        from corvin_console.routes import forge_unified  # noqa: PLC0415
+
+        chain = _chain(home, "_default")
+        for i in range(12):
+            _write(chain, _EVENT, mod="m", command="c", skill=f"s{i:02d}", tenant_id="_default")
+            _write(chain, "plugin.execution_timeout", plugin_id=f"p{i}", boot_layer="x", timeout_ms=i, tenant_id="_default")
+        expected = [f"s{i:02d}" for i in reversed(range(12))]
+
+        got = {}
+        for chunk in (1024 * 1024, 997, 211, 64):  # one chunk, then boundaries inside the records
+            monkeypatch.setattr(forge_unified, "_MOD_ACTIVITY_CHUNK_BYTES", chunk)
+            body = clients["_default"].get("/v1/console/forge/mod-activity").json()
+            got[chunk] = [e["skill"] for e in body["events"]]
+            assert body["window"]["complete"] is True, chunk
+        assert all(v == expected for v in got.values()), got
+
+
+def test_a_list_cut_at_the_limit_is_not_reported_as_complete(tmp_path, monkeypatch):
+    with _sandbox(tmp_path) as (clients, _anon, home):
+        from corvin_console.routes import forge_unified  # noqa: PLC0415
+
+        chain = _chain(home, "_default")
+        for i in range(6):
+            _write(chain, _EVENT, mod="m", command="c", skill=f"s{i}", tenant_id="_default")
+        monkeypatch.setattr(forge_unified, "_MOD_ACTIVITY_LIMIT", 3)
+        body = clients["_default"].get("/v1/console/forge/mod-activity").json()
+        assert [e["skill"] for e in body["events"]] == ["s5", "s4", "s3"]
+        # The whole (small) chain may even have been read, but older records exist beyond the limit:
+        # "complete" would let the UI say there is nothing more.
+        assert body["window"]["limit_reached"] is True
+        assert body["window"]["complete"] is False
+
+
+def test_the_scan_stops_early_once_the_limit_is_met(tmp_path, monkeypatch):
+    with _sandbox(tmp_path) as (clients, _anon, home):
+        from corvin_console.routes import forge_unified  # noqa: PLC0415
+
+        chain = _chain(home, "_default")
+        _write(chain, "plugin.execution_timeout", plugin_id="old", boot_layer="x", timeout_ms=1, tenant_id="_default")
+        for i in range(4):  # recent records at the END of the chain
+            _write(chain, _EVENT, mod="m", command="c", skill=f"s{i}", tenant_id="_default")
+        size = chain.stat().st_size
+        monkeypatch.setattr(forge_unified, "_MOD_ACTIVITY_LIMIT", 2)
+        monkeypatch.setattr(forge_unified, "_MOD_ACTIVITY_CHUNK_BYTES", 300)
+        body = clients["_default"].get("/v1/console/forge/mod-activity").json()
+        assert body["count"] == 2
+        assert 0 < body["window"]["bytes_scanned"] < size, "a busy tail must not cost a read of the whole chain"
 
 
 def test_no_chain_yet_is_an_empty_complete_window(tmp_path):

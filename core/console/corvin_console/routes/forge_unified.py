@@ -318,15 +318,75 @@ async def list_skills(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-#: How much of the END of the tenant chain /mod-activity reads. The chain grows by thousands of records a
-#: day, so this is a window, not the history — and the response says so.
-_MOD_ACTIVITY_WINDOW_BYTES = 4 * 1024 * 1024
+#: How far back from the END of the tenant chain /mod-activity may read. The live chain is hundreds of MB and
+#: grows by ~0.65 MiB an hour (measured 2026-10-26: a 4 MiB window reached back only ~6 hours and showed
+#: nothing), so this is a window, not the history — and the response says so. The scan reads backwards in
+#: chunks and stops at ``_MOD_ACTIVITY_LIMIT`` events, so a busy tenant costs one chunk, not the window.
+_MOD_ACTIVITY_WINDOW_BYTES = 64 * 1024 * 1024
+_MOD_ACTIVITY_CHUNK_BYTES = 1024 * 1024
 _MOD_ACTIVITY_LIMIT = 50
 _MOD_EVENT = "mod.command_executed"
 
 
+def _scan_mod_events(chain: Path, tid: str) -> tuple[list[dict[str, Any]], int, int, bool]:
+    """Newest-first ``mod.command_executed`` records of tenant *tid*, scanning *chain* backwards.
+
+    Returns ``(events, bytes_scanned, chain_bytes, limit_reached)``. Lines are re-joined across chunk
+    boundaries, so a record split by a boundary is neither lost nor parsed in halves.
+    """
+    try:
+        size = chain.stat().st_size
+    except OSError:
+        return [], 0, 0, False
+    needle = _MOD_EVENT.encode()
+    events: list[dict[str, Any]] = []
+    pos, scanned, carry = size, 0, b""
+    limit_reached = False
+    try:
+        with chain.open("rb") as fh:
+            while pos > 0 and scanned < _MOD_ACTIVITY_WINDOW_BYTES and not limit_reached:
+                step = min(_MOD_ACTIVITY_CHUNK_BYTES, pos, _MOD_ACTIVITY_WINDOW_BYTES - scanned)
+                pos -= step
+                fh.seek(pos)
+                data = fh.read(step) + carry
+                scanned += step
+                if pos > 0:
+                    nl = data.find(b"\n")
+                    if nl == -1:  # one line longer than the chunk: keep growing it
+                        carry = data
+                        continue
+                    carry, data = data[:nl], data[nl + 1:]  # the first line may be cut: finish it next round
+                else:
+                    carry = b""
+                for raw in reversed(data.split(b"\n")):
+                    if needle not in raw:  # cheap pre-check before parsing JSON
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if obj.get("event_type") != _MOD_EVENT:
+                        continue
+                    d = obj.get("details") or {}
+                    if d.get("tenant_id") not in (None, tid):  # a foreign tenant inside this chain: skip
+                        continue
+                    events.append({
+                        "ts": obj.get("ts"),
+                        "mod": d.get("mod"),
+                        "command": d.get("command"),
+                        "skill": d.get("skill"),
+                        "score": d.get("score"),
+                    })
+                    if len(events) >= _MOD_ACTIVITY_LIMIT:
+                        limit_reached = True
+                        break
+    except OSError:
+        return events, scanned, size, limit_reached
+    return events, scanned, size, limit_reached
+
+
 @router.get("/mod-activity")
-async def mod_activity(
+def mod_activity(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Recent actions reported by Claude Code mods, from this tenant's audit chain (read-only).
@@ -338,44 +398,20 @@ async def mod_activity(
     long chain and the UI must show the window next to the list — a short list is "none in the window", never
     "none ever".
     """
-    from .audit_tail import _tail_lines  # noqa: PLC0415
-
     tid = rec.tenant_id
     chain = _forge_paths.tenant_audit_chain(tid)
-    try:
-        size = chain.stat().st_size
-    except OSError:
-        size = 0
-    events: list[dict[str, Any]] = []
-    for line in reversed(_tail_lines(chain, byte_budget=_MOD_ACTIVITY_WINDOW_BYTES) if size else []):
-        if _MOD_EVENT not in line:  # cheap pre-check before parsing megabytes of JSON
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if obj.get("event_type") != _MOD_EVENT:
-            continue
-        d = obj.get("details") or {}
-        if d.get("tenant_id") not in (None, tid):
-            continue
-        events.append({
-            "ts": obj.get("ts"),
-            "mod": d.get("mod"),
-            "command": d.get("command"),
-            "skill": d.get("skill"),
-            "score": d.get("score"),
-        })
-        if len(events) >= _MOD_ACTIVITY_LIMIT:
-            break
+    events, scanned, size, limit_reached = _scan_mod_events(chain, tid)
     return {
         "tenant_id": tid,
         "timestamp": time.time(),
         "reported_by": "mod",
         "window": {
-            "bytes_scanned": min(size, _MOD_ACTIVITY_WINDOW_BYTES),
+            "bytes_scanned": scanned,
             "chain_bytes": size,
-            "complete": size <= _MOD_ACTIVITY_WINDOW_BYTES,
+            # complete = the whole chain was read AND the list was not cut at the limit: only then does an
+            # empty or short list mean "none recorded".
+            "complete": scanned >= size and not limit_reached,
+            "limit_reached": limit_reached,
         },
         "limit": _MOD_ACTIVITY_LIMIT,
         "count": len(events),

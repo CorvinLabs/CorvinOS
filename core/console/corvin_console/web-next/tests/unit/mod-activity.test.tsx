@@ -35,6 +35,12 @@ describe("encodings", () => {
     expect(partial).not.toMatch(/whole/i);
   });
 
+  it("a list cut at its limit is described as the newest, even if the whole chain was read", () => {
+    const cut = describeWindow({ bytes_scanned: 100, chain_bytes: 100, complete: false, limit_reached: true });
+    expect(cut).toBe("Showing only the newest mod activity; older records are not shown.");
+    expect(cut).not.toMatch(/whole/i);
+  });
+
   it("says 'none in the part that was read', not 'none', when the window is partial", () => {
     expect(emptyMessage({ bytes_scanned: 1, chain_bytes: 1, complete: true })).toBe("No mod activity has been recorded.");
     expect(emptyMessage({ bytes_scanned: 1, chain_bytes: 9, complete: false })).toMatch(/part of the audit chain that was read/);
