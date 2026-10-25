@@ -290,9 +290,10 @@ systems:
     intake: >-
       The chain is built and proven through the real install route (a plugin.yaml `learning_loops:` entry
       becomes a registry-record field, is listed by the loops panel and measured from its owner skill's
-      events; ADR-0906/0907 accepted 2026-10-25). It is B on THIS install only because the installed
-      `video_producer` record (1.7.0) predates CorvinTV's declaration: the row appears once that record is
-      refreshed from the Marketplace (plugin update/re-install). Flip to A with that live proof.
+      events; ADR-0906/0907 accepted 2026-10-25). CorvinTV 1.7.1 (Marketplace 5da326c) carries the
+      declaration, and the update route gives an older record the loop (tested: 1.7.0 without loops ->
+      1.7.1, still enabled). It is B on THIS install only until the installed `video_producer` record
+      (1.7.0) is updated in the Plugins panel; flip to A with that live proof.
 
   # ── D: retired by ADR-2282 (one entry per group of its decision table) ────
   # PLAN-0964's H01 is R17, H02 is R18, D01-D12 fall into R01-R19.
