@@ -32,6 +32,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 class ModelSelectorShadowLoopTests(unittest.TestCase):
+    # A conversational turn: the classifier (operator policy 2026-09-27, ADR-0952) routes it to
+    # SIMPLE/Haiku. "list the files here" is a work request and is MEDIUM/Sonnet, which is why these
+    # tests read an empty SIMPLE bucket while the loop credited MEDIUM — and the "consumed exactly
+    # once" test compared 0 with 0.
+    PROMPT = "hi, how are you?"
+
+    @staticmethod
+    def _simple_model() -> str:
+        """The model the SIMPLE tier is saved/defaulted to — what the loop credits.
+
+        Never a literal: automatic tiers follow the newest version of a family
+        (ADR-2090), so a pinned id here went stale the day Haiku 5.5 shipped.
+        """
+        from core.models.model_selection_config import load_config
+        return load_config("_default")["SIMPLE"]["selected_model"]
+
+    def test_the_probe_prompt_is_a_simple_turn(self) -> None:
+        from core.skills.os_skills.model_selector import ModelSelector
+        r = ModelSelector().classify(self.PROMPT)
+        self.assertEqual(r.complexity, "simple")  # if the policy moves, the other tests must move with it
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self._prev_home = os.environ.get("CORVIN_HOME")
@@ -56,35 +77,36 @@ class ModelSelectorShadowLoopTests(unittest.TestCase):
 
     def test_full_loop_success_produces_real_confidence(self) -> None:
         for _ in range(6):
-            self.mss.shadow_classify_task("list the files here", "_default", chat_key="chat-a")
+            self.mss.shadow_classify_task(self.PROMPT, "_default", chat_key="chat-a")
             self.mss.report_turn_outcome("chat-a", success=True)
 
         opt = self.mso.get_optimizer()
-        stats = opt.get_stats("SIMPLE", "claude-haiku-4-5-20251001", "_default")
+        stats = opt.get_stats("SIMPLE", self._simple_model(), "_default")
         self.assertEqual(stats.n_samples, 6)
         self.assertAlmostEqual(stats.mean_quality, 0.85, places=6)
         self.assertGreater(stats.confidence_score, 0.5)  # moved up from the uninformed 0.5 prior
 
     def test_failure_outcome_pulls_confidence_down(self) -> None:
         for _ in range(6):
-            self.mss.shadow_classify_task("list the files here", "_default", chat_key="chat-b")
+            self.mss.shadow_classify_task(self.PROMPT, "_default", chat_key="chat-b")
             self.mss.report_turn_outcome("chat-b", success=False)
 
         opt = self.mso.get_optimizer()
-        stats = opt.get_stats("SIMPLE", "claude-haiku-4-5-20251001", "_default")
+        stats = opt.get_stats("SIMPLE", self._simple_model(), "_default")
         self.assertAlmostEqual(stats.mean_quality, 0.2, places=6)
         self.assertLess(stats.confidence_score, 0.5)
 
     def test_pending_entry_consumed_exactly_once(self) -> None:
-        self.mss.shadow_classify_task("list the files here", "_default", chat_key="chat-c")
+        self.mss.shadow_classify_task(self.PROMPT, "_default", chat_key="chat-c")
         self.mss.report_turn_outcome("chat-c", success=True)
         opt = self.mso.get_optimizer()
-        n_after_first = opt.get_stats("SIMPLE", "claude-haiku-4-5-20251001", "_default").n_samples
+        n_after_first = opt.get_stats("SIMPLE", self._simple_model(), "_default").n_samples
+        self.assertEqual(n_after_first, 1)  # not 0 == 0: the outcome must really have been counted
 
         # A second outcome report with no new classification must be a no-op
         # (nothing pending) — never double-counts the same turn.
         self.mss.report_turn_outcome("chat-c", success=True)
-        n_after_second = opt.get_stats("SIMPLE", "claude-haiku-4-5-20251001", "_default").n_samples
+        n_after_second = opt.get_stats("SIMPLE", self._simple_model(), "_default").n_samples
         self.assertEqual(n_after_first, n_after_second)
 
     def test_outcome_with_no_prior_classification_is_a_safe_noop(self) -> None:
@@ -96,12 +118,12 @@ class ModelSelectorShadowLoopTests(unittest.TestCase):
         what a first process (the bridge daemon) wrote — the whole point of
         confidence_persistence.py."""
         for _ in range(6):
-            self.mss.shadow_classify_task("list the files here", "_default", chat_key="chat-d")
+            self.mss.shadow_classify_task(self.PROMPT, "_default", chat_key="chat-d")
             self.mss.report_turn_outcome("chat-d", success=True)
 
         self.mso._optimizer = None  # drop the singleton — force a fresh instance
         fresh = self.mso.get_optimizer()
-        stats = fresh.get_stats("SIMPLE", "claude-haiku-4-5-20251001", "_default")
+        stats = fresh.get_stats("SIMPLE", self._simple_model(), "_default")
         self.assertEqual(stats.n_samples, 6)
 
     def test_saved_provider_override_is_what_gets_credited(self) -> None:
@@ -114,7 +136,7 @@ class ModelSelectorShadowLoopTests(unittest.TestCase):
         cfg["SIMPLE"] = {"selected_model": "claude-opus-5", "provider": None, "alternatives": []}
         save_config("_default", cfg)
 
-        self.mss.shadow_classify_task("list the files here", "_default", chat_key="chat-e")
+        self.mss.shadow_classify_task(self.PROMPT, "_default", chat_key="chat-e")
         self.mss.report_turn_outcome("chat-e", success=True)
 
         opt = self.mso.get_optimizer()
