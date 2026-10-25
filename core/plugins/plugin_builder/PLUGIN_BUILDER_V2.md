@@ -223,6 +223,40 @@ def on_unload(self, context: Any) -> None:
 - Saving state
 - Freeing resources
 
+## Mod generator (CONCEPT-0118, ADR-2285)
+
+`generators/mod.py` turns SkillForge skills into a **Claude Code mod**: a plugin whose hooks module runs in
+the Claude Code process and adds `/quiz`, `/quiz-answer` and `/skill-info`. The skill stays the portable
+unit; the mod is an adapter generated from its metadata. Like every generator it only emits files and never
+loads them (ADR-0244).
+
+```bash
+cd core/plugins
+PYTHONPATH=. python -m plugin_builder.generators.mod_cli \
+    --store <tenant>/skill-forge --out <dir outside CorvinOS> --name corvin-quiz-mod \
+    [--skill assistant.some_skill ...] [--info] [--force]
+```
+
+- **Input:** a SkillForge store (`manifest.json`, `skills/<name>/SKILL.md`). Quiz cards come from a
+  `## quiz` section, one per line: `- <id> | <question> | <keyword>, <keyword> | <hint>`. A malformed line,
+  a keyword under 3 characters or a manifest entry without a `SKILL.md` is an error, never a silent skip.
+- **Output:** `plugin.json`, `hooks/hooks.json` (the `modules` key makes it a mod), `hooks/register.js`,
+  `tests/gate.test.ts`, `README.md`. Deterministic: the same skills give the same bytes. All data is embedded
+  as JSON literals, so card text cannot break out of the generated JavaScript.
+- **Where the output goes:** the caller chooses. A plugin's source belongs in Corvin-Marketplace, not in
+  CorvinOS; the generator refuses a non-empty directory without `--force`.
+- **Adapter-only gate:** a mod cannot abort a session (Claude Code skips a hook that throws), so the generated
+  mod registers nothing unless `CORVIN_CHANNEL_ID` (set by the adapter on every spawn) is present, every command
+  re-checks and throws, and the answer command probes the `skill_forge` and `forge` MCP servers read-only
+  before it writes. The marker is an environment variable, not a credential.
+- **Writes:** one `skill_grade` call and one `mod.command_executed` audit event per answer; never the answer
+  text. The audit gateway sets `tenant_id` itself and overwrites any value a caller sends.
+- **Not done here:** the adapter does not load generated mods yet (nothing passes `--plugin-dir`).
+
+Tests: `tests/test_mod_generator.py`. They include an end-to-end test that runs the CLI as a subprocess and
+feeds its output to the real `claude plugin validate` and `claude plugin test`; it is skipped, with the reason
+named, only where the `claude` CLI is not installed.
+
 ## Testing
 
 Each scaffold includes a test suite with:

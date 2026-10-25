@@ -12,6 +12,7 @@ from .adr import generate_adr_doc
 from .architecture import generate_architecture_doc
 from .e2e_tests import generate_e2e_tests
 from .idea import generate_idea_doc
+from .mod import ModSpecError, generate_mod_files, parse_quiz_cards, write_mod
 from .plan import generate_build_plan_doc
 from .scaffold import (
     ScaffoldResult,
@@ -27,6 +28,10 @@ __all__ = [
     "generate_adr_doc",
     "generate_build_plan_doc",
     "generate_e2e_tests",
+    "generate_mod_files",
+    "parse_quiz_cards",
+    "write_mod",
+    "ModSpecError",
     "ScaffoldResult",
     "slugify_plugin_id",
     "write_artifacts",
