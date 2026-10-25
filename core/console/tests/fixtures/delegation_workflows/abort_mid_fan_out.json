@@ -1,0 +1,39 @@
+{
+  "name": "abort-mid-fan-out",
+  "description": "Fiktiver Workflow (f): drei Worker der ersten Stufe laufen parallel und warten; der Nutzer bricht den Turn mitten im Fan-out ab. Die zweite Stufe darf nie starten, und jeder laufende Worker muss sein Span-Ende als Fehler schreiben.",
+  "prompt": "Prüfe parallel mit 3 Workern drei fiktive Lieferanten und vergleiche danach die Ergebnisse",
+  "manager": [
+    {
+      "decision": "DELEGATE",
+      "reasoning": "drei unabhängige Prüfungen",
+      "subtasks": [
+        {"id": "lief_a", "instructions": "Prüfe den fiktiven Lieferanten Alma.", "expected_output": {"result": "object"}},
+        {"id": "lief_b", "instructions": "Prüfe den fiktiven Lieferanten Borne.", "expected_output": {"result": "object"}},
+        {"id": "lief_c", "instructions": "Prüfe den fiktiven Lieferanten Cirro.", "expected_output": {"result": "object"}}
+      ]
+    },
+    {
+      "decision": "DELEGATE",
+      "reasoning": "Vergleich der drei Prüfungen (darf nach einem Abbruch nie laufen)",
+      "subtasks": [
+        {"id": "vergleich", "instructions": "Vergleiche die drei Lieferanten.", "expected_output": {"result": "object"}}
+      ]
+    },
+    {
+      "decision": "COMPLETE",
+      "complete_artifacts": {"summary": "darf nach einem Abbruch nie erscheinen", "quality_score": 0.9}
+    }
+  ],
+  "workers": {
+    "lief_a": {"stage": 1, "behavior": "block", "output": {"status": "success", "confidence": 0.9, "result": {"marker": "ALMA"}}, "reported_model": "claude-sonnet-5", "tokens": {"input_tokens": 10, "output_tokens": 10, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}},
+    "lief_b": {"stage": 1, "behavior": "block", "output": {"status": "success", "confidence": 0.9, "result": {"marker": "BORNE"}}, "reported_model": "claude-sonnet-5", "tokens": {"input_tokens": 10, "output_tokens": 10, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}},
+    "lief_c": {"stage": 1, "behavior": "block", "output": {"status": "success", "confidence": 0.9, "result": {"marker": "CIRRO"}}, "reported_model": "claude-sonnet-5", "tokens": {"input_tokens": 10, "output_tokens": 10, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}},
+    "vergleich": {"stage": 2, "output": {"status": "success", "confidence": 0.9, "result": {"marker": "VERGLEICH"}}, "reported_model": "claude-sonnet-5", "tokens": {"input_tokens": 10, "output_tokens": 10, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}
+  },
+  "expect": {
+    "worker_count": 3,
+    "stages": [["lief_a", "lief_b", "lief_c"], ["vergleich"]],
+    "never_started": ["vergleich"],
+    "result_contains": []
+  }
+}

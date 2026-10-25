@@ -1,0 +1,34 @@
+{
+  "name": "single-worker",
+  "description": "Fiktiver Workflow (e): die einfachste Form. Der Manager delegiert genau eine Teilaufgabe an einen Worker und übernimmt dessen Ergebnis im COMPLETE (kein Fan-out, kein Fan-in).",
+  "prompt": "/delegate Fasse den fiktiven Quartalsbericht der Firma Ostwind zusammen",
+  "manager": [
+    {
+      "decision": "DELEGATE",
+      "reasoning": "eine einzelne, in sich geschlossene Aufgabe",
+      "subtasks": [
+        {"id": "bericht", "instructions": "Fasse den fiktiven Quartalsbericht von Ostwind zusammen.", "expected_output": {"result": "object"}}
+      ]
+    },
+    {
+      "decision": "COMPLETE",
+      "complete_artifacts": {
+        "summary": "Zusammenfassung Ostwind: Umsatz +7 %, Marge stabil, Ausblick vorsichtig.",
+        "quality_score": 0.9
+      }
+    }
+  ],
+  "workers": {
+    "bericht": {
+      "stage": 1,
+      "output": {"status": "success", "confidence": 0.9, "result": {"firma": "Ostwind", "umsatz_pct": 7, "marker": "BERICHT_OSTWIND"}},
+      "reported_model": "claude-sonnet-5",
+      "tokens": {"input_tokens": 210, "output_tokens": 180, "cache_read_input_tokens": 2400, "cache_creation_input_tokens": 300}
+    }
+  },
+  "expect": {
+    "worker_count": 1,
+    "stages": [["bericht"]],
+    "result_contains": ["Ostwind", "+7 %"]
+  }
+}

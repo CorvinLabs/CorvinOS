@@ -315,6 +315,11 @@ run "Python: adapter UTF-8 decoding (ADR-0265)"   python3 shared/test_adapter_en
 run "Python: bridge_manager shutdown (ADR-0265)"  bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" test_bridge_manager_shutdown.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: bridge_manager windows autostart (2026-08-02)" python3 test_bridge_manager_windows_autostart.py >/dev/null || fails=$((fails+1))
 run "Python: ACS run-dir Windows path (2026-07-13)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_acs_runtime_windows_path.py -q >/dev/null 2>&1' || fails=$((fails+1))
+# ── Web-chat delegation (ADR-0114, E-034): worker span pricing + delegated workflows over the chat WebSocket ──
+run "Python: ACS worker end span carries attested model + 4-way tokens (ADR-0759)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_acs_worker_span_attestation.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: web-chat delegation E2E (single, fan-out/fan-in, DAG, failure, budget stop, cancel)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../core/console/tests/test_web_delegation_workflows_e2e.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: web-chat delegation artifacts (M2.1 registration, failed run, still-growing file)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../core/console/tests/test_m2_1_artifact_registration_e2e.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: ACS worker spawn path is claude -p, not a WorkerEngine (T-0237)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_acs_worker_spawn_path.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: platform independence (ADR-0159)"    python3 shared/test_adr0159_platform.py >/dev/null || fails=$((fails+1))
 # Node: bridge_paths.js's CORVIN_HOME whitespace-guard/expandvars/tilde
 # cases (this session's fix) ride the existing "Node: bridge_paths

@@ -1,6 +1,6 @@
 """E2E — ADR-0114 / PLAN-0961: fictional delegated workflows over the chat WebSocket.
 
-Fixtures (``fixtures/delegation_workflows/*.json``) describe four fictional
+Fixtures (``fixtures/delegation_workflows/*.json``) describe six fictional
 workflows, each driven by a deterministic stub engine instead of a real model:
 
   (a) simple_fan_out_fan_in  — 3 parallel workers, one synthesis
@@ -8,6 +8,11 @@ workflows, each driven by a deterministic stub engine instead of a real model:
                                dependencies between stages
   (c) partial_failure        — one worker raises; the run must say so
   (d) artifact_output        — a worker writes a deliverable file
+  (e) single_worker          — the simplest form: one worker, no fan-out
+  (f) abort_mid_fan_out      — the user cancels while stage 1 is running
+
+plus a budget stop driven by the operator's delegation budget (ADR-0195:
+a reported stop, not an error) on fixture (a).
 
 Transport: the real ``/v1/console/chat/sessions/{sid}/stream`` WebSocket
 (``chat.chat_stream``) drives the real ``chat_runtime.stream_turn`` and the
@@ -75,6 +80,8 @@ class _FixtureEngine:
         for cfg in fixture["workers"].values():
             stage_sizes[cfg["stage"]] = stage_sizes.get(cfg["stage"], 0) + 1
         self._barriers = {s: threading.Barrier(n, timeout=5) for s, n in stage_sizes.items()}
+        # Released by the test (or its cleanup) for workers with behavior=block.
+        self.release = threading.Event()
 
     def manager(self, prompt, model, tenant_id="_default", proc_holder=None):
         with self._lock:
@@ -95,6 +102,9 @@ class _FixtureEngine:
         self._barriers[cfg["stage"]].wait()
         with self._lock:
             self.worker_log.append(("end", sid, _now()))
+        if cfg.get("behavior") == "block":
+            # Held open until the test releases it: the run is cancelled meanwhile.
+            self.release.wait(timeout=15)
         if cfg.get("behavior") == "raise":
             raise RuntimeError(cfg["error"])
         if cfg.get("artifact"):
@@ -439,6 +449,132 @@ class ArtifactOutputE2E(DelegatedWorkflowE2EBase):
         run_dirs = sorted((self.sess.workdir / "acs" / "runs").iterdir())
         self.assertTrue((run_dirs[-1] / "output" / "marktbericht.md").is_file())
         self._assert_worker_spans_priced(self._chain_records())
+
+
+class SingleWorkerE2E(DelegatedWorkflowE2EBase):
+    """The simplest form (T-0234): one subtask, one worker, no fan-out."""
+
+    fixture_name = "single_worker"
+
+    def test_single_worker_over_websocket(self) -> None:
+        events = self._run_over_ws()
+        self._assert_stream_shape(events)
+        self._assert_result_text(events)
+        self.assertEqual(len(self.engine.worker_prompts), self.fixture["expect"]["worker_count"])
+        self.assertEqual(len(self.engine.manager_prompts), 2, "1 DELEGATE + 1 COMPLETE")
+        self._assert_worker_spans_priced(self._chain_records())
+
+
+class BudgetStopE2E(DelegatedWorkflowE2EBase):
+    """Operator budget reached (ADR-0195, T-0235): a reported stop, never an error.
+
+    The operator caps the delegation at three workers through the same file the
+    console Settings UI writes. Round 1 fans out to exactly three workers; the
+    budget check before round 2 stops the run.
+
+    Not ``max_loops=1``: the dispatch re-checks the root budget AFTER the loop
+    counter was incremented for the current round, so a one-round budget refuses
+    the round's own workers (``acs.budget_breach``) and nothing runs. That is a
+    separate finding, recorded in the task, not asserted here.
+    """
+
+    fixture_name = "simple_fan_out_fan_in"
+
+    def setUp(self) -> None:
+        super().setUp()
+        gdir = self.cr._forge_paths.tenant_global_dir("_default")
+        gdir.mkdir(parents=True, exist_ok=True)
+        (gdir / "delegation_budget.json").write_text(
+            json.dumps({"max_total_workers": 3}), encoding="utf-8")
+
+    def test_budget_stop_is_reported_not_an_error(self) -> None:
+        events = self._run_over_ws()
+        types_ = [e.get("type") for e in events]
+        self.assertEqual(types_[-1], "done", types_)
+        self.assertNotIn("error", types_, events)
+        result = next(e for e in events if e.get("type") == "result")
+        text = result.get("text") or ""
+        self.assertIn("Budget erreicht", text, text)
+        self.assertIn("kein Fehler", text, text)
+        self.assertNotIn("fehlgeschlagen", text.lower(), text)
+
+    def test_budget_stop_is_audited_after_the_first_round_ran(self) -> None:
+        self._run_over_ws()
+        # The first round ran in full before the stop.
+        self.assertEqual(len(self.engine.worker_prompts), 3)
+        self.assertEqual(len(self.engine.manager_prompts), 1, "no second planning round")
+        records = self._chain_records()
+        stops = [r for r in records if r.get("event_type") == "acs.budget_exhausted"]
+        self.assertEqual(len(stops), 1, "exactly one acs.budget_exhausted record")
+        self.assertIn("max_total_workers=3", stops[0]["details"].get("reason", ""))
+        self._assert_worker_spans_priced(records)
+
+
+class AbortMidFanOutE2E(DelegatedWorkflowE2EBase):
+    """The user cancels while stage 1 is running (T-0235)."""
+
+    fixture_name = "abort_mid_fan_out"
+
+    def _run_and_cancel(self) -> list[dict]:
+        import time
+
+        app = FastAPI()
+        app.include_router(self.routes.router, prefix="/v1/console")
+        client = TestClient(app, raise_server_exceptions=False)
+        client.cookies.set("corvin_console_sid", "valid-sid")
+        for p in self._patches():
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.engine.release.set)
+        events: list[dict] = []
+        started: set[str] = set()
+        with client.websocket_connect(
+                f"/v1/console/chat/sessions/{self.sess.sid}/stream") as ws:
+            events.append(ws.receive_json())
+            self.assertEqual(events[0]["type"], "ready")
+            ws.send_json({"type": "user", "text": self.fixture["prompt"]})
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                with self.engine._lock:
+                    started = {sid for kind, sid, _ in self.engine.worker_log if kind == "start"}
+                if len(started) == 3:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(len(started), 3, "stage 1 did not fan out before the cancel")
+            ws.send_json({"type": "cancel"})
+            while True:
+                ev = ws.receive_json()
+                events.append(ev)
+                if ev.get("type") in ("done", "error"):
+                    break
+        self.engine.release.set()
+        self.events = events
+        return events
+
+    def test_cancel_closes_the_turn_without_a_result(self) -> None:
+        events = self._run_and_cancel()
+        types_ = [e.get("type") for e in events]
+        self.assertEqual(types_[-1], "done", types_)
+        self.assertNotIn("error", types_, events)
+        self.assertNotIn("result", types_, "a cancelled run must not deliver a synthesis")
+
+    def test_cancel_stops_the_fan_out_and_pairs_every_worker_span(self) -> None:
+        self._run_and_cancel()
+        # Stage 2 never started and no second planning round happened.
+        for sid in self.fixture["expect"]["never_started"]:
+            self.assertNotIn(sid, self.engine.worker_prompts, f"{sid} ran after the cancel")
+        self.assertEqual(len(self.engine.manager_prompts), 1)
+        records = self._chain_records()
+        starts = self._worker_spans(records, "start")
+        ends = self._worker_spans(records, "end")
+        self.assertEqual(len(starts), 3)
+        self.assertEqual(len(ends), 3, "every started worker span is closed")
+        self.assertEqual({e["details"].get("status") for e in ends}, {"error"})
+        self.assertTrue(all(not e["details"].get("model_id") for e in ends),
+                        "a cancelled worker reported nothing and stays unpriced")
+        traced = [r for r in records if r.get("event_type") == "acs.worker_traced"]
+        self.assertEqual(len(traced), 3)
+        self.assertEqual({r["details"].get("status") for r in traced}, {"failed"})
 
 
 if __name__ == "__main__":
