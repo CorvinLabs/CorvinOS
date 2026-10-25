@@ -615,10 +615,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/console/corvin_console/routes/vibe_metrics_api.py::_default_tenant_dir::Path.home() / '.corvin' / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/console/corvin_console/routes/video_producer_api.py::_plugin_locations::home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"

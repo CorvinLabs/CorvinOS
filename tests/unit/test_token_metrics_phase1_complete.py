@@ -7,7 +7,8 @@ import pytest
 from core.learning.token_instrumentation import TokenCounter
 from core.learning.token_baseline import BaselineMetrics, ComparisonEngine, ComparisonResult
 from core.learning.token_metrics_store import TokenMetricsStore
-from core.learning.token_metrics_aggregator import TokenMetricsAggregator
+# token_metrics_aggregator was retired by ADR-2282 (it fabricated a timestamp and a
+# confidence); its aggregation tests left with it.
 
 
 class MockEventEmitter:
@@ -88,71 +89,11 @@ class TestComparisonEngine:
         assert agg["high_confidence_count"] > 0
 
 
-class TestTokenMetricsAggregator:
-    """Test complete aggregation pipeline."""
-
-    @pytest.fixture
-    def aggregator(self):
-        """Create test aggregator."""
-        emitter = MockEventEmitter()
-        store = TokenMetricsStore(emitter)
-        comparison_engine = ComparisonEngine()
-        return TokenMetricsAggregator(store, comparison_engine)
-
-    def test_dashboard_data(self, aggregator):
-        """Test dashboard data generation."""
-        # Write some metrics
-        for i in range(3):
-            counter = TokenCounter(turn_id=f"t{i}", engine="claude")
-            counter.record_llm_call(1000 + i * 100, 500)
-            counter.record_subsystem_usage("confidence", 200)
-            counter.baseline_tokens = 2000
-            counter.task_type = "code"
-            counter.finalize()
-
-            aggregator.store.write_token_metrics(
-                counter,
-                tenant_id="test",
-                instance_id="inst1",
-                session_id="sess1",
-            )
-
-        # Get dashboard data
-        data = aggregator.get_session_dashboard_data("sess1")
-
-        assert data["summary"]["turn_count"] == 3
-        assert data["summary"]["total_tokens"] > 0
-        assert data["summary"]["savings_percent"] > 0
-        assert data["is_significant"]
-
-    def test_session_metrics(self, aggregator):
-        """Test detailed metrics retrieval."""
-        counter = TokenCounter(turn_id="t1", engine="claude")
-        counter.record_llm_call(1200, 800)
-        counter.baseline_tokens = 2800
-        counter.task_type = "research"
-        counter.outcome_quality = "excellent"
-        counter.finalize()
-
-        aggregator.store.write_token_metrics(
-            counter,
-            tenant_id="test",
-            instance_id="inst1",
-            session_id="sess1",
-        )
-
-        metrics = aggregator.get_session_metrics("sess1")
-
-        assert len(metrics) > 0
-        assert metrics[0]["task_type"] == "research"
-        assert metrics[0]["outcome_quality"] == "excellent"
-
-
 class TestPhase1Integration:
     """Integration test: full Phase 1 flow."""
 
     def test_full_measurement_flow(self):
-        """Test: Instrumentation → Store → Aggregation."""
+        """Test: Instrumentation → Store → Comparison."""
         # K=1: Instrumentation
         counter = TokenCounter(turn_id="turn_final", engine="claude-opus-5")
         counter.record_llm_call(input_tokens=1400, output_tokens=850)
@@ -183,17 +124,3 @@ class TestPhase1Integration:
 
         assert comparison.is_significant
         assert comparison.savings_percent > 30  # (2800-2250)/2800 = 19.6%
-
-        # K=4: Aggregation
-        aggregator = TokenMetricsAggregator(store, engine)
-        dashboard = aggregator.get_session_dashboard_data("session-abc123")
-
-        assert dashboard["summary"]["turn_count"] == 1
-        assert dashboard["summary"]["total_tokens"] == 2250
-        assert dashboard["summary"]["savings_percent"] > 0
-        assert "confidence" in dashboard["subsystems"]
-        assert "cache" in dashboard["subsystems"]
-
-        # K=5: Validation
-        assert dashboard["is_significant"]
-        assert dashboard["by_task_type"]["code"]["turns"] == 1

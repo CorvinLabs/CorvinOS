@@ -253,32 +253,3 @@ class TestLearningDashboardRoutes(unittest.TestCase):
                     pass
             self.assertEqual(ctx.exception.code, 4401)
 
-
-class TestVibeMetricsApiAuth(unittest.TestCase):
-    """N-06: ``routes/vibe_metrics_api`` (unmounted today) must gate on the real session."""
-
-    def setUp(self):
-        self._tmp = tempfile.mkdtemp()
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_401_without_session_and_200_with(self):
-        with _sandbox(Path(self._tmp)) as (client, home, tid):
-            from corvin_console.routes import vibe_metrics_api
-            client.app.include_router(vibe_metrics_api.router, prefix="/v1/console")
-            try:
-                # DB + emitter store are rooted under CORVIN_HOME, never ~/.corvin
-                self.assertTrue(str(vibe_metrics_api._db.db_path).startswith(str(home)))
-
-                ok = client.get("/v1/console/api/metrics/stats")
-                self.assertEqual(ok.status_code, 200, ok.text)
-
-                client.cookies.clear()
-                r = client.get("/v1/console/api/metrics/stats")
-                self.assertEqual(r.status_code, 401, r.text)
-                r = client.get("/v1/console/api/metrics/session/s1/summary")
-                self.assertEqual(r.status_code, 401, r.text)
-            finally:
-                vibe_metrics_api._emitter.stop()

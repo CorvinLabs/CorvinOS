@@ -60,7 +60,7 @@ Two components genuinely trade off, so we keep them as a vector (per the
 
 | # | Component | Symbol | Direction | Unit | Source of truth |
 |---|-----------|--------|-----------|------|-----------------|
-| 1 | Weighted cost per turn | `cost_usd` | minimize | USD | `token_accounting.token_components` × real prices (`pricing.py`/`prices.json`) + `code.cache_cost_calculator` |
+| 1 | Weighted cost per turn | `cost_usd` | minimize | USD | `engine_span.usage_split` × real prices (`pricing.py`/`prices.json`) + `code.cache_cost_calculator` |
 | 2 | Hallucination rate | `halluc_rate` | minimize (**guardrail, fail-closed**) | 0..1 | trap-question abstention + `output_judge.judge_output` faithfulness |
 | 3 | Correctness (answerable) | `correct` | maximize | 0..1 | deterministic fact-presence vs `check.expect` (existing harness) |
 

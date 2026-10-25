@@ -55,7 +55,7 @@ Outputs:
 - **Token capture is now correct (4 classes).** Early smoke runs showed `input_tokens=2` while
   `cache_read=24433` + `cache_creation=38060` were ignored — the console reads only `input_tokens`
   and undercounts real input by ~99.99%. This benchmark now sums all four classes via
-  `core/learning/token_accounting.py` (fresh + cache-creation + cache-read + output). The
+  `engine_span.usage_split` (fresh + cache-creation + cache-read + output; ADR-0759). The
   **existing dashboard is still wrong** and is a *separate, larger* fix: the default native turn
   path records **nothing** (the recorder is Hermes-only, `chat_runtime.py:3723`), the store API
   can't receive cache fields, and its "subsystem" split (`50/100/25`) is fabricated.

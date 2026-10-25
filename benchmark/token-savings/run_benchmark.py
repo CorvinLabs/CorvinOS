@@ -30,10 +30,24 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import stats  # noqa: E402  (local module)
-# Canonical 4-class token summation (fresh + cache-creation + cache-read + output) — the ONE
-# place that sums usage correctly, shared with the dashboard fix. Reading only input_tokens
-# (as the first draft did) undercounts real input by ~99.99% on a cached turn.
-from core.learning.token_accounting import token_components, total_tokens  # noqa: E402
+# Canonical 4-class token split (fresh + cache-creation + cache-read + output): the ONE
+# normaliser every span emitter shares, engine_span.usage_split (ADR-0759). Reading only
+# input_tokens (as the first draft did) undercounts real input by ~99.99% on a cached turn.
+# (core/learning/token_accounting.py, a second copy, was retired by ADR-2282.)
+sys.path.insert(0, str(HERE.parents[1] / "corvin_operator" / "bridges" / "shared"))
+from engine_span import usage_split  # noqa: E402
+
+
+def token_components(usage) -> dict[str, int]:
+    """The four disjoint billed token classes of one usage object, named as the
+    benchmark records them, derived from ``engine_span.usage_split``."""
+    s = usage_split(usage)
+    return {
+        "fresh_input": s["input_tokens"],
+        "cache_creation": s["cache_write_tokens"],
+        "cache_read": s["cache_read_tokens"],
+        "output": s["output_tokens"],
+    }
 import pricing  # noqa: E402  (local: cache-aware cost, real prices from prices.json)
 
 

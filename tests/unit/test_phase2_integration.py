@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 from core.learning.token_instrumentation import TokenCounter
 from core.learning.token_metrics_db import TokenMetricsDB
 from core.learning.token_metrics_store import TokenMetricsStore
-from core.learning.token_metrics_aggregator import TokenMetricsAggregator
+# token_metrics_aggregator was retired by ADR-2282 (it fabricated a timestamp and a
+# confidence); its aggregation tests left with it.
 from core.learning.token_baseline import ComparisonEngine
 from core.learning.event_schema import LearningEventType
 
@@ -182,73 +183,8 @@ class TestTokenMetricsStore_WithDB:
         assert db_row is not None
 
 
-class TestTokenMetricsAggregator_Complete:
-    """Test aggregation pipeline (Phase 2.K=4)."""
-
-    @pytest.fixture
-    def aggregator(self, tmp_path):
-        """Create aggregator with DB backend."""
-        from core.learning.token_metrics_db import TokenMetricsDB
-        emitter = MockEventEmitter()
-        db = TokenMetricsDB(tmp_path / "test.db")
-        store = TokenMetricsStore(emitter, db=db)
-        comparison_engine = ComparisonEngine()
-        return TokenMetricsAggregator(store, comparison_engine)
-
-    def test_dashboard_data_with_db(self, aggregator):
-        """Test complete dashboard data generation with DB backend."""
-        # Write 5 turns
-        for i in range(5):
-            counter = TokenCounter(turn_id=f"t{i}", engine="claude")
-            counter.record_llm_call(1000 + i * 100, 500 + i * 50)
-            counter.baseline_tokens = 2500  # ~28 % savings vs. the 15 % significance rule
-            counter.task_type = "code" if i < 3 else "analysis"
-            counter.outcome_quality = "good"
-            counter.finalize()
-
-            aggregator.store.write_token_metrics(
-                counter,
-                tenant_id="test",
-                instance_id="inst1",
-                session_id="sess1"
-            )
-
-        # Get dashboard data
-        dashboard = aggregator.get_session_dashboard_data("sess1")
-
-        assert dashboard["summary"]["turn_count"] == 5
-        assert dashboard["summary"]["total_tokens"] > 0
-        assert dashboard["summary"]["savings_tokens"] > 0
-        assert dashboard["is_significant"]
-        assert "code" in dashboard["by_task_type"]
-        assert "analysis" in dashboard["by_task_type"]
-
-    def test_session_metrics_list(self, aggregator):
-        """Test detailed metrics per-turn list."""
-        for i in range(3):
-            counter = TokenCounter(turn_id=f"t{i}", engine="claude")
-            counter.record_llm_call(1000, 500)
-            counter.baseline_tokens = 2000
-            counter.task_type = "code"
-            counter.outcome_quality = "excellent"
-            counter.finalize()
-
-            aggregator.store.write_token_metrics(
-                counter,
-                tenant_id="test",
-                instance_id="inst1",
-                session_id="sess1"
-            )
-
-        metrics = aggregator.get_session_metrics("sess1")
-
-        assert len(metrics) == 3
-        assert all(m["task_type"] == "code" for m in metrics)
-        assert all(m["outcome_quality"] == "excellent" for m in metrics)
-
-
 class TestPhase2Complete:
-    """End-to-end Phase 2 flow: Instrumentation → DB → API → Dashboard."""
+    """Phase 2 flow: Instrumentation → DB-backed store."""
 
     def test_full_phase2_pipeline(self, tmp_path):
         """Test complete Phase 2 pipeline."""
@@ -279,27 +215,3 @@ class TestPhase2Complete:
         )
 
         assert event_id is not None
-
-        # K=3/K=4: Aggregation for API/Dashboard
-        comparison_engine = ComparisonEngine()
-        aggregator = TokenMetricsAggregator(store, comparison_engine)
-
-        dashboard = aggregator.get_session_dashboard_data("sess_abc123")
-
-        # Verify complete data pipeline
-        assert dashboard["session_id"] == "sess_abc123"
-        assert dashboard["summary"]["turn_count"] == 1
-        assert dashboard["summary"]["total_tokens"] == 2300
-        assert dashboard["summary"]["baseline_tokens"] == 3000
-        assert dashboard["summary"]["savings_tokens"] == 700
-        assert round(dashboard["summary"]["savings_percent"], 1) == 23.3
-        assert dashboard["is_significant"]
-        assert "confidence" in dashboard["subsystems"]
-        assert "cache" in dashboard["subsystems"]
-
-        # Verify metrics list (what API returns)
-        metrics = aggregator.get_session_metrics("sess_abc123")
-        assert len(metrics) == 1
-        assert metrics[0]["turn_id"] == "turn_phase2"
-        assert metrics[0]["task_type"] == "code"
-        assert metrics[0]["outcome_quality"] == "excellent"

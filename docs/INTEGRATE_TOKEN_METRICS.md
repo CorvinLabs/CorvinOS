@@ -330,7 +330,7 @@ journalctl -u corvinos-stats -f
 - **Token Instrumentation:** `core/learning/token_instrumentation.py`
 - **Token Metrics Store:** `core/learning/token_metrics_store.py`
 - **Token Measurement Hook:** `core/learning/token_measurement_hook.py`
-- **API Endpoints:** `core/console/corvin_console/routes/vibe_metrics_api.py`
+- **API Endpoints:** none — `routes/vibe_metrics_api.py` was never mounted and was retired by ADR-2282; token metrics are served by `routes/vibe_engineering.py`
 - **Console Component:** `core/console/corvin_console/web-next/src/pages/token-metrics.tsx`
 
 ---

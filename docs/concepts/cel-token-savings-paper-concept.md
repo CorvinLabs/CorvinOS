@@ -156,7 +156,7 @@ Learned/adaptive injection thresholds; per-model cache economics; longer convers
 ### References
 Anthropic prompt-caching docs; ADR-0275/0282/0283 (CEL), ADR-0394 (selective injection),
 ADR-0395 (cache-stable), ADR-0297 (PII fail-closed), ADR-0218 (token routing);
-`core/learning/token_accounting.py`; the released harness.
+`corvin_operator/bridges/shared/engine_span.py::usage_split` (the ADR-0759 normaliser; the earlier `core/learning/token_accounting.py` copy was retired by ADR-2282); the released harness.
 
 ---
 

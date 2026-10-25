@@ -1,5 +1,10 @@
 # Phase 1: Token Measurement Framework — COMPLETE ✅
 
+> **Retired (2026-10-25, ADR-2282):** `core/learning/token_metrics_aggregator.py` (Layer 4
+> below) was deleted — it fabricated a timestamp and a confidence and had no reachable caller.
+> Token counts are normalised by `engine_span.usage_split` (ADR-0759); the console's token
+> metrics come from `routes/vibe_engineering.py`. This report is historical.
+
 **Status:** Production Ready  
 **Completion Date:** 2026-08-17  
 **Total Iterations:** K=1 through K=5  

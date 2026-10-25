@@ -6,6 +6,7 @@
 - ✅ **Additivität bestätigt korrekt** (kein Doppelzählen). Das Repo hat den Kanon schon inline
   (`corvin_operator/orchestration/tde/worker_ipc.py:311`, `tde_engine.py:435`). → **Ein geteilter Helper**
   `core/learning/token_accounting.py` gebaut + getestet (5/5), statt einer 3. Inline-Summe.
+  (2026-10-25: durch `engine_span.usage_split` ersetzt und gelöscht, ADR-2282.)
 - ✅ **Benchmark-Runner umgesetzt:** erfasst jetzt alle vier Klassen; Roh-JSONL trägt sie; Guard keyt auf
   summierten Input (nicht mehr `input_tokens=2>0`-Falschpass). **Echter Lauf verifiziert.**
 - ✅ **Verifizierter Befund (die Dialektik hatte recht):** korrekt gemessen braucht CEL auf trivialen

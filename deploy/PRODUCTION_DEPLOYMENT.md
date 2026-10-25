@@ -192,7 +192,7 @@ The `.github/workflows/deploy-stats.yml` workflow automatically:
 - Push to `main` branch touching:
   - `docs/stats.html`
   - `core/learning/instance_registry.py`
-  - `core/console/corvin_console/routes/vibe_metrics_api.py`
+  - (`core/console/corvin_console/routes/vibe_metrics_api.py` was retired by ADR-2282; it was never mounted)
 - Schedule: Every 5 minutes (keep data fresh)
 - Manual: Workflow dispatch button in GitHub UI
 

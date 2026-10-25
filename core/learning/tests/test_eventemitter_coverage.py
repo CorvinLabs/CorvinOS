@@ -180,7 +180,6 @@ class TestEmitterWiring:
             repo / "core/orchestration/subsystems/tool_forge_subsystem.py",
             repo / "core/console/corvin_console/standalone.py",
             repo / "core/learning/token_measurement_hook.py",
-            repo / "core/console/corvin_console/routes/vibe_metrics_api.py",
         ]
         bad = re.compile(r"EventEmitter\(\s*(?:\)|Path\(|corvin_home|tenant_home|_tenant_dir\b|tenant_dir\b)")
         for site in sites:
