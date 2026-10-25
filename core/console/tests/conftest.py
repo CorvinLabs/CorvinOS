@@ -227,3 +227,16 @@ def _a2a_member_tier(request, monkeypatch):
         a2a_license_gate.reset_allow_cache()
     except Exception:  # noqa: BLE001
         pass
+
+
+@pytest.fixture(autouse=True)
+def _reauth_token_shim(monkeypatch):
+    """Send the session fingerprint on re-auth routes, as the SPA does (see _reauth_shim.py)."""
+    import os
+    import sys
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import _reauth_shim  # noqa: PLC0415 - sibling module, tests dir is not a package
+    _reauth_shim.install(monkeypatch)

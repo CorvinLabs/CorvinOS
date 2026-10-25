@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { setCurrentCsrf } from "@/lib/csrf-fetch";
+import { setCurrentReauthToken } from "@/lib/reauth";
 import { ApiError, setOn401Handler, setOnCsrfErrorHandler, whoami, logout as apiLogout, type WhoamiResponse } from "@/lib/api";
 
 interface AuthContextValue {
@@ -85,6 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Raw fetch() callers get the CSRF header from lib/csrf-fetch.ts.
   setCurrentCsrf(query.data?.csrf_token);
+  setCurrentReauthToken(query.data?.fingerprint);
 
   const status: AuthContextValue["status"] = query.isLoading
     ? "loading"

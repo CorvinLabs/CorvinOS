@@ -208,6 +208,9 @@ def test_submit_run_talks_to_worker_with_correct_field_names(monkeypatch, tmp_pa
         objective="minimize_loss",
         params={"w": [0.0, 1.0]},
     )
+    # Direct call (no HTTP, so no test shim): the re-auth check sees the fake record's own
+    # fingerprint, exactly what the SPA sends.
+    body.re_auth_token = _FakeRec.sid_fingerprint
     result = C.submit_run(body, rec=_FakeRec())
 
     assert result == {"ok": True, "run_id": "run_fake123", "state": "running"}

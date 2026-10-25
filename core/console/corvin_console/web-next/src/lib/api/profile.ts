@@ -3,6 +3,7 @@
  * Public surface is unchanged; re-exported via the ../api.ts barrel.
  */
 
+import { getReauthToken } from "@/lib/reauth";
 import { api } from "./client";
 
 // ── Profile (Identity + Voice Audience) ────────────────────────────
@@ -74,7 +75,7 @@ export async function putProfile(
   return api<ProfileResponse>("/profile", {
     method: "PUT",
     csrf,
-    body: { ...body },
+    body: { ...body, re_auth_token: getReauthToken() },
   });
 }
 
@@ -96,7 +97,7 @@ export async function resetProfile(
   return api("/profile/reset", {
     method: "POST",
     csrf,
-    body: {},
+    body: { re_auth_token: getReauthToken() },
   });
 }
 

@@ -3,6 +3,7 @@
  * Public surface is unchanged; re-exported via the ../api.ts barrel.
  */
 
+import { getReauthToken } from "@/lib/reauth";
 import { api } from "./client";
 
 // ── Compute Layer (Layer 25) ────────────────────────────────────────
@@ -82,7 +83,7 @@ export async function updateComputeConfig(
   config: { enabled: boolean; fabric_enabled?: boolean; max_parallel_runs?: number; run_ttl_days?: number },
   csrf: string,
 ): Promise<{ ok: true; enabled: boolean }> {
-  return api("/compute/config", { method: "PUT", csrf, body: { ...config } });
+  return api("/compute/config", { method: "PUT", csrf, body: { ...config, re_auth_token: getReauthToken() } });
 }
 
 export async function submitComputeRun(
@@ -92,7 +93,7 @@ export async function submitComputeRun(
   body: { tool_name: string; strategy: string; budget: Record<string, unknown>; objective: string; params?: Record<string, unknown> },
   csrf: string,
 ): Promise<{ ok: true; run_id: string; state: string }> {
-  return api("/compute/runs", { method: "POST", csrf, body: { ...body } });
+  return api("/compute/runs", { method: "POST", csrf, body: { ...body, re_auth_token: getReauthToken() } });
 }
 
 export async function deleteComputeRun(run_id: string, csrf: string): Promise<{ ok: true }> {

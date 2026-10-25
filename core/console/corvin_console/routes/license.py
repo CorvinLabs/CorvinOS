@@ -749,7 +749,7 @@ async def apply_license_key(
             detail="Owner access required",
         )
 
-    if not verify_reauth(rec, req.re_auth_token, require_token=True):
+    if not verify_reauth(rec, req.re_auth_token):
         try:
             console_audit.action_failed(
                 tenant_id=rec.tenant_id,

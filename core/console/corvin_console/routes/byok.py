@@ -281,7 +281,7 @@ def delete_secret(
             reason=reason,
         )
 
-    if not verify_reauth(rec, body.re_auth_token, require_token=True):
+    if not verify_reauth(rec, body.re_auth_token):
         _failed("reauth-failed")
         raise HTTPException(status_code=http_status.HTTP_401_UNAUTHORIZED, detail="re-auth failed")
 

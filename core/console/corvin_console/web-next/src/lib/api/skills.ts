@@ -3,6 +3,7 @@
  * Public surface is unchanged; re-exported via the ../api.ts barrel.
  */
 
+import { getReauthToken } from "@/lib/reauth";
 import { api } from "./client";
 
 // ── Forge tools + SkillForge skills ────────────────────────────────
@@ -60,7 +61,7 @@ export async function promoteForgeTool(
   return api(`/tools/${encodeURIComponent(name)}/promote`, {
     method: "POST",
     csrf,
-    body: { to, force },
+    body: { to, force, re_auth_token: getReauthToken() },
   });
 }
 
@@ -112,7 +113,7 @@ export async function promoteSkill(
   return api(`/skills/${encodeURIComponent(name)}/promote`, {
     method: "POST",
     csrf,
-    body: { to, force },
+    body: { to, force, re_auth_token: getReauthToken() },
   });
 }
 

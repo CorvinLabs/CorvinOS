@@ -77,36 +77,24 @@ def require_session_csrf_on_mutation(
     return require_session(corvin_console_sid=corvin_console_sid)
 
 
-def verify_reauth(
-    rec: session_auth.SessionRecord,
-    presented_token: str | None,
-    *,
-    require_token: bool = False,
-) -> bool:
-    """Possession-proof re-authentication check.
+def verify_reauth(rec: session_auth.SessionRecord, presented_token: str | None) -> bool:
+    """Possession-proof re-authentication check for every re-auth-gated route.
 
-    With ``require_token=True`` (destructive / credential routes: API-key delete,
-    licence apply) an absent or empty token is REJECTED — the caller must present
-    ``rec.sid_fingerprint`` (``/auth/whoami`` returns it to the session holder).
+    The caller must present ``rec.sid_fingerprint`` (the 12-character hex SHA-256
+    prefix of the session id; ``/auth/whoami`` returns it to the session holder and
+    the console publishes it to its API client, ``web-next/src/lib/reauth.ts``).
+    It is compared in constant time. An ABSENT or EMPTY token is refused.
 
-    Default (``require_token=False``, the legacy routes whose UI sends no token
-    yet): when ``presented_token`` is absent or empty the check passes: CSRF
-    (already enforced by ``require_csrf`` on every mutation endpoint)
-    provides sufficient possession proof that the caller holds the active
-    session cookie.
-
-    When a token IS presented it must equal ``rec.sid_fingerprint`` (the
-    12-character hex SHA-256 prefix of the session id) via a constant-time
-    comparison — wrong tokens are always rejected.
+    Until 2026-10 an empty token passed on the theory that CSRF upstream was proof
+    enough; every route that calls this function therefore accepted a request with
+    no re-auth at all (review S-1a follow-up). There is no opt-out parameter: a
+    route that should not require re-auth must not call this function.
 
     When OIDC re-auth is introduced this function will be replaced with a
     proper token-verification call; the call-sites stay unchanged.
     """
     if not presented_token:
-        if require_token:
-            return False
-        # No token presented — CSRF upstream is the possession gate.
-        return True
+        return False
     return hmac.compare_digest(presented_token, rec.sid_fingerprint)
 
 
