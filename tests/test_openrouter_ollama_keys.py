@@ -164,6 +164,8 @@ def test_build_spawn_env_resolves_provider_credential_via_resolve_by_env_var(mon
                 pytest.skip(f"adapter import unavailable: {e}")
 
             class _FakeProviderSpec:
+                id = "openrouter"
+                is_platform = False  # ADR-0759: the real ProviderSpec always answers this
                 proxy_base_url = "http://localhost:9999"
                 base_url = "http://localhost:9999"
                 credential_env = "OPENROUTER_API_KEY"
@@ -250,6 +252,8 @@ def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configur
             # ADR-2091: was an ollama_local spec; the local provider is gone,
             # the auto-proxy path is exercised through openrouter instead.
             class _FakeOpenRouterSpec:
+                id = "openrouter"
+                is_platform = False  # ADR-0759: the real ProviderSpec always answers this
                 proxy_base_url = ""  # no operator override — must auto-start
                 base_url = fake_base
                 model_source = "openrouter"

@@ -4521,8 +4521,13 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
         # spawn paths can never disagree about where claude_code egresses
         # (adversarial review, 2026-07-14: they used to, silently).
         try:
-            from engine_models import resolve_claude_code_provider_env  # type: ignore
-            env.update(resolve_claude_code_provider_env(_tid))
+            from engine_models import apply_claude_code_provider_env  # type: ignore
+            _route_problem = apply_claude_code_provider_env(env, _tid)
+            if _route_problem:
+                # L35 validated the assigned provider's host while this spawn would go to
+                # the default endpoint. The bridge keeps spawning (a strict refusal for
+                # rerouted turns is T-0229); the mismatch is at least named.
+                log(f"provider route: {_route_problem}")
         except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
             pass
     return env

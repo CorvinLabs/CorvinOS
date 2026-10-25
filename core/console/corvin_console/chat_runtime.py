@@ -8350,6 +8350,36 @@ async def _stream_turn_impl(
     # stored OpenAI TTS key to the video JOB process only (``video_producer_api._job_env``), so
     # ``os.environ`` carries nothing to strip (review 2026-10-21, T-0245).
     _spawn_env = {**os.environ, "CORVIN_SESSION_DIR": str(sess.workdir), "CORVIN_TENANT_ID": str(sess.tenant_id)}
+    # T-0230 — the spawn must go where the L35 gate looked. `check_console_spawn_or_refusal`
+    # validates the host of the provider assigned to claude_code, so the env carries that
+    # provider's route (the bridge does the same through the same function) and an inherited
+    # ANTHROPIC_BASE_URL can no longer send the turn somewhere else. A provider that is
+    # assigned but whose route cannot be built refuses the turn instead of falling back to
+    # the default endpoint, which the egress policy may forbid.
+    _route_problem: "str | None" = None
+    if _os_engine == "claude_code":
+        try:
+            from engine_models import apply_claude_code_provider_env as _apply_route  # noqa: PLC0415
+        except ImportError:  # stripped layout: no providers, nothing to agree with
+            _apply_route = None  # type: ignore[assignment]
+        if _apply_route is not None:
+            _route_problem = _apply_route(_spawn_env, str(sess.tenant_id))
+    if _route_problem is not None:
+        _os_audit("os_turn.started", {"model": _os_model_used})
+        tm.record_event(task_id, {
+            "event": "task.failed", "exit_code": 1,
+            "error": "provider route could not be built",
+        })
+        _audit_emit(sess, "web.turn.completed", rc=1, result_chars=len(_route_problem),
+                    usage=None, reason="provider_route_unavailable")
+        _route_meta["no_engine"] = True
+        _os_emit_completed(rc=1)
+        yield {"type": "delta", "text": _route_problem}
+        yield {"type": "result", "text": _route_problem, "usage": None}
+        touch(sess, increment_turn=True)
+        _append_turn(sess, "assistant", [{"kind": "text", "text": _route_problem}])
+        yield {"type": "done"}
+        return
     # ADR-2241 amendment: a PreToolUse hook on Bash snapshots the files a command
     # names BEFORE it runs, so its card can show what it changed. Per-turn dir,
     # removed in the turn's `finally`; a failure here only means "no Bash diff".

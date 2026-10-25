@@ -473,10 +473,21 @@ def providers_as_dict(force_reload: bool = False) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _corvin_home() -> Path:
-    env = os.environ.get("CORVIN_HOME")
-    if env:
-        return Path(os.path.expanduser(os.path.expandvars(env)))
-    return Path.home() / ".corvin"
+    """The home the tenant file is read from: the SAME resolver the spawn gates use.
+
+    ``CORVIN_HOME``, else this checkout's repo-marker home. It used to be
+    ``CORVIN_HOME`` or ``~/.corvin``, so on a checkout without ``CORVIN_HOME`` the L35 gate
+    (``spawn_gates``) and the provider assignment read different tenant files, and the host
+    the gate validated was not the host the spawn used (T-0230).
+    """
+    try:
+        from spawn_gates import _resolve_corvin_home  # type: ignore  # noqa: PLC0415
+        return _resolve_corvin_home(None)
+    except Exception:  # noqa: BLE001 — a stripped layout keeps the old rule
+        env = os.environ.get("CORVIN_HOME")
+        if env:
+            return Path(os.path.expanduser(os.path.expandvars(env)))
+        return Path.home() / ".corvin"
 
 
 def _load_tenant_spec(tenant_id: str) -> dict[str, Any]:
@@ -631,6 +642,54 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
         "ANTHROPIC_AUTH_TOKEN": key or "provider",
         "CORVIN_CC_PROVIDER": prov,
     }
+
+
+#: The variables that decide WHERE a ``claude`` spawn sends inference. Dropped before the
+#: tenant's route is applied, so an inherited value can never win over the assignment.
+#: ``ANTHROPIC_API_KEY`` is deliberately not here: it is the operator's native credential, and
+#: the route overwrites it only when a provider is assigned.
+_CLAUDE_CODE_REDIRECT_VARS = ("ANTHROPIC_BASE_URL", "CORVIN_CC_LOCAL_MODE", "CORVIN_CC_PROVIDER")
+
+
+def apply_claude_code_provider_env(env: "dict[str, str]", tenant_id: str) -> "str | None":
+    """Make a ``claude`` spawn env agree with the egress host L35 validated (T-0230).
+
+    The ONE function the bridge (``adapter._build_spawn_env``) and the console
+    (``chat_runtime.stream_turn``) call. It drops every inherited redirect variable, applies
+    :func:`resolve_claude_code_provider_env` for the tenant's assigned provider, and mutates
+    ``env`` in place.
+
+    Returns ``None`` when the env is consistent with :func:`resolve_engine_egress_host`, else
+    a refusal reason. The inconsistent case is a provider that IS assigned (so L35 validated
+    its host) but whose route could not be built (no model for an OpenAI-format provider, a
+    resolver error): without this check the turn would silently go to the default endpoint,
+    which the egress policy may forbid. A tenant without an assignment never refuses here.
+    """
+    for var in _CLAUDE_CODE_REDIRECT_VARS:
+        env.pop(var, None)
+    route: dict[str, str] = {}
+    failure = ""
+    try:
+        route = resolve_claude_code_provider_env(tenant_id)
+    except Exception as exc:  # noqa: BLE001 — judged below, against the assignment
+        failure = type(exc).__name__
+    try:
+        assigned = resolve_engine_egress(tenant_id, "claude_code")
+    except Exception:  # noqa: BLE001 — cannot tell: treat as assigned only if the route failed
+        assigned = None if not failure else True
+    if route:
+        env.update(route)
+    pid = getattr(assigned, "id", "") or "the assigned provider"
+    # ``anthropic`` IS the native endpoint: no redirect is the correct route, and the host
+    # L35 validated (the provider's own) is the one the spawn uses.
+    if assigned is None or route or pid == "anthropic":
+        return None
+    return (
+        f"claude_code is assigned provider {pid!r} but its route could not be built"
+        f"{' (' + failure + ')' if failure else ''}; refusing instead of sending the turn "
+        "to the default endpoint. Check the provider, its credential and the model on the "
+        "Engines page."
+    )
 
 
 def platform_provider_env(ps: "ProviderSpec",
