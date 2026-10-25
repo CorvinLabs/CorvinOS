@@ -256,6 +256,17 @@ producing a guard that quietly allows what its own table forbids:
   health or financial prose, birth dates, any value outside the categories above.
   **Not wired:** `classify_task()` does not call the detector yet (T-0219 changes it and
   its four production callers), so no turn is classified differently today.
+* **The reroute decision (T-0219, ADR-2268 outcome table).**
+  `spawn_gates.resolve_l34_route(engine_id, tenant_id, classification=|prompt=, ...)`
+  returns one `RouteOutcome`: `native` (exactly where `check_l34` allows today: no policy,
+  a PUBLIC turn, an admitted turn), `reroute` (`provider`, `model_id`) or `refuse` with a
+  stable `reason`. A reroute needs an enabled, well-formed `sensitive_route`, an INTERNAL or
+  CONFIDENTIAL turn, the engine `claude_code`, an eligible declared provider with a
+  verbatim-admitted model, and `validate_provider` allowing it under the unchanged matrix.
+  SECRET, PUBLIC, an unknown class, a malformed route, a classifier or gate error and any
+  ineligible target are refused, never rerouted. **Not wired:** the callers (the bridge
+  OS turn, the console OS turn and `check_l34` in ACS and video producer) still call
+  `check_l34`, so nothing is rerouted yet. The wiring is the rest of T-0219.
 
 `SECRET` is the only row kept local-only by default. It fires solely on literal
 credentials (API keys, private keys, `password = …`) detected by regex, occurs

@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -804,3 +805,128 @@ def invalidate_cache(tenant_id: str | None = None) -> None:
         else:
             for k in [k for k in _l44_overlay_cache if k.startswith(f"{tenant_id}:")]:
                 del _l44_overlay_cache[k]
+
+
+# ── T-0219 / ADR-2268 — the reroute decision ─────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RouteOutcome:
+    """The one decision for a spawn: run as chosen, run on the sensitive provider, or refuse.
+
+    ``kind`` is ``"native"`` (today's behaviour), ``"reroute"`` (run the engine on ``provider``
+    with ``model_id``) or ``"refuse"`` (``reason`` is a stable code, never the prompt text).
+    """
+    kind: str
+    engine: str = ""
+    classification: str = ""
+    provider: str = ""
+    model_id: str = ""
+    reason: str = ""
+
+
+def _tenant_yaml(tenant: str, home: "Path | None") -> "dict | None":
+    """The parsed tenant mapping, or ``None`` when there is no file (the opt-in default).
+    An unreadable file raises; the caller turns that into a gate-error refusal."""
+    import yaml as _yaml  # type: ignore  # noqa: PLC0415
+    import data_classification as _dc  # type: ignore  # noqa: PLC0415
+    resolved = _dc._tenant_config_file(tenant, _resolve_corvin_home(home))
+    if resolved is None:
+        return None
+    _tid, _home, cfg_path = resolved
+    return _yaml.safe_load(cfg_path.read_text("utf-8")) or {}
+
+
+def resolve_l34_route(
+    engine_id: str,
+    tenant_id: str,
+    *,
+    classification: "str | None" = None,
+    prompt: "str | None" = None,
+    persona: "str | None" = None,
+    channel: str = "",
+    chat_key: str = "",
+    corvin_home: "Path | None" = None,
+) -> RouteOutcome:
+    """Decide native / reroute / refuse for one spawn (ADR-2268, outcome table, T-0219).
+
+    Native exactly where ``check_l34`` allows today: no policy, a PUBLIC turn, or a turn the
+    matrix admits. A refusal is returned where ``check_l34`` refuses today and no route is
+    configured, or the route cannot take the turn. ``SECRET`` is never rerouted.
+    """
+    import data_classification as _dc  # type: ignore  # noqa: PLC0415
+    import sensitive_route as _sr  # type: ignore  # noqa: PLC0415
+    from engine_models import load_providers  # type: ignore  # noqa: PLC0415
+
+    if not isinstance(engine_id, str) or not engine_id:
+        return RouteOutcome(kind="native")
+    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+    guard = _load_l34_guard(tenant, corvin_home)
+    if guard is None:
+        return RouteOutcome(kind="native", engine=engine_id)
+    if isinstance(guard, _L34GuardLoadFailed):
+        return RouteOutcome(kind="refuse", engine=engine_id, reason="gate_error")
+
+    try:
+        raw = _tenant_yaml(tenant, corvin_home)
+    except Exception:  # noqa: BLE001
+        return RouteOutcome(kind="refuse", engine=engine_id, reason="gate_error")
+    route = _sr.parse_sensitive_route(raw)
+    if route.malformed:
+        return RouteOutcome(kind="refuse", engine=engine_id, reason="route_malformed")
+
+    if classification is None:
+        try:
+            cls = _dc.classify_task(prompt or "", persona=persona)
+        except Exception:  # noqa: BLE001 — a policy exists and the turn cannot be judged
+            return RouteOutcome(kind="refuse", engine=engine_id, reason="classifier_error")
+    else:
+        cls = _dc.DataClassification.parse(classification)
+        if cls is None:
+            return RouteOutcome(kind="refuse", engine=engine_id, reason="unknown_classification")
+    if route.on:
+        import sensitive_detector as _sd  # type: ignore  # noqa: PLC0415
+        try:
+            cls = _sd.raise_class(cls, prompt or "")
+        except _sd.DetectorError:
+            return RouteOutcome(kind="refuse", engine=engine_id, reason="classifier_error")
+    cls_name = cls.name
+
+    try:
+        decision = guard.validate(classification=cls, engine_id=engine_id, persona=persona,
+                                  channel=channel or None, chat_key=chat_key or None)
+    except Exception:  # noqa: BLE001
+        return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name, reason="gate_error")
+    if decision.allowed:
+        return RouteOutcome(kind="native", engine=engine_id, classification=cls_name)
+
+    # The chosen engine is denied for this class. Only an enabled, well-formed route can help, and
+    # only for the classes the ADR allows (never SECRET, never PUBLIC).
+    if not route.on:
+        return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name, reason="matrix")
+    if cls not in (_dc.DataClassification.INTERNAL, _dc.DataClassification.CONFIDENTIAL):
+        return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name, reason="matrix")
+    if engine_id != "claude_code":
+        return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name,
+                            reason="engine_not_reroutable")
+
+    target = route.route
+    providers = load_providers()
+    declared, _rejected = _dc.parse_provider_compliance(raw)
+    ok, why = _sr.provider_eligibility(target.provider, declared=declared, providers=providers)
+    if not ok:
+        return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name,
+                            provider=target.provider, reason=why)
+    if not _sr.model_allowed(target.provider, target.model_id, declared=declared, providers=providers):
+        return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name,
+                            provider=target.provider, reason="target_not_eligible")
+    host = _sr.current_provider_host(providers[target.provider], declared[target.provider])
+    verdict = guard.validate_provider(classification=cls, engine_id=engine_id, provider=target.provider,
+                                      current_host=host, persona=persona, channel=channel or None,
+                                      chat_key=chat_key or None)
+    if not verdict.allowed:
+        return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name,
+                            provider=target.provider, reason=verdict.matched_rule or "matrix")
+    return RouteOutcome(kind="reroute", engine=engine_id, classification=cls_name,
+                        provider=target.provider, model_id=target.model_id)
