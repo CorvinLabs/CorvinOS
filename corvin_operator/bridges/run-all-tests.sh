@@ -884,6 +884,10 @@ run "Python: learning reachability ratchet (ADR-2281)" bash -c 'PYTEST="${PYTEST
 # Adapter turns: own systemd scope when available (the adapter's unit sweep must never see the runner's cgroup).
 run "Python: learning call-site pins L06/L10/L14 (ADR-2281)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; S=(); systemd-run --user --scope --quiet true >/dev/null 2>&1 && S=(systemd-run --user --scope --quiet); "${S[@]}" "$PYTEST" ../../tests/learning/test_learning_call_site_pins.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 
+# ── Learning repairs and gaps (ADR-2282/2283/2284): retirement guard, approval gate, flow-guard route, DoD weights, anomalies ──
+run "Python: learning retirement guard (ADR-2282)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../tests/learning/test_adr_2282_retired_modules.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: learning repairs and gaps (ADR-2283/2284)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../tests/learning/test_adr_2283_approval_gate_audit_e2e.py ../../tests/learning/test_adr_2283_flow_guard_feedback_e2e.py ../../tests/learning/test_adr_2283_dod_weights_tenant_path.py ../../tests/learning/test_adr_2284_dod_weight_loop_e2e.py ../../tests/learning/test_adr_2284_anomaly_conditions.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+
 run "Python: plugin system (L4, ADR-0233/0345)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; env -u FORGE_ROOT "$PYTEST" ../../core/plugins/tests -q --import-mode=importlib >/dev/null 2>&1' || fails=$((fails+1))
 
 run "daemon boot smoke-test"     bash test_daemon_boot.sh >/dev/null                  || fails=$((fails+1))
