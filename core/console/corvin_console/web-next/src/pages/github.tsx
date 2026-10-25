@@ -53,8 +53,6 @@ interface WorkerStatus {
 interface GitHubStatus {
   connected: boolean
   configured: boolean
-  verified?: boolean
-  state?: string
   owner?: string
   repo?: string
   url?: string
@@ -274,18 +272,6 @@ export default function GitHubIntegrationPanel() {
           </p>
         </div>
       )
-    } else if (status.configured && !error) {
-      return (
-        <div>
-          <p className="font-semibold text-amber-600 dark:text-amber-400">Saved, not verified</p>
-          <p className="text-sm text-muted-foreground">
-            Repo: <code className="bg-muted px-2 py-1 rounded">{status.url}</code>
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">
-            GitHub has not confirmed this repository, so nothing is synced. Run Verify again.
-          </p>
-        </div>
-      )
     } else if (error) {
       return (
         <div>
@@ -398,7 +384,7 @@ export default function GitHubIntegrationPanel() {
                     </p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    {verifyResult.details?.rate_limit ? `API rate limit: ${verifyResult.details.rate_limit} remaining` : ''}
+                    API Rate Limit: {verifyResult.details?.rate_limit} remaining
                   </p>
                 </div>
               </div>

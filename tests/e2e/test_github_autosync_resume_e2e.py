@@ -56,17 +56,13 @@ def _fake_session_record(tenant_id: str) -> session_auth.SessionRecord:
 @pytest.fixture
 def home(tmp_path, monkeypatch) -> Path:
     h = tmp_path / "corvin-home"
-    # S-9i: only a VERIFIED config resumes; "legacy" is the old unverified auto_sync shape.
-    for tid, auto, verified in (("_default", True, True), ("paused", False, True),
-                                ("nocfg", None, None), ("legacy", True, None)):
+    for tid, auto in (("_default", True), ("paused", False), ("nocfg", None)):
         d = h / "tenants" / tid
         d.mkdir(parents=True)
         if auto is not None:
-            cfg = {"url": "https://github.com/example/tenant", "auto_sync": auto,
-                   "owner": "example", "repo": "tenant"}
-            if verified is not None:
-                cfg["verified"] = verified
-            (d / "github-config.json").write_text(json.dumps(cfg))
+            (d / "github-config.json").write_text(json.dumps({
+                "url": "https://github.com/example/tenant", "auto_sync": auto, "owner": "example", "repo": "tenant",
+            }))
     monkeypatch.setenv("CORVIN_HOME", str(h))
     return h
 
@@ -90,10 +86,6 @@ def test_resume_starts_only_auto_sync_tenants_and_the_route_reports_running(home
     assert gs.resume_auto_sync(home) == 1
     assert gs.get_worker("_default").running is True
     assert "paused" not in gs._workers and "nocfg" not in gs._workers
-    # the unverified legacy config was reset (auto_sync false) and never started
-    assert "legacy" not in gs._workers
-    reset = json.loads((home / "tenants" / "legacy" / "github-config.json").read_text())
-    assert reset["auto_sync"] is False and reset["verified"] is False
 
     # idempotent: a second boot-resume does not start a second thread
     assert gs.resume_auto_sync(home) == 0

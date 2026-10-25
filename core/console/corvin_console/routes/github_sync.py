@@ -41,36 +41,11 @@ class GitHubSyncWorker:
         self.sync_count = 0
         self.error_count = 0
     
-    def _is_verified(self) -> bool:
-        """True only when the saved config was confirmed against the GitHub API
-        (``verified: true``, written by ``POST /github/verify``). The ONE gate
-        every start path and the sync loop go through (S-9i)."""
-        return self._load_config().get("verified") is True
-
-    def _audit_refusal(self, action: str) -> None:
-        try:
-            from .. import audit as console_audit  # noqa: PLC0415
-            console_audit.action_denied(
-                tenant_id=self.tenant_id, sid_fingerprint="system", action=action,
-                target_kind="github_integration", target_id="sync-worker",
-                reason="unverified",
-            )
-        except Exception as e:  # noqa: BLE001 - audit must not break the caller
-            logger.warning("github refusal audit failed: %s", type(e).__name__)
-
     def start(self) -> Dict[str, Any]:
-        """Start the background sync worker (only for a verified config)."""
+        """Start the background sync worker."""
         if self.running:
             return {"success": False, "error": "Worker already running"}
-
-        if not self._is_verified():
-            self._audit_refusal("github.worker_start_refused")
-            return {
-                "success": False,
-                "refused": True,
-                "error": "GitHub config is not verified; run Verify first.",
-            }
-
+        
         self.running = True
         self.worker_thread = threading.Thread(target=self._run_worker, daemon=True)
         self.worker_thread.start()
@@ -108,11 +83,6 @@ class GitHubSyncWorker:
                     continue
                 
                 config = self._load_config()
-                if config.get('verified') is not True:
-                    # The config was changed/replaced after start: stop for good.
-                    self._audit_refusal("github.sync_refused")
-                    self.running = False
-                    return
                 if not config.get('auto_sync'):
                     time.sleep(10)
                     continue
@@ -277,11 +247,6 @@ def resume_auto_sync(corvin_home: Path | str) -> int:
             continue
         if not (isinstance(config, dict) and config.get("auto_sync")):
             continue
-        if config.get("verified") is not True:
-            # Legacy / unverified config that carries auto_sync: true (the old
-            # /verify saved it without contacting GitHub). Reset it, audited.
-            if _reset_unverified_auto_sync(tenant_dir, config):
-                continue
         result = get_worker(tenant_dir.name).start()
         if result.get("success"):
             started += 1
@@ -289,35 +254,3 @@ def resume_auto_sync(corvin_home: Path | str) -> int:
         logger.info("Resumed GitHub auto-sync for %d tenant(s)", started)
     return started
 
-
-
-def _reset_unverified_auto_sync(tenant_dir: Path, config: Dict[str, Any]) -> bool:
-    """Set ``auto_sync: false`` on an unverified config (atomic, mode 0600) and
-    record ``github.autosync_reset`` in the tenant's console audit chain.
-    Returns True when the config was reset."""
-    import os as _os
-    import tempfile as _tempfile
-
-    new = dict(config)
-    new["auto_sync"] = False
-    new["verified"] = False
-    target = tenant_dir / "github-config.json"
-    try:
-        fd, tmp = _tempfile.mkstemp(dir=str(tenant_dir), prefix=".github-config.", suffix=".tmp")
-        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(new, fh, indent=2)
-        _os.chmod(tmp, 0o600)
-        _os.replace(tmp, target)
-    except OSError as e:
-        logger.warning("github auto_sync reset failed: %s", type(e).__name__)
-        return False
-    try:
-        from .. import audit as console_audit  # noqa: PLC0415
-        console_audit.action_performed(
-            tenant_id=tenant_dir.name, sid_fingerprint="system",
-            action="github.autosync_reset", target_kind="github_integration",
-            target_id="unverified",
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("github autosync_reset audit failed: %s", type(e).__name__)
-    return True
