@@ -8,6 +8,7 @@
  * - Performance dashboard with statistics
  */
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Activity,
@@ -36,6 +37,7 @@ import {
   getLicenseInfo,
   listRAGProviders,
   getRAGProviderHealth,
+  getRAGStatistics,
   executeRAGQuery,
   type RAGProvider,
   type RAGQueryRequest,
@@ -63,10 +65,17 @@ function HealthBadge({ status }: { status: RAGProvider["health_status"] }) {
     unknown: "Unknown",
   };
 
+  // The API speaks healthy | unhealthy | unknown; anything else must still
+  // render a badge (a missing key used to render an empty pill).
+  const key = (status in variants ? status : "unknown") as keyof typeof variants;
+
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium", variants[status])}>
-      {icons[status]}
-      {labels[status]}
+    <span
+      data-testid="rag-health-badge"
+      className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium", variants[key])}
+    >
+      {icons[key]}
+      {labels[key]}
     </span>
   );
 }
@@ -95,8 +104,21 @@ function ProviderCard({ provider }: { provider: RAGProvider }) {
           </div>
           <HealthBadge status={current.health_status} />
         </div>
+        {(current.data_classification || current.compliance_zone) && (
+          <div className="flex flex-wrap gap-1 pt-2">
+            {current.data_classification && (
+              <Badge variant="outline" className="text-xs">{current.data_classification}</Badge>
+            )}
+            {current.compliance_zone && (
+              <Badge variant="outline" className="text-xs">{current.compliance_zone}</Badge>
+            )}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="space-y-3">
+        {current.health_status === "unhealthy" && current.error && (
+          <p className="text-xs text-destructive break-words">{current.error}</p>
+        )}
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
             <span className="text-muted-foreground">Status</span>
@@ -220,8 +242,23 @@ function QueryTester() {
           </div>
         </div>
 
+        {result && (result.error || result.status) && (
+          <p
+            data-testid="rag-query-notice"
+            className="rounded border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
+          >
+            {result.blocked_by
+              ? `Blocked by the data-classification gate: ${result.error ?? "not allowed"}`
+              : result.status === "no_providers_configured"
+                ? "No provider is registered yet. Add one on the Add Provider page."
+                : result.status === "query_failed"
+                  ? "The query failed. Check the provider's health on the Providers tab."
+                  : result.error}
+          </p>
+        )}
+
         {result && (
-          <div className="border-t pt-4 space-y-3">
+          <div className="border-t pt-4 space-y-3" data-testid="rag-query-result">
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>
                 <span className="text-muted-foreground">Total Time</span>
@@ -298,9 +335,9 @@ function ProviderList() {
         <p className="text-muted-foreground">No providers registered</p>
         <p className="text-sm text-muted-foreground mt-1">
           Register a provider on the{" "}
-          <a href="/app/custom-provider" className="text-accent hover:underline">
-            Create Custom RAG Provider
-          </a>{" "}
+          <Link to="/app/custom-provider" className="text-accent hover:underline">
+            Add Provider
+          </Link>{" "}
           page.
         </p>
       </Card>
@@ -312,6 +349,68 @@ function ProviderList() {
       {providers.map((provider) => (
         <ProviderCard key={provider.id} provider={provider} />
       ))}
+    </div>
+  );
+}
+
+// ── Statistics ────────────────────────────────────────────────────
+
+function StatisticsPanel() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["rag-statistics"],
+    queryFn: ({ signal }) => getRAGStatistics(signal),
+    refetchInterval: 30000,
+  });
+
+  if (isLoading) return <Skeleton className="h-[120px]" />;
+  const stats = data?.statistics;
+  if (!stats || stats.error) {
+    return (
+      <p className="py-8 text-center text-muted-foreground">
+        Statistics are not available on this build.
+      </p>
+    );
+  }
+  if (stats.total_queries === 0 && (stats.blocked_queries ?? 0) === 0) {
+    return (
+      <p className="py-8 text-center text-muted-foreground" data-testid="rag-stats-empty">
+        No queries yet. Run one on the Query Tester tab.
+      </p>
+    );
+  }
+  const perProvider = Object.entries(stats.per_provider_stats ?? {});
+  return (
+    <div className="space-y-4" data-testid="rag-stats">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <div>
+          <span className="text-muted-foreground">Total queries</span>
+          <p className="font-medium" data-testid="rag-stat-total">{stats.total_queries.toLocaleString()}</p>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Today</span>
+          <p className="font-medium">{stats.queries_today}</p>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Avg latency</span>
+          <p className="font-medium">{Math.round(stats.average_latency_ms)}ms</p>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Cache hit rate</span>
+          <p className="font-medium">{stats.cache_hit_rate}%</p>
+        </div>
+      </div>
+      {perProvider.length > 0 && (
+        <div className="space-y-1 text-sm">
+          {perProvider.map(([id, p]) => (
+            <div key={id} className="flex items-center justify-between rounded border px-3 py-2">
+              <span className="font-medium">{p.name ?? id}</span>
+              <span className="text-muted-foreground">
+                {p.total_queries} queries, {p.avg_latency_ms}ms avg
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -436,29 +535,30 @@ export default function RAGPage() {
                     )}
                   </CardDescription>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={atRagLimit}
-                  data-testid="rag-register-btn"
-                  title={
-                    atRagLimit
-                      ? `Free tier limit reached (${providerCount}/${ragMax})`
-                      : "Register a new RAG provider"
-                  }
-                >
-                  {atRagLimit ? (
-                    <>
-                      <Lock className="h-4 w-4 mr-2 text-amber-500" />
-                      Limit Reached
-                    </>
-                  ) : (
-                    <>
+                {atRagLimit ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled
+                    data-testid="rag-register-btn"
+                    title={`Free tier limit reached (${providerCount}/${ragMax})`}
+                  >
+                    <Lock className="h-4 w-4 mr-2 text-amber-500" />
+                    Limit Reached
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    asChild
+                    data-testid="rag-register-btn"
+                  >
+                    <Link to="/app/custom-provider" title="Register a new RAG provider">
                       <Settings className="h-4 w-4 mr-2" />
                       Register New
-                    </>
-                  )}
-                </Button>
+                    </Link>
+                  </Button>
+                )}
               </div>
             </CardHeader>
           </Card>
@@ -481,9 +581,7 @@ export default function RAGPage() {
               <CardDescription>Query statistics and provider metrics</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="text-center py-8 text-muted-foreground">
-                <p>Statistics will be available after your first query</p>
-              </div>
+              <StatisticsPanel />
             </CardContent>
           </Card>
         </TabsContent>

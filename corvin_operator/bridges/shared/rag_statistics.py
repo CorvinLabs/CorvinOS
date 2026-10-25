@@ -91,9 +91,12 @@ class RAGStatisticsAggregator:
                         "avg_latency_ms": prov_stats.get("average_latency_ms", 0),
                     }
 
-                    if provider.get("health_status") == "healthy":
+                    # Health is probed live (GET /rag/providers), not stored in
+                    # the index; count only what a stored value actually says.
+                    health = provider.get("health_status")
+                    if health == "healthy":
                         stats.providers_active += 1
-                    else:
+                    elif health:
                         stats.providers_unhealthy += 1
 
             # Load audit events for query metrics

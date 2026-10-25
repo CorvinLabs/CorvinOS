@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ChevronRight,
@@ -17,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { api, ApiError, getLicenseInfo, listRAGProviders } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 
 type Step = "basic" | "api" | "mapping" | "compliance";
@@ -30,7 +32,7 @@ interface FormState {
   endpoint: string;
   method: "GET" | "POST";
   timeout_ms: number;
-  auth_type: "bearer-token" | "api-key" | "basic" | "oauth2";
+  auth_type: "none" | "bearer-token" | "api-key" | "basic" | "oauth2";
   auth_token_env_var: string;
   query_format_sample: string;
   content_path: string;
@@ -88,7 +90,7 @@ export default function CustomProviderPage() {
     endpoint: "",
     method: "POST",
     timeout_ms: 5000,
-    auth_type: "bearer-token",
+    auth_type: "none",
     auth_token_env_var: "",
     query_format_sample: '{"query": "{query}", "limit": {limit}}',
     content_path: "",
@@ -102,6 +104,8 @@ export default function CustomProviderPage() {
 
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const testApiMutation = useMutation({
     mutationFn: async (testQuery: string) =>
@@ -111,13 +115,26 @@ export default function CustomProviderPage() {
         body: {
           endpoint: form.endpoint,
           method: form.method,
-          auth_type: form.auth_type,
-          auth_token: "test-token",
+          // No credential is sent: the token lives in the secret vault under
+          // the env-var name and is applied by the engine at query time.
+          auth_type: "none",
           test_query: testQuery,
           timeout_ms: form.timeout_ms,
         },
       }),
   });
+
+  const runTest = async () => {
+    setTestResult(null);
+    try {
+      setTestResult((await testApiMutation.mutateAsync("test")) as TestResult);
+    } catch (err: unknown) {
+      setTestResult({
+        status: "failed",
+        error: err instanceof Error ? err.message : "The connectivity test could not run",
+      });
+    }
+  };
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -147,7 +164,14 @@ export default function CustomProviderPage() {
 
     if (step === "basic") {
       if (!form.provider_id || !form.name) {
-        setErrors({ _general: "All fields required" });
+        setErrors({ _general: "Provider ID and name are required" });
+        return;
+      }
+      if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(form.provider_id)) {
+        setErrors({
+          _general:
+            "Provider ID must be lowercase letters, digits, '.', '_' or '-' and start with a letter or digit",
+        });
         return;
       }
       setStep("api");
@@ -171,9 +195,11 @@ export default function CustomProviderPage() {
       try {
         const result = await createMutation.mutateAsync() as Record<string, unknown>;
         if (result.status === "created") {
-          alert(`✅ Provider created: ${result.provider_id}`);
+          setCreatedId(String(result.provider_id));
+          void queryClient.invalidateQueries({ queryKey: ["rag-providers"] });
           setStep("basic");
           setForm({ ...form, provider_id: "", name: "", description: "", endpoint: "" });
+          setTestResult(null);
         } else {
           setErrors({ _general: String(result.error ?? "Failed to create provider") });
         }
@@ -264,6 +290,20 @@ export default function CustomProviderPage() {
           <CardTitle>{STEPS[currentStepIndex].label}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
+          {createdId && (
+            <div
+              data-testid="provider-created"
+              className="flex items-center justify-between gap-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30"
+            >
+              <span className="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-400">
+                <CheckCircle2 className="h-4 w-4" />
+                Provider "{createdId}" is registered.
+              </span>
+              <Link to="/app/rag" className="text-sm text-accent hover:underline">
+                Open Knowledge
+              </Link>
+            </div>
+          )}
           {errors._general && (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
               <AlertCircle className="h-4 w-4 text-destructive" />
@@ -276,7 +316,7 @@ export default function CustomProviderPage() {
             <Step2API
               form={form}
               updateForm={updateForm}
-              onTest={() => setTestResult(null)}
+              onTest={runTest}
               testResult={testResult}
               isLoading={testApiMutation.isPending}
             />
@@ -466,6 +506,7 @@ function Step2API({ form, updateForm, onTest, testResult, isLoading }: StepBaseP
             onChange={(e) => updateForm("auth_type", e.target.value)}
             className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           >
+            <option value="none">None</option>
             <option value="bearer-token">Bearer Token</option>
             <option value="api-key">API Key</option>
             <option value="basic">Basic Auth</option>
@@ -476,6 +517,7 @@ function Step2API({ form, updateForm, onTest, testResult, isLoading }: StepBaseP
           <Input
             id="auth_token_env"
             placeholder="MY_API_TOKEN"
+            disabled={form.auth_type === "none"}
             value={form.auth_token_env_var}
             onChange={(e) => updateForm("auth_token_env_var", e.target.value)}
             className="mt-2"
@@ -494,6 +536,12 @@ function Step2API({ form, updateForm, onTest, testResult, isLoading }: StepBaseP
           placeholder='{"search": "{query}", "results": {limit}}'
         />
         <p className="text-xs text-muted-foreground mt-2">Must contain {"{query}"} and {"{limit}"} placeholders</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Today Corvin always sends {'{"query": ..., "limit": ...}'} and reads
+          {" "}<code>results[].content</code>, <code>score</code>, <code>metadata</code> and{" "}
+          <code>source_url</code> from the answer; this template and the mapping on the next step are
+          stored with the provider for reference.
+        </p>
       </div>
 
       <Button

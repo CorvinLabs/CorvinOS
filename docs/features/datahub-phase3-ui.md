@@ -104,6 +104,6 @@ succeed.
 
 ## Not covered
 
-The DataHub Creator workspace (`panels/datahub-creator/`, ADR-0878) is a separate
-surface backed by `routes/datahub_creator_routes.py` (`/v1/console/datahub/projects*`). It is
-registered in neither `PANELS` nor `NAV_GROUPS`, so no route mounts it.
+The DataHub Creator workspace (`panels/datahub-creator/`, `routes/datahub_creator_routes.py`
+`/v1/console/datahub/projects*`, `core/datahub_creator/`, ADR-0878) was removed: it was registered in
+neither `PANELS` nor `NAV_GROUPS` and nothing in the console called its routes.

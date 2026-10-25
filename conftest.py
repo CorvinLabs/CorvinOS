@@ -739,3 +739,93 @@ def pytest_terminal_summary(terminalreporter):
         terminalreporter.write_line(
             "These carry the live install's own instance id, so they are most likely "
             "the running services — or a subprocess that scrubbed CORVIN_HOME.")
+
+
+# ── Checkout precedence (2026-10-24) ─────────────────────────────────────────
+# The venv's editable install (``_editable_impl_*.pth``) puts the checkout it was
+# installed from (the LIVE one) on sys.path. Running a second checkout's tests in
+# the same venv then imports that checkout's packages from the live tree whenever
+# a test module happens to import them before anything inserted the second
+# checkout's path - order-dependent: ``corvin_core._bootstrap`` loaded from the
+# live tree put the LIVE ``corvin_operator/bridges`` on sys.path, and every later
+# console test failed with ``No module named 'shared.rag_service'`` (60 failures
+# in one combined run, 0 when the same files ran in another order).
+#
+# Fix: before any test module is imported, every entry the editable install
+# contributes is rewritten to THIS checkout and moved to the front, so the code
+# under test is the code in this tree regardless of file order. And a guard per
+# test fails LOUDLY (naming the module and file) if a project package was loaded
+# from another checkout anyway - a silent cross-checkout import is how a fix is
+# "tested" against code that does not contain it.
+_TRACKED_TOP_LEVEL = ("shared", "bridges", "corvin_core", "corvin_console",
+                      "corvin_compute", "corvin_gateway", "forge", "corvin_operator")
+
+
+def _editable_roots() -> "list[str]":
+    """This checkout's equivalents of the editable install's sys.path entries."""
+    import glob as _glob  # noqa: PLC0415
+    import site as _site  # noqa: PLC0415
+
+    out: list[str] = []
+    dirs = list(getattr(_site, "getsitepackages", lambda: [])()) + [_site.getusersitepackages()]
+    for d in dirs:
+        for pth in sorted(_glob.glob(_os.path.join(d, "_editable_impl_*.pth"))):
+            try:
+                lines = Path(pth).read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith(("#", "import ")):
+                    continue
+                root = _checkout_root(Path(line))
+                if root is None:
+                    continue
+                rel = Path(line).resolve().relative_to(root.resolve())
+                mine = (_REPO_ROOT / rel).resolve()
+                if mine.is_dir() and str(mine) not in out:
+                    out.append(str(mine))
+    if str(_REPO_ROOT) not in out:
+        out.insert(0, str(_REPO_ROOT))
+    return out
+
+
+def _prefer_this_checkout() -> None:
+    roots = _editable_roots()
+    for r in roots:
+        while r in _sys.path:
+            _sys.path.remove(r)
+    _sys.path[0:0] = roots
+
+
+_prefer_this_checkout()
+
+
+def _foreign_project_modules() -> "list[str]":
+    bad = []
+    for name in _TRACKED_TOP_LEVEL:
+        mod = _sys.modules.get(name)
+        if mod is None:
+            continue
+        locs = list(getattr(mod, "__path__", []) or [])
+        f = getattr(mod, "__file__", None)
+        if f:
+            locs.append(f)
+        for loc in locs:
+            root = _checkout_root(Path(loc))
+            if root is not None and root.resolve() != _REPO_ROOT.resolve():
+                bad.append(f"{name} -> {loc}")
+                break
+    return bad
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_call(item):
+    bad = _foreign_project_modules()
+    if bad:
+        pytest.fail(
+            "corvin checkout precedence: project package(s) were imported from ANOTHER "
+            f"checkout than {_REPO_ROOT} - this test would run against code it does not "
+            "contain:\n  " + "\n  ".join(bad),
+            pytrace=False,
+        )

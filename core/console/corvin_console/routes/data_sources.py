@@ -18,6 +18,7 @@ All routes:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections import deque
 from pathlib import Path
@@ -256,6 +257,120 @@ def register_connection(
         "tags": manifest.tags,
         "description": manifest.description,
     }
+
+
+# ---------------------------------------------------------------------------
+# Credential storage for connections: /data-sources/_secrets[/{NAME}]
+#
+# ONE path from the Connect form to the compute runner. The form encrypts each
+# credential in the browser (RSA-OAEP, the instance public key from
+# GET /byok/pubkey) and POSTs it here; it is decrypted server-side and written to
+# the forge secret vault - the very store ``corvin_compute.cli._resolve_datasource_env``
+# reads when a run declares ``datasources``. Until now the form posted to
+# ``byok/secrets/{name}``, whose key-name rule (provider API keys only) rejected
+# every credential name with HTTP 400, and the byok vault is not what the runner
+# reads anyway. A connection manifest keeps only the NAMES (``secrets``).
+#
+# ``_secrets`` cannot collide with a connection name (names start with a letter).
+# ---------------------------------------------------------------------------
+
+import re as _re  # noqa: E402
+
+# Credential names are env-var names the driver reads (PGPASSWORD, MYSQL_USER,
+# AWS_SECRET_ACCESS_KEY, ...). Names that belong to Corvin's own provider/engine
+# credentials are refused: this route must not be a way to overwrite those.
+_DS_SECRET_NAME_RE = _re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+_DS_SECRET_RESERVED_EXACT = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "TERM", "LANG", "TMPDIR", "DISPLAY",
+})
+_DS_SECRET_RESERVED_PREFIX = (
+    "ANTHROPIC", "OPENAI", "OPENROUTER", "OLLAMA", "CORVIN", "CLAUDE", "FORGE_", "XDG_",
+    "LD_", "PYTHON", "DYLD_", "NODE_", "BASH_",
+)
+_DS_SECRET_RESERVED_PARTS = ("AUDIT", "VAULT", "POLICY", "LICENSE")
+
+
+def _secret_name_reserved(name: str) -> bool:
+    """Corvin's own credentials and process-environment names (PGUSER is NOT one)."""
+    upper = name.upper()
+    return (
+        upper in _DS_SECRET_RESERVED_EXACT
+        or upper.startswith(_DS_SECRET_RESERVED_PREFIX)
+        or any(part in upper for part in _DS_SECRET_RESERVED_PARTS)
+    )
+
+
+class SecretBody(BaseModel):
+    ciphertext: str
+    algorithm: str = "RSA-OAEP-SHA256"
+    model_config = {"extra": "forbid"}
+
+
+def _check_secret_name(name: str) -> None:
+    if (not _DS_SECRET_NAME_RE.match(name)) or _secret_name_reserved(name):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=(f"credential name {name!r} is not allowed: use the driver's environment "
+                    "variable name (for example PGPASSWORD) in upper case"),
+        )
+
+
+@router.get("/data-sources/_secrets")
+def list_secret_names(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Names (never values) of the credentials already stored for connections."""
+    try:
+        from forge import secret_vault as _vault  # noqa: PLC0415
+    except ImportError:
+        return {"names": []}
+    return {"names": [n for n in _vault.secret_names()
+                      if _DS_SECRET_NAME_RE.match(n) and not _secret_name_reserved(n)]}
+
+
+@router.post("/data-sources/_secrets/{name}", status_code=200)
+def store_secret(
+    name: str,
+    body: SecretBody,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Decrypt a browser-encrypted credential and store it in the secret vault."""
+    tid = rec.tenant_id
+    _check_secret_name(name)
+    if body.algorithm not in ("RSA-OAEP-SHA256", "RSA-OAEP"):
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST,
+                            detail=f"unsupported algorithm: {body.algorithm!r}")
+    if os.environ.get("CORVIN_HOSTED_MODE", "").strip().lower() in ("1", "true", "yes"):
+        raise HTTPException(status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+                            detail="credential storage is not available in hosted mode")
+    try:
+        from agent.keypair import decrypt_oaep  # noqa: PLC0415
+        from forge import secret_vault as _vault  # noqa: PLC0415
+    except ImportError:
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="credential storage unavailable")
+    try:
+        plaintext = decrypt_oaep(body.ciphertext, tenant_id=tid)
+    except (ValueError, FileNotFoundError):
+        console_audit.action_failed(
+            tenant_id=tid, sid_fingerprint=rec.sid_fingerprint[:8],
+            action="datasource.secret_store", target_kind="datasource_secret",
+            target_id=name, reason="decrypt_failed",
+        )
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST,
+                            detail="could not decrypt the credential")
+    try:
+        # Audit-first: the record names the credential, never the value.
+        console_audit.action_performed(
+            tenant_id=tid, sid_fingerprint=rec.sid_fingerprint[:8],
+            action="datasource.secret_store", target_kind="datasource_secret",
+            target_id=name,
+        )
+        _vault.set_secret(name, plaintext.strip())
+    except (_vault.VaultError, _vault.SecretRefError) as exc:
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=f"secret vault unavailable: {exc}")
+    return {"name": name, "stored": True}
 
 
 # ---------------------------------------------------------------------------

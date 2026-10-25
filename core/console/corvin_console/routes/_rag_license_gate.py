@@ -32,6 +32,19 @@ for _p in (_FORGE, _OPERATOR):
 
 from forge import paths as _forge_paths  # noqa: E402
 
+
+def rag_registry_count(registry_dir: Path) -> int:
+    """Providers registered under *registry_dir* - the ONE counter.
+
+    The Knowledge page's "providers used" badge and this licence gate both call
+    it (they used to count different directories: 0 on the badge, 1 at the gate).
+    """
+    try:
+        from shared import rag_registry_store as _store  # noqa: PLC0415
+    except ImportError:
+        from bridges.shared import rag_registry_store as _store  # noqa: PLC0415
+    return _store.count(registry_dir)
+
 # Fail-closed FREE_TIER fallback for the limits this gate reads. If BOTH the
 # validator AND license.limits are unimportable we must NOT degrade to a bare
 # ``{}.get`` — that returns None for every feature, and None is the "unlimited"
@@ -95,7 +108,7 @@ def enforce_rag_providers_max(
     if rag_max is None:
         return  # unlimited (paid tier)
     registry = _forge_paths.tenant_global_dir(tenant_id) / "rag"
-    existing = len(list(registry.glob("*.yaml"))) if registry.exists() else 0
+    existing = rag_registry_count(registry)
     if existing >= rag_max:
         try:
             from .. import audit as _ca  # noqa: PLC0415

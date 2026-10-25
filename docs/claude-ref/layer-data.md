@@ -849,7 +849,7 @@ optional keyword arguments. The console route injects real guards; tests pass
 
 **Backend: `core/console/corvin_console/routes/data_sources.py`**
 
-Seven endpoints mounted at `/v1/console/data-sources`:
+Nine endpoints mounted at `/v1/console/data-sources`:
 
 | Method | Path | CSRF | Purpose |
 |---|---|---|---|
@@ -860,6 +860,8 @@ Seven endpoints mounted at `/v1/console/data-sources`:
 | `POST` | `/data-sources/{name}/test` | Yes | Ping the connection; returns `DSIPingResult` |
 | `DELETE` | `/data-sources/{name}` | Yes | Unregister a connection (returns 204) |
 | `GET` | `/data-sources/{name}/audit` | No | Last N audit events for this connection name |
+| `GET` | `/data-sources/_secrets` | No | NAMES of the credentials already in the vault (never values) |
+| `POST` | `/data-sources/_secrets/{NAME}` | Yes | Store one browser-encrypted credential in the secret vault (see "Credentials" below) |
 
 `_make_ds_audit_writer(tenant_id)` builds an `AuditWriter` from the forge audit
 chain. Returns a no-op writer if the forge import fails (best-effort observability).
@@ -950,6 +952,50 @@ Connection config, secrets, and raw error details never appear in audit fields.
 - **Don't use positional arguments for `tenant_id` in registry functions.**
   keyword-only per ADR-0007.
 
+### Credentials — one store from the Connect form to every reader (2026-10-24)
+
+Diagram: `docs/diagrams/data-rag-credentials-and-registry.svg`.
+
+| Step | Where | What |
+|---|---|---|
+| 1 | `pages/data-sources.tsx` `storeVaultSecret` | encrypts each credential in the browser (RSA-OAEP-SHA256, key from `GET /byok/pubkey`) |
+| 2 | `POST /data-sources/_secrets/{NAME}` (`routes/data_sources.py`) | name rule `^[A-Z][A-Z0-9_]{1,63}$`; refuses Corvin's own names (`ANTHROPIC*`, `OPENAI*`, `CORVIN*`, `CLAUDE*`, `XDG_*`, `LD_*`, `PATH`, `HOME`, `USER`, ... and anything with `AUDIT`/`VAULT`/`POLICY`/`LICENSE`); decrypts with the instance key; audits `console.action_performed` `datasource.secret_store` (name only) BEFORE the write; 501 in hosted mode |
+| 3 | `forge/secret_vault.py` `set_secret` | atomic write, mode 0600, existing entries kept, a permissive vault refused |
+| 4 | `corvin_compute/fabric/datasources/connection_env.py` | the ONE resolver: manifest `config` -> driver env (`PG*`, `MYSQL_*`, both `MYSQL_PORT` and `MYSQL_TCP_PORT`), manifest `secrets` NAMES -> vault values; fail-closed |
+| 5 | readers | `corvin_compute/cli.py::_resolve_datasource_env` (compute runs with `datasources`) and the chat tool `datasource_query` |
+
+The provider-key store behind `/byok/secrets` (ADR-0047 names) is NOT used for datasources any more: its
+name rule refused every database credential (HTTP 400) and nothing on the compute side read it.
+Credentials are per NAME, not per connection (two PostgreSQL connections share `PGUSER`); the form shows
+a stored name as "stored - leave empty to keep". Draft ADR: claude-playground
+`corvin-release-readiness-2026-10-24/adr-drafts/DRAFT-data-connection-credential-store.md`.
+
+### Chat tool `datasource_query` (forge MCP server)
+
+ONE read-only `SELECT` (or `WITH ... SELECT`) against a registered connection; returns
+`{columns, rows, row_count, truncated, elapsed_ms}`. Adapters: `postgresql` (psycopg2), `mysql`/`mariadb`
+(pymysql, part of the `[compute]` extra), `local_file` CSV (loaded into an in-memory SQLite table `data`).
+
+Gates in order (`mcp_server.py::_call_datasource_query`): strict connection name -> licence adapter
+allowlist (same decision as `datasource_connect` and the console route) -> `data_residency: local` is
+refused (its rows must not reach a chat engine) -> L34 classification gate
+(`rag_service.gate_classification`) -> credentials from the vault -> `sql_query.validate_select`
+(one statement, no comments, no write/DDL/file keywords outside string literals) -> read-only session
+(`set_session(readonly=True)` / `START TRANSACTION READ ONLY`), statement timeout, 200-row cap,
+64 KiB result cap. Audit: `datasource.query_executed` / `_refused` / `_failed` with a `sql_sha256`
+prefix, never the SQL text. Capability registry: `data.sources`.
+
+This runs in the MCP server process, not in bwrap (the compute runner path stays the bwrap one).
+The connection's role should be SELECT-only; the read-only session is the second line.
+
+### HTTP Data Bridges (status)
+
+The Add HTTP Bridge form sends `network_egress` (Restricted by default; `none` means the bridge is
+never contacted and its ping answers `egress_not_declared`) and suggests a `CORVIN_DS_*` env var (the
+only names `auth_env` accepts). Ping error codes are shown as sentences. Loopback, private and
+metadata targets stay refused (decision Q3). No compute run or chat tool reads a bridge yet; the page
+says so.
+
 ### References
 
 - `Corvin-Knowledge: decisions/0106-dsi-v1-external-datasource-interface.md` — the ADR
@@ -967,3 +1013,74 @@ Connection config, secrets, and raw error details never appear in audit fields.
 - Layer 35 (L35) — egress gate injected into `registry.register()`
 - Layer 16 (L16) — secret-vault pattern; `secrets` field holds env-var names only
 
+
+## Knowledge (RAG) — registry layout, health, classification (2026-10-24)
+
+Diagram: `docs/diagrams/data-rag-credentials-and-registry.svg`.
+
+**Layout — owned by `corvin_operator/bridges/shared/rag_registry_store.py`, nobody else:**
+
+```
+<tenant>/global/rag/
+  registry.json            {"version": 1, "providers": [{"id", "name", "version", "query_stats", ...}]}
+  manifests/<id>.yaml      the provider manifest
+```
+
+Writers (`custom-provider/create`, `hub/import`, `RAGProviderImportExport.import_manifest`) and readers
+(orchestrator, `/rag/providers` badge, licence gate `_rag_license_gate.rag_registry_count`, compute
+export) all go through the store. A legacy flat `rag/<id>.yaml` is moved into `manifests/` on first
+touch (never deleted when a canonical manifest exists). `count()` is the single counter: badge and
+402 can no longer disagree. The provider id must match `^[a-z0-9][a-z0-9._-]{0,63}$` (400 at create)
+and must be unused (409).
+
+**Orchestrator cache (`routes/rag.py`):** keyed on the registry signature (ids + manifest mtimes);
+rebuilt as soon as a provider is added/replaced/removed, never caching "no registry". Engines create an
+`httpx.AsyncClient` per request (no loop-bound pool) and queries run on the server loop.
+
+**Health vocabulary:** `health_status` is `healthy | unhealthy | unknown` (probe result); the raw
+breaker state is a separate `circuit_state` (`closed | open | half_open`), plus `error`. The per-card
+poll probes only that provider.
+
+**Query service `shared/rag_service.run_query`** (console `POST /rag/query` and the chat tool
+`rag_query`): classification = highest of the caller's label and every queried provider's
+`dataClassification` (the UI never sent one, so it was always PUBLIC) -> L34 gate (fail-closed; default
+policy PUBLIC + INTERNAL) -> `query_with_meta` (cache key includes limit and providers; empty or failed
+answers are never cached) -> `registry.json` `query_stats` (`total_queries`, `queries_today` per UTC
+day, `average_latency_ms`) -> audit `rag.query_executed` / `rag.query_blocked` (registered in
+`EVENT_SEVERITY` + `_EVENT_ALLOWLIST`, metadata only). Response adds `providers_answered`,
+`classification`, and `status`/`error`/`blocked_by`, which the Query Tester now shows.
+
+**Provider tokens:** `auth.token_env_var` is resolved from the secret vault only
+(`rag_service.VaultTokens`); the process environment is never consulted and Corvin/provider key names
+are refused, so an imported manifest cannot name `ANTHROPIC_API_KEY` and receive it.
+
+**Knowledge page (`pages/rag.tsx`):** badge renders for any value (unknown keys fall back to Unknown),
+cards show classification/zone and the probe error, "Register New" links to Add Provider, the
+Statistics tab reads `GET /rag/statistics`. Add Provider (`pages/custom-provider.tsx`): "None" auth
+(default), the connectivity test actually runs (it only cleared the result before) and sends no
+credential, an in-page success panel replaces `alert()`, and a note says the engine sends
+`{query, limit}` and reads `results[].content|score|metadata|source_url` (template and mapping are
+stored for reference).
+
+## Knowledge Hub — tenant-local catalogue (2026-10-24)
+
+`<tenant>/global/rag_hub/` (`shared/rag_hub.py`, `routes/rag_hub.py`). Nothing leaves the tenant; the
+UI copy no longer says "community".
+
+| Action | Route | Behaviour |
+|---|---|---|
+| Publish | `POST /hub/providers {"provider_id"}` | card built from the REGISTERED manifest (never the client); the manifest is stored as `rag_hub/manifests/<sha256>.yaml`; 404 unknown, 409 already published |
+| Review | `POST /hub/reviews` | rating 1-5, text <= 500; updates the card's average |
+| Import | `POST /hub/import {"hub_provider_id", "provider_id"?}` | manifest loaded from the catalogue and hash-verified (tampered -> 404 `manifest_unavailable`); SSRF guard and licence gate as before; 409 when the target id is registered; increments the card's import count |
+| Export | `POST /hub/export {"provider_id"}` | the real manifest + its hash (the invented `share_link` is gone) |
+| Analytics | `GET /hub/analytics/*` | the calling tenant's hub (they all answered "Hub not initialized") |
+
+`trending_score` is derived in memory on read; `GET /hub/trending` used to append every provider to
+`hub_providers.jsonl` on each 30-second poll. The page (`pages/rag-hub.tsx`) has a Publish selector and
+Import (with target id), Review and Export on every card.
+
+## DataHub creator — removed (2026-10-24)
+
+`panels/datahub-creator/` (6 tabs), `routes/datahub_creator_routes.py` (`/v1/console/datahub/projects*`)
+and `core/datahub_creator/` were deleted: the panel was in neither `PANELS` nor `NAV_GROUPS` and nothing
+called the routes. The DataHub panel (`/app/datahub-unified`, `/v1/console/datahub/*`) is unchanged.

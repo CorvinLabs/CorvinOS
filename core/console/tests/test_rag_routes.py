@@ -48,7 +48,7 @@ def _install_fake_orchestrator_module(monkeypatch, *, engines_after_init):
 
         async def health_check_all(self):
             return {
-                pid: {"circuit_state": "closed", "latency_ms": 5}
+                pid: {"status": "success", "circuit_state": "closed", "latency_ms": 5}
                 for pid in self.engines
             }
 
@@ -63,7 +63,8 @@ async def test_get_orchestrator_calls_initialize_before_caching(monkeypatch, tmp
     """Regression: RAGOrchestrator() alone leaves .engines empty forever --
     initialize() must actually run so registered providers are loaded."""
     registry_dir = tmp_path / "rag"
-    registry_dir.mkdir()
+    (registry_dir / "manifests").mkdir(parents=True)
+    (registry_dir / "manifests" / "demo_provider.yaml").write_text("metadata: {name: demo}\n")
     monkeypatch.setattr(
         rag_route._forge_paths, "tenant_global_dir", lambda tid: tmp_path
     )
@@ -90,7 +91,8 @@ async def test_list_providers_reports_real_engines_not_empty(monkeypatch, tmp_pa
     list_providers() must surface it -- previously always fell through to
     the honest-empty-state branch because health_check_all() saw no engines."""
     registry_dir = tmp_path / "rag"
-    registry_dir.mkdir()
+    (registry_dir / "manifests").mkdir(parents=True)
+    (registry_dir / "manifests" / "spotify_knowledge_base.yaml").write_text("metadata: {name: kb}\n")
     monkeypatch.setattr(
         rag_route._forge_paths, "tenant_global_dir", lambda tid: tmp_path
     )

@@ -82,7 +82,7 @@ class RAGProviderImportExport:
 
         Args:
             manifest_yaml: YAML string of the manifest
-            destination_dir: Where to save the manifest locally
+            destination_dir: The tenant's RAG registry directory
             provider_id: Optional override for provider ID
 
         Returns:
@@ -114,13 +114,14 @@ class RAGProviderImportExport:
                     "(no path separators or '..')"
                 )
 
-            # Create destination if needed
-            destination_dir.mkdir(parents=True, exist_ok=True)
+            # destination_dir is the REGISTRY dir (``<tenant>/global/rag``): the
+            # manifest lands in ``manifests/`` and is indexed in ``registry.json``
+            # -- the layout the orchestrator reads (see rag_registry_store).
+            from . import rag_registry_store as _store
 
-            # Write to file
-            manifest_file = destination_dir / f"{provider_id}.yaml"
-            with open(manifest_file, "w") as f:
-                f.write(manifest_yaml)
+            manifest_file = _store.write_manifest(
+                Path(destination_dir), str(provider_id), manifest_yaml
+            )
 
             logger.info(f"Imported provider: {provider_id} → {manifest_file}")
             return True, provider_id, None

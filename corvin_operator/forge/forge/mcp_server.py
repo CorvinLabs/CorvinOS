@@ -196,6 +196,25 @@ except ImportError:
     except ImportError:
         _lic_get_limit = _DS_FREE_TIER_FALLBACK.get  # type: ignore[assignment]
 
+
+def _ensure_license_loaded() -> None:
+    """Activate this process's licence before a licence-gated decision.
+
+    ``get_limit`` reads the licence ``load_license_from_env()`` activated; the
+    console does that at boot, but this MCP server is a separate process
+    (spawned by the engine) and never did - so every gate here answered with the
+    FREE tier: on a Member install chat's ``datasource_connect`` /
+    ``datasource_query`` refused PostgreSQL with "requires a Member licence"
+    (release acceptance, 2026-10-24). Idempotent (the validator loads once per
+    process); a failure leaves the Free tier, i.e. fails closed.
+    """
+    try:
+        from license.validator import load_license_from_env as _load  # type: ignore[import]
+
+        _load()
+    except Exception:  # noqa: BLE001
+        pass
+
 _DATASOURCE_CONNECT_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -216,6 +235,69 @@ _DATASOURCE_CONNECT_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
+
+def _prefer_checkout(root: str, *package_names: str) -> None:
+    """Put THIS checkout's *root* first on sys.path and drop *package_names* from
+    sys.modules, so the code that is running is the code that is imported.
+
+    An editable install can expose another checkout's packages (the live one)
+    earlier on sys.path; without this a new module here is invisible to the server.
+    """
+    if root in sys.path:
+        sys.path.remove(root)
+    sys.path.insert(0, root)
+    for name in list(sys.modules):
+        if any(name == p or name.startswith(p + ".") for p in package_names):
+            sys.modules.pop(name, None)
+
+
+def _rag_service_module() -> Any:
+    """``bridges.shared.rag_service`` or None when the bridges tree is not importable."""
+    _prefer_checkout(str(Path(__file__).resolve().parents[2]), "bridges")  # corvin_operator/
+    try:
+        from bridges.shared import rag_service  # type: ignore[import]
+
+        return rag_service
+    except Exception:  # noqa: BLE001 - the tool is simply not advertised
+        return None
+
+
+_DATASOURCE_QUERY_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "Name of a registered connection (see Databases in the console).",
+        },
+        "sql": {
+            "type": "string",
+            "description": (
+                "ONE read-only SELECT (or WITH ... SELECT) statement, no comments. "
+                "For a local_file (CSV) connection the file is the table `data`. "
+                "To discover tables and columns query information_schema (PostgreSQL / "
+                "MySQL)."
+            ),
+        },
+        "max_rows": {"type": "integer", "minimum": 1, "maximum": 200,
+                     "description": "Rows to return (default 50, hard cap 200)."},
+    },
+    "required": ["name", "sql"],
+    "additionalProperties": False,
+}
+
+_RAG_QUERY_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "maxLength": 2000,
+                  "description": "What to look up in the registered knowledge providers."},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 20,
+                  "description": "Passages to return (default 5)."},
+        "providers": {"type": "array", "items": {"type": "string"}, "maxItems": 10,
+                      "description": "Optional provider ids; default is every registered provider."},
+    },
+    "required": ["query"],
+    "additionalProperties": False,
+}
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "claude-tool-forge"
@@ -885,6 +967,27 @@ class MCPServer:
                 ),
                 "inputSchema": _DATASOURCE_CONNECT_SCHEMA,
             })
+            tools.append({
+                "name": "datasource_query",
+                "description": (
+                    "Run ONE read-only SELECT against a registered database "
+                    "connection (PostgreSQL, MySQL, or a CSV file) and get the rows "
+                    "back. Credentials stay on the host; the session is read-only, "
+                    "rows are capped at 200. Use this to answer questions from the "
+                    "user's own data - query, do not guess."
+                ),
+                "inputSchema": _DATASOURCE_QUERY_SCHEMA,
+            })
+        if _rag_service_module() is not None:
+            tools.append({
+                "name": "rag_query",
+                "description": (
+                    "Search the user's registered knowledge providers (the Knowledge "
+                    "page) and get the best matching passages with scores. Use this "
+                    "to ground an answer in the user's own documents."
+                ),
+                "inputSchema": _RAG_QUERY_SCHEMA,
+            })
         # Union with shadowing across all four workspace scopes plus the
         # legacy single-root registry. Higher scope (task > session >
         # project > user) wins; the single root counts as fallback after
@@ -1071,6 +1174,12 @@ class MCPServer:
         # ADR-0190 M3 — General Availability datasource registration.
         if name == "datasource_connect":
             self._call_datasource_connect(msgid, args)
+            return
+        if name == "datasource_query":
+            self._call_datasource_query(msgid, args)
+            return
+        if name == "rag_query":
+            self._call_rag_query(msgid, args)
             return
         # ADR-2099 Phase 2 — a2a_send (stages a pending confirm, never sends).
         if name == "a2a_send":
@@ -1585,6 +1694,7 @@ class MCPServer:
         adapter = manifest.get("adapter", "")
 
         # ── License gate — identical decision to the console REST route ────
+        _ensure_license_loaded()
         allowed_adapters = _lic_get_limit("datasource_adapters_allowed")
         if allowed_adapters is not None and adapter not in allowed_adapters:
             self._respond(msgid, {
@@ -1652,6 +1762,177 @@ class MCPServer:
                 }, ensure_ascii=False),
             }],
         })
+
+    def _tool_json(self, msgid: Any, payload: dict, *, is_error: bool = False) -> None:
+        body: dict[str, Any] = {
+            "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, default=str)}],
+        }
+        if is_error:
+            body["isError"] = True
+        self._respond(msgid, body)
+
+    def _call_datasource_query(self, msgid: Any, args: dict) -> None:
+        """Chat tool: ONE read-only SELECT over a registered connection.
+
+        Gates, in order: strict connection name -> licence adapter allowlist (same
+        decision as ``datasource_connect`` and the console route) -> residency (a
+        ``data_residency: local`` connection never feeds a chat engine) ->
+        L34 data-classification gate -> credentials from the secret vault (NAMES
+        in the manifest, values never in the tool result) -> read-only session.
+        Every outcome is a hash-chained, metadata-only audit record (the SQL text
+        is represented by a hash, never stored).
+        """
+        if _DataSourceRegistry is None:
+            self._error(msgid, METHOD_NOT_FOUND, "compute plugin not installed (core/compute/)")
+            return
+        import hashlib
+
+        name = args.get("name")
+        sql = args.get("sql")
+        try:
+            max_rows = int(args.get("max_rows") or 50)
+        except (TypeError, ValueError):
+            max_rows = 50
+        from .tenants import current_tenant as _current_tenant
+
+        tenant_id = _current_tenant(None)
+        sql_hash = hashlib.sha256(str(sql).encode("utf-8", "replace")).hexdigest()[:16]
+
+        def refuse(reason: str, message: str) -> None:
+            self._log_security_event(
+                "datasource.query_refused", tool="datasource_query",
+                details={"name": str(name)[:128], "reason": reason, "sql_sha256": sql_hash},
+            )
+            self._tool_json(msgid, {"status": "error", "error": reason, "message": message},
+                            is_error=True)
+
+        _prefer_checkout(str(Path(__file__).resolve().parents[3] / "core" / "compute"),
+                         "corvin_compute")
+        try:
+            from corvin_compute.fabric.datasources.connection_env import (  # type: ignore[import]
+                env_for_connection, load_connection,
+            )
+            from corvin_compute.fabric.datasources.sql_query import (  # type: ignore[import]
+                QueryRefused, run_readonly_query,
+            )
+        except ImportError:
+            self._error(msgid, METHOD_NOT_FOUND, "datasource query support is not installed")
+            return
+        try:
+            raw = load_connection(_DataSourceRegistry()._home, tenant_id, str(name))
+        except ValueError:
+            refuse("unknown_connection", f"No registered connection named {name!r}.")
+            return
+        adapter = str(raw.get("adapter", ""))
+        _ensure_license_loaded()
+        allowed_adapters = _lic_get_limit("datasource_adapters_allowed")
+        if allowed_adapters is not None and adapter not in allowed_adapters:
+            refuse("license_limit", f"Adapter '{adapter}' requires a Member licence or higher.")
+            return
+        if str(raw.get("data_residency", "any")).lower() == "local":
+            refuse("residency_local",
+                   "This connection is marked data_residency=local: its rows must not be "
+                   "sent to a chat engine. Re-register it with residency 'any' to allow that.")
+            return
+        classification = str(raw.get("data_classification", "INTERNAL")).upper()
+        try:
+            from bridges.shared import rag_service as _rs  # type: ignore[import]
+
+            allowed, why = _rs.gate_classification(tenant_id, classification)
+        except Exception:  # noqa: BLE001 - fail-closed
+            allowed, why = False, "data_classification_gate_unavailable"
+        if not allowed:
+            refuse("classification_blocked", str(why))
+            return
+        try:
+            env = env_for_connection(raw, str(name))
+        except ValueError as exc:
+            refuse("credentials_unavailable", str(exc))
+            return
+        try:
+            result = run_readonly_query(raw, env, str(sql), max_rows=max_rows)
+        except QueryRefused as exc:
+            refuse("query_refused", str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 - driver errors carry no secrets, but keep it short
+            self._log_security_event(
+                "datasource.query_failed", tool="datasource_query",
+                details={"name": str(name)[:128], "adapter": adapter,
+                         "reason": type(exc).__name__, "sql_sha256": sql_hash},
+            )
+            self._tool_json(msgid, {
+                "status": "error", "error": "query_failed",
+                "message": f"{type(exc).__name__}: {str(exc)[:300]}",
+            }, is_error=True)
+            return
+        self._log_security_event(
+            "datasource.query_executed", tool="datasource_query",
+            details={"name": str(name)[:128], "adapter": adapter,
+                     "row_count": result["row_count"], "truncated": result["truncated"],
+                     "elapsed_ms": result["elapsed_ms"], "classification": classification,
+                     "sql_sha256": sql_hash},
+        )
+        self._tool_json(msgid, {"status": "ok", "connection": name, **result})
+
+    def _call_rag_query(self, msgid: Any, args: dict) -> None:
+        """Chat tool: query the registered knowledge providers.
+
+        Same service as the console's Query Tester (``rag_service.run_query``):
+        classification of the providers asked -> L34 gate -> orchestrator ->
+        per-provider counters -> audit record.
+        """
+        rs = _rag_service_module()
+        if rs is None:
+            self._error(msgid, METHOD_NOT_FOUND, "RAG support is not installed")
+            return
+        import asyncio
+
+        from .tenants import current_tenant as _current_tenant
+        from forge import paths as _forge_paths
+
+        tenant_id = _current_tenant(None)
+        registry_dir = _forge_paths.tenant_global_dir(tenant_id) / "rag"
+        try:
+            limit = max(1, min(int(args.get("limit") or 5), 20))
+        except (TypeError, ValueError):
+            limit = 5
+        providers = [p for p in (args.get("providers") or []) if isinstance(p, str)][:10]
+
+        async def _go() -> dict:
+            from bridges.shared.rag_orchestrator import RAGOrchestrator  # type: ignore[import]
+
+            orch = None
+            if registry_dir.is_dir():
+                orch = RAGOrchestrator(registry_dir=registry_dir, auth_tokens=rs.VaultTokens())
+                await orch.initialize()
+                if not orch.engines:
+                    orch = None
+            return await rs.run_query(
+                tenant_id, registry_dir, orch, str(args.get("query", "")),
+                limit=limit, preferred_providers=providers,
+            )
+
+        try:
+            result = asyncio.run(_go())
+        except Exception as exc:  # noqa: BLE001
+            self._tool_json(msgid, {"status": "error", "error": "rag_query_failed",
+                                    "message": type(exc).__name__}, is_error=True)
+            return
+        self._log_security_event(
+            "rag.tool_query", tool="rag_query",
+            details={"result_count": len(result.get("items", [])),
+                     "providers_queried": result.get("providers_queried", 0),
+                     "blocked": bool(result.get("blocked_by"))},
+        )
+        slim = [
+            {"content": i["content"], "score": round(float(i["score"]), 3),
+             "metadata": i.get("metadata") or {}, "source_url": i.get("source_url")}
+            for i in result.get("items", [])
+        ]
+        payload = {k: v for k, v in result.items() if k != "items"}
+        payload["passages"] = slim
+        payload["status"] = payload.get("status") or ("blocked" if result.get("blocked_by") else "ok")
+        self._tool_json(msgid, payload, is_error=bool(result.get("blocked_by")))
 
     def _call_fabric_tool(self, msgid: Any, name: str, args: dict) -> None:
         """Route ADR-0026 Fabric tool calls.

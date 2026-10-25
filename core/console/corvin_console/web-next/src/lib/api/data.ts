@@ -329,6 +329,13 @@ export interface RAGProvider {
   name: string;
   status: "active" | "inactive";
   health_status: "healthy" | "unhealthy" | "unknown";
+  /** Raw circuit-breaker state of the provider's engine (closed | open | half_open). */
+  circuit_state?: string;
+  /** Last probe error, when the provider did not answer. */
+  error?: string | null;
+  data_classification?: string;
+  compliance_zone?: string;
+  capabilities?: string[];
   latency_ms: number;
   query_stats: {
     total_queries: number;
@@ -355,7 +362,34 @@ export interface RAGQueryResponse {
   items: RAGResultItem[];
   total_time_ms: number;
   providers_queried: number;
+  providers_answered?: string[];
+  /** Classification the L34 gate judged (highest of the providers asked). */
+  classification?: string;
   cache_hit: boolean;
+  /** Set when nothing could be queried: no_providers_configured | query_failed. */
+  status?: string;
+  error?: string;
+  blocked_by?: string;
+}
+
+export interface RAGStatistics {
+  total_queries: number;
+  queries_today: number;
+  total_results_returned?: number;
+  average_latency_ms: number;
+  cache_hit_rate: number;
+  blocked_queries?: number;
+  providers_active?: number;
+  providers_unhealthy?: number;
+  per_provider_stats?: Record<
+    string,
+    { name?: string; total_queries: number; avg_latency_ms: number; health?: string }
+  >;
+  error?: string;
+}
+
+export async function getRAGStatistics(signal?: AbortSignal): Promise<{ statistics: RAGStatistics }> {
+  return api<{ statistics: RAGStatistics }>("/rag/statistics", { signal });
 }
 
 export async function listRAGProviders(

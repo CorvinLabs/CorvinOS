@@ -29,84 +29,81 @@ _forge_paths = _bootstrap.forge_paths
 
 logger = logging.getLogger(__name__)
 
-# ── L34 Data Classification Gate ───────────────────────────────
-# Import at module level to initialize gate per tenant
-
-_L34_GATES = {}  # Cached per tenant_id
-_AUDIT_EMITTERS = {}  # L16 audit events (per tenant)
 _STATISTICS_AGGS = {}  # Statistics aggregators (per tenant)
-
-
-def _get_l34_gate(tenant_id: str):
-    """Get or create L34 gate for tenant."""
-    if tenant_id not in _L34_GATES:
-        try:
-            from shared.rag_data_classification import (
-                L34DataClassificationGate,
-            )
-            _L34_GATES[tenant_id] = L34DataClassificationGate(tenant_id)
-            logger.info(f"✅ L34 gate initialized for tenant {tenant_id}")
-        except ImportError:
-            logger.warning("L34 data classification not available, skipping gate")
-            return None
-
-    return _L34_GATES.get(tenant_id)
 
 # ── Phase 3 Orchestrator Integration ──────────────────────────
 # Try to import the Phase 3 RAG orchestrator; when unavailable or when no
 # providers are registered, endpoints return an honest EMPTY state (never
 # fabricated mock providers/results).
 
-_ORCHESTRATORS: dict[str, Any] = {}  # tenant_id → RAGOrchestrator | None
+_ORCHESTRATORS: dict[str, tuple[Any, Any]] = {}  # tenant_id -> (signature, RAGOrchestrator)
 _ORCHESTRATORS_LOCK = asyncio.Lock()
 
 
+def _registry_signature(registry_dir: Any) -> tuple:
+    """Provider ids + manifest mtimes: a change anywhere rebuilds the orchestrator."""
+    from shared import rag_registry_store as store  # noqa: PLC0415
+
+    sig = []
+    for pid in store.provider_ids(registry_dir):
+        path = store.find_manifest(registry_dir, pid)
+        try:
+            sig.append((pid, path.stat().st_mtime_ns if path else 0))
+        except OSError:
+            sig.append((pid, 0))
+    return tuple(sig)
+
+
+def invalidate_orchestrator(tenant_id: str) -> None:
+    """Drop the cached orchestrator (call after a provider is created/imported/removed)."""
+    _ORCHESTRATORS.pop(tenant_id, None)
+
+
 async def _get_orchestrator(tenant_id: str) -> Any | None:
-    """Return the Phase 3 RAG orchestrator for the given tenant, or None.
+    """Return the RAG orchestrator for the tenant, or None when no provider exists.
 
-    Keyed by tenant_id from the authenticated session — never from env-var —
-    so each tenant gets an isolated orchestrator pointing to its own registry.
-    _ORCHESTRATORS_LOCK serialises the entire init path so concurrent first
-    requests for the same tenant cannot double-init the orchestrator.
-
-    async, not sync-wrapping-asyncio.run(): every caller is itself an async
-    route handler already running on the event loop, and asyncio.run() raises
-    "cannot be called from a running event loop" in that context (the /query
-    route works around exactly this by hopping to a worker thread first via
-    asyncio.to_thread() — this function instead just awaits directly, since
-    it has no need for a separate thread).
+    Keyed by tenant_id from the authenticated session (never env). The cached
+    orchestrator is reused while the registry is unchanged (so circuit-breaker
+    state survives) and rebuilt as soon as a provider is added, replaced or
+    removed - including by something other than this process. A missing registry
+    is NOT cached: the first provider created after a failed lookup is seen on
+    the next request (a cached ``None`` used to hide it until restart).
     """
     async with _ORCHESTRATORS_LOCK:
-        if tenant_id in _ORCHESTRATORS:
-            return _ORCHESTRATORS[tenant_id]
-
         try:
             from shared.rag_orchestrator import RAGOrchestrator  # noqa: PLC0415
 
             registry_dir = _forge_paths.tenant_global_dir(tenant_id) / "rag"
-            if registry_dir.exists():
-                auth_tokens: dict = {}  # Load from vault in production
-                orch = RAGOrchestrator(registry_dir=registry_dir, auth_tokens=auth_tokens)
-                # RAGOrchestrator.__init__ only sets up the (empty) engines dict —
-                # providers are loaded from registry.json/manifests/*.yaml by the
-                # async initialize() step, which nothing here was calling. Every
-                # registered provider therefore silently vanished from
-                # health_check_all() regardless of what was on disk.
-                await orch.initialize()
-                logger.info(f"RAG Orchestrator initialized for tenant={tenant_id} ({registry_dir})")
-                _ORCHESTRATORS[tenant_id] = orch
-                return orch
-            logger.warning(f"RAG registry not found for tenant={tenant_id}: {registry_dir}")
-            _ORCHESTRATORS[tenant_id] = None
-            return None
+            if not registry_dir.exists():
+                _ORCHESTRATORS.pop(tenant_id, None)
+                return None
+            signature = _registry_signature(registry_dir)
+            cached = _ORCHESTRATORS.get(tenant_id)
+            if cached is not None and cached[0] == signature:
+                return cached[1]
+            if not signature:
+                _ORCHESTRATORS.pop(tenant_id, None)
+                return None
+            orch = RAGOrchestrator(registry_dir=registry_dir, auth_tokens=_VaultTokens())
+            await orch.initialize()
+            logger.info("RAG Orchestrator initialized for tenant=%s (%s providers)",
+                        tenant_id, len(orch.engines))
+            _ORCHESTRATORS[tenant_id] = (signature, orch)
+            return orch
         except ImportError as e:
-            logger.warning(f"Phase 3 orchestrator not available: {e}")
-            _ORCHESTRATORS[tenant_id] = None
+            logger.warning(f"RAG orchestrator not available: {e}")
             return None
         except Exception as e:
             logger.error(f"Failed to initialize orchestrator for tenant={tenant_id}: {e}")
-            _ORCHESTRATORS[tenant_id] = None
             return None
+
+
+from shared.rag_service import (  # noqa: E402
+    VaultTokens as _VaultTokens,
+    health_word as _health_word,
+    manifest_summary as _manifest_summary,
+)
+
 
 router = APIRouter(prefix="/rag", tags=["console-rag"])
 
@@ -185,60 +182,50 @@ class RAGProvider:
 async def list_providers(
     _session: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    """List all registered RAG providers with health status (empty when none).
+    """List registered RAG providers with health and query counts (empty when none).
 
-    Always includes `registered_count` — the number of actual YAML manifests in
-    the tenant's RAG registry dir.  This is the authoritative count used by the
-    licence-gate UI; the empty-state path returns no providers, so it can never
-    inflate this count.
+    ``registered_count`` comes from the same counter the licence gate uses, so
+    the badge and the 402 can never disagree.
     """
-    # Count actual registered YAML manifests (the licence-gate source of truth).
-    # RAGOrchestrator.initialize() loads manifests from registry_dir/manifests/
-    # (see rag_orchestrator.py), not registry_dir itself -- glob the same place
-    # the loader reads, or this count silently stays 0 forever even with
-    # providers registered.
+    from shared import rag_registry_store as store  # noqa: PLC0415
+
     tid = _session.tenant_id
     registry_dir = _forge_paths.tenant_global_dir(tid) / "rag"
-    manifests_dir = registry_dir / "manifests"
-    registered_count = len(list(manifests_dir.glob("*.yaml"))) if manifests_dir.exists() else 0
+    registered_count = store.count(registry_dir)
 
     orch = await _get_orchestrator(tid)
     if orch is not None:
         try:
-            # Get health status of all providers via orchestrator
             health = await orch.health_check_all()
+            stats = store.query_stats(registry_dir)
             providers = []
-
-            # Transform orchestrator output to API format
             for provider_id, status in health.items():
-                providers.append(
-                    RAGProvider(
-                        id=provider_id,
-                        name=provider_id.replace("-", " ").title(),
-                        status="active",
-                        health_status=status.get("circuit_state", "unknown"),
-                        latency_ms=status.get("latency_ms", 0),
-                        total_queries=0,  # Populated from registry in Phase 5.1
-                        queries_today=0,
-                        avg_latency_ms=status.get("latency_ms", 0),
-                    )
-                )
-
+                info = _manifest_summary(registry_dir, provider_id)
+                qs = stats.get(provider_id, {})
+                latency = status.get("latency_ms", 0)
+                provider = RAGProvider(
+                    id=provider_id,
+                    name=info.get("name") or provider_id,
+                    status="active",
+                    health_status=_health_word(status),
+                    latency_ms=latency,
+                    total_queries=qs.get("total_queries", 0),
+                    queries_today=qs.get("queries_today", 0),
+                    avg_latency_ms=qs.get("average_latency_ms", 0),
+                ).to_dict()
+                provider["circuit_state"] = status.get("circuit_state", "unknown")
+                provider["error"] = status.get("error")
+                provider["data_classification"] = info.get("data_classification", "PUBLIC")
+                provider["compliance_zone"] = info.get("compliance_zone", "")
+                provider["capabilities"] = info.get("capabilities", [])
+                providers.append(provider)
             if providers:
-                logger.info(f"Loaded {len(providers)} providers from orchestrator")
-                return {"providers": [p.to_dict() for p in providers], "registered_count": registered_count}
+                return {"providers": providers, "registered_count": registered_count}
         except Exception as e:
             logger.warning(f"Failed to load providers from orchestrator: {e}")
-            # Fall through to the honest empty-state response below.
 
-    # Fallback: no orchestrator (or it returned no providers). Serve an EMPTY
-    # provider list so the real "No providers registered" empty state shows.
-    # Fabricated demo/mock providers must NEVER be served outside an explicit
-    # demo flag — they misrepresent a fresh install as having live backends.
-    return {
-        "providers": [],
-        "registered_count": registered_count,
-    }
+    # No orchestrator / no providers: an EMPTY list, never fabricated providers.
+    return {"providers": [], "registered_count": registered_count}
 
 
 @router.get("/providers/{provider_id}/health")
@@ -246,36 +233,30 @@ async def get_provider_health(
     provider_id: str,
     _session: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    """Health check for a specific registered provider (via orchestrator).
+    """Health of ONE registered provider (probes only that provider)."""
+    from shared import rag_registry_store as store  # noqa: PLC0415
 
-    Returns a "Provider not found" response when the provider is not registered
-    — fabricated mock providers are never served.
-    """
-    orch = await _get_orchestrator(_session.tenant_id)
+    tid = _session.tenant_id
+    orch = await _get_orchestrator(tid)
     if orch is not None:
         try:
-            health = await orch.health_check_all()
-            status = health.get(provider_id)
+            status = await orch.health_check_one(provider_id)
             if status is not None:
+                registry_dir = _forge_paths.tenant_global_dir(tid) / "rag"
+                qs = store.query_stats(registry_dir).get(provider_id, {})
                 latency_ms = status.get("latency_ms", 0)
                 return {
                     "id": provider_id,
-                    "name": provider_id.replace("-", " ").title(),
+                    "name": _manifest_summary(registry_dir, provider_id).get("name") or provider_id,
                     "status": "active",
-                    "health_status": status.get("circuit_state", "unknown"),
+                    "health_status": _health_word(status),
+                    "circuit_state": status.get("circuit_state", "unknown"),
+                    "error": status.get("error"),
                     "latency_ms": latency_ms,
-                    # ProviderCard reads query_stats.{total_queries,queries_today}
-                    # unconditionally (current = health || provider) -- omitting
-                    # this crashed the whole page with "Cannot read properties of
-                    # undefined (reading 'total_queries')" the moment a real
-                    # provider replaced the list-endpoint's RAGProvider default.
-                    # Per-provider query counting isn't implemented yet (see
-                    # RAGProvider.to_dict() above), so this is honestly zeroed,
-                    # not fabricated.
                     "query_stats": {
-                        "total_queries": 0,
-                        "queries_today": 0,
-                        "average_latency_ms": latency_ms,
+                        "total_queries": qs.get("total_queries", 0),
+                        "queries_today": qs.get("queries_today", 0),
+                        "average_latency_ms": qs.get("average_latency_ms", latency_ms),
                     },
                 }
         except Exception as e:
@@ -305,160 +286,25 @@ async def execute_rag_query(
     req: RAGQueryRequest,
     _session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
-    """Execute a RAG query across providers (Phase 3 orchestrator; empty when none)."""
-    query_text = req.query
-    limit = req.limit
-    preferred_providers = req.preferred_providers
-    timeout_ms = req.timeout_ms
-    classification_str = req.classification
+    """Execute a RAG query across providers (empty result when none are registered).
 
-    # ── L34: Data Classification Gate ──────────────────────────
+    Gate, run, count and audit are shared with the chat tool ``rag_query``
+    (``shared.rag_service.run_query``).
+    """
+    from shared import rag_service  # noqa: PLC0415
+
     tenant_id = _session.tenant_id
-    l34_gate = _get_l34_gate(tenant_id)
-
-    if l34_gate:
-        try:
-            from shared.rag_data_classification import (
-                DataClassification,
-            )
-
-            # Parse classification level
-            try:
-                classification = DataClassification[classification_str.upper()]
-            except KeyError:
-                classification = DataClassification.PUBLIC
-
-            # Check gate (fail-closed)
-            allowed, denial_reason = l34_gate.check(query_text, classification)
-            if not allowed:
-                # L16: Emit audit event for blocked query
-                try:
-                    from shared.rag_audit_events import (
-                        RAGAuditEmitter,
-                    )
-                    if tenant_id not in _AUDIT_EMITTERS:
-                        _AUDIT_EMITTERS[tenant_id] = RAGAuditEmitter()
-                    _AUDIT_EMITTERS[tenant_id].query_blocked(
-                        tenant_id,
-                        reason=denial_reason,
-                        classification=classification.name,
-                    )
-                except Exception as e:
-                    logger.warning(f"Audit emit failed: {e}")
-
-                return {
-                    "items": [],
-                    "total_time_ms": 0,
-                    "providers_queried": 0,
-                    "cache_hit": False,
-                    "error": denial_reason,
-                    "blocked_by": "L34_DATA_CLASSIFICATION",
-                }
-        except Exception as e:
-            # L34 fail-closed per ADR-0042: gate errors must block the query,
-            # not silently allow it. Log and return a blocked response.
-            logger.error(f"L34 gate check error (fail-closed): {e}")
-            return {
-                "items": [],
-                "total_time_ms": 0,
-                "providers_queried": 0,
-                "cache_hit": False,
-                "error": "data_classification_gate_unavailable",
-                "blocked_by": "L34_DATA_CLASSIFICATION",
-            }
-
-    if not query_text.strip():
-        return {
-            "items": [],
-            "total_time_ms": 0,
-            "providers_queried": 0,
-            "cache_hit": False,
-            "error": "Empty query",
-        }
-
-    start = time.time()
-
-    # Execute via the Phase 3 orchestrator if one exists for this tenant.
-    _query_tid = _session.tenant_id
-    orch = await _get_orchestrator(_query_tid)
-    if orch is not None:
-        try:
-            from shared.rag_query_engine import RAGQuery  # noqa: PLC0415
-
-            # Create query and execute via orchestrator
-            rag_query = RAGQuery(
-                query=query_text,
-                limit=limit,
-                preferred_providers=preferred_providers or None,
-                timeout_ms=timeout_ms,
-            )
-
-            # Execute asynchronously
-            results = await asyncio.to_thread(
-                lambda: asyncio.run(orch.query(rag_query))
-            )
-
-            elapsed_ms = int((time.time() - start) * 1000)
-
-            # L16: Emit hash-chained audit event for the executed query.
-            try:
-                from shared.rag_audit_events import RAGAuditEmitter
-                if tenant_id not in _AUDIT_EMITTERS:
-                    _AUDIT_EMITTERS[tenant_id] = RAGAuditEmitter()
-                _AUDIT_EMITTERS[tenant_id].query_executed(
-                    tenant_id,
-                    provider_count=len(preferred_providers),
-                    result_count=len(results),
-                    latency_ms=elapsed_ms,
-                    cache_hit=False,
-                    classification=classification_str,
-                )
-            except Exception as e:
-                logger.warning(f"Audit emit failed: {e}")
-
-            return {
-                "items": [
-                    {
-                        "content": item.content,
-                        "score": item.score,
-                        "metadata": item.metadata,
-                        # R2-C1 (2026-09-07): `source_url` originates from a
-                        # REMOTE RAG provider and is rendered as an <a href> in
-                        # the console. Allowlist http(s) at the API boundary as
-                        # well as in the query engine — a provider that bypasses
-                        # the engine's mapper still cannot ship a `javascript:`
-                        # href to the browser.
-                        "source_url": _safe_source_url(item.source_url),
-                    }
-                    for item in results
-                ],
-                "total_time_ms": elapsed_ms,
-                "providers_queried": len(preferred_providers),
-                "cache_hit": False,
-            }
-        except Exception as e:
-            logger.warning(f"Orchestrator query failed: {e}")
-            elapsed_ms = int((time.time() - start) * 1000)
-            return {
-                "items": [],
-                "total_time_ms": elapsed_ms,
-                "providers_queried": 0,
-                "cache_hit": False,
-                "status": "query_failed",
-                "error": "rag_query_failed",
-            }
-
-    # No orchestrator / no providers configured: return an explicit empty
-    # result. Fabricated demo results must NEVER be served — a fresh install
-    # has no providers and the UI must show that honestly.
-    elapsed_ms = int((time.time() - start) * 1000)
-    return {
-        "items": [],
-        "total_time_ms": elapsed_ms,
-        "providers_queried": 0,
-        "cache_hit": False,
-        "status": "no_providers_configured",
-    }
+    return await rag_service.run_query(
+        tenant_id,
+        _forge_paths.tenant_global_dir(tenant_id) / "rag",
+        await _get_orchestrator(tenant_id),
+        req.query,
+        limit=req.limit,
+        preferred_providers=req.preferred_providers,
+        timeout_ms=req.timeout_ms,
+        classification=req.classification,
+        safe_url=_safe_source_url,
+    )
 
 
 @router.get("/statistics")
