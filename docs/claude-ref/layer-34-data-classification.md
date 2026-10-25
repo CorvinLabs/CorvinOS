@@ -175,6 +175,20 @@ producing a guard that quietly allows what its own table forbids:
   the engine: it calls api.anthropic.com. The egress half was unpinned, and
   since the SECRET rule reads exactly that field, `network_egress: none` routed
   SECRET data to a US cloud by the other half of the same false claim.
+* The same pin covers every other bundled engine that calls a US cloud API
+  (T-0226, ADR-2268): `acs`, `acs_worker`, `anthropic_batch`, `codex_cli`,
+  `video_producer`, `video_producer_openai`, `video_producer_edge`
+  (`data_classification.PINNED_US_CLOUD_ENGINES`). An `engine_compliance` entry
+  that sets one of them to `locality: local` or `eu_cloud`, or to
+  `network_egress: none` or `local`, makes `from_tenant_config` raise; the loader
+  failure refuses every spawn of that tenant (`spawn_gates._load_l34_guard`),
+  fail-closed, never "allow". Restating `us_cloud` / `external` or narrowing to
+  `unknown` is accepted, because both only refuse more. `copilot` is the
+  deliberate exception: its bundled note documents GitHub Enterprise Cloud EU
+  residency and on-premise GHES. At boot `boot_platform` names a tenant's
+  rejected entries once (log plus the audit event `data_flow.relabel_rejected`,
+  ids and field only). Not covered here: `claude_code` can still be relabelled
+  `eu_cloud` (ADR-2268 records it as an open weakness).
 
 `SECRET` is the only row kept local-only by default. It fires solely on literal
 credentials (API keys, private keys, `password = …`) detected by regex, occurs
@@ -350,6 +364,9 @@ ships + tests in isolation from the adapter wiring.
   `details` — the allow-list rejects smuggled keys at emission time.
 * Don't ship a `claude_code` override flipping it to `local` — the
   locality mapping is load-bearing for the threat model (V-020 / ADR-0072).
+  The same holds for `acs`, `acs_worker`, `anthropic_batch`, `codex_cli` and
+  `video_producer*` (T-0226): extend `PINNED_US_CLOUD_ENGINES`, never a preset
+  that relabels one of them.
 * Don't change the default matrix (permissive PUBLIC/INTERNAL, CONFIDENTIAL
   local/EU-only, SECRET-local-only) without an ADR amendment — residency-by-
   default is a deliberate compliance decision (F-A10, ADR-0042 amendment).
