@@ -44,9 +44,6 @@ _KNOWN_DOUBLED = {
 _UI_CALLED = [
     ("GET", "/v1/console/datahub/projects/{project_id}"),
     ("GET", "/v1/console/datahub/projects/{project_id}/export"),
-    ("GET", "/v1/console/skills/{skill_id}/learning"),
-    ("GET", "/v1/console/skills/{skill_id}/feedback/history"),
-    ("GET", "/v1/console/skills/{skill_id}/optimization/proposals"),
 ]
 
 

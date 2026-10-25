@@ -408,7 +408,13 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   `*_stream2.py` modules and `components/learning/` (successor `stream4_skill_feedback`, same
   feedback gate), and the Brain hub (`hub`/`brain`/`brain_startup`/`config`/`cli` and
   `core/orchestration/subsystems/`, except `notification_daemon.py`, which the unreachable
-  `core/skill_forge/skill_forge_v2.py` still imports). Registered audit
+  `core/skill_forge/skill_forge_v2.py` still imports), plus the parallel skill optimizers
+  (`core/skills/{skill_learning_loop,skill_optimizer}`, `core/learning/skill_optimizer`,
+  `core/engine/{meta_skills,skill_learning_loop}`, `skill_learning_routes` +
+  `skill-learning-dashboard.tsx` — successor: SkillForge grading/canary/promotion),
+  `auto_grading` (it would let a skill promote itself past the 0.3 auto-grade cap),
+  `operator_fingerprint`/`adaptive_strategy`/`confidence_optimizer`/`tool_ranking(_cache)`
+  and `core/vibe/` (successor `anomaly_monitor`). Registered audit
   event types of retired emitters stay in `EVENT_SEVERITY`/`_EVENT_ALLOWLIST` (old chain
   records may carry them).
 * **The one closed feedback path is race-tested across processes.** `SkillAdapter.apply_config_delta`

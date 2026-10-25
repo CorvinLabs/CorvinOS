@@ -49,7 +49,7 @@ Next Skill Execution (with updated config)
 | **FeedbackCollector** | `core/learning/feedback_collector.py` | Collect user feedback, validate, scrub PII, store in-memory |
 | **FeedbackBatcher** | `core/learning/feedback_batcher.py` | Buffer feedback, trigger optimization on threshold |
 | **ConfigApplier** | `core/learning/config_applier.py` | Apply config deltas, persist to JSONL, enable rollback |
-| **ConvergenceDetector** | `core/learning/skill_optimizer.py` (existing) | Track metrics, detect convergence (confidence + latency + error) |
+| **ConvergenceDetector** | `core/learning/skill_optimizer.py` (retired by ADR-2282) | Track metrics, detect convergence (confidence + latency + error) |
 | **Learning Dashboard API** | `core/console/routes/learning_dashboard.py` | REST endpoints for feedback submission and optimization triggering — **NOT WIRED** (no app mounts it; routes answer 501) |
 
 ---

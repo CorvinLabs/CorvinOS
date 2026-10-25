@@ -5,8 +5,8 @@ Every case goes through the real console router with a real session (``_sandbox`
 * ``GET /discovery/peers`` answered 500 on EVERY request: it called
   ``audit.audit_info`` / ``audit_error``, which do not exist. A listed peer also
   reported ``status: "online"`` with no liveness probe behind it.
-* ``/skills/{id}/learning|feedback/history|optimization/proposals`` were
-  unauthenticated and served the same hard-coded numbers for every skill id.
+* (``/skills/{id}/learning|feedback/history|optimization/proposals`` served
+  hard-coded numbers; the route was retired by ADR-2282.)
 * ``/api/dod/feedback`` and ``/api/dod/history`` were 500 on every call (a dict
   passed where the store takes a LearningEvent; a ``filters=`` keyword the store
   does not have), and the 500 carried the exception text to the client.
@@ -48,22 +48,6 @@ class DiscoveryPeersTest(unittest.TestCase):
                 os.environ.pop("REMOTE_ORIGINS_DIR", None)
             else:
                 os.environ["REMOTE_ORIGINS_DIR"] = prev
-
-
-class SkillLearningNoFabricationTest(unittest.TestCase):
-    def test_no_sample_data_and_session_required(self):
-        with _sandbox(Path(tempfile.mkdtemp())) as (client, _csrf, _home, _):
-            base = "/v1/console/skills/os.delegation_router"
-            r = client.get(f"{base}/learning")
-            self.assertEqual(r.status_code, 404, r.text)
-            self.assertIn("not available", r.json()["detail"])
-            hist = client.get(f"{base}/feedback/history").json()
-            self.assertEqual((hist["recent"], hist["available"]), ([], False))
-            props = client.get(f"{base}/optimization/proposals").json()
-            self.assertEqual((props["proposals"], props["available"]), ([], False))
-            client.cookies.clear()
-            for path in ("learning", "feedback/history", "optimization/proposals"):
-                self.assertEqual(client.get(f"{base}/{path}").status_code, 401, path)
 
 
 class DodVerifierRoutesTest(unittest.TestCase):

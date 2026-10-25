@@ -1316,7 +1316,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "marketplace.skill_installation_started":  "INFO",
     "marketplace.skill_rated":        "INFO",
     "marketplace.skill_uninstalled":  "INFO",
-    # core/vibe loss signals + learning-loop tracker (core/vibe/_chain_audit.py)
+    # core/vibe loss signals + learning-loop tracker (emitters in core/vibe/ retired
+    # by ADR-2282; the vibe.* registrations stay for old chain records)
     "vibe.loss_signal":                 "WARNING",
     "vibe.convergence_point":           "INFO",
     "vibe.loop_cycle":                  "INFO",

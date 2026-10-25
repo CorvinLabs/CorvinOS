@@ -1,9 +1,8 @@
 """Unit tests for Round 1 Critical Blockers fixes.
 
-Tests the six blocker fixes:
-1. ToolForge register() API
-2. Skill auto_grade()
-3. Skill auto_promotion wiring
+Tests the remaining blocker fixes (1-3 — ToolForge register(), skill
+auto_grade() and auto-promotion — left with the Brain hub and auto_grading,
+retired by ADR-2282):
 4. Graph cycle detection
 5. Context Pipeline v2 archival
 6. ExecutionContext consolidation
@@ -11,92 +10,8 @@ Tests the six blocker fixes:
 
 import pytest
 from datetime import datetime
-from core.learning.auto_grading import auto_grade, ConfidenceGrade
 from core.vibe_engineering.graph_queries import GraphQueries
 from core.vibe_engineering.task_graph import TaskGraphBuilder, TaskGraph, Node, Edge
-
-
-class TestBlocker2SkillAutoGrade:
-    """Blocker 2: Skill auto_grade() implementation with Bayesian updates."""
-
-    def test_auto_grade_success_case(self):
-        """Test auto_grade with successful task result."""
-        result = {
-            "success": True,
-            "latency_ms": 150,
-            "output_quality": 0.9,
-            "tokens_used": 500,
-            "error": None,
-        }
-
-        grade = auto_grade(result, prior_confidence=0.5)
-
-        assert isinstance(grade, ConfidenceGrade)
-        assert 0.0 <= grade.score <= 1.0
-        assert grade.score > 0.5  # Should improve over prior
-        assert "Task succeeded" in grade.explanation
-
-    def test_auto_grade_failure_case(self):
-        """Test auto_grade with failed task result."""
-        result = {
-            "success": False,
-            "latency_ms": 5000,
-            "output_quality": 0.1,
-            "tokens_used": 2000,
-            "error": "timeout",
-        }
-
-        grade = auto_grade(result, prior_confidence=0.5)
-
-        assert isinstance(grade, ConfidenceGrade)
-        assert 0.0 <= grade.score <= 1.0
-        assert grade.score < 0.5  # Should decrease from prior
-        assert "Task failed" in grade.explanation
-
-    def test_auto_grade_bayesian_update(self):
-        """Test Bayesian update: prior confidence + feature signal."""
-        result_good = {
-            "success": True,
-            "latency_ms": 100,
-            "output_quality": 0.95,
-            "error": None,
-        }
-
-        # Start with low confidence
-        grade_low = auto_grade(result_good, prior_confidence=0.1)
-        assert grade_low.score > 0.1  # Should improve
-
-        # Start with high confidence
-        grade_high = auto_grade(result_good, prior_confidence=0.9)
-        assert grade_high.score >= 0.9  # Should stay high
-
-    def test_auto_grade_with_user_feedback(self):
-        """Test auto_grade with positive user feedback."""
-        result = {
-            "success": True,
-            "latency_ms": 200,
-            "output_quality": 0.8,
-            "error": None,
-        }
-
-        grade_no_feedback = auto_grade(result, prior_confidence=0.5, feedback=None)
-        grade_positive = auto_grade(
-            result, prior_confidence=0.5, feedback="excellent work"
-        )
-
-        assert grade_positive.score >= grade_no_feedback.score
-
-    def test_auto_grade_clamping(self):
-        """Verify score is clamped to [0.0, 1.0]."""
-        result = {
-            "success": True,
-            "latency_ms": 50,
-            "output_quality": 1.0,
-            "tokens_used": 10,
-        }
-
-        grade = auto_grade(result, prior_confidence=0.99)
-        assert 0.0 <= grade.score <= 1.0
 
 
 class TestBlocker4GraphCycleDetection:
