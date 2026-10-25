@@ -265,28 +265,29 @@ async def list_skills(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/skills/{skill_id}/rollback")
+# SkillForge keeps no version history (``versions`` is always [] above), so there
+# is nothing to roll back to. This route used to be `# TODO: Update skill
+# version` followed by an audit record ``forge_skill_rollback`` and a
+# ``rolled_back`` answer: a permanent chain record of an act that never
+# happened. Same fix as enable/disable: 501, nothing written to the chain.
+# (Canary rollback of an autonomous-forge candidate is a different, real route:
+# POST /autonomous-forge/rollback.)
+_SKILL_ROLLBACK_DETAIL = (
+    "Skill rollback is not implemented on this build. SkillForge stores no "
+    "version history, so there is no earlier version to restore. For an "
+    "autonomous-forge canary use the canary Rollback control."
+)
+
+
+@router.post("/skills/{skill_id}/rollback", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
 async def rollback_skill(
     skill_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-    version: str = Query(...),
+    version: Optional[str] = Query(None),
 ) -> dict[str, Any]:
-    """Rollback a skill to a previous version (audit-logged)."""
-    try:
-        # TODO: Update skill version in SkillForge registry
-
-        # Log to audit trail
-        console_audit.action_performed(
-            tenant_id=rec.tenant_id,
-            sid_fingerprint=rec.sid_fingerprint,
-            action="forge_skill_rollback",
-            target_kind="skill",
-            target_id=skill_id,
-            trigger=f"version={version}",
-        )
-        return {"status": "rolled_back", "skill_id": skill_id, "version": version, "timestamp": time.time()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Not implemented — see _SKILL_ROLLBACK_DETAIL. Writes nothing to the chain."""
+    raise HTTPException(status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+                        detail=_SKILL_ROLLBACK_DETAIL)
 
 
 # SkillForge has no per-skill enable/disable: no meta.json on disk carries
@@ -328,6 +329,48 @@ async def disable_skill(
     """Not implemented — see _SKILL_MUTATION_DETAIL."""
     raise HTTPException(status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
                         detail=_SKILL_MUTATION_DETAIL)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plugins Endpoint (staged, forged plugins)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/plugins")
+async def list_forged_plugins(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """List this tenant's staged forged plugins for the Forge panel's Plugins tab.
+
+    Until 2026-10-24 the tab called ``GET /forge/plugins``, which had no route
+    (404, swallowed by the page loader), so it always read "No plugins yet".
+    Reads the same staging directory Plugin Forge writes and Marketplace ->
+    Forged lists (``forge_creator.forged_summaries``), so there is one reader.
+    Forged plugins are staged, never installed: ``enabled`` is false and
+    ``installed`` is false until the operator installs one from Marketplace.
+    """
+    try:
+        from .forge_creator import forged_summaries  # noqa: PLC0415
+
+        items = [
+            {
+                "id": s["dirname"],
+                "dirname": s["dirname"],
+                "plugin_id": s.get("plugin_id"),
+                "name": s.get("display_name") or s.get("plugin_id") or s["dirname"],
+                "description": s.get("kind") or "",
+                "kind": s.get("kind"),
+                "tier": s.get("tier"),
+                "quality": s.get("quality"),
+                "enabled": False,
+                "installed": False,
+                "created_at": s.get("created_at"),
+            }
+            for s in forged_summaries(rec.tenant_id)
+        ]
+        return {"tenant_id": rec.tenant_id, "timestamp": time.time(),
+                "count": len(items), "plugins": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -569,20 +612,217 @@ async def get_dependency_graph(
 # Audit Endpoints (Real Data from Audit Trail)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Which chain records are "Forge events".
+#
+# Until 2026-10-24 this endpoint kept only ``console.action_performed`` records
+# whose ``details.action`` started with ``forge_`` and read only the last 256 KiB
+# of the chain. The only writers of such an action were the OS-Skill toggles
+# and a stub, so the tab showed 0 events on an install whose chain held >1,500
+# ``forge.tool_executed``, ~70 ``forge_run.*`` and 26 ``forge_bundle.*`` records.
+# The real Forge events have four shapes:
+#   * their own event_type: ``forge.*``, ``forge_run.*``, ``forge_bundle.*``,
+#     ``forge_intake.*``, ``layer_forge.*``;
+#   * ``console.action_performed`` / ``console.action_failed`` whose
+#     ``details.action`` names a Forge act: ``forge_osskill_*``, ``skill.*``
+#     (generated / manual / canary / promote), ``tool.*``, ``plugin.forged_*``.
+_FORGE_EVENT_PREFIXES: tuple[str, ...] = (
+    "forge.", "forge_", "layer_forge.", "tool.",
+)
+# SkillForge's own records (``skill_forge.registry`` / MCP: the skill name is the record's
+# ``tool`` field) and the Tool-Forge runner's gate records. Exact names, NOT a ``skill.`` prefix:
+# ``skill.executed`` / ``skill.model_selector.*`` are OS-skill telemetry written on every turn.
+_FORGE_EXACT_EVENTS: frozenset[str] = frozenset({
+    "skill.create", "skill.create_forced_scope", "skill.delete", "skill.grade",
+    "skill.promote", "skill.namespace_denied", "skill.scope_denied",
+    "skill.bootstrap_grade_failed",
+    "code.exec_attempt", "policy.import_denied", "policy.namespace_denied",
+})
+_FORGE_ACTION_PREFIXES: tuple[str, ...] = (
+    "forge", "layer_forge", "skill.", "tool.", "plugin.forged",
+)
+_CONSOLE_ACTION_EVENTS = frozenset({"console.action_performed", "console.action_failed"})
+# Cheap byte pre-filter so the reverse scan json-parses only candidate lines.
+_FORGE_LINE_NEEDLES: tuple[bytes, ...] = (
+    b"forge", b'"skill.', b'"tool.', b"plugin.forged", b'"code.exec_attempt"', b'"policy.',
+)
+# How far back the endpoint reads. The chain is append-only and can be hundreds
+# of MB; the newest records matter, and the response says when the window did
+# not reach back to ``since`` (``complete: false``).
+_AUDIT_SCAN_BYTES = 64 * 1024 * 1024
+_AUDIT_MAX_EVENTS = 100
+# Detail keys that are metadata-only and safe to re-serve (audit_tail's rule:
+# no free text, no user identifiers, no tool input/output).
+_AUDIT_EXTRA_DETAIL_KEYS: frozenset[str] = frozenset({
+    "run_kind", "artifact_kind", "artifact_id", "event_count", "truncated",
+    "item_id", "format", "data_class", "reason_code", "worker_id", "decision",
+    "cache_hit", "sandbox", "bundle_id", "version", "entry_id", "to_status",
+    "from_status", "gate_id", "kind", "quality", "plugin_id", "skill_id",
+    "tool_name", "exit_code", "duration_ms", "status", "run_id",
+    "sha", "scope", "type", "persona", "language", "outcome",
+})
+
+
+def _forge_event_effective_type(rec_obj: dict[str, Any]) -> str:
+    """The name an operator recognises: the action for console records, else the event_type."""
+    et = str(rec_obj.get("event_type") or "")
+    if et in _CONSOLE_ACTION_EVENTS:
+        return str((rec_obj.get("details") or {}).get("action") or et)
+    return et
+
+
+def _is_forge_event(rec_obj: dict[str, Any]) -> bool:
+    et = str(rec_obj.get("event_type") or "")
+    if et.startswith(_FORGE_EVENT_PREFIXES) or et in _FORGE_EXACT_EVENTS:
+        return True
+    if et in _CONSOLE_ACTION_EVENTS:
+        action = str((rec_obj.get("details") or {}).get("action") or "")
+        return action.startswith(_FORGE_ACTION_PREFIXES)
+    return False
+
+
+def _forge_resource(rec_obj: dict[str, Any]) -> tuple[str, str]:
+    """(resource_type, resource_id) of a Forge chain record."""
+    et = str(rec_obj.get("event_type") or "")
+    d = rec_obj.get("details") or {}
+    if et in _CONSOLE_ACTION_EVENTS:
+        kind = str(d.get("target_kind") or "")
+        kind = {"generated_plugin": "plugin", "generated_skill": "skill",
+                "generated_tool": "tool", "os_skill": "os-skill"}.get(kind, kind)
+        return kind, str(d.get("target_id") or "")
+    if et.startswith("skill."):
+        return "skill", str(rec_obj.get("tool") or d.get("skill_id") or "")
+    if et == "forge.tool_executed" or et.startswith(("tool.", "code.", "policy.")):
+        return "tool", str(d.get("tool_name") or rec_obj.get("tool") or "")
+    if et.startswith("forge_run."):
+        return "run", str(d.get("run_id") or rec_obj.get("run_id") or "")
+    if et.startswith("forge_bundle."):
+        return "bundle", str(d.get("bundle_id") or d.get("artifact_id") or d.get("entry_id") or "")
+    if et.startswith("forge_intake."):
+        return "intake", str(d.get("item_id") or "")
+    if et.startswith("layer_forge."):
+        return "layer", str(d.get("layer_id") or d.get("entry_id") or d.get("id") or "")
+    return "", ""
+
+
+def _reverse_lines(path: Path, max_bytes: int) -> tuple[Any, list[bool]]:
+    """Yield the chain's lines newest-first, reading at most ``max_bytes`` from the end.
+
+    Returns (generator, flag) where flag[0] becomes True when the generator
+    reached the start of the file (the window covered the whole chain).
+    """
+    reached_start = [False]
+
+    def gen():
+        chunk = 1 << 20
+        try:
+            fh = path.open("rb")
+        except OSError:
+            reached_start[0] = True
+            return
+        with fh:
+            fh.seek(0, 2)
+            pos = fh.tell()
+            stop = max(0, pos - max_bytes)
+            carry = b""
+            while pos > stop:
+                n = min(chunk, pos - stop)
+                pos -= n
+                fh.seek(pos)
+                parts = (fh.read(n) + carry).split(b"\n")
+                carry = parts[0]
+                for line in reversed(parts[1:]):
+                    if line.strip():
+                        yield line
+            if stop == 0:
+                reached_start[0] = True
+                if carry.strip():
+                    yield carry
+
+    return gen(), reached_start
+
+
+def _scan_forge_events(chain: Path, since_ts: float | None, limit: int,
+                       event_filter: str) -> tuple[list[dict[str, Any]], bool]:
+    """Newest-first Forge records of ``chain``. Second value: the scan covered the whole requested window."""
+    from .audit_tail import _sanitize_details  # noqa: PLC0415
+
+    lines, reached_start = _reverse_lines(chain, _AUDIT_SCAN_BYTES)
+    out: list[dict[str, Any]] = []
+    covered_since = False
+    for raw in lines:
+        if not any(n in raw for n in _FORGE_LINE_NEEDLES):
+            # Still need the timestamp bound: cheap check only on candidates, so
+            # a long run of non-Forge lines cannot prove "older than since";
+            # the byte window bounds the work instead.
+            continue
+        try:
+            obj = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        ts = obj.get("ts")
+        if since_ts is not None and isinstance(ts, (int, float)) and ts < since_ts:
+            covered_since = True
+            break
+        if not _is_forge_event(obj):
+            continue
+        effective = _forge_event_effective_type(obj)
+        if event_filter and not effective.startswith(event_filter):
+            continue
+        d = obj.get("details") or {}
+        safe = _sanitize_details(d)
+        safe.update({k: v for k, v in d.items()
+                     if k in _AUDIT_EXTRA_DETAIL_KEYS and isinstance(v, (str, int, float, bool))})
+        rtype, rid = _forge_resource(obj)
+        h = str(obj.get("hash") or "")
+        ph = str(obj.get("prev_hash") or "")
+        out.append({
+            "id": h[:16] or f"{ts}",
+            "timestamp": (datetime.utcfromtimestamp(ts).isoformat() + "Z"
+                          if isinstance(ts, (int, float)) else ""),
+            "type": effective,
+            "event_type": str(obj.get("event_type") or ""),
+            "severity": obj.get("severity", "INFO"),
+            "resource_type": rtype,
+            "resource_id": rid,
+            "resource_name": rid or effective,
+            "action": effective,
+            "user": str(d.get("sid_fingerprint") or ""),
+            "details": safe,
+            "hash": h[:8],
+            "prev_hash": ph[:8],
+            "_ts": ts if isinstance(ts, (int, float)) else 0.0,
+        })
+        if len(out) >= limit:
+            covered_since = True  # the page is full: nothing older is needed
+            break
+    complete = covered_since or reached_start[0]
+    for e in out:
+        e.pop("_ts", None)
+    return out, complete
+
+
 @router.get("/audit")
 async def get_audit_trail(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     since: Optional[str] = Query(None),
     event_type: str = Query("forge_*"),
 ) -> dict[str, Any]:
-    """Get hash-chained audit events for Forge operations (real data, ADR-0232/0537).
+    """Hash-chained audit events for Forge operations (real data, ADR-0232/0537).
 
-    Reads the same chain file console_audit.action_performed() writes to
-    (<tenant>/global/forge/audit.jsonl) via audit_tail._parse_chain_file — the
-    canonical console audit reader (ADR-0007 one-chain-per-tenant). Every Forge
-    action is recorded as event_type "console.action_performed" with the real
-    action name in details.action, so filtering happens on that field, not on
-    the outer event_type.
+    Reads the tenant chain (``<tenant>/global/forge/audit.jsonl``, ADR-0007
+    one-chain-per-tenant) newest-first, up to 64 MiB from its end, and keeps
+    every record that is a Forge event: the Forge families
+    (``forge.*``, ``forge_run.*``, ``forge_bundle.*``, ``forge_intake.*``,
+    ``layer_forge.*``) and the console actions that name a Forge act
+    (``forge_osskill_*``, ``skill.*``, ``tool.*``, ``plugin.forged_*``).
+
+    ``event_type`` is an optional prefix on the event name an operator sees
+    (the action for console records); the legacy default ``forge_*`` means
+    "all Forge events". ``complete`` is false when the scan window ended
+    before reaching ``since``, so the UI never claims a full history it did
+    not read.
     """
     try:
         tid = rec.tenant_id
@@ -594,43 +834,19 @@ async def get_audit_trail(
             except ValueError:
                 since_ts = None
 
+        flt = (event_type or "").strip()
+        flt = "" if flt in ("", "*", "forge_*", "all") else flt.rstrip("*")
+
         chain = _forge_paths.tenant_global_dir(tid) / "forge" / "audit.jsonl"
-        raw_events = _parse_chain_file(chain, severity=None, event_prefix=None, since=since_ts) if chain.exists() else []
-
-        prefix = (event_type or "forge_*").rstrip("*")
-        forge_events = [
-            e for e in raw_events
-            if (e.get("details") or {}).get("action", "").startswith(prefix)
-        ]
-        forge_events.sort(key=lambda r: r.get("ts") or 0.0, reverse=True)
-        forge_events = forge_events[:100]
-
-        # Format as API response
-        formatted_events = [
-            {
-                "id": e.get("hash_prefix") or "",
-                "timestamp": (
-                    datetime.utcfromtimestamp(e["ts"]).isoformat() + "Z"
-                    if isinstance(e.get("ts"), (int, float)) else ""
-                ),
-                "type": (e.get("details") or {}).get("action", e.get("event_type", "")),
-                "resource_type": (e.get("details") or {}).get("target_kind", ""),
-                "resource_id": (e.get("details") or {}).get("target_id", ""),
-                "resource_name": (e.get("details") or {}).get("target_id", ""),
-                "action": (e.get("details") or {}).get("action", ""),
-                "user": (e.get("details") or {}).get("sid_fingerprint", ""),
-                "details": e.get("details"),
-                "hash": e.get("hash_prefix") or "",
-                "prev_hash": "",
-            }
-            for e in forge_events
-        ]
+        events, complete = _scan_forge_events(chain, since_ts, _AUDIT_MAX_EVENTS, flt) if chain.exists() else ([], True)
 
         return {
             "tenant_id": tid,
             "timestamp": time.time(),
-            "count": len(formatted_events),
-            "events": formatted_events,
+            "count": len(events),
+            "complete": complete,
+            "window_bytes": _AUDIT_SCAN_BYTES,
+            "events": events,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

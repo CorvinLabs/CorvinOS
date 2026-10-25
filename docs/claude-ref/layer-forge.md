@@ -129,7 +129,7 @@ the runtime half is `SKIPPED` (`skipped_no_runtime_host`) — never a silent PAS
 | POST | `/layer-forge/definitions` (body = manifest) | 200 SUCCESS · 409 version exists · 422 rejected (`detail.phase`) · 503 audit failed |
 | POST | `/layer-forge/definitions/{entry_id}/{version}/transition` `{to_status}` | 200 · 404 · 409 illegal transition · 503 |
 | POST | `/layer-forge/gate-thresholds/analyze` `{gate_id, lookback_days}` | correlation suggestion, never auto-applied |
-| POST | `/layer-forge/gate-thresholds/apply` `{gate_id, new_threshold, reason}` | operator-explicit apply, audited |
+| POST | `/layer-forge/gate-thresholds/apply` `{gate_id, new_threshold, reason}` | **501**, writes nothing. No store holds a gate threshold and no gate reads one; until 2026-10-24 this emitted `layer_forge.gate_threshold_applied` with a hard-coded `old_threshold=1.0` and persisted nothing (a fictional chain record). `analyze` stays real |
 | GET | `/layer-forge/analytics[?since=&until=]` | decisions/confidence/flags/convergence metrics |
 
 The REVIEW phase's model call is bounded too (`review.REVIEW_TIMEOUT_S = 45` s, one retry → worst case
@@ -155,8 +155,22 @@ through the real pipeline on confirm; nothing is created between those two
 steps. The Definitions list/detail view below it is unchanged. The analytics
 dashboard (`/app/layer-forge-analytics`) stayed a separate standalone panel
 (own charts, no shared list+detail surface) — linked from the tab for
-discoverability, since it has no sidebar entry of its own either. Transition
-buttons in the detail view are still `disabled` stubs (see Not built).
+discoverability, since it has no sidebar entry of its own either.
+
+The detail view's transition buttons (Accept · Deploy · Revert to Proposed ·
+Supersede, offered per status: proposed→accepted, accepted→deployed|proposed,
+deployed→superseded) call `POST .../transition` behind a confirm dialog. The
+dialog has an optional override reason: a definition whose review was FLAGGED
+is refused (409, message shown in the dialog) until the operator types one;
+then the request carries `override_review_flags: true` + `override_reason`
+and the server records `layer_forge.review_override_applied` next to
+`layer_forge.definition_transitioned` (audit-first; a chain failure is a 503
+and nothing changes). Until 2026-10-24 the buttons were hard-coded `disabled`.
+The list normalises missing `targets` / `quality_gates` / `enforcement_rules` /
+`dependencies` to `[]` — the registry omits empty lists, and one definition
+without enforcement rules used to crash the whole Forge page.
+The other Forge tabs (Plugins, Audit) and the panel's 501 routes are in
+[forge-console-panel.md](forge-console-panel.md).
 
 ## CLI
 
@@ -194,10 +208,8 @@ python scripts/layer_forge_cli.py [--tenant TID] promote <id> <version> <to_stat
 - `enforcement_rules` are stored and counted; **schema_validation + layer_boundaries
   checkers are wired** (M1 2026-10-05); execution of the boundary rules themselves is deferred
   (phase 2, requires build artifact analysis).
-- The Definitions detail view's transition buttons (Accept/Deploy/Supersede) are
-  rendered `disabled` with a note pointing at the real transition endpoint — a
-  human runs transitions via the CLI (`layer_forge_cli.py promote`) or a direct
-  `POST .../transition` call today, not by clicking in the console.
+- Gate-threshold persistence: `POST /layer-forge/gate-thresholds/apply` answers
+  501 until a threshold store exists that the gates read.
 
 ## Review-prompt canary and the optimizer (Phase 3c/4a2)
 

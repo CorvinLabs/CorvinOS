@@ -998,6 +998,8 @@ class CreateWorkflowRequest(BaseModel):
     title: str = Field("", max_length=120)
     description: str = Field("", max_length=1000)
     yaml: str | None = Field(None, max_length=_MAX_YAML_BYTES)
+    # Key of a server-side template (GET /workflow-templates). Mutually exclusive with ``yaml``.
+    template: str | None = Field(None, pattern=r"^[a-z][a-z0-9-]{0,63}$")
     re_auth_token: str | None = None
     model_config = {"extra": "forbid"}
 
@@ -1167,7 +1169,19 @@ def create_workflow(
     # Build content before the lock (lock scope stays minimal).
     title = body.title or wid
     desc = body.description or ""
-    initial_yaml = body.yaml or (
+    template_yaml: str | None = None
+    if body.template is not None:
+        if body.yaml:
+            raise HTTPException(http_status.HTTP_400_BAD_REQUEST,
+                                "send either a template or a yaml, not both")
+        tmpl = _TEMPLATES.get(body.template)
+        if tmpl is None:
+            raise HTTPException(http_status.HTTP_404_NOT_FOUND,
+                                f"unknown workflow template {body.template!r}")
+        template_yaml = _template_yaml_for(tmpl, wid)
+        if not desc:
+            desc = _template_description(tmpl)
+    initial_yaml = body.yaml or template_yaml or (
         f'awp: "1.0.0"\n'
         f'workflow:\n'
         f'  name: {wid}\n'
@@ -1192,7 +1206,7 @@ def create_workflow(
         if _meta_path(rec.tenant_id, wid).exists():
             raise HTTPException(http_status.HTTP_409_CONFLICT, "workflow already exists")
 
-        if body.yaml:
+        if body.yaml or template_yaml:
             _validate_yaml_str(initial_yaml)
 
         _enforce_workflows_max(rec.tenant_id, rec)
@@ -1217,8 +1231,31 @@ def create_workflow(
         action="workflow.created",
         target_kind="workflow",
         target_id=wid,
+        trigger=f"template={body.template}" if body.template else None,
     )
     return {"ok": True, "workflow": meta}
+
+@router.get("/workflow-templates")
+def list_workflow_templates(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Server-side workflow templates, the same set the design chat offers.
+
+    The Templates tab used to be five hard-coded cards whose ids the server did
+    not know; "Use" opened an empty dialog. Now the list IS ``_TEMPLATES`` and
+    ``POST /workflows`` accepts ``template: <key>`` to create from one.
+    """
+    items = [
+        {
+            "id": key,
+            "title": key.replace("-", " ").title(),
+            "description": _template_description(t),
+            "steps": t.get("steps", ""),
+            "node_count": t["yaml"].count("    - id: "),
+        }
+        for key, t in _TEMPLATES.items()
+    ]
+    return {"count": len(items), "templates": items}
 
 @router.get("/workflows/{wid}")
 def get_workflow(
@@ -4417,6 +4454,18 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
         ),
     },
 }
+
+def _template_description(tmpl: dict[str, Any]) -> str:
+    """The ``workflow.description`` line of a template's YAML."""
+    m = re.search(r'^  description: "([^"\n]*)"', str(tmpl.get("yaml", "")), re.M)
+    return m.group(1) if m else ""
+
+
+def _template_yaml_for(tmpl: dict[str, Any], wid: str) -> str:
+    """A template's YAML with ``workflow.name`` set to the new workflow's id."""
+    return re.sub(r"^(  name: ).*$", lambda m: f"{m.group(1)}{wid}",
+                  str(tmpl["yaml"]), count=1, flags=re.M)
+
 
 def _match_template(text: str) -> tuple[str, float] | None:
     lower = text.lower()

@@ -6,7 +6,12 @@ marketplace, so the `{skill_id}` detail route can never swallow a sibling path.
 The catalogue is the skill registry `SkillInstaller` (ADR-0680) writes: it lists
 skills that ARE installed on this host. There is deliberately no install route
 here — the one that shipped with Phase 6 answered "queued" and installed
-nothing. Skills arrive as packages (Packages tab) or via the Skill Manager.
+nothing. Skills arrive ONLY through the Skill Manager upload
+(``/v1/console/skills-manager/skills/install``, ``/app/skill-manager``): it is the
+one writer of the registry this catalogue reads. The Marketplace Packages tab
+(``routes/packages.py``) keeps a separate store that nothing here reads, so a
+package uploaded there never appears in this catalogue
+(``tests/sandbox/test_gap_forge_wf_compute.py`` pins both halves).
 """
 from pathlib import Path
 from typing import Annotated, Any, Optional

@@ -1,20 +1,23 @@
 import React, { useState, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Package, Plus, Upload, Download } from 'lucide-react';
-import {
-  exportSingleItem,
-  importBundle,
-  isValidZipFile,
-} from '@/lib/forge-bundles';
+import { Package, Upload } from 'lucide-react';
+import { api } from '@/lib/api';
+import { importBundle, isValidZipFile } from '@/lib/forge-bundles';
 
+/** A staged plugin written by Plugin Forge (GET /forge/plugins). Staged plugins are never
+ *  installed: install and review happen in Marketplace -> Forged. */
 interface Plugin {
   id: string;
   name?: string;
   enabled?: boolean;
   description?: string;
   version?: string;
+  plugin_id?: string | null;
+  tier?: string | null;
+  quality?: string | null;
 }
 
 interface PluginsTabProps {
@@ -31,45 +34,24 @@ export default function PluginsTab({
   filterStatus }: PluginsTabProps) {
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filtered = React.useMemo(() => {
+    const q = searchQuery.toLowerCase();
     return plugins.filter((plugin) => {
       const matchesSearch =
-        searchQuery === '' ||
-        plugin.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (plugin.description?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false);
-
+        q === '' ||
+        (plugin.name?.toLowerCase().includes(q) ?? false) ||
+        (plugin.plugin_id?.toLowerCase().includes(q) ?? false) ||
+        (plugin.description?.toLowerCase().includes(q) ?? false);
+      // Staged plugins are never enabled, so "Enabled" matches none of them.
       const matchesStatus =
         filterStatus === 'all' ||
-        (filterStatus === 'enabled' && plugin.enabled) ||
+        (filterStatus === 'enabled' && !!plugin.enabled) ||
         (filterStatus === 'disabled' && !plugin.enabled);
-
       return matchesSearch && matchesStatus;
     });
   }, [plugins, searchQuery, filterStatus]);
-
-  const handleDownloadSingle = async (pluginId: string) => {
-    const result = await exportSingleItem('plugins', pluginId);
-    if (!result.success) {
-      setImportStatus({ type: 'err', msg: `Download failed: ${result.error}` });
-    }
-  };
-
-  const handleDownloadSelected = async () => {
-    if (selectedIds.size === 0) {
-      setImportStatus({ type: 'err', msg: 'No items selected' });
-      return;
-    }
-
-    // For now, download each selected plugin individually
-    for (const id of selectedIds) {
-      await handleDownloadSingle(id);
-    }
-    setImportStatus({ type: 'ok', msg: `Downloaded ${selectedIds.size} plugins` });
-    setSelectedIds(new Set());
-  };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -84,13 +66,10 @@ export default function PluginsTab({
     try {
       const result = await importBundle(file);
       if (result.success) {
-        setImportStatus({
-          type: 'ok',
-          msg: `Imported successfully (${result.imported_count} plugins)`,
-        });
+        setImportStatus({ type: 'ok', msg: 'Bundle accepted. Plugins wait for approval before they run.' });
         try {
-          const res = await fetch('/v1/console/forge/plugins');
-          if (res.ok) setPlugins((await res.json()).plugins || []);
+          const data = await api<{ plugins?: Plugin[] }>('/forge/plugins');
+          setPlugins(data.plugins || []);
         } catch (err) {
           console.error('Failed to refresh plugins:', err);
         }
@@ -103,20 +82,16 @@ export default function PluginsTab({
     }
   };
 
-  const toggleSelection = (pluginId: string) => {
-    const newSelected = new Set(selectedIds);
-    if (newSelected.has(pluginId)) {
-      newSelected.delete(pluginId);
-    } else {
-      newSelected.add(pluginId);
-    }
-    setSelectedIds(newSelected);
-  };
-
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Plugins</h2>
+        <div>
+          <h2 className="text-xl font-semibold">Plugins</h2>
+          <p className="text-sm text-muted-foreground">
+            Plugins the Plugin Forge staged for review. Install or delete them in{' '}
+            <Link className="underline" to="/app/marketplace?tab=forged">Marketplace, Forged</Link>.
+          </p>
+        </div>
         <div className="flex gap-2">
           <input
             ref={fileInputRef}
@@ -135,20 +110,6 @@ export default function PluginsTab({
             <Upload className="w-4 h-4 mr-2" />
             {importing ? 'Importing...' : 'Import'}
           </Button>
-          {selectedIds.size > 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleDownloadSelected}
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Download selected ({selectedIds.size})
-            </Button>
-          )}
-          <Button size="sm">
-            <Plus className="w-4 h-4 mr-2" />
-            New Plugin
-          </Button>
         </div>
       </div>
 
@@ -156,63 +117,32 @@ export default function PluginsTab({
         <Card className="border-dashed">
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
             {plugins.length === 0
-              ? 'No plugins yet. Import or forge one to get started.'
+              ? 'No staged plugins yet. Forge one from the Generator tab.'
               : 'No plugins match your search.'}
           </CardContent>
         </Card>
       ) : (
         <div className="grid gap-3">
           {filtered.map((plugin) => (
-            <Card
-              key={plugin.id}
-              className="cursor-pointer hover:border-accent/50 transition-colors"
-              onClick={() => {}}
-            >
+            <Card key={plugin.id} data-testid="forge-plugin-row">
               <CardContent className="py-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-3 flex-1">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(plugin.id)}
-                      onChange={() => toggleSelection(plugin.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="mt-1"
-                      aria-label={`Select ${plugin.name || plugin.id}`}
-                    />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Package className="w-4 h-4 text-accent" />
-                        <h3 className="font-semibold">{plugin.name || plugin.id}</h3>
-                        <Badge variant={plugin.enabled ? 'ok' : 'secondary'} className="text-[10px]">
-                          {plugin.enabled ? 'Enabled' : 'Disabled'}
-                        </Badge>
-                        {plugin.version && (
-                          <Badge variant="outline" className="text-[10px]">
-                            v{plugin.version}
-                          </Badge>
-                        )}
-                      </div>
-                      {plugin.description && (
-                        <p className="text-sm text-muted-foreground line-clamp-2">
-                          {plugin.description}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      aria-label={`Download ${plugin.name || plugin.id}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDownloadSingle(plugin.id);
-                      }}
-                    >
-                      <Download className="w-4 h-4" />
-                    </Button>
-                  </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Package className="w-4 h-4 text-accent" />
+                  <h3 className="font-semibold">{plugin.name || plugin.id}</h3>
+                  <Badge variant="secondary" className="text-[10px]">Staged</Badge>
+                  {plugin.tier && (
+                    <Badge variant="outline" className="text-[10px]">tier {plugin.tier}</Badge>
+                  )}
+                  {plugin.quality && (
+                    <Badge variant="outline" className="text-[10px]">{plugin.quality}</Badge>
+                  )}
                 </div>
+                {plugin.plugin_id && (
+                  <p className="text-xs font-mono text-muted-foreground">{plugin.plugin_id}</p>
+                )}
+                {plugin.description && (
+                  <p className="text-sm text-muted-foreground line-clamp-2">{plugin.description}</p>
+                )}
               </CardContent>
             </Card>
           ))}

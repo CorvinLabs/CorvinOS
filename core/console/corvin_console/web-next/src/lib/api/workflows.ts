@@ -174,10 +174,25 @@ export async function getWorkflow(
 }
 
 export async function createWorkflow(
-  body: { id: string; title?: string; description?: string; yaml?: string },
+  body: { id: string; title?: string; description?: string; yaml?: string; template?: string },
   csrf: string,
 ): Promise<{ ok: true; workflow: WorkflowMeta }> {
   return api("/workflows", { method: "POST", csrf, body });
+}
+
+/** A server-side workflow template (GET /workflow-templates). */
+export interface WorkflowTemplate {
+  id: string;
+  title: string;
+  description: string;
+  steps: string;
+  node_count: number;
+}
+
+export async function listWorkflowTemplates(
+  signal?: AbortSignal,
+): Promise<{ count: number; templates: WorkflowTemplate[] }> {
+  return api("/workflow-templates", { signal });
 }
 
 export async function patchWorkflow(

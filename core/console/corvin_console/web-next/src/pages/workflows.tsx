@@ -69,6 +69,8 @@ import {
   getWorkflowRunTablePage,
   listRuns,
   listWorkflows,
+  listWorkflowTemplates,
+  type WorkflowTemplate,
   putWorkflowYaml,
   addWorkflowNode,
   cancelWorkflowRun,
@@ -1628,16 +1630,33 @@ function CreateWorkflowDialog({
   onOpenChange,
   csrf,
   onCreated,
+  template,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   csrf: string;
   onCreated: (wid: string) => void;
+  /** Server template to create from; its title prefills the form. */
+  template?: WorkflowTemplate | null;
 }) {
   const [id, setId] = React.useState("");
   const [title, setTitle] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
+
+  const templateKey = template?.id ?? null;
+  React.useEffect(() => {
+    if (!open) return;
+    setError(null);
+    if (template) {
+      setTitle(template.title);
+      setId(template.title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 63));
+    } else {
+      setTitle("");
+      setId("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, templateKey]);
 
   const idFromTitle = (t: string) =>
     t
@@ -1658,7 +1677,12 @@ function CreateWorkflowDialog({
     setSaving(true);
     setError(null);
     try {
-      await createWorkflow({ id, title: title || id, description: "" }, csrf);
+      await createWorkflow(
+        template
+          ? { id, title: title || id, template: template.id }
+          : { id, title: title || id, description: "" },
+        csrf,
+      );
       onCreated(id);
       onOpenChange(false);
     } catch (e: unknown) {
@@ -1676,8 +1700,12 @@ function CreateWorkflowDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New workflow</DialogTitle>
-          <DialogDescription>Give your workflow a name to start.</DialogDescription>
+          <DialogTitle>{template ? `New workflow from "${template.title}"` : "New workflow"}</DialogTitle>
+          <DialogDescription>
+            {template
+              ? `${template.description} (${template.node_count} steps: ${template.steps})`
+              : "Give your workflow a name to start."}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div>
@@ -1715,61 +1743,26 @@ function CreateWorkflowDialog({
 
 // ── ADR-0062 M8: Workflow Templates ──────────────────────────────────────
 
-const WORKFLOW_TEMPLATES: Array<{
-  id: string;
-  title: string;
-  description: string;
-  emoji: string;
-}> = [
-  {
-    id: "daily_briefing",
-    title: "Daily summary",
-    description: "Sends a daily morning summary via messenger.",
-    emoji: "📋",
-  },
-  {
-    id: "alert_routing",
-    title: "Alert routing",
-    description: "Analyse incoming alerts and route them to the right agent.",
-    emoji: "🔔",
-  },
-  {
-    id: "content_approval",
-    title: "Content approval",
-    description: "Draft → AI review → approval or rejection with reason.",
-    emoji: "✅",
-  },
-  {
-    id: "qa_pipeline",
-    title: "Q&A pipeline",
-    description: "Ask a question → retrieve agent → generate answer → send.",
-    emoji: "❓",
-  },
-  {
-    id: "webhook_to_message",
-    title: "Webhook → message",
-    description: "Incoming HTTP webhook → formatted message to a channel.",
-    emoji: "🔗",
-  },
-];
-
 function TemplateCard({
   tpl,
   onUse,
 }: {
-  tpl: (typeof WORKFLOW_TEMPLATES)[0];
-  onUse: (title: string) => void;
+  tpl: WorkflowTemplate;
+  onUse: (tpl: WorkflowTemplate) => void;
 }) {
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-accent/30">
-      <div className="flex items-start gap-3">
-        <span className="text-2xl leading-none">{tpl.emoji}</span>
-        <div className="min-w-0 flex-1">
-          <p className="font-medium text-sm">{tpl.title}</p>
-          <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{tpl.description}</p>
-        </div>
+    <div
+      className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
+      data-testid="workflow-template-card"
+    >
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-sm">{tpl.title}</p>
+        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{tpl.description}</p>
+        <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+          {tpl.node_count} steps: {tpl.steps}
+        </p>
       </div>
-      <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onUse(tpl.title)}>
+      <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onUse(tpl)}>
         <BookOpen className="h-3.5 w-3.5" />
         Use
       </Button>
@@ -1966,12 +1959,20 @@ export function WorkflowsListPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [createTemplate, setCreateTemplate] = React.useState<WorkflowTemplate | null>(null);
   const [deletePending, setDeletePending] = React.useState<string | null>(null);
   const importInputRef = React.useRef<HTMLInputElement>(null);
 
   const list = useQuery({
     queryKey: ["workflows"],
     queryFn: ({ signal }) => listWorkflows(signal),
+  });
+
+  const templatesQ = useQuery({
+    queryKey: ["workflow-templates"],
+    queryFn: ({ signal }) => listWorkflowTemplates(signal),
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 
   // CCC M4: when a workflow is created from chat, invalidate the list
@@ -2142,16 +2143,22 @@ export function WorkflowsListPage() {
         </TabsContent>
 
         <TabsContent value="templates" className="mt-4">
+          {templatesQ.isLoading && <Skeleton className="h-24 w-full" />}
+          {templatesQ.isError && (
+            <Card className="border-dashed">
+              <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                Templates are not available on this build.
+              </CardContent>
+            </Card>
+          )}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {WORKFLOW_TEMPLATES.map((tpl) => (
+            {templatesQ.data?.templates.map((tpl) => (
               <TemplateCard
                 key={tpl.id}
                 tpl={tpl}
-                onUse={(title) => {
+                onUse={(t) => {
+                  setCreateTemplate(t);
                   setCreateOpen(true);
-                  // Store template title for pre-filling — dialog reads from sessionStorage
-                  sessionStorage.setItem("wf_template_title", title);
-                  sessionStorage.setItem("wf_template_id", tpl.id);
                 }}
               />
             ))}
@@ -2191,7 +2198,11 @@ export function WorkflowsListPage() {
 
       <CreateWorkflowDialog
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={(v) => {
+          setCreateOpen(v);
+          if (!v) setCreateTemplate(null);
+        }}
+        template={createTemplate}
         csrf={session!.csrf_token}
         onCreated={(wid) => navigate(`/app/workflows/${wid}`)}
       />

@@ -32,7 +32,7 @@ import {
   computeStageImageUrl,
   getOpenBatchJobs,
   listAcsRuns,
-  listComputeJobs, submitComputeJob, cancelComputeJob,
+  listComputeJobs, cancelComputeJob,
   type ComputeJob,
   type ComputeLicenseStatus, type ComputeRun, type PipelineSummary,
   type PipelineStageDetail, type HacSummary, type HacManagerDetail,
@@ -2998,154 +2998,6 @@ function ComputeJobStatusBadge({ status }: { status: string }) {
   );
 }
 
-function SubmitJobDialog({ csrf, onSubmitted, onClose }: {
-  csrf: string;
-  onSubmitted: () => void;
-  onClose: () => void;
-}) {
-  const [name, setName] = React.useState("");
-  const [jobType, setJobType] = React.useState<"grid" | "pipeline" | "batch">("grid");
-  const [strategy, setStrategy] = React.useState<"grid" | "random" | "bayesian">("bayesian");
-  const [maxTrials, setMaxTrials] = React.useState(10);
-  const [description, setDescription] = React.useState("");
-  const [error, setError] = React.useState<string | null>(null);
-
-  const mutation = useMutation({
-    mutationFn: () =>
-      submitComputeJob(
-        { name: name.trim(), job_type: jobType, strategy, max_trials: maxTrials, description: description.trim() || undefined },
-        csrf,
-      ),
-    onSuccess: () => {
-      onSubmitted();
-      onClose();
-    },
-    onError: (e: unknown) => {
-      setError(e instanceof Error ? e.message : String(e));
-    },
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    setError(null);
-    mutation.mutate();
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div className="flex items-center gap-2">
-            <Cpu className="h-4 w-4 text-accent" />
-            <span className="font-semibold text-sm">Submit Agentic Compute Job</span>
-          </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded" data-testid="submit-job-dialog-close">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
-          {/* Job Name */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground block">Job Name <span className="text-destructive">*</span></label>
-            <input
-              data-testid="job-name-input"
-              type="text"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Bayesian sweep — model v3"
-              className="w-full text-sm border border-border rounded px-3 py-2 bg-background focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          {/* Job Type */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground block">Job Type</label>
-            <select
-              data-testid="job-type-select"
-              value={jobType}
-              onChange={(e) => setJobType(e.target.value as "grid" | "pipeline" | "batch")}
-              className="w-full text-sm border border-border rounded px-3 py-2 bg-background focus:outline-none focus:ring-1 focus:ring-accent"
-            >
-              <option value="grid">Grid</option>
-              <option value="pipeline">Pipeline</option>
-              <option value="batch">Batch</option>
-            </select>
-          </div>
-
-          {/* Strategy */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground block">Strategy</label>
-            <select
-              data-testid="job-strategy-select"
-              value={strategy}
-              onChange={(e) => setStrategy(e.target.value as "grid" | "random" | "bayesian")}
-              className="w-full text-sm border border-border rounded px-3 py-2 bg-background focus:outline-none focus:ring-1 focus:ring-accent"
-            >
-              <option value="grid">Grid</option>
-              <option value="random">Random</option>
-              <option value="bayesian">Bayesian</option>
-            </select>
-          </div>
-
-          {/* Max Trials */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground block">Max Trials</label>
-            <input
-              data-testid="job-max-trials-input"
-              type="number"
-              min={1}
-              max={10000}
-              value={maxTrials}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10);
-                if (!isNaN(v) && v >= 1 && v <= 10000) setMaxTrials(v);
-              }}
-              className="w-full text-sm border border-border rounded px-3 py-2 bg-background font-mono focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          {/* Description */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground block">Description <span className="text-muted-foreground/60">(optional)</span></label>
-            <input
-              data-testid="job-description-input"
-              type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Short description of this job"
-              className="w-full text-sm border border-border rounded px-3 py-2 bg-background focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          {error && (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">{error}</div>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <Button type="button" variant="outline" size="sm" onClick={onClose} data-testid="submit-job-cancel-btn">
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              size="sm"
-              disabled={!name.trim() || mutation.isPending}
-              data-testid="submit-job-confirm-btn"
-              className="gap-1.5"
-            >
-              {mutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-              {mutation.isPending ? "Submitting…" : "Submit Job"}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 function ComputeJobCard({ job, csrf, onCancelled }: { job: ComputeJob; csrf: string; onCancelled: () => void }) {
   const cancelMutation = useMutation({
     mutationFn: () => cancelComputeJob(job.job_id, csrf),
@@ -3176,10 +3028,10 @@ function ComputeJobCard({ job, csrf, onCancelled }: { job: ComputeJob; csrf: str
         onClick={() => cancelMutation.mutate()}
         disabled={cancelMutation.isPending || job.status === "completed" || job.status === "failed"}
         data-testid={`cancel-job-btn-${job.job_id}`}
-        title="Cancel job"
+        title="Remove job record"
       >
         {cancelMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-        <span className="ml-1 text-xs">Cancel</span>
+        <span className="ml-1 text-xs">Remove</span>
       </Button>
     </div>
   );
@@ -3187,7 +3039,6 @@ function ComputeJobCard({ job, csrf, onCancelled }: { job: ComputeJob; csrf: str
 
 function ComputeJobsSection({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
-  const [dialogOpen, setDialogOpen] = React.useState(false);
 
   const jobsQ = useQuery({
     queryKey: ["compute-jobs"],
@@ -3197,68 +3048,35 @@ function ComputeJobsSection({ csrf }: { csrf: string }) {
 
   const jobs: ComputeJob[] = jobsQ.data?.jobs ?? [];
 
-  const handleSubmitted = () => {
-    qc.invalidateQueries({ queryKey: ["compute-jobs"] });
-  };
-
   const handleCancelled = () => {
     qc.invalidateQueries({ queryKey: ["compute-jobs"] });
   };
 
+  // Job submission is not available: nothing executes the queue. Only records written by
+  // earlier builds are listed so they can be removed; with none, the section is not shown.
+  if (jobsQ.isLoading || jobs.length === 0) return null;
+
   return (
-    <div className="space-y-3">
-      {/* Section header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-accent" />
-          <span className="font-semibold text-sm">Agentic Compute Jobs</span>
-          {jobs.length > 0 && (
-            <Badge variant="outline" className="text-xs">{jobs.length}</Badge>
-          )}
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          className="gap-1.5 text-xs"
-          onClick={() => setDialogOpen(true)}
-          data-testid="submit-job-btn"
-        >
-          <Play className="h-3.5 w-3.5" />
-          + Submit Job
-        </Button>
+    <div className="space-y-3" data-testid="compute-jobs-legacy">
+      <div className="flex items-center gap-2">
+        <Cpu className="h-4 w-4 text-accent" />
+        <span className="font-semibold text-sm">Queued jobs that never ran</span>
+        <Badge variant="outline" className="text-xs">{jobs.length}</Badge>
       </div>
-
-      {/* Job list */}
-      {jobsQ.isLoading ? (
-        <Skeleton className="h-24 w-full" />
-      ) : jobs.length === 0 ? (
-        <Card>
-          <CardContent className="py-10 text-center">
-            <Cpu className="mx-auto mb-2 h-7 w-7 text-muted-foreground/30" />
-            <p className="text-sm text-muted-foreground">No jobs submitted yet.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-2">
-          {jobs.map((job) => (
-            <ComputeJobCard
-              key={job.job_id}
-              job={job}
-              csrf={csrf}
-              onCancelled={handleCancelled}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Submit dialog */}
-      {dialogOpen && (
-        <SubmitJobDialog
-          csrf={csrf}
-          onSubmitted={handleSubmitted}
-          onClose={() => setDialogOpen(false)}
-        />
-      )}
+      <p className="text-xs text-muted-foreground">
+        Job submission is no longer available: nothing executed these records. Remove them here.
+        To run compute, ask the assistant to run compute_run on a forged tool.
+      </p>
+      <div className="grid gap-2">
+        {jobs.map((job) => (
+          <ComputeJobCard
+            key={job.job_id}
+            job={job}
+            csrf={csrf}
+            onCancelled={handleCancelled}
+          />
+        ))}
+      </div>
     </div>
   );
 }

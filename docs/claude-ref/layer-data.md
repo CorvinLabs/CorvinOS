@@ -320,6 +320,21 @@ Tools are only advertised when the worker socket
 discovery is cached for 5 s. First miss per process emits
 `compute.worker_unreachable` (WARNING); subsequent misses are silent.
 
+### Console "compute jobs" (`routes/compute_jobs.py`) — submission is 501
+
+The ONLY ways to start compute are the MCP tools above and `POST
+/v1/console/compute/runs` (both quota-gated, both run the L25 worker).
+`POST /v1/console/compute/jobs` answers **501** and queues, charges and audits
+nothing. Until 2026-10-24 it wrote a `queued` manifest under
+`<tenant>/global/compute/jobs/` and spent a daily compute unit
+(`enforce_compute_quota`), while no code read that directory — every job stayed
+`queued` forever, and a job carried no tool or parameter grid to run anyway.
+`GET` and `DELETE /compute/jobs[/{id}]` stay so records written by earlier
+builds can be listed and removed (`compute.job_deleted` is audited). The
+Agentic Compute page has no Submit Job control; it shows such records only
+under "Queued jobs that never ran", each with a Remove button, and nothing at
+all when there are none.
+
 ### Tenant config
 
 ```yaml

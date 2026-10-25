@@ -4,7 +4,8 @@ A workflow draft is **ready** only when a measured report says so. A confirmatio
 design chat ("ok", "passt", "go ahead") no longer moves a draft to `ready`. The decision record is
 ADR-2275 in Corvin-Knowledge; the plan is PLAN-0962.
 
-Diagram: `docs/diagrams/workflow-readiness-flow.svg`.
+Diagram: `docs/diagrams/workflow-readiness-flow.svg`. Creating a draft from a server-side
+template: [workflow-templates.md](workflow-templates.md).
 
 ## The report
 
