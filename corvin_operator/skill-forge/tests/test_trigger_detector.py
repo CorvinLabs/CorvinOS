@@ -13,7 +13,7 @@ import json
 import logging
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -101,7 +101,7 @@ def test_detect_loss_when_confidence_below_threshold():
         temp_audit_dir = Path(tmpdir)
         detector = SkillLossTriggerDetector()
         tenant_id = "_default"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         base_ts = now.timestamp()
 
         # Create 10 events: 3 correct, 7 incorrect → confidence = 0.30
@@ -148,7 +148,7 @@ def test_no_trigger_when_confident():
         temp_audit_dir = Path(tmpdir)
         detector = SkillLossTriggerDetector()
         tenant_id = "_default"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         base_ts = now.timestamp()
 
         # Create 10 events: 8 correct, 2 incorrect → confidence = 0.80
@@ -185,7 +185,7 @@ def test_no_trigger_at_exact_threshold():
         temp_audit_dir = Path(tmpdir)
         detector = SkillLossTriggerDetector()
         tenant_id = "_default"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         base_ts = now.timestamp()
 
         # Create 10 events: 7 correct, 3 incorrect → confidence = 0.70
@@ -221,7 +221,7 @@ def test_tenant_isolation():
     with tempfile.TemporaryDirectory() as tmpdir:
         temp_audit_dir = Path(tmpdir)
         detector = SkillLossTriggerDetector()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         base_ts = now.timestamp()
 
         # Create events for two tenants
@@ -290,7 +290,7 @@ def test_lookback_window_parameter():
         temp_audit_dir = Path(tmpdir)
         detector = SkillLossTriggerDetector()
         tenant_id = "_default"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         base_ts = now.timestamp()
 
         # Create 10 events spread over 25 hours
@@ -398,7 +398,7 @@ def test_events_without_outcome_feedback():
         temp_audit_dir = Path(tmpdir)
         detector = SkillLossTriggerDetector()
         tenant_id = "_default"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         base_ts = now.timestamp()
 
         # Create 5 events: 3 with feedback, 2 without
@@ -442,7 +442,7 @@ def test_multiple_skills_with_mixed_confidence():
         temp_audit_dir = Path(tmpdir)
         detector = SkillLossTriggerDetector()
         tenant_id = "_default"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         base_ts = now.timestamp()
 
         events = []
@@ -554,7 +554,7 @@ def test_real_core_chain_is_accepted_and_tampering_refused(tmp_path, monkeypatch
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     from core.paths import tenant_audit_chain
     chain = tenant_audit_chain("_default")
-    now = datetime.utcnow().timestamp()
+    now = datetime.now(timezone.utc).timestamp()
     # A real registry record (no feedback) — must be accepted, not measured.
     se.write_event(chain, "skill.executed", severity="INFO",
                    details={"skill_id": "s", "tenant_id": "_default", "status": "error"})
@@ -574,7 +574,13 @@ def test_real_core_chain_is_accepted_and_tampering_refused(tmp_path, monkeypatch
 
     # Tamper one record in place → the chain no longer verifies → refused.
     lines = chain.read_text("utf-8").splitlines()
-    lines[1] = lines[1].replace('"correct": true', '"correct": false')
+    # Find the record, never assume its index: the writer may put records of its own first
+    # (e.g. ``instance.key_rotated``), which moved line 1 and turned the old fixed-index
+    # replace into a silent no-op — "DID NOT RAISE", for the wrong reason.
+    target = next(i for i, line in enumerate(lines) if '"correct": true' in line)
+    tampered = lines[target].replace('"correct": true', '"correct": false')
+    assert tampered != lines[target]
+    lines[target] = tampered
     chain.write_text("\n".join(lines) + "\n", "utf-8")
     with pytest.raises(RuntimeError, match="integrity check failed"):
         SkillLossTriggerDetector().detect_loss_signals("_default")

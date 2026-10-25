@@ -16,7 +16,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -166,7 +166,7 @@ class SkillLossTriggerDetector:
             lookback_hours = self.DEFAULT_LOOKBACK_HOURS
 
         # Calculate time window
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)  # aware: a naive utcnow().timestamp() is read as LOCAL time
         since = now - timedelta(hours=lookback_hours)
 
         # Load audit events for this tenant
