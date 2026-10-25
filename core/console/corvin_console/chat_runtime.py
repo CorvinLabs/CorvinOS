@@ -1586,9 +1586,13 @@ async def inject_btw_web(sess: "WebChatSession", text: str, *, via: str = "text"
 _GATE_CANCELLED_TEXT = "[stopped before the safety check finished]"
 
 
-async def _gate_off_loop(sess: "WebChatSession", task_text: str, *, engine_id: str) -> str | None:
-    """The turn's pre-spawn gate, run in a thread (L44 is a model call — inline
-    it stalled every chat and request of the console for seconds).
+async def _route_off_loop(sess: "WebChatSession", task_text: str, *, engine_id: str,
+                          switchable: bool = False):
+    """The turn's pre-spawn gate and sensitive-data route, run in a thread (L44 is a model
+    call — inline it stalled every chat and request of the console for seconds).
+
+    Returns an ``spawn_gates.L34Route``: ``.refusal`` ends the turn, ``.rerouted`` carries the
+    provider and model the OS turn must start on (ADR-2268; only ``switchable`` callers get one).
 
     Cancel-safe and fail-closed: the user line is already in the turn log when
     this runs. A cancel that lands while the gate decides (before this ran
@@ -1597,9 +1601,9 @@ async def _gate_off_loop(sess: "WebChatSession", task_text: str, *, engine_id: s
     review R4-1). So the line is marked withheld before the cancel propagates.
     """
     fut = asyncio.ensure_future(asyncio.to_thread(
-        _spawn_gates.check_console_spawn_or_refusal, task_text,
+        _spawn_gates.resolve_console_spawn, task_text,
         tenant_id=sess.tenant_id, persona="assistant", channel=CHANNEL,
-        chat_key=sess.chat_key, engine_id=engine_id))
+        chat_key=sess.chat_key, engine_id=engine_id, switchable=switchable))
     try:
         return await asyncio.shield(fut)
     except asyncio.CancelledError:
@@ -1607,6 +1611,11 @@ async def _gate_off_loop(sess: "WebChatSession", task_text: str, *, engine_id: s
             _append_turn(sess, "assistant", [{"kind": "text", "text": _GATE_CANCELLED_TEXT}],
                          gate_refused="pre_spawn_cancelled")
         raise
+
+
+async def _gate_off_loop(sess: "WebChatSession", task_text: str, *, engine_id: str) -> str | None:
+    """:func:`_route_off_loop` for a site that never switches: the refusal text, or None."""
+    return (await _route_off_loop(sess, task_text, engine_id=engine_id)).refusal
 
 
 def _turn_text(turn: dict[str, Any]) -> str:
@@ -7120,12 +7129,15 @@ async def _stream_turn_impl(
     # seconds, and run inline it stalled EVERY chat and request of the console
     # for that long — measured 2026-10-13: a /btw sent at t+0.5 s was answered
     # at t+29.6 s, past the client's 30 s timeout on the first try.
-    _gate_refusal = await _gate_off_loop(
+    _gate_delegated = _will_delegate or (_tde_force and _worker_mode == "tde")
+    # Only a turn that stays in-process on claude_code can be started on another endpoint
+    # (ADR-2268 Decision 3); a delegated turn keeps refusing.
+    _l34_route = await _route_off_loop(
         sess, _task_text,
-        engine_id=(_spawn_gates.DELEGATION_ENGINE_ID
-                   if (_will_delegate or (_tde_force and _worker_mode == "tde"))
-                   else _os_engine),
+        engine_id=(_spawn_gates.DELEGATION_ENGINE_ID if _gate_delegated else _os_engine),
+        switchable=(not _gate_delegated and _os_engine == "claude_code"),
     )
+    _gate_refusal = _l34_route.refusal
     if _gate_refusal is not None:
         _os_audit("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {
@@ -8360,7 +8372,32 @@ async def _stream_turn_impl(
     # assigned but whose route cannot be built refuses the turn instead of falling back to
     # the default endpoint, which the egress policy may forbid.
     _route_problem: "str | None" = None
-    if _os_engine == "claude_code":
+    if _l34_route.rerouted:
+        # ADR-2268: a sensitive turn runs on the operator-declared provider. The env is built
+        # strictly (never degrades to the default endpoint, host checked against the declaration
+        # AND against the host L35 judged), and the model goes verbatim: normalise_pin() would
+        # alter an id the declaration lists, and the OS-model resolver knows nothing of it.
+        try:
+            from engine_models import (  # noqa: PLC0415
+                ProviderRouteError as _RouteErr, resolve_provider_env_strict as _strict_env,
+            )
+            from spawn_gates import _provider_current_host as _route_host  # noqa: PLC0415
+            _strict, _verified = _strict_env(
+                str(sess.tenant_id), _l34_route.provider, _l34_route.model_id,
+                base_env=_spawn_env)
+            if _verified != _route_host(str(sess.tenant_id), _l34_route.provider, None):
+                raise _RouteErr("host_mismatch", _l34_route.provider)
+            _spawn_env.clear()
+            _spawn_env.update(_strict)
+            if "--model" in args:
+                args[args.index("--model") + 1] = _l34_route.model_id
+            else:
+                args += ["--model", _l34_route.model_id]
+        except Exception as _exc:  # noqa: BLE001 — a route that cannot be built refuses the turn
+            _route_problem = (
+                "[security] The sensitive-data route could not be built "
+                f"({getattr(_exc, 'code', type(_exc).__name__)}) — request blocked.")
+    elif _os_engine == "claude_code":
         try:
             from engine_models import apply_claude_code_provider_env as _apply_route  # noqa: PLC0415
         except ImportError:  # stripped layout: no providers, nothing to agree with

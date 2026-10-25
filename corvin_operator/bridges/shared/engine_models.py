@@ -729,6 +729,152 @@ def platform_provider_env(ps: "ProviderSpec",
     return out
 
 
+class ProviderRouteError(RuntimeError):
+    """A rerouted turn's route could not be built or verified (ADR-2268, T-0229).
+
+    ``code`` is a stable machine code; the message never carries a credential or a prompt. The
+    caller REFUSES the turn: a rerouted turn is never sent to the default endpoint.
+    """
+
+    def __init__(self, code: str, message: str = "") -> None:
+        super().__init__(f"{code}: {message}" if message else code)
+        self.code = code
+
+
+#: Prefixes of inherited variables that decide WHERE inference goes. A rerouted turn starts
+#: without any of them, whatever the parent process (or an operator's shell) set.
+_STRICT_STRIP_PREFIXES = ("ANTHROPIC_", "CLAUDE_CODE_USE_", "CORVIN_CC_", "VERTEX_REGION_")
+
+
+def _strict_strip_names() -> "set[str]":
+    """Region / project / resource / enable names of EVERY platform provider, plus the common
+    region overrides: an ambient ``AWS_REGION`` must not decide where a rerouted turn goes."""
+    names = {"CLOUD_ML_REGION", "AWS_REGION", "AWS_DEFAULT_REGION"}
+    for ps in load_providers().values():
+        pe = getattr(ps, "platform_env", None) or {}
+        for key in ("region_env", "project_env", "resource_env"):
+            names.update(str(n) for n in (pe.get(key) or []))
+        if pe.get("enable_var"):
+            names.add(str(pe["enable_var"]))
+    return names
+
+
+def _read_tenant_cfg(tenant_id: str, corvin_home: "Path | None") -> "dict | None":
+    import data_classification as _dc  # type: ignore  # noqa: PLC0415
+    resolved = _dc._tenant_config_file(tenant_id, corvin_home if corvin_home is not None else _corvin_home())
+    if resolved is None:
+        return None
+    try:
+        import yaml  # type: ignore  # noqa: PLC0415
+        return yaml.safe_load(resolved[2].read_text("utf-8")) or {}
+    except Exception as exc:  # noqa: BLE001
+        raise ProviderRouteError("policy_unreadable", type(exc).__name__) from exc
+
+
+def resolve_provider_env_strict(
+    tenant_id: str,
+    provider: str,
+    model_id: str,
+    *,
+    base_env: "dict[str, str] | None" = None,
+    corvin_home: "Path | None" = None,
+) -> "tuple[dict[str, str], str]":
+    """The spawn env of a REROUTED ``claude_code`` turn, and the host it will reach.
+
+    Unlike :func:`resolve_claude_code_provider_env` this NEVER degrades. A missing credential, a
+    translating proxy that cannot start, a provider that is not eligible or whose host no longer
+    matches its declaration, a model the declaration does not list, or a host that differs from
+    the declared ``endpoint_host`` raises :class:`ProviderRouteError`. The result starts from
+    *base_env* (default: the process env) stripped of every ``ANTHROPIC_*``, ``CLAUDE_CODE_USE_*``,
+    ``CORVIN_CC_*`` variable and every platform region / project / resource override, then
+    carries only the route's own values. A platform provider's region, project and resource come
+    from the DECLARATION, written into every name of its ``region_env`` / ``project_env`` /
+    ``resource_env``, and only its ``credential_vars`` are copied from the parent.
+
+    The host is verified, not trusted from a marker (``CORVIN_CC_PROVIDER`` proves nothing): the
+    returned host is the UPSTREAM the env reaches (for a translating proxy the provider's chat
+    URL, with ``ANTHROPIC_BASE_URL`` required to be loopback) and it must equal the declared
+    ``endpoint_host``. The caller compares it with the host L35 validated.
+    """
+    import data_classification as _dc  # type: ignore  # noqa: PLC0415
+    import sensitive_route as _sr  # type: ignore  # noqa: PLC0415
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    providers = load_providers()
+    ps = providers.get(provider)
+    if ps is None:
+        raise ProviderRouteError("unknown_provider", provider)
+    declared, _rejected = _dc.parse_provider_compliance(_read_tenant_cfg(tenant_id, corvin_home))
+    decl = declared.get(provider)
+    if decl is None:
+        raise ProviderRouteError("not_declared", provider)
+    ok, why = _sr.provider_eligibility(provider, declared=declared, providers=providers)
+    if not ok:
+        raise ProviderRouteError(why, provider)
+    if not _sr.model_allowed(provider, model_id, declared=declared, providers=providers):
+        raise ProviderRouteError("model_not_declared" if ps.is_platform else "model_invalid", provider)
+
+    src = dict(base_env if base_env is not None else os.environ)
+    drop = _strict_strip_names()
+    env = {k: v for k, v in src.items()
+           if not k.startswith(_STRICT_STRIP_PREFIXES) and k not in drop}
+    pe = getattr(ps, "platform_env", None) or {}
+
+    if ps.is_platform:
+        if not decl.region:
+            raise ProviderRouteError("platform_incomplete", provider)
+        for name in pe.get("credential_vars") or []:
+            if name in src and name not in drop and src[name]:
+                env[name] = src[name]
+        if pe.get("enable_var"):
+            env[str(pe["enable_var"])] = "1"
+        for name in pe.get("region_env") or []:
+            env[str(name)] = decl.region
+        if decl.project:
+            for name in pe.get("project_env") or []:
+                env[str(name)] = decl.project
+        if decl.resource:
+            for name in pe.get("resource_env") or []:
+                env[str(name)] = decl.resource
+        env["CORVIN_CC_PROVIDER"] = ps.id
+        verified = _sr.current_provider_host(ps, decl)
+    else:
+        import provider_keys as _provider_keys  # type: ignore  # noqa: PLC0415
+        key = ""
+        if ps.credential_env:
+            key = (_provider_keys.resolve_by_env_var(ps.credential_env) or "")
+            if not key:
+                raise ProviderRouteError("missing_credential", ps.credential_env)
+        if ps.model_source == "ollama":
+            try:
+                from anthropic_openai_bridge import (  # type: ignore  # noqa: PLC0415
+                    ProxyTarget, chat_completions_url_for, ensure_proxy)
+                chat_url = chat_completions_url_for(ps.base_url, ps.model_source)
+                base = ensure_proxy(ProxyTarget(chat_completions_url=chat_url, api_key=key, model=model_id))
+            except ProviderRouteError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise ProviderRouteError("proxy_failed", type(exc).__name__) from exc
+            if (urlparse(str(base)).hostname or "") not in ("127.0.0.1", "localhost", "::1"):
+                raise ProviderRouteError("proxy_not_loopback", provider)
+            verified = (urlparse(chat_url).hostname or "").lower()
+        else:
+            base = ps.base_url
+            verified = (urlparse(str(base)).hostname or "").lower()
+        if not base:
+            raise ProviderRouteError("no_base_url", provider)
+        env.update({
+            "ANTHROPIC_BASE_URL": str(base),
+            "ANTHROPIC_API_KEY": key or "provider",
+            "ANTHROPIC_AUTH_TOKEN": key or "provider",
+            "CORVIN_CC_PROVIDER": ps.id,
+        })
+
+    if not verified or verified != decl.endpoint_host.rstrip("."):
+        raise ProviderRouteError("host_mismatch", provider)
+    return env, verified
+
+
 #: Every env-var name any platform provider needs in a spawned engine process.
 #: Consumed by the worker/manager spawn paths, whose secret-strip is a NAME
 #: pattern (``ACCESS_KEY``/``SECRET``/``_TOKEN$``) that matches

@@ -2191,6 +2191,68 @@ def _check_egress_or_fail(
         return None
 
 
+def _resolve_os_turn_route(
+    engine: object, *, prompt: str | None, persona: str | None, channel: str, chat_key: str,
+    tenant_id: str | None = None,
+):
+    """L34 + L35 for the bridge OS turn, with the ADR-2268 sensitive-data reroute (T-0219).
+
+    Returns an ``spawn_gates.L34Route``. Where nothing is rerouted its ``refusal`` is exactly
+    what ``_check_compliance_or_fail`` then ``_check_egress_or_fail`` return. A missing module
+    or a nameless engine keeps their fail-closed text; any other error falls back to those two
+    functions, so the route logic can never loosen a gate.
+    """
+    engine_name = getattr(engine, "name", None)
+    tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        from spawn_gates import L34Route, resolve_l34_route  # type: ignore
+    except Exception:  # noqa: BLE001
+        L34Route = None  # type: ignore[assignment]
+    if L34Route is not None and isinstance(engine_name, str) and engine_name:
+        try:
+            return resolve_l34_route(
+                engine_name, tid, prompt=prompt, persona=persona, channel=channel,
+                chat_key=chat_key, switchable=(engine_name == "claude_code"))
+        except Exception as e:  # noqa: BLE001
+            log(f"route gate: resolve_l34_route failed ({e!r}) — unchanged L34/L35 verdict")
+    msg = _check_compliance_or_fail(engine, prompt=prompt, persona=persona,
+                                    channel=channel, chat_key=chat_key, tenant_id=tenant_id)
+    if msg is None:
+        msg = _check_egress_or_fail(engine, channel=channel, chat_key=chat_key, tenant_id=tenant_id)
+    if L34Route is None:
+        class _Plain:  # spawn_gates is missing: the two checks above already fail closed
+            def __init__(self, refusal):
+                self.refusal, self.rerouted, self.provider, self.model_id = refusal, False, None, None
+        return _Plain(msg)
+    return L34Route(refusal=msg, engine_id=str(engine_name or ""))
+
+
+def _apply_sensitive_route(env: dict, resolved: dict, route) -> str | None:
+    """Point a rerouted ``claude_code`` spawn at the declared provider (ADR-2268).
+
+    Builds the env STRICTLY (``engine_models.resolve_provider_env_strict``: never degrades to the
+    default endpoint, host verified against the declaration and against the host L35 judged) and
+    passes the declared model verbatim, replacing whatever the OS-model resolver chose. Mutates
+    *env* and *resolved* in place. Returns a refusal text, or None on success.
+    """
+    try:
+        from engine_models import resolve_provider_env_strict  # type: ignore
+        from spawn_gates import _provider_current_host  # type: ignore
+        tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        strict, verified = resolve_provider_env_strict(
+            tid, route.provider, route.model_id, base_env=env)
+        if verified != _provider_current_host(tid, route.provider, None):
+            raise ValueError("host_mismatch")
+    except Exception as e:  # noqa: BLE001 — a route that cannot be built refuses the turn
+        log(f"route gate: sensitive route could not be built ({type(e).__name__})")
+        return ("[security] The sensitive-data route could not be built "
+                f"({getattr(e, 'code', type(e).__name__)}) — request blocked.")
+    env.clear()
+    env.update(strict)
+    resolved["model"] = route.model_id
+    return None
+
+
 # ADR-0158 M3: classifier internals moved to house_rules.py (canonical home).
 # Backward-compat re-exports so test_adr0157_classifier.py (42 references to
 # adp._house_rules_*) continues to work without modification.
@@ -5665,24 +5727,20 @@ def _call_claude_streaming_via_engine(
     # The L34 module emits its own data_flow.blocked audit event before
     # validate() returns the denial; this function only renders the user-
     # facing message.
-    compliance_msg = _check_compliance_or_fail(
-        engine, prompt=prompt, persona=persona,
-        channel=channel, chat_key=chat_key,
-    )
-    if compliance_msg is not None:
-        _turn_refused("l34_compliance")
-        return compliance_msg
-
-    # ADR-0043 / Layer 35 — Network Egress Gate. Pre-spawn check against
-    # the tenant's egress policy (allowed/forbidden host lists).  Disabled
-    # by default (opt-in via spec.egress.enabled: true); fail-open on
-    # operational errors; fail-closed with a refusal string when the
-    # engine's canonical outbound host is on the forbidden list or the
-    # policy is default_action=deny and the host isn't explicitly allowed.
-    egress_msg = _check_egress_or_fail(engine, channel=channel, chat_key=chat_key)
-    if egress_msg is not None:
-        _turn_refused("egress")
-        return egress_msg
+    # ADR-2268: this OS turn is the bridge's one switchable site. A CONFIDENTIAL/INTERNAL prompt
+    # on a tenant with an enabled, declared sensitive_route is started on the declared provider
+    # with the declared model instead of being refused; L34 and L35 are judged again for that
+    # provider's host inside resolve_l34_route. Everything else keeps the unchanged verdict.
+    l34_route = _resolve_os_turn_route(
+        engine, prompt=prompt, persona=persona, channel=channel, chat_key=chat_key)
+    if l34_route.refusal is not None:
+        _turn_refused("egress" if l34_route.refusal.startswith("[egress]") else "l34_compliance")
+        return l34_route.refusal
+    if l34_route.rerouted:
+        _route_problem = _apply_sensitive_route(env, resolved, l34_route)
+        if _route_problem is not None:
+            _turn_refused("l34_route_unavailable")
+            return _route_problem
 
     # ADR-0133 CLAG M3 — chain integrity gate before OS-turn engine spawn (L22).
     clag_msg = _check_clag_spawn_or_fail(channel=channel, chat_key=chat_key)

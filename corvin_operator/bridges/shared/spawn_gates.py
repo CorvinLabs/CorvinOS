@@ -141,6 +141,25 @@ def _load_l34_guard(tenant_id: str, corvin_home: Path | None):
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
+def _provider_current_host(tenant: str, provider: str, corvin_home: "Path | None") -> "str | None":
+    """The provider's CURRENT egress host (from its declaration and the live registry), or ``None``.
+
+    ``None`` makes ``validate_provider`` deny (``endpoint_unknown``): an unknown host is never
+    assumed to match.
+    """
+    try:
+        import data_classification as _dc  # type: ignore  # noqa: PLC0415
+        import sensitive_route as _sr  # type: ignore  # noqa: PLC0415
+        from engine_models import load_providers  # type: ignore  # noqa: PLC0415
+        declared, _rej = _dc.parse_provider_compliance(_tenant_yaml(tenant, corvin_home))
+        decl, ps = declared.get(provider), load_providers().get(provider)
+        if decl is None or ps is None:
+            return None
+        return _sr.current_provider_host(ps, decl) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def detector_on(tenant_id: str, corvin_home: "Path | None" = None) -> bool:
     """Is the additive detector switched on for this tenant (ADR-2268)?
 
@@ -168,8 +187,15 @@ def check_l34(
     channel: str = "",
     chat_key: str = "",
     corvin_home: "Path | None" = None,
+    provider: "str | None" = None,
 ) -> "str | None":
     """ADR-0042 / L34 pre-spawn data-classification gate.
+
+    ``provider`` (ADR-2268, T-0219) names the provider of ONE rerouted turn. The pair
+    (``engine_id``, ``provider``) is then judged by ``DataFlowGuard.validate_provider`` from the
+    operator's ``provider_compliance`` and the provider's CURRENT egress host, never by the
+    engine's own locality. The ADR-2102 history gates pass it too, so a rerouted turn's history
+    is judged against the provider and not against ``claude_code``. ``None`` is today's gate.
 
     Returns ``None`` when the spawn is permitted (gate passes, or no tenant
     config — the opt-in default, fail-open).  Returns a user-facing refusal
@@ -215,7 +241,7 @@ def check_l34(
             "data_classification module and tenant.corvin.yaml::spec.data_classification."
         )
 
-    if getattr(guard, "route_malformed", False):
+    if getattr(guard, "route_malformed", False) is True:
         # ADR-2268 R1a: a malformed sensitive_route block refuses EVERY turn of the tenant
         # until it is fixed (only a hand edit produces it; the PUT route validates).
         _log.warning("spawn_gates.check_l34: sensitive_route is malformed — refusing (fail-closed)")
@@ -248,13 +274,24 @@ def check_l34(
         cls_val = classification
 
     try:
-        decision = guard.validate(
-            classification=cls_val,
-            engine_id=validate_id,
-            persona=persona,
-            channel=channel or None,
-            chat_key=chat_key or None,
-        )
+        if provider:
+            decision = guard.validate_provider(
+                classification=cls_val,
+                engine_id=validate_id,
+                provider=provider,
+                current_host=_provider_current_host(tenant, provider, corvin_home),
+                persona=persona,
+                channel=channel or None,
+                chat_key=chat_key or None,
+            )
+        else:
+            decision = guard.validate(
+                classification=cls_val,
+                engine_id=validate_id,
+                persona=persona,
+                channel=channel or None,
+                chat_key=chat_key or None,
+            )
     except Exception as exc:  # noqa: BLE001
         # Fail CLOSED (M8): a broken data-flow guard must not wave a spawn through
         # unchecked. This now matches the sibling check_l35 validate handler
@@ -759,6 +796,10 @@ def check_l35(
     tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
     gate = _load_l35_gate(tenant, corvin_home)
     if gate is None:
+        if provider and not _provider_current_host(tenant, provider, corvin_home):
+            # A rerouted turn must reach a KNOWN host even when the tenant has no egress
+            # policy (ADR-2268): with nothing to compare, an unresolvable host is a refusal.
+            return _l35_provider_unresolved(engine_id, provider)
         return None
 
     try:
@@ -840,7 +881,7 @@ def invalidate_cache(tenant_id: str | None = None) -> None:
 
 @dataclass(frozen=True)
 class RouteOutcome:
-    """The one decision for a spawn: run as chosen, run on the sensitive provider, or refuse.
+    """The pure decision for a spawn: run as chosen, run on the sensitive provider, or refuse.
 
     ``kind`` is ``"native"`` (today's behaviour), ``"reroute"`` (run the engine on ``provider``
     with ``model_id``) or ``"refuse"`` (``reason`` is a stable code, never the prompt text).
@@ -851,6 +892,21 @@ class RouteOutcome:
     provider: str = ""
     model_id: str = ""
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class L34Route:
+    """What a spawn site must do (ADR-2268 Decision 3).
+
+    ``refusal`` is a user-facing string and the site must NOT spawn. Otherwise the site spawns
+    ``engine_id``; when ``rerouted`` it spawns it on ``provider`` with ``model_id`` and the strict
+    provider environment, and must judge the turn's history against the provider as well.
+    """
+    refusal: "str | None"
+    engine_id: str
+    provider: "str | None" = None
+    model_id: "str | None" = None
+    rerouted: bool = False
 
 
 def _tenant_yaml(tenant: str, home: "Path | None") -> "dict | None":
@@ -865,23 +921,25 @@ def _tenant_yaml(tenant: str, home: "Path | None") -> "dict | None":
     return _yaml.safe_load(cfg_path.read_text("utf-8")) or {}
 
 
-def resolve_l34_route(
+def decide_l34_route(
     engine_id: str,
     tenant_id: str,
     *,
     classification: "str | None" = None,
     prompt: "str | None" = None,
     persona: "str | None" = None,
-    channel: str = "",
-    chat_key: str = "",
     corvin_home: "Path | None" = None,
 ) -> RouteOutcome:
-    """Decide native / reroute / refuse for one spawn (ADR-2268, outcome table, T-0219).
+    """Decide native / reroute / refuse for one spawn, WITHOUT auditing (ADR-2268, T-0219).
 
     Native exactly where ``check_l34`` allows today: no policy, a PUBLIC turn, or a turn the
     matrix admits. A refusal is returned where ``check_l34`` refuses today and no route is
-    configured, or the route cannot take the turn. ``SECRET`` is never rerouted.
+    configured, or the route cannot take the turn. ``SECRET`` is never rerouted. The caller
+    (:func:`resolve_l34_route`) audits and runs the second pass; this function only decides,
+    on a guard copy with no audit writer, so a reroute does not leave a misleading
+    ``data_flow.blocked`` record behind.
     """
+    import dataclasses as _dcl  # noqa: PLC0415
     import data_classification as _dc  # type: ignore  # noqa: PLC0415
     import sensitive_route as _sr  # type: ignore  # noqa: PLC0415
     from engine_models import load_providers  # type: ignore  # noqa: PLC0415
@@ -890,40 +948,36 @@ def resolve_l34_route(
         return RouteOutcome(kind="native")
     tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
 
-    guard = _load_l34_guard(tenant, corvin_home)
-    if guard is None:
+    loaded = _load_l34_guard(tenant, corvin_home)
+    if loaded is None:
         return RouteOutcome(kind="native", engine=engine_id)
-    if isinstance(guard, _L34GuardLoadFailed):
+    if isinstance(loaded, _L34GuardLoadFailed):
         return RouteOutcome(kind="refuse", engine=engine_id, reason="gate_error")
+    if not _dcl.is_dataclass(loaded):       # a guard double: no route to decide, today's verdict stands
+        return RouteOutcome(kind="native", engine=engine_id)
+    guard = _dcl.replace(loaded, audit_writer=None)     # silent: audit happens in resolve_l34_route
 
+    if guard.route_malformed is True:
+        return RouteOutcome(kind="refuse", engine=engine_id, reason="route_malformed")
     try:
         raw = _tenant_yaml(tenant, corvin_home)
     except Exception:  # noqa: BLE001
         return RouteOutcome(kind="refuse", engine=engine_id, reason="gate_error")
     route = _sr.parse_sensitive_route(raw)
-    if route.malformed:
-        return RouteOutcome(kind="refuse", engine=engine_id, reason="route_malformed")
 
     if classification is None:
         try:
-            cls = _dc.classify_task(prompt or "", persona=persona)
+            cls = _dc.classify_task(prompt or "", persona=persona, detector=guard.detector_on)
         except Exception:  # noqa: BLE001 — a policy exists and the turn cannot be judged
             return RouteOutcome(kind="refuse", engine=engine_id, reason="classifier_error")
     else:
         cls = _dc.DataClassification.parse(classification)
         if cls is None:
             return RouteOutcome(kind="refuse", engine=engine_id, reason="unknown_classification")
-    if route.on:
-        import sensitive_detector as _sd  # type: ignore  # noqa: PLC0415
-        try:
-            cls = _sd.raise_class(cls, prompt or "")
-        except _sd.DetectorError:
-            return RouteOutcome(kind="refuse", engine=engine_id, reason="classifier_error")
     cls_name = cls.name
 
     try:
-        decision = guard.validate(classification=cls, engine_id=engine_id, persona=persona,
-                                  channel=channel or None, chat_key=chat_key or None)
+        decision = guard.validate(classification=cls, engine_id=engine_id)
     except Exception:  # noqa: BLE001
         return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name, reason="gate_error")
     if decision.allowed:
@@ -951,10 +1005,106 @@ def resolve_l34_route(
                             provider=target.provider, reason="target_not_eligible")
     host = _sr.current_provider_host(providers[target.provider], declared[target.provider])
     verdict = guard.validate_provider(classification=cls, engine_id=engine_id, provider=target.provider,
-                                      current_host=host, persona=persona, channel=channel or None,
-                                      chat_key=chat_key or None)
+                                      current_host=host)
     if not verdict.allowed:
         return RouteOutcome(kind="refuse", engine=engine_id, classification=cls_name,
                             provider=target.provider, reason=verdict.matched_rule or "matrix")
     return RouteOutcome(kind="reroute", engine=engine_id, classification=cls_name,
                         provider=target.provider, model_id=target.model_id)
+
+
+def _route_audit(tenant: str, home: "Path | None", event: str, out: RouteOutcome, *, reason: str,
+                 persona: "str | None", channel: str, chat_key: str) -> None:
+    """Best-effort ``data_flow.rerouted`` / ``data_flow.reroute_refused`` through the tenant's guard."""
+    try:
+        guard = _load_l34_guard(tenant, home)
+        if guard is None or isinstance(guard, _L34GuardLoadFailed):
+            return
+        guard.emit_route_event(
+            event, engine_id=out.engine, classification=out.classification or "UNKNOWN", reason=reason,
+            provider=out.provider, model_id=out.model_id, persona=persona,
+            channel=channel or None, chat_key=chat_key or None)
+    except Exception:  # noqa: BLE001 — an audit hiccup never changes the decision
+        pass
+
+
+def resolve_l34_route(
+    engine_id: str,
+    tenant_id: str,
+    *,
+    prompt: "str | None" = None,
+    persona: "str | None" = None,
+    channel: str = "",
+    chat_key: str = "",
+    classification: "str | None" = None,
+    switchable: bool = False,
+    corvin_home: "Path | None" = None,
+) -> L34Route:
+    """The L34 + L35 verdict for one spawn, with the reroute of ADR-2268 (T-0219).
+
+    Every behaviour that exists today is preserved: where nothing is rerouted this calls the
+    unchanged :func:`check_l34` (same refusal text, same ``data_flow.approved`` / ``blocked``
+    audit, same flow-guard shadow compare) and returns its answer. A turn is rerouted only when
+    ``switchable`` (the site can start the engine on another endpoint: the bridge OS turn and the
+    non-delegated console OS turn), an enabled route exists and :func:`decide_l34_route` says so.
+    After a reroute the second pass judges the PAIR (L34 ``validate_provider`` on the provider's
+    current host, L35 on that host); any refusal there is final: there is never a second reroute.
+    """
+    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    common = dict(prompt=prompt, persona=persona, channel=channel, chat_key=chat_key,
+                  classification=classification, corvin_home=corvin_home)
+    out = decide_l34_route(engine_id, tenant, classification=classification, prompt=prompt,
+                           persona=persona, corvin_home=corvin_home)
+    audit_kw = dict(persona=persona, channel=channel, chat_key=chat_key)
+    route_involved = out.reason in _ROUTE_REFUSAL_REASONS or out.kind == "reroute"
+
+    if out.kind != "reroute":
+        refusal = check_l34(engine_id, tenant, **common)
+        if refusal is None and out.kind == "refuse":
+            # check_l34 would let this through but the route logic refuses (never observed for
+            # a non-route tenant): the refusal is the route's, in plain words, no prompt text.
+            refusal = _route_refusal_text(out)
+        if refusal is not None and route_involved:
+            _route_audit(tenant, corvin_home, "data_flow.reroute_refused", out, reason=out.reason, **audit_kw)
+        if refusal is None:
+            refusal = check_l35(engine_id, tenant, persona=persona, channel=channel, chat_key=chat_key,
+                                corvin_home=corvin_home)
+        return L34Route(refusal=refusal, engine_id=engine_id)
+
+    # decision == reroute
+    if not switchable:
+        # Row R7: the site cannot start the engine elsewhere. Refuse as today, record why.
+        _route_audit(tenant, corvin_home, "data_flow.reroute_refused", out,
+                     reason="site_not_switchable", **audit_kw)
+        refusal = check_l34(engine_id, tenant, **common) or _route_refusal_text(out)
+        return L34Route(refusal=refusal, engine_id=engine_id)
+
+    second = check_l34(engine_id, tenant, provider=out.provider, **common)
+    if second is None:
+        second = check_l35(engine_id, tenant, persona=persona, channel=channel, chat_key=chat_key,
+                           corvin_home=corvin_home, provider=out.provider)
+    if second is not None:
+        _route_audit(tenant, corvin_home, "data_flow.reroute_refused", out,
+                     reason="second_pass_refused", **audit_kw)
+        return L34Route(refusal=second, engine_id=engine_id)
+    _route_audit(tenant, corvin_home, "data_flow.rerouted", out, reason="route_applied", **audit_kw)
+    return L34Route(refusal=None, engine_id=engine_id, provider=out.provider,
+                    model_id=out.model_id, rerouted=True)
+
+
+#: Refusal reasons that come from the route (so a ``reroute_refused`` record is meaningful).
+_ROUTE_REFUSAL_REASONS = frozenset({
+    "route_malformed", "target_not_eligible", "not_declared", "unknown_provider", "native_provider",
+    "aggregator", "proxy_provider", "locality_not_admissible", "platform_incomplete",
+    "endpoint_changed", "provider_not_declared", "endpoint_unknown", "provider_engine",
+    "secret_provider", "engine_not_reroutable", "classifier_error", "gate_error",
+})
+
+
+def _route_refusal_text(out: RouteOutcome) -> str:
+    return (
+        "[data-flow] Spawn rejected: the sensitive-data route cannot take this turn "
+        f"({out.reason or 'refused'}) for engine '{out.engine}'. Fail-closed per tenant "
+        "data-classification policy. Operator: check "
+        "tenant.corvin.yaml::spec.data_classification.sensitive_route."
+    )

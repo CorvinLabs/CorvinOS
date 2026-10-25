@@ -177,21 +177,30 @@ def _check_l34_l35_or_fail(
     A missing ``spawn_gates`` module raises here and is caught by the caller's
     fail-closed orchestration wrapper.
     """
-    from spawn_gates import check_l34 as _sg_l34, check_l35 as _sg_l35  # type: ignore
-    l34 = _sg_l34(
+    return _resolve_l34_l35(
+        engine_id=engine_id, tenant_id=tenant_id, prompt=prompt, persona=persona,
+        channel=channel, chat_key=chat_key, classification=classification,
+        switchable=False,
+    ).refusal
+
+
+def _resolve_l34_l35(
+    *, engine_id: str, tenant_id: str, prompt: str | None, persona: str | None,
+    channel: str, chat_key: str, classification: str | None = None, switchable: bool = False,
+):
+    """L34 + L35 with the sensitive-data reroute of ADR-2268 (T-0219): an ``L34Route``.
+
+    Where nothing is rerouted this IS the old L34-then-L35 answer (``resolve_l34_route`` calls
+    the unchanged ``check_l34`` / ``check_l35``). ``switchable`` is True only for the console OS
+    turn (``resolve_console_spawn``); every other console surface keeps refusing, never silently
+    spawning on the original engine.
+    """
+    from spawn_gates import resolve_l34_route as _sg_route  # type: ignore
+    return _sg_route(
         engine_id, tenant_id,
-        classification=classification, prompt=prompt,
-        persona=persona, channel=channel, chat_key=chat_key,
+        classification=classification, prompt=prompt, persona=persona,
+        channel=channel, chat_key=chat_key, switchable=switchable,
     )
-    if l34 is not None:
-        return l34
-    l35 = _sg_l35(
-        engine_id, tenant_id,
-        persona=persona, channel=channel, chat_key=chat_key,
-    )
-    if l35 is not None:
-        return l35
-    return None
 
 
 # ── Public API — the ONE function every console spawn site calls ──────────────
@@ -226,34 +235,75 @@ def check_console_spawn_or_refusal(
 
     The whole sequence is wrapped: ANY unexpected exception becomes a refusal
     (never an allow). Each gate audits its own L16 deny event before returning.
+
+    This function never reroutes: it is ``resolve_console_spawn(..., switchable=False)``, so
+    every caller that is not the console OS turn keeps refusing (ADR-2268 Decision 3).
     """
+    return resolve_console_spawn(
+        prompt, tenant_id=tenant_id, persona=persona, channel=channel, chat_key=chat_key,
+        engine_id=engine_id, classification=classification, switchable=False,
+    ).refusal
+
+
+class _FallbackRoute:
+    """Stand-in for ``spawn_gates.L34Route`` when that module cannot be imported: a refusal."""
+
+    def __init__(self, refusal=None, engine_id="", provider=None, model_id=None, rerouted=False):
+        self.refusal, self.engine_id = refusal, engine_id
+        self.provider, self.model_id, self.rerouted = provider, model_id, rerouted
+
+
+def resolve_console_spawn(
+    prompt: str | None,
+    *,
+    tenant_id: str,
+    persona: str = "assistant",
+    channel: str = "web",
+    chat_key: str = "",
+    engine_id: str = "claude_code",
+    classification: str | None = None,
+    switchable: bool = False,
+):
+    """The four pre-spawn gates with the sensitive-data reroute: an ``spawn_gates.L34Route``.
+
+    Same order and fail-closed contract as ``check_console_spawn_or_refusal`` (L44, capabilities,
+    then L34 + L35 through ``spawn_gates.resolve_l34_route``). ``switchable`` is True only where
+    the caller can start ``claude_code`` on another endpoint: the console OS turn when it is not
+    delegated. A rerouted result carries ``provider`` / ``model_id``; the caller must inject the
+    strict provider environment and pass the model verbatim, and a refusal means do not spawn.
+    The engine stays the same, so L44 and the capability check (which depend on it) are not run
+    again for the target.
+    """
+    try:
+        from spawn_gates import L34Route  # type: ignore
+    except Exception:  # noqa: BLE001 — module missing: same fail-closed answer as any gate error
+        L34Route = _FallbackRoute  # type: ignore[misc,assignment]
     try:
         hr = _check_house_rules_or_fail(
             prompt=prompt, channel=channel, chat_key=chat_key,
             tenant_id=tenant_id, persona=persona, engine_id=engine_id,
         )
         if hr is not None:
-            return hr
+            return L34Route(refusal=hr, engine_id=engine_id)
 
         caps = _check_capabilities_or_fail(channel=channel, chat_key=chat_key)
         if caps is not None:
-            return caps
+            return L34Route(refusal=caps, engine_id=engine_id)
 
-        flow = _check_l34_l35_or_fail(
+        return _resolve_l34_l35(
             engine_id=engine_id, tenant_id=tenant_id, prompt=prompt,
             persona=persona, channel=channel, chat_key=chat_key,
-            classification=classification,
+            classification=classification, switchable=switchable,
         )
-        if flow is not None:
-            return flow
-
-        return None
     except Exception as _exc:  # noqa: BLE001 — orchestration error → fail closed
         _log.error("[console-spawn-gate] orchestration error (%s) — spawn blocked "
                    "(fail-closed) channel=%s chat=%s", type(_exc).__name__,
                    channel, chat_key)
-        return ("[security] Pre-spawn safety gate error — request blocked "
-                "(fail-closed). Contact the operator.")
+        return L34Route(
+            refusal=("[security] Pre-spawn safety gate error — request blocked "
+                     "(fail-closed). Contact the operator."),
+            engine_id=engine_id,
+        )
 
 
-__all__ = ["check_console_spawn_or_refusal"]
+__all__ = ["check_console_spawn_or_refusal", "resolve_console_spawn"]

@@ -468,6 +468,10 @@ _AUDIT_ALLOWED: frozenset[str] = frozenset({
 })
 
 
+#: ADR-2268 / T-0221 reroute audit events and their severity (registered in forge security_events).
+_ROUTE_EVENTS = {"data_flow.rerouted": "INFO", "data_flow.reroute_refused": "WARNING"}
+
+
 def _validate_audit_details(details: dict[str, Any]) -> None:
     for k in details:
         if k not in _AUDIT_ALLOWED:
@@ -856,6 +860,39 @@ class DataFlowGuard:
                         f"{sorted(allowed_localities or [])} for {cls.name}"),
                 matched_rule="matrix", **where)
         return self._approve(cls, label, persona=persona, channel=channel, chat_key=chat_key)
+
+    def emit_route_event(
+        self,
+        event_type: str,
+        *,
+        engine_id: str,
+        classification: str,
+        reason: str,
+        provider: str = "",
+        model_id: str = "",
+        persona: str | None = None,
+        channel: str | None = None,
+        chat_key: str | None = None,
+    ) -> None:
+        """Audit a reroute decision: ``data_flow.rerouted`` or ``data_flow.reroute_refused`` (T-0221).
+
+        Metadata only: engine, provider, model id (configuration, not content), class name and a
+        stable reason code. Best effort like the other guard events; never raises.
+        """
+        if self.audit_writer is None or event_type not in _ROUTE_EVENTS:
+            return
+        details: dict[str, Any] = {"engine_id": engine_id, "classification": classification, "reason": reason}
+        if provider:
+            details["provider"] = provider
+        if model_id and event_type == "data_flow.rerouted":
+            details["model_id"] = model_id
+        for key, val in (("persona", persona), ("channel", channel), ("chat_key", chat_key)):
+            if val is not None:
+                details[key] = val
+        try:
+            self.audit_writer(event_type, _ROUTE_EVENTS[event_type], details)
+        except Exception:  # noqa: BLE001
+            pass
 
     def validate_or_raise(self, **kwargs: Any) -> FlowDecision:
         """Strict variant: raise :class:`DataFlowDenied` on deny.

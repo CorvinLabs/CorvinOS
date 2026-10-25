@@ -689,7 +689,7 @@ def spawn_a2a_worker(
             # Opt-in (adapter parity): no tenant data_classification config → allow.
             _guard = load_guard_for_tenant(_tid)
             if _guard is not None:
-                if getattr(_guard, "route_malformed", False):
+                if getattr(_guard, "route_malformed", False) is True:
                     # ADR-2268 R1a: a malformed sensitive_route refuses every turn (A2A cannot reroute).
                     raise RuntimeError("sensitive_route malformed")
                 _classif = classify_task(clean, persona=persona or None,

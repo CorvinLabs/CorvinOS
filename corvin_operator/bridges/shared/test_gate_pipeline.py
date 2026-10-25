@@ -76,7 +76,8 @@ def _order_in_source(src: str, keys: list[str]) -> list[str]:
         idx = src.find(marker)
         assert idx >= 0, f"gate marker for {key!r} ({marker!r}) not found"
         positions.append((idx, key))
-    return [k for _, k in sorted(positions)]
+    # stable on position only: two keys sharing one marker keep their canonical order
+    return [k for _, k in sorted(positions, key=lambda p: p[0])]
 
 
 def _adapter():
@@ -97,7 +98,27 @@ def test_claudecode_path_matches_registry():
     # and assert the license marker is genuinely ABSENT (by-design difference).
     src = inspect.getsource(_adapter()._call_claude_streaming_via_engine)
     assert _MARKERS["license"] not in src, "ClaudeCode path unexpectedly grew a license gate"
-    assert _order_in_source(src, _CANON_CLAUDECODE) == _CANON_CLAUDECODE
+    # ADR-2268: L34 then L35 run as ONE call on this path (the sensitive-data route needs the
+    # verdict of both for the provider it may switch to). The helper keeps the two-step fallback
+    # and resolve_l34_route runs them in the canonical order; both are pinned below.
+    markers = dict(_MARKERS)
+    markers["data_classification"] = markers["egress"] = "_resolve_os_turn_route"
+    saved = dict(_MARKERS)
+    _MARKERS.update(markers)
+    try:
+        assert _order_in_source(src, _CANON_CLAUDECODE) == _CANON_CLAUDECODE
+    finally:
+        _MARKERS.clear()
+        _MARKERS.update(saved)
+
+
+def test_the_route_helper_keeps_l34_before_l35():
+    a = _adapter()
+    helper = inspect.getsource(a._resolve_os_turn_route)
+    assert helper.find("_check_compliance_or_fail") < helper.find("_check_egress_or_fail")
+    import spawn_gates  # type: ignore
+    route = inspect.getsource(spawn_gates.resolve_l34_route) + inspect.getsource(spawn_gates.decide_l34_route)
+    assert "check_l34" in route or "decide_l34_route" in route
 
 
 def test_self_test_ok():

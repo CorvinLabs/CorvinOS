@@ -204,9 +204,8 @@ producing a guard that quietly allows what its own table forbids:
   CLI is not zero-egress); an undeclared provider; an unknown current host; a current
   host that differs from the declared `endpoint_host`. `spawn_gates.check_l35(...,
   provider=)` judges that provider's host and refuses a provider whose host cannot be
-  resolved, never falling back to the engine default. **Not wired yet:** nothing in
-  production calls `validate_provider` or passes `provider=`; the reroute that does is
-  T-0219. Until then this is a tested mechanism, not a live guarantee.
+  resolved, never falling back to the engine default. Wired: the reroute
+  (`spawn_gates.resolve_l34_route`, below) runs this second pass on every switchable spawn.
 * **The sensitive-route setting and its API (T-0218, ADR-2268).**
   `spec.data_classification.sensitive_route: {enabled, provider, model_id}` names the
   declared provider and model a turn would run on instead of being refused. The
@@ -231,8 +230,8 @@ producing a guard that quietly allows what its own table forbids:
   written; the file is written at mode `0o600`; every write is audited as
   `engine_setting_updated`, every refusal as `engine.setting.update`. The console reads
   and writes the home through `spawn_gates._resolve_corvin_home`, the resolver the gate
-  uses. **Not wired:** nothing reads `sensitive_route` at spawn time yet (T-0219), so
-  enabling it changes no routing today.
+  uses. It is read at spawn time by the reroute below, on the
+  bridge OS turn and the non-delegated console OS turn.
 * **The additive detector (T-0220, ADR-2268 Decision 6).**
   `corvin_operator/bridges/shared/sensitive_detector.py` finds personal data and
   credential prefixes in German and English text and can only RAISE a class: personal
@@ -279,9 +278,25 @@ producing a guard that quietly allows what its own table forbids:
   CONFIDENTIAL turn, the engine `claude_code`, an eligible declared provider with a
   verbatim-admitted model, and `validate_provider` allowing it under the unchanged matrix.
   SECRET, PUBLIC, an unknown class, a malformed route, a classifier or gate error and any
-  ineligible target are refused, never rerouted. **Not wired:** the callers (the bridge
-  OS turn, the console OS turn and `check_l34` in ACS and video producer) still call
-  `check_l34`, so nothing is rerouted yet. The wiring is the rest of T-0219.
+  ineligible target are refused, never rerouted. **Wired (T-0219, T-0221, T-0229):** the bridge OS turn
+  (`adapter._resolve_os_turn_route` → `_apply_sensitive_route`) and the non-delegated console
+  OS turn (`chat_runtime._route_off_loop` → `_spawn_gates.resolve_console_spawn`) switch;
+  ACS, the video producer, the gateway dispatcher, A2A and a delegated console turn keep
+  `check_l34` and refuse (a route that exists but cannot switch there is audited as
+  `data_flow.reroute_refused`, reason `site_not_switchable`). `resolve_l34_route` returns an
+  `L34Route` (`refusal`, `provider`, `model_id`, `rerouted`): where nothing is rerouted its
+  `refusal` is byte for byte the `check_l34`-then-`check_l35` answer; a reroute runs both
+  gates again for the provider's current host and audits `data_flow.rerouted` (provider,
+  model, engine, class, never the prompt). The switching site builds the env with
+  `engine_models.resolve_provider_env_strict` (never degrades to the default endpoint, strips
+  every `ANTHROPIC_*` / `CLAUDE_CODE_USE_*` / platform override, verifies the upstream host
+  against the declaration and against the host L35 judged) and passes the declared model id as
+  `--model`, replacing the OS-model resolver's choice. A route that cannot be built refuses
+  the turn. Limit: the ADR-2102 history gates still judge earlier turns against `claude_code`
+  itself, so a rerouted turn may carry less history than the provider would be allowed to see
+  (over-withholding, never leaking), and `ClaudeCodeEngine` still strips a `provider/` prefix
+  from a Claude-lineage model id.
+  E2E: `test_bridge_sensitive_reroute_e2e.py`, `core/console/tests/test_console_sensitive_reroute_e2e.py`.
 
 `SECRET` is the only row kept local-only by default. It fires solely on literal
 credentials (API keys, private keys, `password = …`) detected by regex, occurs

@@ -64,7 +64,7 @@ def _declared(**extra):
 
 
 def _resolve(prompt="harmless", classification=None, engine="claude_code"):
-    return spawn_gates.resolve_l34_route(engine, "acme", prompt=prompt, classification=classification,
+    return spawn_gates.decide_l34_route(engine, "acme", prompt=prompt, classification=classification,
                                          persona="assistant")
 
 
@@ -176,5 +176,5 @@ class TestPolicyErrors:
 
 
 def test_the_decision_is_the_only_public_entry_for_rerouting():
-    assert callable(spawn_gates.resolve_l34_route)
+    assert callable(spawn_gates.decide_l34_route)
     assert hasattr(spawn_gates, "RouteOutcome")

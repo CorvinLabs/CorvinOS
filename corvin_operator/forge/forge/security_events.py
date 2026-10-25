@@ -230,6 +230,10 @@ EVENT_SEVERITY: dict[str, str] = {
     # T-0226 / ADR-2268 — boot report: a tenant's engine_compliance relabels a bundled
     # US-cloud engine as a safer place; L34 refuses that tenant's spawns until fixed.
     "data_flow.relabel_rejected": "WARNING",
+    # T-0221 / ADR-2268 — a turn L34 would refuse ran on the operator's sensitive provider
+    # (INFO), or the route was available and the turn was refused anyway (WARNING).
+    "data_flow.rerouted": "INFO",
+    "data_flow.reroute_refused": "WARNING",
     # Layer 35 — Network egress lockdown (ADR-0043)
     # ADR-0167 M1 — Entangled License Ratchet integration
     "egress.approved":           "INFO",
@@ -5077,6 +5081,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "data_flow.blocked": frozenset({"channel", "chat_key", "classification", "engine_id", "matched_rule", "persona", "reason"}),
     # Ids and the offending field/value only — never prompt text (T-0226).
     "data_flow.relabel_rejected": frozenset({"engine_id", "field", "tenant_id", "value"}),
+    # Ids and codes only; never the prompt, the model's output or a credential (T-0221).
+    "data_flow.rerouted": frozenset({"channel", "chat_key", "classification", "engine_id", "model_id",
+                                     "persona", "provider", "reason"}),
+    "data_flow.reroute_refused": frozenset({"channel", "chat_key", "classification", "engine_id",
+                                            "persona", "provider", "reason"}),
     "delegate.completed": frozenset({"duration_ms", "engine", "output_chars", "persona"}),
     "delegate.engine_policy_denied": frozenset({"engine", "persona", "reason", "tenant_id"}),
     "delegate.failed": frozenset({"duration_ms", "engine", "persona", "reason"}),
