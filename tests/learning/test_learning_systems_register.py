@@ -188,3 +188,17 @@ def test_vibe_engineering_unreachable_modules_are_classified():
     for path in ve:
         assert path in not_learning or path in in_register, (
             f"{path} is unreachable and not classified (learning or not-learning)")
+
+
+@pytest.mark.parametrize("sys_id", ["L05", "L12"])
+def test_router_entries_record_the_readiness_measurement(sys_id):
+    """T-0280: the router readiness is measured with readiness.evaluate, dated, per surface."""
+    entry = next(s for s in _load() if s["id"] == sys_id)
+    m = entry.get("measured")
+    assert m, f"{sys_id}: no readiness measurement recorded"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(m["date"])), f"{sys_id}: measurement date not ISO"
+    for surface in ("bridge", "console"):
+        row = m[surface]
+        assert {"ready", "reason", "decisions", "join_rate"} <= set(row), f"{sys_id}: {surface} incomplete"
+    # Phase 2 stays off here: a measurement that says ready must come with a proposed decision.
+    assert not any(m[s]["ready"] for s in ("bridge", "console")) or "decision" in m["verdict"].lower()

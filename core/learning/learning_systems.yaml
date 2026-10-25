@@ -75,6 +75,13 @@ systems:
       live ledger (Skill booted, no rollback, >=500 joined decisions per surface,
       join rate >=0.95, proxy evidence). Until then the learned threshold changes
       no routing.
+    measured:
+      date: "2026-10-25"
+      source: core/skills/os_skills/monitoring/readiness.py evaluate(), tenant _default, read-only
+      gates: ADR-2092 (>=500 decisions, join rate >=0.95, console soak 7 d, proxy evidence)
+      bridge: {ready: false, reason: console_soak_incomplete, decisions: 962, join_rate: 0.989, delegating: 26, disagreements: 1}
+      console: {ready: false, reason: insufficient_samples, decisions: 365, join_rate: 0.923, delegating: 36, disagreements: 0}
+      verdict: Phase 2 is not switched; no gate-holding decision is proposed.
 
   - id: L06
     name: Skill grades, injection gate, promotion
@@ -183,6 +190,13 @@ systems:
       both surfaces; the rollback judge and readiness evaluation act only for
       Phase 2, which is refused and audited until the gates hold. Measured
       2026-10-11: no delegating decision on either surface (no_delegation_subject).
+    measured:
+      date: "2026-10-25"
+      source: core/skills/os_skills/monitoring/readiness.py evaluate(), tenant _default, read-only
+      gates: ADR-2092 (>=500 decisions, join rate >=0.95, console soak 7 d, proxy evidence)
+      bridge: {ready: false, reason: console_soak_incomplete, decisions: 962, join_rate: 0.989, delegating: 26, disagreements: 1}
+      console: {ready: false, reason: insufficient_samples, decisions: 365, join_rate: 0.923, delegating: 36, disagreements: 0}
+      verdict: Phase 2 is not switched; no gate-holding decision is proposed.
 
   - id: L13
     name: Flow-guard learning route
