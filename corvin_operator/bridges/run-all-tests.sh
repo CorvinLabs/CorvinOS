@@ -878,6 +878,10 @@ run "Python: compliance gaps G-006/G-008/G-009/G-010 (ADR-0073)" python3 shared/
 #   cd operator/rag-integration && PYTHONPATH=../.. python3 tests/test_rag_basic.py
 # Skipping from run-all-tests.sh for now as other test failures are unrelated to RAG code.
 
+# ── Learning systems (ADR-2281): register well-formedness + reachability ratchet ──
+run "Python: learning-system register (ADR-2281)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../tests/learning/test_learning_systems_register.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: learning reachability ratchet (ADR-2281)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../tests/learning/test_learning_reachability_ratchet.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+
 run "Python: plugin system (L4, ADR-0233/0345)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; env -u FORGE_ROOT "$PYTEST" ../../core/plugins/tests -q --import-mode=importlib >/dev/null 2>&1' || fails=$((fails+1))
 
 run "daemon boot smoke-test"     bash test_daemon_boot.sh >/dev/null                  || fails=$((fails+1))
