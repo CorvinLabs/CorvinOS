@@ -7,14 +7,14 @@
       "manifest": 2,
       "page": 30,
       "route": 34,
-      "tabs-trigger": 38
+      "tabs-trigger": 32
     },
     "deeplinks": 20,
     "nav_static": 28,
     "panels_inventoried": 28,
     "panels_registered": 37,
     "routes": 34,
-    "tabs_triggers": 38
+    "tabs_triggers": 32
   },
   "entries": [
     {
@@ -2780,84 +2780,6 @@
       "sources": [
         "src/pages/workflows.tsx <TabsTrigger>"
       ]
-    },
-    {
-      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#collaboration",
-      "kind": "tabs-trigger",
-      "label": "collaboration",
-      "nav": false,
-      "owner": "src:src/panels/datahub-creator/index.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-collaboration",
-      "sources": [
-        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#create",
-      "kind": "tabs-trigger",
-      "label": "create",
-      "nav": false,
-      "owner": "src:src/panels/datahub-creator/index.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-create",
-      "sources": [
-        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#execute",
-      "kind": "tabs-trigger",
-      "label": "execute",
-      "nav": false,
-      "owner": "src:src/panels/datahub-creator/index.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-execute",
-      "sources": [
-        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#export",
-      "kind": "tabs-trigger",
-      "label": "export",
-      "nav": false,
-      "owner": "src:src/panels/datahub-creator/index.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-export",
-      "sources": [
-        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#metrics_dashboard",
-      "kind": "tabs-trigger",
-      "label": "metrics_dashboard",
-      "nav": false,
-      "owner": "src:src/panels/datahub-creator/index.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-metrics-dashboard",
-      "sources": [
-        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
-      ]
-    },
-    {
-      "id": "tabs-trigger:src/panels/datahub-creator/index.tsx#optimization_config",
-      "kind": "tabs-trigger",
-      "label": "optimization_config",
-      "nav": false,
-      "owner": "src:src/panels/datahub-creator/index.tsx",
-      "panel": false,
-      "route": null,
-      "slug": "tabs-trigger-src-panels-datahub-creator-index-tsx-optimization-config",
-      "sources": [
-        "src/panels/datahub-creator/index.tsx <TabsTrigger>"
-      ]
     }
   ],
   "excluded": [
@@ -2949,12 +2871,12 @@
     "src/App.tsx": "10c24052924326b9b28ad077a9a0c507d3dc334b00cc7b53fce10cae6502aab4",
     "src/components/chat/ChatContextSidebar.tsx": "c9198042c518ac476da95efc87b83fb4a39da0a8b3a0d81959a25f7bdaf780b5",
     "src/components/layout.tsx": "39a6d8fd616bafe282c5f34f556305cdba313f80d5421e8a2860ded5a7413433",
-    "src/pages/compliance.tsx": "6ca3704c3467eaeb45beb330ecbcf0803ccd6b4fe3213973d5ec7bafed4858b4",
-    "src/pages/compute.tsx": "a5712f6e05d98d7e5d3bdcb2b24bf6619bf0cdca12e59bcdb32600f46ddab437",
-    "src/pages/forge.tsx": "bcb3c2510871f62e5979571eb9aa732ec64f666ff8dfb5db442a65d206ffd3e0",
+    "src/pages/compliance.tsx": "27cbe35f70153f47ba30040943f513b173b079a295fc9dbf7bbc5275b5790cfa",
+    "src/pages/compute.tsx": "a2a38e96a6cffb06c2225f73a43ff44cdb2ea810c16406d691691dd145920379",
+    "src/pages/forge.tsx": "bb819c1a3362a593133ce2f59c8a128562ff3ca9741a46081f0573f9f6377213",
     "src/pages/marketplace/tabs.ts": "9f9683db432642b97561f3350c90d22ddc8204cffa6fceaa7a8db825590a5767",
     "src/pages/models/tabs.ts": "53c063c065fcfd0f8455a3e3a1f86040cf0cdc8dc68f6c3a0ae70569e5f5f127",
-    "src/pages/rag-hub.tsx": "7faceb2f0d198a74f7b2100cacdc8f00ee8e68406215500ab3eccd39a4c41f8e",
+    "src/pages/rag-hub.tsx": "92ac14253d813be3bc5858a58cf09f1d1d95ffe955869665a594b2023b612356",
     "src/pages/skills/SkillManagerDashboard.tsx": "d7d9036cc955c559c4579ad648daafd228463cba46b4da5a5d7d3b2affa49792",
     "src/pages/tasks/index.tsx": "d4bab92740275339f594447b41ba8b6cfa391ca580e22b886bf909f48640f081",
     "src/pages/vibe-engineering/VibeDashboard.tsx": "4dc491f27fcafb92a474a80aab1564b2cfdd28494bd3d548665c4c38f7779574",

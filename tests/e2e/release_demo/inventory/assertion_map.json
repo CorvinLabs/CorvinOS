@@ -827,30 +827,6 @@
     "tabs-trigger:src/pages/workflows.tsx#templates": {
       "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
       "status": "pending"
-    },
-    "tabs-trigger:src/panels/datahub-creator/index.tsx#collaboration": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
-    "tabs-trigger:src/panels/datahub-creator/index.tsx#create": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
-    "tabs-trigger:src/panels/datahub-creator/index.tsx#execute": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
-    "tabs-trigger:src/panels/datahub-creator/index.tsx#export": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
-    "tabs-trigger:src/panels/datahub-creator/index.tsx#metrics_dashboard": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
-    "tabs-trigger:src/panels/datahub-creator/index.tsx#optimization_config": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
     }
   },
   "note": "One mapping per inventory entry. status=mapped needs an assertion id; status=pending needs a reason.",
