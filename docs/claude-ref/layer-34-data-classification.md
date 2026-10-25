@@ -233,6 +233,29 @@ producing a guard that quietly allows what its own table forbids:
   and writes the home through `spawn_gates._resolve_corvin_home`, the resolver the gate
   uses. **Not wired:** nothing reads `sensitive_route` at spawn time yet (T-0219), so
   enabling it changes no routing today.
+* **The additive detector (T-0220, ADR-2268 Decision 6).**
+  `corvin_operator/bridges/shared/sensitive_detector.py` finds personal data and
+  credential prefixes in German and English text and can only RAISE a class: personal
+  data (e-mail address, phone number, IBAN with a valid mod-97 checksum and the
+  country's length, payment card with a valid Luhn checksum, German tax id with a valid
+  check digit AND a context word, US social security number) gives at least
+  `CONFIDENTIAL`; credential prefixes (`sk-ant-`, `sk-proj-`, `sk-`, `ghp_`,
+  `github_pat_`, `AKIA`, `xox?-`, `AIza`) give `SECRET`, never `CONFIDENTIAL`, because
+  `SECRET` is never rerouted. `detect()` returns category names only, never the matched
+  text; `raise_class(current, text)` is `max(current, detector)`, so it cannot lower a
+  class, override the secret bank or be switched off by a `[class:public]` marker in the
+  text; any failure raises `DetectorError`, which the caller must treat as a refusal.
+  Measured on a self-written synthetic corpus (75 texts, `tests/fixtures/
+  sensitive_detector_corpus.jsonl`, run 2026-10-26): recall email 5/8, phone 9/11, IBAN
+  6/7, payment card 5/6, tax id 4/5, US SSN 2/2, credential 8/9 (39 of 48 sensitive
+  texts), 1 false positive in 27 harmless texts (`git@github.com:` looks like an
+  address). Every miss is a labelled `known_miss` (spelled-out or space-separated
+  digits, `[at]`/`[dot]` writing, a tax id with no context word, a prefix split from its
+  secret) and the test pins the miss set exactly. **That corpus is not real traffic: do
+  not read these numbers as a rate.** Not detected at all: names, postal addresses,
+  health or financial prose, birth dates, any value outside the categories above.
+  **Not wired:** `classify_task()` does not call the detector yet (T-0219 changes it and
+  its four production callers), so no turn is classified differently today.
 
 `SECRET` is the only row kept local-only by default. It fires solely on literal
 credentials (API keys, private keys, `password = …`) detected by regex, occurs

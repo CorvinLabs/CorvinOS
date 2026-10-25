@@ -1,0 +1,75 @@
+{"id": "em-de-1", "lang": "de", "category": "email", "sensitive": true, "text": "Bitte schick die Unterlagen an max.mustermann@beispiel.de bis Freitag."}
+{"id": "em-en-1", "lang": "en", "category": "email", "sensitive": true, "text": "Contact jane.doe@example.com for the contract."}
+{"id": "em-de-2", "lang": "de", "category": "email", "sensitive": true, "text": "Ihre Rechnung geht an buchhaltung+2026@firma-xyz.example.org."}
+{"id": "em-en-2", "lang": "en", "category": "email", "sensitive": true, "text": "cc: j.smith@mail.corp.example.co.uk and the team"}
+{"id": "em-de-3", "lang": "de", "category": "email", "sensitive": true, "text": "Antworten Sie an erika@musterfrau.de."}
+{"id": "em-de-miss-1", "lang": "de", "category": "email", "sensitive": true, "known_miss": true, "note": "spelled out", "text": "Schreib mir an max punkt mustermann at beispiel punkt de"}
+{"id": "em-en-miss-1", "lang": "en", "category": "email", "sensitive": true, "known_miss": true, "note": "spelled out", "text": "my address is jane dot doe at example dot com"}
+{"id": "em-en-miss-2", "lang": "en", "category": "email", "sensitive": true, "known_miss": true, "note": "bracketed", "text": "jane.doe [at] example [dot] com"}
+{"id": "em-neg-1", "lang": "en", "category": "none", "sensitive": false, "text": "The asset is icon@2x.png in the sprite sheet."}
+{"id": "em-neg-2", "lang": "en", "category": "none", "sensitive": false, "text": "Ping @alice in the channel about the release."}
+{"id": "em-neg-3", "lang": "en", "category": "none", "sensitive": false, "text": "Connect to user@localhost for the local test."}
+{"id": "em-neg-fp-1", "lang": "en", "category": "none", "sensitive": false, "known_false_positive": true, "note": "git remote looks like an address", "text": "git clone git@github.com:corvin/repo.git"}
+{"id": "ph-de-1", "lang": "de", "category": "phone", "sensitive": true, "text": "Rufen Sie mich unter +49 30 12345678 an."}
+{"id": "ph-de-2", "lang": "de", "category": "phone", "sensitive": true, "text": "Meine Nummer: 030 1234567"}
+{"id": "ph-de-3", "lang": "de", "category": "phone", "sensitive": true, "text": "Mobil erreichbar unter 0171 2345678."}
+{"id": "ph-de-4", "lang": "de", "category": "phone", "sensitive": true, "text": "Tel. (030) 123456-78 werktags"}
+{"id": "ph-de-5", "lang": "de", "category": "phone", "sensitive": true, "text": "Erreichbar unter 0049 89 123456 78"}
+{"id": "ph-de-6", "lang": "de", "category": "phone", "sensitive": true, "text": "Kontakt: 0171/2345678"}
+{"id": "ph-en-1", "lang": "en", "category": "phone", "sensitive": true, "text": "Call me on +1 (415) 555-0132 tomorrow."}
+{"id": "ph-en-2", "lang": "en", "category": "phone", "sensitive": true, "text": "Office: +44 20 7946 0958"}
+{"id": "ph-en-3", "lang": "en", "category": "phone", "sensitive": true, "text": "Reach the desk at (415) 555-0132."}
+{"id": "ph-de-miss-1", "lang": "de", "category": "phone", "sensitive": true, "known_miss": true, "note": "spelled-out digits", "text": "null eins sieben eins zwei drei vier fünf sechs sieben acht"}
+{"id": "ph-de-miss-2", "lang": "de", "category": "phone", "sensitive": true, "known_miss": true, "note": "single spaced digits", "text": "ruf an: 0 1 7 1 2 3 4 5 6 7 8"}
+{"id": "ph-neg-1", "lang": "de", "category": "none", "sensitive": false, "text": "Der Termin ist am 2026-10-26 um zehn Uhr."}
+{"id": "ph-neg-2", "lang": "en", "category": "none", "sensitive": false, "text": "Version 10.4.2.1 is out since Monday."}
+{"id": "ph-neg-3", "lang": "de", "category": "none", "sensitive": false, "text": "Bestellnummer 123456789012 wurde versendet."}
+{"id": "ph-neg-4", "lang": "en", "category": "none", "sensitive": false, "text": "ISBN 978-3-16-148410-0 is in stock."}
+{"id": "ph-neg-5", "lang": "de", "category": "none", "sensitive": false, "text": "Der Preis liegt bei 0,50 Euro pro Stück."}
+{"id": "ph-neg-6", "lang": "en", "category": "none", "sensitive": false, "text": "Listen on port 8080 and read RFC 7231 section 6.5.1."}
+{"id": "ib-de-1", "lang": "de", "category": "iban", "sensitive": true, "text": "Überweisen Sie bitte auf IBAN DE89 3704 0044 0532 0130 00 bis Monatsende."}
+{"id": "ib-de-2", "lang": "de", "category": "iban", "sensitive": true, "text": "Konto: DE89370400440532013000"}
+{"id": "ib-en-1", "lang": "en", "category": "iban", "sensitive": true, "text": "Please pay to GB82 WEST 1234 5698 7654 32 by Friday."}
+{"id": "ib-fr-1", "lang": "en", "category": "iban", "sensitive": true, "text": "French account FR14 2004 1010 0505 0001 3M02 606 for the refund."}
+{"id": "ib-at-1", "lang": "de", "category": "iban", "sensitive": true, "text": "Österreichisches Konto AT61 1904 3002 3457 3201"}
+{"id": "ib-nl-1", "lang": "en", "category": "iban", "sensitive": true, "text": "NL91ABNA0417164300 is the Dutch one."}
+{"id": "ib-miss-1", "lang": "de", "category": "iban", "sensitive": true, "known_miss": true, "note": "single spaced characters", "text": "D E 8 9 3 7 0 4 0 0 4 4 0 5 3 2 0 1 3 0 0 0"}
+{"id": "ib-neg-1", "lang": "de", "category": "none", "sensitive": false, "text": "Falsche IBAN DE89 3704 0044 0532 0130 01 steht im Formular."}
+{"id": "ib-neg-2", "lang": "de", "category": "none", "sensitive": false, "text": "Artikel DE12345678 ist ausverkauft."}
+{"id": "ib-neg-3", "lang": "en", "category": "none", "sensitive": false, "text": "The hash AB12CD34EF56GH78IJ90 was reported."}
+{"id": "cc-en-1", "lang": "en", "category": "payment_card", "sensitive": true, "text": "My card is 4111 1111 1111 1111 exp 12/28."}
+{"id": "cc-de-1", "lang": "de", "category": "payment_card", "sensitive": true, "text": "Kreditkarte 5555 5555 5555 4444, gültig bis 11/27"}
+{"id": "cc-en-2", "lang": "en", "category": "payment_card", "sensitive": true, "text": "Amex 3782 822463 10005 on file."}
+{"id": "cc-en-3", "lang": "en", "category": "payment_card", "sensitive": true, "text": "6011111111111117"}
+{"id": "cc-de-2", "lang": "de", "category": "payment_card", "sensitive": true, "text": "Karte: 5555-5555-5555-4444"}
+{"id": "cc-miss-1", "lang": "en", "category": "payment_card", "sensitive": true, "known_miss": true, "note": "digits split by words", "text": "four one one one, one one one one, one one one one, one one one one"}
+{"id": "cc-neg-1", "lang": "en", "category": "none", "sensitive": false, "text": "Reference 1234 5678 9012 3457 failed validation."}
+{"id": "cc-neg-2", "lang": "de", "category": "none", "sensitive": false, "text": "Sendungsnummer 1234 5678 9012 liegt vor."}
+{"id": "tx-de-1", "lang": "de", "category": "tax_id_de", "sensitive": true, "text": "Meine Steuer-ID ist 48123456783."}
+{"id": "tx-de-2", "lang": "de", "category": "tax_id_de", "sensitive": true, "text": "Steueridentifikationsnummer: 24 761 259 348"}
+{"id": "tx-en-1", "lang": "en", "category": "tax_id_de", "sensitive": true, "text": "His German tax id 51392874616 is needed for the form."}
+{"id": "tx-de-3", "lang": "de", "category": "tax_id_de", "sensitive": true, "text": "IdNr. 65929970489 bitte eintragen"}
+{"id": "tx-de-miss-1", "lang": "de", "category": "tax_id_de", "sensitive": true, "known_miss": true, "note": "no context word", "text": "Seine Nummer lautet 24761259348 laut Bescheid."}
+{"id": "tx-neg-1", "lang": "de", "category": "none", "sensitive": false, "text": "Steuer-ID 48123456784 laut Formular."}
+{"id": "tx-neg-2", "lang": "de", "category": "none", "sensitive": false, "text": "Bestellung 12345678901 ist angelegt."}
+{"id": "ss-en-1", "lang": "en", "category": "ssn_us", "sensitive": true, "text": "My SSN is 123-45-6789."}
+{"id": "ss-en-2", "lang": "en", "category": "ssn_us", "sensitive": true, "text": "Social security 219-09-9999 for the payroll."}
+{"id": "ss-neg-1", "lang": "en", "category": "none", "sensitive": false, "text": "Invalid area 000-12-3456 in the test data."}
+{"id": "ss-neg-2", "lang": "en", "category": "none", "sensitive": false, "text": "Part number 123-45-67890 ships Monday."}
+{"id": "ky-en-1", "lang": "en", "category": "api_key", "sensitive": true, "text": "key: sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"}
+{"id": "ky-en-2", "lang": "en", "category": "api_key", "sensitive": true, "text": "OPENAI_API_KEY=sk-proj-AbCdEfGh12345678IjKlMnOp"}
+{"id": "ky-en-3", "lang": "en", "category": "api_key", "sensitive": true, "text": "token ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"}
+{"id": "ky-en-4", "lang": "en", "category": "api_key", "sensitive": true, "text": "aws key AKIAIOSFODNN7EXAMPLE in the env"}
+{"id": "ky-en-5", "lang": "en", "category": "api_key", "sensitive": true, "text": "slack xoxb-1234567890-abcdefghij"}
+{"id": "ky-en-6", "lang": "en", "category": "api_key", "sensitive": true, "text": "google AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q"}
+{"id": "ky-de-1", "lang": "de", "category": "api_key", "sensitive": true, "text": "Hier mein Schlüssel: sk-ant-api03-ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210"}
+{"id": "ky-en-7", "lang": "en", "category": "api_key", "sensitive": true, "note": "key split in two chunks: the first chunk still carries the prefix", "text": "sk-ant-api03-AbCdEf and then GhIjKlMnOpQrStUvWxYz0123456789 in the next line"}
+{"id": "ky-miss-1", "lang": "en", "category": "api_key", "sensitive": true, "known_miss": true, "note": "prefix split from the secret", "text": "the prefix is sk-ant- and the rest is AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"}
+{"id": "ky-neg-1", "lang": "de", "category": "none", "sensitive": false, "text": "Das task-ant-Muster beschreibt die Arbeitsteilung."}
+{"id": "ky-neg-2", "lang": "en", "category": "none", "sensitive": false, "text": "The prefix sk-ant-x is only an example."}
+{"id": "no-1", "lang": "de", "category": "none", "sensitive": false, "text": "Fasse den Artikel über Lastenräder in drei Sätzen zusammen."}
+{"id": "no-2", "lang": "en", "category": "none", "sensitive": false, "text": "Write a Python function that sorts a list of tuples by the second item."}
+{"id": "no-3", "lang": "de", "category": "none", "sensitive": false, "text": "Wie funktioniert ein Hash-Join in einer relationalen Datenbank?"}
+{"id": "no-4", "lang": "en", "category": "none", "sensitive": false, "text": "Explain the difference between a mutex and a semaphore."}
+{"id": "no-5", "lang": "de", "category": "none", "sensitive": false, "text": "Plane eine Reise nach Lissabon vom 3. bis 9. Mai für zwei Personen."}
+{"id": "no-6", "lang": "en", "category": "none", "sensitive": false, "text": "def total(items): return sum(i.price * i.qty for i in items)"}
