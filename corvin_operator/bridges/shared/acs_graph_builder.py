@@ -228,15 +228,36 @@ def graph_to_awp_yaml(
 
     if mode == "dag":
         wf_id = f"discovered-{short}"
+        # The console Workflows page and the AWP validator read `awp`, `workflow.name` and
+        # `orchestration.graph` (R1..R11). The exporter used to write only `apiVersion` and a
+        # private `nodes:` list, so an import became an empty draft with 0 nodes. Both shapes
+        # are written now; the ACS provenance stays on every node under `meta`.
+        graph_section = []
+        for entry in nodes_section:
+            gnode: dict[str, Any] = {
+                "id": entry["id"],
+                "type": "agent",
+                "agent": "general",
+                "instructions": entry["task"],
+            }
+            # Copies, never the same objects: PyYAML would write them as &anchor/*alias, and the
+            # Workflows import refuses aliases.
+            if entry.get("depends_on"):
+                gnode["depends_on"] = list(entry["depends_on"])
+            gnode["meta"] = dict(entry["meta"])
+            graph_section.append(gnode)
         doc: dict[str, Any] = {
+            "awp": "1.0.0",
             "apiVersion": "1.0.0",
             "workflow": {
                 "id": wf_id,
+                "name": _safe_id(wf_id),
                 "description": desc,
                 "tags": ["acs-discovered", "dag"],
             },
             "orchestration": {
                 "engine": "dag",
+                "graph": graph_section,
             },
             "nodes": nodes_section,
             "state": {"initial": {}},

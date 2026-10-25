@@ -179,6 +179,36 @@ def test_awp_yaml_dag_mode(tmp_path):
     assert "w-worker-c" in yaml_text
 
 
+def test_dag_export_is_a_valid_console_workflow(tmp_path):
+    """The exported DAG must load and validate with the same loader/validator the Workflows
+    page uses on import (R1..R11). Until 2026-10-24 it wrote a private `nodes:` list, so an
+    import produced an empty draft with 0 nodes."""
+    wf_dir = Path(__file__).resolve().parents[3] / "core" / "workflows"
+    sys.path.insert(0, str(wf_dir))
+    from corvin_workflows import load_workflow, validate
+
+    run_dir = _make_run_dir(tmp_path)
+    graph = ACSGraphBuilder(run_dir).build()
+    assert graph is not None
+
+    yaml_path = tmp_path / "export.awp.yaml"
+    yaml_text = graph_to_awp_yaml(graph, mode="dag")
+    # The Workflows import refuses YAML anchors/aliases (alias bomb guard, B-10); PyYAML writes
+    # them whenever one list/dict object appears twice in the document.
+    import yaml as _y
+    assert not any(isinstance(ev, _y.AliasEvent) for ev in _y.parse(yaml_text)), "export contains YAML aliases"
+    yaml_path.write_text(yaml_text, encoding="utf-8")
+    doc = load_workflow(yaml_path)
+    validate(doc)  # raises WorkflowInvalid on any rule violation
+
+    assert [n["id"] for n in doc.graph] == [n.node_id for n in graph.nodes]
+    last = doc.graph[-1]
+    assert sorted(last["depends_on"]) == ["w-worker-a", "w-worker-b"]
+    assert all(n["type"] == "agent" and n["agent"] and n["instructions"] for n in doc.graph)
+    # ACS provenance stays on the node, nothing is lost by the conversion
+    assert doc.graph[0]["meta"]["acs_status"] == "success"
+
+
 def test_awp_yaml_template_mode(tmp_path):
     run_dir = _make_run_dir(tmp_path)
     graph = ACSGraphBuilder(run_dir).build()
