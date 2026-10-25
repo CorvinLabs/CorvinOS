@@ -55,6 +55,26 @@ def fake_session_record(tenant_id: str = "_default") -> "session_auth.SessionRec
     return session_auth.SessionRecord(**values)  # type: ignore[arg-type]
 
 
+def seed_core_loop(tenant_id: str = "_default", skill_id: str = "os.delegation_router") -> str:
+    """Record one execution of a core skill and return the loop id it makes discoverable.
+
+    ``core.learning.loop_discovery`` builds one core loop per skill from the tenant's
+    learning events, so a sandbox tenant with no event has no loop at all: the panel's
+    detail routes then answer 404 for any id and tests that need a loop have nothing to
+    open. Written through the real audit-first ``EventStore`` (the repo conftest sandboxes
+    ``CORVIN_HOME``).
+    """
+    from core.learning.event_store import EventStore
+    from core.learning.learning_events import EventType, LearningEvent
+    from core.paths.tenant import tenant_home
+
+    EventStore(tenant_home(tenant_id), tenant_id=tenant_id).write_event(LearningEvent.create(
+        event_type=EventType.SKILL_EXECUTED, skill_id=skill_id, tenant_id=tenant_id,
+        signal={"status": "success", "output": {"ok": True}},
+        lom="core/skills/skill_registry_phase1.py:execute"))
+    return f"core:{skill_id}"
+
+
 @pytest.fixture
 def app():
     """The real console router, mounted where the live host mounts it.

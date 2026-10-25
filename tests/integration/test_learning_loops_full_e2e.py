@@ -22,6 +22,15 @@ def session_headers() -> dict:
     return {}
 
 
+@pytest.fixture(autouse=True)
+def _seeded_core_loop():
+    """Four tests here skip with "No loops available" in a sandbox tenant; one recorded
+    execution makes the core loop exist so they run (``seed_core_loop``)."""
+    from tests.fixtures_console import seed_core_loop
+
+    seed_core_loop()
+
+
 @pytest.mark.asyncio
 async def test_panel_loads_without_console_crash(client: TestClient, session_headers: dict):
     """Panel renders without crashing the console."""
@@ -133,7 +142,9 @@ async def test_api_contract_list_response(client: TestClient, session_headers: d
         assert "health" in loop
         assert "event_count_7d" in loop
         assert loop["status"] in ["active", "dormant", "stale", "degrading"]
-        assert 0.0 <= loop["health"]["score"] <= 1.0
+        # None = nothing measured yet; the panel never shows a number it did not compute.
+        score = loop["health"]["score"]
+        assert score is None or 0.0 <= score <= 1.0
 
 
 @pytest.mark.asyncio
@@ -162,7 +173,10 @@ async def test_api_contract_detail_response(client: TestClient, session_headers:
     assert "min_score" in trend
     assert "max_score" in trend
     assert "avg_score" in trend
-    assert trend["min_score"] <= trend["avg_score"] <= trend["max_score"]
+    # Either all three are unmeasured (None) or they are ordered numbers.
+    low, avg, high = trend["min_score"], trend["avg_score"], trend["max_score"]
+    assert (low is None and avg is None and high is None) or (
+        None not in (low, avg, high) and low <= avg <= high)
 
 
 @pytest.mark.asyncio
@@ -297,7 +311,8 @@ async def test_health_score_validation(client: TestClient, session_headers: dict
 
     loops = resp.json()["loops"]
     for loop in loops:
-        assert 0.0 <= loop["health"]["score"] <= 1.0
+        score = loop["health"]["score"]
+        assert score is None or 0.0 <= score <= 1.0
         assert loop["health"]["trend"] in ["up", "down", "flat"]
 
 

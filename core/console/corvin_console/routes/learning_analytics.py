@@ -250,11 +250,16 @@ _last_cache_cleanup = datetime.now(timezone.utc)
 
 
 def _hash_cache_key(plugin_id: Optional[str], skill_id: Optional[str],
-                   status: Optional[str], sort_by: str) -> str:
+                   status: Optional[str], sort_by: str,
+                   limit: int = 50, offset: int = 0) -> str:
     """Hash cache parameters to avoid collision/injection vulnerabilities.
 
     Uses SHA256 hash of normalized parameters instead of string concatenation
     to prevent cache key collisions and parameter injection attacks.
+
+    ``limit`` and ``offset`` are part of the key: until 2026-10-25 they were not, so for
+    the 2-minute TTL every page request with the same filters got whichever page was
+    cached first (``?offset=1000`` returned the first page).
     """
     # Normalize sort_by first (before including in hash)
     normalized_sort_by = sort_by or "last_event"
@@ -267,6 +272,8 @@ def _hash_cache_key(plugin_id: Optional[str], skill_id: Optional[str],
         skill_id or "",
         status or "",
         normalized_sort_by,  # Use normalized value in hash
+        str(int(limit)),
+        str(int(offset)),
     ]
 
     key_str = "|".join(parts)
@@ -631,9 +638,11 @@ async def list_learning_loops(
     tenant_id = session.tenant_id
 
     # Check cache (use hashed key to prevent collision/injection)
-    cache_key_hash = _hash_cache_key(plugin_id, skill_id, status, sort_by)
+    cache_key_hash = _hash_cache_key(plugin_id, skill_id, status, sort_by, limit, offset)
     cached = _get_cached(tenant_id, cache_key_hash, _CACHE_TTL_LIST)
     if cached is not None:
+        # A cache hit is still a read of the panel: audit it like the slow path does.
+        await _audit_log_route(session, "/learning-loops/list")
         return cached
 
     # Two sources, one list. Plugin-declared loops live in the index (ADR-0906
@@ -1106,16 +1115,19 @@ async def _audit_log_route(session: SessionRecord, route: str, **details) -> Non
         route: API route path (e.g., /learning-loops/list)
         **details: Additional details to log (filters, pagination params, etc.)
     """
+    # Until 2026-10-25 this imported ``core.security.audit.emit_audit_event`` — a module
+    # that does not exist — so every read of the panel was answered with no record and one
+    # warning. The console's own registered event is used (no new event type, no user id);
+    # ``details`` (pagination, filters) stay out of the chain on purpose.
     try:
-        from core.security.audit import emit_audit_event
-        await emit_audit_event(
+        from .. import audit as console_audit
+
+        console_audit.action_performed(
             tenant_id=session.tenant_id,
-            event_type="console.learning_loop_access",
-            details={
-                "route": route,
-                "user_id": session.user_id,
-                **details,
-            },
+            sid_fingerprint=session.sid_fingerprint,
+            action="learning_loops.read",
+            target_kind="learning_loop_route",
+            target_id=route,
         )
     except Exception as e:
         logger.warning(f"Failed to audit route {route}: {type(e).__name__}: {e}")

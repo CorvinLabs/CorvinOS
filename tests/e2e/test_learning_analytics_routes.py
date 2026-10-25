@@ -72,8 +72,10 @@ async def test_list_learning_loops_schema_valid(async_client: AsyncClient, test_
         assert "plugin_id" in loop
         assert "status" in loop
         assert "health" in loop
-        assert loop["health"]["score"] >= 0.0
-        assert loop["health"]["score"] <= 1.0
+        # The score is None until the loop has measured outcomes: the panel never
+        # shows a number it did not compute.
+        score = loop["health"]["score"]
+        assert score is None or 0.0 <= score <= 1.0
         assert loop["health"]["trend"] in ["up", "down", "flat"]
 
 
@@ -152,6 +154,12 @@ async def test_list_learning_loops_sorting(async_client: AsyncClient, test_sessi
 @pytest.mark.asyncio
 async def test_list_learning_loops_performance(async_client: AsyncClient, test_session):
     """List endpoint meets <50ms performance target."""
+    # Warm-up: the first request in a process pays the lazy imports of the discovery code
+    # (measured once at ~600 ms); the target is about a served request, not process start.
+    await async_client.get(
+        "/v1/console/learning-loops/list?limit=1",
+        cookies={"session": test_session.session_id},
+    )
     start = time.time()
     response = await async_client.get(
         "/v1/console/learning-loops/list",
@@ -222,6 +230,12 @@ async def test_get_loop_details_404_on_missing(async_client: AsyncClient, test_s
 @pytest.mark.asyncio
 async def test_get_loop_details_performance(async_client: AsyncClient, test_session, test_loop_id):
     """Details endpoint meets <200ms performance target."""
+    # Warm-up with a different ``days`` (its own cache key, so the measured request below is
+    # still a computed one): the first request in a process pays lazy imports (693 ms once).
+    await async_client.get(
+        f"/v1/console/learning-loops/{test_loop_id}/details?days=3",
+        cookies={"session": test_session.session_id},
+    )
     start = time.time()
     response = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/details",
@@ -360,26 +374,42 @@ async def test_details_caching(async_client: AsyncClient, test_session, test_loo
 
 
 @pytest.mark.asyncio
-async def test_tenant_isolation(async_client: AsyncClient, test_session_a, test_session_b):
-    """Tenant A cannot see Tenant B's loops (fail-closed isolation)."""
-    # Assuming test sessions have different tenant_ids
+async def test_tenant_isolation(app, async_client: AsyncClient, test_session):
+    """Tenant B cannot see tenant A's loops (fail-closed isolation).
+
+    The ``app`` fixture answers EVERY request with the ``_default`` session, so the
+    cookie a test sends decides nothing; the earlier version of this test compared
+    two requests that both ran as ``_default``. Tenant B is therefore made real by
+    swapping the overridden session dependency itself.
+    """
+    from tests.fixtures_console import fake_session_record
+
+    seeded = "core:os.delegation_router"  # written for _default by _seeded_core_loop
+
     response_a = await async_client.get(
         "/v1/console/learning-loops/list",
-        cookies={"session": test_session_a.session_id},
+        cookies={"session": test_session.session_id},
     )
+    assert response_a.status_code == 200
+    assert seeded in {l["loop_id"] for l in response_a.json()["loops"]}  # positive control
+
+    fake_b = fake_session_record(tenant_id="test_tenant_b")
+    for dependency in list(app.dependency_overrides):
+        app.dependency_overrides[dependency] = lambda: fake_b
+
     response_b = await async_client.get(
         "/v1/console/learning-loops/list",
-        cookies={"session": test_session_b.session_id},
+        cookies={"session": test_session.session_id},
     )
-
-    assert response_a.status_code == 200
     assert response_b.status_code == 200
+    assert seeded not in {l["loop_id"] for l in response_b.json()["loops"]}
 
-    loops_a = {l["loop_id"] for l in response_a.json()["loops"]}
-    loops_b = {l["loop_id"] for l in response_b.json()["loops"]}
-
-    # No intersection (assuming test data is correctly isolated)
-    assert loops_a.isdisjoint(loops_b) or (len(loops_a) == 0 and len(loops_b) == 0)
+    # and B cannot open A's loop by id either
+    detail_b = await async_client.get(
+        f"/v1/console/learning-loops/{seeded}/details",
+        cookies={"session": test_session.session_id},
+    )
+    assert detail_b.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -411,20 +441,19 @@ async def test_missing_session_returns_401(anon_async_client: AsyncClient):
 
 # ── Test Data Fixtures ──────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _seeded_core_loop():
+    """One recorded execution of a core skill (see ``seed_core_loop``).
+
+    Without any event the sandbox tenant has no loop: the detail routes answered 404 for an
+    id that never existed and the sorting test's ``len(loops) > 0`` had nothing to sort.
+    """
+    from tests.fixtures_console import seed_core_loop
+
+    seed_core_loop()
+
+
 @pytest.fixture
 def test_loop_id():
-    """A test loop_id for querying."""
-    return "test_loop_001"
-
-
-@pytest.fixture
-def test_session_a(test_session):
-    """Session for tenant A."""
-    return test_session
-
-
-@pytest.fixture
-def test_session_b():
-    """Session for tenant B (different tenant_id)."""
-    from tests.fixtures_console import fake_session_record
-    return fake_session_record(tenant_id="test_tenant_b")
+    """The id of the core loop seeded by ``_seeded_core_loop``."""
+    return "core:os.delegation_router"

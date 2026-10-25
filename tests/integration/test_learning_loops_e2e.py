@@ -13,6 +13,27 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture
+def session_headers() -> dict:
+    """The ``client`` fixture (tests/fixtures_console.py) already overrides the
+    console session dependency, so requests need no extra auth headers.
+
+    This file used the fixture without defining it (it lives in
+    test_learning_loops_full_e2e.py), so all 12 tests errored at setup and none
+    had ever run.
+    """
+    return {}
+
+
+@pytest.fixture(autouse=True)
+def _seeded_core_loop():
+    """Five tests here skip with "No loops available" in a sandbox tenant; one recorded
+    execution makes the core loop exist so they run (``seed_core_loop``)."""
+    from tests.fixtures_console import seed_core_loop
+
+    seed_core_loop()
+
+
 @pytest.mark.asyncio
 async def test_learning_loops_list_endpoint(client: TestClient, session_headers: dict):
     """GET /v1/console/learning-loops/list returns loop summaries."""
@@ -95,18 +116,9 @@ async def test_learning_loops_pagination(client: TestClient, session_headers: di
         assert len(data["loops"]) <= 10
 
 
-@pytest.mark.asyncio
-async def test_tenant_isolation(client: TestClient, session_headers: dict, alt_tenant_headers: dict):
-    """Learning loops are isolated by tenant."""
-    resp1 = client.get("/v1/console/learning-loops/list", headers=session_headers)
-    resp2 = client.get("/v1/console/learning-loops/list", headers=alt_tenant_headers)
-
-    if resp1.status_code == 200 and resp2.status_code == 200:
-        data1 = resp1.json()
-        data2 = resp2.json()
-        # Different tenants may have different loop counts
-        assert "loops" in data1
-        assert "loops" in data2
+# Tenant isolation: tests/e2e/test_learning_analytics_routes.py::test_tenant_isolation swaps the
+# session of a real second tenant. The version that stood here needed a fixture nobody defined
+# and, once given one, only asserted that the key "loops" exists.
 
 
 @pytest.mark.asyncio
@@ -136,7 +148,8 @@ async def test_health_trend_data(client: TestClient, session_headers: dict):
             assert "date" in point
             assert "health_score" in point
             assert "event_count" in point
-            assert 0.0 <= point["health_score"] <= 1.0
+            # a day without measured outcomes has no score (None), never an invented 0
+            assert point["health_score"] is None or 0.0 <= point["health_score"] <= 1.0
 
 
 @pytest.mark.asyncio

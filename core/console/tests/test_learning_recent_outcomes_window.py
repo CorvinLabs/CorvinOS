@@ -53,6 +53,11 @@ def _console(tmp_path: Path):
     os.environ["VOICE_AUDIT_PATH"] = str(home / "audit.jsonl")
     preloaded = {k: v for k, v in sys.modules.items() if k.startswith(_PURGED)}
     emitter = None
+    # ``boot_skills`` installs a process-global registry whose learning backend points at THIS
+    # sandbox's store. Left in place, ``recent_outcomes(store=None)`` in any later test of the
+    # same process read these outcomes (core/learning/tests: "expected (0, 0), got (10, 10)").
+    from core.skills import skill_registry_phase1 as _reg_mod
+    prev_registry = getattr(_reg_mod, "_global_registry", None)
     try:
         _reset_modules()
         from fastapi import FastAPI
@@ -106,6 +111,7 @@ def _console(tmp_path: Path):
                 emitter.stop(timeout=5.0)
         except Exception:  # noqa: BLE001
             pass
+        _reg_mod._global_registry = prev_registry
         for k, v in prev.items():
             if v is None:
                 os.environ.pop(k, None)

@@ -160,7 +160,7 @@ Cache keys are scoped by `tenant_id` (from `session.tenant_id`). Cross-tenant le
 
 All endpoints require:
 - **Session:** `require_session` dependency (authenticated SessionRecord with `tenant_id`)
-- **Audit:** all queries logged to core audit chain (GDPR Art. 30, 32)
+- **Audit:** every successful read of `list`, `{loop_id}/details` and `{loop_id}/events` writes one `console.action_performed` record (`action: learning_loops.read`, `target_kind: learning_loop_route`, `target_id` = the route, `sid_fingerprint`, `tenant_id`) to the tenant chain (GDPR Art. 30, 32). Filters and pagination are not recorded. The panel polls every 120 s while it is open. Until 2026-10-25 the helper imported `core.security.audit`, a module that does not exist, so no read was recorded and each logged one warning.
 - **Tenant Isolation:** queries filtered by `session.tenant_id` (GDPR Art. 6)
 
 ---

@@ -258,6 +258,30 @@ class LearningLoopRoutesE2E(unittest.TestCase):
             denied = [c for c in _console_chain(home, tenant_id) if "feedback_rejected" in json.dumps(c)]
             self.assertGreaterEqual(len(denied), 1)
 
+    def test_reading_the_learning_loops_panel_lands_in_the_console_chain(self):
+        """The panel's audit helper imported a module that does not exist.
+
+        ``GET /learning-loops/list`` answered 200 and logged "Failed to audit
+        route … No module named 'core.security.audit'": the access left no record.
+        """
+        with _sandbox(Path(self._tmp)) as (client, home, tenant_id, emitter, chain):
+            r = client.get("/v1/console/learning-loops/list")
+            self.assertEqual(r.status_code, 200, r.text)
+            loops = r.json()["loops"]
+            # the seeded execution makes the skill's core loop discoverable
+            loop_id = next(l["loop_id"] for l in loops if l["loop_id"] == "core:os.delegation_router")
+            for suffix in ("details", "events"):
+                r = client.get(f"/v1/console/learning-loops/{loop_id}/{suffix}")
+                self.assertEqual(r.status_code, 200, (suffix, r.text))
+
+            reads = [c for c in _console_chain(home, tenant_id) if "learning_loops.read" in json.dumps(c)]
+            self.assertEqual(len(reads), 3, reads)  # list, details, events: one record each
+            blob = json.dumps(reads)
+            for route in ("/learning-loops/list", f"/learning-loops/{loop_id}/details",
+                          f"/learning-loops/{loop_id}/events"):
+                self.assertIn(route, blob)
+            self.assertNotIn("user_id", blob)
+
     def test_invalid_feedback_rejected(self):
         with _sandbox(Path(self._tmp)) as (client, home, tenant_id, emitter, chain):
             r = client.post("/v1/console/learning/feedback", json={"task_id": "t", "outcome_quality": "meh"})
