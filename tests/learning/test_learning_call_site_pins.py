@@ -25,6 +25,20 @@ wrong value. Nothing here imports a learning target and calls it.
 The adapter turns run in-process (no SIGTERM, so the adapter's unit sweep is
 never reached); run-all-tests.sh still starts this file in its own
 ``systemd-run --user --scope`` when available.
+
+Mutation record (2026-10-25, origin/main bff4bbe50): neutering ONE production call site
+in a worktree and running this file turns exactly the matching pin red; restored afterwards.
+
+* ``adapter.py`` ``skill_block = _skill_inject.collect_active_skills(`` → L06 pin red
+* ``adapter.py`` ``outcome_graded = _skill_inject.grade_from_user_followup(`` → L06 pin red
+* ``adapter.py`` ``target=_user_model_distill_async,`` → ``schedules_the_distill`` and
+  ``yields_a_distilled_model`` red
+* ``adapter.py`` ``um = _user_model.load(`` → ``injects_the_stored_user_model`` red
+* ``orchestrator.py`` ``emit_gate_confidence(``, ``emit_enforcement_confidence(`` and
+  ``emit_review_confidence(``, one at a time → the L14 pin red each time
+
+The lines move when the files do; the register (``learning_systems.yaml``) holds the
+current ``path:line`` of each call site.
 """
 from __future__ import annotations
 
