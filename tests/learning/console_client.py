@@ -40,8 +40,13 @@ COOKIE_NAME = "corvin_console_sid"
 
 
 def _reset_modules() -> None:
+    # ``forge`` is deliberately NOT purged. Purging it gave the console its own copy of
+    # ``forge.security_events`` while every audit test in the same process kept the copy it
+    # imported at collection time: the two writers then disagreed about the chain (3 audit
+    # tests failed after this file ran, 0 with it kept). The console itself reads the tenant and
+    # the home at call time, so it does not need a fresh forge.
     for key in list(sys.modules):
-        if any(key.startswith(p) for p in ("corvin_console", "corvin_gateway", "forge")):
+        if any(key.startswith(p) for p in ("corvin_console", "corvin_gateway")):
             del sys.modules[key]
 
 
