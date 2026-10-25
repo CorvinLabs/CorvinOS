@@ -1449,6 +1449,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "skill.approval.granted": "INFO",
     "skill.approval.denied": "INFO",
     "skill.approval.revoked": "WARNING",
+    # ADR-2283 — the flow-guard learning route (console /flow/feedback) via the strict
+    # CoreAuditBackend, which dots LearningEvent's ``skill_feedback`` type.
+    "skill.feedback": "INFO",
     "skill.manually.disabled": "INFO",
     "skill.manually.enabled": "INFO",
     "workflow_config_updated": "INFO",
@@ -5322,6 +5325,15 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "skill.approval.revoked": frozenset({
         "tenant_id", "approval_id", "skill_id", "metric_name", "operator_ref",
         "reason_code", "has_reason", "audit_ref",
+    }),
+    # ADR-2283 — flow-guard route feedback (core/skills/os_skills/flow_guard/
+    # learning_integration.py), written audit-first. data_class / destination_engine are
+    # identifiers the route validates against ^[A-Za-z0-9_.:/*-]{1,128}$; result /
+    # feedback_type / rule_effect closed codes; confidence_before the DENY rule's real
+    # confidence (absent when there is none). Never the operator's reasoning.
+    "skill.feedback": frozenset({
+        "tenant_id", "skill_id", "feedback_type", "data_class", "destination_engine",
+        "result", "rule_effect", "confidence_before", "event_id", "lom", "audit_ref",
     }),
     # corvin_operator/license/capability_api.py::_audit_capability_decision —
     # reason is a closed code from _evaluate() (unknown_capability /

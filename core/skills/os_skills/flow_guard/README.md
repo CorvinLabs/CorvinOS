@@ -195,6 +195,26 @@ Every flow decision is logged to the audit trail with:
 - `reasoning`: Human-readable explanation
 - `lom`: Line-of-Moral-Responsibility (for attribution)
 
+### Console learning route (ADR-2283, 2026-10-25)
+
+`POST /v1/console/flow/feedback` (`core/console/corvin_console/routes/flow_guard.py`) feeds
+`LearningIntegration.record_feedback` on the route's OWN per-tenant FlowGuard — separate from
+the L34 production gate (`spawn_gates.check_l34`):
+
+- **Strengthen-only (ADR-2049).** `rejected` / `pii_leak_detected` add or raise a DENY rule,
+  `error` is neutral; `success` / `approved` (would add or raise ALLOW) answer **422**
+  `feedback_may_only_strengthen`, unknown results 422 `unknown_result`. `LearningIntegration`
+  itself raises `FeedbackWouldWeaken` / `UnknownFeedbackResult`, so no caller routes around it.
+- **Audit-first, fail-closed.** The record (`skill.feedback` on the core chain: ids,
+  closed codes, the DENY rule's real `confidence_before`, `audit_ref`) is written through
+  `CoreAuditBackend(tenant_id, strict=True)` BEFORE the policy changes; a record that does
+  not commit answers **503** `audit_not_committed` and nothing changes.
+- **No free text.** The body's `reasoning` is accepted and discarded; `GET /flow/audit`
+  returns no `reasoning`. `data_class` / `destination_engine` must match
+  `^[A-Za-z0-9_.:/*-]{1,128}$`.
+
+E2E: `tests/learning/test_adr_2283_flow_guard_feedback_e2e.py`.
+
 ### Tenant Isolation (GDPR Art. 5, 6, 32)
 
 - Each tenant has its own policy (FlowPolicyManager)
@@ -275,7 +295,7 @@ EOF
 ## Next Steps
 
 - [ ] Week 2: Feedback integration (ADR-2033)
-- [ ] Week 3: Console routes (/flow/policy, /flow/feedback)
+- [x] Week 3: Console routes (/flow/policy, /flow/feedback, /flow/audit) — mounted; audited and strengthen-only since ADR-2283 (see "Console learning route" above)
 - [ ] Week 4: Learning loop validation (confidence scoring)
 - [ ] Week 6: UI dashboard + Grafana metrics
 - [ ] Week 10: Gate 4 review (90 tests, security audit)

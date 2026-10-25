@@ -16,6 +16,17 @@ UNAUTHENTICATED query parameter (``request.args.get("tenant_id", ...)``)
 policy just by changing that string. That gap never shipped because the
 route was dead; this port takes the tenant from the authenticated session
 instead, like every sibling route in this console.
+
+ADR-2283 (2026-10-25): the route's ``LearningIntegration`` writes through the
+STRICT core-chain backend (``CoreAuditBackend(tenant_id, strict=True)``),
+audit-first — a record that does not commit answers 503 and changes nothing.
+``POST /flow/feedback`` may only strengthen (ADR-2049 "never weakens"):
+``rejected`` / ``pii_leak_detected`` add or raise a DENY rule, ``error`` is
+neutral, and anything that would add or raise an ALLOW rule (``success``,
+``approved``) or is unknown answers 422. The operator's ``reasoning`` is
+accepted for compatibility and discarded: no free text is kept, returned
+(``GET /flow/audit``) or audited. This route's FlowGuard is its own per-tenant
+instance — separate from the L34 production gate (``spawn_gates.check_l34``).
 """
 from __future__ import annotations
 
@@ -38,11 +49,23 @@ WriteSession = Annotated[session_auth.SessionRecord, Depends(require_session_csr
 try:
     from core.skills.os_skills.flow_guard import FlowGuard  # type: ignore[import-not-found]
     from core.skills.os_skills.flow_guard.learning_integration import (  # type: ignore[import-not-found]
+        STRENGTHENING_RESULTS,
+        WEAKENING_RESULTS,
         LearningIntegration,
+    )
+    from core.skills.skill_registry_phase1 import (  # type: ignore[import-not-found]
+        AuditNotCommitted,
+        CoreAuditBackend,
     )
 except ImportError:  # pragma: no cover — graceful degradation, as the original intended
     FlowGuard = None  # type: ignore[assignment,misc]
     LearningIntegration = None  # type: ignore[assignment,misc]
+    CoreAuditBackend = None  # type: ignore[assignment,misc]
+    STRENGTHENING_RESULTS = {}  # type: ignore[assignment]
+    WEAKENING_RESULTS = frozenset()  # type: ignore[assignment]
+
+    class AuditNotCommitted(RuntimeError):  # type: ignore[no-redef]
+        pass
 
 _flow_guard_instances: dict[str, Any] = {}
 _learning_integrations: dict[str, Any] = {}
@@ -67,7 +90,7 @@ def _get_flow_guard(tenant_id: str) -> Any | None:
 
 
 def _get_learning(tenant_id: str) -> Any | None:
-    if LearningIntegration is None:
+    if LearningIntegration is None or CoreAuditBackend is None:
         return None
     if tenant_id not in _learning_integrations:
         flow_guard = _get_flow_guard(tenant_id)
@@ -75,7 +98,9 @@ def _get_learning(tenant_id: str) -> Any | None:
             return None
         try:
             _learning_integrations[tenant_id] = LearningIntegration(
-                tenant_id=tenant_id, flow_guard=flow_guard, audit_backend=None,
+                tenant_id=tenant_id, flow_guard=flow_guard,
+                # ADR-2283: fail-closed core-chain backend — no policy change without its record.
+                audit_backend=CoreAuditBackend(tenant_id=tenant_id, strict=True),
             )
         except Exception:
             logger.exception("Failed to create LearningIntegration for tenant %s", tenant_id)
@@ -114,10 +139,15 @@ def get_flow_policy(rec: ReadSession) -> dict[str, Any]:
     }
 
 
+_IDENT = r"^[A-Za-z0-9_.:/*-]{1,128}$"
+
+
 class FlowFeedbackBody(BaseModel):
-    data_class: str = Field(min_length=1)
-    destination_engine: str = Field(min_length=1)
-    result: str = Field(min_length=1)
+    # Identifiers only (a class label, an engine id): they reach the audit chain.
+    data_class: str = Field(min_length=1, max_length=128, pattern=_IDENT)
+    destination_engine: str = Field(min_length=1, max_length=128, pattern=_IDENT)
+    result: str = Field(min_length=1, max_length=64)
+    # Accepted for compatibility, DISCARDED (ADR-2283: no free text kept or audited).
     reasoning: str = ""
 
 
@@ -131,30 +161,29 @@ def post_flow_feedback(body: FlowFeedbackBody, rec: WriteSession) -> dict[str, A
     if flow_guard is None or learning is None:
         raise HTTPException(status_code=503, detail="flow guard not available")
 
-    if body.result in ("approved", "rejected"):
-        event = learning.process_operator_feedback(
+    if body.result in WEAKENING_RESULTS:
+        raise HTTPException(status_code=422, detail={
+            "reason": "feedback_may_only_strengthen",
+            "allowed": sorted(STRENGTHENING_RESULTS),
+        })
+    if body.result not in STRENGTHENING_RESULTS:
+        raise HTTPException(status_code=422, detail={
+            "reason": "unknown_result", "allowed": sorted(STRENGTHENING_RESULTS),
+        })
+    try:
+        event = learning.record_feedback(
             data_class=body.data_class, destination_engine=body.destination_engine,
-            approval=(body.result == "approved"), reasoning=body.reasoning,
+            result=body.result,
         )
-    else:
-        # process_flow_outcome only reads these 3 attributes off `evaluation`
-        # (same minimal shim the pre-port Flask code used — constructing a
-        # real FlowEvaluation needs a FlowDecision this endpoint never has).
-        dummy_eval = type("obj", (object,), {
-            "data_class": body.data_class,
-            "destination_engine": body.destination_engine,
-            "policy_confidence": 0.5,
-        })()
-        try:
-            event = learning.process_flow_outcome(
-                evaluation=dummy_eval, outcome_result=body.result, reasoning=body.reasoning,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
+    except AuditNotCommitted:
+        raise HTTPException(status_code=503, detail={"reason": "audit_not_committed"}) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"reason": type(exc).__name__}) from None
 
     return {
         "event_id": event.event_id,
         "status": "recorded",
+        "rule_effect": event.rule_effect,
         "confidence_before": event.confidence_before,
         "confidence_after": event.confidence_after,
         "timestamp": event.timestamp,
@@ -192,15 +221,15 @@ def get_flow_audit(
         "result": e.result,
         "confidence_before": e.confidence_before,
         "confidence_after": e.confidence_after,
-        "reasoning": e.reasoning,
+        "rule_effect": e.rule_effect,
         "feedback_type": e.feedback_type.value,
         "lom": e.lom,
     } for e in shown]
     result_counts: dict[str, int] = {}
     for e in events:
         result_counts[e.result] = result_counts.get(e.result, 0) + 1
-    avg_confidence_after = (sum(e.confidence_after for e in events) / len(events)
-                            if events else 0.0)
+    known_after = [e.confidence_after for e in events if e.confidence_after is not None]
+    avg_confidence_after = sum(known_after) / len(known_after) if known_after else 0.0
     return {
         "tenant_id": tenant_id,
         "audit_events": audit_events,

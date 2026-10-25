@@ -242,6 +242,7 @@ of them.
 | `skill.executed` | core | `CoreAuditBackend` on every registry execution (incl. shadow) |
 | `learning.skill_executed` / `learning.outcome` / `learning.feedback` / `learning.config_updated` / `learning.preference` | core (content-free: event_id, event_type, skill_id, skill_version, lom) | `EventStore.write_event` (audit-first) |
 | `action_performed` — `learning.feedback_received:*`, `skill_config_updated:hypothesis_accepted`, `skill_config_updated:rollback`, `learning.config_rollback`, `learning.preference_confirmed` | console tenant chain | `method_discovery_api.py` |
+| `skill.feedback` | core (metadata only: data_class / destination_engine identifiers, closed `result` / `feedback_type` / `rule_effect`, the DENY rule's real `confidence_before`, `event_id`, `audit_ref`; never `reasoning`) | console `POST /flow/feedback` → flow-guard `LearningIntegration.record_feedback`, audit-first via the STRICT `CoreAuditBackend` (ADR-2283) |
 | `skill.approval.requested` / `.granted` / `.denied` / `.revoked` | core (metadata only: ids, metric name, confidence, closed codes, `operator_ref` = sha256 prefix, `audit_ref`; never a reason text or raw operator id) | L5 k=2 `OperatorApprovalGate` via the gateway's STRICT `CoreAuditBackend` (ADR-2283) |
 
 **Strict core-chain backend (ADR-2283).** `CoreAuditBackend(tenant_id, strict=True)`
@@ -253,7 +254,13 @@ continue. It dots the event type (`skill_approval_granted` → `skill.approval.g
 register the dotted name. Live users: the gateway's approval gate
 (`corvin_gateway/app.py::_init_approval_gate`, `/v1/approvals/...`; a non-committing write
 answers 500 and the approval stays pending) — E2E
-`tests/learning/test_adr_2283_approval_gate_audit_e2e.py`.
+`tests/learning/test_adr_2283_approval_gate_audit_e2e.py`; and the console flow-guard
+learning route (`routes/flow_guard.py`): `POST /flow/feedback` writes its record BEFORE the
+route's own FlowGuard policy changes (503 `audit_not_committed` and no change when it does not
+commit), may only strengthen — `rejected` / `pii_leak_detected` add or raise DENY, `error` is
+neutral, `success` / `approved` / unknown answer 422 — discards the body's `reasoning`, and
+`GET /flow/audit` returns no free text. That FlowGuard is separate from the L34 production
+gate — E2E `tests/learning/test_adr_2283_flow_guard_feedback_e2e.py`.
 
 ## What is learned from — and what is only audited
 
