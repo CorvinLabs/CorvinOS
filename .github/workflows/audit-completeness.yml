@@ -3,6 +3,12 @@ name: Audit Completeness Check
 on:
   pull_request:
     paths:
+      # Any Python file can introduce an event name that has no severity entry; the ratchet in
+      # scripts/verify_audit_event_completeness.py (baseline: scripts/audit_unregistered_baseline.json)
+      # only catches it if this job runs for that change.
+      - '**/*.py'
+      - 'scripts/audit_unregistered_baseline.json'
+      - 'tests/security/test_audit_unregistered_ratchet.py'
       - 'corvin_operator/forge/forge/security_events.py'
       - 'core/compute/corvin_compute/audit.py'
       - 'core/a2a/a2a_audit.py'
@@ -16,6 +22,9 @@ on:
     branches:
       - main
     paths:
+      - '**/*.py'
+      - 'scripts/audit_unregistered_baseline.json'
+      - 'tests/security/test_audit_unregistered_ratchet.py'
       - 'corvin_operator/forge/forge/security_events.py'
       - 'core/compute/corvin_compute/audit.py'
       - 'core/a2a/a2a_audit.py'
@@ -71,6 +80,7 @@ jobs:
           tests/security/test_audit_phase2_events.py
           tests/security/test_audit_registry_round4.py
           tests/security/test_anchor_key_relative_path.py
+          tests/security/test_audit_unregistered_ratchet.py
 
   audit-coverage:
     name: Audit Event Coverage Report

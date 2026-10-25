@@ -19,7 +19,10 @@ Reported:
       - NO EMITTER: registered, but nothing in the repo emits it — reported,
         never "fixed" by inventing fields;
   * allowlisted events with no severity (FAIL: the writer silently defaults
-    them to INFO).
+    them to INFO);
+  * literal event names emitted with NO severity entry: a shrink-only ratchet against
+    ``scripts/audit_unregistered_baseline.json`` (a new name FAILS; ``--init-baseline`` creates the file
+    once, ``--shrink-baseline`` only removes names that are registered now).
 
 ``--runtime`` additionally imports every module that calls
 ``register_event_allowlist`` / ``audit_sink.register_events`` (best effort)
@@ -35,6 +38,7 @@ from __future__ import annotations
 import argparse
 import ast
 import importlib
+import json
 import os
 import re
 import sys
@@ -44,6 +48,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FORGE_DIR = REPO_ROOT / "corvin_operator" / "forge"
 SECURITY_EVENTS = FORGE_DIR / "forge" / "security_events.py"
+BASELINE = REPO_ROOT / "scripts" / "audit_unregistered_baseline.json"
 
 #: Emitted events that stay on the vocabulary floor ON PURPOSE. A positive
 #: allowlist switches off the floor's PII value scan for non-free-text keys, so
@@ -255,6 +260,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="also import runtime registrars and report static/runtime disagreement")
     ap.add_argument("--list-unregistered", action="store_true",
                     help="list every literal event name emitted without an EVENT_SEVERITY entry")
+    ap.add_argument("--baseline", default=str(BASELINE),
+                    help="shrink-only baseline of names emitted without a severity entry (default: %(default)s)")
+    ap.add_argument("--init-baseline", action="store_true",
+                    help="create the baseline from the current scan; refuses when it already exists")
+    ap.add_argument("--shrink-baseline", action="store_true",
+                    help="drop baseline entries that are registered now; never adds an entry")
     args = ap.parse_args(argv)
     # ast.parse of repo sources re-emits their invalid-escape SyntaxWarnings.
     warnings.simplefilter("ignore", SyntaxWarning)
@@ -297,11 +308,45 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  NOTE FLOOR_BY_DESIGN entry is stale (now allowlisted or unregistered): {e}")
 
     unregistered = find_unregistered_emissions(set(severity))
-    print(f"\n  emitted with no EVENT_SEVERITY entry (heuristic, informational): {len(unregistered)}"
+    print(f"\n  emitted with no EVENT_SEVERITY entry (heuristic scan): {len(unregistered)}"
           + ("" if args.list_unregistered else "  (--list-unregistered to show)"))
     if args.list_unregistered:
         for e in sorted(unregistered):
             print(f"    {e}  ({', '.join(unregistered[e][:2])})")
+
+    # Shrink-only ratchet (PLAN-0965 F-11): the scan above used to be informational, so the number of events
+    # written with the default severity and a floored detail set could only grow. The baseline holds today's
+    # names; a NEW name fails the gate, a name that got registered is a note (shrink the file).
+    base_path = Path(args.baseline)
+    if args.init_baseline:
+        if base_path.exists():
+            print(f"ERROR: {base_path} exists; the baseline is shrink-only (use --shrink-baseline)")
+            return 2
+        base_path.write_text(json.dumps(sorted(unregistered), indent=1) + "\n", encoding="utf-8")
+        print(f"baseline written: {len(unregistered)} names -> {base_path}")
+        return 0
+    baseline: set[str] | None = None
+    if base_path.exists():
+        try:
+            baseline = {str(x) for x in json.loads(base_path.read_text("utf-8"))}
+        except (ValueError, OSError) as exc:
+            print(f"ERROR: baseline unreadable ({type(exc).__name__}): {base_path}")
+            return 2
+    new_unregistered: list[str] = []
+    if baseline is None:
+        print("  NOTE no baseline file: the scan is informational (--init-baseline creates it)")
+    else:
+        new_unregistered = sorted(set(unregistered) - baseline)
+        stale_baseline = sorted(baseline - set(unregistered))
+        print(f"  baseline: {len(baseline)} names, new: {len(new_unregistered)}, now registered: {len(stale_baseline)}")
+        for e in new_unregistered:
+            print(f"  FAIL emitted without an EVENT_SEVERITY entry and not in the baseline: {e}  "
+                  f"({', '.join(unregistered[e][:2])}) - register it in security_events.py")
+        for e in stale_baseline:
+            print(f"  NOTE registered now, remove from the baseline (--shrink-baseline): {e}")
+        if args.shrink_baseline and stale_baseline:
+            base_path.write_text(json.dumps(sorted(baseline & set(unregistered)), indent=1) + "\n", encoding="utf-8")
+            print(f"baseline shrunk by {len(stale_baseline)} -> {base_path}")
 
     if args.runtime:
         recorded, failures = runtime_registrations(se)
@@ -319,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         for f in failures:
             print(f"  not imported: {f}")
 
-    ok = not emitted and not no_severity
+    ok = not emitted and not no_severity and not new_unregistered
     print("\nPASS" if ok else "\nFAIL")
     return 0 if ok else 1
 

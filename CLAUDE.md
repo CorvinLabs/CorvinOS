@@ -1896,9 +1896,11 @@ which PASSES)** — the rule below is load-bearing; the completeness it claims i
 778 `EVENT_SEVERITY` entries, 701 `_EVENT_ALLOWLIST` entries, 0 allowlisted without a
 severity. 77 severity entries have no allowlist: 0 emitted without one (the gate), 13 left on
 the vocabulary floor by design (listed with reasons in the script), 64 with no emitter in the
-repo. Separately, a literal scan finds ~198 event names passed to a writer with NO
-`EVENT_SEVERITY` entry at all (defaulted to INFO, details floored) — informational, not
-gated (`--list-unregistered`). ADR-2040 stays PROPOSED. The per-subsystem percentages in
+repo. Separately, a literal scan finds 202 event names (2026-10-25) passed to a writer with NO
+`EVENT_SEVERITY` entry at all (defaulted to INFO, details floored). Since 2026-10-25 that scan
+is a shrink-only ratchet: `scripts/audit_unregistered_baseline.json` holds today's names, a NEW
+name fails the gate (`audit-completeness.yml` now runs on every `*.py` change), a name that got
+registered is a note (`--shrink-baseline`); `--list-unregistered` shows them. ADR-2040 stays PROPOSED. The per-subsystem percentages in
 the table below are self-reported, not measured.
 
 **RULE: ALL Subsystems MUST Audit 100% of Actions. Zero silent operations.**
