@@ -155,23 +155,6 @@ class TestForgeE2E:
         assert len(daemon.weight_learner.weight_history) == 1
         assert daemon.audit_trail == []
 
-    @pytest.mark.asyncio
-    async def test_dashboard_compliance_export(self):
-        """The dashboard's compliance export is NOT implemented and says so.
-
-        It used to return invented figures ("42 skills generated",
-        ``convergence_achieved: True``) — this test asserted them. A GDPR
-        export must never be answered from placeholder data (2026-09-27).
-        """
-        from core.console.routes.learning_dashboard import LearningDashboardAPI
-
-        dashboard = LearningDashboardAPI()
-        with pytest.raises(NotImplementedError):
-            await dashboard.export_compliance_report(start_date="2026-01-01", end_date="2026-12-31")
-        with pytest.raises(NotImplementedError):
-            await dashboard.verify_audit_chain()
-
-
 class TestForgeQuality:
     """Quality gates for production readiness."""
 

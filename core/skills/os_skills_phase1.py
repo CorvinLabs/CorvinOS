@@ -699,10 +699,10 @@ BUILTIN_SKILL_IDS: tuple[str, ...] = (
 # 2026-10-12 (PLAN-0948): ``os.learning_daemon`` is booted - the daemon has producers, a persisted
 # host and a regeneration consumer, and the Skill is its audited status face. The rest stay optional
 # for stated reasons: ``os.data_hub`` / ``os.skill_tool_creator`` are the 12-phase generator that the
-# plan puts out of scope (regeneration runs through ``datahub_unified.UnifiedCreator``), and
-# ``os.learning_dashboard`` is a console ROUTE (``/api/learning``), not a Skill.
+# plan puts out of scope (regeneration runs through ``datahub_unified.UnifiedCreator``).
+# 2026-10-25 (ADR-2282): ``os.learning_dashboard`` left MANIFEST.json and this tuple with its
+# module, the unmounted ``core/console/routes/learning_dashboard.py`` — it was a route, never a Skill.
 OPTIONAL_SKILLS: tuple[str, ...] = (
     "os.data_hub",
     "os.skill_tool_creator",
-    "os.learning_dashboard",
 )

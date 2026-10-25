@@ -6,6 +6,7 @@
 **Date:** 2026-09-18  
 **Related:** ADR-0675 (Skill Forge v2.0), ADR-0676 (Learning Daemon)  
 **Implementation:** Complete feedback→config→execution loop wired  
+**Retired (2026-10-25, ADR-2282):** the legacy `core/console/routes/` tree, including `learning_dashboard.py`, was deleted; nothing ever mounted it.  
 **Status note (2026-09-27, adversarial review):** the HTTP entry point this doc
 names (`core/console/routes/learning_dashboard.py`) is not mounted by any app;
 its routes now answer 501 `not_implemented` (see § Integration Points).  
@@ -251,6 +252,8 @@ def collect_feedback(
 ## Integration Points
 
 ### 1. API Endpoints (routes/learning_dashboard.py)
+
+> **Retired (2026-10-25, ADR-2282):** the module below was deleted with the legacy `core/console/routes/` tree.
 
 > **NOT WIRED (2026-09-27, adversarial review):** `core/console/routes/learning_dashboard.py`
 > has no production caller — no app mounts its `/api/v1/console/learning` router,

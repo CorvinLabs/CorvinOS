@@ -545,9 +545,10 @@ router.include_router(multi_instance_route.router, tags=["console-multi-instance
 router.include_router(datahub_route.router, tags=["console-datahub"])
 # ADR-0411 Phase 5 — Automated Remediation (approval workflow + operator gates)
 router.include_router(remediation_routes.remediation_router, tags=["console-remediation"])
-# Media System (30087270) is NOT mounted: its module was committed outside this
-# package (core/console/routes/media_routes.py), has no require_session / tenant
-# scoping on upload/delete/send-to-bridge, and its own fastapi import fails.
+# Media System (30087270) was never mounted: its module was committed outside this
+# package (core/console/routes/media_routes.py, retired with that legacy tree by
+# ADR-2282), had no require_session / tenant scoping on upload/delete/send-to-bridge,
+# and its own fastapi import failed.
 
 
 @router.get("/version")

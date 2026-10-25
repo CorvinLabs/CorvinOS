@@ -394,7 +394,6 @@ exclude = [
     "core/console/dev.sh",
     "core/console/frontend/**",
     "core/console/ui/**",
-    "core/console/routes/**",
     "core/console/config/**",
     "core/gateway/Dockerfile",
     "core/gateway/pyproject.toml",

@@ -775,10 +775,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/console/routes/video_producer_metrics.py::initialize_globals::os.path.join(_corvin_home, 'tenants', '_default', 'plugins', 'instances', 'video_producer', 'src')": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/context_engineering/memory_coordinator.py::MemoryCoordinator.__init__::self.corvin_home / 'tenants'": {
     "count": 3,
     "reason": "measured-2026-10-24, not yet triaged"

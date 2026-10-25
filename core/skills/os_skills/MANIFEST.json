@@ -71,25 +71,6 @@
         "convergence_detected",
         "causal_attribution_computed"
       ]
-    },
-    {
-      "id": "os.learning_dashboard",
-      "name": "Learning Dashboard",
-      "description": "Console UI for skill lifecycle, audit trail, and GDPR compliance",
-      "version": "1.0.0",
-      "entry_point": "console.routes.learning_dashboard:LearningDashboardAPI",
-      "capabilities": [
-        "skill_lifecycle_view",
-        "audit_chain_verification",
-        "compliance_export",
-        "learning_metrics_dashboard"
-      ],
-      "dependencies": ["os.learning_daemon"],
-      "audit_events": [
-        "dashboard_access",
-        "audit_chain_verified",
-        "compliance_report_generated"
-      ]
     }
   ],
   "architecture": {
@@ -108,11 +89,6 @@
         "name": "Layer 3: Autonomous Learning",
         "skill": "os.learning_daemon",
         "purpose": "Event-driven daemon that learns which data sources work best"
-      },
-      {
-        "name": "Layer 4: Operator Dashboard",
-        "skill": "os.learning_dashboard",
-        "purpose": "Console UI for lifecycle visibility, audit trail, and compliance"
       }
     ],
     "learning_loop": {

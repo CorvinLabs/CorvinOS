@@ -1,5 +1,7 @@
 # Learning Dashboard — GDPR Compliance (ADR-0321)
 
+> **Retired (2026-10-25, ADR-2282):** `core/console/routes/learning_dashboard.py` was deleted with the legacy `core/console/routes/` tree.
+
 > **Status note (2026-09-27, adversarial review):** `routes/learning_dashboard.py` (`core/console/routes/learning_dashboard.py`) has no production caller — no app mounts its router — and its handlers, which fabricated results, now answer 501 `not_implemented`. The live learning surface is `/v1/console/learning/*` (`corvin_console/routes/method_discovery_api.py`); its `POST /feedback` requires the per-user consent scope `learning_feedback` (deny-by-default, 403 + `console.action_denied` otherwise).
 
 **Effective:** 2026-09-02  

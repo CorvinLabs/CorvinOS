@@ -7,6 +7,7 @@
 Track B implements the complete Learning Loop infrastructure for CorvinOS Skills, enabling continuous improvement through user feedback, automated config optimization, and convergence detection.
 
 **Status:** Phase 3 (Gates 1-5 Complete) — Ready for E2E Proof  
+**Retired (2026-10-25, ADR-2282):** the legacy `core/console/routes/` tree, including `learning_dashboard.py`, was deleted; nothing ever mounted it.  
 **Status note (2026-09-27, adversarial review):** the Learning Dashboard API
 (`core/console/routes/learning_dashboard.py`, `/api/v1/console/learning/*`) has
 no production caller — it lives outside the `corvin_console` package and no app

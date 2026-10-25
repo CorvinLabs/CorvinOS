@@ -35,7 +35,6 @@ def _client(router, *, prefix: str = "") -> TestClient:
     "corvin_console.services.voice_session_store",
     "corvin_console.services.performance_monitor",
     "corvin_console.models.voice_session",
-    "core.console.routes.learning_dashboard",
 ])
 def test_module_imports_and_is_marked_not_wired(modname):
     import importlib
@@ -71,17 +70,6 @@ def test_skills_v2_no_mock_install_or_status():
     assert c.post("/skills/install", json={"skill_id": "os.x", "source": "marketplace"}).status_code == 501
     assert c.get("/skills/status", params={"task_id": "install-x-1"}).status_code == 501
     assert c.get("/skills/installed").status_code == 501
-
-
-def test_learning_dashboard_routes_fail_closed():
-    from core.console.routes import learning_dashboard as m
-
-    c = TestClient(_app := FastAPI(), raise_server_exceptions=False)
-    _app.include_router(m.router)
-    r = c.post("/api/v1/console/learning/feedback",
-               json={"skill_id": "os.x", "task_id": "t", "quality_rating": 5})
-    assert r.status_code == 501  # used to answer "accepted" without storing anything
-    assert c.get("/api/v1/console/learning/learning-loop/status").status_code == 501
 
 
 def test_message_envelope_never_claims_unverified_context(monkeypatch):

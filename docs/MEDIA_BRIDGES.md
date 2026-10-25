@@ -1,6 +1,7 @@
 # Media Bridges Reference
 
 **Status:** Production-Ready ✅  
+**Retired in part (2026-10-25, ADR-2282):** `core/console/routes/media_routes.py` (never mounted) was deleted with the legacy `core/console/routes/` tree; ADR-2038 is superseded. `core/media/` and the media bridges in `core/bridges/` remain on disk with no reachable caller.  
 **Last Updated:** 2026-09-22
 
 ## Bridge Overview
