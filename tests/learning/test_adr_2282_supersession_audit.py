@@ -140,8 +140,6 @@ SUPERSEDED_PATHS = {
 KEPT = {
     "core/console/corvin_console/web-next/src/panels/registry.tsx": "ADR-0353 (live console panel registry)",
     "tests/e2e/test_tier34_complete.py": "live core/testing/adversarial_sweep tests; loss-signal part removed in 74b2300f3",
-    "core/skills/confidence_calculator.py": "ADR-2157 (unreachable from every entry point; decision open in T-0282)",
-    "core/skills/tests/test_confidence_calculator.py": "ADR-2157 (tests an unreachable module; T-0282)",
     "core/orchestration/subsystems/": "notification_daemon.py, imported by the unreachable core/skill_forge/skill_forge_v2.py",
 }
 
