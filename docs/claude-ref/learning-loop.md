@@ -435,6 +435,12 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   path, so an optimizer for it would close no loop. Method note: a plain importer graph MISSES
   names re-exported by `core/learning/__init__.py` (`from core.learning import LearningIntegration`
   is a production import of `integration`); resolve re-exports before calling anything dead.
+* **ADR-2157's SkillScore modules retired (2026-10-26, ADR-2296, T-0282).** `core/skills/confidence_calculator.py`,
+  `confidence_metrics_calculator.py` and `ab_testing_optimizer.py` (972 lines) and their three test files were deleted:
+  the zero-caller sweep showed no entry point reaching them, and the two documents ADR-2157 names never existed.
+  What they described is covered by skill grades and the injection gate (L06), canary A/B (ADR-2094) and the
+  feedback gate (L04). `core/skills/` stays outside the ADR-2281 ratchet scopes; a retired path is held by
+  `tests/learning/test_adr_2282_retired_modules.py`.
 * **Second clean-up round in `core/skills` (2026-10-11, T-0140).** 66 more modules (about 15 000
   lines: the marketplace installer/core/skill integration, A/B-testing framework, batch approval,
   config applier/tuner, the `graders/`, `orchestration/` and `feedback/` packages, the
