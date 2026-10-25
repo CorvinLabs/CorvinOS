@@ -199,3 +199,60 @@ def test_scanner_finds_absolute_and_relative_imports_positive_control():
     assert ("core/other/x.py", "core.learning.quality_gate") in hits
     rel = _offenders([("core/learning/y.py", "from . import conflict_resolver\n")])
     assert ("core/learning/y.py", "core.learning.conflict_resolver") in rel
+
+
+def _decisions_dir():
+    """Corvin-Knowledge decisions, or None when no checkout is reachable (CI has none)."""
+    import os
+
+    cands = []
+    if os.environ.get("CORVIN_KB_REPO"):
+        cands.append(Path(os.environ["CORVIN_KB_REPO"]) / "decisions")
+    cands += [p / "Corvin-Knowledge" / "decisions" for p in REPO.parents]
+    cands.append(REPO / "corvin_decisions" / "decisions")
+    for c in cands:
+        if c.is_dir() and any(c.glob("ADR-*.md")):
+            return c
+    return None
+
+
+def _live_adrs_naming_retired_files(decisions, retired_files):
+    """(ADR id, path) for each non-superseded ADR that carries an ADR-2282 amendment and still
+    lists a deleted file in its frontmatter paths. ADR-2282 itself keeps its list."""
+    import re
+
+    import yaml
+
+    out = []
+    for f in sorted(decisions.glob("ADR-*.md")):
+        text = f.read_text(encoding="utf-8")
+        m = re.match(r"---\n(.*?)\n---", text, re.S)
+        if not m or not re.search(r"Amendment[^\n]*ADR-2282", text):
+            continue
+        fm = yaml.safe_load(m.group(1)) or {}
+        if str(fm.get("status", "")).lower() == "superseded" or fm.get("id") == "ADR-2282":
+            continue
+        out += [(fm.get("id"), p) for p in fm.get("paths") or [] if isinstance(p, str) and p in retired_files]
+    return out
+
+
+def test_amended_adrs_do_not_list_files_adr_2282_deleted():
+    """T-0281: an ADR that carries the ADR-2282 amendment no longer names a deleted file in its
+    paths: (the G6 sweep reads a vanished path as a regression)."""
+    d = _decisions_dir()
+    if d is None:
+        pytest.skip("no Corvin-Knowledge checkout reachable")
+    retired_files = {f"{p}.py" for p in RETIRED}
+    assert any(d.glob("ADR-2282-*.md")), "positive control: ADR-2282 not found in the decisions dir"
+    assert _live_adrs_naming_retired_files(d, retired_files) == []
+
+
+def test_live_adr_detector_finds_a_listed_deleted_file_positive_control(tmp_path):
+    adr = tmp_path / "ADR-9999-x.md"
+    adr.write_text(
+        "---\nid: ADR-9999\nstatus: accepted\npaths:\n  - core/learning/base.py\n  - README.md\n---\n"
+        "> **Amendment (2026-10-25, ADR-2282):** gone.\n", encoding="utf-8")
+    assert _live_adrs_naming_retired_files(tmp_path, {"core/learning/base.py"}) == [
+        ("ADR-9999", "core/learning/base.py")]
+    adr.write_text(adr.read_text(encoding="utf-8").replace("  - core/learning/base.py\n", ""), encoding="utf-8")
+    assert _live_adrs_naming_retired_files(tmp_path, {"core/learning/base.py"}) == []
