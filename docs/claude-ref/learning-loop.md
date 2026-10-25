@@ -50,7 +50,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | L18 | Video learning feedback API | B |
 | L19 | Autonomous Forge (autopilot off by default) | B |
 | H03 | Plugin-declared learning loops (manifest discovery) | B |
-| R01–R19 | Modules retired by ADR-2282 (one entry per group of its table) | D |
+| R19–R19 | Brain hub leftover kept by ADR-2282: `subsystems/notification_daemon.py` (still imported by the unreachable `core/skill_forge/skill_forge_v2.py`); R01–R18 were removed with their deleted modules | D |
 <!-- register-table:end -->
 
 Findings of 2026-10-25: **L10** (now A) — both adapter call sites ran, but
@@ -203,7 +203,7 @@ export HMAC, alert nonce, geo validation) are therefore NOT guarantees of this
 install, implemented or otherwise. Which learning systems are live is the
 register's A entries, nothing else.
 
-### Live experiment collector (`live_experiment_collector.py`) — register R17, state D
+### Live experiment collector (`live_experiment_collector.py`) — retired
 
 Retired by ADR-2282 and deleted on 2026-10-25 (T-0271).
 
