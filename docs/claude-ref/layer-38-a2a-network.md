@@ -1987,3 +1987,14 @@ answer text. Until now the record stopped at `A2A.*` and showed none of these fl
 `core/compliance/tests/test_ropa_federation.py` fails when a new `federation.*` / `workflow.peer_*` event is
 registered without being listed or exempted with a reason, and proves the section end to end through the real
 audit writer and generator.
+
+## The inbound worker's isolation is a test, not a docstring (PLAN-0965 F-06, 2026-10-25)
+
+What makes a task from another organisation safe to run is a short list of properties of the worker spawn, and until
+2026-10-25 no test named any of them (nothing referenced `--strict-mcp-config`). `test_a2a_worker_isolation_contract.py`
+now pins them for the one engine that is shareable today (`claude_code`), through the real HTTP receiver and sender:
+(a) zero MCP servers (`--strict-mcp-config`, no `--mcp-config`), (b) credentials blanked in the environment override,
+(c) an origin without `allow_*` gets Bash, network, read and write tools denied and a grant lifts exactly its own tool,
+(d) the worker runs in a private 0700 scratch directory outside the repository that is gone afterwards. Mutation probes
+(flag removed, one credential un-blanked) turn the tests red. ADR-2291 (draft) makes this contract the entry ticket for
+sharing any further engine.
