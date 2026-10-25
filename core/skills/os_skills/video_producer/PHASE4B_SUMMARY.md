@@ -75,7 +75,7 @@ Audit trail logs every decision (immutable, hash-chained)
 - `GET /v1/console/video/learning/confidence` — distribution of the confidence raters stated
 - `POST /v1/console/video/learning/select-model` — advice which variant rated best; `applied` is always false
 - `POST /v1/console/video/learning/report-quality` — one overall 1–5 rating for a whole job (audit-first)
-  (these four answered 501 until 2026-10-26; the Learning tab of the Video Producer page is their consumer)
+  (these four answered 501 until 2026-10-26, ADR-2297; the Learning tab of the Video Producer page is their consumer)
 - `GET /v1/console/video/learning/health` — Health check
 
 ### Commit 3: Track B Frontend (200 LOC TSX + 10 tests)

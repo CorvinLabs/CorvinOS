@@ -12,7 +12,7 @@ Endpoints (under /v1/console/video):
                                          below the sample floor or without a clear margin
 - POST /learning/report-quality        — one overall 1–5 rating for a whole job (audit-first, like a scene's)
 
-These four answered 501 until 2026-10-26. They are descriptive: nothing here chooses a variant for a
+These four answered 501 until 2026-10-26 (decision: ADR-2297). They are descriptive: nothing here chooses a variant for a
 job (CONCEPT-0117: a second router is not a connection). The consumer is the Learning tab of the
 Video Producer page. Every read and write uses the authenticated session's tenant.
 """
