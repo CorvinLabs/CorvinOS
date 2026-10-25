@@ -2,6 +2,8 @@
 
 **Status:** Manifest schema + parser implemented; plugin scan, health and Console route NOT live (see below)
 
+> **Retired (2026-10-25, ADR-2282):** `core/learning/learning_loop_manifest.py`, `core/learning/learning_loop_audit_integration.py`, the Flask `routes/learning_loops.py` and `web-next/src/pages/learning-loops-dashboard.tsx` were deleted with their tests. The live loop surface is `routes/learning_analytics.py` (`/v1/console/learning-loops/*`) + `capabilities.py` + `core/learning/loop_discovery.py` (ADR-0908). The plugin-manifest validator `core/plugins/validators/learning_loop_validator.py` is separate and stays. Everything below is historical.
+
 > **Verified 2026-09-27 — the Phase 1 "complete / all gates passed" claims below are NOT true.**
 > `core/console/corvin_console/routes/learning_loops.py` defines a **Flask** `Blueprint`
 > that the FastAPI console never registers (`git grep learning_loops core/console/corvin_console/app.py`

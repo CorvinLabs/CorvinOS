@@ -20,7 +20,6 @@ vi.mock("@/lib/auth", () => ({
 import RolloutMonitoringDashboard from "@/pages/monitoring-dashboard-extension";
 import { MonitoringDashboardExtension } from "@/pages/orchestration/monitoring-dashboard-extension";
 import { VideoStoryboardTimeline } from "@/components/VideoStoryboardTimeline";
-import { LearningLoopsDashboard } from "@/pages/learning-loops-dashboard";
 import { UnifiedLearningDashboard } from "@/pages/skills/unified-learning-dashboard";
 
 afterEach(() => cleanup());
@@ -78,13 +77,6 @@ describe("unwired pages on a build without their backend", () => {
     expect(await screen.findByTestId("storyboard-unavailable")).toHaveTextContent(/not available on this build/);
     await sleep(3200);
     expect(hits.n).toBe(1);
-  });
-
-  it("learning loops dashboard", async () => {
-    count404("/v1/console/learning/loops");
-    wrap(<LearningLoopsDashboard />);
-    expect(await screen.findByTestId("learning-loops-unavailable")).toHaveTextContent(/not available on this build/);
-    expect(screen.queryByText(/HTTP 404/)).not.toBeInTheDocument();
   });
 
   it("unified learning dashboard", async () => {

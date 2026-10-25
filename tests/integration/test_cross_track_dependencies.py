@@ -29,7 +29,7 @@ Cross-track dependencies:
 # pending. Delete this guard in the commit that reconciles the APIs.
 import pytest
 
-pytest.skip('core.marketplace.plugin_tier_system has no TierQuotaManager/TierMetadata (the module ships PluginTierGate + PluginMetadata)', allow_module_level=True)
+pytest.skip('core.marketplace.plugin_tier_system and plugin_registry were retired by ADR-2282 (never wired)', allow_module_level=True)
 
 
 import pytest

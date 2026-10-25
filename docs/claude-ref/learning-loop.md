@@ -413,7 +413,12 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   `exception_system` forced ALLOW — both contradicted ADR-2049; L34 itself is unchanged),
   `workflow_optimizer_skill/confidence_calculator.py`, and the CEL stages
   `selective_injection`/`memory_pruning`/`adr_reranking` (in no shipped pipeline; their
-  "embedding" was a salted `hash()`; `context_priority` is the live stage). Registered audit
+  "embedding" was a salted `hash()`; `context_priority` is the live stage), 11
+  `core/marketplace/*` learning/distribution modules (successors `corvin_plugins/trust.py`,
+  the manifest origin axis, `state.py`, `routes/marketplace.py`; `custom_repositories.py` and
+  `auth/` stay), and the Flask `routes/learning_loops.py` with `learning_loop_manifest` /
+  `learning_loop_audit_integration` / `learning-loops-dashboard.tsx` (successor
+  `learning_analytics.py` + `loop_discovery.py`, ADR-0908). Registered audit
   event types of retired emitters stay in `EVENT_SEVERITY`/`_EVENT_ALLOWLIST` (old chain
   records may carry them).
 * **The one closed feedback path is race-tested across processes.** `SkillAdapter.apply_config_delta`

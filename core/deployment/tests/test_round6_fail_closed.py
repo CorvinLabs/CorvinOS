@@ -236,32 +236,3 @@ class TestIncidentNotMeasured:
         })
         assert inc == []
 
-
-# ---------------------------------------------------------------- item 6
-
-
-class TestEcosystemAuditFirst:
-    def test_unauditable_tenant_mutates_nothing(self):
-        from core.marketplace.ecosystem_monitoring import EcosystemMonitor
-
-        mon = EcosystemMonitor()
-        # "acme" is not the process tenant: the forge writer refuses the
-        # alert record. Metrics used to be committed before that write.
-        with pytest.raises(audit_sink.AuditWriteFailed):
-            mon.record_skill_execution("acme", "s1", 10.0, success=False)
-        assert "s1" not in mon.metrics.get("acme", {})
-        assert ("acme", "s1") not in mon._latencies
-        assert mon.get_alerts("acme") == []
-
-    def test_auditable_tenant_commits_metrics_and_alert(self):
-        from core.marketplace.ecosystem_monitoring import EcosystemMonitor
-
-        mon = EcosystemMonitor()
-        mon.record_skill_execution("_default", "s-r6", 10.0, success=False)
-        m = mon.metrics["_default"]["s-r6"]
-        assert m.total_executions == 1 and m.failed_executions == 1
-        alerts = mon.get_alerts("_default")
-        assert [a.category for a in alerts] == ["high_error_rate"]
-        recs = [r for r in _chain("marketplace.ecosystem_alert_raised")
-                if r["details"].get("alert_id") == alerts[0].alert_id]
-        assert recs

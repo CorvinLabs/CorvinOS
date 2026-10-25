@@ -29,7 +29,6 @@ def _client(router, *, prefix: str = "") -> TestClient:
     "corvin_console.routes.skills_observability_api",
     "corvin_console.routes.skills_v2",
     "corvin_console.routes.context_engineering",
-    "corvin_console.routes.learning_loops",
     "corvin_console.task_completion_orchestrator",
     "corvin_console.message_completeness_protocol",
     "corvin_console.services.voice_session_store",

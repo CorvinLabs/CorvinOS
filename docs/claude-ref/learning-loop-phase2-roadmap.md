@@ -2,6 +2,8 @@
 
 **Status:** Phase 1 (k=1–k=5) NOT complete (verified 2026-09-27, see learning-loop-manifest.md) | Phase 2 BLOCKED  
 **Date:** 2026-09-25  
+
+> **Retired (2026-10-25, ADR-2282):** `core/learning/learning_loop_manifest.py`, `core/learning/learning_loop_audit_integration.py`, the Flask `routes/learning_loops.py` and `web-next/src/pages/learning-loops-dashboard.tsx` were deleted with their tests. The live loop surface is `routes/learning_analytics.py` (`/v1/console/learning-loops/*`) + `capabilities.py` + `core/learning/loop_discovery.py` (ADR-0908). The plugin-manifest validator `core/plugins/validators/learning_loop_validator.py` is separate and stays. Everything below is historical.
 **Deciders:** shumway + Claude Haiku 4.5
 
 ---

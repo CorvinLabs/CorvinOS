@@ -963,10 +963,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/marketplace/ecosystem_monitoring.py::EcosystemMonitor.save_metrics_snapshot::tenant_home(tenant_id) / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/models/model_selection_config.py::_config_path::_corvin_home() / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"

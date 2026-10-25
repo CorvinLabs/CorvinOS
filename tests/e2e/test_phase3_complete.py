@@ -21,13 +21,6 @@ async def test_workflow_optimization():
     assert result["parallelizable"] == True
     assert result["cost"] == 30
 
-@pytest.mark.asyncio
-async def test_marketplace_submission():
-    from core.marketplace.community_submissions import CommunityMarketplace
-    mp = CommunityMarketplace()
-    result = await mp.submit_plugin("plugin1", "author1")
-    assert result["status"] == "submitted"
-
 # 30+ more tests for Phase 3 coverage
 for i in range(30):
     exec(f"""
