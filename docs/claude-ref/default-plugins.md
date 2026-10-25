@@ -56,7 +56,15 @@ OpenAI declines — an exhausted, invalid or missing key falls back instead of s
 fails with a named error, never a silent video. Piper is not part of the chain. Every host is gated per job by the
 console's L34/L35 checks (`egress_gate.DEFAULT_ENGINE_HOSTS`: `api.openai.com`, `speech.platform.bing.com`; the
 optional storyboard backend adds `api.anthropic.com`), and declared in the manifest (`egress_hosts`, `pii_risk: medium`).
-The default engine is `auto` (that chain); `openai` means OpenAI only and refuses instead of falling back. The
+The default engine is `auto` (that chain); `openai` means OpenAI only and refuses instead of falling back.
+**Where the settings live (2026-10-24).** The panel's narration engine and maximum length are the plugin's own
+settings (`tts_engine`, `max_video_length_minutes` in `plugin.yaml`'s `settings_schema`), stored in the tenant's
+plugin registry record and written through `PluginLifecycle.set_settings` — one store, so they survive a restart
+and cannot disagree with the Installed tab. `PUT /video/settings` records `video_producer.settings_changed`
+(new and previous value) before it writes, `PUT /video/styles/default` records
+`video_producer.style_default_changed` (also when a saved style is made the default); both refuse with 503
+when the record cannot be written, and a value the plugin schema rejects is a 422 with no record. Diagram:
+`docs/diagrams/marketplace-packages-corvintv-stores.svg`. The
 operator can disable or uninstall the plugin at any time; an uninstall sticks (the ledger remembers it was offered).
 
 **The rename (`replaces:` in `default_plugins.yaml`).** The index id changed (`plugin:contributor-media-video_producer`

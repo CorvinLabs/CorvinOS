@@ -4,13 +4,25 @@ Manages installation, listing, and deletion of marketplace-compatible
 ZIP distribution packages. Packages contain skills, tools, connectors,
 and other extensions with validated manifests and dependency declarations.
 
-POST   /api/v1/packages/upload        — Upload and validate ZIP package
-GET    /api/v1/packages               — List installed packages (all accessible tenants)
-DELETE /api/v1/packages/{package_id}  — Uninstall package
-GET    /api/v1/packages/{package_id}/details — Full package metadata
+POST   /v1/console/packages/upload        — Upload and validate ZIP package
+GET    /v1/console/packages               — List the tenant's installed packages
+DELETE /v1/console/packages/{package_id}  — Uninstall package (archived, not erased)
+GET    /v1/console/packages/{package_id}/details — Full package metadata
+
+Where packages live: ``<corvin_home>/tenants/<tenant_id>/packages/`` with
+``installed/<id>/`` (extracted ZIP + ``metadata.json``) and ``archive/`` (the
+metadata, which carries the manifest, of every uninstalled package).
+``corvin_home`` honours ``CORVIN_HOME`` through ``core.paths.tenant``; until
+2026-10-24 this module wrote to ``Path.home()/.corvin/packages`` and ignored
+the configured root.
+
+Scope (stated, not hidden): this is a package REGISTRY. An upload validates the
+ZIP and its manifest, extracts it, records it and audits it; it does NOT
+register the contained skills, tools or connectors with the running system -
+nothing reads ``installed/`` yet. The Packages tab says so.
 
 Signature validation (Phase 3) deferred. Manifest and dependencies are
-always validated; permission list shown to operator before approval.
+always validated; the permission list is returned with the upload.
 
 Tenant resolution: ALWAYS ``rec.tenant_id`` from authenticated ``SessionRecord``,
 never env vars (CLAUDE.md § Multi-tenant axis).
@@ -20,6 +32,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 import shutil
 import sys
 import uuid
@@ -48,16 +61,19 @@ from pydantic import BaseModel, Field
 
 from .. import audit as console_audit
 from .. import auth as session_auth
-from .. import feature_flags as _feature_flags
 from ..deps import require_csrf, require_session
 from .. import _bootstrap
+from core.paths.tenant import tenant_home
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/packages")
 
 _MAX_PACKAGE_BYTES = 100 * 1024 * 1024  # 100 MB per package
-_PACKAGES_REGISTRY_DIR = Path.home() / ".corvin" / "packages"
+# A package id is the lower-cased manifest ``name`` (see ``_validate_manifest``). The same
+# pattern guards the path parameter, so ``..`` can never address a directory outside
+# ``installed/`` (DELETE /packages/.. used to resolve to the tenant's registry root).
+_PACKAGE_ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,127}$"
 
 # Try to import the skill package system (optional, for validation)
 _SKILL_SYSTEM_AVAILABLE = False
@@ -152,24 +168,17 @@ class PackageUploadResponse(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _require_feature(tenant_id: str) -> None:
-    """Check if the package marketplace feature is enabled."""
-    if not _feature_flags.is_enabled("package_marketplace_ui", tenant_id):
-        raise HTTPException(
-            status_code=http_status.HTTP_404_NOT_FOUND,
-            detail="package marketplace is not enabled",
-        )
-
-
+# No feature flag: until 2026-10-24 every route answered 404 unless the default-off
+# ``package_marketplace_ui`` flag was on, so the Packages tab was "switched off on this
+# build" on a fresh install. The policy is plugin-based isolation, not default-off flags;
+# the registry is honestly scoped (module docstring), so the routes are always on.
 async def require_feature(rec: Annotated[Any, Depends(require_session)]) -> Any:
-    """Session + feature gate as a dependency."""
-    _require_feature(rec.tenant_id)
+    """Session dependency (name kept for the route signatures)."""
     return rec
 
 
 async def require_feature_csrf(rec: Annotated[Any, Depends(require_csrf)]) -> Any:
-    """CSRF + feature gate as a dependency."""
-    _require_feature(rec.tenant_id)
+    """Session + CSRF dependency (name kept for the route signatures)."""
     return rec
 
 
@@ -204,8 +213,9 @@ def _validate_and_extract_zip(zip_bytes: bytes, extract_to: Path, max_size: int)
             extract_to_resolved = extract_to.resolve()
             for member in members:
                 member_path = (extract_to_resolved / member).resolve()
-                # Ensure resolved path stays within extract_to (no ../ escapes)
-                if not str(member_path).startswith(str(extract_to_resolved)):
+                # Ensure resolved path stays within extract_to (no ../ escapes). A string
+                # prefix test would accept a sibling such as ``<dir>-evil``.
+                if member_path != extract_to_resolved and not member_path.is_relative_to(extract_to_resolved):
                     raise ValueError(f"path traversal detected: {member}")
 
             # Now extract all files (paths already validated)
@@ -304,19 +314,68 @@ def _extract_dependencies(manifest: dict[str, Any]) -> list[str]:
     return [str(d).strip() for d in deps if d] if isinstance(deps, list) else []
 
 
+def _registry_root(tenant_id: str) -> Path:
+    """``<corvin_home>/tenants/<tenant_id>/packages`` - resolved per call so a moved
+    ``CORVIN_HOME`` (sandbox, tests) is honoured; validates the tenant id."""
+    return tenant_home(tenant_id) / "packages"
+
+
 def _get_package_dir(tenant_id: str, package_id: str) -> Path:
     """Get the installation directory for a package."""
-    return _PACKAGES_REGISTRY_DIR / tenant_id / "installed" / package_id
+    return _registry_root(tenant_id) / "installed" / package_id
 
 
-def _get_approval_dir(tenant_id: str, package_id: str) -> Path:
-    """Get the temporary directory for pending approvals."""
-    return _PACKAGES_REGISTRY_DIR / tenant_id / "pending" / package_id
+def _archive_root(tenant_id: str) -> Path:
+    return _registry_root(tenant_id) / "archive"
+
+
+def _dependency_name(spec: str) -> str:
+    """``"adscale>=1.2"`` / ``"adscale"`` -> ``"adscale"`` (lower-cased)."""
+    return re.split(r"[\s<>=!~@\[;(,]", spec.strip(), maxsplit=1)[0].strip().lower()
+
+
+def _dependents_of(tenant_id: str, package_id: str) -> list[str]:
+    """Installed packages of this tenant whose manifest declares ``package_id`` as a dependency."""
+    root = _registry_root(tenant_id) / "installed"
+    if not root.is_dir():
+        return []
+    found: list[str] = []
+    for other in sorted(root.iterdir()):
+        if not other.is_dir() or other.name == package_id:
+            continue
+        try:
+            manifest = json.loads((other / "metadata.json").read_text()).get("manifest", {})
+        except (OSError, ValueError):
+            continue
+        if any(_dependency_name(d) == package_id for d in _extract_dependencies(manifest)):
+            found.append(other.name)
+    return found
+
+
+def _audit_first(rec: Any, action: str, package_id: str) -> None:
+    """Write ``console.action_performed`` and REQUIRE it to commit. Until 2026-10-24 this went
+    through the best-effort writer, which swallowed a failed chain write, so a package was
+    installed or deleted with no record. Now a failed write answers 503 and the caller stops."""
+    try:
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action=action,
+            target_kind="package",
+            target_id=package_id,
+            strict=True,
+        )
+    except console_audit.AuditWriteFailed as exc:
+        log.warning("package %s refused: audit record did not commit (%s)", action, exc)
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The change could not be recorded in the audit log; nothing was changed",
+        ) from exc
 
 
 def _list_installed_packages(tenant_id: str) -> list[PackageListItem]:
     """List all installed packages for a tenant."""
-    pkg_dir = _PACKAGES_REGISTRY_DIR / tenant_id / "installed"
+    pkg_dir = _registry_root(tenant_id) / "installed"
     if not pkg_dir.exists():
         return []
 
@@ -377,7 +436,7 @@ async def upload_package(
 
     # Use unique temp directory to avoid concurrent upload conflicts
     temp_id = str(uuid.uuid4())[:8]
-    temp_pkg_dir = _PACKAGES_REGISTRY_DIR / rec.tenant_id / "temp" / temp_id
+    temp_pkg_dir = _registry_root(rec.tenant_id) / "temp" / temp_id
 
     try:
         # Create parent directory for temp extraction
@@ -405,15 +464,9 @@ async def upload_package(
             except json.JSONDecodeError:
                 log.warning(f"Corrupted metadata for {package_id}, will overwrite")
 
-        # **AUDIT BEFORE COMMIT:** Log to audit trail BEFORE writing files (GDPR Art. 30)
-        # If audit fails, exception prevents file write via the outer except handler
-        console_audit.action_performed(
-            tenant_id=rec.tenant_id,
-            sid_fingerprint=rec.sid_fingerprint,
-            action="package.install",
-            target_kind="package",
-            target_id=package_id,
-        )
+        # AUDIT BEFORE COMMIT (GDPR Art. 30), enforced: a record that does not commit
+        # refuses the install with 503 and nothing is moved into installed/.
+        _audit_first(rec, "package.install", package_id)
 
         # Commit the package atomically: create backup, move temp → final, clean old backup
         # (TOCTOU-safe: minimal window between atomic move and cleanup)
@@ -499,7 +552,7 @@ async def list_packages(
 @router.get("/{package_id}/details")
 async def get_package_details(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature)],
-    package_id: str = PathParam(..., description="package identifier"),
+    package_id: str = PathParam(..., description="package identifier", pattern=_PACKAGE_ID_PATTERN),
 ) -> PackageDetails:
     """Get full metadata for an installed package.
 
@@ -546,17 +599,20 @@ async def get_package_details(
 @router.delete("/{package_id}")
 async def uninstall_package(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature_csrf)],
-    package_id: str = PathParam(..., description="package identifier"),
+    package_id: str = PathParam(..., description="package identifier", pattern=_PACKAGE_ID_PATTERN),
 ) -> dict[str, Any]:
     """Uninstall a skill package.
 
-    Removes the package directory and all contained skills/tools/etc.
-    The manifest is retained in an archive for audit purposes.
+    Deletes the package's directory from ``installed/``. Its ``metadata.json`` (which
+    carries the full manifest) is first copied to
+    ``archive/<id>-<version>-<UTC stamp>/`` so the record of what was installed
+    survives; the extracted files are not kept.
 
     Status codes:
-    - 204: Package uninstalled
+    - 200: Package uninstalled
     - 404: Package not installed
-    - 409: Package cannot be uninstalled (dependencies exist)
+    - 409: Another installed package declares this one as a dependency
+    - 422: Not a valid package id
     """
     pkg_dir = _get_package_dir(rec.tenant_id, package_id)
 
@@ -566,21 +622,31 @@ async def uninstall_package(
             detail="package not installed",
         )
 
-    # Check for reverse dependencies before deletion (prevent orphaned dependents)
-    # TODO: Implement dependency graph scanning. For now, proceed with deletion.
+    # Reverse dependencies: refuse while an installed package still declares this one.
+    dependents = _dependents_of(rec.tenant_id, package_id)
+    if dependents:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail=f"required by installed package(s): {', '.join(dependents)}",
+        )
 
-    # AUDIT BEFORE COMMIT: Log to audit trail BEFORE deleting files (GDPR Art. 30)
-    # If audit fails, exception prevents deletion
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="package.uninstall",
-        target_kind="package",
-        target_id=package_id,
-    )
+    # AUDIT BEFORE COMMIT (GDPR Art. 30), enforced: no committed record, no deletion (503).
+    _audit_first(rec, "package.uninstall", package_id)
 
+    archived = False
     try:
-        import shutil
+        meta = pkg_dir / "metadata.json"
+        if meta.is_file():
+            try:
+                version = str(json.loads(meta.read_text()).get("version", "unknown"))
+            except ValueError:
+                version = "unknown"
+            version = re.sub(r"[^0-9A-Za-z._-]", "_", version)[:40] or "unknown"
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            archive_dir = _archive_root(rec.tenant_id) / f"{package_id}-{version}-{stamp}"
+            archive_dir.mkdir(parents=True, exist_ok=False)
+            shutil.copy2(meta, archive_dir / "metadata.json")
+            archived = True
         shutil.rmtree(pkg_dir, ignore_errors=False)
     except Exception as exc:
         log.error(f"Failed to delete package directory {package_id}: {type(exc).__name__}: {exc}")
@@ -589,4 +655,4 @@ async def uninstall_package(
             detail="uninstall failed",
         ) from exc
 
-    return {"ok": True, "package_id": package_id, "uninstalled": True}
+    return {"ok": True, "package_id": package_id, "uninstalled": True, "archived": archived}

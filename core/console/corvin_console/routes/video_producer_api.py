@@ -489,12 +489,56 @@ class SettingsRequest(BaseModel):
 #   gtts    Google Translate TTS (legacy, no key)
 _TTS_ENGINES = ["openai", "auto", "gtts"]
 _DEFAULT_SETTINGS = {"tts_engine": "auto", "max_duration_minutes": 60}
-# Per tenant, in memory (reset on restart).
-_settings: Dict[str, Dict[str, Any]] = {}
+# The panel's names -> the plugin's settings_schema keys (plugin.yaml). The tenant's plugin
+# registry record (``<tenant>/plugins/registry.yaml``) is the ONLY store: until 2026-10-24 the
+# panel kept these two in a process-memory dict that reset on restart, was never audited and
+# disagreed with the plugin's own ``tts_engine`` setting.
+_PLUGIN_SETTING_KEYS = {"tts_engine": "tts_engine", "max_duration_minutes": "max_video_length_minutes"}
+
+
+def _stored_settings(tenant_id: str) -> Dict[str, Any]:
+    """The tenant's narration engine and maximum length, read from the plugin registry record.
+    An absent or invalid value falls back to the default (never raises: the panel must render)."""
+    out = dict(_DEFAULT_SETTINGS)
+    try:
+        from .plugins import _load  # noqa: PLC0415
+
+        raw = dict(getattr(_load(tenant_id).records.get(PLUGIN_ID), "settings", None) or {})
+    except Exception:  # noqa: BLE001
+        return out
+    if raw.get("tts_engine") in _TTS_ENGINES:
+        out["tts_engine"] = raw["tts_engine"]
+    n = raw.get(_PLUGIN_SETTING_KEYS["max_duration_minutes"])
+    if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= 60:
+        out["max_duration_minutes"] = n
+    return out
+
+
+def _store_settings(tenant_id: str, changes: Dict[str, Any]) -> None:
+    """Persist ``changes`` into the plugin record's settings through the plugin lifecycle (schema
+    validated, locked registry write, ``plugin.config_changed`` recorded). Raises on any failure."""
+    from .plugins import PluginLifecycle  # noqa: PLC0415
+
+    lifecycle = PluginLifecycle(tenant_id=tenant_id, lifecycle_enabled=True)
+    current = dict(lifecycle._registry().get(PLUGIN_ID).settings or {})
+    for name, value in changes.items():
+        current[_PLUGIN_SETTING_KEYS[name]] = value
+    lifecycle.set_settings(PLUGIN_ID, current)
+
+
+def _precheck_settings(tenant_id: str, changes: Dict[str, Any]) -> None:
+    """Validate the merged settings against the plugin's schema BEFORE the audit record is written."""
+    from .plugins import PluginLifecycle, SettingsValidator  # noqa: PLC0415
+
+    record = PluginLifecycle(tenant_id=tenant_id, lifecycle_enabled=True)._registry().get(PLUGIN_ID)
+    merged = dict(record.settings or {})
+    for name, value in changes.items():
+        merged[_PLUGIN_SETTING_KEYS[name]] = value
+    SettingsValidator(record.settings_schema).validate(merged)
 
 
 def _tenant_settings(rec) -> Dict[str, Any]:
-    s = _settings.setdefault(rec.tenant_id, dict(_DEFAULT_SETTINGS))
+    s = _stored_settings(rec.tenant_id)
     web_slides = _web_slides_state()
     return {
         **s,
@@ -1692,11 +1736,24 @@ def update_settings(req: SettingsRequest, rec=_SessionRec):
     current = _tenant_settings(rec)
     if req.output_folder is not None and req.output_folder != current["output_folder"]:
         raise HTTPException(status_code=400, detail="The output folder is fixed to this tenant's video directory")
-    s = _settings.setdefault(rec.tenant_id, dict(_DEFAULT_SETTINGS))
-    if req.tts_engine is not None:
-        s["tts_engine"] = req.tts_engine
-    if req.max_duration_minutes is not None:
-        s["max_duration_minutes"] = req.max_duration_minutes
+    changes = {k: v for k, v in (("tts_engine", req.tts_engine), ("max_duration_minutes", req.max_duration_minutes))
+               if v is not None and v != current[k]}
+    if changes:
+        try:
+            _precheck_settings(rec.tenant_id, changes)
+        except Exception as e:  # noqa: BLE001 - the schema or the registry refused it; nothing was written
+            raise HTTPException(status_code=422, detail="The setting was rejected by the plugin's settings schema") from e
+        details: Dict[str, Any] = {"changed": sorted(changes)}
+        for k in changes:
+            details[k], details[f"previous_{k}"] = changes[k], current[k]
+        # audit-first: the record exists before the setting changes
+        if not _audit(rec.tenant_id, "video_producer.settings_changed", details):
+            raise HTTPException(status_code=503, detail="The change could not be recorded; the settings were kept")
+        try:
+            _store_settings(rec.tenant_id, changes)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("video producer: settings write failed (%s)", type(e).__name__)
+            raise HTTPException(status_code=503, detail="The settings could not be saved") from e
     if req.capture_enabled is not None and req.capture_enabled != _capture_enabled(rec):
         # audit-first: the record exists before the switch changes
         if not _audit(rec.tenant_id, "video_producer.capture_setting_changed", {"enabled": req.capture_enabled}):
@@ -2334,6 +2391,9 @@ async def save_style(request: Request, rec=_SessionRec):
                   {"style_id": style_id, "source_kind": style.source.get("kind", "tokens"),
                    "has_mark": style.mark_png is not None}):
         raise HTTPException(status_code=503, detail="The style could not be recorded; it was not saved")
+    if set_default and not _audit(rec.tenant_id, "video_producer.style_default_changed",
+                                  {k: v for k, v in (("style_id", style_id), ("previous_style_id", store.get_default())) if v}):
+        raise HTTPException(status_code=503, detail="The style could not be recorded; it was not saved")
     try:
         store.save(style)
         if set_default:
@@ -2352,10 +2412,14 @@ class DefaultStyleRequest(BaseModel):
 @router.put("/styles/default")
 def set_default_style(req: DefaultStyleRequest, rec=_SessionRec):
     store = _style_store(rec)
-    if req.style_id is None:
-        store.set_default(None)
-        return {"default_style_id": None}
-    _load_own_style(rec, req.style_id)
+    if req.style_id is not None:
+        _load_own_style(rec, req.style_id)
+    previous = store.get_default()
+    if req.style_id != previous:
+        # audit-first: the record exists before the default changes
+        details = {k: v for k, v in (("style_id", req.style_id), ("previous_style_id", previous)) if v}
+        if not _audit(rec.tenant_id, "video_producer.style_default_changed", details):
+            raise HTTPException(status_code=503, detail="The change could not be recorded; the default was kept")
     store.set_default(req.style_id)
     return {"default_style_id": req.style_id}
 

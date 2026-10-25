@@ -796,22 +796,6 @@
       "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
       "status": "pending"
     },
-    "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#overview": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
-    "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#reviews": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
-    "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#technical": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
-    "tabs-trigger:src/pages/marketplace/components/skill-details-panel.tsx#versions": {
-      "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
-      "status": "pending"
-    },
     "tabs-trigger:src/pages/rag.tsx#providers": {
       "reason": "W-0b maps no assertions; the panel/deep-link/tab predicate is written in W-6 (WP-03)",
       "status": "pending"

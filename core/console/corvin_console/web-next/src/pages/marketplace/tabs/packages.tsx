@@ -1,10 +1,11 @@
 /**
  * Packages tab (ADR-0892 D4) — skill packages (ADR-0268 ZIPs) on
  * packages.py: upload (validated, audited before the atomic move into
- * <home>/packages/<tenant>/installed/), details, uninstall (audited before the
- * delete). A package is the ONLY way a skill arrives through the marketplace
- * today: the marketplace repository ships no skill index (D7), and the old
- * "skill install" routes were stubs — deleted.
+ * <corvin_home>/tenants/<tenant>/packages/installed/), details, uninstall
+ * (audited, manifest archived, refused while another package depends on it).
+ * This is a registry: nothing activates the contents of a package yet, and the
+ * tab says so. The marketplace repository ships no skill index (D7), and the
+ * old "skill install" routes were stubs — deleted.
  */
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -43,13 +44,15 @@ export function PackagesTab() {
 
   const upload = useMutation({
     mutationFn: (file: File) => uploadPackage(file, csrf),
-    onSuccess: (r) => { setMsg(`Installed ${r.display_name} v${r.version} — audited.`); qc.invalidateQueries({ queryKey: [...KEY_PACKAGES] }); },
+    onSuccess: (r) => { setMsg(`Registered ${r.display_name} v${r.version} — audited. Its contents are not activated.`); qc.invalidateQueries({ queryKey: [...KEY_PACKAGES] }); },
     onError: (e) => setMsg(uploadError(e)),
   });
   const remove = useMutation({
     mutationFn: (id: string) => deletePackage(id, csrf),
     onSuccess: (_r, id) => { setMsg(`Uninstalled ${id} — audited.`); setDetailId(null); qc.invalidateQueries({ queryKey: [...KEY_PACKAGES] }); },
-    onError: () => setMsg("Not uninstalled — the package could not be removed."),
+    onError: (e) => setMsg(e instanceof ApiError && e.status === 409
+      ? "Not uninstalled — another installed package depends on it."
+      : "Not uninstalled — the package could not be removed."),
   });
 
   if (q.isLoading) {
@@ -71,7 +74,7 @@ export function PackagesTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground" data-testid="packages-summary">
-          {packages.length} skill packages installed for this tenant. A package is a ZIP with a manifest.json (ADR-0268); upload installs it after validation.
+          {packages.length} skill packages registered for this tenant. A package is a ZIP with a manifest.json; upload validates and records it. Registering a package does not activate the skills, tools or connectors inside it. Uninstalling keeps the manifest in an archive.
         </p>
         <input ref={fileRef} type="file" accept=".zip,application/zip" className="hidden" aria-label="Package ZIP"
                onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate(f); e.target.value = ""; }} />

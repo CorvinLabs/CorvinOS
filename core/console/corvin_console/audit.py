@@ -257,7 +257,11 @@ def _emit(
     tenant_id: str | None,
     details: dict[str, Any],
     severity: str | None = None,
+    strict: bool = False,
 ) -> None:
+    """Write one record. ``strict=True`` is for audit-FIRST callers: a chain write that does
+    not commit raises :class:`AuditWriteFailed` so the caller can refuse the action instead of
+    performing it unrecorded. The default stays best-effort for informational records."""
     bad = _FORBIDDEN_FIELDS.intersection(details.keys())
     if bad:
         raise AuditFieldNotAllowed(
@@ -276,8 +280,13 @@ def _emit(
         _security_events.write_event(
             chain, event_type, details=details, severity=severity,
         )
-    except Exception:  # pragma: no cover — chain unreachable
-        pass
+    except Exception as exc:  # chain unreachable / refused
+        if strict:
+            raise AuditWriteFailed(f"{event_type}: chain write did not commit ({type(exc).__name__})") from exc
+
+
+class AuditWriteFailed(RuntimeError):
+    """An audit-first write did not commit; the guarded action must not run."""
 
 
 def session_started(
@@ -328,10 +337,12 @@ def action_performed(
     run_id: str | None = None,
     step_id: str | None = None,
     trigger: str | None = None,
+    strict: bool = False,
 ) -> None:
     """One emit per successful mutation. Audit details are curated;
     NEVER include the cleartext memory body, persona JSON or tool
-    impl source."""
+    impl source. ``strict=True``: raise :class:`AuditWriteFailed` when the
+    record does not commit (audit-first callers)."""
     details: dict[str, Any] = {
         "action":          action,
         "target_kind":     target_kind,
@@ -350,6 +361,7 @@ def action_performed(
         tenant_id=tenant_id,
         details=details,
         severity="INFO",
+        strict=strict,
     )
 
 
