@@ -5,7 +5,7 @@
  *  1. Authenticate via local-login endpoint (no password, owner tier)
  *  2. Navigate to /app/chat and verify chat list loads
  *  3. Create a new chat session
- *  4. Open the Audit Trail panel (ShieldCheck button)
+ *  4. Open the Audit Trail panel (header "Audit" button, data-testid chat-audit-toggle)
  *  5. Verify all three WdatAuditPanel tabs are clickable:
  *       "ACS Workflow Graph" | "OS-Turn Audit" | "Execution Log"
  *  6. Screenshot each tab
@@ -32,7 +32,8 @@ import {
 } from "@playwright/test";
 import { resolveConsoleOrigin } from './sandbox-origin';
 
-const BASE_URL = "http://localhost:5173";
+// Console origin of the run (sandbox by default; :8765 only with CORVIN_E2E_ALLOW_LIVE=1).
+const BASE_URL = resolveConsoleOrigin();
 const API_BASE = `${resolveConsoleOrigin()}/v1/console`;
 
 // Session with confirmed OS-turn data — discovered dynamically in beforeAll
@@ -198,9 +199,7 @@ test.describe("Chat page + WdatAuditPanel (ADR-0109)", () => {
       await navigateToChat(page, KNOWN_SESSION_WITH_DATA);
 
       // The Audit button (ShieldCheck + "Audit" text)
-      const auditBtn = page
-        .locator('button:has-text("Audit")')
-        .first();
+      const auditBtn = page.getByTestId("chat-audit-toggle");
 
       await expect(auditBtn).toBeVisible({ timeout: 12_000 });
       await auditBtn.click();
@@ -230,7 +229,7 @@ test.describe("Chat page + WdatAuditPanel (ADR-0109)", () => {
     try {
       await navigateToChat(page, KNOWN_SESSION_WITH_DATA);
 
-      const auditBtn = page.locator('button:has-text("Audit")').first();
+      const auditBtn = page.getByTestId("chat-audit-toggle");
       await expect(auditBtn).toBeVisible({ timeout: 12_000 });
       await auditBtn.click();
       await page.waitForTimeout(800);
@@ -261,7 +260,7 @@ test.describe("Chat page + WdatAuditPanel (ADR-0109)", () => {
     try {
       await navigateToChat(page, KNOWN_SESSION_WITH_DATA);
 
-      const auditBtn = page.locator('button:has-text("Audit")').first();
+      const auditBtn = page.getByTestId("chat-audit-toggle");
       await expect(auditBtn).toBeVisible({ timeout: 12_000 });
       await auditBtn.click();
       await page.waitForTimeout(800);
@@ -310,7 +309,7 @@ test.describe("Chat page + WdatAuditPanel (ADR-0109)", () => {
     try {
       await navigateToChat(page, KNOWN_SESSION_WITH_DATA);
 
-      const auditBtn = page.locator('button:has-text("Audit")').first();
+      const auditBtn = page.getByTestId("chat-audit-toggle");
       await expect(auditBtn).toBeVisible({ timeout: 12_000 });
       await auditBtn.click();
       await page.waitForTimeout(800);
@@ -355,7 +354,7 @@ test.describe("Chat page + WdatAuditPanel (ADR-0109)", () => {
         timeout: 30_000,
       });
 
-      const auditBtn = page.locator('button:has-text("Audit")').first();
+      const auditBtn = page.getByTestId("chat-audit-toggle");
       await expect(auditBtn).toBeVisible({ timeout: 12_000 });
       await auditBtn.click();
       await page.waitForTimeout(1500);
@@ -523,7 +522,7 @@ test.describe("Chat page + WdatAuditPanel (ADR-0109)", () => {
     try {
       await navigateToChat(page, KNOWN_SESSION_WITH_DATA);
 
-      const auditBtn = page.locator('button:has-text("Audit")').first();
+      const auditBtn = page.getByTestId("chat-audit-toggle");
       await expect(auditBtn).toBeVisible({ timeout: 12_000 });
       await auditBtn.click();
       await page.waitForTimeout(800);
@@ -567,7 +566,7 @@ test.describe("Chat page + WdatAuditPanel (ADR-0109)", () => {
     try {
       await navigateToChat(page, KNOWN_SESSION_WITH_DATA);
 
-      const auditBtn = page.locator('button:has-text("Audit")').first();
+      const auditBtn = page.getByTestId("chat-audit-toggle");
       await expect(auditBtn).toBeVisible({ timeout: 12_000 });
       await auditBtn.click();
       await page.waitForTimeout(500);

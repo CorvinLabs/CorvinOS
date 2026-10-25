@@ -84,3 +84,40 @@ Client → server: `user {text, voice_on}`, `cancel`, `ping`.
   stop from the attached tab; hub bounds; stale-owner isolation.
 * `web-next/tests/unit/chat-live-turn-reattach.test.ts` — the restored-mirror case, re-attach
   without doubling, history arriving after the replay, reconcile on attached `done`.
+
+## Slash commands and the per-chat audit views (gap/chat, 2026-10-24)
+
+**Every palette entry acts.** `SlashCommandPalette.tsx::SLASH_COMMANDS` lists only
+commands with a handler: the deterministic dispatcher (`slash_commands.py`: `/help /whoami
+/role /quota /engine /audit /federation /plugin-builder`), the WebSocket loop (`/btw`,
+`/resume`), the turn pipeline (`/delegate /use-engine /engine-auto /debug-engine`,
+`/create task`, `/erase`) or the composer itself (`/new` creates a chat; `/stop`). Bridge-only
+commands (`/go /propose /share /persona`) and pointer-only ones (`/skills /memory
+/dialectic-* /forget /clear /reset`) are not offered; typed by hand they still get an honest
+one-line answer, never a model turn. `/engine` only shows the configured engine (the engine is
+tenant-wide, set in the Engines tab). `/audit [last <n>]` reads the newest records of the
+tenant chain (`tenant_audit_chain`) and shows event type + time only.
+
+**CCC commands answer themselves.** A typed `/create ...` or `/erase ...` is dispatched by the
+turn pipeline even with `ccc_command_routing` off (the flag only governs extraction from free
+text), needs no engine, and ENDS the turn with the command's own result: no model turn.
+`/create workflow|tool|skill` return status `not_available` with no entity id (they used to
+invent `wf_/tool_/skill_` ids and answer "queued"); `/erase` is two-step (see
+[layer-36-erasure.md](layer-36-erasure.md)).
+
+**The three per-chat audit views read the writer's chain.** `os-turns`, `engine-spans` and
+`execution-log` (and the WDAT graph / worker trace) read
+`routes/chat.py::_session_chain_paths` = `tenant_audit_chain(tenant_id)` first, then the
+pre-ADR-0654 files as read-only history, always filtered by the chat's `chat_key` / run dir.
+Before, they read the host-global bridge file and a tenant-level file that no current writer
+appends to, so a fresh chat turn never appeared (S-11b). The console's engine-span END now
+carries `chat_key` like the START, otherwise the view never paired it.
+
+**Audit panel.** The chat header carries the `Audit` button (`data-testid="chat-audit-toggle"`)
+and the panel a close control (`chat-audit-close`); Auto-Repair (`Debug Log` view) sends the
+CSRF token (`repairSession(sid, csrf, dryRun)`).
+
+Proof: `tests/sandbox/test_gap_chat.py` (real uvicorn console, HTTP + WebSocket),
+`web-next/tests/e2e/chat-gap-release.spec.ts` (Playwright: audit opener/close, Auto-Repair,
+palette, `/new`, `/audit`, `/create workflow`), `web-next/tests/unit/repair-session-csrf.test.ts`,
+`web-next/tests/unit/slash-command-insertion.test.ts`.

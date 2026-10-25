@@ -309,6 +309,8 @@ ENV_ALLOWLIST = frozenset({
     "https_proxy", "all_proxy", "NO_PROXY", "no_proxy", "CORVIN_TELEMETRY_OPTIN",
     "CORVIN_GEO_OPT_OUT", "CORVIN_TELEMETRY_URL", "SBX_GIT_LOG", "SBX_PROBE_DIR",
     "CORVIN_A2A_INGRESS", "CORVIN_CONSOLE_PORT", "CORVIN_CONSOLE_BASE_URL",
+    # a2a_pair.py defaults these three to directories INSIDE the checkout.
+    "REMOTE_ORIGINS_DIR", "REMOTE_ENDPOINTS_DIR", "REMOTE_PENDING_DIR",
 })
 # Never in a sandbox server: these reach the operator's user session (systemd --user, D-Bus).
 ENV_FORBIDDEN = frozenset({"DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"})
@@ -390,6 +392,9 @@ class Sandbox:
             "CORVIN_GEO_OPT_OUT": "1",
             "CORVIN_TELEMETRY_URL": dead,
             "CORVIN_A2A_INGRESS": "off",  # the live install owns :8775
+            "REMOTE_ORIGINS_DIR": str(root / "a2a" / "origins"),
+            "REMOTE_ENDPOINTS_DIR": str(root / "a2a" / "endpoints"),
+            "REMOTE_PENDING_DIR": str(root / "a2a" / "pending"),
             "SBX_GIT_LOG": str(git_log),
             "SBX_PROBE_DIR": str(probe_dir),
         }

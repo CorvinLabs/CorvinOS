@@ -132,6 +132,8 @@ class BoardRoutesE2E(unittest.TestCase):
 
             owner = json.loads((store_dir / "asset.json").read_text())["uploaded_by"]
             plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": owner}, confidence=1.0)
+            # /erase asks for a one-time code first; take the one the router would have shown the user.
+            plan.slots["confirm"] = chat_router._issue_erase_code("tenant_a", plan.slots["subject_id"])
             result = asyncio.run(chat_router.dispatch(plan, "tenant_a"))
             layers = {lr["layer_id"]: lr for lr in result.payload["layers"]}
             self.assertEqual(layers["L-video-producer"]["status"], "applied", layers["L-video-producer"])

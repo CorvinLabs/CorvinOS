@@ -28,10 +28,10 @@ describe("buildCommandInsertion", () => {
   });
 
   it("inserts the argument placeholder and selects exactly it, not the command", () => {
-    const persona = SLASH_COMMANDS.find((c) => c.cmd === "/persona")!;
-    const { text, selStart, selEnd } = buildCommandInsertion(persona);
-    expect(text).toBe("/persona <name>");
-    expect(text.slice(selStart, selEnd)).toBe("<name>");
+    const resume = SLASH_COMMANDS.find((c) => c.cmd === "/resume")!;
+    const { text, selStart, selEnd } = buildCommandInsertion(resume);
+    expect(text).toBe("/resume <task_id>");
+    expect(text.slice(selStart, selEnd)).toBe("<task_id>");
   });
 
   it("selects the placeholder for a server-supplied peer-thread command (e.g. /ask @mine)", () => {
@@ -42,5 +42,23 @@ describe("buildCommandInsertion", () => {
     const talkInsertion = buildCommandInsertion(TALK);
     expect(talkInsertion.text).toBe("/talk <topic>");
     expect(talkInsertion.text.slice(talkInsertion.selStart, talkInsertion.selEnd)).toBe("<topic>");
+  });
+});
+
+describe("SLASH_COMMANDS lists only commands that act", () => {
+  const names: string[] = SLASH_COMMANDS.map((c) => c.cmd);
+  it.each(["/clear", "/reset", "/forget", "/skills", "/memory", "/dialectic-on", "/dialectic-off",
+           "/share", "/go", "/propose", "/persona", "/create workflow", "/create tool", "/create skill"])(
+    "does not offer %s (no handler / bridge-only / pointer only)", (dead) => {
+      expect(names).not.toContain(dead);
+    });
+  it.each(["/help", "/new", "/stop", "/resume", "/federation", "/audit", "/erase", "/create task", "/quota"])(
+    "offers %s", (live) => {
+      expect(names).toContain(live);
+    });
+  it("describes /engine as read-only (it does not switch engines)", () => {
+    const engine = SLASH_COMMANDS.find((c) => c.cmd === "/engine")!;
+    expect(engine.args).toBe("");
+    expect(engine.desc).not.toMatch(/switch/i);
   });
 });
