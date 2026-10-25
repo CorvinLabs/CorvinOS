@@ -196,6 +196,25 @@ except ImportError:
     except ImportError:
         _lic_get_limit = _DS_FREE_TIER_FALLBACK.get  # type: ignore[assignment]
 
+
+def _ensure_license_loaded() -> None:
+    """Activate this process's licence before a licence-gated decision.
+
+    ``get_limit`` reads the licence ``load_license_from_env()`` activated; the
+    console does that at boot, but this MCP server is a separate process
+    (spawned by the engine) and never did - so every gate here answered with the
+    FREE tier: on a Member install chat's ``datasource_connect`` /
+    ``datasource_query`` refused PostgreSQL with "requires a Member licence"
+    (release acceptance, 2026-10-24). Idempotent (the validator loads once per
+    process); a failure leaves the Free tier, i.e. fails closed.
+    """
+    try:
+        from license.validator import load_license_from_env as _load  # type: ignore[import]
+
+        _load()
+    except Exception:  # noqa: BLE001
+        pass
+
 _DATASOURCE_CONNECT_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -1675,6 +1694,7 @@ class MCPServer:
         adapter = manifest.get("adapter", "")
 
         # ── License gate — identical decision to the console REST route ────
+        _ensure_license_loaded()
         allowed_adapters = _lic_get_limit("datasource_adapters_allowed")
         if allowed_adapters is not None and adapter not in allowed_adapters:
             self._respond(msgid, {
@@ -1804,6 +1824,7 @@ class MCPServer:
             refuse("unknown_connection", f"No registered connection named {name!r}.")
             return
         adapter = str(raw.get("adapter", ""))
+        _ensure_license_loaded()
         allowed_adapters = _lic_get_limit("datasource_adapters_allowed")
         if allowed_adapters is not None and adapter not in allowed_adapters:
             refuse("license_limit", f"Adapter '{adapter}' requires a Member licence or higher.")
