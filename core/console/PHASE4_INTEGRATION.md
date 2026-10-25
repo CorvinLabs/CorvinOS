@@ -76,6 +76,6 @@ CLAUDE_LIVE_E2E=1 .venv/bin/python -m pytest -q -o addopts="" \
 
 | Phase | What | Where |
 |---|---|---|
-| 5 | Summary Generator consumes `language_context` | `core/notification/summary_generator.py` |
+| 5 | Summary Generator consumes `language_context` | retired with `core/notification/` (ADR-2282); no live summary generator |
 | 6 | `OutputTranslator` wiring — **today it has no production caller and no LLM function**; `LanguageOutputBoundary.__init__` hard-codes `llm_translate_fn=None` | `chat_runtime.py` |
 | — | Frontend consumer for the `language` stream event | `web-next/src/lib/chat-registry.ts` |

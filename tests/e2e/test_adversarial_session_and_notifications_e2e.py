@@ -84,56 +84,6 @@ class TestAdversarialSessionManager:
             "ADVERSARIAL FAILURE: resume_from_bridge() is dead code (no callers)"
 
 
-class TestAdversarialNotificationRouter:
-    """Adversarial tests for NotificationRouter (does it actually deliver?)."""
-
-    def test_notification_router_deliver_ready_actually_called(self):
-        """ADVERSARIAL: deliver_ready() must be called with correct parameters."""
-        from core.notification.notification_router import NotificationRouter
-
-        router = NotificationRouter(poll_interval_seconds=0.1)
-
-        # Mock deliver_ready to catch ACTUAL calls
-        with mock.patch("core.notification.notification_router.deliver_ready") as mock_deliver:
-            # Simulate a completion event
-            notif = mock.MagicMock()
-            notif.task_id = "wf_test"
-            notif.channel = "discord"
-            notif.chat_id = "ch_123"
-            notif.text = "Test completion"
-            notif.voice_path = None
-
-            # Call _deliver_discord directly
-            import asyncio
-            asyncio.run(router._deliver_discord(notif))
-
-            # ADVERSARIAL CHECK: Was deliver_ready ACTUALLY CALLED?
-            mock_deliver.assert_called_once()
-            call_kwargs = mock_deliver.call_args[1]
-
-            assert call_kwargs["task_id"] == "wf_test", \
-                "deliver_ready() not called with correct task_id"
-            assert call_kwargs["channel"] == "discord", \
-                "deliver_ready() not called with correct channel"
-
-    def test_notification_router_daemon_startup(self):
-        """ADVERSARIAL: NotificationRouter must actually start as daemon."""
-        daemon_script = Path("/home/shumway/projects/CorvinOS/scripts/start_notification_router.sh")
-
-        # ADVERSARIAL: Does the script exist?
-        assert daemon_script.exists(), \
-            "FINDING: start_notification_router.sh does not exist (daemon not registered)"
-
-        # Does it make the router executable?
-        with open(daemon_script, "r") as f:
-            script_content = f.read()
-
-        assert "NotificationRouter" in script_content, \
-            "FINDING: Daemon script does not mention NotificationRouter"
-        assert "asyncio.run" in script_content or "await router.run" in script_content, \
-            "FINDING: Daemon script does not call router.run()"
-
-
 class TestAdversarialE2E:
     """E2E tests with REAL tasks (not mocks)."""
 
@@ -172,8 +122,11 @@ class TestAdversarialE2E:
                 "4_user_no_prompt": "User is NOT asked 'new session?' (transparent)",
             },
             "notifications": {
-                "1_detector_running": "WorkflowDetector polls audit chain every 3s",
-                "2_router_running": "NotificationRouter daemon is registered & running",
+                # WorkflowDetector / core.notification.NotificationRouter were
+                # retired by ADR-2282; the live path is completion_notify +
+                # the routes/workflows.py bridge outbox (ADR-0192, ADR-2236).
+                "1_completion_notified": "completion_notify runs when a workflow finishes",
+                "2_outbox_routed": "routes/workflows.py writes the bridge outbox for the chat",
                 "3_delivery_called": "deliver_ready() is called with Discord routing",
                 "4_outbox_written": "Discord outbox receives actual message file",
                 "5_voice_attached": "Voice file is included if TTS available",

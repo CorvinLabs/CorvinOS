@@ -95,6 +95,10 @@ async def stream_turn(...):
 
 ### 2. Summary Generator Integration
 
+> Retired (2026-10-25, ADR-2282): `core/notification/summary_generator.py` was deleted
+> with the never-wired completion detectors. The pattern below is kept as an
+> illustration only; there is no live summary generator to integrate.
+
 ```python
 from core.notification.summary_generator import SummaryGenerator
 from core.language import LanguageOutputBoundary

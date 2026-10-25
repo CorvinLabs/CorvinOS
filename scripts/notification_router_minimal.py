@@ -2,7 +2,8 @@
 """Minimal NotificationRouter daemon for Phase 2 testing (ADR-0655).
 
 This is a lightweight version without numpy/scipy dependencies for testing.
-In production, use the full NotificationRouter from core.notification.
+(The "full" core.notification.NotificationRouter was retired by ADR-2282; the live
+completion path is completion_notify + the routes/workflows.py bridge outbox.)
 
 Monitors CompletionEvents and delivers to Discord outbox.
 """
