@@ -939,10 +939,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/learning/live_experiment_collector.py::LiveExperimentCollector.collect_system_metrics::corvin_home() / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/learning/model_selection_learner.py::_acs_chain_paths::global_dir / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"

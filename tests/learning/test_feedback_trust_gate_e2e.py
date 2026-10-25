@@ -141,23 +141,6 @@ def test_matching_claimed_output_hash_is_accepted(tmp_path: Path):
         assert [e["event_id"] for e in _feedback_on_disk(sb)] == [ok.event_id]
 
 
-def test_feedback_submit_records_instead_of_pretending(tmp_path: Path):
-    """``/learning/feedback/submit`` answered "queued" and stored nothing."""
-    with console_client(tmp_path) as sb:
-        body = {"skill_id": "os.flow_guard", "signal_type": "outcome", "value": 0.9,
-                "comment": "private words"}
-        r = sb.client.post("/v1/console/learning/feedback/submit", json=body, headers=sb.csrf_headers)
-        assert r.status_code == 422, r.text  # no execution yet → refused, not "queued"
-        _seed_execution(sb, "os.flow_guard")
-        r = sb.client.post("/v1/console/learning/feedback/submit", json=body, headers=sb.csrf_headers)
-        assert r.status_code == 200, r.text
-        assert r.json()["status"] == "recorded"
-        stored = _feedback_on_disk(sb)
-        assert len(stored) == 1 and stored[0]["signal"]["value"] == 0.9
-        assert "private words" not in sb.chain.read_text()
-        assert stored[0]["signal"]["text_length"] == len("private words")
-
-
 def test_gate_is_tenant_scoped(tmp_path: Path):
     """An execution in tenant B does not verify feedback in tenant A."""
     import json

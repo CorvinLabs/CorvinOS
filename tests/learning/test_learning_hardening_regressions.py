@@ -24,37 +24,7 @@ def _outcome(tenant: str, success: bool) -> LearningEvent:
     )
 
 
-# ── F-L5: the live collector measures, it does not simulate ─────────────────
-
-
-def test_live_collector_reads_real_sources_and_never_fabricates(tmp_path: Path):
-    from core.learning import live_experiment_collector as mod
-    from core.learning.live_experiment_collector import LiveExperimentCollector
-
-    assert not hasattr(mod, "random"), "random-number fabrication is back in the collector"
-    store = EventStore(tenant_home("_default"), tenant_id="_default")
-    store.write_event(_outcome("_default", True))
-    store.write_event(_outcome("_default", False))
-
-    collector = LiveExperimentCollector("_default")
-    assert str(collector.base_dir).startswith(str(corvin_home()))  # F-L12
-    m1 = collector.collect_all_metrics()
-    m2 = collector.collect_all_metrics()
-    assert m1["sources"]["learning"] == "event_store"
-    assert m1["learning"] == m2["learning"]  # deterministic: same store → same numbers
-    assert m1["learning"]["event_counts"]["outcome"] == 2
-    assert m1["learning"]["recent_outcomes"] == {"window": 50, "total": 2, "successes": 1}
-    assert m1["learning"]["success_rate"] == 0.5 and m1["learning"]["outcome_loss"] == 0.5
-    assert m1["user_actions"]["outcomes_last_hour"] == 2
-    assert m1["component_health"]["outcome"]["active"] is True
-    assert m1["component_health"]["feedback"]["active"] is False
-    assert m1["system"]["process_max_rss_mb"] > 0
-
-    collector.save_measurement(m1)
-    saved = json.loads(collector.get_today_file().read_text().splitlines()[-1])
-    assert saved["learning"] == m1["learning"]
-    stats = collector.get_statistics(days=1)
-    assert stats["num_measurements"] == 1 and stats["outcome_loss"]["mean"] == 0.5
+# ── F-L5: the live collector was retired by ADR-2282 (maturity_live measures on demand) ──
 
 
 # ── F-L6: no free text in learning records ───────────────────────────────────

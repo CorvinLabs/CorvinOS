@@ -185,29 +185,14 @@ outcome sink, the console `/v1/console/learning/*` routes, the `SkillAdapter`
 config the delegation router reads, and the live experiment collector's
 schema — everything described in the sections above this one.
 
-### Live experiment collector (`live_experiment_collector.py`)
+### Live experiment collector — retired (ADR-2282, 2026-10-25)
 
-Records ONLY measured values: learning counts / recent success rate / outcome
-loss from the `EventStore`, process `rusage` + host load average, audit chain
-size, event counts of the last hour, and per-signal "seen at all" health —
-under `<CORVIN_HOME>/tenants/<t>/experiments/live_measurements/`. A source that
-cannot be read is recorded as `None` and named in `sources`; nothing is ever
-simulated (the pre-2026-09-07 collector wrote `random.gauss` values labelled as
-measurements).
-
-Every record carries `schema: "corvin.live_measurement/1"`
-(`MEASUREMENT_SCHEMA`) and a `provenance` block, so a measured record is
-distinguishable from a fabricated one by inspection — the pre-fix files carry
-neither, and nothing else told them apart even though the documented purpose of
-this data is "export for papers". `live_collection_dashboard` reads that schema
-(it previously indexed the synthetic keys `learning.loss_total`,
-`learning.accuracy_routing`, `system.latency_p99_ms` and raised `KeyError` on
-every honest record) and IGNORES any record without the marker, with a warning.
-
-Run it as `corvin-live-collector start` (console script) or
-`python -m core.learning.live_experiment_collector start`. It is NOT an
-executable script: no +x bit, and its shebang is the system interpreter, which
-has no `core` package on its path.
+`core/learning/live_experiment_collector.py` and its `corvin-live-collector` console
+script were deleted. Its last data was from 2026-09-06, its user unit was disabled, and its
+only reader (`live_collection_dashboard`) was already gone. The maturity panel measures on
+demand instead (`maturity_live.build_measurement`, served by `routes/api_vibe_maturity.py`).
+A disabled `corvin-live-collector.service` user unit outside the repo may still exist on a
+host; it now points at a removed entry point and can be deleted by the operator.
 
 ## Console surface — bounded, CSRF-gated, honest
 
@@ -418,7 +403,10 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   the manifest origin axis, `state.py`, `routes/marketplace.py`; `custom_repositories.py` and
   `auth/` stay), and the Flask `routes/learning_loops.py` with `learning_loop_manifest` /
   `learning_loop_audit_integration` / `learning-loops-dashboard.tsx` (successor
-  `learning_analytics.py` + `loop_discovery.py`, ADR-0908). Registered audit
+  `learning_analytics.py` + `loop_discovery.py`, ADR-0908), the live experiment collector
+  (successor `maturity_live.build_measurement`) and the Stream-2 optimizer route with its eight
+  `*_stream2.py` modules and `components/learning/` (successor `stream4_skill_feedback`, same
+  feedback gate). Registered audit
   event types of retired emitters stay in `EVENT_SEVERITY`/`_EVENT_ALLOWLIST` (old chain
   records may carry them).
 * **The one closed feedback path is race-tested across processes.** `SkillAdapter.apply_config_delta`
@@ -467,8 +455,8 @@ feedback stays stored.
 Proof: `tests/e2e/test_stream4_skill_feedback_console_e2e.py`.
 
 **Where an operator rates (2026-10-13).** Until then no reachable console surface posted here — the
-four `pages/skill-feedback/*` pages and `components/learning/FeedbackModal.tsx` are mounted nowhere
-and call endpoints that do not exist — so the tenant had 0 feedback in two weeks. The Learning Loops
+four `pages/skill-feedback/*` pages and `components/learning/FeedbackModal.tsx` (retired by ADR-2282) were mounted nowhere
+and called endpoints that do not exist — so the tenant had 0 feedback in two weeks. The Learning Loops
 detail view now shows "Rate recent decisions" for the four skills above
 (`components/learning-loop-rating.tsx`): `GET /v1/console/feedback/skill/recent?skill_id=` lists the
 latest `skill_executed` records (event id, time, and the decision only when it is a short identifier —

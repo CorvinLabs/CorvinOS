@@ -73,9 +73,8 @@ class StreamAValidator:
             "Feedback submission": self._check_file_exists(
                 "core/console/corvin_console/routes/feedback_portal_routes.py"
             ),
-            "Optimizer dashboard": self._check_file_exists(
-                "core/console/corvin_console/routes/learning_optimizer_routes_stream2.py"
-            ),
+            # "Optimizer dashboard" (routes/learning_optimizer_routes_stream2.py)
+            # was retired by ADR-2282; its live successor is stream4_skill_feedback.
             "Confidence metrics": self._check_method_exists(
                 "core/learning/optimizer.py", "get_confidence"
             ),
