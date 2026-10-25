@@ -122,6 +122,35 @@ def _load_tenant_yaml(tenant_id: str) -> dict[str, Any]:
         return {}
 
 
+def _load_tenant_yaml_for_write(tenant_id: str) -> dict[str, Any]:
+    """Load the tenant YAML before a writer rewrites it.
+
+    A missing file is an empty config. An UNPARSEABLE file must refuse the write:
+    returning {} here (as the reader does) makes the writer replace the whole file
+    with its one section and drop everything else in it, including the L34
+    data-residency policy. The refusal leaves the file byte-identical (T-0227).
+    """
+    path = _tenant_yaml_path(tenant_id)
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text())
+    except Exception as exc:
+        _log.error("tenant YAML at %s is unparseable; refusing to overwrite it", path)
+        raise HTTPException(
+            http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "tenant configuration is unparseable; fix or restore it before changing engine settings",
+        ) from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise HTTPException(
+            http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "tenant configuration is not a mapping; fix or restore it before changing engine settings",
+        )
+    return data
+
+
 def _save_tenant_yaml(tenant_id: str, data: dict[str, Any]) -> None:
     """Save tenant configuration to YAML atomically, mode 0o600.
 
@@ -372,8 +401,8 @@ def put_engine_setting(
                           f"Choose from: {sorted(known_providers)}",
                 )
 
-    # Load, update, and save tenant config
-    data = _load_tenant_yaml(_rec.tenant_id)
+    # Load, update, and save tenant config (an unparseable file refuses the write)
+    data = _load_tenant_yaml_for_write(_rec.tenant_id)
     if "spec" not in data or not isinstance(data.get("spec"), dict):
         data["spec"] = {}
 

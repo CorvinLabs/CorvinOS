@@ -49,13 +49,21 @@ _ENGINE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 # ── Storage ───────────────────────────────────────────────────────────────────
 
 def _load_tenant_yaml(tid: str) -> dict[str, Any]:
+    """Read the tenant YAML for the data-residency check.
+
+    An unparseable file must FAIL CLOSED: returning {} here would skip the L34
+    data-residency rule for every custom engine on a corrupt config (T-0227).
+    """
     path = _forge_paths.tenant_global_dir(tid) / "tenant.corvin.yaml"
     if not path.exists():
         return {}
     try:
         return yaml.safe_load(path.read_text()) or {}
-    except Exception:
-        return {}
+    except Exception as exc:
+        raise HTTPException(
+            http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "tenant configuration is unparseable; the data-residency check cannot run",
+        ) from exc
 
 
 def _engines_dir(tid: str) -> Path:
