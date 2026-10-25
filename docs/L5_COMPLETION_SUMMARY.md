@@ -1,5 +1,7 @@
 # L5 COMPLETE — 100% Production-Ready
 
+> **Retired (2026-10-25, ADR-2282):** the L5 K3–K5 modules (`quality_gate`, `conflict_resolver`, `rollback_guard`, `utils`), `scripts/validate_l5_k3_k5.py` and `docs/claude-ref/l5-k3-k5-complete-stack.md` were deleted — nothing ever called `OperatorApprovalGate.request_approval`. This summary is historical.
+
 > **Status note (2026-09-27, adversarial review):** `core/learning/feedback_ingestion.py` has no production caller; "production-ready" below does not make it part of the running system.
 
 **Status:** ALL 10 GAPS CLOSED ✅  

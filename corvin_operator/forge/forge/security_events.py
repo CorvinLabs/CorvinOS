@@ -1147,7 +1147,8 @@ EVENT_SEVERITY: dict[str, str] = {
     # Registry CORE-plugin replacement (core/plugins/corvin_plugins/registry.py)
     "plugin.replaced":                  "WARNING",
     "plugin.replace_failed":            "ERROR",
-    # Learning outcome sink A2 (core/learning/outcome_sink_a2.py)
+    # Learning outcome sink A2 (emitter core/learning/outcome_sink_a2.py retired by
+    # ADR-2282; the registration stays so old chain records keep their severity)
     "learning.outcome_processed":       "INFO",
     # Infinite session (core/infinite_session/, also registered at runtime)
     "infinite_session.bridge_created":  "INFO",

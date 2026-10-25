@@ -1,6 +1,7 @@
 # Compliance Remediation Cycle 2 — Report
 
 **Date:** 2026-09-27  
+**Retired (2026-10-25, ADR-2282):** `core/learning/outcome_sink_a2.py` and its tests were deleted (its producer classes never existed); the live outcome path is `core/learning/outcome_sink.py::emit_task_outcome`. References below are historical.  
 **Status:** ⚠️ **UNVERIFIED** — the verification this report relies on was self-referential (see correction below)  
 **Proof Location:** ~~`/tmp/compliance_proof.json`~~ — not evidence (see correction below)
 

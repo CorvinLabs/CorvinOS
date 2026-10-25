@@ -25,6 +25,5 @@
  "core/plugins/templates/worker_engine_plugin.py::WorkerEnginePluginTemplate",
  "corvin_operator/context_engineering/stages/adr_reranking_stage.py::ADRRerangkingStage",
  "corvin_operator/context_engineering/stages/memory_pruning_stage.py::MemoryPruningStage",
- "corvin_operator/context_engineering/stages/selective_injection_stage.py::SelectiveInjectionStage",
- "scripts/stream_a_orchestrator.py::<unparseable>"
+ "corvin_operator/context_engineering/stages/selective_injection_stage.py::SelectiveInjectionStage"
 ]

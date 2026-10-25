@@ -12,7 +12,9 @@ import time
 from core.skills.os_skills.definition_of_done_verifier.skill import DoD_VerifierSkill
 from core.skills.os_skills.definition_of_done_verifier.checks.reachability import ReachabilityCheck
 from core.skills.os_skills.definition_of_done_verifier.weight_optimizer import DoD_WeightOptimizer
-from core.skills.os_skills.definition_of_done_verifier.hardening import CircuitBreaker, ConcurrencyHardeningMonitor
+# definition_of_done_verifier/hardening.py was retired by ADR-2282 (the timeout
+# and concurrency bounds live in skill.py: worker pool + per-check timeouts);
+# its circuit-breaker, concurrency-monitor and metrics tests left with it.
 
 
 # ============================================================================
@@ -152,48 +154,6 @@ class TestAdversarialPhase3:
     """Attack vectors on Phase 3 (hardening, production)."""
 
     @pytest.mark.adversarial
-    def test_timeout_abuse_circuit_breaker_opens(self):
-        """Attack: Attacker stalls checks → circuit breaker should open."""
-        breaker = CircuitBreaker(threshold_ms=100)
-        breaker.start()
-
-        # Simulate work that takes too long
-        time.sleep(0.15)  # 150ms > 100ms threshold
-
-        # Circuit should be open
-        assert not breaker.check()
-        assert breaker.is_open == True
-
-    @pytest.mark.adversarial
-    def test_concurrency_race_condition_monitor(self):
-        """Attack: Too many concurrent tasks → monitor should reject."""
-        monitor = ConcurrencyHardeningMonitor()
-
-        # Fill all slots
-        for _ in range(5):
-            assert monitor.acquire() == True
-
-        # 6th should be rejected (bounded concurrency)
-        assert monitor.acquire() == False
-
-    @pytest.mark.adversarial
-    def test_monitoring_bypass_metrics_tracked(self):
-        """Attack: Attacker tries to bypass monitoring → all metrics recorded."""
-        from core.skills.os_skills.definition_of_done_verifier.hardening import MonitoringMetrics
-
-        metrics = MonitoringMetrics(
-            total_checks=100,
-            failed_checks=5,
-            timeout_checks=2,
-            error_checks=1,
-        )
-
-        error_rate = metrics.compute_error_rate()
-        # (5 + 2 + 1) / 100 = 0.08 = 8%
-        assert error_rate == 0.08
-        assert error_rate < 0.2  # Should be low
-
-    @pytest.mark.adversarial
     def test_malformed_json_in_audit_trail_handled(self):
         """Attack: Corrupt audit.jsonl with malformed JSON → parser should skip gracefully."""
         from core.skills.os_skills.definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
@@ -286,37 +246,6 @@ class TestAdversarialCrossPhase:
             loaded = persist.load_weights()
             # Should return empty dict (fallback), not crash
             assert isinstance(loaded, dict)
-
-
-# ============================================================================
-# PHASE 3 GATE: HARDENING VERIFICATION
-# ============================================================================
-
-class TestPhase3Gate:
-    """Gate: Phase 3 hardening must be verified."""
-
-    @pytest.mark.gate
-    def test_circuit_breaker_exists(self):
-        """Circuit breaker implemented for timeout protection."""
-        breaker = CircuitBreaker()
-        assert hasattr(breaker, 'check')
-        assert hasattr(breaker, 'start')
-        assert hasattr(breaker, 'stop')
-
-    @pytest.mark.gate
-    def test_concurrency_monitor_exists(self):
-        """Concurrency monitor implemented for thread safety."""
-        monitor = ConcurrencyHardeningMonitor()
-        assert hasattr(monitor, 'acquire')
-        assert hasattr(monitor, 'release')
-        assert monitor.max_concurrent == 5
-
-    @pytest.mark.gate
-    def test_monitoring_metrics_exist(self):
-        """Monitoring metrics implemented for observability."""
-        from core.skills.os_skills.definition_of_done_verifier.hardening import MonitoringMetrics
-        metrics = MonitoringMetrics()
-        assert hasattr(metrics, 'compute_error_rate')
 
 
 if __name__ == "__main__":

@@ -557,35 +557,42 @@ class ComplianceVerifier:
     def test_finding_9_learning_loop(self) -> ComplianceProof:
         """ADR-0314 + ADR-0613: Learning loop closure with audit-first"""
         try:
-            from core.learning.outcome_sink_a2 import OutcomeSink, OutcomeRecord
+            # The live outcome path (ADR-0613): TaskManager.record_event ->
+            # outcome_sink.emit_task_outcome -> learning emitter -> audit-first
+            # EventStore. (outcome_sink_a2 was retired by ADR-2282.)
+            from core.learning.outcome_sink import emit_task_outcome, OUTCOME_SKILL_ID
 
-            # Create outcome sink
-            sink = OutcomeSink(tenant_id="_default", orchestrator=None)
-
-            # Create mock bucket
-            class MockBucket:
+            class _CapturingEmitter:
                 def __init__(self):
-                    self.skill_id = "os.delegation_router"
-                    self.outcome_count = 10
-                    self.avg_confidence = 0.85
-                    self.audit_ref = "evt-bucket-123"
+                    self.events = []
 
-            bucket = MockBucket()
+                def emit(self, event):
+                    self.events.append(event)
+                    return True
 
-            # Process (validates + audits)
-            result = sink.process(bucket)
+            emitter = _CapturingEmitter()
+            queued = emit_task_outcome(
+                tenant_id="_default", task_id="compliance-proof-9",
+                status="completed", exit_code=0, emitter=emitter,
+            )
+            no_tenant = emit_task_outcome(
+                tenant_id=None, task_id="compliance-proof-9b",
+                status="completed", emitter=emitter,
+            )
+            event = emitter.events[0] if emitter.events else None
 
-            # PROOF: Outcome processed with validation + audit
+            # PROOF: one OUTCOME event queued for the tenant; a tenant-less
+            # outcome is dropped (fail-closed tenant isolation).
             proof = ComplianceProof(
                 finding_id=9,
                 finding_name="ADR-0314 + ADR-0613 - Learning Loop",
                 gate_name="learning_outcome_audit_first",
-                passed=result is not None and isinstance(result, OutcomeRecord),
+                passed=bool(queued) and not no_tenant and len(emitter.events) == 1,
                 evidence={
-                    "skill_id": result.skill_id if result else None,
-                    "outcome_count": result.outcome_count if result else 0,
-                    "avg_confidence": result.avg_confidence if result else 0.0,
-                    "audit_ref": result.audit_ref if result else None,
+                    "queued": bool(queued),
+                    "tenantless_dropped": not no_tenant,
+                    "skill_id": getattr(event, "skill_id", None),
+                    "expected_skill_id": OUTCOME_SKILL_ID,
                 },
             )
             return proof
@@ -596,7 +603,7 @@ class ComplianceVerifier:
                 gate_name="learning_outcome_audit_first",
                 passed=False,
                 evidence={"skipped": "module not found"},
-                error_message="OutcomeSink not importable",
+                error_message="core.learning.outcome_sink not importable",
             )
         except Exception as e:
             return ComplianceProof(

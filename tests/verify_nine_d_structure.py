@@ -129,7 +129,6 @@ def verify_file_structure():
 
     files_to_check = [
         ("core/learning/nine_d_loss.py", "NineD_LossOptimizer implementation"),
-        ("core/learning/base.py", "LearningLoop base class"),
         ("core/learning/memory_optimizer.py", "MemoryOptimizer"),
         ("core/learning/composition_optimizer.py", "CompositionOptimizer"),
         ("core/learning/plugin_optimizer.py", "PluginOrchestrator"),
