@@ -227,6 +227,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "data_flow.approved":        "INFO",
     "orchestration.batch_completed": "INFO",
     "data_flow.blocked":         "CRITICAL",
+    # T-0226 / ADR-2268 — boot report: a tenant's engine_compliance relabels a bundled
+    # US-cloud engine as a safer place; L34 refuses that tenant's spawns until fixed.
+    "data_flow.relabel_rejected": "WARNING",
     # Layer 35 — Network egress lockdown (ADR-0043)
     # ADR-0167 M1 — Entangled License Ratchet integration
     "egress.approved":           "INFO",
@@ -5065,6 +5068,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "data_flow.approved": frozenset({"channel", "chat_key", "classification", "engine_id", "matched_rule", "persona", "reason"}),
     "orchestration.batch_completed": frozenset({"batch_id", "task_count", "success_count", "failed_count", "incomplete_count", "outcome", "tenant_id"}),
     "data_flow.blocked": frozenset({"channel", "chat_key", "classification", "engine_id", "matched_rule", "persona", "reason"}),
+    # Ids and the offending field/value only — never prompt text (T-0226).
+    "data_flow.relabel_rejected": frozenset({"engine_id", "field", "tenant_id", "value"}),
     "delegate.completed": frozenset({"duration_ms", "engine", "output_chars", "persona"}),
     "delegate.engine_policy_denied": frozenset({"engine", "persona", "reason", "tenant_id"}),
     "delegate.failed": frozenset({"duration_ms", "engine", "persona", "reason"}),

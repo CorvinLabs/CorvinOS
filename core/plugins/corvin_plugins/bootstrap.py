@@ -2095,6 +2095,10 @@ def boot_platform() -> list[str]:
     # writer the plugins receive, so Skill decisions join the hash chain.
     _boot_skills_registry()
 
+    # 2c. T-0226 — name L34 engine relabels the tenant config carries and L34 rejects.
+    # Read-only and non-blocking; the guard already refuses such a tenant's spawns.
+    _report_l34_relabels(_tid)
+
     try:
         from corvin_compliance_reports.tripwire import (  # noqa: PLC0415
             assert_post_boot as _assert_post_boot,
@@ -2388,6 +2392,33 @@ def _package_unresolvable(name: str) -> bool:
         except Exception:  # noqa: BLE001 — cannot confirm ⇒ assume present
             return False
     return False
+
+
+def _report_l34_relabels(tenant_id: str) -> list[dict]:
+    """Name the L34 engine relabels the boot tenant's config carries and L34 now rejects (T-0226).
+
+    Best effort, read-only and never blocking: the guard itself already refuses the
+    tenant's spawns on such a config (fail-closed). This only makes the cause visible
+    at boot, in the log and in the hash chain (``data_flow.relabel_rejected``, ids and
+    fields only, no free text). An install without the bridge modules reports nothing.
+    """
+    try:
+        try:
+            from data_classification import report_pinned_relabels  # noqa: PLC0415
+        except ImportError:
+            from corvin_operator.bridges.shared.data_classification import (  # noqa: PLC0415
+                report_pinned_relabels,
+            )
+        found = report_pinned_relabels(tenant_id)
+    except Exception:  # noqa: BLE001 — a report must never stop a boot
+        log.debug("L34 relabel report skipped", exc_info=True)
+        return []
+    for item in found:
+        _audit_degradation(tenant_id, "data_flow.relabel_rejected", {
+            "tenant_id": tenant_id, "engine_id": item["engine_id"],
+            "field": item["field"], "value": item["value"],
+        })
+    return found
 
 
 def _boot_skills_registry() -> list[str]:

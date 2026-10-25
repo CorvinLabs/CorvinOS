@@ -256,6 +256,49 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
 }
 
 
+# T-0226 / ADR-2268 — bundled engines whose traffic always goes to a US cloud API.
+# ADR-0072 pinned ``claude_code`` alone; an operator ``engine_compliance`` entry could
+# still relabel any of these as ``local`` / ``eu_cloud`` or claim egress ``none`` and
+# the guard then admitted CONFIDENTIAL / SECRET data to them. Their locality and egress
+# are facts about the engine, not preferences. ``copilot`` is deliberately NOT here: its
+# bundled note documents GitHub Enterprise Cloud EU residency and on-premise GHES as real
+# overrides. Restating the truth (``us_cloud`` / ``external``) or narrowing to
+# ``unknown`` stays allowed: both only refuse more.
+PINNED_US_CLOUD_ENGINES: frozenset[str] = frozenset({
+    "acs", "acs_worker", "anthropic_batch", "codex_cli",
+    "video_producer", "video_producer_openai", "video_producer_edge",
+})
+
+
+def pinned_relabel_violations(tenant_config: "dict | None") -> "list[dict[str, str]]":
+    """Operator ``engine_compliance`` entries that relabel a pinned engine to a safer place.
+
+    Pure: reads the parsed ``tenant.corvin.yaml`` mapping, builds nothing, raises nothing.
+    Each item names ``engine_id``, ``field`` (``locality`` or ``network_egress``) and the
+    offending ``value``. :meth:`DataFlowGuard.from_tenant_config` raises on a non-empty
+    result; the boot report lists them so an existing config is named, not just refused.
+    """
+    spec = tenant_config.get("spec") if isinstance(tenant_config, dict) else None
+    dcfg = spec.get("data_classification") if isinstance(spec, dict) else None
+    entries = dcfg.get("engine_compliance") if isinstance(dcfg, dict) else None
+    found: list[dict[str, str]] = []
+    if not isinstance(entries, list):
+        return found
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        eid = entry.get("engine_id")
+        if eid not in PINNED_US_CLOUD_ENGINES:
+            continue
+        locality = entry.get("locality", "unknown")
+        egress = entry.get("network_egress", "external")
+        if locality in ("local", "eu_cloud"):
+            found.append({"engine_id": eid, "field": "locality", "value": str(locality)})
+        if egress in ("none", "local"):
+            found.append({"engine_id": eid, "field": "network_egress", "value": str(egress)})
+    return found
+
+
 # ── Single source of truth: the delegation-fanout engine_id ──────────────────
 # chat_runtime.py classifies a *delegated* web-chat turn under this engine_id
 # (the ACS orchestrator fan-out alias) rather than the configured OS engine.
@@ -490,6 +533,20 @@ class DataFlowGuard:
                             "engine_compliance, or classify the data CONFIDENTIAL."
                         )
                 matrix[cls_key] = frozenset(allowed_localities)  # type: ignore[arg-type]
+
+        # T-0226 / ADR-2268: the same pin as claude_code below, for every other bundled
+        # engine that calls a US cloud API. Raised before any entry is applied so a
+        # tenant never ends up with half a policy. The loader failure refuses every
+        # spawn of the tenant (spawn_gates._load_l34_guard), it never allows.
+        _relabels = pinned_relabel_violations(tenant_config)
+        if _relabels:
+            raise ValueError(
+                "ADR-2268: engine_compliance may not relabel a bundled US-cloud engine as "
+                "a safer place — "
+                + "; ".join(f"{v['engine_id']}.{v['field']}={v['value']!r}" for v in _relabels)
+                + ". These engines always egress to a US API. Declare your own engine "
+                "under engine_compliance for local or EU processing."
+            )
 
         # Engine compliance override / extension
         eraw = dc.get("engine_compliance")
@@ -971,21 +1028,16 @@ def _guard_audit_chain(tenant_id: str, home: Path) -> Path:
     return home / rel
 
 
-def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) -> "DataFlowGuard | None":
-    """Build an enforcing DataFlowGuard for a tenant, or None to fail-open.
+def _tenant_config_file(
+    tenant_id: str, corvin_home: "Path | None" = None,
+) -> "tuple[str, Path, Path] | None":
+    """Resolve ``(tenant_id, home, tenant.corvin.yaml)``, or ``None`` when there is nothing to read.
 
-    SINGLE SOURCE OF TRUTH for the L34 opt-in contract used by every
-    spawn-site gate (adapter, ACS, delegation, A2A, compute batch):
-
-      * No ``tenant.corvin.yaml`` on disk  → return None (NO enforcement —
-        the single-operator zero-config default; preserves back-compat).
-      * File present → parse it and build a guard from its real
-        ``spec.data_classification`` matrix (NOT the bare default matrix).
-
-    Callers MUST pass the parsed config to ``from_tenant_config`` via this
-    helper — passing a tenant_id *string* directly to ``from_tenant_config``
-    is a bug (it expects a dict and silently falls back to the default
-    matrix, ignoring the tenant's real policy).
+    ``None`` covers three cases that all mean "no L34 policy file": an id that is not a
+    single safe path segment, a config that resolves outside ``<home>/tenants/``, and no
+    file on disk (the single-operator zero-config default). Shared by
+    :func:`load_guard_for_tenant` and :func:`report_pinned_relabels`, so the confinement
+    rules exist once.
     """
     # Validate tenant_id BEFORE any path interpolation — an attacker- or
     # env-influenced id with path separators ("../") could otherwise read an
@@ -1012,6 +1064,60 @@ def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) ->
         return None
     if not cfg_path.is_file():
         return None  # opt-in: no config → no enforcement (adapter parity)
+    return tenant_id, home, cfg_path
+
+
+def report_pinned_relabels(
+    tenant_id: str, *, corvin_home: "Path | None" = None,
+) -> "list[dict[str, str]]":
+    """Name the engine relabels of an existing tenant config that L34 now rejects (T-0226).
+
+    Run at boot so an operator whose ``engine_compliance`` relabels a bundled US-cloud
+    engine reads WHICH entry is refused and why, instead of finding out as a refusal on
+    the first spawn. Best effort and read-only: a missing, unreadable or unparseable file
+    reports nothing (the guard loader already handles those, fail-closed). It never
+    changes what the guard does.
+    """
+    resolved = _tenant_config_file(tenant_id, corvin_home)
+    if resolved is None:
+        return []
+    tid, _home, cfg_path = resolved
+    try:
+        import yaml  # type: ignore
+        cfg = yaml.safe_load(cfg_path.read_text("utf-8"))
+    except Exception:  # noqa: BLE001 — not this function's problem
+        return []
+    found = pinned_relabel_violations(cfg)
+    if found:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "tenant %s: engine_compliance relabels a bundled US-cloud engine (%s); L34 refuses "
+            "every spawn of this tenant until the entries are removed",
+            tid, "; ".join(f"{v['engine_id']}.{v['field']}={v['value']}" for v in found),
+        )
+    return found
+
+
+def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) -> "DataFlowGuard | None":
+    """Build an enforcing DataFlowGuard for a tenant, or None to fail-open.
+
+    SINGLE SOURCE OF TRUTH for the L34 opt-in contract used by every
+    spawn-site gate (adapter, ACS, delegation, A2A, compute batch):
+
+      * No ``tenant.corvin.yaml`` on disk  → return None (NO enforcement —
+        the single-operator zero-config default; preserves back-compat).
+      * File present → parse it and build a guard from its real
+        ``spec.data_classification`` matrix (NOT the bare default matrix).
+
+    Callers MUST pass the parsed config to ``from_tenant_config`` via this
+    helper — passing a tenant_id *string* directly to ``from_tenant_config``
+    is a bug (it expects a dict and silently falls back to the default
+    matrix, ignoring the tenant's real policy).
+    """
+    resolved = _tenant_config_file(tenant_id, corvin_home)
+    if resolved is None:
+        return None  # invalid id / outside <home>/tenants / no config → no enforcement
+    tenant_id, home, cfg_path = resolved
     audit_path = _guard_audit_chain(tenant_id, home)
     try:
         import yaml  # type: ignore
