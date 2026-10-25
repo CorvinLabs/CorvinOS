@@ -130,11 +130,20 @@ def test_G2_gate_threshold_apply_is_501_and_writes_nothing(server, sandbox, sess
 
 # ── G3: Forge Audit tab shows the real Forge events ──────────────────────────
 
-def test_G3_forge_audit_lists_real_forge_events_beyond_the_tail(server, sandbox, sess_a):
+def test_G3_forge_audit_lists_real_forge_events_beyond_the_tail(server, sandbox, sess_a, request):
     out = sandbox.run_child(EMIT_FORGE_EVENTS, TENANT)
     assert out.strip().endswith("ok")
     # 700 KiB of unrelated records AFTER the Forge events: the old reader looked at the last 256 KiB.
     chain = sandbox.tenant_home(TENANT) / "global" / "forge" / "audit.jsonl"
+    size_before_noise = chain.stat().st_size
+
+    def _drop_noise() -> None:
+        # The noise lines are raw (unchained) on purpose; leaving them would make every later
+        # test in this session that verifies the tenant chain fail with "unchained_record".
+        with chain.open("r+b") as fh:
+            fh.truncate(size_before_noise)
+
+    request.addfinalizer(_drop_noise)
     noise = json.dumps({"ts": 9e9, "event_type": "console.page_viewed",
                         "details": {"tenant_id": TENANT, "pad": "x" * 200}}) + "\n"
     with chain.open("a", encoding="utf-8") as fh:
