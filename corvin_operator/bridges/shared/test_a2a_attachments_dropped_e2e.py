@@ -29,6 +29,9 @@ _SAVED_LICENSE_MODULES: dict[str, object | None] = {}
 
 
 def setUpModule() -> None:
+    import a2a_test_tier  # run as a plain script (run-all-tests.sh) there is no conftest tier pin
+
+    a2a_test_tier.pin_member_tier()
     for name in ("license.compute_quota", "license.limits"):
         _SAVED_LICENSE_MODULES[name] = sys.modules.get(name)
         sys.modules[name] = None  # type: ignore[assignment]

@@ -117,6 +117,20 @@ corvin-instance-id show
 corvin-a2a pair <peer-label> <peer-url>
 ```
 
+### Diagnosing a peer
+
+```bash
+corvin-a2a diagnose <endpoint-id-or-label> [--task-id <id>] [--json]
+```
+
+Read-only. It combines the signed ping (reachable, transport `direct` or `relay`, the peer's reported task
+capacity, or the sender's closed error text with a plain-language hint), the signed `task-status` of one task
+(stage and the closed refusal code, ADR-2242) and the newest delegation-ledger rows toward that peer. Exit code
+0 = the peer answered a signed ping, 1 = it did not, 2 = no such endpoint. It prints what it cannot tell you:
+the peer's logs and the reason behind a refusal beyond the closed codes are unavailable by design (every
+rejection looks the same from outside); both audit chains hold the exchange by hash.
+Proof: `corvin_operator/bridges/shared/test_a2a_diagnose_cli_e2e.py` (real receiver, CLI as a subprocess).
+
 ### Binary Attachments
 
 Protocol v3 adds binary attachment support. Attachments are base64-encoded in

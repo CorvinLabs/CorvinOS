@@ -1588,6 +1588,114 @@ def _cmd_revoke_token(args: argparse.Namespace) -> int:
 
 # ── Argparse ──────────────────────────────────────────────────────────────
 
+# ── diagnose (PLAN-0965 F-12) ─────────────────────────────────────────────
+
+# What an operator may conclude from the sender's own CLOSED error texts (ADR-0197 templates).
+# Peer-supplied text never appears here: the sender never carries it.
+_DIAGNOSE_HINTS = {
+    "A2A network requires a member seat":
+        "This installation holds no member seat; the local network gate refused before anything was sent.",
+    "Unable to reach endpoint (DNS/connection refused)":
+        "The peer is not reachable: the peer is down, or the network, DNS or a firewall is in the way.",
+    "HTTP request timeout": "The peer did not answer in time.",
+    "Relay response timeout": "The relay did not get an answer from the peer in time.",
+    "Relay transport error": "The relay path failed; try the direct URL or check the relay.",
+    "Instance ID mismatch":
+        "The peer answered with a different installation identity than the pinned one. If the peer "
+        "legitimately changed identity, re-pair; otherwise treat this as a possible impersonation.",
+    "Response signature verification failed":
+        "The answer was not signed with the paired key. The keys differ or the answer was altered.",
+    "Unsigned ping response rejected":
+        "The peer answered without a signature (an old build, or not the paired peer).",
+    "Peer rejected ping":
+        "The peer is reachable but refused the ping: it has no member seat, or it no longer knows this pairing.",
+}
+
+_DIAGNOSE_BLIND_SPOT = (
+    "Not available by design: the peer's logs, and the reason behind a refusal beyond the closed codes "
+    "above. Every rejection looks the same from outside so that an attacker learns nothing by probing. "
+    "Ask the peer's operator; both audit chains hold the exchange by hash."
+)
+
+
+def _diagnose_recent_delegations(endpoint_id: str, limit: int = 5) -> list[dict]:
+    """The newest ledger rows toward ``endpoint_id`` (metadata only). [] when federation is not installed."""
+    try:
+        repo_root = _HERE.parents[3]
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from core.federation.delegation import DelegationLedger  # type: ignore[import-not-found]
+        from core.tenants.validation import validate_tenant_id  # type: ignore[import-not-found]
+        tenant = validate_tenant_id(os.environ.get("CORVIN_TENANT_ID") or "_default")
+        rows = [r for r in DelegationLedger(tenant).latest_by_task().values() if r.get("endpoint_id") == endpoint_id]
+    except Exception:  # noqa: BLE001 - a diagnosis must not fail because a ledger is unreadable
+        return []
+    rows.sort(key=lambda r: float(r.get("sent_at") or 0), reverse=True)
+    keep = ("task_id", "status", "ok", "error", "duration_ms", "hop", "sent_at")
+    return [{k: r.get(k) for k in keep} for r in rows[:limit]]
+
+
+def _cmd_diagnose(args: argparse.Namespace) -> int:
+    endpoints_dir = _endpoints_dir()
+    endpoint_id = _resolve_endpoint_id(args.endpoint_id, endpoints_dir)
+    cfg = _read_endpoint_cfg(endpoints_dir / f"{endpoint_id}.json")
+    if not cfg:
+        # An unknown name must not read as "peer not reachable": nothing was configured to reach.
+        print(f"error: no endpoint named {args.endpoint_id!r} (see: corvin-a2a list-endpoints)", file=sys.stderr)
+        return 2
+    sender = rts.RemoteTriggerSender(endpoints_dir=endpoints_dir)
+    ping = sender.ping(endpoint_id)
+    report: dict[str, Any] = {
+        "endpoint_id": endpoint_id,
+        "label": cfg.get("label") or "",
+        "url_configured": bool(cfg.get("url")),
+        "instance_pinned": bool(cfg.get("instance_id")),
+        "ping": {
+            "reachable": ping.reachable, "via": ping.via, "duration_ms": ping.duration_ms,
+            "task_capacity": ping.task_capacity, "error_category": ping.error_category,
+            "error_detail": ping.error_detail,
+        },
+    }
+    if ping.reachable:
+        report["verdict"] = "reachable: the peer answered a signed ping"
+    else:
+        report["verdict"] = _DIAGNOSE_HINTS.get(
+            ping.error_detail or "", "The ping failed; the closed error category above is all the sender knows.")
+    if args.task_id:
+        st = sender.task_status(endpoint_id, args.task_id)
+        reason = st.get("reason") or ""
+        texts = getattr(rts, "_PUBLIC_REJECTION_TEXT", {}) or {}
+        report["task"] = {
+            "task_id": args.task_id, "supported": st.get("supported"), "stage": st.get("stage"),
+            "stage_seq": st.get("stage_seq"), "reason": reason,
+            "reason_text": texts.get(reason, "") if reason else "", "via": st.get("via"),
+        }
+        if st.get("reachable") and not st.get("supported"):
+            report["task"]["note"] = "the peer answered a plain pong: an older build without task-status support"
+    report["recent_delegations"] = _diagnose_recent_delegations(endpoint_id)
+    report["blind_spot"] = _DIAGNOSE_BLIND_SPOT
+    if args.json:
+        print(json.dumps(report, sort_keys=True, indent=2))
+    else:
+        p = report["ping"]
+        print(f"peer      : {endpoint_id}" + (f"  ({report['label']})" if report["label"] else ""))
+        print(f"pinned    : {'yes' if report['instance_pinned'] else 'no (first verified answer will pin it)'}")
+        print(f"ping      : {'reachable' if p['reachable'] else 'NOT reachable'} via {p['via']} in {p['duration_ms']} ms"
+              + (f", capacity {p['task_capacity']}" if p["task_capacity"] else ""))
+        if not p["reachable"]:
+            print(f"closed    : {p['error_category']} / {p['error_detail']}")
+        print(f"verdict   : {report['verdict']}")
+        if "task" in report:
+            t = report["task"]
+            print(f"task      : {t['task_id']} stage={t['stage']}" + (f" reason={t['reason']}" if t["reason"] else "")
+                  + (f" ({t['reason_text']})" if t["reason_text"] else "") + (f" [{t['note']}]" if t.get("note") else ""))
+        for r in report["recent_delegations"]:
+            print(f"delegation: {r['task_id']} status={r['status']} ok={r['ok']} error={r['error']} "
+                  f"{r['duration_ms']} ms hop={r['hop']}")
+        print(report["blind_spot"])
+    return 0 if ping.reachable else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="corvin-a2a",
@@ -1627,6 +1735,13 @@ def main(argv: list[str] | None = None) -> int:
     p_send.add_argument("--attach-out-dir", default=None,
                         metavar="DIR",
                         help="write returned attachments into DIR")
+
+    p_dg = sub.add_parser(
+        "diagnose",
+        help="why is this peer not answering? ping + task-status + recent delegations (read-only)")
+    p_dg.add_argument("endpoint_id", help="endpoint id or label")
+    p_dg.add_argument("--task-id", default=None, help="also ask the peer how far this task has come")
+    p_dg.add_argument("--json", action="store_true", help="machine-readable output")
 
     sub.add_parser("list-origins", help="list inbound origins")
     sub.add_parser("list-endpoints", help="list outbound endpoints")
@@ -1756,6 +1871,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "pair": _cmd_pair,
         "send": _cmd_send,
+        "diagnose": _cmd_diagnose,
         "list-origins": _cmd_list_origins,
         "list-endpoints": _cmd_list_endpoints,
         "show-origin": _cmd_show_origin,

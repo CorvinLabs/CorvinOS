@@ -779,6 +779,8 @@ run "Python: L38 a2a_worker + injection (ADR-0048)"    python3 shared/test_a2a_w
 run "Python: L38 bidirectional E2E (ADR-0048)"         python3 shared/test_a2a_bidirectional.py >/dev/null            || fails=$((fails+1))
 run "Python: L38 v3 attachments (ADR-0048)"            python3 shared/test_a2a_attachments.py >/dev/null              || fails=$((fails+1))
 run "Python: L38 v3 LIVE compute E2E (ADR-0048)"       python3 shared/test_a2a_e2e_compute.py >/dev/null              || fails=$((fails+1))
+run "Python: L38 dropped output files are reported (PLAN-0965 F-02)" python3 shared/test_a2a_attachments_dropped_e2e.py >/dev/null || fails=$((fails+1))
+run "Python: L38 corvin-a2a diagnose CLI E2E (PLAN-0965 F-12)" python3 shared/test_a2a_diagnose_cli_e2e.py >/dev/null || fails=$((fails+1))
 # 2026-08-01 audit: these 7 A2A test files existed but were referenced by
 # NEITHER this script NOR coverage.yml (operator/bridges/shared/ is
 # explicitly excluded there — see that workflow's "KNOWINGLY NOT RUN HERE"
