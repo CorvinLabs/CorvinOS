@@ -264,6 +264,93 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
 # bundled note documents GitHub Enterprise Cloud EU residency and on-premise GHES as real
 # overrides. Restating the truth (``us_cloud`` / ``external``) or narrowing to
 # ``unknown`` stays allowed: both only refuse more.
+@dataclass(frozen=True)
+class ProviderCompliance:
+    """Operator-declared facts about one provider a rerouted claude_code turn may use (ADR-2268).
+
+    ``endpoint_host`` is bound to the endpoint the operator declared: a provider whose host
+    changed afterwards is ineligible until it is declared again. ``region`` / ``models`` are
+    set only for platform providers (Bedrock / Vertex / Foundry).
+    """
+    provider: str
+    locality: str
+    network_egress: str
+    endpoint_host: str
+    region: str = ""
+    project: str = ""
+    resource: str = ""
+    models: tuple[str, ...] = ()
+
+
+_PROVIDER_LOCALITIES = frozenset({"local", "eu_cloud", "us_cloud"})
+_PROVIDER_EGRESS = frozenset({"external", "local"})
+_PROVIDER_ID_RE = re.compile(r"[a-z0-9_][a-z0-9_-]{0,62}")
+
+
+def parse_provider_compliance(
+    tenant_config: "dict | None",
+) -> "tuple[dict[str, ProviderCompliance], list[dict[str, str]]]":
+    """Parse ``spec.data_classification.provider_compliance`` in its OWN step (ADR-2268, Decision 8).
+
+    Returns ``(valid, rejected)``. A malformed entry, an ``unknown`` locality, egress ``none``,
+    a missing ``endpoint_host`` or a platform provider without its region or models drops
+    THAT provider only. A provider declared twice is rejected in both entries. The matrix
+    guard is never affected: this function is not called by ``from_tenant_config``.
+    Pure: reads a parsed mapping, raises nothing.
+    """
+    spec = tenant_config.get("spec") if isinstance(tenant_config, dict) else None
+    dcfg = spec.get("data_classification") if isinstance(spec, dict) else None
+    entries = dcfg.get("provider_compliance") if isinstance(dcfg, dict) else None
+    valid: dict[str, ProviderCompliance] = {}
+    rejected: list[dict[str, str]] = []
+    if not isinstance(entries, list):
+        return valid, rejected
+
+    seen: dict[str, int] = {}
+    for entry in entries:
+        pid = entry.get("provider") if isinstance(entry, dict) else None
+        if isinstance(pid, str) and _PROVIDER_ID_RE.fullmatch(pid):
+            seen[pid] = seen.get(pid, 0) + 1
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            rejected.append({"provider": "", "reason": "entry is not a mapping"})
+            continue
+        pid = entry.get("provider")
+        if not isinstance(pid, str) or not _PROVIDER_ID_RE.fullmatch(pid):
+            rejected.append({"provider": "", "reason": "provider id missing or malformed"})
+            continue
+        if seen.get(pid, 0) > 1:
+            rejected.append({"provider": pid, "reason": "declared more than once"})
+            continue
+        locality = entry.get("locality")
+        if locality not in _PROVIDER_LOCALITIES:
+            rejected.append({"provider": pid, "reason": f"locality {locality!r} is not admissible"})
+            continue
+        egress = entry.get("network_egress")
+        if egress not in _PROVIDER_EGRESS:
+            rejected.append({"provider": pid, "reason": f"network_egress {egress!r} is not admissible"})
+            continue
+        host = entry.get("endpoint_host")
+        if not isinstance(host, str) or not host.strip():
+            rejected.append({"provider": pid, "reason": "endpoint_host is required"})
+            continue
+        region = str(entry.get("region") or "")
+        models_raw = entry.get("models") or []
+        models = tuple(str(m) for m in models_raw) if isinstance(models_raw, list) else ()
+        platform = bool(entry.get("platform"))
+        if platform and (not region or not models):
+            rejected.append({"provider": pid, "reason": "a platform provider needs region and models"})
+            continue
+        valid[pid] = ProviderCompliance(
+            provider=pid, locality=locality, network_egress=egress,
+            endpoint_host=host.strip().lower(), region=region,
+            project=str(entry.get("project") or ""), resource=str(entry.get("resource") or ""),
+            models=models,
+        )
+    return valid, rejected
+
+
 PINNED_US_CLOUD_ENGINES: frozenset[str] = frozenset({
     "acs", "acs_worker", "anthropic_batch", "codex_cli",
     "video_producer", "video_producer_openai", "video_producer_edge",
