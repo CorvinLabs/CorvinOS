@@ -227,8 +227,8 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             self.assertEqual(ca.get("/v1/console/video/settings").json()["max_duration_minutes"], 5)
             self.assertEqual(cb.get("/v1/console/video/settings").json()["max_duration_minutes"], 60)
 
-    # ── A4 / A3 ─────────────────────────────────────────────────────────────
-    def test_unbuilt_endpoints_answer_501_not_fabricated_success(self):
+    # ── A4 / A3 ─────────────────────────────────────────────────
+    def test_unbuilt_youtube_export_is_not_a_fabricated_success(self):
         with _sandbox(self._tmp) as (client, csrf, _home, _clients):
             mod = _route_module()
             mod.get_runner = lambda: _RecordingRunner()
@@ -237,13 +237,128 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             r = client.post(f"/v1/console/video/jobs/{job_id}/youtube", headers={"X-CSRF-Token": csrf})
             self.assertNotEqual(r.status_code, 200)
             self.assertNotIn("queued", r.text)
-            for path in ("/v1/console/video/learning/models", "/v1/console/video/learning/confidence"):
-                self.assertEqual(client.get(path).status_code, 501, path)
-            for path in ("/v1/console/video/learning/select-model", "/v1/console/video/learning/report-quality"):
-                self.assertEqual(client.post(path, json={}, headers={"X-CSRF-Token": csrf}).status_code, 501, path)
+
+    # ── E10: the four learning endpoints that answered 501 until 2026-10-26 ──────────────────────
+    def _lift_feedback_throttle(self):
+        """ADR-0534 Layer 1 allows 5 signals a minute per skill, across all jobs - right for a person, too
+        tight for a test that rates a dozen scenes. Only that one limit is raised; the reality check and the
+        trust weight stay in force."""
+        from unittest import mock
+
+        from core.learning import feedback_throttle as _ft
+
+        self.enterContext(mock.patch.object(_ft, "DEFAULT_RATE_LIMIT", _ft.RateLimitConfig(window_sec=60, max_per_window=1000)))
+
+    def _rated_job(self, client, csrf, home, tenant, tier, ratings, confidence=None):
+        """A finished job whose own report.json names ``tier``, rated scene by scene."""
+        mod = _route_module()
+        job_id = self._create(client, csrf, task=f"Explain {tier} narration in one short scene.").json()["job_id"]
+        _finish_job(home, tenant, job_id)
+        storage = mod._get_storage(str(home / "tenants" / tenant / "video_producer"))
+        report = Path(storage.videos_dir) / job_id / "report.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps({"job_id": job_id, "scenes": [{"tts_tier": tier}]}))
+        for i, rating in enumerate(ratings):
+            r = client.post(f"/v1/console/video/jobs/{job_id}/feedback",
+                            json={"scene_id": f"s{i:02d}", "rating": rating}, headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+        for i, conf in enumerate(confidence or []):
+            r = client.post(f"/v1/console/video/jobs/{job_id}/scenes/c{i:02d}/feedback",
+                            json={"feedback_type": "approve", "confidence": conf}, headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+        return job_id
+
+    def test_learning_endpoints_answer_from_measured_data_and_say_so_when_there_is_none(self):
+        with _sandbox(self._tmp) as (client, csrf, _home, _clients):
+            mod = _route_module()
+            mod.get_runner = lambda: _RecordingRunner()
+            models = client.get("/v1/console/video/learning/models")
+            self.assertEqual(models.status_code, 200, models.text)
+            self.assertEqual(models.json()["variants"], [])
+            self.assertEqual(models.json()["dimension"], "tts_tier")
+            conf = client.get("/v1/console/video/learning/confidence")
+            self.assertEqual(conf.status_code, 200, conf.text)
+            self.assertEqual((conf.json()["samples"], conf.json()["average"]), (0, None))
+            adv = client.post("/v1/console/video/learning/select-model", json={}, headers={"X-CSRF-Token": csrf})
+            self.assertEqual(adv.status_code, 200, adv.text)
+            self.assertEqual((adv.json()["advice"], adv.json()["reason"], adv.json()["applied"]),
+                             (None, "insufficient_data", False))
+            # the overall rating of a job that does not exist is a 404, never a recorded success
+            rq = client.post("/v1/console/video/learning/report-quality", json={"job_id": "job_00000000", "rating": 4},
+                             headers={"X-CSRF-Token": csrf})
+            self.assertEqual(rq.status_code, 404, rq.text)
             stats = client.get("/v1/console/video/learning/stats")
             self.assertEqual(stats.status_code, 200, stats.text)
             self.assertEqual(stats.json()["feedback_stats"]["total_events"], 0)
+
+    def test_variants_come_from_recorded_ratings_and_advice_needs_samples_and_a_clear_lead(self):
+        self._lift_feedback_throttle()
+        with _sandbox(self._tmp) as (client, csrf, home, _clients):
+            _route_module().get_runner = lambda: _RecordingRunner()
+            hdr = {"X-CSRF-Token": csrf}
+            self._rated_job(client, csrf, home, "_default", "openai", [5, 5, 5, 5, 5], confidence=[0.9, 0.3])
+            # 4 ratings: below the sample floor, so no mean is shown and the variant cannot be advised
+            self._rated_job(client, csrf, home, "_default", "edge", [2, 2, 2, 2])
+            m = client.get("/v1/console/video/learning/models").json()
+            by = {v["variant"]: v for v in m["variants"]}
+            self.assertEqual(set(by), {"openai", "edge"})
+            self.assertTrue(by["openai"]["enough_samples"])
+            self.assertEqual((by["openai"]["jobs"], by["openai"]["mean_rating"]), (1, 5.0))
+            self.assertFalse(by["edge"]["enough_samples"])
+            self.assertIsNone(by["edge"]["mean_rating"], "a mean over four ratings must not be shown")
+            adv = client.post("/v1/console/video/learning/select-model", json={}, headers=hdr).json()
+            self.assertEqual((adv["advice"], adv["reason"]), (None, "insufficient_data"))
+
+            self._rated_job(client, csrf, home, "_default", "edge", [2])  # edge now has 5 ratings, mean 2.0
+            adv = client.post("/v1/console/video/learning/select-model", json={}, headers=hdr).json()
+            self.assertEqual(adv["reason"], "ok", adv)
+            self.assertEqual((adv["advice"]["variant"], adv["advice"]["over"]), ("openai", "edge"))
+            self.assertIs(adv["applied"], False)
+
+            conf = client.get("/v1/console/video/learning/confidence").json()
+            self.assertEqual(conf["samples"], 2)
+            self.assertEqual(conf["buckets"]["0.8-1.0"], 1)
+            self.assertEqual(conf["buckets"]["0.2-0.4"], 1)
+            self.assertEqual(conf["by_source"]["user"], conf["feedback_events"])
+
+    def test_no_clear_difference_gives_no_advice(self):
+        self._lift_feedback_throttle()
+        with _sandbox(self._tmp) as (client, csrf, home, _clients):
+            _route_module().get_runner = lambda: _RecordingRunner()
+            self._rated_job(client, csrf, home, "_default", "openai", [4, 4, 4, 4, 4])
+            self._rated_job(client, csrf, home, "_default", "edge", [4, 4, 4, 4, 3])
+            adv = client.post("/v1/console/video/learning/select-model", json={}, headers={"X-CSRF-Token": csrf}).json()
+            self.assertEqual((adv["advice"], adv["reason"]), (None, "no_clear_difference"))
+
+    def test_overall_rating_is_audit_first_validated_and_tenant_scoped(self):
+        with _sandbox(self._tmp, tenants=("tenant_a", "tenant_b")) as (_c, _t, home, clients):
+            _route_module().get_runner = lambda: _RecordingRunner()
+            (ca, csrf_a), (cb, csrf_b) = clients["tenant_a"], clients["tenant_b"]
+            job_id = self._create(ca, csrf_a).json()["job_id"]
+            url, body = "/v1/console/video/learning/report-quality", {"job_id": job_id, "rating": 4}
+
+            early = ca.post(url, json=body, headers={"X-CSRF-Token": csrf_a})
+            self.assertEqual(early.status_code, 503, early.text)  # ADR-0534: a real execution first
+            self.assertIn("once it has been produced", early.json()["detail"])
+            _finish_job(home, "tenant_a", job_id)
+
+            for bad in ({"job_id": job_id, "rating": 0}, {"job_id": job_id, "rating": 6}, {"rating": 3}):
+                self.assertEqual(ca.post(url, json=bad, headers={"X-CSRF-Token": csrf_a}).status_code, 422, bad)
+            self.assertEqual(ca.post(url, json={"job_id": "../x", "rating": 3}, headers={"X-CSRF-Token": csrf_a}).status_code, 404)
+
+            ok = ca.post(url, json={**body, "notes": "contact me at alice@example.com"}, headers={"X-CSRF-Token": csrf_a})
+            self.assertEqual(ok.status_code, 200, ok.text)
+            self.assertEqual((ok.json()["status"], ok.json()["scope"]), ("recorded", "job"))
+            self.assertTrue(ok.json()["audit_ref"])
+            self.assertNotIn("alice@example.com", ok.text)
+            m = ca.get(f"/v1/console/video/jobs/{job_id}/learning-metrics").json()
+            self.assertEqual((m["total_feedback_events"], m["events"][0]["scene_id"]), (1, "job"))
+            self.assertEqual(ca.get("/v1/console/video/learning/stats").json()["feedback_stats"]["rating_only"], 1)
+            self.assertNotIn("alice@example.com", _chain_text(home), "the free-text note is nowhere in the chain")
+
+            # tenant B cannot rate A's job and sees none of A's variants
+            self.assertEqual(cb.post(url, json=body, headers={"X-CSRF-Token": csrf_b}).status_code, 404)
+            self.assertEqual(cb.get("/v1/console/video/learning/models").json()["variants"], [])
 
     # ── A5 / A6 / A7 / A8 / A9 ──────────────────────────────────────────────
     def test_scene_feedback_is_validated_recorded_and_read_back_per_tenant(self):

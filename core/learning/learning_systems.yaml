@@ -251,17 +251,21 @@ systems:
       - core/console/tests/test_learning_loop_routes_e2e.py
 
   - id: L18
-    name: Video learning feedback API
-    state: B
+    name: Video learning feedback API (ratings, per-variant statistics, advice)
+    state: A
     callers:
-      - core/console/corvin_console/app.py:405
+      - core/console/corvin_console/app.py:401
+      - core/console/corvin_console/routes/video_learning_api.py:218
+      - core/console/corvin_console/routes/video_learning_api.py:259
+      - core/console/corvin_console/web-next/src/pages/video-producer.tsx:309
     tests:
-      - tests/skills/test_video_producer_phase4b_console_api.py
-    intake: >-
-      Job feedback is recorded and counted (/jobs/{id}/feedback, /learning/stats),
-      but nothing reads it to change a video decision; the four model-selection /
-      confidence endpoints answer 501 by design. It may act only with a consumer
-      and a decision (PLAN-0964 E10).
+      - core/console/tests/test_video_producer_routes_e2e.py
+      - core/console/corvin_console/web-next/tests/unit/video-producer-page.test.tsx
+      - core/console/corvin_console/web-next/tests/unit/video-learning-overview.test.ts
+    # Reads recorded ratings and reports them in the Learning tab of the Video Producer page; it is
+    # descriptive by decision (CONCEPT-0117: a second router is not a connection): select-model is advice,
+    # `applied` is always false and nothing chooses a variant for a job. Until the first rating it reports
+    # "No rated videos yet" - that is its documented quiet state.
 
   - id: L19
     name: Autonomous Forge (autopilot off by default)
@@ -279,12 +283,16 @@ systems:
     name: Plugin-declared learning loops (manifest discovery)
     state: B
     callers:
-      - core/console/corvin_console/routes/capabilities.py:705
-    tests: []
+      - core/console/corvin_console/routes/capabilities.py:677
+      - core/console/corvin_console/routes/marketplace_resolve.py:232
+    tests:
+      - tests/learning/test_adr_0906_plugin_loop_declaration_e2e.py
     intake: >-
-      The mechanism is reachable through the console manifest, but no installed
-      plugin declares a learning loop (ADR-0906/0907 proposed). It shows a loop
-      only once a plugin declares one and those decisions are accepted.
+      The chain is built and proven through the real install route (a plugin.yaml `learning_loops:` entry
+      becomes a registry-record field, is listed by the loops panel and measured from its owner skill's
+      events; ADR-0906/0907 accepted 2026-10-25). It is B on THIS install only because the installed
+      `video_producer` record (1.7.0) predates CorvinTV's declaration: the row appears once that record is
+      refreshed from the Marketplace (plugin update/re-install). Flip to A with that live proof.
 
   # ── D: retired by ADR-2282 (one entry per group of its decision table) ────
   # PLAN-0964's H01 is R17, H02 is R18, D01-D12 fall into R01-R19.

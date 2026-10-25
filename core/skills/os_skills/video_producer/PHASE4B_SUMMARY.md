@@ -71,10 +71,11 @@ Audit trail logs every decision (immutable, hash-chained)
 **Console API Routes**
 - `POST /v1/console/video/jobs/{job_id}/feedback` — Submit feedback
 - `GET /v1/console/video/learning/stats` — Learning statistics
-- `GET /v1/console/video/learning/models` — Model selection stats
-- `GET /v1/console/video/learning/confidence` — Confidence metrics
-- `POST /v1/console/video/learning/select-model` — Select model
-- `POST /v1/console/video/learning/report-quality` — Report quality
+- `GET /v1/console/video/learning/models` — recorded ratings per production variant (narration tier from the job's own report), measured, mean only from 5 ratings
+- `GET /v1/console/video/learning/confidence` — distribution of the confidence raters stated
+- `POST /v1/console/video/learning/select-model` — advice which variant rated best; `applied` is always false
+- `POST /v1/console/video/learning/report-quality` — one overall 1–5 rating for a whole job (audit-first)
+  (these four answered 501 until 2026-10-26; the Learning tab of the Video Producer page is their consumer)
 - `GET /v1/console/video/learning/health` — Health check
 
 ### Commit 3: Track B Frontend (200 LOC TSX + 10 tests)

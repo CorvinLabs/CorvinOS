@@ -11,7 +11,7 @@
  *             (routes/video_producer_api.py → video_quality.py): stream facts,
  *             a checklist with a named denominator (incl. "no subtitles"), and every scene's
  *             planned vs rendered seconds;
- *   Learning  the feedback the operator gave on this job (ADR-0314 events)
+ *   Learning  the feedback the operator gave on this job, and what all recorded ratings say (ADR-0314 events)
  *             and the buttons to give more, per scene;
  *   Code      the job's highlighted-code scenes, Canvas its pen-drawn canvas scenes and their
  *             signals, Assets the workspace's uploaded images (ADR-2249,
@@ -39,6 +39,7 @@ import { BUILTIN_STYLE_ID, STYLE_DECK_ACCEPT, isDeckFile, type StyleList } from 
 import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-styles";
 import { ProductionSignals } from "@/components/video-quality-report";
 import { AssetsTab, CanvasTab, CaptureDialog, CodeTab } from "@/components/video-expressive";
+import { LearningOverview } from "@/components/video-learning-overview";
 import { captureBlockedReason, firstUrlIn, type CaptureSettings } from "@/lib/api/video-assets";
 import { installOutcomeText, installWebSlidesBrowser, webSlidesNote, webSlidesState, type WebSlidesState } from "@/lib/api/video-web-slides";
 import type { ProductionReport } from "@/lib/video-quality-signals";
@@ -283,7 +284,7 @@ function LearningTab({ job, scenes }: { job: Job; scenes: SceneRow[] }) {
         <Fact k="Mean confidence" v={l && l.average_confidence !== null ? pct(l.average_confidence) : "—"} />
       </div>
       <p className="text-xs text-muted-foreground" data-testid="learning-caption">
-        {learning.isError ? "Learning events could not be loaded." : l && l.total_feedback_events === 0 ? "No feedback on this job yet. Every approval or rejection below becomes an ADR-0314 feedback event the optimizer reads." : l ? `Read from ${l.source}.` : "loading…"}
+        {learning.isError ? "Learning events could not be loaded." : l && l.total_feedback_events === 0 ? "No feedback on this job yet. Every approval or rejection below is recorded as a learning event." : l ? `Read from ${l.source}.` : "loading…"}
       </p>
       {scenes.length > 0 && (
         <div className="space-y-1">
@@ -305,6 +306,7 @@ function LearningTab({ job, scenes }: { job: Job; scenes: SceneRow[] }) {
           {l.events.slice().reverse().map((e, i) => <li key={i} className="flex gap-2"><span className="text-muted-foreground">{fmtWhen(e.timestamp)}</span><span>{e.outcome === "yes" ? "approved" : e.outcome === "no" ? "rejected" : e.outcome ?? "—"}</span>{e.confidence !== null && <span className="text-muted-foreground">· confidence {pct(e.confidence)}</span>}</li>)}
         </ul>
       )}
+      <LearningOverview jobId={job.id} csrf={csrf} />
     </div>
   );
 }

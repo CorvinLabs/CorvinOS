@@ -71,6 +71,22 @@ function handlers() {
     http.get(`${B}/jobs/job_2626f1e8`, () => HttpResponse.json({ ...JOBS.jobs[0], started_at: "2026-09-13T08:11:46", completed_at: "2026-09-13T08:12:16" })),
     http.get(`${B}/jobs/job_2626f1e8/quality-metrics`, () => HttpResponse.json(QUALITY)),
     http.get(`${B}/jobs/job_2626f1e8/learning-metrics`, () => HttpResponse.json({ job_id: "job_2626f1e8", total_feedback_events: 0, approved: 0, rejected: 0, average_confidence: null, events: [], source: "learning.event_store" })),
+    http.get(`${B}/learning/models`, () => HttpResponse.json({
+      dimension: "tts_tier", min_samples: 5, source: "learning.event_store",
+      variants: [
+        { variant: "openai", jobs: 2, rated_scenes: 7, positive: 4, negative: 0, enough_samples: true, mean_rating: 4.6 },
+        { variant: "edge", jobs: 1, rated_scenes: 2, positive: 0, negative: 1, enough_samples: false, mean_rating: null },
+      ],
+    })),
+    http.get(`${B}/learning/confidence`, () => HttpResponse.json({ samples: 3, feedback_events: 9, average: 0.8, min: 0.5, max: 0.9, buckets: {}, by_source: {}, source: "learning.event_store" })),
+    http.post(`${B}/learning/select-model`, async ({ request }) => {
+      seen.push({ path: "select-model", csrf: request.headers.get("x-csrf-token"), body: await request.json() });
+      return HttpResponse.json({ dimension: "tts_tier", advice: { variant: "openai", mean_rating: 4.6, over: "edge", over_mean_rating: 2 }, reason: "ok", applied: false, min_samples: 5, margin: 0.5 });
+    }),
+    http.post(`${B}/learning/report-quality`, async ({ request }) => {
+      seen.push({ path: "report-quality", csrf: request.headers.get("x-csrf-token"), body: await request.json() });
+      return HttpResponse.json({ job_id: "job_2626f1e8", scope: "job", rating: 4, status: "recorded", audit_ref: "a1" });
+    }),
     http.get(`${B}/settings`, () => HttpResponse.json({ output_folder: "~/.corvin/video-producer/videos", tts_engine: "auto", tts_engines: ["openai", "auto", "gtts"], max_duration_minutes: 60, openai_configured: true, web_slides_available: false })),
     http.post(`${B}/jobs`, async ({ request }) => {
       posted.push({ csrf: request.headers.get("x-csrf-token"), body: (await request.json()) as Record<string, unknown> });
@@ -277,6 +293,36 @@ describe("Video Producer studio", () => {
     fireEvent.click(screen.getByLabelText("approve s1"));
     await screen.findByText("Recorded: approve for s1.");
     expect(seen[0]).toMatchObject({ path: "s1", csrf: "csrf-test", body: { feedback_type: "approve" } });
+  });
+
+  it("the Learning tab reads what all recorded ratings say, per variant, and withholds a mean below the sample floor", async () => {
+    server.use(...handlers());
+    renderIt("?job=job_2626f1e8&tab=learning");
+    await screen.findByTestId("learning-overview");
+    await waitFor(() => expect(screen.getByTestId("overview-rated").textContent).toBe("9"));
+    expect(screen.getByTestId("overview-confidence").textContent).toBe("0.80");
+    const rows = screen.getByTestId("overview-variants").textContent ?? "";
+    expect(rows).toMatch(/openai.*2 videos.*7 rated scenes.*mean 4\.6 of 5/);
+    expect(rows).toMatch(/edge.*1 video.*2 rated scenes.*needs 5 ratings for a mean/);
+  });
+
+  it("asking for a suggestion posts with CSRF and shows advice that is never applied", async () => {
+    seen.length = 0;
+    server.use(...handlers());
+    renderIt("?job=job_2626f1e8&tab=learning");
+    fireEvent.click(await screen.findByTestId("ask-advice"));
+    await waitFor(() => expect(screen.getByTestId("advice-text").textContent).toMatch(/openai rated best \(mean 4\.6 of 5\) against edge/));
+    expect(screen.getByTestId("advice-text").textContent).toMatch(/Advice only/);
+    expect(seen[0]).toMatchObject({ path: "select-model", csrf: "csrf-test" });
+  });
+
+  it("the overall rating posts the job id and the chosen rating with CSRF", async () => {
+    seen.length = 0;
+    server.use(...handlers());
+    renderIt("?job=job_2626f1e8&tab=learning");
+    fireEvent.click(await screen.findByLabelText("rate video 4"));
+    await screen.findByText("Recorded: overall rating 4 of 5.");
+    expect(seen[0]).toMatchObject({ path: "report-quality", csrf: "csrf-test", body: { job_id: "job_2626f1e8", rating: 4 } });
   });
 
   it("a refused rating shows the server's reason, not a generic line", async () => {
