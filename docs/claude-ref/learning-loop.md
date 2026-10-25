@@ -307,6 +307,12 @@ by `POST /features/toggle`, so an operator decision is never stale.
   its frontend hook `useStageGrades` (`web-next/src/adapters/vibe.ts`) has no consumer, so
   no panel shows a CEL grade and there is no label to change. A panel that starts rendering
   them must label an automatic native-path grade "turn completed".
+* **Live proof (2026-10-25, `scripts/console-deploy.sh --marker 'the model selection does not
+  read it'`):** the host served `assets/index-DNo90ACa.js`; across the 96 built chunks the
+  marker is in exactly one (positive control) and none contains `HotfixPanel`,
+  `LearningDashboard`, `SkillLearningDashboard`, `learning-loops-dashboard` or
+  `skill-learning-dashboard`, the pages ADR-2282 retired. The running console process still
+  mounts the retired backend routes until its next `safe-restart.sh`.
 
 ## Feedback trust gate (ADR-0534, accepted + built 2026-10-10)
 
