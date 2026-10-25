@@ -273,6 +273,21 @@ optimizer consumes them. The manifest route additionally caches the resolved
 flags per tenant for 5 s (`routes/capabilities.py::_read_flags`), invalidated
 by `POST /features/toggle`, so an operator decision is never stale.
 
+## Honest labels: selector learner and CEL grades (ADR-2281 §5, 2026-10-25)
+
+* **Model-selector learner = a descriptive statistic.** Its per-turn input is a binary
+  proxy (`model_selector_shadow.py`: `quality_score = 0.85` when the turn ended without an
+  error, `0.2` when it failed) plus operator ratings, and nothing in the model selection
+  reads it. The Models → Learning tab says so ("What the learner has recorded, per tier",
+  `web-next/src/pages/models/tabs/learning.tsx`; pinned by `tests/unit/learning-tab.test.tsx`).
+* **CEL turn grades: no console surface renders them.** The native console path records
+  `success=True` for every completed turn (`chat_runtime.py`, behind `outcome_feedback_loop`),
+  so such a grade means "turn completed", not "the stage helped". Measured 2026-10-25: the
+  only reader is `GET /v1/console/vibe-engineering/grades` (`routes/vibe_engineering.py`);
+  its frontend hook `useStageGrades` (`web-next/src/adapters/vibe.ts`) has no consumer, so
+  no panel shows a CEL grade and there is no label to change. A panel that starts rendering
+  them must label an automatic native-path grade "turn completed".
+
 ## Feedback trust gate (ADR-0534, accepted + built 2026-10-10)
 
 Feedback is untrusted input. `EventStore.write_event` runs `core/learning/feedback_gate.admit()`

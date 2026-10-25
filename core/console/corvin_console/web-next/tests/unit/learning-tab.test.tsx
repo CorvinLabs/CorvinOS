@@ -97,6 +97,16 @@ describe("Learning tab — feedback", () => {
     expect(screen.getByText("Outcome samples — lifetime")).toBeInTheDocument();
     expect(screen.getByText("Shadow classifications — in window")).toBeInTheDocument();
   });
+
+  it("labels the ranking as descriptive: the selection does not read it, its input is a binary proxy", async () => {
+    server.use(...baseHandlers(() => HttpResponse.json({}, { status: 500 })));
+    renderTab();
+    await screen.findAllByText("claude-sonnet-5");
+    expect(screen.getByText("What the learner has recorded, per tier")).toBeInTheDocument();
+    expect(screen.queryByText(/What the selector believes/)).toBeNull();
+    expect(screen.getByText(/the model selection does not read it/)).toBeInTheDocument();
+    expect(screen.getByText(/0\.85 when the turn ended without an error, 0\.2 when it failed/)).toBeInTheDocument();
+  });
 });
 
 describe("Learning tab — ONE reset", () => {

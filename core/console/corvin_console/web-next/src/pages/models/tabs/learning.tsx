@@ -1,7 +1,9 @@
 /**
  * Learning tab (ADR-0885 D1/D2/D5/D6).
  *
- * What the selector has learned and from what: shadow classifications (in
+ * What the selector's learner has recorded and from what — descriptive only,
+ * the model selection never reads it (its input is the 0.85 / 0.2 "turn ended
+ * without an error" proxy plus operator ratings): shadow classifications (in
  * window) vs. outcome samples (all time), convergence, the per-tier ranking
  * from `rank_models` (rows as the learner stored them — never merged), the
  * operator rating of recent shadow classifications, and ONE reset that clears
@@ -152,11 +154,13 @@ export function LearningTab() {
       {/* per-tier ranking */}
       <Card>
         <CardHeader>
-          <CardTitle>What the selector believes, per tier</CardTitle>
+          <CardTitle>What the learner has recorded, per tier</CardTitle>
           <CardDescription>
-            Learned confidence per (tier, model) from real outcome feedback — Beta posterior with
-            EMA smoothing. Published rates are shown beside each row; a rate of “—” means the model
-            is not on the rate card, never that it is free.
+            A descriptive statistic: the model selection does not read it. Each turn feeds it a
+            binary proxy — 0.85 when the turn ended without an error, 0.2 when it failed — plus
+            your ratings below, so it measures “finished without error”, not answer quality. Beta
+            posterior with EMA smoothing per (tier, model). Published rates are shown beside each
+            row; a rate of “—” means the model is not on the rate card, never that it is free.
           </CardDescription>
         </CardHeader>
         <CardContent>
