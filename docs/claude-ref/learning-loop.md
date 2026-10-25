@@ -490,6 +490,15 @@ latest `skill_executed` records (event id, time, and the decision only when it i
 never input, output or reasoning text), and Correct/Wrong posts `rating ±1, category accuracy` with
 the event id as `subject_id`. Proof: `core/console/tests/test_learning_anomalies_e2e.py`.
 
+## DoD weight loop (ADR-2283 decision 3, ADR-2284 decision 1, 2026-10-25)
+
+Learned Definition-of-Done weights persist per tenant in
+`<tenant_home>/global/forge/dod_weights.json` (`weight_persistence.weights_path`, resolved through
+`core.paths.tenant.tenant_home` — `CORVIN_HOME` honoured, never `Path.home()`; atomic write, mode
+0600). The file holds the weights, their per-weight confidence and the sample count; all three are
+loaded back, so the confidence gate survives a restart.
+Proof: `tests/learning/test_adr_2283_dod_weights_tenant_path.py`.
+
 ## Learning anomalies (ADR-2044 Phase 3, 2026-10-13)
 
 `core/learning/anomaly_monitor.py` measures three conditions over data the loop already stores;
