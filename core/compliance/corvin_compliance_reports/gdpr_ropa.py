@@ -55,6 +55,30 @@ _A2A_EVENTS = (
     "A2A.request_rejected",
     "A2A.response_rejected",
 )
+# Cross-organisation delegation (ADR-2232 federation, ADR-2276 workflow peer step).
+# Each delegated task is an Art. 30 cross-system flow to ANOTHER installation (another
+# organisation): the requester sends task text, the peer returns an answer. Only metadata is
+# recorded (ids, status, duration, chain tails) - never the text. PLAN-0965 F-11: this list
+# used to stop at ``A2A.*``, so the Art. 30 record did not show the federation flows at all.
+# tests/test_ropa_federation.py fails when a new federation.* / workflow.peer_* event is
+# registered without being listed here or exempted there.
+_FEDERATION_EVENTS = (
+    "federation.catalog_fetched",
+    "federation.catalog_served",
+    "federation.catalog_refused",
+    "federation.task_delegated",
+    "federation.task_result_received",
+    "federation.task_received",
+    "federation.task_completed",
+    "federation.task_rejected",
+    "federation.conversation_started",
+    "federation.conversation_turn",
+    "federation.conversation_ended",
+    "workflow.peer_delegated",
+    "workflow.peer_completed",
+    "workflow.peer_refused",
+    "workflow.peer_outcome_unknown",
+)
 _DATA_EVENTS = (
     "data.registered",
     "data.snapshot_generated",
@@ -261,6 +285,41 @@ def _aggregate_a2a(events: list[dict[str, Any]]) -> list[list[str]]:
     return rows
 
 
+def _aggregate_federation(events: list[dict[str, Any]]) -> list[list[str]]:
+    """Cross-organisation delegation by peer: out, results back, workflow steps, served in, refused, unknown.
+
+    The peer key is the endpoint (requester side) or the origin (receiver side). Counts only: the chain
+    holds no task text and no answer text.
+    """
+    cols = ("out", "back", "wf", "served", "refused", "unknown")
+    by_peer: dict[str, dict[str, int]] = {}
+    for ev in events:
+        d = ev.get("details", {}) or {}
+        et = ev.get("event_type", "")
+        peer = str(d.get("endpoint_id", "") or d.get("origin_id", "") or d.get("peer_instance_id", "") or "unknown")
+        col = {
+            "federation.task_delegated": "out",
+            "federation.task_result_received": "back",
+            "workflow.peer_delegated": "wf",
+            "federation.task_received": "served",
+            "federation.task_rejected": "refused",
+            "federation.catalog_refused": "refused",
+            "workflow.peer_refused": "refused",
+            "workflow.peer_outcome_unknown": "unknown",
+        }.get(et)
+        if col is None:
+            continue
+        b = by_peer.setdefault(peer, dict.fromkeys(cols, 0))
+        b[col] += 1
+    rows: list[list[str]] = [["Peer (endpoint/origin)", "Delegated out", "Results back", "Workflow steps",
+                              "Served in", "Refused", "Outcome unknown"]]
+    for peer, b in sorted(by_peer.items()):
+        rows.append([peer[:32], *(str(b[c]) for c in cols)])
+    if not by_peer:
+        rows.append(["—", "0", "0", "0", "0", "0", "0"])
+    return rows
+
+
 def generate(
     *,
     tenant_id: str,
@@ -302,6 +361,10 @@ def generate(
     a2a_events = audit_query.collect_events(
         tenant_id=tenant_id, start_ts=start_ts, end_ts=end_ts,
         event_types=_A2A_EVENTS, chain_path=chain_path,
+    )
+    federation_events = audit_query.collect_events(
+        tenant_id=tenant_id, start_ts=start_ts, end_ts=end_ts,
+        event_types=_FEDERATION_EVENTS, chain_path=chain_path,
     )
     stats = audit_query.compute_stats(
         tenant_id=tenant_id, start_ts=start_ts, end_ts=end_ts,
@@ -472,6 +535,33 @@ def generate(
             styles["body"],
         ))
 
+    # Section 7 — cross-organisation delegation (ADR-2232 federation, ADR-2276 workflow peer step)
+    story.append(PageBreak())
+    story.append(templates.section_heading(
+        "7.  Cross-organisation delegation (federation and workflow peer steps)", styles,
+    ))
+    story.append(Paragraph(
+        "A task delegated to an agent of a paired installation, directly or from a workflow step, "
+        "sends task text to ANOTHER installation, that is another controller or processor, and brings "
+        "an answer back. Each delegation is an Art. 30 cross-system flow. The chain records only "
+        "metadata (task id, peer, agent, status, duration and both chain tails); task and answer text "
+        "are never in it. Before a workflow step sends, an outbound gate checks the data grade: by "
+        "default only public data may go, secret data never. The legal role of each peer (controller or "
+        "processor) is an operator decision and is not derived here.",
+        styles["small"],
+    ))
+    story.append(Spacer(1, 4 * mm))
+    if federation_events:
+        story.append(templates.styled_table(
+            _aggregate_federation(federation_events),
+            col_widths=[44 * mm, 22 * mm, 22 * mm, 22 * mm, 20 * mm, 20 * mm, 22 * mm],
+        ))
+    else:
+        story.append(Paragraph(
+            "<i>No cross-organisation delegation in the selected period.</i>",
+            styles["body"],
+        ))
+
     # Hash anchor
     story.extend(templates.signed_footer_block(
         last_hash=stats.last_event_hash,
@@ -490,6 +580,7 @@ def generate(
         "memory_events": len(memory_events),
         "delegation_events": len(delegation_events),
         "a2a_events": len(a2a_events),
+        "federation_events": len(federation_events),
         "total_chain_events": stats.total_events,
         "chain_intact": stats.chain_intact,
         "anchor_hash": stats.last_event_hash,

@@ -1977,3 +1977,13 @@ the pending file (the secret material) and `pair/accept` refuses a revoked `acce
 410; a successful accept marks the entry `accepted`. A registry lock timeout refuses the
 generation (503, nothing handed out): never a code the registry cannot list or revoke.
 Proof: `tests/sandbox/test_gap_chat.py::test_G6_*`.
+
+## The Art. 30 record lists cross-organisation delegation (PLAN-0965 F-11, 2026-10-25)
+
+`corvin-compliance-reports gdpr-30` has a section 7, "Cross-organisation delegation", built from
+`federation.*` and `workflow.peer_*` events (`gdpr_ropa._FEDERATION_EVENTS`): per peer, delegated out,
+results back, workflow steps, served in, refused, outcome unknown. Counts only; the chain holds no task or
+answer text. Until now the record stopped at `A2A.*` and showed none of these flows.
+`core/compliance/tests/test_ropa_federation.py` fails when a new `federation.*` / `workflow.peer_*` event is
+registered without being listed or exempted with a reason, and proves the section end to end through the real
+audit writer and generator.
