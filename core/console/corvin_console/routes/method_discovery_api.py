@@ -61,7 +61,7 @@ try:
         FeedbackInterpreter,
         UserFeedback,
     )
-    from core.skills.os_skills.skill_adapter import SkillAdapter, SkillConfigLockBusy
+    from core.skills.os_skills.skill_adapter import LearningFrozen, SkillAdapter, SkillConfigLockBusy
     from core.skills.os_skills.workstyle_model import PreferenceInferencer
     from core.learning.outcome_sink import learning_emitter, recent_outcomes
 
@@ -72,6 +72,10 @@ except ImportError:  # pragma: no cover - stripped install without core.skills
     UserFeedback = None  # type: ignore[assignment]
     SkillAdapter = None  # type: ignore[assignment]
     SkillConfigLockBusy = TimeoutError  # type: ignore[assignment,misc]
+
+    class LearningFrozen(RuntimeError):  # type: ignore[no-redef]
+        reason = ""
+
     PreferenceInferencer = None  # type: ignore[assignment]
     learning_emitter = None  # type: ignore[assignment]
     recent_outcomes = None  # type: ignore[assignment]
@@ -397,6 +401,10 @@ async def submit_feedback(
             accepted, why = adapter.run_optimizer_epoch(hyp, successes, total)
         except SkillConfigLockBusy:
             raise _refuse_lock_busy(rec, "learning.feedback_optimizer", hyp.skill_id) from None
+        except LearningFrozen:
+            # ADR-2304: the feedback above is recorded; the frozen skill's optimizer does
+            # not run (the adapter recorded learning.freeze_refused_write).
+            accepted, why = False, "learning_frozen"
         out.append(
             HypothesisDTO(
                 hypothesis_id=hyp.hypothesis_id,

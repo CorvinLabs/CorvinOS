@@ -31,6 +31,25 @@ Persistence (2026-09-06 adversarial review, F7):
 The config produced here is READ by ``DelegationRouterSkill`` via
 :func:`load_skill_config` — that is what closes the loop (feedback → hypothesis
 → accepted config → the next routing decision uses it).
+
+Epoch-test label (ADR-2305 Part 1, PLAN-0966 WP2): an accepted hypothesis carries
+the suffix :data:`UNVERIFIED_CAUSALITY` in its returned reason and in the new
+version's ``change_reason`` unless the learned config can act
+(:func:`learned_config_can_act`: Phase 2 dual-write cleared by every ADR-2092 gate
+on every routing surface). Until then nothing reads the learned threshold, so an
+acceptance cannot be a measured effect. Behaviour is otherwise unchanged.
+
+Learning brake (ADR-2304, PLAN-0966 WP3): ``OptimizerState.frozen`` (persisted
+with the config). While frozen, BOTH writers (:meth:`SkillAdapter.apply_config_delta`,
+:meth:`SkillAdapter.run_optimizer_epoch`) and the DoD weight writer
+(``definition_of_done_verifier.weight_persistence``, via :func:`refuse_if_frozen`)
+refuse with :class:`LearningFrozen` and record ``learning.freeze_refused_write``.
+Freezing (:func:`freeze_learning`, called only by the learning host after a
+committed ``skill.config_oscillation`` / ``skill.confidence_regression`` record)
+and lifting (:meth:`SkillAdapter.unfreeze`, called only by the CSRF-protected
+console route) are audit-first: no ``learning.frozen`` / ``learning.unfrozen``
+record, no state change. A freeze never rolls back and never lifts itself. There
+is no switch: no flag and no environment variable turns the brake off.
 """
 
 from __future__ import annotations
@@ -61,7 +80,94 @@ __all__ = [
     "load_skill_config",
     "skill_config_path",
     "LOCK_TIMEOUT_SECONDS",
+    "UNVERIFIED_CAUSALITY",
+    "learned_config_can_act",
+    "LearningFrozen",
+    "NotFrozen",
+    "BRAKE_EVENTS",
+    "freeze_learning",
+    "refuse_if_frozen",
+    "valid_skill_id",
 ]
+
+#: ADR-2305 Part 1: suffix of an acceptance the epoch test cannot attribute causally.
+UNVERIFIED_CAUSALITY = ":unverified_causality"
+
+#: The skills whose learned config is read back by a consumer (the same set as
+#: ``routes/stream4_skill_feedback.CONFIG_CONSUMERS``). Any other skill's config acts nowhere.
+_CONFIG_READERS = frozenset({"os.delegation_router"})
+
+#: The routing surfaces the ADR-2092 gates are evaluated for
+#: (``delegation_policy.ROUTING_SURFACES``; not imported: that module lives in the bridge tree).
+_ROUTING_SURFACES = ("bridge", "console")
+
+#: ADR-2304 audit events, content-free: ids and closed enums only (``reason`` is the
+#: anomaly event name, ``target`` one of ``skill_config`` / ``dod_weights``). Mirrored in
+#: ``forge.security_events.EVENT_SEVERITY`` / ``_EVENT_ALLOWLIST``.
+BRAKE_EVENTS = {
+    "learning.frozen": ("skill_id", "reason", "version_id"),
+    "learning.unfrozen": ("skill_id", "reason", "version_id"),
+    "learning.freeze_refused_write": ("skill_id", "reason", "version_id", "target"),
+}
+_BRAKE_TARGETS = ("skill_config", "dod_weights")
+_SKILL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def valid_skill_id(skill_id: Any) -> bool:
+    """A skill id that is safe as a config file name (no path separator, no ``..``)."""
+    return isinstance(skill_id, str) and bool(_SKILL_ID_RE.match(skill_id)) and ".." not in skill_id
+
+
+class LearningFrozen(RuntimeError):
+    """A learned-config write was refused because the skill's learning is frozen (ADR-2304)."""
+
+    def __init__(self, skill_id: str, reason: str):
+        super().__init__(f"learning of {skill_id!r} is frozen ({reason})")
+        self.skill_id = skill_id
+        self.reason = reason
+
+
+class NotFrozen(ValueError):
+    """Unfreeze was asked for a skill whose learning is not frozen."""
+
+
+def _freeze_reasons() -> frozenset:
+    from core.learning.anomaly_monitor import FREEZES_LEARNING  # noqa: PLC0415
+
+    return FREEZES_LEARNING
+
+
+def _brake_emit(event: str, details: dict, *, tenant_id: str, severity: str) -> None:
+    """One hash-chained brake record on the tenant chain; raises ``AuditWriteFailed``."""
+    from core.deployment import audit_sink  # noqa: PLC0415
+
+    audit_sink.register_events(BRAKE_EVENTS)
+    audit_sink.emit(event, details, tenant_id=tenant_id, severity=severity)
+
+
+def learned_config_can_act(tenant_id: str, skill_id: str = "os.delegation_router") -> bool:
+    """True only when a learned config of ``skill_id`` is read on every routing surface.
+
+    That is the case when the skill has a config reader at all and
+    ``monitoring.dual_write.effective_phase`` answers ``dual_write`` (``CORVIN_ACP_PHASE=
+    phase2_dual_write`` AND Skill booted AND no rollback AND readiness ready) for every
+    surface. A pure query: no audit writer is passed, so it records nothing. Any failure
+    answers False — the label stays (the honest direction).
+    """
+    if skill_id not in _CONFIG_READERS:
+        return False
+    try:
+        from core.skills.os_skills.monitoring import dual_write  # noqa: PLC0415
+        from core.skills import skill_registry_phase1 as _reg  # noqa: PLC0415
+
+        registry = getattr(_reg, "_global_registry", None)
+        available = registry is not None and registry.get(skill_id) is not None
+        return all(
+            dual_write.effective_phase(tenant_id=tenant_id, surface=s,
+                                       skill_available=available, audit=None) == "dual_write"
+            for s in _ROUTING_SURFACES)
+    except Exception:  # noqa: BLE001 — cannot decide ⇒ not shown as causal
+        return False
 
 #: Deadline for the per-skill config flock. Same value and same contract as
 #: ``core.infinite_session.event_store.LOCK_TIMEOUT_SECONDS`` and
@@ -136,6 +242,11 @@ class OptimizerState:
     hypotheses_tested: int = 0
     hypotheses_accepted: int = 0
     mde_threshold: float = 0.05  # Minimum Detectable Effect
+    #: ADR-2304 learning brake: set only by :func:`freeze_learning`, cleared only by
+    #: :meth:`SkillAdapter.unfreeze` (a human, through the console route).
+    frozen: bool = False
+    frozen_reason: Optional[str] = None  # the anomaly event name
+    frozen_since: Optional[str] = None   # ISO-8601 UTC
 
 
 def _default_work_dir(tenant_id: str) -> Path:
@@ -297,6 +408,14 @@ class SkillAdapter:
         self.state.current_success_rate = float(opt.get("current_success_rate", 0.0))
         self.state.hypotheses_tested = int(opt.get("hypotheses_tested", 0))
         self.state.hypotheses_accepted = int(opt.get("hypotheses_accepted", 0))
+        # Any non-false value reads as frozen: a hand-mangled flag must not lift the brake.
+        self.state.frozen = opt.get("frozen", False) not in (False, None, 0)
+        self.state.frozen_reason = (str(opt["frozen_reason"]) if self.state.frozen
+                                    and opt.get("frozen_reason") else None)
+        self.state.frozen_since = (str(opt["frozen_since"]) if self.state.frozen
+                                   and opt.get("frozen_since") else None)
+        if self.state.frozen and not self.state.frozen_reason:
+            self.state.frozen_reason = "unknown"
         versions: list[SkillConfigVersion] = []
         unparsed: list = []
         for v in data.get("versions") or []:
@@ -336,6 +455,9 @@ class SkillAdapter:
                 "current_success_rate": self.state.current_success_rate,
                 "hypotheses_tested": self.state.hypotheses_tested,
                 "hypotheses_accepted": self.state.hypotheses_accepted,
+                "frozen": self.state.frozen,
+                "frozen_reason": self.state.frozen_reason,
+                "frozen_since": self.state.frozen_since,
             },
             "versions": [
                 {
@@ -389,17 +511,30 @@ class SkillAdapter:
             recent_total: total tasks in last 10
 
         Returns:
-            (accepted, reason): whether hypothesis was accepted
+            (accepted, reason): whether hypothesis was accepted. An accepted reason ends in
+            :data:`UNVERIFIED_CAUSALITY` unless :func:`learned_config_can_act` (ADR-2305).
+
+        Raises:
+            LearningFrozen: the skill's learning is frozen (ADR-2304); nothing changed,
+                not even the epoch counter.
         """
+        # Evaluated outside the lock: the readiness check may read the routing ledger.
+        causal = learned_config_can_act(self.tenant_id, self.skill_id)
         with self._locked():
-            return self._run_optimizer_epoch_locked(hypothesis, recent_successes, recent_total)
+            return self._run_optimizer_epoch_locked(
+                hypothesis, recent_successes, recent_total, causal=causal)
 
     def _run_optimizer_epoch_locked(
         self,
         hypothesis: Optional[ConfigHypothesis],
         recent_successes: int,
         recent_total: int,
+        *,
+        causal: bool = False,
     ) -> tuple[bool, str]:
+        if self.state.frozen:
+            raise self._refuse_frozen("skill_config")
+        label = "" if causal else UNVERIFIED_CAUSALITY
         self.state.epoch += 1
         recent_success_rate = recent_successes / recent_total if recent_total > 0 else 0.0
 
@@ -430,7 +565,7 @@ class SkillAdapter:
                     skill_id=self.skill_id,
                     timestamp=datetime.now(timezone.utc),
                     config=new_config,
-                    change_reason=hypothesis.reason,
+                    change_reason=hypothesis.reason + label,
                     improvement_pct=improvement * 100,
                 )
                 self.state.config_versions.append(version)
@@ -444,7 +579,7 @@ class SkillAdapter:
                     delta=hypothesis.delta,
                     improvement_pct=improvement * 100,
                 )
-                return True, f"improvement_{improvement:.2%}_accepted"
+                return True, f"improvement_{improvement:.2%}_accepted{label}"
             else:
                 # Reject: keep current config
                 self.state.hypotheses_tested += 1
@@ -487,6 +622,67 @@ class SkillAdapter:
                     self._announce("rollback", to_version=to_version)
                     return v.config
             raise ValueError(f"Version {to_version} not found")
+
+    # ── learning brake (ADR-2304) ───────────────────────────────────────────
+
+    def _current_version_id(self) -> str:
+        return self.state.active_version or (
+            self.state.config_versions[-1].version_id if self.state.config_versions else "none")
+
+    def _refuse_frozen(self, target: str) -> LearningFrozen:
+        """Record the refused write (best effort: the refusal holds either way) and
+        return the exception the caller raises."""
+        reason = self.state.frozen_reason or "unknown"
+        _record_refusal(self.skill_id, self.tenant_id, reason=reason,
+                        version_id=self._current_version_id(), target=target)
+        return LearningFrozen(self.skill_id, reason)
+
+    @property
+    def frozen(self) -> bool:
+        return self.state.frozen
+
+    def freeze(self, reason: str) -> bool:
+        """Freeze this skill's learned-config writes. Audit-first.
+
+        Returns True when this call froze it, False when it was already frozen (nothing
+        recorded). Raises ``AuditWriteFailed`` when ``learning.frozen`` did not commit —
+        then nothing changed. No rollback is triggered.
+        """
+        if reason not in _freeze_reasons():
+            raise ValueError(f"not a freezing anomaly: {reason!r}")
+        with self._locked():
+            if self.state.frozen:
+                return False
+            _brake_emit("learning.frozen", {
+                "skill_id": self.skill_id, "reason": reason,
+                "version_id": self._current_version_id(),
+            }, tenant_id=self.tenant_id, severity="WARNING")
+            self.state.frozen = True
+            self.state.frozen_reason = reason
+            self.state.frozen_since = datetime.now(timezone.utc).isoformat()
+            self._persist()
+            return True
+
+    def unfreeze(self) -> str:
+        """Lift the brake (a human, through the console route). Audit-first.
+
+        Returns the reason the skill was frozen for. Raises :class:`NotFrozen` when it was
+        not frozen and ``AuditWriteFailed`` when ``learning.unfrozen`` did not commit (then
+        it stays frozen).
+        """
+        with self._locked():
+            if not self.state.frozen:
+                raise NotFrozen(f"learning of {self.skill_id!r} is not frozen")
+            reason = self.state.frozen_reason or "unknown"
+            _brake_emit("learning.unfrozen", {
+                "skill_id": self.skill_id, "reason": reason,
+                "version_id": self._current_version_id(),
+            }, tenant_id=self.tenant_id, severity="INFO")
+            self.state.frozen = False
+            self.state.frozen_reason = None
+            self.state.frozen_since = None
+            self._persist()
+            return reason
 
     def get_current_config(self) -> SkillConfig:
         """Get current configuration."""
@@ -536,6 +732,8 @@ class SkillAdapter:
         """Apply delta under the config lock (reload + mutate + persist + audit)."""
         # 1. Reload current config (in case another writer changed it)
         self._load_or_init()
+        if self.state.frozen:  # ADR-2304: no config change, one refusal record
+            raise self._refuse_frozen("skill_config")
         old_config = self.state.best_config
 
         # 2. Apply each delta to the current config
@@ -632,3 +830,53 @@ class SkillAdapter:
             store.write_event(event)
         except Exception as e:
             raise RuntimeError(f"Failed to emit config update audit event: {e}") from e
+
+
+# ── learning brake: module-level entry points (ADR-2304) ────────────────────
+
+
+def _record_refusal(skill_id: str, tenant_id: str, *, reason: str, version_id: str, target: str) -> None:
+    if target not in _BRAKE_TARGETS:
+        raise ValueError(f"unknown brake target: {target!r}")
+    try:
+        _brake_emit("learning.freeze_refused_write", {
+            "skill_id": skill_id, "reason": reason, "version_id": version_id, "target": target,
+        }, tenant_id=tenant_id, severity="WARNING")
+    except Exception as exc:  # noqa: BLE001 — the write stays refused even when unrecorded
+        logger.warning("learning.freeze_refused_write for %s did not commit (%s)",
+                       skill_id, type(exc).__name__)
+
+
+def freeze_learning(skill_id: str, tenant_id: str, *, reason: str) -> bool:
+    """Freeze ``skill_id``'s learned-config writes for ``tenant_id`` (the learning host's
+    one call site, after the anomaly record committed). True = newly frozen, False =
+    already frozen. Raises ``ValueError`` (bad id / reason), ``AuditWriteFailed`` (not
+    recorded ⇒ not frozen; the host retries on its next check), :class:`SkillConfigLockBusy`."""
+    if not valid_skill_id(skill_id):
+        raise ValueError("skill id is not a safe config name")
+    return SkillAdapter(skill_id, tenant_id).freeze(reason)
+
+
+def refuse_if_frozen(skill_id: str, tenant_id: str, *, target: str) -> None:
+    """Raise :class:`LearningFrozen` (and record the refusal) when ``skill_id`` is frozen.
+
+    For learned-config writers outside :class:`SkillAdapter` (the DoD weights). Reads the
+    skill's config file only — never creates it. An unreadable file reads as frozen
+    (``brake_state_unreadable``): a brake that cannot be read must not open.
+    """
+    path = skill_config_path(skill_id, tenant_id)
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text())
+        opt = data.get("optimizer") or {}
+        frozen = opt.get("frozen", False) not in (False, None, 0)
+        reason = str(opt.get("frozen_reason") or "unknown")
+        version = data.get("active_version")
+    except (OSError, ValueError, AttributeError, TypeError):
+        frozen, reason, version = True, "brake_state_unreadable", None
+    if not frozen:
+        return
+    _record_refusal(skill_id, tenant_id, reason=reason,
+                    version_id=version if isinstance(version, str) else "none", target=target)
+    raise LearningFrozen(skill_id, reason)

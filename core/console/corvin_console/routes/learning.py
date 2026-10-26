@@ -14,6 +14,7 @@ Endpoints:
   GET  /v1/console/learning/metrics    — REAL time series (bucketed OUTCOME/FEEDBACK events)
   GET  /v1/console/learning/checkpoint — REAL Skill config versions (the rollback points)
   GET  /v1/console/learning/audit      — REAL ``learning.*`` records from the core hash chain
+  POST /v1/console/learning/config/unfreeze?skill_id= — lift the ADR-2304 learning brake (CSRF, audited)
   POST /v1/console/learning/override   — 501 (no live meta loop to override)
   POST /v1/console/learning/rollback/{checkpoint_id} — 501 (use POST learning/config/rollback)
 
@@ -785,6 +786,55 @@ async def get_audit_trail(
             )
     events = events[-limit:]
     return AuditResponse(events=events, count=len(events), chain_path=str(path))
+
+
+@router.post("/learning/config/unfreeze")
+async def unfreeze_learning(
+    skill_id: str = Query(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"),
+    session = Depends(require_csrf),
+):
+    """Lift the learning brake of one skill (ADR-2304) — the ONLY way a freeze ends.
+
+    The learning host freezes a skill's learned-config writes after a committed
+    ``skill.config_oscillation`` / ``skill.confidence_regression`` record; nothing lifts it
+    automatically. Tenant: the session's, never a parameter — a skill frozen in another
+    tenant is simply not frozen here (404). Audit-first: ``learning.unfrozen`` on the tenant
+    chain BEFORE the state changes (503 and still frozen when it does not commit), then a
+    console ``learning.config_unfreeze`` record. No rollback is performed.
+    """
+    import asyncio  # noqa: PLC0415
+
+    try:
+        from core.deployment.audit_sink import AuditWriteFailed  # noqa: PLC0415
+        from core.skills.os_skills.skill_adapter import (  # noqa: PLC0415
+            NotFrozen, SkillAdapter, SkillConfigLockBusy, skill_config_path, valid_skill_id,
+        )
+    except ImportError:
+        raise HTTPException(status_code=503, detail="skill adapter not wired (core.skills unavailable)")
+    from .. import audit as console_audit  # noqa: PLC0415
+
+    tenant_id = session.tenant_id
+    if not valid_skill_id(skill_id):
+        raise HTTPException(status_code=422, detail="invalid skill_id")
+    not_frozen = HTTPException(status_code=404, detail={"error": "not_frozen", "skill_id": skill_id})
+    if not skill_config_path(skill_id, tenant_id).is_file():
+        raise not_frozen  # never create a config file for a skill that has none
+    try:
+        reason = await asyncio.to_thread(SkillAdapter(skill_id, tenant_id).unfreeze)
+    except NotFrozen:
+        raise not_frozen from None
+    except SkillConfigLockBusy:
+        raise HTTPException(status_code=503, detail={"error": "lock_busy"}) from None
+    except AuditWriteFailed:
+        raise HTTPException(status_code=503, detail={"error": "audit_not_committed"}) from None
+    console_audit.action_performed(
+        tenant_id=tenant_id,
+        sid_fingerprint=session.sid_fingerprint,
+        action="learning.config_unfreeze",
+        target_kind="skill_config",
+        target_id=skill_id,
+    )
+    return {"skill_id": skill_id, "frozen": False, "previous_reason": reason}
 
 
 @router.post("/learning/override")

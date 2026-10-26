@@ -400,6 +400,17 @@ async def submit_dod_feedback(
         changed = (result.new_weights != result.old_weights
                    or result.confidence != before_conf)
         if changed:
+            # ADR-2304 learning brake, BEFORE the change is chained: a frozen skill gets one
+            # refusal record and no ``skill_config_updated`` for a change that never happens.
+            from core.skills.os_skills.skill_adapter import (  # noqa: PLC0415
+                LearningFrozen, refuse_if_frozen,
+            )
+
+            try:
+                refuse_if_frozen(_DOD_SKILL_ID, tenant_id, target="dod_weights")
+            except LearningFrozen as frozen:
+                raise HTTPException(status_code=409, detail={
+                    "error": "learning_frozen", "skill_id": _DOD_SKILL_ID, "reason": frozen.reason})
             # Audit-first: no chain record -> nothing persisted. Metadata only: the task
             # type, the two weight vectors and the per-weight confidence (numbers).
             ok = emit_skill_config_updated_event(

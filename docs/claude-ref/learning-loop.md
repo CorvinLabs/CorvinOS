@@ -118,6 +118,10 @@ operator ──► POST /v1/console/learning/feedback   {task_id, outcome_qualit
                         50-epoch baseline → hypothesis phase → accept iff Δsuccess ≥ MDE (0.05)
                         accepted → new config VERSION (snapshot persisted) + CONFIG_UPDATED event
                                    + console audit "skill_config_updated:hypothesis_accepted"
+                        label (ADR-2305 Part 1): an acceptance is NOT causal evidence — the
+                                   reason and the version's change_reason end in
+                                   ":unverified_causality" unless Phase 2 dual-write holds
+                        frozen skill (ADR-2304) → no epoch, optimizer_reason "learning_frozen"
 
 next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tenant)
                  a LEARNED confidence_threshold (only once a version exists) is the acceptance
@@ -151,6 +155,22 @@ next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tena
 | `GET health` | `operational` only when the subsystem imports AND an emitter is booted | — |
 
 Only `os.delegation_router` is tunable (`TUNABLE_SKILLS`); any other `skill_id` is a 400.
+
+**Epoch-test label (ADR-2305 Part 1, PLAN-0966 WP2, 2026-10-26).** The epoch test is a trend rule,
+not an experiment: the baseline is overwritten by the last window (epochs 1–50), the input
+`recent_outcomes(tenant, 10)` is tenant-wide, and outside a cleared Phase 2 nothing reads the
+learned threshold, so an acceptance cannot be an effect of the change. An accepted hypothesis
+therefore reads `optimizer_reason: "improvement_<x>%_accepted:unverified_causality"` and its version
+`change_reason: "<rule reason>:unverified_causality"` (also in `GET config-versions` and
+`GET learning/checkpoint`) unless `skill_adapter.learned_config_can_act()` holds: the skill has a
+config reader (`os.delegation_router`) AND `monitoring.dual_write.effective_phase` answers
+`dual_write` on BOTH surfaces (`bridge`, `console`) — `CORVIN_ACP_PHASE=phase2_dual_write`, Skill
+booted, no rollback, readiness ready. The check is a pure query (no audit writer passed, nothing
+recorded) and any failure keeps the label. Acceptance threshold, versioning, rollback and the
+`skill_config_updated` audit are unchanged; the marker is an enum suffix, never free text, and does
+not enter the chain. Readers of the text: the console `POST feedback` answer and the two version
+lists; no code compares it (checked 2026-10-26: one test asserts `baseline_collection_phase`).
+Proof: `tests/learning/test_adr_2305_unverified_causality_e2e.py`.
 
 ### Operator interface (`routes/learning.py`, `routes/learning_metrics.py`) — real data or an honest error code (2026-09-07)
 
@@ -400,6 +420,12 @@ Proof: `tests/learning/test_feedback_trust_gate_e2e.py`,
 * `SkillConfig.apply_delta` clamps to `[0, 1]` and rejects unknown params;
   `ConfigHypothesis.delta` is bounded to `[-0.20, 0.20]` — one feedback can
   move a parameter by at most 0.20, and every accepted change is reversible.
+* Learning brake (ADR-2304): a freeze is audit-first, only stops writes, never rolls back,
+  never lifts itself, and has no flag, env variable or setting; it covers `SkillAdapter` AND
+  the DoD weights. Only `skill.config_oscillation` / `skill.confidence_regression` freeze.
+* The `:unverified_causality` label (ADR-2305 Part 1) is dropped only when Phase 2 dual-write
+  holds on every routing surface (every ADR-2092 gate); a requested but refused Phase 2, or a
+  gate check that fails, keeps it. Removing the label altogether waits for the causal test (Part 2).
 
 ## Verification
 
@@ -611,10 +637,39 @@ ADR-2284 ones (metadata only: skill id, counts, ratios) and at runtime through
 
 Consumer: the host's persisted state (`anomalies`), returned by `GET /v1/console/api/learning/daemon`
 and shown in the "Anomalies" card of the Learning Loops view (an ADR-2284 event shows its event name
-there; the card has no dedicated wording for it yet). Nothing acts on them automatically.
+there; the card has no dedicated wording for it yet). Three of them only report; the two below
+freeze (learning brake).
 Proof: `tests/learning/test_anomaly_monitor.py`, `core/console/tests/test_learning_anomalies_e2e.py`,
 `tests/learning/test_adr_2284_anomaly_conditions.py` (seeded store → one learning-host tick → one
 chained record → the daemon route; no second record on further ticks).
+
+The oscillation anomaly names the skill by the config file's own `skill_id` (what `SkillAdapter`
+writes, e.g. `os.delegation_router`); until 2026-10-26 it fell back to the file stem
+(`os_delegation_router`) because the persisted versions carry no skill id.
+
+### Learning brake (ADR-2304, PLAN-0966 WP3, 2026-10-26)
+
+An anomaly may stop a change, never cause one. `anomaly_monitor.FREEZES_LEARNING` =
+`skill.config_oscillation`, `skill.confidence_regression` (operator decision D2); stall, latency and
+rejection rate only report.
+
+| Step | Where | Contract |
+|---|---|---|
+| Freeze | `LearningHost._check_anomalies` → `_freeze` → `skill_adapter.freeze_learning` → `SkillAdapter.freeze` | only AFTER the anomaly record committed; audit-first: `learning.frozen` (WARNING) on the tenant chain, then `OptimizerState.frozen/frozen_reason/frozen_since` persisted in `<tenant>/skills/<skill>_config.json` (`optimizer`). Not committed → nothing frozen, the anomaly entry has no `freeze` key and the next check retries. Done once per anomaly episode (`freeze: frozen` on the host's anomaly entry); a bad skill id is `freeze: invalid_skill_id`, never retried |
+| Refuse | `SkillAdapter._apply_config_delta_locked`, `SkillAdapter._run_optimizer_epoch_locked`, `WeightPersistence.save_weights`, `dod_verifier_dashboard` feedback route | `LearningFrozen` raised, no config/weight change, not even an epoch tick; one `learning.freeze_refused_write` (`target: skill_config` or `dod_weights`). The refusal holds even if its record does not commit. The DoD weights are frozen under `os.definition_of_done_verifier` (`weight_persistence.DOD_SKILL_ID`); an unreadable brake file reads as frozen (`brake_state_unreadable`) |
+| Surface | `POST learning/feedback` → hypotheses `optimizer_reason: learning_frozen` (feedback still recorded); `POST /feedback/skill` → `config_applied: false` with the note `config not updated: LearningFrozen`; `POST /api/dod/feedback` → 409 `{error: learning_frozen}`, no `skill_config_updated` | |
+| Lift | `POST /v1/console/learning/config/unfreeze?skill_id=` (`routes/learning.py`) | `require_csrf` (no CSRF → 403); tenant from the session only (a skill frozen in another tenant is 404 `not_frozen` here); audit-first `learning.unfrozen`, then state, then console `learning.config_unfreeze`. 503 `audit_not_committed` leaves it frozen. Never automatic, no time-out |
+
+A freeze never triggers a rollback (`SkillAdapter.rollback` stays the separate manual action and
+still works while frozen). There is **no switch** — no flag, no env variable, no setting. Fields of
+the three events: `skill_id`, `reason` (the anomaly event name), `version_id`, `tenant_id`
+(+ `target` on the refusal), registered in `EVENT_SEVERITY` / `_EVENT_ALLOWLIST` and at runtime via
+`skill_adapter.BRAKE_EVENTS`. Today a router freeze has no routing effect (the learned threshold is
+read only in a cleared Phase 2, register L05); it bites on the DoD weights.
+There is no unfreeze button in the console yet; the host's anomaly entry (`GET
+/v1/console/api/learning/daemon`) carries `freeze: frozen`.
+Proof: `tests/learning/test_adr_2304_learning_brake_e2e.py` (seeded oscillation → one host tick →
+one `learning.frozen` → refused writes through the console routes → unfreeze over HTTP).
 
 ## Data Hub learning loop (PLAN-0948, ADR-2255, 2026-10-12)
 

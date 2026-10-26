@@ -20,6 +20,11 @@ Edge-triggered: a condition is recorded once when it starts (audit-first — the
 active only after the chain record committed) and again only after it cleared. The consumer is the
 learning host's persisted state, read by ``GET /v1/console/api/learning/daemon`` and shown in the
 console's Learning Loops view.
+
+ADR-2304 learning brake: ``skill.config_oscillation`` and ``skill.confidence_regression``
+(:data:`FREEZES_LEARNING`) additionally make the host freeze that skill's learned-config writes
+after the anomaly record committed. A freeze is a stop, never a change: no rollback, no
+automatic lift. The other three conditions only report.
 """
 
 from __future__ import annotations
@@ -66,6 +71,12 @@ EVENTS = {
     "skill.latency_regression": ("skill_id", "p95_before_ms", "p95_after_ms", "samples_before",
                                  "samples_after", "ratio"),
 }
+
+#: ADR-2304 (operator decision D2, 2026-10-26): the anomalies that freeze the skill's
+#: learned-config writes once their record committed (learning host). The other three
+#: only report. A freeze is lifted only by a human (``POST /v1/console/learning/config/
+#: unfreeze``); it never triggers a rollback.
+FREEZES_LEARNING = frozenset({"skill.config_oscillation", "skill.confidence_regression"})
 
 
 @dataclass(frozen=True)
@@ -131,7 +142,10 @@ def _oscillation_anomalies(skills_dir: Path, now: float) -> list[Anomaly]:
                   and (ts := _parse_ts(v.get("timestamp"))) is not None
                   and now - OSCILLATION_WINDOW_S <= ts <= now]
         if len(recent) > OSCILLATION_MAX_CHANGES:
-            skill_id = str(recent[-1].get("skill_id") or path.stem[: -len("_config")])
+            # The file's own ``skill_id`` (what SkillAdapter writes) first: the persisted versions
+            # carry none, and the file stem has the dots replaced (``os_delegation_router``).
+            top = data.get("skill_id") if isinstance(data.get("skill_id"), str) else None
+            skill_id = str(top or recent[-1].get("skill_id") or path.stem[: -len("_config")])
             out.append(Anomaly("skill.config_oscillation", skill_id, {
                 "param_name": "config", "change_count": len(recent),
                 "window_seconds": OSCILLATION_WINDOW_S}))
@@ -291,4 +305,4 @@ def scan(tenant_id: str, *, now: Optional[float] = None) -> list[Anomaly]:
     return found
 
 
-__all__ = ["Anomaly", "EVENTS", "scan"]
+__all__ = ["Anomaly", "EVENTS", "FREEZES_LEARNING", "scan"]

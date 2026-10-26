@@ -57,6 +57,7 @@ systems:
       - core/background/learning_host.py:271
     tests:
       - tests/learning/test_anomaly_monitor.py
+      - tests/learning/test_adr_2304_learning_brake_e2e.py   # ADR-2304: two anomalies freeze
 
   - id: L03
     name: Event store and outcome sink
@@ -87,6 +88,7 @@ systems:
       - core/skills/os_skills/delegation_router.py:138
     tests:
       - tests/e2e/test_stream4_skill_feedback_console_e2e.py
+      - tests/learning/test_adr_2305_unverified_causality_e2e.py   # ADR-2305 Part 1 label
     intake: >-
       ADR-2092 gates G0-G4. The writer is live (operator feedback -> SkillAdapter
       config); the only reader is the Phase-2 branch of the router, which runs only

@@ -8,6 +8,9 @@ outside the live install whenever ``CORVIN_HOME`` pointed elsewhere.
 
 Weights AND their confidence are persisted and loaded back, so the ADR-0723 confidence
 gate (a learned weight is used only at confidence > 0.5) survives a restart.
+
+Learning brake (ADR-2304): ``save_weights`` refuses while ``os.definition_of_done_verifier``
+is frozen (``skill_adapter.refuse_if_frozen``), so every writer of this file is braked.
 """
 
 import json
@@ -17,6 +20,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 FILE_NAME = "dod_weights.json"
+#: The skill id the learning brake (ADR-2304) freezes the DoD weights under.
+DOD_SKILL_ID = "os.definition_of_done_verifier"
 
 
 def weights_path(tenant_id: str) -> Path:
@@ -69,7 +74,14 @@ class WeightPersistence:
         confidence: Dict[str, Dict[str, float]],
         sample_count: Optional[Dict[str, int]] = None,
     ) -> bool:
-        """Persist atomically (temp file + replace, mode 0600). Returns success."""
+        """Persist atomically (temp file + replace, mode 0600). Returns success.
+
+        Raises ``LearningFrozen`` (ADR-2304) when the DoD skill's learning is frozen: the
+        write is refused and recorded (``learning.freeze_refused_write``), nothing changes.
+        """
+        from core.skills.os_skills.skill_adapter import refuse_if_frozen  # noqa: PLC0415
+
+        refuse_if_frozen(DOD_SKILL_ID, self.tenant_id, target="dod_weights")
         data = {
             "version": "0.2.0",
             "tenant_id": self.tenant_id,

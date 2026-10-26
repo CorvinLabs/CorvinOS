@@ -308,6 +308,12 @@ class LearningHost:
             changed += 1
         for key, a in current.items():
             if key in self.anomalies:
+                # A freeze whose record did not commit last time is retried; one that
+                # happened (or was refused for a bad id) is never repeated while the
+                # anomaly stays active - an operator's unfreeze stands until it recurs.
+                entry = self.anomalies[key]
+                if a.event in anomaly_monitor.FREEZES_LEARNING and "freeze" not in entry:
+                    changed += self._freeze(a, entry)
                 continue
             try:
                 audit_sink.emit(a.event, {"skill_id": a.skill_id, **a.details},
@@ -319,9 +325,31 @@ class LearningHost:
                                    "since": datetime.utcfromtimestamp(now).isoformat() + "Z",
                                    **a.details}
             changed += 1
+            if a.event in anomaly_monitor.FREEZES_LEARNING:
+                self._freeze(a, self.anomalies[key])
         if changed:
             self._dirty = True
         return changed
+
+    def _freeze(self, a: "anomaly_monitor.Anomaly", entry: dict) -> int:
+        """ADR-2304: freeze the skill's learned-config writes, AFTER the anomaly record
+        committed. Audit-first inside ``freeze_learning``: no ``learning.frozen`` record, no
+        state change, and ``entry`` stays without ``freeze`` so the next check retries.
+        Never a rollback, never an unfreeze."""
+        try:
+            from core.skills.os_skills.skill_adapter import freeze_learning  # noqa: PLC0415
+
+            freeze_learning(a.skill_id, self.tenant_id, reason=a.event)
+        except ValueError:
+            logger.warning("%s: skill id %r cannot be frozen", a.event, a.skill_id)
+            entry["freeze"] = "invalid_skill_id"
+            return 1
+        except Exception as exc:  # noqa: BLE001 — AuditWriteFailed, lock busy, I/O: retried
+            logger.warning("freeze of %s after %s did not happen (%s); retried next check",
+                           a.skill_id, a.event, type(exc).__name__)
+            return 0
+        entry["freeze"] = "frozen"
+        return 1
 
     async def _prune_once(self, now: float) -> int:
         """The Data Hub's self-clean pass: the system decides which of its skills go (see
