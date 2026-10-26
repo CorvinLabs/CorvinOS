@@ -106,7 +106,9 @@ The pre-KB scripts (`migrate_local_adrs_to_corvin_adr.py`, `verify_adr_0516_comp
    # fill the ADR-0264 frontmatter (paths/docs/depends_on) and the body, then:
    cd /home/shumway/projects/Corvin-Knowledge && git commit -am "adr: ADR-XXXX — …"
    ```
-3. **VALIDATE** — `python3 scripts/kb.py check` → `blocking: 0`, `python3 scripts/adr_lint.py` → ratchet OK.
+3. **VALIDATE** — `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py check` → `blocking: 0`. The
+   `adr_lint.py` ratchet runs in CI (`kb.yml`) only: it imports `subprocess`, is not hash-pinned, and the path gate refuses it
+   from an agent's Bash — do not work around that, name it as "CI-only" in the report.
 4. **Push** — `git push origin main` (CI re-runs both gates).
 
 ### Absolute Must-NOT
@@ -271,6 +273,16 @@ the human handle. Run every command below as `python3 /home/shumway/projects/Cor
 | review | `adversarial-reviews/` (+`reviews/`) | `REVIEW-NNNN` | open · addressed · dismissed |
 | note (agent notes) | `notes/` | `NOTE-NNNN` | — |
 | initiative → epic → task | `kb/initiatives/` · `kb/epics/` · `kb/tasks/` | `I-NN` · `E-NNN` · `T-NNNN` | task: open · in_progress · blocked · done · cancelled; containers: DERIVED, never stored |
+
+**How an agent session reaches `kb.py` (path gate, ADR-2280 — the recurring "KB is blocked" cause):** write the
+script as the EXACT absolute path `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py …` — never
+`scripts/kb.py` after a `cd`, `./`, `~` or `$HOME` (refused by the AST gate; the denial now prints the right command).
+`PYTHONIOENCODING=`/`PYTHONUNBUFFERED=`/`PYTHONUTF8=` prefixes are fine, other `PYTHON*=`/`LD_*=` and `--reviewer-cmd`/
+`--drafter-cmd` are refused. Write helper scripts to `/tmp`, not as heredocs naming hook/ledger paths. Editing `kb.py`,
+`kb_lib.py` or `kb_model.py` changes their sha256 and locks `kb.py` for EVERY session until the pin in `path_gate.py` is
+re-set by a reviewed commit — change them only with the operator. The projector commits to Corvin-Knowledge `main`
+every few minutes but never pushes: `git -C /home/shumway/projects/Corvin-Knowledge pull --rebase && git push origin main`
+before reporting a KB change as published. → [layer-10-path-gate.md](docs/claude-ref/layer-10-path-gate.md) § Pinned trusted tool
 
 **Find knowledge first** (before writing anything new — duplicates are the failure this KB exists to prevent):
 - `kb find <words…> [--type decision|concept|…|task] [--status in_progress]` — exact id first, then ranked text match

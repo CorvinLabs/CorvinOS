@@ -168,6 +168,32 @@ def test_interpreter_rerouting_environment_is_refused(bundle, prefix):
     assert not ok and "refused" in reason, reason
 
 
+@pytest.mark.parametrize("prefix", ["PYTHONIOENCODING=utf-8 ", "PYTHONUNBUFFERED=1 ", "PYTHONUTF8=1 ",
+                                    "PYTHONDONTWRITEBYTECODE=1 "])
+def test_harmless_output_environment_does_not_make_the_pinned_tool_fail(bundle, prefix):
+    d, _ = bundle
+    ok, reason = _check(f"{prefix}python3 {d / 'kb.py'} check")
+    assert ok, reason
+    # control: the same shape with a re-routing variable is still refused, so the allowance is not "any PYTHON*="
+    ok2, reason2 = _check(f"{prefix}PYTHONPATH=/tmp/x python3 {d / 'kb.py'} check")
+    assert not ok2 and "refused" in reason2, reason2
+
+
+def test_a_relative_form_of_the_pinned_tool_is_refused_and_the_message_names_the_absolute_path(bundle, monkeypatch):
+    d, _ = bundle
+    monkeypatch.chdir(d.parent)                       # the form a session writes after `cd Corvin-Knowledge`
+    ok, reason = _check("python3 scripts/kb.py check")
+    assert not ok and "forbidden import" in reason, reason     # still not exempted (strict string comparison)
+    assert f"python3 {d / 'kb.py'}" in reason, reason          # but the way out is spelled out
+    ok2, reason2 = _check(f"python3 {d / 'kb.py'} check")      # control: the absolute form passes
+    assert ok2, reason2
+
+
+def test_the_hint_is_not_added_to_an_unrelated_denial(bundle):
+    ok, reason = _check("python3 -c 'import socket'")
+    assert not ok and "runnable only when written as the exact absolute path" not in reason, reason
+
+
 # ---------------------------------------------------------------------------------- nothing else is relaxed
 def test_a_second_python_snippet_in_the_same_command_is_still_checked(bundle):
     d, _ = bundle

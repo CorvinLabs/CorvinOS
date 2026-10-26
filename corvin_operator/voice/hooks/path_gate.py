@@ -622,9 +622,31 @@ _PINNED_PYTHON_TOOLS: dict[str, dict[str, str]] = {
     },
 }
 
+# PYTHON*= re-routes interpreter start-up (PYTHONPATH, PYTHONSTARTUP, PYTHONHOME, ...) and stays refused. The four
+# variables below only change stream encoding / buffering / bytecode caching, load no code, and are what a session
+# sets to get readable output from kb.py - refusing them made the pinned tool look broken for no security gain.
+_PIN_HARMLESS_PYTHON_ENV = ("IOENCODING", "UNBUFFERED", "UTF8", "DONTWRITEBYTECODE")
 _PIN_REFUSED_CMD_RE = re.compile(
-    r"--reviewer-cmd|--drafter-cmd|\bPYTHON[A-Z_]*=|\bLD_[A-Z_]+=|\bBASH_ENV=|\bsitecustomize\b"
+    r"--reviewer-cmd|--drafter-cmd|\bPYTHON(?!(?:" + "|".join(_PIN_HARMLESS_PYTHON_ENV) + r")=)[A-Z_]*=|"
+    r"\bLD_[A-Z_]+=|\bBASH_ENV=|\bsitecustomize\b"
 )
+
+
+def _pin_hint(cmd: str) -> str:
+    """When ``cmd`` names a pinned tool by anything but its exact pinned path, say how to name it.
+
+    The AST gate's generic answer ("use forge_exec") is wrong for a session that only wrote ``scripts/kb.py`` after a
+    ``cd``: the relative form is refused by design (plain string comparison, no normalisation) and the one fix is the
+    absolute path. Matching is by basename, so a look-alike script elsewhere also gets the pointer, never an exemption.
+    """
+    wanted = {Path(s).name: s for s in _PINNED_PYTHON_TOOLS}
+    for m in _PY_FILE_RE.finditer(cmd):
+        named = m.group(1)
+        pinned = wanted.get(Path(named).name)
+        if pinned and named != pinned:
+            return (f" The tool {Path(named).name!r} is runnable only when written as the exact absolute path "
+                    f"(no relative, ~ or $VAR form): python3 {pinned} ...")
+    return ""
 
 
 def _pinned_tool_gate(cmd: str) -> tuple[frozenset[str], str]:
@@ -1640,7 +1662,7 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
                 msg = (
                     f"path_gate: AST gate blocked Python execution: {reason}. "
                     f"Use forge_exec (sandboxed) instead of Bash for "
-                    f"LLM-generated code."
+                    f"LLM-generated code." + _pin_hint(cmd)
                 )
                 _emit_code_exec_audit(payload, outcome="blocked",
                                       blocked_reason=reason)

@@ -79,7 +79,12 @@ locked out of `kb new` / `kb task` / `kb check`. `_PINNED_PYTHON_TOOLS` in `path
   puts first on `sys.path`) - must be regular files whose SHA-256, computed **fresh from the bytes on every call**,
   equals the value pinned in the source. Missing file, symlink, unreadable file or mismatch = **deny** (fail closed);
 - refused even with a matching hash: `--reviewer-cmd` / `--drafter-cmd` (kb runs those commands by design) and
-  `PYTHON*=`, `LD_*=`, `BASH_ENV=`, `sitecustomize` in the command (they re-route interpreter start-up);
+  `PYTHON*=`, `LD_*=`, `BASH_ENV=`, `sitecustomize` in the command (they re-route interpreter start-up). Exception:
+  `PYTHONIOENCODING=`, `PYTHONUNBUFFERED=`, `PYTHONUTF8=`, `PYTHONDONTWRITEBYTECODE=` only change encoding / buffering /
+  bytecode caching and load no code, so they pass (`_PIN_HARMLESS_PYTHON_ENV`);
+- a command that names `kb.py` in any other form (`python3 scripts/kb.py` after a `cd`, `./scripts/kb.py`, `~`, `$HOME`)
+  is still not exempted, but its denial now spells out the exact absolute command (`_pin_hint`) instead of the generic
+  "use forge_exec" text, which sent sessions looking for a sandbox instead of fixing the path;
 - nothing else is relaxed: write-target detection, protected paths and every other Python snippet of the same command
   are still checked. Audit: `code.exec_attempt` with `outcome=allowed_pinned`, or `code.exec_blocked` with the reason.
 
@@ -87,7 +92,7 @@ The pin lives in the hook's source on purpose - changing it is a reviewed commit
 file next to the tool. **Re-pin** after a reviewed change of the tool: `sha256sum kb.py kb_lib.py kb_model.py` in
 `scripts/`, update the three values in the same commit. Stated residual risk: the hash is checked when the hook runs,
 not when python opens the file (an attacker who can already write that directory could swap a file in between).
-Tests: `corvin_operator/voice/hooks/test_path_gate_pinned_tools.py` (25, each "allowed" case has an unpinned control;
+Tests: `corvin_operator/voice/hooks/test_path_gate_pinned_tools.py` (31, each "allowed" case has an unpinned control;
 five deliberate breakages of the mechanism were each caught).
 
 Open, separate from the exception: a **relative** script path (or one after `cd`) is resolved against the hook's
