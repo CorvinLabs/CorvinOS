@@ -245,6 +245,21 @@ def delegate(
     if origin_agent_id is not None:
         fed["origin_agent_id"] = origin_agent_id
 
+    sender = sender or default_sender()
+    # ADR-2294: classified data to an endpoint whose GDPR role is unset is refused by the sender's
+    # outbound rule. Ask it BEFORE the audit-first record, so a refused task is never recorded as
+    # delegated (the sender writes its own ``A2A.outbound_refused``).
+    _pre = getattr(sender, "outbound_refusal", None)
+    refused = _pre(endpoint_id, instruction, task_id=task_id) if callable(_pre) else None
+    if refused is not None and getattr(refused, "status", None) == "rejected" \
+            and isinstance(getattr(refused, "data", None), dict):
+        return DelegationResult(
+            task_id=task_id, ok=False, status="rejected", endpoint_id=endpoint_id,
+            peer_instance_id=peer_iid, agent_id=agent_id, address=None,
+            data={"detail": refused.error_detail or ""},
+            error=str((refused.data or {}).get("reason") or "refused_locally"),
+        )
+
     # Audit-first: no chained record → nothing leaves this installation.
     federation_audit.emit(
         "federation.task_delegated", tenant_id=tenant_id, task_id=task_id,
@@ -259,7 +274,6 @@ def delegate(
         "status": "sent", "sent_at": time.time(),
     })
 
-    sender = sender or default_sender()
     res = sender.send(endpoint_id, instruction, task_id=task_id, ttl_s=ttl_s,
                       timeout_s=timeout_s, federation=fed, thread_ref=thread_ref)
     # Peer-supplied strings never reach our chain, ledger or API verbatim

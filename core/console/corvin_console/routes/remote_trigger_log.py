@@ -56,6 +56,9 @@ except ImportError:  # pragma: no cover — minimal fallback, never fail-open
         return "".join(ch for ch in s if ch.isprintable()).strip()[:max_len]
 
 
+import endpoint_role as _endpoint_role  # type: ignore[import-not-found]  # noqa: E402  (ADR-2294)
+
+
 def _label_out(cfg: dict) -> str | None:
     """Read-side sanitized label for API/UI delivery (None stays None)."""
     raw = cfg.get("label")
@@ -316,5 +319,8 @@ def remote_trigger_endpoints(
                 "state":           cfg.get("state") or ("ACTIVE" if cfg.get("enabled", False) else None),
                 "label":           _label_out(cfg),
                 "_friendship":     bool(cfg.get("_friendship", False)),
+                # ADR-2294: the operator's statement, "unset" when none was made (never guessed).
+                "organisation":    _endpoint_role.organisation_of(cfg),
+                "gdpr_role":       _endpoint_role.role_of(cfg),
             })
     return {"ts": time.time(), "count": len(out), "endpoints": out}

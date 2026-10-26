@@ -7,7 +7,8 @@ runs on OUR side, before anything is sent, on the exact payload:
 2. the data grade of the payload (``data_classification.classify_task``): ``PUBLIC`` may go;
    anything above is refused unless the tenant policy releases that one endpoint
    (``spec.workflows.peer_policy.endpoints.<endpoint_id>.max_classification``: ``internal`` or
-   ``confidential``; ``SECRET`` never). The L34 engine matrix is deliberately NOT used: a peer is
+   ``confidential``; ``SECRET`` never) AND the operator stated the endpoint's GDPR role
+   (ADR-2294: role ``unset`` refuses a released grade with ``endpoint_role_unset``). The L34 engine matrix is deliberately NOT used: a peer is
    not an engine of this installation and ``check_l34`` is fail-open without a tenant policy
    (ADR-2276 Appendix A);
 3. the endpoint is paired (registry entry, enabled) and carries an instance pin.
@@ -34,9 +35,11 @@ REASON_ABOVE_PUBLIC = "classified_above_public"
 REASON_NOT_PAIRED = "endpoint_not_paired"
 REASON_NOT_PINNED = "endpoint_not_pinned"
 REASON_AUDIT = "audit_unavailable"
+# ADR-2294: the grade is released by policy, but the operator has not stated the endpoint's GDPR role.
+REASON_ROLE_UNSET = "endpoint_role_unset"
 REASONS = frozenset({
     REASON_GATE_UNAVAILABLE, REASON_L44, REASON_ABOVE_PUBLIC, REASON_NOT_PAIRED, REASON_NOT_PINNED,
-    REASON_AUDIT,
+    REASON_AUDIT, REASON_ROLE_UNSET,
 })
 
 GATE_CHANNEL = "workflow-peer"
@@ -147,6 +150,11 @@ def evaluate_peer_outbound(
 
         if grade > _dc.DataClassification.PUBLIC and (released is None or grade > released):
             return PeerGateDecision(False, REASON_ABOVE_PUBLIC, grade_name)
+        # ADR-2294: a released grade still needs the operator's statement of the endpoint's GDPR role.
+        import endpoint_role as _er  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        if grade > _dc.DataClassification.PUBLIC and _er.role_of(cfg) == _er.ROLE_UNSET:
+            return PeerGateDecision(False, REASON_ROLE_UNSET, grade_name)
         return PeerGateDecision(True, "", grade_name)
     except Exception as exc:  # noqa: BLE001 - any gate error refuses, never allows
         _log.error("[workflow-peer] outbound gate error (%s) - refused (fail-closed)", type(exc).__name__)

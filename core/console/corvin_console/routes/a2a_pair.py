@@ -43,7 +43,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 # Serialize all peer-count check+write pairs to prevent TOCTOU race where two
 # concurrent pairing requests both read count=0 and both pass the a2a_peers_max
@@ -52,7 +52,7 @@ _pair_lock: threading.Lock = threading.Lock()
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..utils import atomic_write_json
 from .. import audit as console_audit
@@ -1061,6 +1061,7 @@ def revoke_invite(
 # once a URL is known.
 
 import a2a_friendship as _ft  # type: ignore[import-not-found]
+import endpoint_role as _endpoint_role  # type: ignore[import-not-found]  # ADR-2294
 import a2a_chat_friendship_token as _pending_ft  # type: ignore[import-not-found]  # ADR-2216
 import paths as _a2a_paths  # type: ignore[import-not-found]  # ADR-2216
 
@@ -2508,3 +2509,57 @@ def patch_endpoint(
         "enabled": cfg.get("enabled", True),
         "default_ttl_s": cfg.get("default_ttl_s"),
     }
+
+
+# ── PUT /remote-trigger/endpoints/{endpoint_id}/gdpr-role (ADR-2294) ──
+
+
+class EndpointGdprRoleRequest(BaseModel):
+    """The operator's statement of who the partner behind an endpoint is, legally.
+
+    Both fields are required: ``organisation`` (1 to 80 characters, no markup) and ``gdpr_role``.
+    ``unset`` withdraws a stated role. Nothing here is inferred from the peer.
+    """
+    model_config = {"extra": "forbid"}
+    organisation: str = Field(min_length=1, max_length=200)
+    gdpr_role: Literal["controller", "processor", "joint", "unset"]
+
+    @field_validator("organisation")
+    @classmethod
+    def _organisation(cls, v: str) -> str:
+        try:
+            return _endpoint_role.normalise_organisation(v)
+        except _endpoint_role.EndpointRoleError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+@router.put("/remote-trigger/endpoints/{endpoint_id}/gdpr-role")
+def put_endpoint_gdpr_role(
+    endpoint_id: str,
+    body: EndpointGdprRoleRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Record the organisation and GDPR role of an outbound endpoint (friendship endpoints included).
+
+    Audit-first through ``endpoint_role.set_endpoint_role``: ``federation.endpoint_role_set`` (endpoint
+    id, role, actor) commits before the record changes. Data classified above public goes to an
+    endpoint only once its role is stated (the outbound rule in ``RemoteTriggerSender.send``).
+    """
+    if (not endpoint_id or "/" in endpoint_id or "\\" in endpoint_id
+            or ":" in endpoint_id or endpoint_id.startswith(".")):
+        raise HTTPException(status_code=400, detail="invalid endpoint_id")
+    actor = "console:" + (re.sub(r"[^A-Za-z0-9_\-]", "", str(rec.sid_fingerprint or ""))[:64] or "session")
+    try:
+        with _pair_lock:
+            out = _endpoint_role.set_endpoint_role(
+                endpoint_id, organisation=body.organisation, gdpr_role=body.gdpr_role, actor=actor,
+                tenant_id=rec.tenant_id, endpoints_dir=_endpoints_dir(),
+            )
+    except _endpoint_role.EndpointNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Endpoint {endpoint_id!r} not found") from exc
+    except _ft.FriendshipLockBusy as exc:
+        raise HTTPException(status_code=503, detail="Connection settings are busy - try again") from exc
+    except _endpoint_role.EndpointRoleError as exc:
+        # The values were validated above, so this is the audit write or an unreadable record.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"ok": True, **out}

@@ -15,6 +15,7 @@ custom-template variants.
 """
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,7 @@ _A2A_EVENTS = (
     "A2A.response_signed",
     "A2A.request_rejected",
     "A2A.response_rejected",
+    "A2A.outbound_refused",  # ADR-2294: refused locally, nothing left (counted as rejected)
 )
 # Cross-organisation delegation (ADR-2232 federation, ADR-2276 workflow peer step).
 # Each delegated task is an Art. 30 cross-system flow to ANOTHER installation (another
@@ -79,6 +81,9 @@ _FEDERATION_EVENTS = (
     "workflow.peer_refused",
     "workflow.peer_outcome_unknown",
 )
+# ADR-2294: an endpoint whose GDPR role the operator has not stated. Printed as such, never guessed.
+# Mirrors endpoint_role.UNSET_RECORD_TEXT (pinned by test_ropa_federation.py).
+_UNSET_ROLE_TEXT = "unset - operator decision pending"
 _DATA_EVENTS = (
     "data.registered",
     "data.snapshot_generated",
@@ -274,7 +279,7 @@ def _aggregate_a2a(events: list[dict[str, Any]]) -> list[list[str]]:
         elif et == "A2A.engine_spawned":
             bucket["spawned"] += 1
             spawned += 1
-        elif et in ("A2A.request_rejected", "A2A.response_rejected"):
+        elif et in ("A2A.request_rejected", "A2A.response_rejected", "A2A.outbound_refused"):
             bucket["rejected"] += 1
             rejected += 1
     rows: list[list[str]] = [["Peer (origin/endpoint)", "Received", "Sent", "Spawned", "Rejected"]]
@@ -285,14 +290,40 @@ def _aggregate_a2a(events: list[dict[str, Any]]) -> list[list[str]]:
     return rows
 
 
-def _aggregate_federation(events: list[dict[str, Any]]) -> list[list[str]]:
-    """Cross-organisation delegation by peer: out, results back, workflow steps, served in, refused, unknown.
+def _endpoint_roles(endpoints_dir: Path | None = None) -> dict[str, tuple[str, str]]:
+    """``{endpoint_id: (organisation, gdpr_role)}`` as the operator stated them (ADR-2294).
+
+    Read from the endpoint records through the shared reader; a missing module or directory yields
+    ``{}`` (every peer then prints as unset - the record never guesses a role).
+    """
+    try:
+        shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
+        if str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        import endpoint_role  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        return endpoint_role.read_endpoint_roles(endpoints_dir)
+    except Exception:  # noqa: BLE001 - the record still lists the flows
+        return {}
+
+
+def _role_cell(role: str) -> str:
+    return _UNSET_ROLE_TEXT if role not in ("controller", "processor", "joint") else role
+
+
+def _aggregate_federation(
+    events: list[dict[str, Any]], roles: dict[str, tuple[str, str]] | None = None,
+) -> list[list[str]]:
+    """Cross-organisation delegation by peer: organisation and stated GDPR role (ADR-2294), then
+    out, results back, workflow steps, served in, refused, unknown.
 
     The peer key is the endpoint (requester side) or the origin (receiver side). Counts only: the chain
-    holds no task text and no answer text.
+    holds no task text and no answer text. Every paired endpoint in ``roles`` is listed even without a
+    flow in the period; a peer with no stated role prints ``unset - operator decision pending``.
     """
     cols = ("out", "back", "wf", "served", "refused", "unknown")
-    by_peer: dict[str, dict[str, int]] = {}
+    roles = roles or {}
+    by_peer: dict[str, dict[str, int]] = {eid: dict.fromkeys(cols, 0) for eid in roles}
     for ev in events:
         d = ev.get("details", {}) or {}
         et = ev.get("event_type", "")
@@ -311,12 +342,13 @@ def _aggregate_federation(events: list[dict[str, Any]]) -> list[list[str]]:
             continue
         b = by_peer.setdefault(peer, dict.fromkeys(cols, 0))
         b[col] += 1
-    rows: list[list[str]] = [["Peer (endpoint/origin)", "Delegated out", "Results back", "Workflow steps",
-                              "Served in", "Refused", "Outcome unknown"]]
+    rows: list[list[str]] = [["Peer (endpoint/origin)", "Organisation", "GDPR role", "Out", "Back",
+                              "Workflow", "Served in", "Refused", "Unknown"]]
     for peer, b in sorted(by_peer.items()):
-        rows.append([peer[:32], *(str(b[c]) for c in cols)])
+        org, role = roles.get(peer, ("", "unset"))
+        rows.append([peer[:32], org or "—", _role_cell(role), *(str(b[c]) for c in cols)])
     if not by_peer:
-        rows.append(["—", "0", "0", "0", "0", "0", "0"])
+        rows.append(["—", "", "", "0", "0", "0", "0", "0", "0"])
     return rows
 
 
@@ -327,6 +359,7 @@ def generate(
     end_ts: int,
     output_path: Path,
     chain_path: Path | None = None,
+    endpoints_dir: Path | None = None,
 ) -> dict[str, Any]:
     now = int(time.time())
     meta = templates.ReportMetadata(
@@ -366,6 +399,9 @@ def generate(
         tenant_id=tenant_id, start_ts=start_ts, end_ts=end_ts,
         event_types=_FEDERATION_EVENTS, chain_path=chain_path,
     )
+    peer_roles = _endpoint_roles(endpoints_dir)
+    federation_rows = _aggregate_federation(federation_events, roles=peer_roles)
+    federation_peers = 0 if federation_rows[1][0] == "—" else len(federation_rows) - 1
     stats = audit_query.compute_stats(
         tenant_id=tenant_id, start_ts=start_ts, end_ts=end_ts,
         chain_path=chain_path,
@@ -546,15 +582,20 @@ def generate(
         "an answer back. Each delegation is an Art. 30 cross-system flow. The chain records only "
         "metadata (task id, peer, agent, status, duration and both chain tails); task and answer text "
         "are never in it. Before a workflow step sends, an outbound gate checks the data grade: by "
-        "default only public data may go, secret data never. The legal role of each peer (controller or "
-        "processor) is an operator decision and is not derived here.",
+        "default only public data may go, secret data never. The organisation and GDPR role of each "
+        "paired peer (controller, processor or joint controller) are the operator's own statement on "
+        "the endpoint record; they are shown as stated and never derived here. A peer whose role was "
+        "not stated is shown as \"unset - operator decision pending\", and no data classified above "
+        "public is sent to it. Columns: Out = tasks delegated, Back = results received, Workflow = "
+        "workflow steps, Served in = tasks this installation ran for the peer, Refused, Unknown = "
+        "outcome unknown.",
         styles["small"],
     ))
     story.append(Spacer(1, 4 * mm))
-    if federation_events:
+    if federation_peers:
         story.append(templates.styled_table(
-            _aggregate_federation(federation_events),
-            col_widths=[44 * mm, 22 * mm, 22 * mm, 22 * mm, 20 * mm, 20 * mm, 22 * mm],
+            federation_rows,
+            col_widths=[25 * mm, 28 * mm, 49 * mm, 12 * mm, 12 * mm, 15 * mm, 13 * mm, 13 * mm, 13 * mm],
         ))
     else:
         story.append(Paragraph(
@@ -581,6 +622,7 @@ def generate(
         "delegation_events": len(delegation_events),
         "a2a_events": len(a2a_events),
         "federation_events": len(federation_events),
+        "federation_peers": federation_peers,
         "total_chain_events": stats.total_events,
         "chain_intact": stats.chain_intact,
         "anchor_hash": stats.last_event_hash,

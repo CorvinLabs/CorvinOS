@@ -70,6 +70,12 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "conversation_id", "agent_id", "endpoint_id", "status", "duration_ms",
         "task_id", "tenant_id",
     }),
+    # ADR-2294 — the operator states a paired endpoint's GDPR role (endpoint_role.set_endpoint_role).
+    # Who said which role: endpoint id, closed role, closed-shape actor. NEVER the organisation text
+    # or a free-text justification.
+    "federation.endpoint_role_set": frozenset({
+        "endpoint_id", "gdpr_role", "actor", "tenant_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
@@ -87,6 +93,7 @@ SEVERITY: dict[str, str] = {
     "federation.conversation_paused": "INFO",
     "federation.conversation_resumed": "INFO",
     "federation.local_ask": "INFO",
+    "federation.endpoint_role_set": "INFO",
 }
 
 

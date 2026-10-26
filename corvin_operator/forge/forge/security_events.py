@@ -668,6 +668,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "A2A.relay_fallback_used":        "INFO",
     "A2A.relay_expired_dropped":      "INFO",   # T-0252: a queued task whose sender had stopped waiting is not run
     "A2A.outbox_enqueued":            "INFO",   # T-0252 step 2: a message for an offline peer is kept
+    "A2A.outbound_refused":           "WARNING",  # ADR-2294: refused locally (endpoint_role_unset), nothing sent
     "A2A.outbox_retried":             "INFO",   # T-0252 step 2: one more attempt (fresh envelope, same task_id)
     "A2A.outbox_closed":              "INFO",   # T-0252 step 2: sent|delivered|expired|cancelled|unconfirmed|failed
     "A2A.ping_result":                "INFO",
@@ -1069,6 +1070,9 @@ EVENT_SEVERITY: dict[str, str] = {
     # thread (ADR-2235 Phase 2). Metadata only: the answer text lives in the
     # tenant-local conversation transcript (kind=ask), never in the chain.
     "federation.local_ask": "INFO",
+    # ADR-2294 — the operator states a paired endpoint's GDPR role (endpoint_role.set_endpoint_role);
+    # mirrored in core/federation/audit.py. Endpoint id, closed role, actor - never free text.
+    "federation.endpoint_role_set": "INFO",
     # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
     # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
     # NEVER: subprocess stdout/stderr, exception message text.
@@ -3660,6 +3664,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         ("A2A.relay_fallback_used", set()),
         ("A2A.relay_expired_dropped", {"late_s"}),
         ("A2A.outbox_enqueued", {"deadline_s"}),
+        # ADR-2294: a send refused locally before anything left (closed reason + payload grade)
+        ("A2A.outbound_refused", {"data_class"}),
         ("A2A.outbox_retried", {"attempts"}),
         ("A2A.outbox_closed", {"state", "attempts"}),
         ("A2A.ping_result", {"reachable", "error_category"}),
@@ -4596,6 +4602,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "federation.local_ask": frozenset({
         "conversation_id", "agent_id", "endpoint_id", "status", "duration_ms",
         "task_id", "tenant_id",
+    }),
+    "federation.endpoint_role_set": frozenset({
+        "endpoint_id", "gdpr_role", "actor", "tenant_id",
     }),
     # Video Producer — Blender render path (mirrored in
     # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).

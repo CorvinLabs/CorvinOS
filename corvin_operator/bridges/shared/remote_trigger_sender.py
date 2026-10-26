@@ -137,6 +137,9 @@ except ImportError:
         sys.path.insert(0, str(_shared))
     from a2a_friendship import sanitize_label as _sanitize_label  # type: ignore[import-not-found]
 
+# ADR-2294: the GDPR-role rule of every outbound send (classified data needs a stated role).
+import endpoint_role as _endpoint_role  # type: ignore[import-not-found]  # noqa: E402  (shared dir is on sys.path above)
+
 # ── IBC attestation (ADR-0103 Protocol v7 / IBC concept) ─────────────────
 try:
     from instance_identity import (  # type: ignore[import-not-found]
@@ -787,6 +790,8 @@ _ERROR_DETAIL_TEMPLATES = frozenset(_ERROR_DETAIL_TEMPLATES) | frozenset(_WORKER
     "The peer requires a verified build this instance cannot provide",
     "The peer is busy with other tasks - try again in a moment",
     "The peer did not accept this group message (not a member there, or the group is unknown to it)",
+    # ADR-2294: refused locally - classified data to an endpoint whose GDPR role is unset.
+    _endpoint_role.refusal_text(),
 })
 
 # ADR-0197 §2: the only non-template content ever emitted as error_detail is
@@ -871,6 +876,8 @@ _AUDIT_ALLOWED_KEYS = frozenset({
     # ADR-2292: the peer's signed usage block as scalars (four ints + a model id that must
     # match a2a_usage.MODEL_ID_RE, checked in _is_safe_audit_value).
     "model_id", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+    # ADR-2294: the payload grade of a locally refused send (PUBLIC/INTERNAL/CONFIDENTIAL/SECRET).
+    "data_class",
 })
 _AUDIT_VIA_VALUES = frozenset({"direct", "relay"})
 _AUDIT_STATUS_VALUES = frozenset({
@@ -1176,6 +1183,13 @@ class RemoteTriggerSender:
                 )
         except Exception:  # noqa: BLE001
             pass
+        # ADR-2294: classified data needs a stated GDPR role on the endpoint. Refused before anything
+        # is recorded as sent or leaves this machine; public data is unaffected.
+        refused = self.outbound_refusal(endpoint_id, instruction, task_id=task_id)
+        if refused is not None:
+            if feed_task_recorded and group_id is None:
+                _record_feed_response(endpoint_id, refused, None)
+            return refused
         # A caller that declares no schema is having a conversation: accept the
         # worker's prose reply. The receiver deliberately answers an EMPTY
         # schema with {} (it only ever releases declared fields), so without
@@ -1234,6 +1248,36 @@ class RemoteTriggerSender:
             if not retried_unresolved:
                 _record_feed_response(endpoint_id, result, peer_label)
         return result
+
+    def outbound_refusal(self, endpoint_id: str, instruction: str, *,
+                         task_id: str | None = None) -> "SendResult | None":
+        """ADR-2294 outbound rule: a refused :class:`SendResult` (and one ``A2A.outbound_refused``
+        record), or ``None`` when the send may proceed.
+
+        Anything classified above ``PUBLIC`` toward an endpoint whose ``gdpr_role`` is ``unset`` is
+        refused with ``endpoint_role_unset``. ``send`` calls this first; ``federation.delegate`` calls
+        it before its own audit-first record so a refused task is never recorded as delegated. An
+        endpoint that cannot be loaded is left to ``_send_impl``, which reports it.
+        """
+        try:
+            cfg = self._registry.load(endpoint_id)
+        except Exception:  # noqa: BLE001 - unknown/disabled endpoint: _send_impl refuses it
+            return None
+        reason, grade = _endpoint_role.outbound_refusal(cfg, instruction)
+        if reason is None:
+            return None
+        tid = task_id or str(uuid.uuid4())
+        self._audit_best_effort(
+            "A2A.outbound_refused", "WARNING",
+            {"endpoint_id": endpoint_id, "task_id": tid, "reason": reason, "status": "rejected",
+             "data_class": grade},
+        )
+        return SendResult(
+            ok=False, status="rejected", task_id=tid, instance_id="", instance_id_match=False,
+            data={"reason": reason}, attachments=[], duration_ms=0,
+            error_category=ErrorCategory.REJECTED,
+            error_detail=_sanitize_error(_endpoint_role.refusal_text()),
+        )
 
     def _keep_in_outbox(self, endpoint_id: str, task_id: str, instruction: str, result: "SendResult",
                         deadline_s: int, *, attachments: list | None, group_id: str | None,

@@ -49,7 +49,11 @@ class _Sender:
         self._registry = _Registry(**kw)
 
 
-PAIRED = _Sender(cfg={"endpoint_id": "ep_acme", "instance_id": "iid-acme", "enabled": True})
+# ADR-2294: an endpoint the operator stated a GDPR role for. The policy tests below run against it;
+# the role rule has its own tests (UNSET).
+PAIRED = _Sender(cfg={"endpoint_id": "ep_acme", "instance_id": "iid-acme", "enabled": True,
+                      "organisation": "Acme GmbH", "gdpr_role": "processor"})
+UNSET = _Sender(cfg={"endpoint_id": "ep_acme", "instance_id": "iid-acme", "enabled": True})
 
 
 def _policy(home, endpoints):
@@ -96,6 +100,35 @@ def test_secret_is_never_releasable_and_secret_is_not_a_valid_policy_value(home)
     _policy(home, {"ep_acme": {"max_classification": "secret"}})
     assert not _evaluate("[class:internal] x").allowed
     assert not _evaluate(SECRET_TEXT).allowed
+
+
+def test_released_grade_is_refused_while_the_endpoint_role_is_unset(home):
+    """ADR-2294: the policy release does not suffice without a stated GDPR role."""
+    _policy(home, {"ep_acme": {"max_classification": "confidential"}})
+    for text, grade in (("[class:internal] q3", "INTERNAL"), ("[class:confidential] list", "CONFIDENTIAL")):
+        d = _evaluate(text, sender=UNSET)
+        assert (d.allowed, d.reason_code, d.data_class) == (False, "endpoint_role_unset", grade)
+    explicit = _Sender(cfg={"endpoint_id": "ep_acme", "instance_id": "iid-acme", "enabled": True,
+                            "gdpr_role": "unset"})
+    assert _evaluate("[class:internal] q3", sender=explicit).reason_code == "endpoint_role_unset"
+    # role stated: released exactly as before
+    for role in ("controller", "processor", "joint"):
+        s = _Sender(cfg={"endpoint_id": "ep_acme", "instance_id": "iid-acme", "enabled": True, "gdpr_role": role})
+        assert _evaluate("[class:confidential] list", sender=s).allowed
+
+
+def test_public_text_is_unaffected_by_an_unset_role(home):
+    d = _evaluate("Please review the attached public press release.", sender=UNSET)
+    assert d.allowed and d.data_class == "PUBLIC"
+
+
+def test_unreleased_grade_keeps_its_own_reason_when_the_role_is_unset_too(home):
+    d = _evaluate("[class:internal] q3", sender=UNSET)
+    assert (d.allowed, d.reason_code) == (False, "classified_above_public")
+
+
+def test_role_unset_is_a_closed_reason_code():
+    assert "endpoint_role_unset" in peer_gate.REASONS
 
 
 @pytest.mark.parametrize("body", ["spec: [unclosed", "- not a mapping\n- at all", "spec: {workflows: 3}"])
