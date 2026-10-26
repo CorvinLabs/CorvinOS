@@ -147,7 +147,13 @@ def test_process_one_streams_acs_steps_to_the_outbox_and_ends_with_the_summary(s
                     for f in sorted(sandbox["outbox"].glob("msg-acs-1_s*.json"))]
     assert any(t.startswith("🧭 Iteration 1: Manager teilt in 2 Teilaufgaben") for t in status_texts), status_texts
     assert sum(t.startswith("🤖 Worker") for t in status_texts) == 2, status_texts
-    assert any(t.startswith("📊 Gate") and "höher = besser" in t for t in status_texts), status_texts
+    # The gate line leads with the verdict's marker from the shared vocabulary (ADR-2269), not
+    # a literal: this gate passed, so it is the "done" marker, and never the "failed" one.
+    from status_markers import icon  # noqa: PLC0415
+    gate = [t for t in status_texts if "Gate Iteration" in t and "höher = besser" in t]
+    assert gate, status_texts
+    assert all(t.startswith(icon("done") + " Gate") for t in gate), gate
+    assert not any(t.startswith(icon("failed")) for t in gate), gate
 
     finals = [json.loads(f.read_text()) for f in sorted(sandbox["outbox"].glob("msg-acs-1_0*.json"))]
     assert finals, f"no final message in {[p.name for p in sandbox['outbox'].iterdir()]}"
