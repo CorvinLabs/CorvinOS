@@ -390,6 +390,51 @@ FEEDBACK event, so it calls `admit()` itself and passes `trust_weight` to
 Proof: `tests/learning/test_feedback_trust_gate_e2e.py`,
 `tests/e2e/test_stream4_skill_feedback_console_e2e.py`.
 
+## Follow-up grades from the user's own text (both chat surfaces, 2026-10-26)
+
+The operator's next message grades the skills that were active in the previous turn —
+"gut gemacht" / "well done" is an approval, "nein, falsch" / "nochmal" a rejection, a
+near-repeat of the previous question a rephrase. ONE detector and ONE grader serve both
+surfaces: `skill_inject.detect_outcome_signal` and `skill_inject.grade_from_user_followup`.
+
+| | Bridge | Console web chat |
+|---|---|---|
+| Snapshot "skills of the previous turn" | `adapter._record_last_turn_skills` after the post-turn auto-grade (skills the answer visibly used) | `chat_runtime._stream_turn_impl` → `followup_grading.record_turn_skills` with the skills the CEL step injected (`bundle.skills_to_bind`) |
+| Grading call | `adapter.process_one` (before the turn) | `routes/chat.py::_run_turn` → `followup_grading.grade_followup` (inside the session turn lock, before `stream_turn`) |
+| Switches | chat profile `inject_skills: false` / `outcome_grading: false` | the same two keys in `spec.web_chat` of `tenant.corvin.yaml` |
+| Consent | — (bridge has no console session) | active `learning_feedback` consent (`core.compliance.consent.consent_required`, the checker of `POST /learning/feedback`); a refusal or an unverifiable store = no signal |
+| Extra gate | — | the previous turn's task must be `COMPLETED` |
+| Audit | `skill.outcome_graded` (signal, skill names, score) | `console.action_performed`, `action=skill.outcome_graded.<signal>`, `target_kind=skill`, `run_id` = previous task |
+
+Both: the snapshot is in memory only, TTL 30 min, consumed by the first follow-up whether or
+not it carries a signal. The registry writes its own hash-chained `skill.grade` record.
+
+**Detection rules** (precedence rejection > approval > rephrase, unchanged):
+
+* Rejection: substring match on `_OUTCOME_REJECTION_PHRASES` (unchanged).
+* Approval: token match on `_OUTCOME_APPROVAL_PHRASES` — word boundaries, so "top" never fires
+  inside "stopp"/"laptop", "great" not inside "greater". `_OUTCOME_APPROVAL_EXACT` ("gut", "good",
+  "nice", …) count only as the whole message.
+* Negation guard: a negator ("nicht", "kein*", "nie", "nein", "not", "no", "never", "isn't", …, and
+  "alles andere als" / "far from" / "anything but") within 3 tokens before or after the phrase voids the
+  approval. A negated praise is NO signal, not a rejection.
+* Length guard: approval only for messages of at most `_OUTCOME_APPROVAL_MAX_WORDS = 12` tokens. **A
+  decision, not a measurement:** praise for an answer is short; a longer message is a new request or a
+  discussion in which a praise word is incidental. A missed approval costs one grade; a false one can
+  promote a skill. It applies to approval only — rejection keeps its earlier behaviour.
+
+**Privacy:** the user's text is read, never stored. The grade note names only the signal and the
+previous run id; the learning-inbox event carries skill id + signal; the console audit carries the enum.
+
+**Scores and the cap are unchanged:** approval 0.9, rejection 0.1, rephrase 0.3. The follow-up grade
+is `organic=True` and is NOT clamped to `AUTO_GRADE_CAP_MAX` (0.3): one seed grade plus one approval
+reaches a mean of 0.6, above the session→project promotion bar. Whether that should be bounded
+(e.g. a minimum number of organic grades before promotion) is an open operator decision.
+
+Proof: `corvin_operator/bridges/shared/test_outcome_praise_e2e.py` (phrase/negation table + three
+`adapter.process_one` turns), `core/console/tests/test_followup_grading_ws_e2e.py` (two turns over the
+real chat WebSocket: approval, rejection, negated/incidental praise, no consent, tenant opt-out).
+
 ## Registry hardening (2026-09-07 adversarial review F-K2/F-K3/F-K5/F-K6/F-K8)
 
 | Mechanism | Where | Rule |

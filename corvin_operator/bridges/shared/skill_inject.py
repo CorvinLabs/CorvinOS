@@ -1038,15 +1038,136 @@ def auto_grade_from_output(
 #
 # Precedence: rejection > approval > rephrase. Picks the most-conservative
 # signal so "thanks but actually wrong" lands as rejection.
+#
+# Approval is matched on WORD boundaries (token sequences), never as a raw
+# substring: "top" must not fire inside "stopp" / "laptop", "great" not inside
+# "greater", "super" not inside "superscript". Rejection keeps its substring
+# match (unchanged) — it already wins precedence, and a stricter rejection
+# match would only turn some rejections into approvals.
+#
+# An approval grade is ORGANIC (see grade_from_user_followup) and may lift a
+# skill over the promotion bar, so the approval side is deliberately strict:
+#   * word-boundary match (above);
+#   * negation guard: a negator within _OUTCOME_NEGATION_WINDOW tokens before
+#     or after the phrase ("nicht gut gemacht", "not a good job", "alles andere
+#     als perfekt", "danke, aber nicht ganz") voids the approval — it does NOT
+#     become a rejection, it is simply no signal;
+#   * length guard: approval only when the message has at most
+#     _OUTCOME_APPROVAL_MAX_WORDS tokens.
+#
+# _OUTCOME_APPROVAL_MAX_WORDS = 12 is a DECISION, not a measurement: praise
+# for the previous answer is short ("Gut gemacht, danke!", "Perfect, that's
+# exactly it."), plus at most a short follow-up clause. A longer message is a
+# new request or a discussion in which a praise word is incidental ("…the
+# great thing about Postgres is…") and must not grade the previous turn.
+# A missed approval costs one absent grade; a false one can promote a skill.
+#
+# _OUTCOME_APPROVAL_EXACT are words too generic to count inside a sentence
+# ("gut, dann mach X", "good question") — they count only when they are the
+# whole message (punctuation/emoji ignored).
 
 _OUTCOME_APPROVAL_PHRASES = (
     # German
-    "danke", "perfekt", "passt", "passt!", "top", "genau", "super",
-    "klasse", "supi", "stimmt", "richtig",
+    "danke", "dankeschön", "vielen dank", "perfekt", "passt", "top", "genau",
+    "super", "klasse", "supi", "stimmt", "richtig",
+    "gut gemacht", "sehr gut", "super gemacht", "toll gemacht",
+    "klasse gemacht", "prima", "toll", "spitze", "wunderbar", "hervorragend",
+    "ausgezeichnet", "großartig", "grossartig", "genial", "klasse arbeit",
+    "gute arbeit", "genau so",
     # English
     "thanks", "thank you", "perfect", "exactly", "great", "awesome",
     "spot on", "correct",
+    "well done", "good job", "great job", "nice job", "nice work",
+    "good work", "great work", "excellent", "brilliant", "fantastic",
+    "nailed it", "love it", "looks good", "works now",
 )
+
+_OUTCOME_APPROVAL_EXACT = frozenset({
+    "gut", "good", "nice", "schön", "cool", "very good",
+})
+
+_OUTCOME_APPROVAL_MAX_WORDS = 12
+_OUTCOME_NEGATION_WINDOW = 3  # tokens before / after an approval phrase
+
+_OUTCOME_NEGATORS = frozenset({
+    # German
+    "nicht", "kein", "keine", "keinen", "keinem", "keiner", "keines",
+    "nie", "niemals", "kaum", "nix", "nichts", "nein",
+    # English (contractions arrive apostrophe-folded: "isn't" -> "isnt")
+    "not", "no", "never", "hardly", "barely", "nope", "nothing",
+    "isnt", "wasnt", "arent", "werent", "dont", "doesnt", "didnt",
+    "cant", "cannot", "couldnt", "wont", "wouldnt", "shouldnt", "aint",
+    "hasnt", "havent", "hadnt",
+})
+# Multi-word negators, matched as contiguous tokens inside the window.
+_OUTCOME_NEGATOR_PHRASES = (
+    ("alles", "andere", "als"), ("far", "from"), ("anything", "but"),
+)
+
+_TOKEN_RE = None  # compiled lazily (keeps import cost at zero)
+
+
+def _outcome_tokens(text: str) -> list[str]:
+    """Lower-case word tokens. Apostrophes are folded so "isn't" -> "isnt"
+    and the typographic ’ behaves like '. Unicode-aware (umlauts, ß)."""
+    global _TOKEN_RE
+    if _TOKEN_RE is None:
+        import re
+        _TOKEN_RE = re.compile(r"\w+")
+    folded = text.lower().replace("’", "'").replace("'", "")
+    return _TOKEN_RE.findall(folded)
+
+
+def _is_negator_at(tokens: list[str], i: int) -> bool:
+    if tokens[i] in _OUTCOME_NEGATORS:
+        return True
+    for phrase in _OUTCOME_NEGATOR_PHRASES:
+        n = len(phrase)
+        if tuple(tokens[i:i + n]) == phrase:
+            return True
+    return False
+
+
+def _negated(tokens: list[str], start: int, end: int) -> bool:
+    """True iff a negator sits within the window before ``start`` or after
+    ``end`` (exclusive), or inside the phrase span itself."""
+    lo = max(0, start - _OUTCOME_NEGATION_WINDOW)
+    hi = min(len(tokens), end + _OUTCOME_NEGATION_WINDOW)
+    return any(_is_negator_at(tokens, i) for i in range(lo, hi))
+
+
+def _phrase_positions(tokens: list[str], phrase: tuple[str, ...]):
+    n = len(phrase)
+    for i in range(len(tokens) - n + 1):
+        if tuple(tokens[i:i + n]) == phrase:
+            yield i, i + n
+
+
+_APPROVAL_TOKENS: tuple[tuple[str, ...], ...] | None = None
+
+
+def _approval_phrase_tokens() -> tuple[tuple[str, ...], ...]:
+    global _APPROVAL_TOKENS
+    if _APPROVAL_TOKENS is None:
+        _APPROVAL_TOKENS = tuple(
+            tuple(_outcome_tokens(p)) for p in _OUTCOME_APPROVAL_PHRASES
+            if _outcome_tokens(p)
+        )
+    return _APPROVAL_TOKENS
+
+
+def _is_approval(text: str) -> bool:
+    """Strict approval test: word-boundary phrase, not negated, short message."""
+    tokens = _outcome_tokens(text)
+    if not tokens or len(tokens) > _OUTCOME_APPROVAL_MAX_WORDS:
+        return False
+    if " ".join(tokens) in _OUTCOME_APPROVAL_EXACT:
+        return True
+    for phrase in _approval_phrase_tokens():
+        for start, end in _phrase_positions(tokens, phrase):
+            if not _negated(tokens, start, end):
+                return True
+    return False
 
 _OUTCOME_REJECTION_PHRASES = (
     # German
@@ -1081,7 +1202,7 @@ def detect_outcome_signal(
         return (None, 0.0)
     if any(p in text for p in _OUTCOME_REJECTION_PHRASES):
         return ("rejection", _OUTCOME_REJECTION_SCORE)
-    if any(p in text for p in _OUTCOME_APPROVAL_PHRASES):
+    if _is_approval(text):
         return ("approval", _OUTCOME_APPROVAL_SCORE)
     if prev_user_text:
         import difflib
@@ -1102,8 +1223,19 @@ def grade_from_user_followup(
     prev_skill_names: list[str],
     prev_user_text: str | None = None,
     project_root: Path | None = None,
+    tenant_id: str | None = None,
 ) -> list[dict]:
     """Apply outcome signal to skills active in the previous turn.
+
+    Called by both chat surfaces: the bridge (``adapter.process_one``) and the
+    console web chat (``corvin_console.followup_grading``, which passes its
+    session's ``tenant_id`` and gates on the ``learning_feedback`` consent
+    first). ``tenant_id`` None keeps the registry's own resolution (env, then
+    ``_default``) — the bridge's behaviour.
+
+    Privacy: ``user_text`` / ``prev_user_text`` are only read here. Nothing
+    derived from them except the signal enum and its score is written — the
+    grade note, the learning-inbox event and the returned dicts carry no text.
 
     Returns list of {name, signal, score, result} per skill that received
     a grade. Empty list when:
@@ -1136,6 +1268,7 @@ def grade_from_user_followup(
         project_root = _detect_project_root()
     try:
         reg = _sf.MultiSkillRegistry(
+            tenant_id=tenant_id,
             channel_id=channel_id,
             project_root=project_root,
         )
@@ -1159,7 +1292,7 @@ def grade_from_user_followup(
                 "name": name, "signal": signal,
                 "score": float(score), "result": res,
             })
-            _emit_feedback_for_learning(reg, name, float(score), None)
+            _emit_feedback_for_learning(reg, name, float(score), tenant_id)
         except Exception:  # noqa: BLE001
             continue
     return graded

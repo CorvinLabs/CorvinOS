@@ -122,9 +122,13 @@ systems:
       - corvin_operator/bridges/shared/adapter.py:12643
       - corvin_operator/bridges/shared/adapter.py:13285
       - corvin_operator/skill-forge/skill_forge/mcp_server.py:490
+      - core/console/corvin_console/routes/chat.py:771
+      - core/console/corvin_console/chat_runtime.py:6709
     tests:
       - corvin_operator/skill-forge/tests/test_grading.py
       - corvin_operator/bridges/shared/test_adapter_skill_inject.py
+      - corvin_operator/bridges/shared/test_outcome_praise_e2e.py
+      - core/console/tests/test_followup_grading_ws_e2e.py
       - tests/learning/test_learning_call_site_pins.py
 
   - id: L07

@@ -6758,6 +6758,15 @@ async def _stream_turn_impl(
                 ]
             except Exception:  # noqa: BLE001
                 _cel_ran_stage_ids = []
+            try:  # outcome grading: the skills this turn injected; the NEXT prompt grades them
+                from . import followup_grading as _fg  # noqa: PLC0415
+                _fg_bound = getattr(locals().get("_bundle"), "skills_to_bind", None) or []
+                _fg.record_turn_skills(
+                    sess.tenant_id, sess.chat_key, tasks_dir=tasks_dir, run_id=task_id,
+                    skill_names=[getattr(s, "skill_id", "") for s in _fg_bound],
+                    user_text=prompt)
+            except Exception:  # noqa: BLE001 — grading bookkeeping never breaks a turn
+                pass
         except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
             _cel_brief_text = ""
     # ADR-0395 (cache-stable CEL). The volatile CEL brief in the --append-system-prompt

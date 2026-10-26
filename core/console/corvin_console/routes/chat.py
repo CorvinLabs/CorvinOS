@@ -50,6 +50,7 @@ from .. import attachments_common as _attachments
 from .. import audit as console_audit
 from .. import auth as session_auth
 from .. import chat_runtime
+from .. import followup_grading
 from .. import live_turns
 from .. import task_manager as tm_module
 from ..deps import require_csrf, require_session
@@ -765,6 +766,9 @@ async def chat_stream(
                     await _send({"type": "error", "message": "This chat was deleted."})
                     await _send({"type": "done"})
                     return
+                # Outcome-grounded grading: THIS prompt grades the skills the
+                # previous turn injected (consent-gated, never raises, no text kept).
+                await followup_grading.grade_followup(rec, fresh.chat_key, prompt)
                 chat_runtime.register_live_turn(rec.tenant_id, sid, _loop, _task)
                 _turn_id = live_turns.begin(rec.tenant_id, sid, _hub_token)
                 await _send({"type": "turn_started", "turn_id": _turn_id})
