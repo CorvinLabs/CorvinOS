@@ -86,6 +86,13 @@ def skill_home(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_FORCE_SCOPE", "user")
     monkeypatch.setenv("CORVIN_PLUGIN_SLOT_DIR", str(tmp_path / "slot"))
     monkeypatch.delenv("LDD_AUTO_OPTIN", raising=False)
+    # The TASK scope lives under the platform temp dir, ignores CORVIN_HOME and the tenant
+    # (forge/scope.py::_resolve_tmp_tasks_root), so any other process that created a task-scope
+    # skill there (a Mods test left assistant.mod_quiz_phase0 in /tmp/.corvin) would be injected
+    # into the worker. Point the temp dir at the sandbox.
+    import tempfile
+    (tmp_path / "tmpdir").mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmpdir"))
     # The production lookup also covers PROJECT-scope skills of the repo it runs in
     # (intended). Pin the project root to an empty sandbox so the test sees only the
     # two skills it creates below.
@@ -102,8 +109,9 @@ def skill_home(tmp_path, monkeypatch):
     return home
 
 
-def _dispatch(tmp_path: Path, spec_extra: dict) -> tuple[str, list[tuple[str, dict]]]:
-    """Dispatch one worker against the recording stub. Returns (system prompt, audit writes)."""
+def _dispatch(tmp_path: Path, spec_extra: dict,
+              instructions: str = "clean the csv export and report the row counts"):
+    """Dispatch one worker against the recording stub. Returns (system prompt, audit writes, results)."""
     from test_acs_runtime import _minimal_spec  # type: ignore[import-not-found]
 
     binary, rec = _recording_claude(tmp_path)
@@ -121,7 +129,7 @@ def _dispatch(tmp_path: Path, spec_extra: dict) -> tuple[str, list[tuple[str, di
     def _capture(tenant_id, event_type, details):
         writes.append((event_type, dict(details)))
 
-    subtasks = [{"id": "t0", "instructions": "clean the csv export and report the row counts"}]
+    subtasks = [{"id": "t0", "instructions": instructions}]
     with (
         patch.object(_rt, "_resolve_worker_engine", return_value=("claude_code", "m")),
         patch.object(_rt, "_assert_engine_licensed", return_value=None),
@@ -210,3 +218,42 @@ def test_max_skills_is_clamped(tmp_path, skill_home, asked, expected):
     assert seen["profile"]["max_injected_skills"] == expected
     assert seen["include_core"] is False
     assert seen["tenant_id"] == "_default"
+
+
+NAMED_UNGRADED = "use the skill acs.csv_ungraded to clean the csv export"
+
+
+def test_an_ungraded_skill_named_in_subtask_text_is_never_injected(tmp_path, skill_home):
+    """Naming a skill in the subtask text does not pull it in: the grade gate decides."""
+    system, writes, results = _dispatch(
+        tmp_path, {"dynamic_skills": {"enabled": True}}, instructions=NAMED_UNGRADED)
+    assert results and results[0].status == "success", results
+    assert UNGRADED_MARKER not in system
+    listed = [d.get("skills", "") for et, d in writes if et == "acs.worker_skills_injected"]
+    assert not any("acs.csv_ungraded" in s for s in listed), listed
+
+
+def test_positive_control_a_resolved_namespace_would_inject_the_ungraded_skill(
+        tmp_path, skill_home, monkeypatch):
+    """Proves the test above can fail: with a resolved persona namespace the ungraded body DOES
+    reach the worker, so its absence there is the grade gate's doing and not a blind harness."""
+    import skill_inject
+    monkeypatch.setattr(skill_inject, "_persona_namespace", lambda p: "acs")
+    system, _writes, results = _dispatch(
+        tmp_path, {"dynamic_skills": {"enabled": True}}, instructions=NAMED_UNGRADED)
+    assert results and results[0].status == "success", results
+    assert UNGRADED_MARKER in system
+
+
+def test_an_l34_blocked_worker_builds_no_skill_block(tmp_path, skill_home):
+    """Gate ORDER: L34 refuses before any skill text is built, recorded or audited. (L34 is
+    opt-in per tenant policy; this pins the order, not that L34 restricts a class.)"""
+    import spawn_gates
+    with patch.object(spawn_gates, "check_l34", return_value="[data-flow] refused"), \
+            patch.object(_rt, "_worker_skills_block") as spy:
+        system, writes, results = _dispatch(tmp_path, {"dynamic_skills": {"enabled": True}})
+    assert results and results[0].status == "failed", results
+    assert "L34" in (results[0].error or "")
+    assert system == ""
+    spy.assert_not_called()
+    assert not [1 for et, _ in writes if et == "acs.worker_skills_injected"]
