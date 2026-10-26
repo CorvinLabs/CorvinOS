@@ -10,36 +10,43 @@ claim:
 
 Manage which quality disciplines are active in your CorvinOS sessions.
 
+Run every command below from the root of the CorvinOS checkout: the package is
+`corvin_operator`, not `operator` (that name is the Python standard library, so
+`from operator.bridges...` fails with `ModuleNotFoundError`). The same switches are on
+the console's LDD page (`/console/app/ldd`). Switching `adr_gate` or `concept_gate` changes
+whether the gate is applied, never how its artifacts are judged: both write through
+`kb.py new` and are judged by `kb check` (see the shared mechanism in those two skills).
+
 ## Available Commands
 
 **Check status:**
 ```bash
-python3 -c "from operator.bridges.shared.quality_layers import get_status, list_layers; import json; print(json.dumps(get_status(), indent=2))"
+python3 -c "from corvin_operator.bridges.shared.quality_layers import get_status, list_layers; import json; print(json.dumps(get_status(), indent=2))"
 ```
 
 Or simpler — to list all layers:
 ```bash
-python3 -c "from operator.bridges.shared.quality_layers import list_layers; import json; print(json.dumps(list_layers(), indent=2))"
+python3 -c "from corvin_operator.bridges.shared.quality_layers import list_layers; import json; print(json.dumps(list_layers(), indent=2))"
 ```
 
 **Enable a specific layer:**
 ```bash
-python3 -c "from operator.bridges.shared.quality_layers import enable_layer; enable_layer('adr_gate'); print('✓ adr_gate enabled')"
+python3 -c "from corvin_operator.bridges.shared.quality_layers import enable_layer; enable_layer('adr_gate'); print('✓ adr_gate enabled')"
 ```
 
 **Disable a specific layer:**
 ```bash
-python3 -c "from operator.bridges.shared.quality_layers import disable_layer; disable_layer('adr_gate'); print('✓ adr_gate disabled')"
+python3 -c "from corvin_operator.bridges.shared.quality_layers import disable_layer; disable_layer('adr_gate'); print('✓ adr_gate disabled')"
 ```
 
 **Enable all layers:**
 ```bash
-python3 -c "from operator.bridges.shared.quality_layers import enable_all; enable_all(); print('✓ All quality layers enabled')"
+python3 -c "from corvin_operator.bridges.shared.quality_layers import enable_all; enable_all(); print('✓ All quality layers enabled')"
 ```
 
 **Disable all layers:**
 ```bash
-python3 -c "from operator.bridges.shared.quality_layers import disable_all; disable_all(); print('✓ All quality layers disabled')"
+python3 -c "from corvin_operator.bridges.shared.quality_layers import disable_all; disable_all(); print('✓ All quality layers disabled')"
 ```
 
 ## Configuration File
@@ -78,12 +85,12 @@ Settings are stored in `~/.corvin/global/quality-layers.json`. You can also edit
 
 **Turn off ADR Gate (e.g., for quick prototyping):**
 ```bash
-python3 -c "from operator.bridges.shared.quality_layers import disable_layer; disable_layer('adr_gate'); print('✓ adr_gate disabled')"
+python3 -c "from corvin_operator.bridges.shared.quality_layers import disable_layer; disable_layer('adr_gate'); print('✓ adr_gate disabled')"
 ```
 
 **Check which layers are on:**
 ```bash
-python3 -c "from operator.bridges.shared.quality_layers import list_layers; import json; [print(f'{k}: {v}') for k,v in list_layers().items()]"
+python3 -c "from corvin_operator.bridges.shared.quality_layers import list_layers; import json; [print(f'{k}: {v}') for k,v in list_layers().items()]"
 ```
 
 **Reset to all defaults:**

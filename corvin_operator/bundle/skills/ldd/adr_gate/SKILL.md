@@ -1,6 +1,6 @@
 ---
 name: adr_gate
-description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; writes to Corvin-ADR repo when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), emits ADR-0264 decision-graph frontmatter (depends_on/related/paths/docs — the three-layer Code/Docs/ADR graph) so scripts/adr_graph.py can traverse it, and generates E2E tests for every new structural invariant so LDD has a loss signal.
+description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; creates it in Corvin-Knowledge through `kb.py new decision` (the shared knowledge-gate mechanism, judged by `kb check`) when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), emits ADR-0264 decision-graph frontmatter (depends_on/related/paths/docs — the three-layer Code/Docs/ADR graph) so scripts/adr_graph.py can traverse it, and generates E2E tests for every new structural invariant so LDD has a loss signal.
 ---
 
 # ADR Gate — Architectural Decision Record discipline
@@ -48,17 +48,38 @@ Before deciding whether to write an ADR — and when writing one — think throu
 
 All three levels must appear explicitly in the ADR's **Context** and **Decision** sections. If one level has nothing to say (rare), name that explicitly — e.g. *"Implementation level: no specific shape is locked in beyond the structural constraint above."*
 
+<!-- knowledge-gate-mechanism:begin -->
+## Writing it: the shared knowledge-gate mechanism
+
+ADR Gate and Concept Gate answer different questions (a decision versus a working method),
+but they write through ONE mechanism and their artifacts are judged by ONE rule source.
+
+1. **Find first.** `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py find <words> --type decision`
+   (or `--type concept`) and `kb.py show <id>`. An existing entry is amended with a dated note
+   under its Status, never duplicated.
+2. **Create with `kb new`, never by hand.**
+   `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py new decision --title "..."`
+   (or `new concept`), with `--link rel=target` for every real relation. It numbers across the
+   whole corpus, writes `id`/`uid`/`title`/`status`/`created`/`links`, refuses a link that does not
+   resolve to exactly one entity, and commits in Corvin-Knowledge. Never pick a number with `ls`:
+   canonical names are `ADR-NNNN-...`, so a `^[0-9]{4}` scan sees only legacy files and returns a
+   number that is already taken. Never commit to Corvin-ADR: it is frozen (ADR-2205), and
+   `kb check` reports any commit there as `W02_frozen_source_written`. Call `kb.py` by this
+   absolute path — the path gate pins it.
+3. **Fill the body and the type's own frontmatter** (below), then commit in Corvin-Knowledge.
+4. **Validate against the one rule source.**
+   `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py check` must report
+   `blocking: 0`. The console's Quality Gates page (`/console/app/quality`) runs this same
+   `kb check` over the same checkout: an `error` finding is shown as fail, a `warning` (for
+   example the G1-G4 readiness gates) as warn. There is no second rule table to satisfy.
+<!-- knowledge-gate-mechanism:end -->
+
 ## How to write the ADR
 
-**Step 1** — Find the next number:
+**Step 1** — Run the shared mechanism above with `kb.py new decision`. It writes
+`decisions/ADR-NNNN-short-kebab-title.md`; do not choose the number or the file name yourself.
 
-```bash
-ls ../Corvin-Knowledge/decisions/ | grep -E '^[0-9]{4}' | sort | tail -1
-```
-
-Add 1, zero-pad to 4 digits (e.g. `0068`).
-
-**Step 2** — Write to `../Corvin-Knowledge/decisions/XXXX-short-kebab-title.md`. Every ADR
+**Step 2** — Complete the file `kb new` created. Every ADR
 carries **both** the human-facing prose header **and** a machine-readable frontmatter
 block (ADR-0264 — "ADR Decision Graph"): the frontmatter is what makes an ADR a node a
 coding agent can traverse to instead of a document it must have already read.
@@ -116,18 +137,19 @@ explains it to a reader — exactly the artifacts the `docs-as-definition-of-don
 keeps in sync (matched by `adrs_for_doc()`). An empty or inaccurate list in either makes
 this ADR invisible to that specific traversal, not merely undocumented.
 
-**Step 3** — Commit in the Corvin-ADR repo:
+**Step 3** — Commit the completed file in Corvin-Knowledge and validate (shared mechanism, step 4):
 
 ```bash
-cd ../Corvin-ADR
-git add decisions/XXXX-short-kebab-title.md
-git commit -m "adr: add ADR-XXXX — [title]"
+cd /home/shumway/projects/Corvin-Knowledge
+git add decisions/ADR-NNNN-short-kebab-title.md
+git commit -m "adr: ADR-NNNN — [title]"
+python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py check   # blocking: 0
 ```
 
 **Step 4** — If the ADR documents a load-bearing mechanism in Corvin, add a one-line reference at the end of the relevant CLAUDE.md section:
 
 ```
-→ ADR: `Corvin-ADR: decisions/XXXX-short-title.md`
+→ ADR: `corvin_decisions/decisions/ADR-NNNN-short-title.md`
 ```
 
 This prose pointer stays — it is what a human skimming CLAUDE.md sees — but it is no
@@ -144,7 +166,7 @@ A generated (not hand-authored) ADR — e.g. Plugin-Builder's per-plugin classif
 ADR (`core/plugins/plugin_builder/generators/adr.py`) — carries this same frontmatter
 schema too, with a plugin-scoped `id` (`{plugin_id}-ADR-0001`, never a bare `ADR-NNNN`,
 which is reserved for this repo's own sequence) and `related` pointing into the real
-Corvin-ADR corpus. Any new document-generator that produces an ADR-shaped artifact
+Corvin-Knowledge corpus. Any new document-generator that produces an ADR-shaped artifact
 should follow this same convention rather than emitting unstructured prose.
 
 **Step 5 — E2E tests for the ADR's mechanism (LDD loss signal)**

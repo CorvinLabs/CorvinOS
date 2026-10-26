@@ -56,14 +56,16 @@ export interface RunResults {
 const BASE = "/api/quality/gates";
 const KEY = ["quality", "gates"] as const;
 
-/** Rendered caption — also the deploy marker (a string literal). */
-export const MARKER_QUALITY = "What the gate validators decided about the decisions, concepts, plans and ideas of the knowledge repository.";
+/** Rendered caption — also the deploy marker (a string literal). Since 2026-10-26 every
+ *  verdict comes from the checkout's own `kb check` (core/quality_gates/kb_verdicts.py):
+ *  a kb error is a fail, a kb warning a warn — the page keeps no rule table of its own. */
+export const MARKER_QUALITY = "What the knowledge repository's own kb check says about its decisions, concepts, plans and ideas.";
 
 const GATE_LABEL: Record<string, string> = {
-  ADRGate: "ADRs — frontmatter complete",
-  ConceptGate: "Concepts — narrative, boundaries, evidence",
-  ImplementationPlanGate: "Implementation plans — phases, criteria, estimate",
-  IdeaGate: "Ideas — evidence and recurrence",
+  ADRGate: "Decisions — kb check rules",
+  ConceptGate: "Concepts — kb check rules",
+  ImplementationPlanGate: "Implementation plans — kb check rules",
+  IdeaGate: "Ideas — kb check rules",
 };
 
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${v.toFixed(1)} %`);
@@ -213,7 +215,7 @@ export default function QualityGatesPanel() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Gate status</CardTitle>
-          <CardDescription>Per gate: the newest verdict of every artifact{asOf ? ` (newest run ${asOf})` : ""}. The 24 h / 7 d columns count verdicts recorded in that window — two runs judge every artifact twice. A gate nobody ran shows no share.</CardDescription>
+          <CardDescription>Per gate: the newest verdict of every artifact{asOf ? ` (newest run ${asOf})` : ""}. The 24 h / 7 d columns count verdicts recorded in that window — two runs judge every artifact twice. A gate nobody ran shows no share. Fail = a kb check error; warn = only kb check warnings (for example the readiness gates: no concept, no plan yet).</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="rounded-lg border border-border overflow-x-auto">

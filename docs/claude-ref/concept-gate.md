@@ -92,8 +92,12 @@ as ADRs. Fallback only if Corvin-Knowledge is genuinely unreachable to the curre
 Corvin-Knowledge/concepts/CONCEPT-NNNN-short-title.md
 ```
 
-**Numbering:** independent 4-digit sequence starting at `0001`, own namespace, never
-`ADR-NNNN` — a concept's `id:` is always `CONCEPT-NNNN`.
+**Numbering:** independent 4-digit sequence, own namespace, never `ADR-NNNN` — a
+concept's `id:` is always `CONCEPT-NNNN`. The number is assigned by
+`python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py new concept --title "..."`,
+never chosen by hand; validate with `kb.py check` (`blocking: 0`). This is the same
+mechanism and the same rule source as the ADR Gate (ADR-2302, adr-gate.md "ADR
+Destination"); the console's Quality Gates page shows a concept's `kb check` verdict.
 
 **Commit message:**
 ```

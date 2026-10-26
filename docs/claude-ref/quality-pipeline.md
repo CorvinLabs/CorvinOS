@@ -309,11 +309,26 @@ Gates are enforcement-only; no opt-out flags. ImplementationGate is blocking and
 
 ## Quality Gates console — `core/quality_gates/` (ADR-0688)
 
-A **separate module** from `core.quality.gates` above: four validators
+A **separate module** from `core.quality.gates` above: four gates
 (`IdeaGate`, `ConceptGate`, `ADRGate`, `ImplementationPlanGate`) that judge the
 markdown artifacts of the Corvin-Knowledge checkout and write every verdict as a
 hash-chained `gate_events` row in `<tenant>/global/quality_gates.db` (DuckDB).
 The console page `/console/app/quality` renders those rows and nothing else.
+
+**One rule source (ADR-2302, 2026-10-26).** The verdict comes from the judged
+checkout's own `kb check`, never from a table of this module: the run executes
+`<checkout>/scripts/kb.py check --json` as a subprocess (`kb_projection._run`, the
+board projector's minimal environment) and `core/quality_gates/kb_verdicts.py` maps
+per file — any `error` finding → **fail**, only `warning` findings → **warn**, none →
+**pass**; `reason` reads `kb check: N error(s), M warning(s)` and `findings` names the
+rules. Each rule's severity is read from the same checkout's `RULES` table with `ast`
+(parsed, never imported or executed). No `scripts/kb.py`, an incomplete `kb check`, a
+non-literal `RULES` or a reported rule the table does not define → a `failed` run that
+records nothing; there is no fallback. The old tables in `validators.py` disagreed with
+`kb check` on 848 of 1277 live artifacts and are no longer called by the console.
+Consequence an operator sees: most decisions read **warn**, because `kb check` reports
+the G1/G3 readiness gates (no concept, no plan yet) as warnings. The agent gate skills
+`adr_gate`/`concept_gate` validate with the same `kb check` (see adr-gate.md).
 
 **What produces events.** The git hooks the ADR describes are not installed;
 the only producer is the console's **Run all gates** (`POST
@@ -321,7 +336,7 @@ the only producer is the console's **Run all gates** (`POST
 a daemon thread: `core/quality_gates/artifacts.py` resolves the checkout
 (`CORVIN_ADR_ROOT` → `../Corvin-Knowledge` → `corvin_decisions/`), projects each file
 of `decisions/`, `concepts/`, `implementation-plans/`, `ideas/` onto the dict
-its gate checks, runs the real validator, writes the gate event and a
+its gate checks, takes its verdict from `kb check` (above), writes the gate event and a
 `kg_nodes` projection, and reports `artifacts_done / artifacts_total` on
 `GET .../results/{run_id}` (the page's progress bar). Before that date the run
 wrote one hard-coded `pass` per gate, and the page fetched
@@ -339,7 +354,7 @@ file. The declared id travels as `declared_id`.
 |---|---|
 | `GET gates/status` | per-gate `current` (the NEWEST verdict per artifact, however old — one per artifact, so a second run does not double it), plus 24 h / 7 d verdict counts aggregated in SQL (never a row limit — the old "last 1000 rows" cut the gates that ran first), `pass_percentage` **null** when a gate has no event in the window, `events_24h`, `events_total`, `as_of` (newest verdict timestamp), `source_root`, `last_run` |
 | `GET gates/trend?days=` | one point per **UTC day that has events**; a day without a run is a gap, not 0 % |
-| `GET gates/failures?scope=window\|current&hours=&limit=` | `window` (default): fail/warn verdicts of the last `hours`; `current`: artifacts whose newest verdict is fail/warn (`hours` ignored). Rows carry the validator's own `reason`, `findings_count`, `artifact_type` |
+| `GET gates/failures?scope=window\|current&hours=&limit=` | `window` (default): fail/warn verdicts of the last `hours`; `current`: artifacts whose newest verdict is fail/warn (`hours` ignored). Rows carry the verdict's `reason` (`kb check: …`), `findings_count`, `artifact_type` |
 | `POST gates/run/all` → `GET gates/results/{id}` | the job above; a checkout that cannot be found is a `failed` run that says so |
 
 **Page rules (ADR-0761/0763).** Tiles, the table's main columns and the
@@ -359,6 +374,8 @@ on this build" instead of zeros. Deploy marker: the page caption string in
 keep that shape.
 
 **Proof.** `tests/e2e/test_quality_gates_console_e2e.py` (HTTP, temp
-`CORVIN_HOME`, temp ADR root with known verdicts, chain verifies) and
-`web-next/tests/unit/quality-page.test.tsx` (MSW).
+`CORVIN_HOME`, a temp minimal KB built with `kb new` plus one hand-broken decision;
+every verdict equals the kb's own severity, a checkout without `kb.py` is refused, chain
+verifies), `core/quality_gates/tests/test_kb_verdicts.py` (table parsed, never executed;
+unknown rules refuse) and `web-next/tests/unit/quality-page.test.tsx` (MSW).
 

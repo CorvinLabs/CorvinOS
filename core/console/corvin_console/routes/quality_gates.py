@@ -33,10 +33,12 @@ from core.quality_gates.graph import KnowledgeGraph
 from core.quality_gates.audit import QualityGateAuditLogger
 from core.quality_gates.artifacts import KINDS, load_artifacts, resolve_adr_root
 from core.quality_gates.config import get_validator_class, list_gates, load_gate_config
+from core.quality_gates.kb_verdicts import KbCheckOutputError, findings_by_file, rule_severities, verdict_for
 from core.quality_gates.models import KGNode, VerdictType, KGNodeType
 
 from .. import _bootstrap
 from .. import auth as session_auth
+from .. import kb_projection
 from ..deps import require_csrf, require_session
 
 _forge_paths = _bootstrap.forge_paths
@@ -413,6 +415,24 @@ async def get_artifact_history(
 # Endpoint 4: POST /api/quality/gates/run/all
 # ============================================================================
 
+def _kb_findings(root) -> Dict[str, List[Dict[str, Any]]]:
+    """``kb check --json`` of the checkout being judged, keyed by file. The checkout's own
+    ``kb.py`` decides — the rules travel with the artifacts they judge."""
+    import tempfile
+    from pathlib import Path
+
+    if not (Path(root) / "scripts" / "kb.py").is_file():
+        raise KbCheckOutputError(f"no scripts/kb.py in the knowledge checkout {root}")
+    with tempfile.TemporaryDirectory(prefix="quality-gates-") as tmp:
+        out = Path(tmp) / "check.json"
+        rc, data = kb_projection._run(Path(root), "check", "--json", str(out))
+        # rc 1 = blocking findings exist: still a complete, judgeable result
+        if rc not in (0, 1) or not out.is_file():
+            raise KbCheckOutputError(f"kb check did not complete (exit {rc}): {str(data)[:200]}")
+        severities = rule_severities(Path(root) / "scripts" / "kb.py")
+        return findings_by_file(json.loads(out.read_text(encoding="utf-8")), severities)
+
+
 @router.post("/gates/run/all", summary="Run all gate validators")
 async def run_all_gates(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -458,16 +478,21 @@ async def run_all_gates(
     def _worker() -> None:
         graph = None
         try:
+            # One rule source: the checkout's own `kb check` judges every artifact
+            # (kb_verdicts). The checkout's kb.py runs as a subprocess with the KB's
+            # minimal environment, exactly like the board projector runs it.
+            by_file = _kb_findings(root)
             graph = _get_graph(tenant_id)
             audit_logger = QualityGateAuditLogger(graph.conn)
             per_gate = {g: load_artifacts(root, g) for g in list_gates()}
             run["artifacts_total"] = sum(len(v) for v in per_gate.values())
             for gate_name in list_gates():
                 counts = {"pass": 0, "warn": 0, "fail": 0}
-                validator = get_validator_class(gate_name)(graph, tenant_id)
                 node_type = KGNodeType(KINDS[gate_name]["node_type"])
                 for artifact in per_gate[gate_name]:
-                    result = validator.validate(artifact)
+                    result = verdict_for(gate_name, str(artifact.get("id") or artifact.get("path")),
+                                         root / KINDS[gate_name]["dir"] / artifact["path"],
+                                         by_file, tenant_id)
                     if not result.timestamp:
                         result = dataclasses.replace(result, timestamp=_now())
                     audit_logger.write_gate_event(result)
@@ -484,6 +509,11 @@ async def run_all_gates(
                 run["results"][gate_name] = {"gate_name": gate_name, "artifacts": len(per_gate[gate_name]), **counts}
                 run["gates_completed"] += 1
             run["status"] = "completed"
+        except KbCheckOutputError as exc:
+            # No verdict without the KB's own rules — never a fallback to a second table.
+            logger.error("gate run %s refused: %s", run_id, exc)
+            run["status"] = "failed"
+            run["error"] = str(exc)[:300]
         except Exception as exc:  # noqa: BLE001 — the run must never stay "running"
             logger.error("gate run %s failed: %s", run_id, exc)
             run["status"] = "failed"

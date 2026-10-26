@@ -59,10 +59,25 @@ Example: "Skipped ADR because this is a pure refactor of the Forge MCP handler (
 **ADRs live in `Corvin-Knowledge/decisions/` (sibling repository), NOT in this repo.**
 
 ```
-Corvin-Knowledge/decisions/XXXX-short-title.md
+Corvin-Knowledge/decisions/ADR-NNNN-short-title.md
 ```
 
-**Numbering:** max existing number + 1, four digits zero-padded (0042, 0156, etc.).
+**Create it with `kb new`, never by hand (ADR-2205, ADR-2302):**
+
+```bash
+python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py find <words> --type decision   # amend, don't duplicate
+python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py new decision --title "..." --link depends_on=ADR-....
+# fill the ADR-0264 frontmatter (depends_on/related/paths/docs) and the body, commit, then:
+python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py check                          # blocking: 0
+```
+
+`kb new` numbers across the whole corpus — never pick "max + 1" yourself: canonical names
+are `ADR-NNNN-…`, and the old `ls | grep -E '^[0-9]{4}'` recipe saw only legacy files
+(it returned 0468 while the corpus was at ADR-2301). Corvin-ADR is frozen; never commit
+there. **One rule source:** the console's Quality Gates page (`/console/app/quality`)
+judges the ADR with the same `kb check` — a kb error is a fail, a kb warning a warn
+(quality-pipeline.md). The Concept Gate uses the identical mechanism; both skills carry it
+as one byte-identical block (`tests/skills/test_knowledge_gate_shared_mechanism.py`).
 
 **Commit message:**
 ```
@@ -188,4 +203,4 @@ rather than a bare `ADR-NNNN`, which is reserved for this repo's own sequence.
 
 - [CLAUDE.md](../../CLAUDE.md) — Main conventions document
 - [compliance-baseline.md](compliance-baseline.md) — Compliance constraints (ADRs often needed here)
-- [Corvin-Knowledge repository](https://github.com/anthropics/corvin-adr) — Public ADR source of truth
+- [Corvin-Knowledge repository](https://github.com/CorvinLabs/Corvin-Knowledge) — ADR source of truth (`corvin_decisions/` submodule)
