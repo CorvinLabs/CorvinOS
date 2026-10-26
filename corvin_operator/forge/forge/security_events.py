@@ -3472,6 +3472,12 @@ _VP_JOB_END_FIELDS: frozenset[str] = frozenset({
     "verdict", "failed_stage", "error_class",
 })
 
+# ADR-2292: the scalars of a signed A2A usage block (a2a_usage.AUDIT_FIELDS). Integers and a
+# pattern-checked model id — never a price, never free text.
+_A2A_USAGE_FIELDS: frozenset[str] = frozenset({
+    "model_id", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+})
+
 _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # ADR-2092 — L5 routing loop. Engines/surfaces/reasons are closed enums,
     # counts and rates are numbers, turn_id is an opaque random id. NEVER text.
@@ -3633,9 +3639,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
                                    "attachments_total_bytes", "attachment_sha_prefixes",
                                    "attachment_validation_error"}),
         ("A2A.envelope_sent", {"nonce_prefix", "ttl_s", "attachments_count"}),
+        # ADR-2292: the engine-attested usage scalars of the signed usage block — on the
+        # receiver's signing record and on the requester's receipt.
         ("A2A.response_signed", {"attachments_count", "attachments_total_bytes",
-                                 "attachment_sha_prefixes"}),
-        ("A2A.response_received", {"instance_id_match", "attachments_count"}),
+                                 "attachment_sha_prefixes", *_A2A_USAGE_FIELDS}),
+        ("A2A.response_received", {"instance_id_match", "attachments_count", *_A2A_USAGE_FIELDS}),
         ("A2A.response_rejected", {"http_status", "error_category", "error_detail",
                                    "instance_id_match"}),
         ("A2A.result_filtered", {"filter_pass_count", "filter_reject_count",
@@ -4553,6 +4561,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "federation.task_completed": frozenset({
         "task_id", "origin_id", "agent_id", "status", "duration_ms", "tenant_id",
+        *_A2A_USAGE_FIELDS,  # ADR-2292: the usage block this instance signed
     }),
     "federation.task_delegated": frozenset({
         "task_id", "endpoint_id", "peer_instance_id", "agent_id", "capability",
@@ -4561,6 +4570,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "federation.task_result_received": frozenset({
         "task_id", "endpoint_id", "peer_instance_id", "agent_id", "status",
         "duration_ms", "our_chain_tail", "peer_chain_tail", "tenant_id",
+        *_A2A_USAGE_FIELDS,  # ADR-2292: the peer's signed usage block, as scalars
     }),
     "federation.conversation_started": frozenset({
         "conversation_id", "local_agent_id", "endpoint_id", "peer_instance_id",

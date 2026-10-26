@@ -15,6 +15,7 @@ import * as React from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Bot, Check, CheckCheck, CircleHelp, Clock, Globe2, Loader2, Paperclip, Send, Mic, MicOff, FolderUp, Square, XCircle, type LucideIcon } from "lucide-react";
 import { YourAgents } from "@/components/agent-conversations/YourAgents";
+import { PartnerUsage } from "@/components/agent-conversations/PartnerUsage";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -512,6 +513,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
       {agentsOpen && (
         <div className="border-b border-border px-4 py-3" data-testid="peer-agents-panel">
           <YourAgents csrf={csrf} />
+          <div className="mt-3"><PartnerUsage peerId={peerId} /></div>
         </div>
       )}
 

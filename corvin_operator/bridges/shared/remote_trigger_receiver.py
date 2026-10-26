@@ -41,7 +41,7 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -548,6 +548,33 @@ class TaskEnvelope:
         ).encode()
 
 
+def _usage_block_of(worker_result: Any) -> dict | None:
+    """ADR-2292: the usage block the worker built, re-checked against the closed shape before it is signed.
+
+    The receiver signs only what ``a2a_usage.parse_usage_block`` accepts — the same rule the requester
+    applies — so this side never signs a block the other side would have to drop. ``None`` = no block.
+    """
+    raw = getattr(worker_result, "usage", None)
+    if not raw:
+        return None
+    try:
+        import a2a_usage  # type: ignore[import-not-found]
+        return a2a_usage.parse_usage_block(raw) or None
+    except Exception:  # noqa: BLE001 — no usage report is better than a failed response
+        return None
+
+
+def _usage_audit_fields(block: Any) -> dict:
+    """The usage scalars for an audit record (ADR-2292); ``{}`` when no block was signed."""
+    if not block:
+        return {}
+    try:
+        import a2a_usage  # type: ignore[import-not-found]
+        return a2a_usage.audit_fields(block)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 @dataclass
 class ResponseEnvelope:
     task_id: str
@@ -562,12 +589,20 @@ class ResponseEnvelope:
     # A2A.envelope_received — included in HMAC for cross-peer anchoring.
     # Empty string = unavailable (best-effort). Pre-M4 senders ignore this field.
     receiver_chain_tail: str = ""
+    # ADR-2292: the engine-attested usage block (a2a_usage.build_usage_block) — model id + the
+    # four-way token split, never a price. Signed like every other field (it is in
+    # canonical_payload); omitted from the wire AND the HMAC when empty, so a response whose
+    # engine reported no model stays byte-identical to the pre-ADR-2292 shape. An old sender
+    # verifies over every key it received, so it verifies this one too and then ignores it.
+    usage: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         # ADR-0116 M4: omit receiver_chain_tail when absent for wire compat.
         if not d.get("receiver_chain_tail"):
             d.pop("receiver_chain_tail", None)
+        if not d.get("usage"):
+            d.pop("usage", None)
         return d
 
     def canonical_payload(self) -> bytes:
@@ -577,6 +612,8 @@ class ResponseEnvelope:
         # pre-M4 senders/verifiers remain compatible (additive, backward-compat).
         if not d.get("receiver_chain_tail"):
             d.pop("receiver_chain_tail", None)
+        if not d.get("usage"):
+            d.pop("usage", None)
         return json.dumps(
             d, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode()
@@ -1418,6 +1455,9 @@ class RemoteTriggerReceiver:
             return resp
 
         self._stage(env.origin_id, env.task_id, "accepted")
+        # ADR-2292: filled by the worker path with the engine-attested usage block; stays empty
+        # (no block on the wire) for M1, group messages and an engine that reported no model.
+        worker_usage: dict = {}
         if spawn_worker:
             self._stage(env.origin_id, env.task_id, "processing")
             try:
@@ -1427,6 +1467,7 @@ class RemoteTriggerReceiver:
                             env=env, origin_config=origin_config,
                             start=start, inbound_attachments=_inbound_atts,
                             model=model, on_engine_spawn=on_engine_spawn,
+                            usage_out=worker_usage,
                         )
                     )
                 finally:
@@ -1470,7 +1511,7 @@ class RemoteTriggerReceiver:
         recv_key = recv_key_bytes
         resp = self._build_response(
             env.task_id, env.origin_id, worker_status, worker_data, recv_key,
-            attachments=worker_attachments,
+            attachments=worker_attachments, usage=worker_usage,
         )
 
         try:
@@ -1501,7 +1542,7 @@ class RemoteTriggerReceiver:
             "A2A.response_signed", "INFO",
             {"task_id": env.task_id, "origin_id": env.origin_id,
              "status": resp.status, "duration_ms": _ms(start),
-             **_out_audit},
+             **_out_audit, **_usage_audit_fields(resp.usage)},
         )
         if not group_id:
             _feed_record(
@@ -1522,9 +1563,13 @@ class RemoteTriggerReceiver:
         inbound_attachments: list,
         model: str | None = None,
         on_engine_spawn: Any = None,
+        usage_out: dict | None = None,
     ) -> tuple[str, dict, list]:
         """Spawn the worker, apply the result filter, return
         (status, data, out_attachments).
+
+        ``usage_out`` (ADR-2292), when given, receives the engine-attested usage block of the run —
+        also for a run that ended in an engine error, because the tokens were spent either way.
 
         Raises :class:`_InjectionRejected` if the instruction trips the
         prompt-injection defences (caller maps to A2A.request_rejected).
@@ -1669,6 +1714,9 @@ class RemoteTriggerReceiver:
              "duration_ms": worker_result.duration_ms,
              "status": worker_result.status},
         )
+
+        if usage_out is not None:
+            usage_out.update(_usage_block_of(worker_result) or {})
 
         # If the worker failed structurally (timeout/engine error), emit
         # filtered with empty data and propagate the failure status.
@@ -2491,6 +2539,7 @@ class RemoteTriggerReceiver:
     def _build_response(
         self, task_id: str, origin_id: str, status: str, data: dict,
         recv_key: bytes, attachments: list | None = None,
+        usage: dict | None = None,
     ) -> ResponseEnvelope:
         # ADR-0116 M4: capture receiver chain tail AFTER the A2A.envelope_received
         # audit event has been written (audit-first invariant ensures the tail
@@ -2515,6 +2564,7 @@ class RemoteTriggerReceiver:
             attachments=list(attachments or []),
             signature="",
             receiver_chain_tail=receiver_chain_tail,
+            usage=dict(usage or {}),
         )
         sig = _hmac.new(recv_key, resp.canonical_payload(), hashlib.sha256).hexdigest()
         resp.signature = sig

@@ -318,6 +318,58 @@ async def delegate_federated_task(
     return result.to_dict()
 
 
+def _partner_usage(tenant_id: str) -> dict[str, Any]:
+    """Per-partner token sums of delegated tasks, priced with THIS installation's rate card (ADR-2292).
+
+    The tokens are the peer's engine-attested report from its signed response; the price is ours —
+    a model this installation cannot price is shown as tokens only (``cost_usd: None``), never at a
+    peer-supplied rate. Sums only: no averages, no percentages. Counted from the ADR-0760 epoch,
+    and the window travels with the numbers.
+    """
+    from core.federation.delegation import usage_by_partner
+    from core.learning.model_selection_learner import _turn_cost_usd, model_price_per_1k
+
+    from .. import usage_epoch
+
+    rows = usage_by_partner(tenant_id, since_ts=usage_epoch.epoch_ts(tenant_id))
+    declared: dict[str, list[dict[str, Any]]] = {}
+    for p in PeerCatalog(tenant_id).agents(max_age_s=None):
+        declared.setdefault(p.endpoint_id, []).append(
+            {"agent_id": p.agent_id, "cost_per_task_usd": p.cost_per_task_usd})
+    partners = []
+    for row in rows:
+        models, cost, priced_tasks, unpriced_tasks = [], 0.0, 0, 0
+        for model_id, m in sorted(row["models"].items()):
+            price = model_price_per_1k(model_id)
+            usd = None if price is None else _turn_cost_usd(
+                price, m["input_tokens"], m["output_tokens"], m["cache_write_tokens"],
+                m["cache_read_tokens"], model=model_id)
+            if usd is None:
+                unpriced_tasks += m["tasks"]
+            else:
+                priced_tasks += m["tasks"]
+                cost += usd
+            models.append({"model_id": model_id, **m, "priced": usd is not None,
+                           "cost_usd": None if usd is None else round(usd, 6)})
+        partners.append({
+            **{k: v for k, v in row.items() if k != "models"},
+            "models": models,
+            "priced_tasks": priced_tasks, "unpriced_tasks": unpriced_tasks,
+            "cost_usd": round(cost, 6) if priced_tasks else None,
+            # The peer's own catalogue figure: a hint it wrote, never verified, never added to cost_usd.
+            "declared_by_peer": declared.get(row["endpoint_id"], []),
+        })
+    return {"window": usage_epoch.window_note(tenant_id), "partners": partners,
+            "source": "engine_attested", "pricing": "this_installation"}
+
+
+@router.get("/usage")
+async def federation_partner_usage(session: Any = Depends(require_session)) -> dict[str, Any]:
+    """What delegated tasks consumed, per partner, from the peers' signed usage blocks."""
+    tenant_id = _tenant_of(session)
+    return await asyncio.to_thread(_partner_usage, tenant_id)
+
+
 @router.get("/tasks/{task_id}/trace")
 async def trace_federated_task(task_id: str, session: Any = Depends(require_session)) -> dict[str, Any]:
     """Hop tree of a delegated task, with both chains' anchor hashes per hop."""

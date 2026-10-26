@@ -124,9 +124,33 @@ class DelegationResult:
     duration_ms: int = 0
     our_chain_tail: str = ""
     peer_chain_tail: str = ""
+    # ADR-2292: the peer's signed, engine-attested usage block (model id + four token counts,
+    # ``source="engine_attested"``); ``{}`` when the peer sent none. Never a price.
+    usage: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _a2a_usage() -> Any:
+    """The shared ``a2a_usage`` module (closed usage-block shape, one definition for both sides)."""
+    try:
+        import a2a_usage  # type: ignore[import-not-found]
+    except ImportError:
+        import sys
+        shared = Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"
+        if str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        import a2a_usage  # type: ignore[import-not-found]
+    return a2a_usage
+
+
+def _closed_usage(raw: object) -> dict:
+    """The usage block re-checked against the closed shape; ``{}`` when absent or malformed."""
+    try:
+        return _a2a_usage().parse_usage_block(raw)
+    except Exception:  # noqa: BLE001 — no usage is better than a failed delegation record
+        return {}
 
 
 class DelegationLedger:
@@ -263,12 +287,17 @@ def delegate(
         duration_ms=int(res.duration_ms or 0),
         our_chain_tail=getattr(res, "our_chain_tail", "") or "",
         peer_chain_tail=getattr(res, "peer_chain_tail", "") or "",
+        # ADR-2292: kept for any answered task (a refused or failed run may still have spent tokens);
+        # the sender only hands over a block it read from a VERIFIED response.
+        usage=_closed_usage(getattr(res, "usage", None)),
     )
+    usage_scalars = {k: v for k, v in result.usage.items() if k != "source"}
     ledger.append({
         "task_id": task_id, "status": result.status, "ok": result.ok, "error": error,
         "peer_instance_id": peer_iid, "completed_at": time.time(),
         "duration_ms": result.duration_ms,
         "our_chain_tail": result.our_chain_tail, "peer_chain_tail": result.peer_chain_tail,
+        **({"usage": usage_scalars} if usage_scalars else {}),
     })
     try:
         federation_audit.emit(
@@ -276,10 +305,51 @@ def delegate(
             endpoint_id=endpoint_id, peer_instance_id=peer_iid, agent_id=agent_id or "",
             status=result.status, duration_ms=result.duration_ms,
             our_chain_tail=result.our_chain_tail[:16], peer_chain_tail=result.peer_chain_tail[:16],
+            **usage_scalars,
         )
     except Exception:  # noqa: BLE001 — the exchange happened; the ledger holds it
         pass
     return result
+
+
+def usage_by_partner(tenant_id: str, *, since_ts: float = 0.0) -> list[dict[str, Any]]:
+    """Real token sums per partner from this installation's delegation ledger (ADR-2292).
+
+    One row per ``endpoint_id`` with a completed delegation at or after ``since_ts`` (the
+    ADR-0760 counting epoch; ``0.0`` = all time). Sums of the peer's engine-attested counts, per
+    model as well, so a caller can price each model with ITS OWN rate card. No averages, no
+    percentages, no price: the ledger holds tokens only.
+    """
+    usage_mod = _a2a_usage()
+    rows: dict[str, dict[str, Any]] = {}
+    for rec in DelegationLedger(tenant_id).latest_by_task().values():
+        completed_at = rec.get("completed_at")
+        if not isinstance(completed_at, (int, float)) or isinstance(completed_at, bool):
+            continue  # sent, never answered: nothing was reported
+        if since_ts and completed_at < since_ts:
+            continue
+        endpoint_id = rec.get("endpoint_id")
+        if not isinstance(endpoint_id, str) or not endpoint_id:
+            continue
+        row = rows.setdefault(endpoint_id, {
+            "endpoint_id": endpoint_id, "peer_instance_id": "", "tasks": 0, "tasks_with_usage": 0,
+            **{k: 0 for k in usage_mod.COUNT_FIELDS}, "models": {},
+        })
+        row["tasks"] += 1
+        if valid_instance_id(rec.get("peer_instance_id")):
+            row["peer_instance_id"] = rec["peer_instance_id"]
+        usage = _closed_usage({**rec["usage"], "source": usage_mod.SOURCE}) \
+            if isinstance(rec.get("usage"), dict) else {}
+        if not usage:
+            continue
+        row["tasks_with_usage"] += 1
+        per_model = row["models"].setdefault(
+            usage["model_id"], {"tasks": 0, **{k: 0 for k in usage_mod.COUNT_FIELDS}})
+        per_model["tasks"] += 1
+        for k in usage_mod.COUNT_FIELDS:
+            row[k] += usage[k]
+            per_model[k] += usage[k]
+    return sorted(rows.values(), key=lambda r: r["endpoint_id"])
 
 
 def trace(tenant_id: str, task_id: str) -> dict[str, Any]:

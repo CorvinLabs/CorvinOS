@@ -38,6 +38,8 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "federation.task_result_received": frozenset({
         "task_id", "endpoint_id", "peer_instance_id", "agent_id", "status",
         "duration_ms", "our_chain_tail", "peer_chain_tail", "tenant_id",
+        # ADR-2292: the peer's signed, engine-attested usage block as scalars.
+        "model_id", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
     }),
     # Agent-to-agent conversation (ADR-2234). Metadata only: the turn TEXT
     # lives in the tenant-local transcript, never in the chain.

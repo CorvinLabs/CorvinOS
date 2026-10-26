@@ -363,7 +363,16 @@ def finish(env: Any, ctx: FederationContext | None, resp: Any, *, tenant_id: str
     if not ctx.spawned and ctx.seen_key:
         _SEEN.forget(ctx.seen_key)
     status = getattr(resp, "status", None) or "error"
+    # ADR-2292: the usage block this instance signed into the response, as scalars (model id +
+    # four token counts). Absent when the engine reported no model.
+    usage_fields: dict = {}
+    try:
+        import a2a_usage  # type: ignore[import-not-found]
+        usage_fields = a2a_usage.audit_fields(getattr(resp, "usage", None))
+    except Exception:  # noqa: BLE001
+        usage_fields = {}
     audit_best_effort("federation.task_completed", "INFO", {
         "task_id": env.task_id, "origin_id": env.origin_id, "agent_id": ctx.agent_id,
         "status": status, "duration_ms": duration_ms, "tenant_id": tenant_id,
+        **usage_fields,
     })

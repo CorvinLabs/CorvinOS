@@ -100,6 +100,28 @@ def _attested_model_of(result: Any) -> str:
         return ""
 
 
+def _usage_block(model_id: str, usage: Any) -> dict:
+    """ADR-2292: the signable usage block for this run, ``{}`` when the engine reported no model.
+
+    Built by ``a2a_usage.build_usage_block`` from the SAME attested model and raw usage the worker span
+    closes on (``engine_span.usage_split`` inside), so the requester sees what this instance prices.
+    """
+    try:
+        import a2a_usage  # type: ignore[import-not-found]
+    except ImportError:
+        _shared = Path(__file__).resolve().parent
+        if str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        try:
+            import a2a_usage  # type: ignore[import-not-found]
+        except ImportError:
+            return {}
+    try:
+        return a2a_usage.build_usage_block(model_id, usage) or {}
+    except Exception:  # noqa: BLE001 — a usage report never fails the run
+        return {}
+
+
 # ── ADR-0144: Snapshot CORVIN_HOME at import time (A3 fix) ──────────────
 # os.environ is mutable; post-boot mutation could redirect the compute-quota
 # gate to an attacker-controlled directory. Analogous to _CORVIN_HOME_SNAPSHOT_SR
@@ -280,6 +302,10 @@ class WorkerResult:
     # byte of content. Empty = nothing was dropped. The receiver signs it into the response data
     # and the audit record so the sender can tell a partial result from a complete one (PLAN-0965 F-02).
     attachments_dropped: dict = field(default_factory=dict)
+    # ADR-2292: the engine-attested usage block (``a2a_usage.build_usage_block``) — the model the
+    # ENGINE reported and its four-way token split, the same two values the worker span closes on.
+    # Empty when the engine reported no model: the receiver then signs no block at all.
+    usage: dict = field(default_factory=dict)
 
 
 # ── System prompt (the structural defence) ────────────────────────────────
@@ -1155,9 +1181,10 @@ def spawn_a2a_worker(
     # ADR-0759 — closes on the model the engine REPORTED plus its four-way
     # token split, so the run is priceable in the Models console. Both come
     # from the drained frames; neither is guessed when the engine stays quiet.
+    _model_id = _attested_model_of(result)
     _emit_a2a_engine_span("end", task_id=task_id, engine_id=engine_name,
                           status=("error" if err else "ok"), duration_ms=_ms(start),
-                          model_id=_attested_model_of(result),
+                          model_id=_model_id,
                           usage=result.usage,
                           tool_call_count=sum(
                               1 for ev in result.events if ev.type == "tool_call"))
@@ -1172,6 +1199,7 @@ def spawn_a2a_worker(
         reason_code=_classify_engine_failure(err, "engine_error") if err else "",
         error=err,
         attachments_dropped=attachments_dropped,
+        usage=_usage_block(_model_id, result.usage),
     )
 
 

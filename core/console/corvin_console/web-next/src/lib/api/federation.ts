@@ -105,6 +105,47 @@ export interface StartConversation {
   settings?: Partial<ConversationSettings>;
 }
 
+/** Token sums the peer's engine reported for one model, priced (or not) with THIS installation's rates. */
+export interface PartnerModelUsage {
+  model_id: string;
+  tasks: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  priced: boolean;
+  /** null = this installation has no rate for the model: tokens only, never the peer's figure. */
+  cost_usd: number | null;
+}
+
+export interface PartnerUsage {
+  endpoint_id: string;
+  peer_instance_id: string;
+  tasks: number;
+  tasks_with_usage: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  models: PartnerModelUsage[];
+  priced_tasks: number;
+  unpriced_tasks: number;
+  cost_usd: number | null;
+  /** The peer's own catalogue figure — a hint it wrote, never verified, never part of cost_usd. */
+  declared_by_peer: { agent_id: string; cost_per_task_usd: number }[];
+}
+
+export interface UsageWindow {
+  active: boolean;
+  epoch_ts: number | null;
+  since_iso: string | null;
+  reason: string;
+}
+
+/** What delegated tasks consumed per partner, from the peers' signed usage blocks (sums, counting window). */
+export const getPartnerUsage = () =>
+  api<{ window: UsageWindow; partners: PartnerUsage[] }>(`${P}/usage`);
+
 export const listLocalAgents = () => api<{ agents: LocalAgent[] }>(`${P}/agents`);
 /** One click: register this installation's Claude Code agent. NOT shared with peers (201 created / 200 existed). */
 export const registerDefaultAgent = (csrf: string) =>

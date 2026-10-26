@@ -86,7 +86,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +116,15 @@ except ImportError:
     if str(_shared) not in sys.path:
         sys.path.insert(0, str(_shared))
     from instance_identity import get_instance_id  # type: ignore[import-not-found]
+
+# ADR-2292: the closed usage block of a signed response (shared with the receiver).
+try:
+    import a2a_usage  # type: ignore[import-not-found]
+except ImportError:
+    _shared = Path(__file__).resolve().parent
+    if str(_shared) not in sys.path:
+        sys.path.insert(0, str(_shared))
+    import a2a_usage  # type: ignore[import-not-found]
 
 # Shared label sanitizer (A4 defense-in-depth, 2026-07-20): labels stored
 # BEFORE the ingestion sanitizer existed may still carry ANSI escapes / bidi
@@ -654,6 +663,11 @@ class SendResult:
     # response. "" = unavailable. Lets a cross-peer trace cite both chains.
     our_chain_tail: str = ""
     peer_chain_tail: str = ""
+    # ADR-2292: the peer's engine-attested usage block from the SIGNED response, re-checked
+    # against the closed shape (a2a_usage.parse_usage_block); ``{}`` when the peer sent none
+    # (an old receiver, or an engine that reported no model) or the block was malformed.
+    # Token counts and a model id only — never a price: the requester prices them itself.
+    usage: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -854,6 +868,9 @@ _AUDIT_ALLOWED_KEYS = frozenset({
     # which transport carried the exchange — closed enum, see _AUDIT_VIA_VALUES.
     # Was missing, so ping_result's via landed in the chain as "redacted".
     "via",
+    # ADR-2292: the peer's signed usage block as scalars (four ints + a model id that must
+    # match a2a_usage.MODEL_ID_RE, checked in _is_safe_audit_value).
+    "model_id", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
 })
 _AUDIT_VIA_VALUES = frozenset({"direct", "relay"})
 _AUDIT_STATUS_VALUES = frozenset({
@@ -901,6 +918,8 @@ def _is_safe_audit_value(key: str, value: Any) -> bool:
         return value in _AUDIT_VIA_VALUES
     if key == "reason":
         return bool(_AUDIT_REASON_RE.match(value))
+    if key == "model_id":
+        return a2a_usage.valid_model_id(value)
     return bool(_AUDIT_ENUMISH_RE.match(value))
 
 
@@ -1574,6 +1593,8 @@ class RemoteTriggerSender:
                 error_detail=self._sanitize_error("Invalid response attachment"),
             )
 
+        # ADR-2292: read only AFTER the HMAC check above, so the block is the peer's signed statement.
+        usage_block = a2a_usage.parse_usage_block(response.get("usage"))
         self._audit_best_effort(
             "A2A.response_received", "INFO",
             {"endpoint_id": endpoint_id, "task_id": task_id,
@@ -1581,7 +1602,8 @@ class RemoteTriggerSender:
              "status": status,
              "attachments_count": len(verified_atts),
              "via": via,
-             "duration_ms": _ms(start)},
+             "duration_ms": _ms(start),
+             **a2a_usage.audit_fields(usage_block)},
         )
 
         # ADR-0116 M4: emit chain_anchor_verified when receiver includes its
@@ -1622,6 +1644,7 @@ class RemoteTriggerSender:
             error_detail=error_det,
             our_chain_tail=sender_chain_tail or "",
             peer_chain_tail=_receiver_tail if isinstance(_receiver_tail, str) else "",
+            usage=usage_block,
         )
 
     def send_reconnect(self, endpoint_id: str, new_url: str, *,
