@@ -27,6 +27,8 @@ _PROBE_ALLOWLIST = {
     ("a2a_connectivity.py", "_ping_peer"): "returns the outcome; both callers stamp it",
     ("remote_trigger_sender.py", "ping"): "the probe itself",
     ("remote_trigger_sender.py", "_http_ping_probe"): "the probe transport",
+    ("corvin_a2a.py", "_cmd_diagnose"): "read-only report: pings, prints the result and writes no "
+                                       "connection state, so it cannot leave presence stale",
 }
 _PROBE_FILES = [
     _REPO / "core/a2a/a2a_connectivity.py",
