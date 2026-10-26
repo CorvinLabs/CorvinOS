@@ -712,9 +712,46 @@ def _cmd_list_origins(_: argparse.Namespace) -> int:
 
 
 def _cmd_list_endpoints(_: argparse.Namespace) -> int:
+    import endpoint_role as _er  # type: ignore[import-not-found]  # ADR-2294
+
     ids = _list_dir(_endpoints_dir())
+    roles = _er.read_endpoint_roles(_endpoints_dir())
     for i in ids:
-        print(i)
+        org, role = roles.get(i, ("", _er.ROLE_UNSET))
+        stated = role if role != _er.ROLE_UNSET else _er.UNSET_RECORD_TEXT
+        print(f"{i}  {org or '-'}  {stated}")
+    return 0
+
+
+def _cmd_set_role(args: argparse.Namespace) -> int:
+    """ADR-2294: state the organisation and GDPR role of an endpoint (the operator's own statement).
+
+    The same validated, audit-first writer as the console route; actor ``cli``. The role is never
+    inferred from the peer. ``--organisation`` may be omitted once one is stored.
+    """
+    import endpoint_role as _er  # type: ignore[import-not-found]
+
+    endpoints_dir = _endpoints_dir()
+    ep_id = _resolve_endpoint_id(args.endpoint_id, endpoints_dir)
+    cfg = _read_endpoint_cfg(endpoints_dir / f"{ep_id}.json")
+    if not cfg:
+        print(f"error: no endpoint named {args.endpoint_id!r} (see: corvin-a2a list-endpoints)", file=sys.stderr)
+        return 2
+    organisation = args.organisation if args.organisation is not None else _er.organisation_of(cfg)
+    if not organisation:
+        print("error: --organisation is required the first time a role is set", file=sys.stderr)
+        return 2
+    try:
+        from core.tenants.validation import validate_tenant_id  # type: ignore[import-not-found]
+        tenant = validate_tenant_id(os.environ.get("CORVIN_TENANT_ID") or "_default")
+        out = _er.set_endpoint_role(
+            ep_id, organisation=organisation, gdpr_role=args.role, actor="cli", tenant_id=tenant,
+            endpoints_dir=endpoints_dir,
+        )
+    except _er.EndpointRoleError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(out, sort_keys=True, indent=2))
     return 0
 
 
@@ -1759,6 +1796,17 @@ def main(argv: list[str] | None = None) -> int:
     p_lep.add_argument("endpoint_id", help="endpoint_id (filename stem) or existing label")
     p_lep.add_argument("label", help="friendly name (≤ 64 chars, no control chars)")
 
+    p_sr = sub.add_parser(
+        "set-role",
+        help="state an endpoint's organisation and GDPR role; data classified above public is only sent "
+             "once a role is set (controller, processor, joint, unset)",
+    )
+    p_sr.add_argument("endpoint_id", help="endpoint_id (filename stem) or label")
+    p_sr.add_argument("--role", required=True,
+                      help="controller | processor | joint | unset (your statement, never inferred)")
+    p_sr.add_argument("--organisation", default=None,
+                      help="the partner's organisation (1-80 chars, no markup); required the first time")
+
     p_ag = sub.add_parser("agents", help="list all known agents (local + remote)")
     p_ag.add_argument("--json", action="store_true", dest="json",
                       help="output as machine-readable JSON")
@@ -1877,6 +1925,7 @@ def main(argv: list[str] | None = None) -> int:
         "show-origin": _cmd_show_origin,
         "show-endpoint": _cmd_show_endpoint,
         "label-endpoint": _cmd_label_endpoint,
+        "set-role": _cmd_set_role,
         "agents": _cmd_agents,
         "invite": _cmd_invite,
         "accept": _cmd_accept,

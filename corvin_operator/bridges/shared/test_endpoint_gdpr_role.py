@@ -126,7 +126,8 @@ def test_classifier_failure_refuses_only_where_the_rule_could_apply(monkeypatch)
 
 def test_refusal_text_tells_the_operator_what_to_set_and_where():
     text = er.refusal_text()
-    for needle in ("GDPR role", "organisation", "controller", "processor", "joint", "Peers", "corvin-a2a set-role"):
+    for needle in ("GDPR role", "organisation", "controller", "processor", "joint",
+                   "console: Peers > <partner> > Role", "`corvin-a2a set-role"):
         assert needle in text, needle
 
 

@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EndpointRoleSection } from "@/components/chat/EndpointRoleSection";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -875,6 +876,14 @@ function EndpointRow({
       {deleteError && (
         <p className="rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">{deleteError}</p>
       )}
+
+      {/* Organisation + GDPR role: the operator's statement, editable for every endpoint (also token pairings) */}
+      <EndpointRoleSection
+        endpointId={endpoint.endpoint_id}
+        organisation={endpoint.organisation}
+        gdprRole={endpoint.gdpr_role}
+        csrf={csrf}
+      />
 
       {/* Inline edit form */}
       {editing && (

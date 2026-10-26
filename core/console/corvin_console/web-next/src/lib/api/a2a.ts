@@ -43,6 +43,9 @@ export interface A2AEndpoint {
   state?: "PENDING" | "ACTIVE";
   label?: string | null;
   _friendship?: boolean;
+  /** Operator-stated (empty / "unset" until stated); never inferred from the partner. */
+  organisation?: string;
+  gdpr_role?: "controller" | "processor" | "joint" | "unset";
 }
 
 export interface A2AEndpointsResponse {
@@ -506,6 +509,18 @@ export async function patchA2AEndpoint(
 ): Promise<{ ok: boolean; endpoint_id: string; label: string | null; url: string | null; enabled: boolean; default_ttl_s: number | null }> {
   return api(`/remote-trigger/endpoints/${encodeURIComponent(endpointId)}`, {
     method: "PATCH",
+    body,
+    csrf,
+  });
+}
+
+export async function putA2AEndpointGdprRole(
+  endpointId: string,
+  body: { organisation: string; gdpr_role: "controller" | "processor" | "joint" | "unset" },
+  csrf: string,
+): Promise<{ ok: boolean; endpoint_id: string; organisation: string; gdpr_role: "controller" | "processor" | "joint" | "unset" }> {
+  return api(`/remote-trigger/endpoints/${encodeURIComponent(endpointId)}/gdpr-role`, {
+    method: "PUT",
     body,
     csrf,
   });

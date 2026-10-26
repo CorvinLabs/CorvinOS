@@ -49,9 +49,9 @@ _ACTOR_RE = re.compile(r"^(console|cli)(:[A-Za-z0-9_\-]{1,64})?$")
 
 _REFUSAL_TEXT = (
     "Refused: this connection has no GDPR role yet, so data classified above public is not sent to it. "
-    "State the partner's organisation and GDPR role (controller, processor or joint) in the console "
-    "under Agent Hub > Peers > outbound endpoint > GDPR role, or with "
-    "'corvin-a2a set-role <endpoint> --organisation <name> --role <role>'. Public data still goes."
+    "State the partner's organisation and GDPR role (controller, processor or joint) - "
+    "console: Peers > <partner> > Role, or `corvin-a2a set-role <endpoint> --role <role> "
+    "--organisation <name>`. Public data still goes."
 )
 
 

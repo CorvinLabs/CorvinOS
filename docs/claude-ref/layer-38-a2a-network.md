@@ -2013,11 +2013,44 @@ Proof: `tests/sandbox/test_gap_chat.py::test_G6_*`.
 
 `corvin-compliance-reports gdpr-30` has a section 7, "Cross-organisation delegation", built from
 `federation.*` and `workflow.peer_*` events (`gdpr_ropa._FEDERATION_EVENTS`): per peer, delegated out,
-results back, workflow steps, served in, refused, outcome unknown. Counts only; the chain holds no task or
+results back, workflow steps, served in, refused, outcome unknown (ADR-2294 adds the organisation and GDPR role columns). Counts only; the chain holds no task or
 answer text. Until now the record stopped at `A2A.*` and showed none of these flows.
 `core/compliance/tests/test_ropa_federation.py` fails when a new `federation.*` / `workflow.peer_*` event is
 registered without being listed or exempted with a reason, and proves the section end to end through the real
 audit writer and generator.
+
+### Organisation and GDPR role per endpoint — classified data needs a stated role (ADR-2294, 2026-10-26)
+
+An endpoint record (`remote_endpoints/<id>.json`) carries two operator-stated fields: `organisation` (1 to 80
+characters, no markup) and `gdpr_role` in `controller | processor | joint | unset`. Absent means `unset` — never
+inferred from the peer's catalogue, URL, label or name, and never defaulted to `processor`. No legal analysis is
+generated: the role is the operator's statement and is not checked against a contract.
+
+**Who writes it.** Only `corvin_operator/bridges/shared/endpoint_role.py::set_endpoint_role`, called by the console
+(`PUT /v1/console/remote-trigger/endpoints/{id}/gdpr-role`, CSRF, 422 on an invalid value) and the CLI. It is
+audit-first: `federation.endpoint_role_set` (endpoint id, role, actor `console:<session fingerprint>` or `cli`; never
+the organisation text or a justification) must commit before the record changes. Pairing, re-pairing, the receiver's
+reconnect handler and the relay never name the key, so a peer cannot set or change its own label or role;
+`test_endpoint_gdpr_role.py` pins that structurally.
+
+**The rule.** Anything classified above `PUBLIC` toward an endpoint whose role is `unset` is refused with the closed
+reason `endpoint_role_unset` (`A2A.outbound_refused` in the chain, payload grade only), even when `peer_policy` released
+the grade. Public data is unaffected, and a stated role changes nothing else: `peer_policy` still applies. The rule sits
+in `RemoteTriggerSender.send` (every chat, MCP, CLI, group, conversation and outbox send), in
+`core.federation.delegation.delegate` (asked before its audit-first record, so a refused task is never recorded as
+delegated) and in the workflow gate `peer_gate.evaluate_peer_outbound`. Proof: `tests/federation/test_endpoint_gdpr_role_e2e.py`
+(real sender against a real receiver over HTTP, real `DAGRunner` run).
+
+**Set a role.** Console: Peers > the partner > *Set role* (organisation and role). CLI:
+`corvin-a2a set-role <endpoint> --role processor --organisation "Acme Analytics GmbH"` (`--organisation` may be omitted
+once one is stored); `corvin-a2a list-endpoints` prints both fields, an unset role as `unset - operator decision pending`.
+
+**One-time consequence for existing peers.** Every endpoint paired before this change has no role, so classified data
+to it is refused until an operator sets one. Public data keeps flowing. The refusal text names both places to fix it.
+
+**Art. 30.** Section 7 of `corvin-compliance-reports gdpr-30` lists every endpoint with organisation and role next to its
+flow counts, including paired endpoints with no flow in the period; `unset` prints as `unset - operator decision
+pending`.
 
 ## The inbound worker's isolation is a test, not a docstring (PLAN-0965 F-06, 2026-10-25)
 

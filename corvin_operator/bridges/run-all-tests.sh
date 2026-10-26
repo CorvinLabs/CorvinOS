@@ -788,6 +788,12 @@ run "Python: L38 v3 LIVE compute E2E (ADR-0048)"       python3 shared/test_a2a_e
 run "Python: L38 dropped output files are reported (PLAN-0965 F-02)" python3 shared/test_a2a_attachments_dropped_e2e.py >/dev/null || fails=$((fails+1))
 run "Python: L38 corvin-a2a diagnose CLI E2E (PLAN-0965 F-12)" python3 shared/test_a2a_diagnose_cli_e2e.py >/dev/null || fails=$((fails+1))
 run "Python: L38 inbound worker isolation contract (PLAN-0965 F-06)" python3 shared/test_a2a_worker_isolation_contract.py >/dev/null || fails=$((fails+1))
+# ADR-2294: organisation + GDPR role of a paired endpoint; classified data needs a stated role.
+run "Python: L38 endpoint GDPR role unit + only-operator-writes ratchet (ADR-2294)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_endpoint_gdpr_role.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: L38 corvin-a2a set-role CLI E2E (ADR-2294)" python3 shared/test_a2a_set_role_cli_e2e.py >/dev/null || fails=$((fails+1))
+run "Python: L38 GDPR-role outbound rule on every send path, two-instance E2E (ADR-2294)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../tests/federation/test_endpoint_gdpr_role_e2e.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: L38 console endpoint GDPR-role route, CSRF + audit (ADR-2294)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../core/console/tests/test_a2a_endpoint_gdpr_role_route.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: Art. 30 record shows organisation and GDPR role per peer (ADR-2294)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../core/compliance/tests/test_ropa_federation.py ../../core/workflows/tests/test_peer_gate.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 # 2026-08-01 audit: these 7 A2A test files existed but were referenced by
 # NEITHER this script NOR coverage.yml (operator/bridges/shared/ is
 # explicitly excluded there — see that workflow's "KNOWINGLY NOT RUN HERE"
