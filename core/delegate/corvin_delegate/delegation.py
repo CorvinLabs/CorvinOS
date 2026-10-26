@@ -1471,15 +1471,28 @@ def _check_data_classification(
     module is genuinely unavailable (adapter / tenant-policy parity).
     """
     try:
-        from data_classification import load_guard_for_tenant, classify_task  # type: ignore
+        from data_classification import (  # type: ignore
+            load_guard_for_tenant, classify_task, secret_floor_refusal,
+        )
     except Exception:  # noqa: BLE001 — module not on path → no enforcement
         return None
     tenant_id = os.environ.get("CORVIN_TENANT_ID") or "_default"
     try:
-        # Opt-in (adapter parity): no tenant data_classification config → allow.
+        # Opt-in (adapter parity): no tenant data_classification config → allow,
+        # except a SECRET prompt, which the built-in floor refuses (T-0254).
         guard = load_guard_for_tenant(tenant_id)
         if guard is None:
-            return None
+            floor = secret_floor_refusal(tenant_id, engine_id=engine, prompt=prompt,
+                                         persona=persona_tag or None)
+            if floor is None:
+                return None
+            return DelegateResult(
+                ok=False,
+                engine=engine,
+                error=(f"data-flow-denied: classification SECRET is not allowed for "
+                       f"engine {engine!r}: {floor.reason}")[:400],
+                model=model,
+            )
         classification = classify_task(prompt or "", persona=persona_tag or None)
         decision = guard.validate(
             classification=classification,

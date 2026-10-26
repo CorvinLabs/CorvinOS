@@ -101,7 +101,8 @@ def _load_l34_guard(tenant_id: str, corvin_home: Path | None):
     """Return a mtime-cached DataFlowGuard for *tenant_id*, None, or a load-failure marker.
 
     Cache is invalidated when ``tenant.corvin.yaml`` mtime changes. ``None`` means the
-    tenant has no policy file (fail-open by design). A policy file that is present but
+    tenant has no policy file (no residency policy by design; ``check_l34`` still applies the
+    SECRET floor, T-0254). A policy file that is present but
     cannot be loaded (missing module, unreadable yaml) yields an ``_L34GuardLoadFailed``
     marker — never cached — and ``check_l34`` refuses on it.
     """
@@ -177,6 +178,36 @@ def detector_on(tenant_id: str, corvin_home: "Path | None" = None) -> bool:
     return bool(getattr(guard, "detector_on", False))
 
 
+def _no_policy_secret_refusal(
+    engine_id: str, tenant: str, *, classification: "str | None", prompt: "str | None",
+    persona: "str | None", channel: str, chat_key: str, corvin_home: "Path | None",
+) -> "str | None":
+    """T-0254: a tenant with no ``tenant.corvin.yaml`` still refuses a SECRET prompt.
+
+    ``None`` (nothing objects) for everything below SECRET and for any classifier error, so
+    the zero-config default keeps working; a refusal string for a literal credential, with
+    ``data_flow.blocked`` written by the default guard (see ``secret_floor_refusal``).
+    """
+    try:
+        from data_classification import secret_floor_refusal  # type: ignore
+    except Exception as exc:  # noqa: BLE001 — module unimportable: same fail-open as before
+        _log.debug("spawn_gates.check_l34: secret floor unavailable (%r)", exc)
+        return None
+    decision = secret_floor_refusal(
+        tenant, engine_id=engine_id, prompt=prompt, classification=classification,
+        persona=persona, channel=channel or None, chat_key=chat_key or None,
+        corvin_home=corvin_home)
+    if decision is None:
+        return None
+    _log.info("[spawn-gate/L34] denied (no policy, SECRET floor) engine=%s reason=%s channel=%s chat=%s",
+              engine_id, decision.reason, channel, chat_key)
+    return (
+        f"[data-flow] Spawn rejected: the prompt contains a credential (classification SECRET) "
+        f"and engine '{engine_id}' is not local with zero network egress. {decision.reason} "
+        "This holds even without a tenant.corvin.yaml. Remove the credential from the prompt."
+    )
+
+
 def check_l34(
     engine_id: str,
     tenant_id: str,
@@ -198,7 +229,8 @@ def check_l34(
     is judged against the provider and not against ``claude_code``. ``None`` is today's gate.
 
     Returns ``None`` when the spawn is permitted (gate passes, or no tenant
-    config — the opt-in default, fail-open).  Returns a user-facing refusal
+    config — the opt-in default, fail-open — except for a SECRET prompt, which
+    is refused even then, T-0254).  Returns a user-facing refusal
     string when the gate denies, AND when a present policy could not be loaded,
     classified or validated (gate error — fail-closed, like ``check_l44``).
 
@@ -227,7 +259,9 @@ def check_l34(
     tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
     guard = _load_l34_guard(tenant, corvin_home)
     if guard is None:
-        return None
+        return _no_policy_secret_refusal(
+            engine_id, tenant, classification=classification, prompt=prompt, persona=persona,
+            channel=channel, chat_key=chat_key, corvin_home=corvin_home)
     if isinstance(guard, _L34GuardLoadFailed):
         # Fail CLOSED: a tenant policy exists, so the operator asked for the gate, and
         # we cannot evaluate it. Waving the spawn through would send a possibly SECRET
@@ -262,7 +296,7 @@ def check_l34(
             # allowed against the residency matrix, so deny rather than wave it
             # through. Consistent with the validate handler below and check_l35.
             # (The legitimate no-policy opt-in case is the guard-is-None early
-            # return above, which stays fail-open by design.)
+            # return above: no policy, so only the SECRET floor applies.)
             _log.warning("spawn_gates.check_l34: classify_task failed (%r) — fail-closed", exc)
             return (
                 "[data-flow] Spawn rejected: task classification failed for engine "

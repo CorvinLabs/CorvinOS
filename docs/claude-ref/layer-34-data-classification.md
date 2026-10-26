@@ -146,10 +146,20 @@ spec:
       CONFIDENTIAL: [local, eu_cloud, us_cloud]   # opt IN to a US-cloud engine
 ```
 
-The enforcement contract is unchanged: with NO `tenant.corvin.yaml` on disk,
-`load_guard_for_tenant` returns `None` (no enforcement). The restrictive default
-applies the moment a tenant config exists without its own `matrix` — and it is
-what the fail-closed fallback for an unparseable config always promised.
+With NO `tenant.corvin.yaml` on disk, `load_guard_for_tenant` returns `None` (no
+policy), and PUBLIC / INTERNAL / CONFIDENTIAL stay the operator's opt-in. The
+restrictive default applies the moment a tenant config exists without its own
+`matrix` — and it is what the fail-closed fallback for an unparseable config always
+promised.
+
+**SECRET floor without a policy (T-0254, ADR-2299).** A tenant with no
+`tenant.corvin.yaml` still refuses a prompt classified `SECRET` (a literal credential:
+`ghp_`, `sk-ant-`, an AWS key, ...). `data_classification.secret_floor_refusal()` judges it
+with the built-in default guard, which admits SECRET only for an engine registered as local
+with zero egress — no bundled engine is — and writes `data_flow.blocked` (class, engine,
+rule; never the prompt) to the tenant's chain. Every spawn-site gate that reads a `None`
+guard asks it: `spawn_gates.check_l34` (bridge, console, ACS), the delegation gate and the
+inbound A2A worker. A classifier error there allows (no policy: an error is not evidence).
 
 `DataClassification.parse()` returns `None` for an unknown value (it used to
 return `INTERNAL`, which every default row allows on a cloud engine — a typo in a
@@ -507,7 +517,9 @@ Each of these is a candidate for a later ADR. None is claimed here as a guarante
 * Don't fail-open the pre-spawn gate on a load error: when a tenant policy file exists but
   `data_classification` cannot be imported or the yaml cannot be loaded, `spawn_gates.check_l34`
   refuses the spawn (`L34_GUARD_LOAD_FAILED`, never cached; since 2026-10-21 — before, the guard
-  became `None` and every prompt passed). Only a tenant WITHOUT a policy file is fail-open.
+  became `None` and every prompt passed). Only a tenant WITHOUT a policy file is fail-open,
+  and even that one refuses a SECRET prompt (`secret_floor_refusal`, T-0254) — don't make a
+  call site treat a `None` guard as "allow everything" without asking it.
 * Don't fail-open the gate on error: unknown engine / unparseable config must
   still enforce the DEFAULT matrix (which keeps the SECRET floor), never
   allow-all.

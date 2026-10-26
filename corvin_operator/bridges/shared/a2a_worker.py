@@ -680,14 +680,29 @@ def spawn_a2a_worker(
     # exception must never turn the CONFIDENTIAL→local block into a silent
     # bypass (CLAUDE.md L38: data_flow.blocked is not advisory).
     try:
-        from data_classification import load_guard_for_tenant, classify_task  # type: ignore
+        from data_classification import (  # type: ignore
+            load_guard_for_tenant, classify_task, secret_floor_refusal,
+        )
     except ImportError:
         load_guard_for_tenant = None  # type: ignore
     if load_guard_for_tenant is not None:
         try:
             _tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
-            # Opt-in (adapter parity): no tenant data_classification config → allow.
+            # Opt-in (adapter parity): no tenant data_classification config → allow,
+            # except a SECRET task, which the built-in floor refuses (T-0254).
             _guard = load_guard_for_tenant(_tid)
+            if _guard is None:
+                _floor = secret_floor_refusal(_tid, engine_id="claude_code",
+                                              prompt=clean, persona=persona or None)
+                if _floor is not None:
+                    return WorkerResult(
+                        status="rejected", raw_output="",
+                        parsed_output={}, duration_ms=_ms(start),
+                        persona=persona, engine_name="claude_code",
+                        reason_code="data_flow",
+                        error=(f"data-flow-denied: SECRET not allowed for "
+                               f"A2A worker engine: {_floor.reason}")[:300],
+                    )
             if _guard is not None:
                 if getattr(_guard, "route_malformed", False) is True:
                     # ADR-2268 R1a: a malformed sensitive_route refuses every turn (A2A cannot reroute).

@@ -422,8 +422,9 @@ DELEGATION_ENGINE_ID: str = "acs"
 #         matrix:
 #           CONFIDENTIAL: [local, eu_cloud, us_cloud]   # opt IN to US cloud
 #
-# Note the enforcement contract is unchanged: no tenant.corvin.yaml on disk →
-# ``load_guard_for_tenant`` returns None (no enforcement at all). This matrix
+# Note the enforcement contract: no tenant.corvin.yaml on disk →
+# ``load_guard_for_tenant`` returns None (no policy). Only the SECRET row of this
+# matrix still applies then, through ``secret_floor_refusal`` (T-0254); the rest
 # applies the moment a tenant config exists without its own ``matrix``.
 DEFAULT_MATRIX: dict[DataClassification, frozenset[Locality]] = {
     DataClassification.PUBLIC:       frozenset({"local", "eu_cloud", "us_cloud"}),
@@ -1320,7 +1321,7 @@ def _tenant_config_file(
     if tenants_root not in cfg_path.parents:
         return None
     if not cfg_path.is_file():
-        return None  # opt-in: no config → no enforcement (adapter parity)
+        return None  # opt-in: no config → no policy (SECRET floor: secret_floor_refusal, T-0254)
     return tenant_id, home, cfg_path
 
 
@@ -1361,8 +1362,9 @@ def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) ->
     SINGLE SOURCE OF TRUTH for the L34 opt-in contract used by every
     spawn-site gate (adapter, ACS, delegation, A2A, compute batch):
 
-      * No ``tenant.corvin.yaml`` on disk  → return None (NO enforcement —
-        the single-operator zero-config default; preserves back-compat).
+      * No ``tenant.corvin.yaml`` on disk  → return None (no POLICY — the
+        single-operator zero-config default; preserves back-compat). The SECRET
+        floor still holds: a caller that gets None asks :func:`secret_floor_refusal`.
       * File present → parse it and build a guard from its real
         ``spec.data_classification`` matrix (NOT the bare default matrix).
 
@@ -1373,7 +1375,7 @@ def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) ->
     """
     resolved = _tenant_config_file(tenant_id, corvin_home)
     if resolved is None:
-        return None  # invalid id / outside <home>/tenants / no config → no enforcement
+        return None  # invalid id / outside <home>/tenants / no config → no policy (SECRET floor still asked)
     tenant_id, home, cfg_path = resolved
     audit_path = _guard_audit_chain(tenant_id, home)
     try:
@@ -1397,3 +1399,66 @@ def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) ->
     return DataFlowGuard.from_tenant_config(
         cfg, audit_writer=make_forge_audit_writer(audit_path),
     )
+
+
+def secret_floor_refusal(
+    tenant_id: str,
+    *,
+    engine_id: str,
+    prompt: "str | None" = None,
+    classification: "DataClassification | str | int | None" = None,
+    persona: "str | None" = None,
+    channel: "str | None" = None,
+    chat_key: "str | None" = None,
+    corvin_home: "Path | None" = None,
+) -> "FlowDecision | None":
+    """The SECRET floor of a tenant that has NO ``tenant.corvin.yaml`` (T-0254).
+
+    ``load_guard_for_tenant`` returns ``None`` for such a tenant, and every spawn-site gate
+    used to read that as "no enforcement at all": a prompt carrying a literal credential
+    (``ghp_``, ``sk-ant-``, an AWS key, ...) reached a cloud engine with no classification
+    record. This is the one rule that survives the missing policy: a prompt classified
+    ``SECRET`` is judged by the built-in default guard, which admits it only for an engine
+    registered as local with zero network egress. No bundled engine is, so the turn is
+    refused and ``data_flow.blocked`` is written to the tenant's chain (class name, engine
+    id and rule only — never the prompt).
+
+    Everything below SECRET is untouched: PUBLIC, INTERNAL and CONFIDENTIAL stay the
+    operator's opt-in (the zero-config default of :func:`load_guard_for_tenant`), and no
+    audit record is written for them.
+
+    Returns the denying :class:`FlowDecision`, or ``None`` when nothing objects. Callers
+    use it ONLY where their guard is ``None``; a tenant WITH a policy is judged by that
+    policy. A classifier error returns ``None`` (fail-open, like the guard-is-None path it
+    replaces): with no policy nothing proves the prompt is a secret, and a broken
+    classifier must not brick a zero-config install. The audit write is best-effort; the
+    refusal never depends on it.
+    """
+    secret = DataClassification.SECRET
+    if classification is not None:
+        if DataClassification.parse(classification) is not secret:
+            return None
+    else:
+        try:
+            if classify_task(prompt or "", persona=persona) is not secret:
+                return None
+        except Exception as exc:  # noqa: BLE001 — no policy: an error is not evidence
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "secret_floor_refusal: classify_task failed (%r) — no policy, allowing", exc)
+            return None
+
+    writer: "AuditWriter | None" = None
+    try:
+        tid = tenant_id if isinstance(tenant_id, str) and re.fullmatch(
+            r"[a-z0-9_][a-z0-9_-]{0,62}", tenant_id) else "_default"
+        home = corvin_home if corvin_home is not None else _default_home()
+        home = Path(os.path.expanduser(os.path.expandvars(str(home))))
+        writer = make_forge_audit_writer(_guard_audit_chain(tid, home))
+    except Exception:  # noqa: BLE001 — the refusal below never depends on the audit path
+        writer = None
+    decision = DataFlowGuard.from_tenant_config({}, audit_writer=writer).validate(
+        classification=secret, engine_id=engine_id,
+        persona=persona, channel=channel, chat_key=chat_key,
+    )
+    return None if decision.allowed else decision
