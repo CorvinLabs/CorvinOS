@@ -58,6 +58,7 @@ MIN_INTERVAL_S = 2.0
 MAX_INTERVAL_S = 30.0
 SOURCE_CHECK_S = 300.0
 ANOMALY_CHECK_S = 300.0
+PRUNE_CHECK_S = 24 * 3600.0      # the Data Hub tidies up after itself once a day (``datahub_unified.prune``)
 SAVE_EVERY_TICKS_WHEN_IDLE = 10
 RETRY_FAILED_S = 3600.0          # a failed/partial regeneration is retried after an hour
 RETRY_REFUSED_S = 24 * 3600.0    # a refused one (secret in the source, ...) after a day
@@ -149,14 +150,23 @@ class LearningHost:
 
     def __init__(self, tenant_id: str = "_default", *,
                  sources: Optional[Callable[[str], list]] = None,
-                 regenerate: Optional[Callable[..., Any]] = None):
+                 regenerate: Optional[Callable[..., Any]] = None,
+                 prune: Optional[Callable[..., Any]] = None):
         self.tenant_id = tenant_id
         self.daemon = DataHubLearningDaemon(tenant_id)
         self.cursor: dict[str, Any] = {}
         self._sources = sources
         self._regenerate = regenerate
+        self._prune = prune
         self._last_source_check = 0.0
         self._last_anomaly_check = 0.0
+        self._last_prune_check = 0.0
+        # What the self-clean pass did, persisted with the state so any process can show it.
+        # ``observing_since``: the unused-skill rule only holds once the daemon has watched the whole window.
+        self.prune_state: dict[str, Any] = {
+            "observing_since": None, "last_epoch": 0.0, "last_at": "", "last_removed": 0,
+            "last_failed": 0, "last_refused": "", "total_removed": 0,
+        }
         self.anomalies: dict[str, dict[str, Any]] = {}
         self._dirty = False
         self._idle_ticks = 0
@@ -198,14 +208,27 @@ class LearningHost:
         self.cursor = dict(raw.get("cursor") or {})
         self.regenerations = list(raw.get("regenerations") or [])[-50:]
         self.anomalies = {str(k): v for k, v in (raw.get("anomalies") or {}).items() if isinstance(v, dict)}
+        saved = raw.get("prune") if isinstance(raw.get("prune"), dict) else {}
+        for key in self.prune_state:
+            if key in saved:
+                self.prune_state[key] = saved[key]
+        try:
+            self._last_prune_check = float(self.prune_state.get("last_epoch") or 0.0)
+        except (TypeError, ValueError):
+            self._last_prune_check = 0.0
         return True
 
     def save(self) -> None:
+        # The daemon starts to "watch" when it first has something worth saving; an idle host with no
+        # subject writes nothing (and so never starts the clock of the unused-skill rule).
+        if self.prune_state.get("observing_since") is None:
+            self.prune_state["observing_since"] = time.time()
         _atomic_write(state_path(self.tenant_id), {
             "tenant_id": self.tenant_id, "saved_at": datetime.utcnow().isoformat(),
             "cursor": self.cursor, "daemon": self.daemon.snapshot(),
             "regenerations": self.regenerations[-50:],
             "anomalies": self.anomalies,
+            "prune": self.prune_state,
         })
         self._dirty = False
 
@@ -240,7 +263,11 @@ class LearningHost:
             self._last_anomaly_check = now
             work += self._check_anomalies(now)
 
-        batch = await self.daemon.regeneration_scheduler.get_ready_batch()
+        if now - self._last_prune_check >= PRUNE_CHECK_S:
+            self._last_prune_check = now
+            work += await self._prune_once(now)
+
+        batch =await self.daemon.regeneration_scheduler.get_ready_batch()
         for i, skill_id in enumerate(batch):
             if self._stop_requested():
                 # Shutting down: start no further regeneration; the rest stay queued for the next
@@ -293,6 +320,35 @@ class LearningHost:
         if changed:
             self._dirty = True
         return changed
+
+    async def _prune_once(self, now: float) -> int:
+        """The Data Hub's self-clean pass: the system decides which of its skills go (see
+        ``datahub_unified.prune``). Audited, guarded, never fatal to the host."""
+        fn = self._prune or _default_prune
+        d = self.daemon
+        used = set(d.execution_listener.skill_success_rate) | {
+            f.skill_id for f in d.feedback_collector.feedback_history}
+        try:
+            res = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: fn(self.tenant_id, now=now, used_ids=used,
+                                 observing_since=self.prune_state.get("observing_since")))
+        except Exception as exc:  # noqa: BLE001 - a failed pass is retried tomorrow, the host carries on
+            logger.warning("datahub prune pass failed (%s)", type(exc).__name__)
+            self.prune_state.update({"last_epoch": now, "last_refused": "error:" + type(exc).__name__})
+            self._dirty = True
+            return 0
+        removed = len(getattr(res, "removed", []) or [])
+        failed = len(getattr(res, "failed", []) or [])
+        refused = str(getattr(res, "refused", "") or "")
+        self.prune_state.update({
+            "last_epoch": now, "last_at": _iso(now), "last_removed": removed, "last_failed": failed,
+            "last_refused": refused, "total_removed": int(self.prune_state.get("total_removed") or 0) + removed,
+        })
+        # A pass that found nothing to do leaves no trace on disk (an idle host writes no state); it
+        # simply runs again after a restart, which is cheap and idempotent.
+        if removed or failed or refused:
+            self._dirty = True
+        return removed
 
     async def _check_sources(self) -> int:
         """A hash change of a watched source is a ``data_changed`` event for the skills built on it."""
@@ -391,7 +447,7 @@ class LearningHost:
             "queue": list(d.regeneration_scheduler.regeneration_queue),
             "regenerations": self.regenerations[-10:], "cursor": dict(self.cursor),
             "standby": bool(getattr(self, "standby", False)), "lease": self.lease.held,
-            "decisions": len(d.audit_trail),
+            "decisions": len(d.audit_trail), "prune": dict(self.prune_state),
         }
 
     def _stop_requested(self) -> bool:
@@ -456,6 +512,19 @@ def _default_regenerate(tenant_id: str, skill_id: str, *, reason: str):
     return regenerate_skill(tenant_id, skill_id, reason=reason)
 
 
+def _iso(ts: float) -> str:
+    try:
+        return datetime.utcfromtimestamp(ts).isoformat() + "Z"
+    except (OverflowError, OSError, ValueError):     # a clock far outside the calendar (tests, broken RTC)
+        return ""
+
+
+def _default_prune(tenant_id: str, *, now: float, used_ids, observing_since):
+    from core.skills.os_skills.datahub_unified.prune import run
+
+    return run(tenant_id, now=now, used_ids=used_ids, observing_since=observing_since)
+
+
 def read_state_summary(tenant_id: str) -> dict[str, Any]:
     """The daemon's persisted state as a content-free summary - readable from ANY process.
 
@@ -483,6 +552,7 @@ def read_state_summary(tenant_id: str) -> dict[str, Any]:
         "cursor": raw.get("cursor") or {},
         "pending_inbox_files": len(learning_inbox.day_files(tenant_id)),
         "anomalies": [v for v in (raw.get("anomalies") or {}).values() if isinstance(v, dict)],
+        "prune": raw.get("prune") if isinstance(raw.get("prune"), dict) else {},
     }
 
 

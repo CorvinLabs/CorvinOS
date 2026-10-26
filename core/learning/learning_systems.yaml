@@ -30,6 +30,7 @@ systems:
     tests:
       - core/background/test_learning_host.py
       - core/console/tests/test_datahub_learning_loop_e2e.py
+      - core/console/tests/test_datahub_prune_e2e.py   # D6: the host's daily self-clean pass
 
   - id: L02
     name: Anomaly monitor (learning host, every 300 s)

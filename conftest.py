@@ -278,7 +278,12 @@ import tempfile as _tempfile
 _REAL_HOME = Path(_os.path.expanduser("~")).resolve()
 _REAL_CONFIG = _REAL_HOME / ".config"
 _REAL_VOICE_CONFIG = _REAL_CONFIG / "corvin-voice"
-_ISOLATED_KEYS = ("CORVIN_HOME", "XDG_CONFIG_HOME", "CORVIN_AUDIT_ANCHOR_KEY")
+#: ``CORVIN_PLUGIN_SLOT_DIR`` redirects the engine-facing skill mirror (``skill_forge.registry.plugin_slot_dir``).
+#: Left unset it resolves to the REAL ``corvin_operator/skill-forge/skills/dyn`` of the checkout, so every test
+#: that creates a skill left a mirror there (120 ``assistant_datahub_*`` ones from three Data Hub tests alone,
+#: 2026-10-12..24), which the engine's skill loader and the CEL skill stage then read as real skills.
+_ISOLATED_KEYS = ("CORVIN_HOME", "XDG_CONFIG_HOME", "CORVIN_AUDIT_ANCHOR_KEY", "CORVIN_PLUGIN_SLOT_DIR")
+_REAL_PLUGIN_SLOT = _REPO_ROOT / "corvin_operator" / "skill-forge" / "skills" / "dyn"
 
 
 def _norm(p: "str | Path") -> Path:
@@ -361,6 +366,8 @@ def _unsafe(key: str, value: "str | None") -> bool:
     p = _norm(value.strip())
     if _is_protected(p):
         return True
+    if key == "CORVIN_PLUGIN_SLOT_DIR":
+        return _under(p, _REAL_PLUGIN_SLOT) or _under(_REAL_PLUGIN_SLOT, p)
     if key == "XDG_CONFIG_HOME":
         return p == _REAL_CONFIG or _under(_REAL_CONFIG, p)
     if key == "CORVIN_AUDIT_ANCHOR_KEY":
@@ -379,6 +386,7 @@ def _install_session_sandbox() -> "tuple[Path, bool, dict[str, str]]":
         "CORVIN_HOME": str(sandbox / "corvin_home"),
         "XDG_CONFIG_HOME": str(sandbox / "xdg_config"),
         "CORVIN_AUDIT_ANCHOR_KEY": str(sandbox / "anchor" / "audit_anchor.key"),
+        "CORVIN_PLUGIN_SLOT_DIR": str(sandbox / "plugin_slot"),
     }
     for key, default in defaults.items():
         if _unsafe(key, _os.environ.get(key)):

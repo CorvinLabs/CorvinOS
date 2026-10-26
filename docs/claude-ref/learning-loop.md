@@ -615,7 +615,36 @@ A second, separate loop - not the L5 router loop above. Its subject is a **Data 
 | Host | `core/background/learning_host.py`, started by `corvin_gateway.app`, `corvin_console.app`, `corvin_console.standalone` | drains the inbox from a persisted cursor, checks watched sources by hash every 300 s, runs the regeneration batch, snapshots `state.json`; 2 s -> 30 s idle back-off; a failing tick is counted, not fatal |
 | Learn | `learning_daemon.py` | per-source weights (unseen source = 0.5), feedback consensus, causal edges; consensus mean < 0 over >= 3 events, or a changed source, queues the skill; 24 h cooldown, a request during cooldown is deferred not dropped |
 | Act | `datahub_unified/regenerate.py` | re-read the source (secret -> refused), regenerate via `UnifiedCreator`, `learning.regeneration` `applying` on the chain FIRST, `update_body(quota_exempt)` (grades + meta kept), `finished` |
-| See | `os.learning_daemon` (registry Skill, read-only), `GET /v1/console/api/learning/daemon` | persisted summary: weights, queue, regenerations, decisions |
+| Tidy | `datahub_unified/prune.py`, run by the host once a day (`PRUNE_CHECK_S`) | the system removes Data Hub skills that are dead, duplicated or unused - by rule, audited, guarded (below) |
+| See | `os.learning_daemon` (registry Skill, read-only), `GET /v1/console/api/learning/daemon` | persisted summary: weights, queue, regenerations, decisions, `prune` (last pass, total removed) |
+
+**Self-clean (D6, 2026-10-26).** Data Hub skills piled up with nothing to take them away: a registered skill outlived its
+artifact, and the engine-facing plugin slot (`corvin_operator/skill-forge/skills/dyn/assistant_datahub_<id>/`, gitignored) kept
+mirrors of skills no registry held any more - 120 of them on the live install (107 from tests), read by the engine's skill loader
+and the CEL skill stage but never injectable, gradable or regenerable. `LearningHost._prune_once` now runs `prune.run` once a day
+(first tick after start, then every 24 h) and the system decides by rule, in this order:
+
+| Reason | Holds when |
+|---|---|
+| `orphan_mirror` | a slot mirror that NO tenant registry holds (a mirror is per repo, so every tenant's registries are checked), older than 10 min. Also the legacy name-derived slugs (before DH-2/DH-10), only when the body carries the creator's template; their name is never recorded, only a hash |
+| `artifact_gone` | a registered skill whose artifact is deleted or missing |
+| `duplicate` | same data profile (`DataHubSkill.profile()` block; without one, same body); the one with earned grades, then the newest, stays |
+| `unused` | older than 60 days, never offered to a turn, never rated, bootstrap grade only - and only once the daemon has watched for the whole 60 days (`prune.observing_since`, set at the first save) |
+
+Guards: the intent is chained (`learning.datahub_pruned`, `stage: applying`) BEFORE anything is touched, a record that does not commit
+leaves the item alone · a skill with an earned grade is never removed as duplicate or unused · a pass that would remove >= 20
+registered skills AND more than half of them is refused whole (`learning.datahub_prune_refused`, `bulk_guard`; orphan mirrors are
+exempt) · at most 500 removals per pass. Every removal is appended to `<tenant>/learning/datahub_prune/removed.jsonl` (time, id, kind,
+reason, body hash prefix, kept skill - never a body, title or description); `prune.removed_list()` reads it, `prune.verify()` checks that
+the names are gone from registry and slot and that no text file still mentions them. A pass that finds nothing writes nothing (an
+idle host stays silent). Proof: `core/console/tests/test_datahub_prune_e2e.py` - created through the console route, acted on only by
+`LearningHost.tick()`; mutation probes: no call in the tick -> 3 tests red, no slot isolation in `conftest.py` -> the isolation test red.
+
+**Cause of the pile, closed.** Unset, `CORVIN_PLUGIN_SLOT_DIR` resolves to the checkout's REAL `skills/dyn`; every test that created a
+skill left a mirror there. `test_admin_route._sandbox` already redirected it, but two Data Hub test files (`tests/skills/test_datahub_unified_complete.py`,
+`tests/e2e/test_console_skills_wiring.py`) did not, and the root `conftest.py` did not isolate it. It now does for the whole pytest session
+(`_ISOLATED_KEYS`, default `<session sandbox>/plugin_slot`; a value pointing into the checkout is re-armed). Which run left the 35 mirrors of
+2026-10-24 was not established.
 
 **Hardened 2026-10-12 (adversarial review, 44 findings across Epic I-11).** The skill id is
 `assistant.datahub_<artifact_id>` - never derived from the artifact NAME (two similar names shared one
@@ -651,4 +680,6 @@ proof: `tests/e2e/test_datahub_skill_reaches_acs_worker.py` (live part opt-in vi
 
 **Must NOT do:** put user text, a path or a skill body into an inbox line or a `learning.regeneration` record · let a producer raise into a
 turn · regenerate before the `applying` record committed · spend the operator's authoring quota on a daemon rewrite ·
-start the host from a request path (it is started once per host process).
+start the host from a request path (it is started once per host process) · prune before the `learning.datahub_pruned` intent committed ·
+remove a skill that carries an earned grade for being a duplicate or unused · write a legacy slug (it can be a person's name), a title or
+a body into a prune record · judge a slot mirror against one tenant's registry alone · skip the bulk guard.
