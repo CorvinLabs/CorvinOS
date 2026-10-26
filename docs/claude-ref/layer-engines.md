@@ -2335,6 +2335,25 @@ one place that reads.
   (stale credential read, missing proxy auto-start) even if it looks
   identical at the moment you write it.
 
+### Sensitive-data reroute builds its env strictly (ADR-2268, T-0229)
+
+A rerouted turn does not use `apply_claude_code_provider_env`, because that function
+degrades to the default endpoint when a route cannot be built. It calls
+`engine_models.resolve_provider_env_strict(tenant_id, provider, model_id, base_env=...)`
+instead. The strict function never degrades: a missing credential, an unknown or undeclared
+provider, an illegal model id or a host that differs from the declaration raises
+`ProviderRouteError`, and the turn is refused. The env starts from the base env with every
+`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `CORVIN_CC_*` and platform override stripped, then carries
+only the route's own values. The model goes to `--model` verbatim, replacing the OS-model
+resolver's choice. Bridge OS turn and non-delegated console OS turn both use this path, and
+both are E2E-tested against a real subprocess (`test_bridge_sensitive_reroute_e2e.py`,
+`core/console/tests/test_console_sensitive_reroute_e2e.py`).
+
+Rule: a new spawn site that reroutes must call the strict function and must not copy the
+provider env by hand. Full decision flow, the "Not covered" list and the outcome table are in
+[layer-34-data-classification.md](layer-34-data-classification.md) and
+`docs/diagrams/26-sensitive-reroute-flow.svg`.
+
 ## ADR-0104 — ACS delegation: unbounded-memory hardening (2026-07-15)
 
 Investigated a reported crash: a very large ACS (Autonomous Compute Shell)

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 640" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Sensitive-data reroute decision (Layer 34 + Layer 35, ADR-2268)</title>
+  <desc>Decision flow of resolve_l34_route. A turn is classified; PUBLIC, admitted and SECRET turns keep the unchanged check_l34 verdict. A CONFIDENTIAL or INTERNAL turn on a switchable site with an enabled, declared sensitive_route is rerouted to the declared provider only after L34 and L35 pass again for that provider host. Any missing piece refuses the turn; nothing falls back to the default endpoint.</desc>
+
+  <text x="490" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Sensitive-data reroute (Layer 34 + Layer 35)</text>
+  <text x="490" y="50" text-anchor="middle" font-size="12" fill="#475569">ADR-2268 · resolve_l34_route → decide_l34_route · second pass on the provider host · fail-closed</text>
+
+  <rect x="380" y="70" width="220" height="40" rx="6" fill="#1e3a8a"/>
+  <text x="490" y="95" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Pre-spawn turn (OS turn)</text>
+
+  <path d="M490 110 L490 130" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+
+  <rect x="360" y="130" width="260" height="44" rx="6" fill="#e0e7ff" stroke="#1e3a8a"/>
+  <text x="490" y="150" text-anchor="middle" font-size="13" font-weight="700" fill="#1e293b">Classify (prompt or class)</text>
+  <text x="490" y="166" text-anchor="middle" font-size="11" fill="#334155">detector raises the class only</text>
+
+  <path d="M490 174 L490 196" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+
+  <polygon points="490,196 610,240 490,284 370,240" fill="#fef9c3" stroke="#854d0e"/>
+  <text x="490" y="236" text-anchor="middle" font-size="12" font-weight="700" fill="#1e293b">Route enabled, declared</text>
+  <text x="490" y="252" text-anchor="middle" font-size="12" font-weight="700" fill="#1e293b">and class INTERNAL / CONFIDENTIAL?</text>
+
+  <path d="M370 240 L150 240 L150 300" stroke="#166534" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="250" y="232" text-anchor="middle" font-size="11" fill="#166534">no: PUBLIC, admitted, SECRET</text>
+  <rect x="60" y="300" width="180" height="70" rx="6" fill="#dcfce7" stroke="#166534"/>
+  <text x="150" y="324" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Unchanged verdict</text>
+  <text x="150" y="342" text-anchor="middle" font-size="11" fill="#14532d">check_l34, then check_l35</text>
+  <text x="150" y="358" text-anchor="middle" font-size="11" fill="#14532d">allowed → spawn as today</text>
+
+  <path d="M610 240 L810 240 L810 300" stroke="#854d0e" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="710" y="232" text-anchor="middle" font-size="11" fill="#854d0e">yes</text>
+
+  <polygon points="810,300 900,350 810,400 720,350" fill="#fef9c3" stroke="#854d0e"/>
+  <text x="810" y="346" text-anchor="middle" font-size="11" font-weight="700" fill="#1e293b">Switchable</text>
+  <text x="810" y="362" text-anchor="middle" font-size="11" font-weight="700" fill="#1e293b">site + claude_code?</text>
+
+  <path d="M720 350 L600 350" stroke="#991b1b" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="660" y="342" text-anchor="middle" font-size="11" fill="#991b1b">no</text>
+  <rect x="420" y="330" width="180" height="50" rx="6" fill="#fee2e2" stroke="#991b1b"/>
+  <text x="510" y="352" text-anchor="middle" font-size="12" font-weight="700" fill="#7f1d1d">Refuse</text>
+  <text x="510" y="368" text-anchor="middle" font-size="11" fill="#7f1d1d">data_flow.reroute_refused</text>
+
+  <path d="M810 400 L810 430" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="826" y="420" font-size="11" fill="#334155">yes</text>
+
+  <rect x="640" y="430" width="300" height="70" rx="6" fill="#e0e7ff" stroke="#1e3a8a"/>
+  <text x="790" y="454" text-anchor="middle" font-size="12" font-weight="700" fill="#1e293b">Second pass for provider host</text>
+  <text x="790" y="472" text-anchor="middle" font-size="11" fill="#334155">L34 validate_provider · L35 host</text>
+  <text x="790" y="488" text-anchor="middle" font-size="11" fill="#334155">eligibility · model in declaration</text>
+
+  <path d="M790 500 L790 530" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+
+  <rect x="600" y="530" width="380" height="70" rx="6" fill="#dcfce7" stroke="#166534"/>
+  <text x="790" y="552" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Strict provider env, verbatim model</text>
+  <text x="790" y="570" text-anchor="middle" font-size="11" fill="#14532d">resolve_provider_env_strict · --model declared id</text>
+  <text x="790" y="586" text-anchor="middle" font-size="11" fill="#14532d">data_flow.rerouted · no degradation to default endpoint</text>
+
+  <path d="M640 465 L600 465 L600 390" stroke="#991b1b" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+  <text x="614" y="454" font-size="10" fill="#991b1b">fails</text>
+
+  <text x="60" y="620" font-size="11" fill="#475569">Not covered by this route: STT, TTS, embeddings, A2A inbound and ACS / video producer (see layer-34 doc, section “Not covered by this layer”).</text>
+
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#334155"/>
+    </marker>
+  </defs>
+</svg>

@@ -462,6 +462,28 @@ the classification argument as opaque.
 The standalone shape (no adapter dependency) is deliberate: L34
 ships + tests in isolation from the adapter wiring.
 
+* **Sensitive-data reroute (T-0219, T-0221, T-0222, T-0223, T-0228, T-0229; ADR-2268):**
+  wired on the bridge OS turn and the non-delegated console OS turn. Decision flow:
+  `docs/diagrams/26-sensitive-reroute-flow.svg`. Every other spawn site keeps refusing.
+
+## Not covered by this layer
+
+The guard judges text that becomes a spawn prompt on a claude_code or engine spawn. These
+paths are outside it and must not be read as protected:
+
+* **Speech-to-text and text-to-speech.** Audio is transcribed or synthesised by its own
+  provider call (L23). Neither path passes `DataFlowGuard`; the voice transcript audit records
+  metadata only, never text.
+* **Embeddings and retrieval indexes.** Conversation recall and the knowledge providers embed
+  turns without a spawn gate. Their stores sit under the tenant home, not under an engine.
+* **A2A inbound and outbound.** The A2A worker classifies and refuses (`route_malformed` and
+  the detector apply), but it never reroutes; a peer's task is judged, not moved.
+* **ACS, video producer, gateway dispatcher.** These refuse through `check_l34`; a sensitive
+  turn there is refused, never switched to a declared provider.
+* **Delegated console turns.** A turn delegated to a worker engine refuses rather than moves.
+
+Each of these is a candidate for a later ADR. None is claimed here as a guarantee.
+
 ---
 
 ## Must NOT do
