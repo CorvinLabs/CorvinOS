@@ -38,6 +38,7 @@ import { ClaudeSourceLine, TaskTypeCard, fmtInt, useAuthLabel, useClaudeModels, 
   from "../components/engine-parts";
 import { ENGINE_SETTING_KEY, pinsOf, useOsEngineSetting } from "../hooks/use-pins";
 import { COST_STATUS_KEY } from "../hooks/use-cost-status";
+import { SensitiveRouteCard } from "../components/sensitive-route-card";
 
 const NATIVE = "__native__";
 
@@ -395,6 +396,9 @@ export function RoutingTab({
           </div>
         )}
       </div>
+
+      {/* ── Sensitive data (ADR-2268) ── */}
+      <SensitiveRouteCard />
 
       {/* ── Block 3 ── */}
       <Card>

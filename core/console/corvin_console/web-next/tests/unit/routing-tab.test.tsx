@@ -34,6 +34,8 @@ vi.mock("@/pages/models/components/engine-parts", () => ({
                                  openrouter: { label: "OpenRouter", kind: "cloud", model_source: "openrouter", credential_env: "OPENROUTER_API_KEY", base_url: "" } } }),
 }));
 
+vi.mock("@/pages/models/components/sensitive-route-card", () => ({ SensitiveRouteCard: () => null }));
+
 import { RoutingTab } from "@/pages/models/tabs/routing";
 
 const setting = (os: string | null, worker: string | null, provider: string | null = null) => ({
