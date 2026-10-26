@@ -101,10 +101,15 @@ def test_generated_mod_contains_the_gate_and_no_forbidden_hooks():
     js = generate_mod_files(mod_name="demo-mod", version="0.1.0", description="d", cards=_cards(), info=True)[
         "hooks/register.js"
     ]
-    assert "requireAdapter" in js and "requireServers" in js
-    assert "$.env.get('CORVIN_CHANNEL_ID')" in js
+    assert "requireServers" in js and "callTool" in js
+    # ADR-2298 option A': the adapter marker is gone, and so is every environment read
+    assert "requireAdapter" not in js and "CORVIN_CHANNEL_ID" not in js and "$.env" not in js
     for hook in ("tool.call", "tool.check", "prompt.submit", "plugin.register"):
         assert f"on('{hook}'" not in js, f"the mod must not hook {hook}"
+    # a server-side failure resolves with isError (it does not throw): the one place that turns it into a throw
+    assert "res.isError === true" in js
+    # no call site talks to a server around callTool: every grade/audit/probe goes through it
+    assert js.count("$.mcp.call(") == 1, "only callTool may call the servers directly"
     # the probes come before the first write in the answer handler
     answer = js.split("{ command: 'quiz-answer' }")[1]
     assert answer.index("requireServers") < answer.index("skill_grade") < answer.index("audit_write_event")
@@ -182,12 +187,12 @@ def test_cli_output_is_accepted_by_claude_code(tmp_path):
 
     validate = subprocess.run([_CLAUDE, "plugin", "validate", str(out)], capture_output=True, text=True, timeout=120)
     assert "Validation passed" in validate.stdout, validate.stdout + validate.stderr
-    assert "$.env.get (via requireAdapter)" in validate.stdout
-    assert "env reads: CORVIN_CHANNEL_ID" in validate.stdout
+    assert "$.mcp.call (via callTool)" in validate.stdout
+    assert "CORVIN_CHANNEL_ID" not in validate.stdout, "the adapter marker must not be read any more"
 
     test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
     assert test.returncode == 0, test.stdout + test.stderr
-    assert "0 fail" in test.stdout and "15 pass" in test.stdout  # 7 quiz-gate + 8 skill-info tests
+    assert "0 fail" in test.stdout and "29 pass" in test.stdout  # 16 quiz + 13 skill-info tests
 
 
 @pytest.mark.skipif(_CLAUDE is None, reason="the claude CLI is not installed, so Claude Code cannot be driven")
@@ -207,19 +212,48 @@ def test_info_only_mod_for_a_store_without_any_quiz_is_complete_and_tested(tmp_p
     assert "Validation passed" in validate.stdout, validate.stdout + validate.stderr
     test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
     assert test.returncode == 0, test.stdout + test.stderr
-    assert "0 fail" in test.stdout and "8 pass" in test.stdout
+    assert "0 fail" in test.stdout and "13 pass" in test.stdout
+
+
+def _mutated_output_fails(tmp_path, old: str, new: str, *, expect_failing: list[str]):
+    """Generate a mod, apply ONE mutation to its register.js and run its own tests: they must go red."""
+    root = _store(tmp_path, {"assistant.demo": BODY})
+    out = tmp_path / "mod"
+    assert _run_cli("--store", str(root), "--out", str(out), "--name", "demo-mod", "--info").returncode == 0
+    js = out / "hooks" / "register.js"
+    text = js.read_text(encoding="utf-8")
+    assert old in text, f"the mutation target {old!r} is not in the generated mod"
+    js.write_text(text.replace(old, new), encoding="utf-8")
+    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
+    assert test.returncode != 0
+    failed = [ln for ln in test.stdout.splitlines() if ln.startswith("(fail)")]
+    assert failed, test.stdout
+    for fragment in expect_failing:
+        assert any(fragment in ln for ln in failed), (fragment, failed)
 
 
 @pytest.mark.skipif(_CLAUDE is None, reason="the claude CLI is not installed, so Claude Code cannot be driven")
-def test_a_gate_removed_from_the_output_makes_the_generated_tests_fail(tmp_path):
-    """The generated tests must be able to fail: with the adapter gate cut out they have to go red."""
-    root = _store(tmp_path, {"assistant.demo": BODY})
-    out = tmp_path / "mod"
-    assert _run_cli("--store", str(root), "--out", str(out), "--name", "demo-mod").returncode == 0
-    js = out / "hooks" / "register.js"
-    text = js.read_text(encoding="utf-8")
-    assert "await requireAdapter($)" in text
-    js.write_text(text.replace("await requireAdapter($)", "// gate removed"), encoding="utf-8")
-    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
-    assert test.returncode != 0
-    assert "(fail)" in test.stdout
+def test_a_server_gate_removed_from_the_output_makes_the_generated_tests_fail(tmp_path):
+    """The generated tests must be able to fail: with the server gate cut out they have to go red."""
+    _mutated_output_fails(
+        tmp_path, "await requireServers($)", "// gate removed",
+        expect_failing=["both servers down", "only forge down"],
+    )
+
+
+@pytest.mark.skipif(_CLAUDE is None, reason="the claude CLI is not installed, so Claude Code cannot be driven")
+def test_ignoring_isError_in_the_output_makes_the_generated_tests_fail(tmp_path):
+    """The defect this check exists for: a server-side failure RESOLVES with isError. A mod that never looks
+    at it reports a grade as confirmed that failed; the generated tests have to catch that."""
+    _mutated_output_fails(
+        tmp_path, "res.isError === true", "false",
+        expect_failing=["RESOLVES with isError"],
+    )
+
+
+@pytest.mark.skipif(_CLAUDE is None, reason="the claude CLI is not installed, so Claude Code cannot be driven")
+def test_an_unconfirmed_grade_accepted_in_the_output_makes_the_generated_tests_fail(tmp_path):
+    _mutated_output_fails(
+        tmp_path, "if (graded.ok !== true)", "if (false)",
+        expect_failing=["did not confirm"],
+    )

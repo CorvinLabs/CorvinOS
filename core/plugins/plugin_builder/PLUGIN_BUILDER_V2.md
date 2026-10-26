@@ -245,10 +245,22 @@ PYTHONPATH=. python -m plugin_builder.generators.mod_cli \
   as JSON literals, so card text cannot break out of the generated JavaScript.
 - **Where the output goes:** the caller chooses. A plugin's source belongs in Corvin-Marketplace, not in
   CorvinOS; the generator refuses a non-empty directory without `--force`.
-- **Adapter-only gate:** a mod cannot abort a session (Claude Code skips a hook that throws), so the generated
-  mod registers nothing unless `CORVIN_CHANNEL_ID` (set by the adapter on every spawn) is present, every command
-  re-checks and throws, and the answer command probes the `skill_forge` and `forge` MCP servers read-only
-  before it writes. The marker is an environment variable, not a credential.
+- **Server gate (ADR-2298, option A'):** a mod cannot abort a session (Claude Code skips a hook that throws), so a
+  command that reads or writes CorvinOS data first probes the `skill_forge` and `forge` MCP servers read-only
+  and requires that they answer WITHOUT AN ERROR IN CORVINOS' SHAPE; otherwise it throws at its own call site
+  and nothing is written. The adapter marker is not read any more, so the mod works in the operator's own Claude
+  Code when it is started with the CorvinOS MCP servers (`--mcp-config` from `<corvin_home>/cowork/mcp-cache/`).
+  `/quiz` only reads cards embedded in the mod and needs no server. **The check is behavioural, not
+  authentication:** an MCP server installed under the same id (ADR-0096 has no reserved names) that imitates
+  the answers passes it. Measured 2026-10-26: it then receives the skill name, card id and score (never the
+  answer text) and the mod reports "The server confirmed the grade", which is a statement about the server.
+- **A failed call does not throw in a mod.** `$.mcp.call` RESOLVES with `isError: true` when the server fails;
+  only a missing server or tool rejects (measured against the real servers). Every generated call therefore goes
+  through one helper that turns `isError` into a throw, and a grade or audit write the server did not confirm
+  (`ok: true`, `written: <event>`) is never reported as done. The generated tests pin this with a stub whose
+  error carries a success-shaped body, so only the flag can tell it from a success, and
+  `tests/test_mod_generator.py` mutates the output (drop the gate, ignore `isError`, accept an unconfirmed
+  grade) and requires the generated tests to go red.
 - **Writes:** one `skill_grade` call and one `mod.command_executed` audit event per answer; never the answer
   text. The audit gateway sets `tenant_id` itself and overwrites any value a caller sends.
 - **Console:** the Forge Skills tab shows the same figures a mod serves. `GET /v1/console/forge/skills` carries
@@ -256,7 +268,8 @@ PYTHONPATH=. python -m plugin_builder.generators.mod_cli \
   zero), and `GET /v1/console/forge/mod-activity` lists recent `mod.command_executed` records of the session's
   tenant from the END of the audit chain, with the window it read (`window.complete` is false for a long
   chain). The records are mod-reported, not verified.
-- **Not done here:** the adapter does not load generated mods yet (nothing passes `--plugin-dir`).
+- **Not in bridge chats (ADR-2298):** the adapter loads no mod. It prefixes every outbound prompt with
+  `User input:` (R2-E1), so `/quiz` text never reaches a mod command; that guard is not weakened for mods.
 
 Tests: `tests/test_mod_generator.py`. They include an end-to-end test that runs the CLI as a subprocess and
 feeds its output to the real `claude plugin validate` and `claude plugin test`; it is skipped, with the reason
