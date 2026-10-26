@@ -1246,8 +1246,10 @@ promised path looks like there, and what it took:
 - **Observed, not changed:** a message to a peer whose console is stopped goes to the relay, times out
   after 30 s and is reported *delivery unconfirmed — the peer may have received and run it*; after the
   peer returned (2.5 min later, inside the relay's 5-min queue) nothing was delivered and nothing retries.
-  The envelope TTL (60 s) is shorter than the relay queue TTL, so a queued message is dead on arrival
-  anyway. The overview now states the limit. Replay of a correctly signed envelope answers the closed
+  (Corrected 2026-10-26: the queued message was NOT dead on arrival — the receiver checks freshness
+  against +-300 s of `issued_at`, not against the worker's `ttl_s` — so a peer returning inside the
+  5-min queue RAN it with nobody left to read the answer; see "Relay deliver-by" below.)
+  The overview now states the limit. Replay of a correctly signed envelope answers the closed
   public reason `replay` (`A2A_PUBLIC_REASONS`); a tampered or unknown-origin envelope answers the same
   opaque `rejected` — the signature check comes first, so no unauthenticated prober learns anything.
   A freshly paired origin carries `require_ibc: false` (ADR-2099 permissive mode) with the instance pin
@@ -1307,10 +1309,19 @@ promised path looks like there, and what it took:
   `friendship/import` and `POST /a2a/feed/send` call it with `fresh=True` (the gate itself). The sender's
   feed-row closing on a refusal (`feed_task_recorded`) stays: a seat can lapse between the console's check and
   `send()`, and without it the row read *queued* forever (`test_free_refusal_closes_the_feed_row_the_console_recorded`).
-- **Still open:** a message to a peer that is down with the relay on is *delivery unconfirmed* and is not
-  delivered when the peer returns (T-0252; the envelope TTL 60 s < the relay queue TTL 300 s) — no
-  sender-side outbox exists. `require_ibc` has no product toggle (an origin-file edit); it is permissive on
-  every fresh pairing (ADR-2099).
+- **Relay deliver-by (T-0252 step 1, ADR-2300):** a task queued at the relay for an offline peer is no longer
+  run after its sender stopped waiting. `RemoteTriggerSender._relay_post` stamps `_relay_deliver_by` (end of
+  its own wait budget, epoch seconds) onto a COPY of the envelope inside the AEAD relay payload — outside the
+  signed envelope — and `RelayListener._handle_deliver` strips it and drops a task whose deadline passed by
+  more than `_DELIVER_BY_GRACE_S` (30 s, the clock-skew allowance), sending no answer and writing
+  `A2A.relay_expired_dropped` (task id and seconds late, never text). A missing or malformed stamp means no
+  deadline (the old behaviour); a peer on an older build does not know the key and runs the task as before.
+  The relay is unchanged. Proof: `test_a2a_relay_deliver_by.py` (real relay, an offline peer, both outcomes).
+  The envelope `ttl_s` is the worker's wall-time budget, not a delivery deadline; freshness stays +-300 s.
+- **Still open:** a message to a peer that is down with the relay on is *delivery unconfirmed* and, since
+  step 1, is not run when the peer returns after the sender's wait — it is also not DELIVERED. No sender-side
+  outbox exists yet (ADR-2300 step 2). `require_ibc` has no product toggle (an origin-file edit); it is
+  permissive on every fresh pairing (ADR-2099).
 - **Journal:** "relay listener connected", "connection … is active (via …)" and "Prometheus client not
   available" are INFO now; "relay listener started (default relay)" stays WARNING on purpose (a third-party
   relay sees routing metadata).

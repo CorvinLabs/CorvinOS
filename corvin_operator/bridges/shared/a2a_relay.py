@@ -56,6 +56,17 @@ from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 
 _MAX_QUEUE_PER_KID = 32          # bounded — a liveness bridge, not a mailbox
 _QUEUE_TTL_S = 300.0             # 5 min — long enough for a brief reconnect
+# T-0252 / ADR-2300: a queued task must not run after its SENDER stopped waiting. The sender
+# stamps the end of its wait budget (epoch seconds, its own clock) into the AEAD-protected relay
+# payload under this key — transport-only, outside the signed envelope, silently ignored by a
+# receiver that predates it (``TaskEnvelope.from_dict`` reads known keys only) — and the
+# receiving ``RelayListener`` drops a task whose deadline passed by more than the grace below.
+# The relay itself is unchanged (a hosted relay needs no deploy). The grace is the clock-skew
+# allowance between the two hosts: a receiver clock running further ahead than this drops
+# messages the sender is still waiting for, one running behind runs a few late ones — the
+# same trade the +-300 s envelope freshness window makes.
+DELIVER_BY_KEY = "_relay_deliver_by"
+_DELIVER_BY_GRACE_S = 30.0
 # 2026-09-25 size alignment. The old single 512 KB frame cap could not carry
 # what the direct path carries: an A2A envelope may hold 1 MiB of attachments
 # (a2a_attachments.MAX_ATTACHMENTS_TOTAL_BYTES), base64-expanded to ~1.4 MB of
@@ -638,6 +649,21 @@ class RelayTransportError(Exception):
         super().__init__(reason)
         self.reason = reason
         self.maybe_delivered = maybe_delivered
+
+
+def _pop_deliver_by(payload: dict[str, Any]) -> float | None:
+    """Remove and return the sender's deliver-by stamp, or ``None`` when absent or unusable.
+
+    A stamp that is not a finite real number (a string, a bool, ``null``, NaN, infinity) means
+    "no deadline" — the pre-T-0252 behaviour — never a rejection: this field only ever LETS a
+    receiver skip dead work, so a garbled value must not become a new way to refuse live work.
+    A finite number, however old, IS a deadline.
+    """
+    raw = payload.pop(DELIVER_BY_KEY, None)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if value == value and value not in (float("inf"), float("-inf")) else None
 
 
 def relay_frame_size(*, to_kid: str, from_kid: str, nonce_hex: str,
@@ -1237,8 +1263,21 @@ class RelayListener:
                 # 2026-09-24 relay fan-out both peers' listeners receive every
                 # delivery for the shared kid, so this guard is what makes
                 # exactly the peer answer.
+                _deliver_by = _pop_deliver_by(payload)   # always stripped: the receiver never sees it
                 if _my_instance and payload.get("sender_instance_id") == _my_instance:
                     return  # our own task, routed back to us — never execute it
+                if _deliver_by is not None and time.time() - _deliver_by > _DELIVER_BY_GRACE_S:
+                    # T-0252: the sender stopped waiting before this reached us (we were
+                    # offline and the relay queued it). Running it now would spend a worker
+                    # on an answer nobody reads, and a resend would run it twice. No answer
+                    # is sent: the sender's connection is long gone.
+                    _auditor = getattr(self._receiver, "_audit_best_effort", None)
+                    if callable(_auditor):
+                        _auditor("A2A.relay_expired_dropped", "INFO", {
+                            "task_id": str(payload.get("task_id") or "")[:128],
+                            "late_s": int(time.time() - _deliver_by),
+                        })
+                    return
                 async with self._heavy_slot():
                     response = await _run_work(self._receiver.receive, payload)
                 response_dict = response.to_dict()

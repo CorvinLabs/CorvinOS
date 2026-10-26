@@ -2326,11 +2326,19 @@ class RemoteTriggerSender:
         my_kid = f"{to_kid}:reply:{task_id}"
 
         import secrets as _secrets  # noqa: PLC0415
+        import a2a_relay as _relay  # type: ignore[import-not-found]  # noqa: PLC0415
         my_relay_auth_key = _secrets.token_hex(32)  # ephemeral, single-use — no TOFU needed
+
+        # T-0252 / ADR-2300: tell the peer when we stop waiting. A copy that sits in the relay
+        # queue while the peer is offline would otherwise run after we reported a timeout, with
+        # nobody to read the answer (and a resend would run it a second time). A COPY carries the
+        # stamp: the signed envelope is untouched, and the stamp rides inside the AEAD payload.
+        stamped = dict(envelope)
+        stamped[_relay.DELIVER_BY_KEY] = round(time.time() + float(timeout_s), 3)
 
         return _relay_round_trip(
             relay_url=relay_url, hmac_key=hmac_key, to_kid=to_kid, my_kid=my_kid,
-            my_relay_auth_key=my_relay_auth_key, payload=envelope,
+            my_relay_auth_key=my_relay_auth_key, payload=stamped,
             correlation_id=task_id, timeout_s=timeout_s,
             sender_instance_id=str(envelope.get("sender_instance_id") or ""),
         )

@@ -666,6 +666,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "A2A.friendship_url_updated":     "WARNING",  # a repeat ack re-pointed a peer URL
     "A2A.friendship_peer_revoked":    "WARNING",  # the peer revoked the friendship (signed notice)
     "A2A.relay_fallback_used":        "INFO",
+    "A2A.relay_expired_dropped":      "INFO",   # T-0252: a queued task whose sender had stopped waiting is not run
     "A2A.ping_result":                "INFO",
     # ADR-2242 message lifecycle: stage changes on the receiver, status queries both sides.
     "A2A.task_stage_changed":         "INFO",
@@ -3646,6 +3647,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         ("A2A.chain_dna_verified", {"nonce_prefix", "peer_genesis_hash_prefix"}),
         ("A2A.chain_dna_genesis_absent", {"nonce_prefix"}),
         ("A2A.relay_fallback_used", set()),
+        ("A2A.relay_expired_dropped", {"late_s"}),
         ("A2A.ping_result", {"reachable", "error_category"}),
         ("A2A.task_stage_changed", {"stage", "prev_stage"}),
         ("A2A.task_status_queried", {"stage"}),
