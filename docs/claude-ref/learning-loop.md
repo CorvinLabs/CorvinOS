@@ -23,7 +23,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 
 | Check | File | Fails on |
 |---|---|---|
-| Register | `tests/learning/test_learning_systems_register.py` | a caller file/line that does not exist, a missing test file, an A without caller, a B without `intake`, a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
+| Register | `tests/learning/test_learning_systems_register.py` | a caller file/line that does not exist, a missing test file, an A without caller, a B without `intake`, a B without a valid `signal_contract` (ADR-2303, below), a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
 | Reachability ratchet | `scripts/learning_reachability.py` + `scripts/learning_reachability_baseline.json`, `tests/learning/test_learning_reachability_ratchet.py` | a NEW unreachable module in the learning scopes (same graph as `zero_caller_sweep`), and a STALE baseline entry (module reachable again or deleted). Shrink-only |
 | Call-site pins | `tests/learning/test_learning_call_site_pins.py` | L06 injection gate / follow-up grade and L10 distill scheduling / injection through `adapter.process_one`; L14 `emit_*_confidence` through `POST /v1/console/forge-bundles/import`. Each was shown red with its call site cut |
 
@@ -52,6 +52,19 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | H03 | Plugin-declared learning loops (manifest discovery) | A |
 | R19–R19 | Brain hub leftover kept by ADR-2282: `subsystems/notification_daemon.py` (still imported by the unreachable `core/skill_forge/skill_forge_v2.py`); R01–R18 were removed with their deleted modules | D |
 <!-- register-table:end -->
+
+**Signal contract (ADR-2303, PLAN-0966 WP1, 2026-10-26).** Every B entry carries a
+`signal_contract` (A may): `signal`, `proxy_of`, `validity`, `consumer`, `target`, `guard`,
+`control`, `rollback`; a system with several independent signals (L11) carries one contract per
+skill (`skill`). The register test enforces the form: a B entry without a contract fails; a proxy
+(`proxy_of` not `none`) with a `target` other than `none` fails — a proxy may guard, it is never
+optimised for; `consumer` is `none` or a `path:line` that resolves; `validity` is a mapping of
+numbers or `unmeasured`. Today only L05/L12 name numbers (the ADR-2092 gates: 500 joined decisions,
+join rate 0.95) and only they name a target (`confidence_threshold`, consumer
+`delegation_router.py:138`); L07 (`turn completed`, proxy of output quality) and L08 (0.85 / 0.2,
+proxy of answer quality) are proxies with `target: none`; L11, L13 and L19 learn nothing
+(`target: none`). The other validity bounds are `unmeasured` until PLAN-0966 WP4 measures them.
+The contract checks form, not truth, and grants no permission to learn.
 
 Findings of 2026-10-25: **L10** (now A) — both adapter call sites ran, but
 `user_model.distill()` queried `conversation_recall.recall('')`, an empty FTS5 phrase that

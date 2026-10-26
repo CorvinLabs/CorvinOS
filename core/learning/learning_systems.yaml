@@ -16,6 +16,24 @@
 # tests/learning/test_learning_systems_register.py checks well-formedness, not
 # truth: that a caller really runs is the job of the tests named here and of
 #
+# `signal_contract` (ADR-2303, CONCEPT-0120) states what a system's signal is.
+# Required on every B entry, optional on A. A system with several independent
+# signals (L11) carries a list, one contract per skill (`skill`). Keys:
+#   signal    what is measured
+#   proxy_of  what it stands in for, or `none` when it is the outcome itself;
+#             a proxy (proxy_of != none) has `target: none` - it may guard, never
+#             be optimised for (Goodhart)
+#   validity  the sample floor and join/age bounds as numbers where a decision
+#             already fixed them, else `unmeasured` (PLAN-0966 WP4/WP5 measure
+#             them; the register never invents a number)
+#   consumer  "path:line" of the code that reads the learned value, or `none`
+#   target    the learned parameter, or `none`
+#   guard     the counter-metric that must not get worse
+#   control   what holds the learning back today
+#   rollback  how a learned change is undone, or `none` (nothing is learned)
+# The contract grants no permission to learn; promotion B -> A stays its own
+# decision per consumer (ADR-2281 intake rule).
+#
 # Unreachable modules in the learning scopes are tracked separately by the
 # reachability ratchet (scripts/learning_reachability.py + its baseline).
 systems:
@@ -76,6 +94,15 @@ systems:
       live ledger (Skill booted, no rollback, >=500 joined decisions per surface,
       join rate >=0.95, proxy evidence). Until then the learned threshold changes
       no routing.
+    signal_contract:
+      signal: task success per router decision (routing ledger joined to the OUTCOME)
+      proxy_of: none
+      validity: {min_joined_decisions: 500, min_join_rate: 0.95}   # ADR-2092 gates
+      consumer: core/skills/os_skills/delegation_router.py:138
+      target: confidence_threshold
+      guard: task success of the turns routed to native
+      control: ADR-2092 gates G0-G4 (Phase 2 only); learning brake (ADR-2304)
+      rollback: SkillAdapter.rollback (versioned config snapshots)
     measured:
       date: "2026-10-25"
       source: core/skills/os_skills/monitoring/readiness.py evaluate(), tenant _default, read-only
@@ -113,6 +140,15 @@ systems:
       An automatic grade never makes a stage default-eligible, only an operator
       grade does. It may steer stage selection only with a measured outcome
       source (T-0128 was cancelled for want of one) and a decision naming it.
+    signal_contract:
+      signal: turn completed (success=True for every completed turn)
+      proxy_of: output quality
+      validity: unmeasured
+      consumer: none
+      target: none
+      guard: a stage whose completed-turn rate falls below its reference is a warning
+      control: advisory only; automatic grades never make a stage default-eligible
+      rollback: none
 
   - id: L08
     name: Model selector learner (descriptive only)
@@ -128,6 +164,15 @@ systems:
       the binary proxy 0.85 / 0.2 (the turn ended with or without an error,
       model_selector_shadow.py:162). It may influence selection only with a real
       quality signal (IDEA-0002) and a decision naming the consumer.
+    signal_contract:
+      signal: 0.85 when the turn ended without an error, 0.2 with one
+      proxy_of: answer quality
+      validity: unmeasured
+      consumer: none
+      target: none
+      guard: error rate per model tier
+      control: descriptive only; model selection never reads it
+      rollback: none
 
   - id: L09
     name: Savings meter (Free-tier cost.optimize allowance)
@@ -174,6 +219,43 @@ systems:
       through a new decision that names its consumer, after a readiness
       measurement on live data in the ADR-2092 shape (>=500 joined decisions per
       surface). os.flow_guard may never weaken an L34 decision.
+    signal_contract:
+      - skill: os.workflow_optimizer
+        signal: agreement of the shadow advice with the production decision
+        proxy_of: none
+        validity: unmeasured
+        consumer: none
+        target: none
+        guard: task success when advice and production decision differ
+        control: shadow only (ADR-0532); the advice is never applied
+        rollback: none
+      - skill: os.flow_guard
+        signal: agreement of the shadow advice with the L34 gate decision
+        proxy_of: none
+        validity: unmeasured
+        consumer: none
+        target: none
+        guard: no L34 decision is ever weakened (ADR-2049)
+        control: shadow only (ADR-0532); the advice is never applied
+        rollback: none
+      - skill: os.security_orchestrator
+        signal: agreement of the shadow advice with the elevation decision
+        proxy_of: none
+        validity: unmeasured
+        consumer: none
+        target: none
+        guard: it may only tighten, never loosen
+        control: shadow only (ADR-0532); rarely reached
+        rollback: none
+      - skill: os.context_adapter
+        signal: content-free context adaptation compared with the served brief
+        proxy_of: none
+        validity: unmeasured
+        consumer: none
+        target: none
+        guard: the served brief is never changed
+        control: shadow only (ADR-0532); audited as context.adapted
+        rollback: none
 
   - id: L12
     name: Routing ledger and rollback judge
@@ -191,6 +273,15 @@ systems:
       both surfaces; the rollback judge and readiness evaluation act only for
       Phase 2, which is refused and audited until the gates hold. Measured
       2026-10-11: no delegating decision on either surface (no_delegation_subject).
+    signal_contract:
+      signal: task success per router decision (routing ledger joined to the OUTCOME)
+      proxy_of: none
+      validity: {min_joined_decisions: 500, min_join_rate: 0.95}   # ADR-2092 gates
+      consumer: core/skills/os_skills/delegation_router.py:138
+      target: confidence_threshold
+      guard: task success of the turns routed to native
+      control: ADR-2092 gates G0-G4 (Phase 2 only); learning brake (ADR-2304)
+      rollback: rollback judge (rollback_detector) for Phase 2; SkillAdapter.rollback for the config
     measured:
       date: "2026-10-25"
       source: core/skills/os_skills/monitoring/readiness.py evaluate(), tenant _default, read-only
@@ -211,6 +302,15 @@ systems:
       outside the audit chain until ADR-2283 repairs it; it never loosens an L34
       decision (ADR-2049 invariants). Advisory learning may come back only after
       the ADR-2264 classifier fix, as a new decision (ADR-2282).
+    signal_contract:
+      signal: none (no feedback source exists)
+      proxy_of: none
+      validity: unmeasured
+      consumer: none
+      target: none
+      guard: no L34 decision is ever weakened (ADR-2049)
+      control: no feedback source; ADR-2283 repair pending
+      rollback: none
 
   - id: L14
     name: Layer Forge learning integration (emit_*_confidence / *_outcome)
@@ -279,6 +379,15 @@ systems:
       Autopilot is off by default; it acts only after the operator turns it on
       (POST /autonomous-forge/autopilot) for the tenant. Whether it runs on the
       live install is not verified (PLAN-0964).
+    signal_contract:
+      signal: none (nothing is learned while the autopilot is off)
+      proxy_of: none
+      validity: unmeasured
+      consumer: none
+      target: none
+      guard: none
+      control: autopilot off by default; the operator turns it on per tenant
+      rollback: none
 
   - id: H03
     name: Plugin-declared learning loops (manifest discovery)

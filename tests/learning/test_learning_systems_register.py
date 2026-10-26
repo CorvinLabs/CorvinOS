@@ -12,6 +12,10 @@ still has at least one of its `modules` on disk (the entry leaves the register
 with its last module). The core/vibe_engineering classification (ADR-2281 §6)
 is checked against the reachability baseline, and the register table in
 docs/claude-ref/learning-loop.md must name the same state per system.
+
+ADR-2303: every B entry carries a ``signal_contract``; a proxy (``proxy_of``
+not ``none``) never has a ``target``; ``consumer`` is ``none`` or a resolving
+``path:line``; ``validity`` is numbers or ``unmeasured``. Form only, not truth.
 """
 
 import json
@@ -104,6 +108,92 @@ def test_shadow_systems_state_their_intake():
             assert s.get("callers"), f"{s['id']} is B but lists no caller"
             assert str(s.get("intake") or "").strip(), (
                 f"{s['id']} is B but has no intake: state when its output may act")
+
+
+CONTRACT_KEYS = ("signal", "proxy_of", "validity", "consumer", "target", "guard", "control", "rollback")
+_CONSUMER_REF = re.compile(r"^(?P<path>[\w./-]+\.\w+):(?P<line>\d+)$")
+
+
+def _contract_violations(systems: list[dict]) -> list[str]:
+    """ADR-2303: every B entry carries a ``signal_contract`` (A may); a proxy is never a
+    target; ``validity`` is numbers or ``unmeasured``; ``consumer`` is ``none`` or a
+    ``path:line`` inside an existing file. Returns one message per violation."""
+    out: list[str] = []
+    for s in systems:
+        contract = s.get("signal_contract")
+        if contract is None:
+            if s["state"] == "B":
+                out.append(f"{s['id']} is B but has no signal_contract")
+            continue
+        entries = contract if isinstance(contract, list) else [contract]
+        if not entries or not all(isinstance(e, dict) for e in entries):
+            out.append(f"{s['id']}: signal_contract must be a mapping or a non-empty list of mappings")
+            continue
+        for e in entries:
+            where = f"{s['id']}" + (f"/{e['skill']}" if e.get("skill") else "")
+            if isinstance(contract, list) and not str(e.get("skill") or "").strip():
+                out.append(f"{where}: a contract in a list names its skill")
+            for key in CONTRACT_KEYS:
+                if e.get(key) is None or str(e.get(key)).strip() == "":
+                    out.append(f"{where}: signal_contract lacks {key!r}")
+            proxy, target = str(e.get("proxy_of") or ""), str(e.get("target") or "")
+            if proxy and proxy != "none" and target != "none":
+                out.append(f"{where}: a proxy (proxy_of={proxy!r}) cannot be a target ({target!r})")
+            validity = e.get("validity")
+            if isinstance(validity, dict):
+                if not validity or not all(
+                        isinstance(v, (int, float)) and not isinstance(v, bool) for v in validity.values()):
+                    out.append(f"{where}: validity bounds must be numbers")
+            elif validity != "unmeasured":
+                out.append(f"{where}: validity is a mapping of numbers or 'unmeasured'")
+            consumer = str(e.get("consumer") or "")
+            if consumer != "none":
+                m = _CONSUMER_REF.match(consumer)
+                if not m:
+                    out.append(f"{where}: consumer {consumer!r} is neither 'none' nor path:line")
+                else:
+                    target_file = REPO / m["path"]
+                    n = (len(target_file.read_text(encoding="utf-8", errors="replace").splitlines())
+                         if target_file.is_file() else 0)
+                    if not 1 <= int(m["line"]) <= n:
+                        out.append(f"{where}: consumer {consumer!r} does not resolve")
+            elif target != "none":
+                out.append(f"{where}: a target ({target!r}) needs a named consumer")
+    return out
+
+
+def test_every_shadow_system_carries_a_valid_signal_contract():
+    systems = _load()
+    assert [s["id"] for s in systems if s["state"] == "B"], "positive control: no B entry"
+    assert _contract_violations(systems) == []
+
+
+def test_contract_check_catches_a_missing_contract_and_a_proxy_target():
+    """Negative controls on copies of the real register (the file is not touched)."""
+    import copy
+
+    systems = _load()
+    b_ids = [s["id"] for s in systems if s["state"] == "B"]
+    for sys_id in b_ids:
+        broken = copy.deepcopy(systems)
+        next(s for s in broken if s["id"] == sys_id).pop("signal_contract", None)
+        assert f"{sys_id} is B but has no signal_contract" in _contract_violations(broken)
+
+    broken = copy.deepcopy(systems)
+    l07 = next(s for s in broken if s["id"] == "L07")["signal_contract"]
+    assert l07["proxy_of"] != "none", "positive control: L07 is recorded as a proxy"
+    l07.update(target="stage_selection", consumer="core/skills/os_skills/delegation_router.py:138")
+    assert any("cannot be a target" in v for v in _contract_violations(broken))
+
+    broken = copy.deepcopy(systems)
+    broken_l11 = next(s for s in broken if s["id"] == "L11")["signal_contract"]
+    broken_l11[0].pop("skill")
+    broken_l11[1]["validity"] = {"min_samples": "many"}
+    broken_l11[2]["consumer"] = "core/does/not/exist.py:1"
+    found = _contract_violations(broken)
+    assert any("names its skill" in v for v in found)
+    assert any("bounds must be numbers" in v for v in found)
+    assert any("does not resolve" in v for v in found)
 
 
 def test_dead_systems_name_their_retiring_decision():
