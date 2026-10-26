@@ -2040,3 +2040,21 @@ paired, signed envelope); pairing is the trust boundary. Interoperating with for
 its own authentication, gates and audit, not a flag. The words *parts* and *artifacts* in the media sections are an analogy.
 Guard: `test_adr_2293_no_foreign_a2a.py` (files absent, no production mention with a positive control on the scan, no switch in
 `build_server`, `/a2a` and the agent card answer 404 over a real HTTP server with `/healthz` as the control).
+
+### What a federated run cost: the signed usage block (ADR-2292)
+
+The signed response carries an optional `usage` object, covered by the response HMAC like every other field:
+`{model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, source: "engine_attested"}`
+(`a2a_usage.py`). The receiver builds it from the same two measurements its own worker span uses, the model the
+ENGINE reported (`agents.attested_model`) and the four-way split from `engine_span.usage_split`; there is no second
+normaliser. **No reported model, no block**: the response is then byte-identical to the pre-ADR-2292 shape, and an
+old receiver simply omits it, an old sender ignores it. There is no dollar field and none is accepted: the requester
+prices the tokens with its own rate card or shows tokens only for a model it does not know. The requester side
+drops the whole block when a key is unknown, a count is not a non-negative integer, `model_id` is not model-id
+shaped (free text) or `source` differs; a partly valid split would misprice the run. The block is attributed, not
+verified: the HMAC proves the peer sent it, not that the numbers are true. Recorded as allowlisted scalars on both
+sides (`A2A.response_signed`, `federation.task_result_received`); the console shows sums per partner with the
+ADR-0760 window (`GET /v1/console/federation/usage`, `PartnerUsage`), never an average of percentages, and the
+catalogue's `cost_per_task_usd` stays a self-declared hint that the UI labels as such; selection ignores the block.
+Tests: `test_a2a_usage_block_e2e.py` (real HTTP, real signatures), `tests/federation/test_federation_usage_e2e.py`,
+`partner-usage.test.tsx`.
