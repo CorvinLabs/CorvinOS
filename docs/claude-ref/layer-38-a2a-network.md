@@ -1318,10 +1318,33 @@ promised path looks like there, and what it took:
   deadline (the old behaviour); a peer on an older build does not know the key and runs the task as before.
   The relay is unchanged. Proof: `test_a2a_relay_deliver_by.py` (real relay, an offline peer, both outcomes).
   The envelope `ttl_s` is the worker's wall-time budget, not a delivery deadline; freshness stays +-300 s.
-- **Still open:** a message to a peer that is down with the relay on is *delivery unconfirmed* and, since
-  step 1, is not run when the peer returns after the sender's wait — it is also not DELIVERED. No sender-side
-  outbox exists yet (ADR-2300 step 2). `require_ibc` has no product toggle (an origin-file edit); it is
-  permissive on every fresh pairing (ADR-2099).
+- **Sender outbox (T-0252 step 2, ADR-2300):** a plain-text chat message that could not be delivered because
+  the peer is offline (`unreachable`) or did not answer in time (`timeout_transport`) is KEPT in
+  `a2a_outbox` (`<tenant>/global/a2a_feed/outbox.jsonl`) for 24 h (`DEFAULT_DEADLINE_S`) instead of ending as
+  a failure. `RemoteTriggerSender.send(outbox_deadline_s=...)` keeps it (the console's `POST /a2a/feed/send`
+  asks for it; attachments, group and federation traffic never do); the feed row shows **Waiting for peer**
+  with a Cancel button (`GET /a2a/feed` → `outbox` map of task id → deadline, attempts; never text;
+  `POST /a2a/feed/outbox/{task_id}/cancel`). The `ConnectivityManager` runs the drain in its OWN task every
+  10 s (`OUTBOX_TICK_S`) so a blocking send never delays the presence passes.
+  **Rules a retry follows** (`a2a_outbox._drain_one`): a failure that proved non-delivery is resent when the
+  peer looks active or after 30 s → 300 s backoff, never closer than 15 s; a failure that MAY have delivered
+  is resent only after the signed stage query (`task_status`, ADR-2242) says the peer has never heard of the
+  `task_id` — a peer that knows the task is left alone (its stage is shown), a peer that cannot answer a
+  stage query is never retried (the message ends `unconfirmed`). Every attempt is a fresh envelope with the
+  same `task_id`; an entry is marked "may have delivered" BEFORE each attempt, so a crash mid-send is never
+  read as a clean miss. Closing an entry (sent, delivered, expired, cancelled, unconfirmed, failed) deletes
+  its text; `a2a_feed.erase_peer`/`clear` erase the outbox too (GDPR Art. 17). Audit: `A2A.outbox_enqueued`,
+  `A2A.outbox_retried`, `A2A.outbox_closed` (ids, state, counts; never text).
+  **A bug this exposed:** the relay pins a reply slot (`<kid>:reply:<task_id>`) to the random credential of
+  its first registrant, so ANY second attempt with the same `task_id` was refused with `auth_key_mismatch`
+  for 60 s; the reply slot is now unique per attempt (`remote_trigger_sender._relay_post`).
+  **Limits (stated, not hidden):** a peer on a build that has the stage query but not the step-1 deliver-by
+  drop can run the stale queued copy AND receive the resend (the older relay-flush race); chat text only —
+  a compute task is not kept (a task run hours later spends the peer's daily pool). Proof:
+  `test_a2a_outbox.py` (store, drain decisions, manager wiring, and a real relay with an offline peer),
+  `test_a2a_outbox_routes.py`, `peer-outbox-waiting.test.tsx`.
+- **Still open:** `require_ibc` has no product toggle (an origin-file edit); it is permissive on every fresh
+  pairing (ADR-2099).
 - **Journal:** "relay listener connected", "connection … is active (via …)" and "Prometheus client not
   available" are INFO now; "relay listener started (default relay)" stays WARNING on purpose (a third-party
   relay sees routing metadata).

@@ -102,6 +102,42 @@ describe("outbound message", () => {
   });
 });
 
+describe("waiting in the sender outbox (T-0252)", () => {
+  const outbox = (deadlineIn: number, attempts = 0) => ({ deadline_at: NOW + deadlineIn, attempts });
+
+  it("a message kept for an offline peer is 'Waiting for peer', a warning clock, chain at step 0", () => {
+    const v = messageStatusView(msg({ status: "queued" }), { now: NOW, outbox: outbox(3 * 3600) });
+    expect([v.key, v.icon, v.tone, v.label]).toEqual(["waiting", "clock", "warning", "Waiting for peer"]);
+    expect(states(v)).toBe("current,pending,pending,pending,pending,pending");
+    expect(v.detail).toMatch(/not retried yet/);
+    expect(v.detail).toMatch(/3 h/);
+  });
+
+  it("outranks 'queued' even past the stale limit, because the outbox has its own deadline", () => {
+    const v = messageStatusView(msg({ status: "queued", ts: NOW - QUEUED_STALE_S - 1 }),
+      { now: NOW, outbox: outbox(600, 2) });
+    expect(v.key).toBe("waiting");
+    expect(v.detail).toMatch(/2 retries so far/);
+    expect(v.detail).toMatch(/10 min/);
+  });
+
+  it("never claims a delivery: a stage the peer reported while it waits wins only when terminal", () => {
+    const live = messageStatusView(msg({ status: "sent" }), { now: NOW, outbox: outbox(60), stage: stage("processing") });
+    expect(live.key).toBe("waiting");
+    const done = messageStatusView(msg({ status: "sent" }), { now: NOW, outbox: outbox(60), stage: stage("completed") });
+    expect(done.key).toBe("done");
+  });
+
+  it("a deadline that has passed reads 'under a minute', never a negative time", () => {
+    const v = messageStatusView(msg({ status: "queued" }), { now: NOW, outbox: outbox(-500) });
+    expect(v.detail).toMatch(/under a minute/);
+  });
+
+  it("without an outbox entry nothing changes", () => {
+    expect(messageStatusView(msg({ status: "queued" }), { now: NOW, outbox: null }).key).toBe("queued");
+  });
+});
+
 describe("inbound message and replies", () => {
   it("a received message that is not answered yet", () => {
     const v = messageStatusView(msg({ direction: "in", status: "received" }), { now: NOW });

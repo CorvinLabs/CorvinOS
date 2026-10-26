@@ -1100,8 +1100,15 @@ class RemoteTriggerSender:
         feed_task_recorded: bool = False,
         federation: dict | None = None,
         thread_ref: dict | None = None,
+        outbox_deadline_s: int | None = None,
+        outbox_retry: bool = False,
     ) -> SendResult:
         """Send a signed TaskEnvelope and record the exchange in the A2A feed.
+
+        ``outbox_deadline_s`` (T-0252, ADR-2300 step 2): a plain-text message that could not be delivered
+        because the peer is offline or did not answer is KEPT in ``a2a_outbox`` for up to this many
+        seconds and resent when the peer is back; the feed then shows "waiting" instead of a failure.
+        ``outbox_retry`` is set only by ``a2a_outbox.drain`` for its own attempts.
 
         ``thread_ref`` (ADR-2235 Phase 1) labels the OUTBOUND feed record's
         author for the peer-thread UI — e.g. a moderated conversation's
@@ -1194,9 +1201,50 @@ class RemoteTriggerSender:
         finally:
             if poller is not None:
                 poller.finish(result)
-        if in_feed:
-            _record_feed_response(endpoint_id, result, peer_label)
+        kept = False
+        if outbox_deadline_s is not None and in_feed and result is not None:
+            kept = self._keep_in_outbox(endpoint_id, task_id, instruction, result, outbox_deadline_s,
+                                        attachments=attachments, group_id=group_id,
+                                        federation=federation)
+        if in_feed and not kept:
+            # An outbox attempt that failed in a way the outbox resolves (peer offline / no answer)
+            # writes no row: the "waiting" row stays until the next attempt or the deadline.
+            retried_unresolved = outbox_retry and not result.ok and (
+                result.error_category in (ErrorCategory.UNREACHABLE, ErrorCategory.TIMEOUT_TRANSPORT)
+                or bool(getattr(result, "maybe_delivered", False)))
+            if not retried_unresolved:
+                _record_feed_response(endpoint_id, result, peer_label)
         return result
+
+    def _keep_in_outbox(self, endpoint_id: str, task_id: str, instruction: str, result: "SendResult",
+                        deadline_s: int, *, attachments: list | None, group_id: str | None,
+                        federation: dict | None) -> bool:
+        """T-0252 / ADR-2300 step 2: keep a failed chat message for a later attempt.
+
+        Only plain text (no attachments, group or federation traffic) and only a failure the outbox can
+        resolve safely: the peer was unreachable, or no answer arrived in time (``a2a_outbox.drain`` then
+        asks the peer with the signed stage query before it ever resends). Returns True when kept; the
+        caller then writes no failure row — the feed API reports the entry as waiting (``waiting_view``).
+        """
+        try:
+            if result.ok or attachments or group_id is not None or federation is not None:
+                return False
+            cat = result.error_category
+            if cat not in (ErrorCategory.UNREACHABLE, ErrorCategory.TIMEOUT_TRANSPORT):
+                return False
+            import a2a_outbox as _outbox  # type: ignore[import-not-found]  # noqa: PLC0415
+            maybe = bool(getattr(result, "maybe_delivered", False)) or cat == ErrorCategory.TIMEOUT_TRANSPORT
+            entry = _outbox.enqueue(endpoint_id, task_id, instruction, deadline_s=deadline_s,
+                                    maybe_delivered=maybe)
+            if entry is None:
+                return False
+            self._audit_best_effort(
+                "A2A.outbox_enqueued", "INFO",
+                {"endpoint_id": endpoint_id, "task_id": task_id, "reason": str(cat),
+                 "deadline_s": int(deadline_s)})
+            return True
+        except Exception:  # noqa: BLE001 — the outbox must never turn a failure into an exception
+            return False
 
     def _send_impl(
         self,
@@ -2323,9 +2371,16 @@ class RemoteTriggerSender:
             raise TransportError("relay_endpoint_config_incomplete")
 
         task_id = envelope.get("task_id", "")
-        my_kid = f"{to_kid}:reply:{task_id}"
-
         import secrets as _secrets  # noqa: PLC0415
+        # One reply slot per ATTEMPT, not per task id (T-0252): the relay pins a slot to the random
+        # credential of whoever registered it first, so a second attempt for the same task_id —
+        # the outbox's resend, or a user's — was refused with ``auth_key_mismatch`` for as long as
+        # the first attempt's slot lived (60 s idle). The suffix keeps the kid within the relay's
+        # 128-character limit or is left out.
+        my_kid = f"{to_kid}:reply:{task_id}"
+        _suffix = ":" + _secrets.token_hex(4)
+        if len(my_kid) + len(_suffix) <= 128:
+            my_kid += _suffix
         import a2a_relay as _relay  # type: ignore[import-not-found]  # noqa: PLC0415
         my_relay_auth_key = _secrets.token_hex(32)  # ephemeral, single-use — no TOFU needed
 

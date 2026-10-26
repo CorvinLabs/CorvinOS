@@ -68,6 +68,8 @@ PRESENCE_INTERVAL_S = 60.0
 # intervals plus one tick and the ping timeout.
 PRESENCE_FRESH_S = 2 * PRESENCE_INTERVAL_S + TICK_S + 25.0
 PROBE_WORKERS = 8
+# How often the sender outbox looks for a waiting message it can deliver (T-0252, ADR-2300).
+OUTBOX_TICK_S = 10.0
 _CONSOLE_PORT = 8765
 
 
@@ -376,6 +378,7 @@ class ConnectivityManager:
         self._relay_listener: Any = None
         self._relay_task: asyncio.Task | None = None
         self._task: asyncio.Task | None = None
+        self._outbox_task: asyncio.Task | None = None
         self._stop = False
         self._schedules: dict[str, _Schedule] = {}
         self._sched_lock = threading.Lock()
@@ -386,7 +389,11 @@ class ConnectivityManager:
 
     # ── lifecycle ──
     def start(self) -> asyncio.Task:
-        self._task = asyncio.get_running_loop().create_task(self._run(), name="a2a-connectivity")
+        loop = asyncio.get_running_loop()
+        self._task = loop.create_task(self._run(), name="a2a-connectivity")
+        # Its own task (T-0252): a drain sends and can block for a whole send timeout; it must never
+        # delay the presence passes above, or a live peer's status would flicker to "unknown".
+        self._outbox_task = loop.create_task(self._run_outbox(), name="a2a-outbox")
         return self._task
 
     async def stop(self) -> None:
@@ -398,6 +405,8 @@ class ConnectivityManager:
             self._relay_task.cancel()
         if self._task is not None:
             self._task.cancel()
+        if self._outbox_task is not None:
+            self._outbox_task.cancel()
         await asyncio.to_thread(self.ingress.stop)
 
     def wake(self, kid: str | None = None) -> None:
@@ -430,6 +439,31 @@ class ConnectivityManager:
             except Exception:  # noqa: BLE001 — one bad pass must not end the loop
                 _log.exception("a2a connectivity pass failed")
             await self._sleep(TICK_S)
+
+    async def _run_outbox(self) -> None:
+        while not self._stop:
+            try:
+                await asyncio.to_thread(self._drain_outbox)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — one bad pass must not end the loop
+                _log.exception("a2a outbox pass failed")
+            await asyncio.sleep(OUTBOX_TICK_S)
+
+    def _peer_is_active(self, kid: str) -> bool:
+        with self._sched_lock:
+            return self._known_states.get(kid, "").startswith("active")
+
+    def _drain_outbox(self) -> dict[str, int]:
+        """T-0252: resend the chat messages that were waiting for an offline peer."""
+        import a2a_outbox  # noqa: PLC0415
+        if not a2a_outbox.waiting(self._tenant_id):
+            return {}
+        from remote_trigger_sender import RemoteTriggerSender  # noqa: PLC0415
+        return a2a_outbox.drain(
+            RemoteTriggerSender(endpoints_dir=self._endpoints_dir),
+            audit=lambda event, severity, details: _audit(event, severity, **details),
+            is_active=self._peer_is_active, tenant_id=self._tenant_id)
 
     async def _sleep(self, seconds: float) -> None:
         deadline = time.monotonic() + seconds

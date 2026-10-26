@@ -15,7 +15,7 @@
  *  - "Unconfirmed" is shown only while no stage was ever observed; once one was, the
  *    last known stage wins.
  */
-import type { A2AFeedMessage, A2AStageInfo, A2AStageName } from "@/lib/api/a2a";
+import type { A2AFeedMessage, A2AOutboxInfo, A2AStageInfo, A2AStageName } from "@/lib/api/a2a";
 
 export type StatusIcon = "clock" | "check" | "check-check" | "spinner" | "x" | "help";
 export type StatusTone = "muted" | "info" | "working" | "success" | "warning" | "danger";
@@ -43,6 +43,8 @@ export interface StatusContext {
   reply?: Pick<A2AFeedMessage, "status" | "error" | "direction"> | null;
   /** Furthest stage the peer reported for this task. */
   stage?: A2AStageInfo | null;
+  /** Set while the message waits in the sender outbox for its offline peer (T-0252). */
+  outbox?: A2AOutboxInfo | null;
   /** Unix seconds "now" (injected so the mapping is deterministic). */
   now: number;
 }
@@ -106,6 +108,13 @@ export function formatAge(seconds: number | null): string {
   return `${Math.floor(seconds / 3600)} h ago`;
 }
 
+/** "3 h", "12 min", "under a minute" — a deadline distance, never a live countdown. */
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return "under a minute";
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+  return `${Math.round(seconds / 3600)} h`;
+}
+
 function view(p: Omit<MessageStatusView, "chain" | "observedAgeS"> & Partial<Pick<MessageStatusView, "chain" | "observedAgeS">>): MessageStatusView {
   return { chain: [], observedAgeS: null, ...p };
 }
@@ -147,6 +156,16 @@ export function messageStatusView(m: A2AFeedMessage, ctx: StatusContext): Messag
   }
 
   // ── a message we sent ───────────────────────────────────────────────
+  // Waiting in the outbox (T-0252): the peer is offline and the message is kept. It outranks
+  // "queued"/"unconfirmed" (the outbox is the newer fact) and never claims a delivery.
+  if (ctx.outbox && !(stage && TERMINAL.has(stage.stage))) {
+    const left = Math.max(0, ctx.outbox.deadline_at - now);
+    return view({ key: "waiting", icon: "clock", tone: "warning", label: "Waiting for peer",
+      detail: `The peer is offline. This message is kept and sent again automatically when it is back `
+        + `(${ctx.outbox.attempts === 0 ? "not retried yet" : `${ctx.outbox.attempts} retries so far`}); `
+        + `it is given up on in ${formatDuration(left)}.`,
+      chain: chain(0) });
+  }
   // Terminal stage reported by the peer wins over everything inferred locally.
   if (stage && TERMINAL.has(stage.stage)) {
     if (stage.stage === "completed") {

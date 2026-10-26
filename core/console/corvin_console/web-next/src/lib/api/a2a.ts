@@ -595,6 +595,13 @@ export interface A2AFeedMessage {
 export type A2AStageName =
   | "delivered" | "accepted" | "processing" | "completed" | "failed" | "rejected" | "timeout";
 
+export interface A2AOutboxInfo {
+  /** Unix seconds after which the message is given up on. */
+  deadline_at: number;
+  /** How many times it was sent again already. */
+  attempts: number;
+}
+
 export interface A2AStageInfo {
   stage: A2AStageName;
   stage_seq: number;
@@ -638,6 +645,8 @@ export interface A2AFeedResponse {
   peers: A2AFeedPeer[];
   /** task_id -> furthest stage the peer reported. Absent on older hosts. */
   stages?: Record<string, A2AStageInfo>;
+  /** Messages still waiting for their offline peer, by task id (deadline and attempts, never text). */
+  outbox?: Record<string, A2AOutboxInfo>;
   /** Member-only network verdict; absent on an older host. */
   network?: A2ANetworkStatus;
 }
@@ -670,6 +679,14 @@ export async function sendA2AFeedMessage(
   csrf: string,
 ): Promise<{ accepted: boolean; peer_id: string }> {
   return api(`/a2a/feed/send`, { method: "POST", body, csrf });
+}
+
+/** Withdraw a message that is still waiting for its offline peer. 404 once it is no longer waiting. */
+export async function cancelWaitingA2AMessage(
+  taskId: string,
+  csrf: string,
+): Promise<{ cancelled: boolean; task_id: string }> {
+  return api(`/a2a/feed/outbox/${encodeURIComponent(taskId)}/cancel`, { method: "POST", csrf });
 }
 
 export async function clearA2AFeed(

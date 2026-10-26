@@ -800,6 +800,7 @@ run "Python: L38 instance revocation guard"            bash -c 'PYTEST="${PYTEST
 run "Python: L38 Google A2A adapter"                   python3 shared/test_a2a_google_adapter.py >/dev/null           || fails=$((fails+1))
 run "Python: L38 Google A2A E2E"                       python3 shared/test_a2a_google_e2e.py >/dev/null               || fails=$((fails+1))
 run "Python: L38 relay hardening (ADR-0258)"           python3 shared/test_a2a_relay.py >/dev/null                    || fails=$((fails+1))
+run "Python: L38 sender outbox: store, drain decisions, manager wiring, offline peer over a real relay (ADR-2300, T-0252)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_a2a_outbox.py ../../core/console/tests/test_a2a_outbox_routes.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: L38 relay deliver-by: a queued task is not run after its sender gave up (ADR-2300, T-0252)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_a2a_relay_deliver_by.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: L38 crypto+protocol E2E"                  python3 shared/test_a2a_crypto_e2e.py >/dev/null               || fails=$((fails+1))
 run "Python: L38 friendship handshake"                 python3 shared/test_a2a_friendship_handshake.py >/dev/null    || fails=$((fails+1))

@@ -652,8 +652,14 @@ def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]
         return 0, 0
     root = feed_dir(tenant_id)
     path = root / "messages.jsonl"
+    # T-0252: a message still waiting for this peer holds its text at rest in the outbox.
+    try:
+        import a2a_outbox  # noqa: PLC0415
+        _ob = a2a_outbox.erase_peer(subject_id, tenant_id)
+    except Exception:  # noqa: BLE001
+        _ob = 0
     if not path.exists() and not (root / _STAGES_FILE).exists():
-        return 0, 0
+        return _ob, 0
     with _store_lock(root):
         overrides = _load_overrides(root)
         records = _apply_overrides(list(_iter_records(path)), overrides)
@@ -669,7 +675,7 @@ def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]
                 _write_atomic(_sp, "".join(json.dumps(r) + "\n" for r in _skeep).encode("utf-8"))
                 removed += len(_srows) - len(_skeep)
         if not removed:
-            return 0, 0
+            return _ob, 0
         if len(keep) != len(records):
             _write_atomic(path, "".join(
                 json.dumps(r, ensure_ascii=False) + "\n" for r in keep).encode("utf-8"))
@@ -688,7 +694,7 @@ def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]
                 except OSError:
                     pass
         _blob_estimate.pop(str(root), None)
-    return removed, blobs_removed
+    return removed + _ob, blobs_removed
 
 
 def clear(tenant_id: str | None = None) -> tuple[int, int]:
@@ -710,6 +716,11 @@ def clear(tenant_id: str | None = None) -> tuple[int, int]:
                 blobs += 1
             except OSError:
                 pass
+    try:
+        import a2a_outbox  # noqa: PLC0415
+        a2a_outbox.clear(tenant_id)
+    except Exception:  # noqa: BLE001
+        pass
     return msgs, blobs
 
 

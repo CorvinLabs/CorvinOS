@@ -22,9 +22,9 @@ import { cn } from "@/lib/utils";
 import { CommandPalette, applyCommandInsertion, useSlashCommandPalette, type SlashCommand } from "./SlashCommandPalette";
 import {
   a2aFeedBlobUrl, encodeFilesForA2A, getA2AFeed, getPeerThreadCommands,
-  sendA2AFeedMessage, sendPeerThreadCommand,
+  sendA2AFeedMessage, sendPeerThreadCommand, cancelWaitingA2AMessage,
   A2AAttachmentLimitError, A2A_MAX_ATTACHMENTS_COUNT, A2A_MAX_ATTACHMENTS_TOTAL_BYTES,
-  type A2AFeedMessage, type A2AStageInfo,
+  type A2AFeedMessage, type A2AOutboxInfo, type A2AStageInfo,
 } from "@/lib/api/a2a";
 import {
   formatAge, messageStatusView, type MessageStatusView, type StatusIcon, type StatusTone,
@@ -75,8 +75,8 @@ const CHAIN_DOT: Record<string, string> = {
  * (queued → sent → delivered → accepted → working → done). The mapping lives in
  * lib/a2a-message-status.ts; this only draws it.
  */
-export function MessageStatusSymbol({ v, mine, onResend }: {
-  v: MessageStatusView; mine: boolean; onResend?: () => void;
+export function MessageStatusSymbol({ v, mine, onResend, onCancel }: {
+  v: MessageStatusView; mine: boolean; onResend?: () => void; onCancel?: () => void;
 }) {
   const Icon = STATUS_ICON[v.icon];
   const chainText = v.chain.length
@@ -109,6 +109,12 @@ export function MessageStatusSymbol({ v, mine, onResend }: {
           Resend
         </button>
       )}
+      {onCancel && (
+        <button type="button" data-testid="peer-message-cancel" onClick={onCancel}
+          className="ml-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-foreground/80 underline-offset-2 hover:bg-muted hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+          Cancel
+        </button>
+      )}
     </div>
   );
 }
@@ -116,9 +122,10 @@ export function MessageStatusSymbol({ v, mine, onResend }: {
 /** Refusals that depend on the message itself — sending the same text again cannot help. */
 const CONTENT_REFUSALS: ReadonlySet<string> = new Set(["injection", "house_rules", "data_flow"]);
 
-const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, stage, now, onResend }: {
-  m: A2AFeedMessage; label: string; reply: A2AFeedMessage | null; stage: A2AStageInfo | null; now: number;
-  onResend?: (text: string) => void;
+const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, stage, outbox, now, onResend, onCancel }: {
+  m: A2AFeedMessage; label: string; reply: A2AFeedMessage | null; stage: A2AStageInfo | null;
+  outbox?: A2AOutboxInfo | null; now: number;
+  onResend?: (text: string) => void; onCancel?: (taskId: string) => void;
 }) {
   // Four actors, not two (ADR-2235): who authored this line is derived from
   // (direction, kind) — or from thread_ref when a moderated conversation's
@@ -134,7 +141,9 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, sta
   const failed = !unconfirmed && (Boolean(m.error) || ["rejected", "timeout", "error"].includes(m.status));
   // The status symbol: what the feed knows about this message, its reply and the
   // stage the peer reported — one pure mapping (lib/a2a-message-status.ts).
-  const statusView = messageStatusView(m, { reply, stage, now });
+  const statusView = messageStatusView(m, { reply, stage, outbox, now });
+  // A message waiting for an offline peer can be withdrawn while it still waits (T-0252).
+  const canCancel = Boolean(onCancel) && mine && m.kind === "task" && statusView.key === "waiting";
   // A refused or never-sent message of ours can be sent again — by the user, explicitly.
   // Never for "unconfirmed" (it may already have run: a resend would run it twice), never
   // with attachments (the feed keeps no bytes to re-attach), never when the refusal was
@@ -216,7 +225,8 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, sta
           )}
         </div>
         <MessageStatusSymbol v={statusView} mine={mine}
-          onResend={canResend && onResend ? () => onResend(m.text) : undefined} />
+          onResend={canResend && onResend ? () => onResend(m.text) : undefined}
+          onCancel={canCancel && onCancel ? () => onCancel(m.task_id) : undefined} />
       </div>
     </div>
   );
@@ -366,7 +376,18 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- feed.refetch is stable
   }, [peerId, csrf]);
+  const cancelWaiting = React.useCallback(async (taskId: string) => {
+    setError("");
+    try {
+      await cancelWaitingA2AMessage(taskId, csrf);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    void feed.refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- feed.refetch is stable
+  }, [csrf]);
   const stages = feed.data?.stages;
+  const outbox = feed.data?.outbox;
   const nowS = Math.floor((feed.dataUpdatedAt || Date.now()) / 1000);
   // Reachable is not the same as accepting: a peer can answer pings while
   // refusing every task (e.g. it requires a verified CorvinOS identity).
@@ -519,7 +540,8 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
               <PeerMessageRow m={m} label={label}
                 reply={m.kind === "task" ? repliesByTask.get(m.task_id) ?? null : null}
                 stage={m.kind === "task" && m.direction === "out" ? stages?.[m.task_id] ?? null : null}
-                now={nowS} onResend={resend} />
+                outbox={m.kind === "task" && m.direction === "out" ? outbox?.[m.task_id] ?? null : null}
+                now={nowS} onResend={resend} onCancel={cancelWaiting} />
             </React.Fragment>
           ))}
           {error && (

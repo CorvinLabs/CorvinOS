@@ -191,7 +191,17 @@ def a2a_feed(
         # `after` cursor on purpose — a stage changes on a message that is already
         # delivered to the client, so the whole (small, capped) map rides every poll.
         "stages": _recent_stages(tid, peer_id),
+        # T-0252: messages still waiting for their offline peer (ids and deadline only, never text).
+        "outbox": _waiting_outbox(tid, peer_id),
     }
+
+
+def _waiting_outbox(tenant_id: str, peer_id: str | None) -> dict[str, Any]:
+    try:
+        import a2a_outbox  # type: ignore[import-not-found]  # noqa: PLC0415
+        return a2a_outbox.waiting_view(peer_id, tenant_id)
+    except Exception:  # noqa: BLE001 — a status ticker never fails the feed
+        return {}
 
 
 def _network_status() -> dict[str, Any]:
@@ -286,8 +296,11 @@ def _send_in_background(peer_id: str, text: str, atts: list[dict], timeout_s: in
                         task_id: str | None = None) -> None:
     try:
         from remote_trigger_sender import RemoteTriggerSender  # type: ignore[import-not-found]
+        import a2a_outbox  # type: ignore[import-not-found]  # noqa: PLC0415
+        # T-0252: plain text to an offline peer waits in the outbox instead of failing (ADR-2300).
         RemoteTriggerSender().send(peer_id, text, attachments=atts or None, timeout_s=timeout_s,
-                                   task_id=task_id, feed_task_recorded=task_id is not None)
+                                   task_id=task_id, feed_task_recorded=task_id is not None,
+                                   outbox_deadline_s=None if atts else a2a_outbox.DEFAULT_DEADLINE_S)
     except Exception:
         # send() records its own failure in the feed and the audit chain; an
         # exception here means the sender could not even be built.
@@ -435,6 +448,31 @@ def a2a_feed_send_confirm(rec: Session, pending_id: str) -> dict[str, Any]:
                  peer_label=peer.get("label"), tenant_id=tenant_id)
     _SEND_POOL.submit(_send_in_background, record["peer_id"], record["text"], [], None, task_id)
     return {"accepted": True, "peer_id": record["peer_id"], "task_id": task_id}
+
+
+@router.post("/a2a/feed/outbox/{task_id}/cancel")
+def a2a_feed_outbox_cancel(rec: Session, task_id: str) -> dict[str, Any]:
+    """Withdraw a message that is still waiting for its offline peer (T-0252, ADR-2300).
+
+    Only a ``waiting`` entry can be cancelled: once an attempt is on the wire or the entry is closed
+    the answer is 404. The text is deleted with the entry; the feed row ends as "Cancelled"."""
+    tenant_id = _a2a_tenant(rec)
+    import a2a_outbox  # type: ignore[import-not-found]  # noqa: PLC0415
+    entry = a2a_outbox.cancel(task_id, tenant_id=tenant_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="no waiting message with this id")
+    _feed.record(direction="in", kind="response", peer_id=entry["endpoint_id"], task_id=task_id,
+                 status="error", error="Cancelled before it was delivered.", tenant_id=tenant_id)
+    try:
+        from forge.security_events import write_event  # type: ignore[import-not-found]
+        write_event(
+            _forge_paths.tenant_audit_chain(tenant_id), "A2A.outbox_closed", severity="INFO",
+            details={"endpoint_id": entry["endpoint_id"], "task_id": task_id,
+                     "state": "cancelled", "attempts": int(entry.get("attempts") or 0)},
+        )
+    except Exception:  # noqa: BLE001 — the message is already withdrawn; the audit is best-effort here
+        pass
+    return {"cancelled": True, "task_id": task_id}
 
 
 @router.post("/a2a/feed/send/discard/{pending_id}")
