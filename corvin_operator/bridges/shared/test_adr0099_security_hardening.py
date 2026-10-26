@@ -306,38 +306,6 @@ class TestMed01FriendshipKeyDerivation(unittest.TestCase):
         self.assertEqual(ed.get("_friendship_key_version"), 2)
 
 
-# ─── MED-02: Host header sanitisation ────────────────────────────────────────
-
-class TestMed02HostHeader(unittest.TestCase):
-    def test_safe_host_pattern(self):
-        """Valid hostnames should pass the safe host regex."""
-        from a2a_http_server import _SAFE_HOST_RE
-        valid = [
-            "example.com",
-            "sub.example.com:443",
-            "192.168.1.1:8001",
-            "[::1]:8080",
-            "localhost",
-            "localhost:8001",
-        ]
-        for h in valid:
-            self.assertIsNotNone(_SAFE_HOST_RE.match(h), f"{h!r} should be valid")
-
-    def test_malicious_host_rejected(self):
-        """Host headers with special chars must be rejected."""
-        from a2a_http_server import _SAFE_HOST_RE
-        malicious = [
-            "evil.com/path",
-            "evil.com<script>",
-            'evil.com"onload',
-            "evil.com?query=1",
-            "../etc/passwd",
-            "evil.com\nHeader: injected",
-        ]
-        for h in malicious:
-            self.assertIsNone(_SAFE_HOST_RE.match(h), f"{h!r} should be rejected")
-
-
 # ─── MED-03: raw output size cap ─────────────────────────────────────────────
 
 class TestMed03RawOutputCap(unittest.TestCase):
@@ -717,36 +685,6 @@ class TestIter2AttachmentPreCheckDoS(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
 
-class TestIter2GoogleAdapterInvalidBase64Raises(unittest.TestCase):
-    """HIGH-A2A-GOOGLE-01: invalid base64 raises, never silently skipped."""
-
-    def test_invalid_base64_raises_error(self):
-        """_extract_attachments must raise GoogleA2AError on bad base64."""
-        import a2a_google_adapter as gad
-        parts = [{"type": "file", "file": {
-            "mimeType": "text/plain",
-            "data": "!!!!not-valid-base64!!!!",
-        }}]
-        with self.assertRaises(gad.GoogleA2AError,
-                               msg="Invalid base64 must raise, not silently skip"):
-            gad.GoogleA2AAdapter._extract_attachments(parts)
-
-    def test_valid_attachment_passes(self):
-        """Valid base64 attachment must still be returned normally."""
-        import base64
-        import a2a_google_adapter as gad
-        content = b"hello test"
-        b64 = base64.b64encode(content).decode("ascii")
-        parts = [{"type": "file", "file": {
-            "mimeType": "text/plain",
-            "data": b64,
-            "name": "hello.txt",
-        }}]
-        result = gad.GoogleA2AAdapter._extract_attachments(parts)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].decode(), content)
-
-
 class TestIter2ResponseTaskIdBinding(unittest.TestCase):
     """MED-CLIENT-01: verify_response cross-checks task_id."""
 
@@ -1042,35 +980,6 @@ class TestIter4WorkspaceEscapeBlocked(unittest.TestCase):
         from a2a_worker import sanitize_instruction
         result = sanitize_instruction("use the workspace to write output.csv")
         self.assertIn("workspace", result)
-
-
-class TestIter4PortValidation(unittest.TestCase):
-    """MED-IT4-04: _sanitize_host must reject ports > 65535."""
-
-    def test_valid_port_accepted(self):
-        from a2a_http_server import _sanitize_host
-        self.assertEqual(_sanitize_host("example.com:8080"), "example.com:8080")
-        self.assertEqual(_sanitize_host("127.0.0.1:443"), "127.0.0.1:443")
-        self.assertEqual(_sanitize_host("[::1]:80"), "[::1]:80")
-
-    def test_port_over_65535_rejected(self):
-        from a2a_http_server import _sanitize_host
-        self.assertEqual(_sanitize_host("example.com:99999"), "",
-            "Port 99999 must be rejected (MED-IT4-04)")
-        self.assertEqual(_sanitize_host("example.com:65536"), "",
-            "Port 65536 must be rejected (MED-IT4-04)")
-
-    def test_port_65535_accepted(self):
-        from a2a_http_server import _sanitize_host
-        self.assertEqual(_sanitize_host("example.com:65535"), "example.com:65535")
-
-    def test_no_port_accepted(self):
-        from a2a_http_server import _sanitize_host
-        self.assertEqual(_sanitize_host("example.com"), "example.com")
-
-    def test_injection_string_rejected(self):
-        from a2a_http_server import _sanitize_host
-        self.assertEqual(_sanitize_host("evil.com/../../etc/passwd"), "")
 
 
 class TestIter4ResultSchemaSizeLimit(unittest.TestCase):

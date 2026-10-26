@@ -220,8 +220,6 @@ def build_ingress_server(
             counters.bump(field)
 
     class _IngressHandler(_A2AHandler):
-        google_adapter = None
-
         def do_GET(self):  # noqa: N802
             counters.bump("not_found")
             self._respond(404, b'{"reason":"not_found"}\n')

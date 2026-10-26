@@ -13,12 +13,8 @@ Routes (native A2A):
   POST /v1/a2a/receive  → :class:`RemoteTriggerReceiver`
   GET  /healthz          → 200 ok + instance_id
 
-Google A2A routes (opt-in via ``google_a2a_adapter`` parameter):
-  GET  /.well-known/agent.json  → A2A agent card (URL derived from Host)
-  POST /a2a                     → Google A2A JSON-RPC dispatcher
-                                   (Authorization: Bearer <api_key>)
-
-Everything else → 404.
+There is no other inbound protocol (ADR-2293): CorvinOS does not interoperate with foreign A2A agents,
+pairing is the trust boundary. Everything else → 404.
 
 Run via ``python -m a2a_http_server --port 8001 --origins-dir <dir>``
 (or import :func:`build_server` + call ``serve_forever`` programmatically).
@@ -32,35 +28,12 @@ import collections
 import http.server
 import json
 import os
-import re
 import socket
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
-
-# Allowlist for Host header values in agent card URL construction (MED-02).
-# Matches IPv4, IPv6-in-brackets (RFC 2732), hostnames with optional port.
-# Port range 1–65535 enforced via regex + post-match numeric check.
-# ADR-0099 iter-4 MED-IT4-04: \d{1,5} allowed ports > 65535; fixed below.
-_SAFE_HOST_RE = re.compile(
-    r"^(?:[a-zA-Z0-9._-]+|\[[0-9a-fA-F:]+\])(?::(\d{1,5}))?$"
-)
-
-
-def _sanitize_host(host: str) -> str:
-    """Return host if it passes the safe-host allowlist, else empty string.
-
-    Validates: hostname/IPv4/IPv6 shape AND port number ≤ 65535.
-    """
-    m = _SAFE_HOST_RE.fullmatch(host)
-    if not m:
-        return ""
-    port_str = m.group(1)
-    if port_str is not None and int(port_str) > 65535:
-        return ""
-    return host
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -120,13 +93,6 @@ from remote_trigger_receiver import (  # type: ignore[import-not-found]
     OriginRegistry,
     RemoteTriggerReceiver,
 )
-
-# GoogleA2AAdapter is optional — imported lazily so the server stays
-# functional even if a2a_google_adapter.py is not yet installed.
-try:
-    from a2a_google_adapter import GoogleA2AAdapter  # type: ignore[import-not-found]
-except ImportError:
-    GoogleA2AAdapter = None  # type: ignore[assignment,misc]
 
 
 # ADR-0199 Decision 7 — ping rate limiting. Deliberately a SEPARATE bounded
@@ -434,11 +400,10 @@ def process_ping_request(
 
 
 class _A2AHandler(http.server.BaseHTTPRequestHandler):
-    """HTTP handler bound to a RemoteTriggerReceiver (+ optional GoogleA2AAdapter)."""
+    """HTTP handler bound to a RemoteTriggerReceiver."""
 
     # Set by build_server() (class-level — stdlib constructs handlers per request).
     receiver: RemoteTriggerReceiver  # type: ignore[assignment]
-    google_adapter: Any = None       # GoogleA2AAdapter | None
     # Explicit dirs for the friendship-ack handler (None = env-var-or-default,
     # see _endpoints_dir()/_pending_friendships_dir()). Two servers built with
     # explicit, DIFFERENT dirs in the same process (e.g. two test instances)
@@ -560,34 +525,9 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(500, b'{"reason":"audit_head_error"}\n')
             return
 
-        # Google A2A: agent card discovery endpoint
-        if self.path == "/.well-known/agent.json" and self.google_adapter:
-            host = self.headers.get("Host", "")
-            # Sanitize Host header to prevent Host Header Injection in the
-            # agent card URL (MED-02, ADR-0099). Reject headers that don't
-            # match the safe-host pattern; fall back to empty (relative URL).
-            # _sanitize_host also enforces port ≤ 65535 (MED-IT4-04).
-            host = _sanitize_host(host)
-            # Detect HTTPS via reverse-proxy forwarded header.  The stdlib
-            # server itself is plain HTTP; TLS termination is done upstream.
-            # Hardcoding "http" caused the agent card to advertise an HTTP
-            # URL even for HTTPS-only deployments (MED-02).
-            fwd_proto = self.headers.get("X-Forwarded-Proto", "").lower().strip()
-            scheme = "https" if fwd_proto == "https" else "http"
-            base_url = f"{scheme}://{host}" if host else ""
-            card = self.google_adapter.agent_card(base_url)
-            body = json.dumps(card).encode()
-            self._respond(200, body)
-            return
-
         self._respond(404, b'{"reason":"not_found"}\n')
 
     def do_POST(self):  # noqa: N802
-        # Google A2A: JSON-RPC dispatch
-        if self.path == "/a2a" and self.google_adapter is not None:
-            self._handle_google_a2a()
-            return
-
         # ADR-0199: Lightweight peer-liveness check. Receiver-side ping
         # endpoint. The sender POSTs a signed ping request; the receiver
         # verifies and responds with a recv_key-signed, task_id-echoing body.
@@ -647,61 +587,6 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             return
 
         payload = json.dumps(resp.to_dict()).encode()
-        self._respond(200, payload)
-
-    def _handle_google_a2a(self) -> None:
-        """Handle POST /a2a → GoogleA2AAdapter (JSON-RPC 2.0)."""
-        length_hdr = self.headers.get("Content-Length", "0")
-        try:
-            length = int(length_hdr)
-        except ValueError:
-            self._respond(400, b'{"reason":"invalid_content_length"}\n')
-            return
-        if length <= 0 or length > self.max_body_bytes:
-            self._respond(413, b'{"reason":"body_too_large_or_empty"}\n')
-            return
-
-        raw = self._read_body(length)
-        try:
-            body = json.loads(raw)
-        except Exception:
-            rpc_err = {
-                "jsonrpc": "2.0", "id": None,
-                "error": {"code": -32700, "message": "Parse error"},
-            }
-            self._respond(200, json.dumps(rpc_err).encode())
-            return
-        if not isinstance(body, dict):
-            rpc_err = {
-                "jsonrpc": "2.0", "id": None,
-                "error": {"code": -32600, "message": "Invalid Request"},
-            }
-            self._respond(200, json.dumps(rpc_err).encode())
-            return
-
-        # Extract Bearer token from Authorization header
-        auth_header = self.headers.get("Authorization", "")
-        api_key: str | None = None
-        if auth_header.lower().startswith("bearer "):
-            api_key = auth_header[len("bearer "):].strip() or None
-
-        try:
-            result = self.google_adapter.dispatch(body, api_key)
-        except Exception as exc:
-            if os.environ.get("CORVIN_A2A_HTTP_LOG", "") == "1":
-                import traceback
-                traceback.print_exc()
-            else:
-                print(f"a2a_http_server: google adapter crashed: "
-                      f"{type(exc).__name__}: {exc}", flush=True)
-            rpc_err = {
-                "jsonrpc": "2.0", "id": body.get("id"),
-                "error": {"code": -32603, "message": "Internal error"},
-            }
-            self._respond(200, json.dumps(rpc_err).encode())
-            return
-
-        payload = json.dumps(result).encode()
         self._respond(200, payload)
 
     # ── Route implementations ─────────────────────────────────────────
@@ -1018,8 +903,6 @@ def build_server(
     force_m1_only: bool | None = None,
     instance_id: str | None = None,
     nonce_store: Any = None,
-    google_a2a_enabled: bool = False,
-    agent_card_overrides: dict | None = None,
     forge_se: Any = None,
     group_message_handler: Any = None,  # ADR-2218 Phase 3: group routing callback
 ) -> HardenedThreadingHTTPServer:
@@ -1027,16 +910,6 @@ def build_server(
 
     Port 0 → OS picks an ephemeral port; read it back via
     ``server.server_address[1]``.
-
-    google_a2a_enabled
-        When True, activates ``POST /a2a`` and
-        ``GET /.well-known/agent.json`` routes by attaching a
-        :class:`GoogleA2AAdapter` to the handler class.
-        Requires ``a2a_google_adapter.py`` to be importable.
-
-    agent_card_overrides
-        Dict merged over the default agent card (name, description,
-        skills, etc.) when ``google_a2a_enabled=True``.
 
     forge_se
         Optional forge security_events module override for test isolation.
@@ -1067,31 +940,10 @@ def build_server(
         group_message_handler=group_message_handler,
     )
 
-    google_adapter: Any = None
-    if google_a2a_enabled:
-        if GoogleA2AAdapter is None:
-            raise ImportError(
-                "google_a2a_enabled=True but a2a_google_adapter.py is not importable"
-            )
-        eff_origins_dir = (
-            Path(os.environ.get("REMOTE_ORIGINS_DIR", ""))
-            if os.environ.get("REMOTE_ORIGINS_DIR")
-            else origins_dir
-            or (_DEFAULT_COWORK_DIR / "remote_origins")
-        )
-        google_adapter = GoogleA2AAdapter(
-            receiver=receiver,
-            origins_dir=eff_origins_dir,
-            instance_id=instance_id,
-            agent_card_overrides=agent_card_overrides,
-            forge_se=forge_se,
-        )
-
     class _Handler(_A2AHandler):
         pass
 
     _Handler.receiver = receiver
-    _Handler.google_adapter = google_adapter
     _Handler.endpoints_dir = endpoints_dir
     _Handler.pending_dir = pending_dir
     return HardenedThreadingHTTPServer((host, port), _Handler)

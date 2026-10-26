@@ -1,6 +1,6 @@
 """Regression: the A2A origin/endpoint default-directory resolvers used to be
-FOUR independently-computed implementations (remote_trigger_receiver.py,
-remote_trigger_sender.py, a2a_http_server.py, a2a_google_sender.py) plus a
+independently-computed implementations (remote_trigger_receiver.py,
+remote_trigger_sender.py, a2a_http_server.py; a fourth, the Google sender, was removed with ADR-2293) plus a
 FIFTH, structurally different one in the Console
 (core/console/corvin_console/routes/a2a_pair.py, a fixed
 ``Path(__file__).resolve().parents[3]``).
@@ -43,7 +43,6 @@ if str(_SHARED) not in sys.path:
 import remote_trigger_receiver as _rtr  # noqa: E402
 import remote_trigger_sender as _rts  # noqa: E402
 import a2a_http_server as _a2a_http  # noqa: E402
-import a2a_google_sender as _a2a_google  # noqa: E402
 
 
 def _install_fake_corvin_console(monkeypatch, venv_root: Path) -> None:
@@ -73,12 +72,10 @@ class TestInstalledLayoutConsistency:
         receiver_origins = _rtr._default_repo_relative("cowork", "remote_origins")
         sender_endpoints = _rts._default_endpoints_dir()
         http_cowork = _a2a_http._default_cowork_dir()
-        google_endpoints = _a2a_google._default_google_sender_endpoints_dir()
 
         assert receiver_origins == expected_operator_root / "cowork" / "remote_origins"
         assert sender_endpoints == expected_operator_root / "cowork" / "remote_endpoints"
         assert http_cowork == expected_operator_root / "cowork"
-        assert google_endpoints == expected_operator_root / "cowork" / "remote_endpoints"
 
         # The load-bearing assertion: sender and receiver must land in the
         # SAME cowork directory, or a friendship-ack write (via the

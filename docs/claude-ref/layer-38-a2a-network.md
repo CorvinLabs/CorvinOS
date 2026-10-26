@@ -872,7 +872,7 @@ demonstrably successful friendship-ack handshake:
 - **Four independently-computed "default origin/endpoint directory" functions** —
   `remote_trigger_receiver.py::_default_repo_relative()`,
   `remote_trigger_sender.py::_default_endpoints_dir()`, `a2a_http_server.py::
-  _default_cowork_dir()`, and `a2a_google_sender.py`'s inline default — all walk up from
+  _default_cowork_dir()` — all walk up from
   their OWN `__file__` for a `.corvin_repo`/`plugins` marker (a 2026-08-01/02 fix for a prior
   `IndexError` crash), with a "directory next to this file" fallback when no marker is
   found. In an installed/vendored deployment (these files live under
@@ -1421,7 +1421,7 @@ three chokepoints:
 
 | Chokepoint | Call site (`corvin_operator/bridges/shared/`) | What a denial does |
 |---|---|---|
-| inbound | `RemoteTriggerReceiver.receive` → `RemoteTriggerReceiver._network_denied()` (`remote_trigger_receiver.py`, before `_receive_impl`) | every inbound transport (HTTP server, relay, Google adapter) funnels here; answers the unsigned rejection an unknown origin gets, audits `A2A.request_rejected` (`reason=license_required`) locally; no task is recorded, so no stage is written |
+| inbound | `RemoteTriggerReceiver.receive` → `RemoteTriggerReceiver._network_denied()` (`remote_trigger_receiver.py`, before `_receive_impl`) | every inbound transport (HTTP server, relay) funnels here; answers the unsigned rejection an unknown origin gets, audits `A2A.request_rejected` (`reason=license_required`) locally; no task is recorded, so no stage is written |
 | outbound | `RemoteTriggerSender.send` → `_network_denied("remote_trigger_sender.send")` | refused before anything is recorded or sent; returns `SendResult(status="rejected", error_category=REJECTED)` with the local detail `A2A network requires a member seat` |
 | outbound | `RemoteTriggerSender.ping` → `_network_denied("remote_trigger_sender.ping")` | no probe leaves the machine; `PingResult(reachable=False, error_category=REJECTED)` |
 | outbound | `RemoteTriggerSender.send_reconnect` → `_network_denied(…)` | nothing is pushed; returns `False` |
@@ -1635,10 +1635,7 @@ pairing keys is left behind. `corvin-a2a import` rolls back on the issuer's
   is consumed, a task whose HMAC-covered `sender_instance_id` is our own id
   (`sender_is_self`) or differs from the bound `_peer_instance_id`
   (`sender_not_bound_peer`). This runs inside `receive()`, so every
-  transport is covered. An empty sender id (legacy sender) passes. The
-  Google A2A adapter builds its in-process envelopes with an empty
-  `sender_instance_id`: it speaks for no Corvin peer and must not claim the
-  host's own identity (round 11).
+  transport is covered. An empty sender id (legacy sender) passes.
 - **Attachment names** use `fullmatch`; `$` admitted a trailing newline.
 
 ### Live feed store — seq allocation (review rounds 4–5)
@@ -2032,3 +2029,14 @@ now pins them for the one engine that is shareable today (`claude_code`), throug
 (d) the worker runs in a private 0700 scratch directory outside the repository that is gone afterwards. Mutation probes
 (flag removed, one credential un-blanked) turn the tests red. ADR-2291 (draft) makes this contract the entry ticket for
 sharing any further engine.
+
+### One inbound protocol: the Google A2A adapter is gone (ADR-2293)
+
+`a2a_google_adapter.py`, `a2a_google_sender.py`, the `google_a2a_enabled` / `agent_card_overrides` parameters of
+`a2a_http_server.build_server`, the `POST /a2a` and `GET /.well-known/agent.json` routes and the safe-host helper only the
+agent card used were removed. The flag defaulted to `False` and nothing in production ever set it, so no install
+changes behaviour; the routes answer 404 as every unknown path does. The receiver keeps exactly one inbound protocol (the
+paired, signed envelope); pairing is the trust boundary. Interoperating with foreign agents would be a new decision with
+its own authentication, gates and audit, not a flag. The words *parts* and *artifacts* in the media sections are an analogy.
+Guard: `test_adr_2293_no_foreign_a2a.py` (files absent, no production mention with a positive control on the scan, no switch in
+`build_server`, `/a2a` and the agent card answer 404 over a real HTTP server with `/healthz` as the control).
