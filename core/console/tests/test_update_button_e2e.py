@@ -110,6 +110,18 @@ def test_run_cut_off_by_restart_is_never_called_a_success_from_the_version(tmp_p
     assert UpdateManager("_default", state_path=tmp_path / "none.json").last_update("1.0.0") is None
 
 
+def test_verification_that_lands_after_the_cut_off_verdict_is_folded_in(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({
+        "status": "interrupted", "phase": "failed", "started_at": 1000.0, "finished_at": 1100.0,
+        "exit_code": None, "steps": {"verification": {"status": "running", "at": 1100.0, "detail": None}}}))
+    (tmp_path / "update_progress.jsonl").write_text(
+        json.dumps({"phase": "verification", "status": "ok", "detail": "", "ts": 1103}) + "\n")
+    last = UpdateManager("_default", state_path=state).last_update("2.0.0", tmp_path)
+    assert last["steps"]["verification"]["status"] == "ok"
+    assert last["checks"]["verified"] is True
+
+
 # ── real route ────────────────────────────────────────────────────────────
 
 def _fake_record(tenant_id: str = "_default"):

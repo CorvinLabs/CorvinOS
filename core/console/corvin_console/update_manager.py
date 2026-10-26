@@ -372,7 +372,11 @@ class UpdateManager:
         if not st:
             return None
         events = read_progress(progress_path_for(self.state_path()))
-        if st.get("status") == "running" and not self.lock.locked() and not _isolated_run_active():
+        # A run settled while the updater was still verifying (exit code unknown) misses the
+        # "verification ok" it writes a moment later; progress newer than the verdict re-opens it.
+        late = (st.get("status") in ("interrupted", "unverified") and st.get("exit_code") is None
+                and any((ev.get("ts") or 0) > (st.get("finished_at") or 0) for ev in events))
+        if late or (st.get("status") == "running" and not self.lock.locked() and not _isolated_run_active()):
             # No lock in THIS process does not mean the run is over: the updater restarts the
             # console, and the new process polled this before the transient unit had finished
             # (verify / wait_live take up to 180 s). Finalising then marked a live run
