@@ -118,10 +118,10 @@ metrics) returns early for every event, because `LearningEvent` carries no `plug
 or `learning_loop_id`. The index therefore holds declarations only; its health, status
 and counts are not read.
 
-**On this install** the panel shows the OS-skill and CEL-stage loops. CorvinTV's
-declaration is in the Marketplace manifest, but the installed `video_producer` record
-(1.7.0) predates it, so its row appears once that record is refreshed from the
-Marketplace (register entry H03).
+**On this install** (checked read-only 2026-10-26) the enabled `video_producer` record is 1.7.1 and
+carries `scene_feedback`; the loops list reports it from the events of `os.video_producer` (78 events,
+4 in the last 7 days, no outcome, so no health score). The 1.7.0 record that predated the declaration
+was brought to 1.7.1 with the Plugins panel's Update (register entry H03, state A).
 
 ### A health score means something measured one
 

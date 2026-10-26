@@ -49,7 +49,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | L17 | Learning and maturity panels (report health, not learning) | A |
 | L18 | Video learning feedback API (ratings, per-variant statistics, advice) | A |
 | L19 | Autonomous Forge (autopilot off by default) | B |
-| H03 | Plugin-declared learning loops (manifest discovery) | B |
+| H03 | Plugin-declared learning loops (manifest discovery) | A |
 | R19–R19 | Brain hub leftover kept by ADR-2282: `subsystems/notification_daemon.py` (still imported by the unreachable `core/skill_forge/skill_forge_v2.py`); R01–R18 were removed with their deleted modules | D |
 <!-- register-table:end -->
 
