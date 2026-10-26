@@ -657,6 +657,8 @@ export → (use in Claude Web) → import back with original identity and versio
   - The forge tabs' "Download selected" fetches one ZIP per selected item (there is no multi-item single-ZIP route besides the bundle `POST /export`)
   - Import (`POST /forge-bundles/import`, multipart field `file`, CSRF) auto-detects a single-item ZIP. Tools go to quarantine, layers pass the same `_check_imported_layer` checks as a bundle, skills are re-packed with `SkillPackager` and installed by `SkillInstaller` (owner/admin only), then offered to SkillForge as a prompt skill (see below)
   - Audit event: `forge_bundle.item_exported` (tenant-scoped, hash-chained)
+  - **SkillForge prompt skills (fixed 2026-10-26):** the Skills tab lists SkillForge skills (`<scope>/skill-forge/skills/<name>/{SKILL.md,meta.json}`), not `skills_gen` packages, and their download used to answer `404 skill … not found`. `item_export.find_prompt_skill` now resolves them (user → tenant-root → sessions, name = one directory name, symlinks refused); the ZIP is `<claude-name>/SKILL.md` + `.corvin-skill.json` (`skill_kind: "prompt"`), version `meta.version` or `1.0.0`. A `skills_gen` package of the same name keeps the package format. Import of a ZIP without `skill.json` (own export, or a plain Claude-Web skill with no Corvin metadata) skips the packager and only activates the prompt skill as `installed.<id>`; a refusal (linter, quota, name clash) fails the import instead of reporting "installed". The skill id from the ZIP must be a plain directory name.
+  - All reads/writes of skill text in this path are explicit UTF-8 (Windows defaults to cp1252).
 
 - **CLI:** `scripts/forge_bundle_cli.py export --skill ID@VER` (not yet implemented for per-item; use bundle export for now)
 

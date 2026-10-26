@@ -204,7 +204,7 @@ def _name_taken(registry, tool_id: str) -> bool:
 
 def _load_meta(entry_dir: Path, qid: str) -> QuarantinedTool:
     try:
-        meta = json.loads((entry_dir / "meta.json").read_text())
+        meta = json.loads((entry_dir / "meta.json").read_text(encoding="utf-8"))
         entry = QuarantinedTool(**meta)
     except FileNotFoundError:
         raise QuarantineNotFound("unknown quarantine id") from None
@@ -273,7 +273,7 @@ class ToolQuarantine:
         try:
             os.chmod(tmp, 0o700)
             (tmp / entry.impl_filename).write_bytes(impl_bytes)
-            (tmp / "meta.json").write_text(json.dumps(entry.__dict__, indent=2))
+            (tmp / "meta.json").write_text(json.dumps(entry.__dict__, indent=2), encoding="utf-8")
             for p in tmp.iterdir():
                 os.chmod(p, 0o600)
             tmp.rename(self.root / qid)

@@ -9,6 +9,7 @@ every path the frontend calls.
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 
 import pytest
@@ -529,3 +530,86 @@ def test_single_skill_zip_round_trips_through_the_import_route(console_client, m
     r = _upload(client, csrf, "import", zip_bytes)
     assert r.status_code == 200, r.text
     assert r.json()["failed_count"] == 0
+
+
+# --- SkillForge prompt skills: what the Skills tab lists (was a 404 on download) ---
+
+
+def _make_prompt_skill(home, name="assistant.pruefe_json", description="Prüft JSON-Dateien – äöü ✓"):
+    d = home / "tenants" / T / "global" / "skill-forge" / "skills" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ntype: learned-experience\ndescription: {description}\n---\n\n"
+        "# Prüfen\n\nCheck that JSON files parse and report each file.\n", encoding="utf-8")
+    (d / "meta.json").write_text(
+        json.dumps({"name": name, "type": "learned-experience", "description": description, "scope": "user"}),
+        encoding="utf-8")
+    return d
+
+
+def test_prompt_skill_listed_in_the_tab_downloads_as_a_claude_web_zip(console_client, tmp_corvin_home):
+    client, _csrf = console_client
+    _make_prompt_skill(tmp_corvin_home)
+    r = client.get(f"{BASE}/export/skills/assistant.pruefe_json")
+    assert r.status_code == 200, r.text
+    assert 'filename="assistant.pruefe_json-1.0.0.zip"' in r.headers["content-disposition"]
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    assert sorted(zf.namelist()) == ["assistant-pruefe-json/.corvin-skill.json", "assistant-pruefe-json/SKILL.md"]
+    text = zf.read("assistant-pruefe-json/SKILL.md").decode("utf-8")
+    assert text.startswith("---\nname: assistant-pruefe-json\n")
+    assert "Check that JSON files parse" in text and "# Prüfen" in text
+    assert client.get(f"{BASE}/export/skills/does.not.exist").status_code == 404
+
+
+@pytest.mark.parametrize("name", ["a%2Fb", ".hidden", "x" * 200])
+def test_prompt_skill_download_refuses_names_that_are_not_a_directory_name(console_client, name):
+    client, _csrf = console_client
+    assert client.get(f"{BASE}/export/skills/{name}").status_code in (404, 422)
+
+
+def test_prompt_skill_lookup_never_leaves_the_skill_store(tmp_corvin_home):
+    # An HTTP client normalises ".." away before sending, so pin the guard itself.
+    from core.forge_bundle.item_export import find_prompt_skill
+    _make_prompt_skill(tmp_corvin_home)
+    for hostile in ("..", "../global", "a/b", "a\\b", "", ".", "..x/.."):
+        assert find_prompt_skill(hostile, T) is None
+    assert find_prompt_skill("assistant.pruefe_json", T) is not None
+
+
+def test_prompt_skill_zip_round_trips_into_a_skillforge_skill(console_client, tmp_corvin_home):
+    client, csrf = console_client
+    _make_prompt_skill(tmp_corvin_home)
+    zip_bytes = client.get(f"{BASE}/export/skills/assistant.pruefe_json").content
+
+    r = _upload(client, csrf, "import", zip_bytes)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["failed_count"] == 0
+    assert body["outcomes"][0]["status"] == "installed" and body["outcomes"][0]["id"] == "assistant.pruefe_json"
+
+    from skill_forge.multi_registry import MultiSkillRegistry
+    reg = MultiSkillRegistry(tenant_id=T)
+    assert reg.get("installed.assistant.pruefe_json") is not None
+    assert "Check that JSON files parse" in (reg.get_body("installed.assistant.pruefe_json") or "")
+    # Importing the same ZIP again is idempotent, not an error.
+    assert _upload(client, csrf, "import", zip_bytes).status_code == 200
+
+
+def test_plain_claude_web_skill_zip_imports(console_client):
+    client, csrf = console_client
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("web-skill/SKILL.md", "---\nname: web-skill\ndescription: From Claude Web\n---\n\n# Web skill\n\nDo the thing.\n")
+    r = _upload(client, csrf, "import", buf.getvalue())
+    assert r.status_code == 200, r.text
+    assert r.json()["outcomes"][0]["id"] == "web-skill"
+
+
+def test_skill_zip_with_a_hostile_id_is_refused(console_client):
+    client, csrf = console_client
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("s/SKILL.md", "---\nname: s\n---\n\nbody\n")
+        zf.writestr("s/.corvin-skill.json", '{"corvin_skill_id": "../../escape", "corvin_version": "1.0.0"}')
+    r = _upload(client, csrf, "import", buf.getvalue())
+    assert r.status_code == 422, r.text

@@ -55,7 +55,7 @@ def _forged_skills(*, strict: bool = False) -> list[dict[str, Any]]:
             if not manifest.is_file():
                 continue
             try:
-                data = json.loads(manifest.read_text())
+                data = json.loads(manifest.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 if strict:
                     raise InventoryUnavailable("a forged skill's skill.json is unreadable") from None
@@ -77,7 +77,7 @@ def _installed_skills() -> dict[str, list[str]]:
     if not reg.exists():
         return {}
     try:
-        data = json.loads(reg.read_text())
+        data = json.loads(reg.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise InventoryUnavailable("the installed-skill registry is unreadable") from None
     if not isinstance(data, dict):

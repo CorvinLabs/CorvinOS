@@ -20,8 +20,10 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -110,7 +112,7 @@ def _export_skill_to_claude_format(
     _require(manifest_file.exists(), f"skill {skill_selection.skill_id}: missing skill.json")
 
     try:
-        manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text()))
+        manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text(encoding="utf-8")))
     except (ValueError, KeyError, TypeError) as exc:
         raise ItemExportError(f"skill {skill_selection.skill_id}: invalid skill.json") from None
 
@@ -157,7 +159,7 @@ description: {json.dumps(description)}
 
 > **Original Corvin name:** {skill_selection.skill_id}
 """
-        (skill_folder_copy / "SKILL.md").write_text(skill_md_content)
+        (skill_folder_copy / "SKILL.md").write_text(skill_md_content, encoding="utf-8")
 
         # Store Corvin metadata for lossless re-import
         corvin_metadata = {
@@ -166,7 +168,7 @@ description: {json.dumps(description)}
             "exported_at": json.dumps(__import__("datetime").datetime.now(tz=__import__("datetime").timezone.utc).isoformat()),
             "original_manifest": manifest.to_dict(),
         }
-        (skill_folder_copy / ".corvin-skill.json").write_text(json.dumps(corvin_metadata, indent=2))
+        (skill_folder_copy / ".corvin-skill.json").write_text(json.dumps(corvin_metadata, indent=2), encoding="utf-8")
 
         # Create the ZIP
         zip_buffer = io.BytesIO()
@@ -187,6 +189,97 @@ description: {json.dumps(description)}
             size_bytes=len(zip_data),
             sha256=sha256_hash,
         )
+
+
+#: A SkillForge skill name is one directory name; anything else is refused before it touches a path.
+_PROMPT_SKILL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+#: Same ceiling the import side applies to a SKILL.md (installed_prompt_skills.MAX_BODY_BYTES).
+_MAX_PROMPT_BODY_BYTES = 256 * 1024
+DEFAULT_PROMPT_SKILL_VERSION = "1.0.0"
+
+
+def find_prompt_skill(name: str, tenant_id: str) -> tuple[Path, dict] | None:
+    """The SkillForge skill ``name`` as the Skills tab lists it: ``(skill_dir, meta)``.
+
+    SkillForge skills are directories (``SKILL.md`` + ``meta.json``) under the
+    user, tenant-root or per-session scope; they are NOT ``skills_gen`` packages,
+    which is all the export knew until 2026-10-26 (every tab download was a 404).
+    The scope order matches the tab: user first. Symlinks are never followed.
+    """
+    if not _PROMPT_SKILL_NAME.fullmatch(name or "") or ".." in name:
+        return None
+    from forge import paths as _forge_paths
+
+    roots: list[Path] = [_forge_paths.tenant_global_dir(tenant_id) / "skill-forge" / "skills",
+                         _forge_paths.tenant_home(tenant_id) / "skill-forge" / "skills"]
+    sessions = _forge_paths.tenant_sessions_dir(tenant_id)
+    try:
+        roots += [e / "skill-forge" / "skills" for e in sorted(sessions.iterdir()) if e.is_dir()]
+    except OSError:
+        pass
+    for root in roots:
+        d = root / name
+        try:
+            if d.is_symlink() or not d.is_dir() or (d / "SKILL.md").is_symlink() or not (d / "SKILL.md").is_file():
+                continue
+        except OSError:
+            continue
+        meta: dict = {}
+        try:
+            raw = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                meta = raw
+        except (OSError, ValueError):
+            pass
+        return d, meta
+    return None
+
+
+def _strip_front_matter(text: str) -> str:
+    """The text after a leading ``---`` fenced block (or the text itself)."""
+    text = text.lstrip("﻿")
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return text
+    for i, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            return "".join(lines[i + 1:])
+    return text
+
+
+def _export_prompt_skill_to_claude_format(name: str, version: str, tenant_id: str) -> ItemExportResult | None:
+    """Export a SkillForge prompt skill as a Claude-Web skill ZIP, or None if there is none.
+
+    ``<claude-name>/SKILL.md`` (frontmatter + the skill's body) plus
+    ``.corvin-skill.json`` carrying the original name for lossless re-import.
+    Import turns it back into a SkillForge prompt skill (``installed.<name>``).
+    """
+    found = find_prompt_skill(name, tenant_id)
+    if found is None:
+        return None
+    skill_dir, meta = found
+    skill_md = skill_dir / "SKILL.md"
+    if skill_md.stat().st_size > _MAX_PROMPT_BODY_BYTES:
+        raise ItemExportError(f"skill {name}: SKILL.md is larger than 256 KiB")
+    text = skill_md.read_text(encoding="utf-8")
+    body = _strip_front_matter(text).strip("\n")
+    description = " ".join(str(meta.get("description") or "").split())[:1024] or f"Corvin skill {name}"
+    claude_name = _sanitize_skill_name_for_claude(name)
+    content = f"---\nname: {claude_name}\ndescription: {json.dumps(description)}\n---\n\n{body}\n"
+    corvin_metadata = {
+        "corvin_skill_id": name,
+        "corvin_version": version,
+        "skill_kind": "prompt",
+        "skill_type": str(meta.get("type") or ""),
+        "exported_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{claude_name}/SKILL.md", content.encode("utf-8"))
+        zf.writestr(f"{claude_name}/.corvin-skill.json", json.dumps(corvin_metadata, indent=2).encode("utf-8"))
+    data = buf.getvalue()
+    return ItemExportResult(data=data, artifact_type="skill", artifact_id=name, artifact_version=version,
+                            size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
 
 
 def _export_tool_to_zip(
@@ -378,14 +471,14 @@ def _skill_description(skill_folder: Path, skill_id: str) -> str:
     ``description`` key, else the first prose line of README.md, else a stub."""
     text = ""
     try:
-        raw = json.loads((skill_folder / "skill.json").read_text())
+        raw = json.loads((skill_folder / "skill.json").read_text(encoding="utf-8"))
         if isinstance(raw, dict) and isinstance(raw.get("description"), str):
             text = raw["description"]
     except (OSError, ValueError):
         pass
     if not text.strip():
         try:
-            for line in (skill_folder / "README.md").read_text().splitlines():
+            for line in (skill_folder / "README.md").read_text(encoding="utf-8").splitlines():
                 if line.strip() and not line.lstrip().startswith("#"):
                     text = line
                     break
@@ -419,6 +512,14 @@ def export_single_item(
     """
     try:
         if artifact_type == "skill":
+            from .export import _skills_gen_root
+
+            # A packaged (skills_gen) skill keeps its package format; every other
+            # skill the Skills tab lists is a SkillForge prompt skill.
+            if not (_skills_gen_root() / artifact_id).is_dir():
+                prompt = _export_prompt_skill_to_claude_format(artifact_id, artifact_version, tenant_id)
+                if prompt is not None:
+                    return prompt
             selection = SkillSelection(artifact_id, artifact_version)
             return _export_skill_to_claude_format(selection, tenant_id)
         elif artifact_type == "tool":

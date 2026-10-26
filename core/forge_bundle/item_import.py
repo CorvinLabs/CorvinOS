@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,7 +66,7 @@ def detect_item_type_from_zip(data: bytes) -> DetectedItemZip | None:
                 corvin_meta_path = f"{folder}/.corvin-skill.json"
                 if corvin_meta_path in names:
                     try:
-                        meta = json.loads(zf.read(corvin_meta_path).decode())
+                        meta = json.loads(zf.read(corvin_meta_path).decode("utf-8"))
                         skill_id = meta.get("corvin_skill_id", folder)
                         version = meta.get("corvin_version", "1.0.0")
                         return DetectedItemZip(
@@ -74,13 +75,17 @@ def detect_item_type_from_zip(data: bytes) -> DetectedItemZip | None:
                             item_version=version,
                             data=data,
                         )
-                    except (json.JSONDecodeError, KeyError) as exc:
+                    except (json.JSONDecodeError, KeyError, UnicodeDecodeError) as exc:
                         raise ItemImportError(f"Skill ZIP: invalid .corvin-skill.json ({exc})") from None
+                # A plain Claude-Web skill (SKILL.md without Corvin metadata) is a
+                # prompt skill too; it keeps the folder name as its id.
+                if not any(n in (f"{folder}/spec.json", f"{folder}/manifest.json") for n in names):
+                    return DetectedItemZip(item_type="skill", item_id=folder, item_version="1.0.0", data=data)
 
             # Rule 4: Single-Tool ZIP detection
             if any(n == f"{folder}/spec.json" for n in names):
                 try:
-                    spec = json.loads(zf.read(f"{folder}/spec.json").decode())
+                    spec = json.loads(zf.read(f"{folder}/spec.json").decode("utf-8"))
                     tool_id = spec.get("name", folder)
                     version = spec.get("version", "1.0.0")
 
@@ -101,7 +106,7 @@ def detect_item_type_from_zip(data: bytes) -> DetectedItemZip | None:
             # Rule 5: Single-Layer ZIP detection
             if any(n == f"{folder}/manifest.json" for n in names):
                 try:
-                    manifest = json.loads(zf.read(f"{folder}/manifest.json").decode())
+                    manifest = json.loads(zf.read(f"{folder}/manifest.json").decode("utf-8"))
                     layer_id = manifest.get("id", folder)
                     version = manifest.get("version", "1.0.0")
                     return DetectedItemZip(
@@ -159,6 +164,9 @@ def _import_single_skill(
     actor: str,
 ) -> dict[str, str]:
     """Import a single skill ZIP."""
+    # The id comes from the ZIP (untrusted) and becomes a path component below.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", str(detected.item_id)) or ".." in str(detected.item_id):
+        raise ItemImportError("skill ZIP names an unusable skill id")
     # Audit: import started
     try:
         emit(
@@ -215,16 +223,20 @@ def _import_single_skill(
             for sub in ("src", "hooks", "tests", "scripts", "docs", "references"):
                 (work / sub).mkdir(exist_ok=True)
             manifest_file = work / "skill.json"
-            if not manifest_file.is_file():
-                raise ItemImportError("skill ZIP has no skill.json (only skills exported by Corvin can be imported)")
-            manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text()))
-            zip_path, zip_hash, _meta = SkillPackager(Path(tmp) / "out").package(work, manifest)
-            ok, message = SkillInstaller(_forge_paths.corvin_home() / "skills_installed").install_skill(
-                zip_path, zip_hash,
-                {"skill_id": detected.item_id, "version": detected.item_version, "dependencies": []})
-            if not ok:
-                raise ItemImportError(
-                    "skill installer error" if message.startswith("Error") else f"skill installer refused: {message[:200]}")
+            # No skill.json = a SkillForge prompt skill (SKILL.md only): there is
+            # no package to install, only the prompt skill to activate below.
+            prompt_only = not manifest_file.is_file()
+            if prompt_only and not (prompt_body or "").strip():
+                raise ItemImportError("skill ZIP has neither a skill.json nor a readable SKILL.md")
+            if not prompt_only:
+                manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text(encoding="utf-8")))
+                zip_path, zip_hash, _meta = SkillPackager(Path(tmp) / "out").package(work, manifest)
+                ok, message = SkillInstaller(_forge_paths.corvin_home() / "skills_installed").install_skill(
+                    zip_path, zip_hash,
+                    {"skill_id": detected.item_id, "version": detected.item_version, "dependencies": []})
+                if not ok:
+                    raise ItemImportError(
+                        "skill installer error" if message.startswith("Error") else f"skill installer refused: {message[:200]}")
 
         # Audit: import succeeded
         try:
@@ -249,6 +261,9 @@ def _import_single_skill(
 
         activation = activate_installed_skill(
             detected.item_id, detected.item_version or "", prompt_body or "", tenant_id=tenant_id)
+        if prompt_only and not activation.active:
+            # Nothing else was stored, so "installed" would be false.
+            raise ItemImportError(activation.describe())
         return {
             "status": "installed",
             "detail": f"Skill {detected.item_id} installed; {activation.describe()}",

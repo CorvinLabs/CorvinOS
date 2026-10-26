@@ -111,7 +111,7 @@ class SkillSelection:
         manifest_file = skill_folder / "skill.json"
         _require(manifest_file.exists(), f"skill {self.skill_id}: missing skill.json")
         try:
-            manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text()))
+            manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text(encoding="utf-8")))
         except (ValueError, KeyError, TypeError) as exc:
             raise ExportError(f"skill {self.skill_id}: skill.json is invalid ({type(exc).__name__})") from None
         _require(

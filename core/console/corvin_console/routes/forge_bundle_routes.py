@@ -160,6 +160,13 @@ def _default_item_version(artifact_type: str, artifact_id: str, rec: session_aut
 
     Skills and layers have one in the inventory (the newest listed wins); tools
     and OS-Skills carry none of their own, so the file gets a fixed label."""
+    if artifact_type == "skill":
+        # A SkillForge skill (what the Skills tab lists) has no version of its own.
+        from core.forge_bundle.item_export import DEFAULT_PROMPT_SKILL_VERSION, find_prompt_skill
+        found = find_prompt_skill(artifact_id, rec.tenant_id)
+        if found is not None:
+            v = found[1].get("version")
+            return v if isinstance(v, str) and v.strip() else DEFAULT_PROMPT_SKILL_VERSION
     if artifact_type in ("skill", "layer"):
         from core.forge_bundle.inventory import InventoryUnavailable, exportable
         try:
@@ -192,12 +199,15 @@ def export_single_item(
     # Accept the plural spellings the forge tabs use as well.
     artifact_type = _KIND_ALIASES.get(artifact_type, artifact_type)
 
-    # Skills are host-wide; only owner/admin may export them
+    # Packaged (skills_gen) skills are host-wide; only owner/admin may export them.
+    # A SkillForge skill is read from the session's own tenant, like the Skills tab.
     if artifact_type == "skill" and not _may_touch_host_skills(rec):
-        raise HTTPException(
-            status_code=403,
-            detail="skills live in a host-wide store; only the install owner may export them",
-        )
+        from core.forge_bundle.item_export import find_prompt_skill
+        if find_prompt_skill(artifact_id, rec.tenant_id) is None:
+            raise HTTPException(
+                status_code=403,
+                detail="skills live in a host-wide store; only the install owner may export them",
+            )
 
     # OS-Skills are read-only descriptions, accessible to all
     if artifact_type == "os_skills":
