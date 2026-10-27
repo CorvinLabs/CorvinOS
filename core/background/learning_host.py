@@ -335,20 +335,45 @@ class LearningHost:
         """ADR-2304: freeze the skill's learned-config writes, AFTER the anomaly record
         committed. Audit-first inside ``freeze_learning``: no ``learning.frozen`` record, no
         state change, and ``entry`` stays without ``freeze`` so the next check retries.
-        Never a rollback, never an unfreeze."""
-        try:
-            from core.skills.os_skills.skill_adapter import freeze_learning  # noqa: PLC0415
+        Never a rollback, never an unfreeze.
 
-            freeze_learning(a.skill_id, self.tenant_id, reason=a.event)
-        except ValueError:
+        Only a skill id that fails ``valid_skill_id`` - checked HERE, not inferred from an
+        exception - is ``invalid_skill_id`` and never retried. Every other failure is retried
+        on the next check, with ``freeze_attempts`` counted in the entry and carried as
+        ``attempt`` on the next ``learning.frozen``. A config file that does not parse (one
+        malformed number is enough) is recorded once per episode as ``learning.freeze_failed``
+        (cause ``config_unreadable``) and stays retried; while it does not parse the DoD
+        writer reads it as frozen and the adapter writers cannot load it (fail closed)."""
+        from core.skills.os_skills.skill_adapter import (  # noqa: PLC0415
+            BrakeStateUnreadable, freeze_learning, record_freeze_failed, valid_skill_id,
+        )
+
+        if not valid_skill_id(a.skill_id):
             logger.warning("%s: skill id %r cannot be frozen", a.event, a.skill_id)
             entry["freeze"] = "invalid_skill_id"
             return 1
-        except Exception as exc:  # noqa: BLE001 — AuditWriteFailed, lock busy, I/O: retried
+        attempt = int(entry.get("freeze_attempts") or 0) + 1
+        try:
+            freeze_learning(a.skill_id, self.tenant_id, reason=a.event, attempt=attempt)
+        except BrakeStateUnreadable:
+            entry["freeze_attempts"] = attempt
+            logger.warning("freeze of %s after %s: config file unreadable; retried next check",
+                           a.skill_id, a.event)
+            if entry.get("freeze_failed") != "config_unreadable":
+                try:
+                    record_freeze_failed(a.skill_id, self.tenant_id, reason=a.event,
+                                         cause="config_unreadable", attempt=attempt)
+                    entry["freeze_failed"] = "config_unreadable"
+                except Exception as exc:  # noqa: BLE001 — recorded on a later check
+                    logger.warning("learning.freeze_failed did not commit (%s)", type(exc).__name__)
+            return 1
+        except Exception as exc:  # noqa: BLE001 — AuditWriteFailed, BrakeNotApplied, lock busy, I/O
+            entry["freeze_attempts"] = attempt
             logger.warning("freeze of %s after %s did not happen (%s); retried next check",
                            a.skill_id, a.event, type(exc).__name__)
-            return 0
+            return 1
         entry["freeze"] = "frozen"
+        entry.pop("freeze_failed", None)
         return 1
 
     async def _prune_once(self, now: float) -> int:

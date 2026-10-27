@@ -5,7 +5,10 @@ Five conditions, each a measurement over stored data — never a value someone w
 * ``skill.high_rejection_rate`` — the ADR-0534 gate refused more than 20 % of the feedback on one
   subject in the last 24 h (``<tenant>/learning/feedback_gate/decisions.jsonl``, at least 10).
 * ``skill.config_oscillation`` — a skill's learned config got more than 3 new versions in one hour
-  (``<tenant>/skills/<skill>_config.json``).
+  (``<tenant>/skills/<skill>_config.json``). The DoD weights (``global/forge/dod_weights.json``)
+  have no versions list: for ``os.definition_of_done_verifier`` the changes are counted from the
+  tenant core chain's ``skill_config_updated`` records for that skill (one per stored weight
+  change, chained before the write), same window and same threshold.
 * ``skill.confidence_regression`` — the mean ``output.confidence`` of a skill's ``skill_executed``
   events in the last 24 h is at least 0.10 below the six days before (at least 20 each side).
 * ``skill.convergence_stall`` (ADR-2284) — a skill's newest OUTCOME learning events (at least 20, at
@@ -61,6 +64,12 @@ LATENCY_FACTOR = 1.5
 LATENCY_MAX_RECORDS = 50_000
 LATENCY_EVENT_NAMES = ("skill.executed", "skill_executed")
 
+#: ADR-2304: the DoD skill's weight changes are measured from the chain (its weight file has no
+#: versions list); newest chained ``skill_config_updated`` records read per scan.
+DOD_SKILL_ID = "os.definition_of_done_verifier"
+CONFIG_UPDATE_EVENT = "skill_config_updated"
+CONFIG_UPDATE_MAX_RECORDS = 1_000
+
 EVENTS = {
     "skill.high_rejection_rate": ("skill_id", "rejection_count", "sample_count", "rate", "window_seconds"),
     "skill.config_oscillation": ("skill_id", "param_name", "change_count", "window_seconds"),
@@ -72,9 +81,11 @@ EVENTS = {
                                  "samples_after", "ratio"),
 }
 
-#: ADR-2304 (operator decision D2, 2026-10-26): the anomalies that freeze the skill's
-#: learned-config writes once their record committed (learning host). The other three
-#: only report. A freeze is lifted only by a human (``POST /v1/console/learning/config/
+#: ADR-2304: the anomalies that freeze the skill's learned-config writes once their record
+#: committed (learning host). The other three only report. Source of the decision: the
+#: operator's chat answers of 2026-10-26 to PLAN-0966's open questions (D1 "ja", D2 "okay");
+#: ADR-2304 itself is still ``proposed`` and does not record them yet (amendment pending in
+#: Corvin-Knowledge). A freeze is lifted only by a human (``POST /v1/console/learning/config/
 #: unfreeze``); it never triggers a rollback.
 FREEZES_LEARNING = frozenset({"skill.config_oscillation", "skill.confidence_regression"})
 
@@ -152,7 +163,37 @@ def _oscillation_anomalies(skills_dir: Path, now: float) -> list[Anomaly]:
     return out
 
 
+def _chained_change_anomalies(records: Iterable[dict], now: float) -> list[Anomaly]:
+    """``skill.config_oscillation`` for the DoD weights, from chained ``skill_config_updated``
+    records (``details.skill_id == DOD_SKILL_ID``): more than ``OSCILLATION_MAX_CHANGES`` in the
+    last ``OSCILLATION_WINDOW_S``. Only the DoD skill: SkillAdapter skills are measured from
+    their versions list, and counting their chain records too would count one change twice."""
+    count = 0
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        if (rec.get("event") or rec.get("event_type")) != CONFIG_UPDATE_EVENT:
+            continue
+        details = rec.get("details") if isinstance(rec.get("details"), dict) else {}
+        if (details.get("skill_id") or rec.get("tool")) != DOD_SKILL_ID:
+            continue
+        ts = _parse_ts(rec.get("ts", rec.get("timestamp")))
+        if ts is not None and now - OSCILLATION_WINDOW_S <= ts <= now:
+            count += 1
+    if count > OSCILLATION_MAX_CHANGES:
+        return [Anomaly("skill.config_oscillation", DOD_SKILL_ID, {
+            "param_name": "dod_weights", "change_count": count,
+            "window_seconds": OSCILLATION_WINDOW_S})]
+    return []
+
+
 def _confidence_of(event: Any) -> Optional[float]:
+    """``signal.output.confidence`` in [0, 1], else None.
+
+    Not applicable to ``os.definition_of_done_verifier``: its only production ``skill_executed``
+    writer (``dod_verifier_dashboard.run_dod_verification``) records ``output = {score, passed}``
+    and no confidence, so the regression never sees a DoD sample. The DoD weights are braked by
+    the chained-change oscillation (:func:`_chained_change_anomalies`) instead."""
     signal = getattr(event, "signal", None)
     if not isinstance(signal, dict):
         return None
@@ -282,6 +323,17 @@ def _chained_executions(tenant_id: str) -> list[dict]:
         needles=tuple(f'"{name}"' for name in LATENCY_EVENT_NAMES))
 
 
+def _chained_config_updates(tenant_id: str) -> list[dict]:
+    """The tenant chain's newest ``skill_config_updated`` records (stored, chained data only).
+    Capped: only "more than 3 in the last hour" is asked, so the cap never hides a hit."""
+    from core.deployment.audit_sink import _forge  # noqa: PLC0415
+
+    se, fp = _forge()
+    return se.last_chain_records(
+        fp.tenant_audit_chain(tenant_id), max_records=CONFIG_UPDATE_MAX_RECORDS, max_bytes=None,
+        needles=(f'"{CONFIG_UPDATE_EVENT}"',))
+
+
 def scan(tenant_id: str, *, now: Optional[float] = None) -> list[Anomaly]:
     """Every anomaly that holds right now for ``tenant_id`` (read-only)."""
     from core.learning.event_store import EventStore  # noqa: PLC0415
@@ -293,6 +345,9 @@ def scan(tenant_id: str, *, now: Optional[float] = None) -> list[Anomaly]:
     home = tenant_home(tenant_id)
     found = _rejection_anomalies(DecisionLedger(home / "learning").tail(), now)
     found += _oscillation_anomalies(home / "skills", now)
+    seen = {a.key for a in found}
+    found += [a for a in _chained_change_anomalies(_chained_config_updates(tenant_id), now)
+              if a.key not in seen]
     since = datetime.fromtimestamp(now - CONFIDENCE_BASELINE_S, tz=timezone.utc)
     events = EventStore(home, tenant_id=tenant_id).query_events(
         tenant_id, event_type=EventType.SKILL_EXECUTED,

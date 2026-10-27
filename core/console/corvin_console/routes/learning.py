@@ -800,14 +800,19 @@ async def unfreeze_learning(
     automatically. Tenant: the session's, never a parameter — a skill frozen in another
     tenant is simply not frozen here (404). Audit-first: ``learning.unfrozen`` on the tenant
     chain BEFORE the state changes (503 and still frozen when it does not commit), then a
-    console ``learning.config_unfreeze`` record. No rollback is performed.
+    console ``learning.config_unfreeze`` record. No rollback is performed. 503
+    ``state_not_written`` when the state file could not be written (if the record had already
+    committed, ``learning.unfreeze_not_applied`` follows it; still frozen). 422
+    ``skill_id_alias`` for an id that names another skill's file (``os_x`` for ``os.x``). 409
+    ``brake_state_unreadable`` for a file that does not parse (stays frozen).
     """
     import asyncio  # noqa: PLC0415
 
     try:
         from core.deployment.audit_sink import AuditWriteFailed  # noqa: PLC0415
         from core.skills.os_skills.skill_adapter import (  # noqa: PLC0415
-            NotFrozen, SkillAdapter, SkillConfigLockBusy, skill_config_path, valid_skill_id,
+            BrakeNotApplied, BrakeStateUnreadable, NotFrozen, SkillAdapter, SkillConfigLockBusy,
+            SkillIdAlias, skill_config_path, valid_skill_id,
         )
     except ImportError:
         raise HTTPException(status_code=503, detail="skill adapter not wired (core.skills unavailable)")
@@ -819,14 +824,33 @@ async def unfreeze_learning(
     not_frozen = HTTPException(status_code=404, detail={"error": "not_frozen", "skill_id": skill_id})
     if not skill_config_path(skill_id, tenant_id).is_file():
         raise not_frozen  # never create a config file for a skill that has none
+
+    def _unfreeze() -> str:
+        return SkillAdapter(skill_id, tenant_id).unfreeze()
+
     try:
-        reason = await asyncio.to_thread(SkillAdapter(skill_id, tenant_id).unfreeze)
+        reason = await asyncio.to_thread(_unfreeze)
     except NotFrozen:
         raise not_frozen from None
+    except SkillIdAlias as alias:
+        # ``os_x`` names the file of ``os.x``: lift it under the id it was frozen under (s2-4)
+        raise HTTPException(status_code=422, detail={
+            "error": "skill_id_alias", "skill_id": skill_id,
+            "canonical_skill_id": alias.canonical}) from None
+    except BrakeStateUnreadable:
+        # the file does not parse: it stays frozen (fail closed) until it is repaired
+        raise HTTPException(status_code=409, detail={"error": "brake_state_unreadable"}) from None
     except SkillConfigLockBusy:
         raise HTTPException(status_code=503, detail={"error": "lock_busy"}) from None
     except AuditWriteFailed:
         raise HTTPException(status_code=503, detail={"error": "audit_not_committed"}) from None
+    except BrakeNotApplied:
+        # learning.unfrozen committed, the state write did not: learning.unfreeze_not_applied
+        # followed it on the chain and the skill stays frozen; a retry is a fresh attempt
+        raise HTTPException(status_code=503, detail={"error": "state_not_written"}) from None
+    except RuntimeError:
+        # the state temp file could not be written: nothing recorded, still frozen
+        raise HTTPException(status_code=503, detail={"error": "state_not_written"}) from None
     console_audit.action_performed(
         tenant_id=tenant_id,
         sid_fingerprint=session.sid_fingerprint,

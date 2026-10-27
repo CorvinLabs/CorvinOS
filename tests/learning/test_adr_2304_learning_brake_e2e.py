@@ -238,29 +238,43 @@ def _seed_confidence_regression(sb, skill_id: str) -> None:
                 ev, timestamp=(when + timedelta(seconds=i)).isoformat()))
 
 
-def test_confidence_regression_freezes_the_dod_weights(tmp_path, gate_clock):
+def _dod_feedback(sb, gate_clock, check: str, verdict: str):
+    gate_clock[0] += 61.0
+    return sb.client.post("/v1/console/api/dod/feedback", headers=sb.csrf_headers, json={
+        "task_id": "dod-1", "check_name": check, "feedback": verdict})
+
+
+def test_dod_weight_oscillation_freezes_the_dod_weights(tmp_path, gate_clock):
+    """The DoD weights are frozen from data production writes: four weight changes through
+    ``POST /api/dod/feedback`` (each a chained ``skill_config_updated``) within the hour."""
     with console_client(tmp_path) as sb:
-        _seed_confidence_regression(sb, DOD)
-        from core.background.learning_host import LearningHost
-
-        _tick(LearningHost(sb.tenant_id))
-        assert [r["details"]["skill_id"] for r in _named(sb, "skill.confidence_regression")] == [DOD]
-        [frozen] = _named(sb, "learning.frozen")
-        assert (frozen["details"]["skill_id"], frozen["details"]["reason"]) == (DOD, "skill.confidence_regression")
-
-        # the DoD feedback route refuses before anything is chained as a config change
         r = sb.client.post("/v1/console/api/dod/verify", headers=sb.csrf_headers, json={
             "task_id": "dod-1", "task_type": "feature", "commit_msg": "fix: reproduce with pytest"})
         assert r.status_code == 200, r.text
-        gate_clock[0] += 61.0
-        r = sb.client.post("/v1/console/api/dod/feedback", headers=sb.csrf_headers, json={
-            "task_id": "dod-1", "check_name": "reproducibility", "feedback": "accurate"})
+        for check, verdict in (("reproducibility", "accurate"), ("audit_trail", "inaccurate"),
+                               ("test_evidence", "accurate"), ("docs_sync", "inaccurate")):
+            r = _dod_feedback(sb, gate_clock, check, verdict)
+            assert r.status_code == 200 and r.json()["weights_changed"] is True, r.text
+        weights = sb.tenant_home / "global" / "forge" / "dod_weights.json"
+        stored = weights.read_text()
+        from core.background.learning_host import LearningHost
+
+        _tick(LearningHost(sb.tenant_id))
+        assert [r["details"]["skill_id"] for r in _named(sb, "skill.config_oscillation")] == [DOD]
+        [frozen] = _named(sb, "learning.frozen")
+        assert (frozen["details"]["skill_id"], frozen["details"]["reason"]) == (DOD, "skill.config_oscillation")
+
+        # the DoD feedback route refuses before anything is chained as a config change
+        def _dod_updates():
+            return [x for x in _chain(sb) if "skill_config_updated" in (x.get("event"), x.get("event_type"))
+                    and (x.get("details") or {}).get("skill_id") == DOD]
+
+        assert len(_dod_updates()) == 4
+        r = _dod_feedback(sb, gate_clock, "reproducibility", "accurate")
         assert r.status_code == 409, r.text
         assert r.json()["detail"]["error"] == "learning_frozen"
-        weights = sb.tenant_home / "global" / "forge" / "dod_weights.json"
-        assert not weights.exists()
-        assert not [x for x in _chain(sb) if "skill_config_updated" in (x.get("event"), x.get("event_type"))
-                    and (x.get("details") or {}).get("skill_id") == DOD]
+        assert weights.read_text() == stored
+        assert len(_dod_updates()) == 4
         refused = _named(sb, "learning.freeze_refused_write")
         assert [(x["details"]["skill_id"], x["details"]["target"]) for x in refused] == [(DOD, "dod_weights")]
 
@@ -270,21 +284,37 @@ def test_confidence_regression_freezes_the_dod_weights(tmp_path, gate_clock):
 
         with pytest.raises(LearningFrozen):
             WeightPersistence(tenant_id=sb.tenant_id).save_weights({"feature": {"w_repro": 0.3}}, {})
-        assert not weights.exists()
+        assert weights.read_text() == stored
 
         # lifted by the operator -> the rating is learned again
         r = sb.client.post(UNFREEZE, params={"skill_id": DOD}, headers=sb.csrf_headers)
         assert r.status_code == 200, r.text
-        gate_clock[0] += 61.0
-        r = sb.client.post("/v1/console/api/dod/feedback", headers=sb.csrf_headers, json={
-            "task_id": "dod-1", "check_name": "reproducibility", "feedback": "accurate"})
+        r = _dod_feedback(sb, gate_clock, "reproducibility", "accurate")
         assert r.status_code == 200, r.text
-        assert weights.exists()
+        assert weights.read_text() != stored
         _verify_chain(sb)
 
 
+def test_confidence_regression_freezes_a_skill_that_reports_confidence(tmp_path):
+    """``output.confidence`` is the shape the router's executions carry. The DoD skill's
+    production executions carry ``{score, passed}`` and never a confidence, so the regression
+    does not apply to it (its brake is the chained-change oscillation above)."""
+    with console_client(tmp_path) as sb:
+        _seed_confidence_regression(sb, ROUTER)
+        r = sb.client.post("/v1/console/api/dod/verify", headers=sb.csrf_headers, json={
+            "task_id": "dod-1", "task_type": "feature", "commit_msg": "fix: reproduce with pytest"})
+        assert r.status_code == 200, r.text
+        from core.background.learning_host import LearningHost
+
+        _tick(LearningHost(sb.tenant_id))
+        assert [r["details"]["skill_id"] for r in _named(sb, "skill.confidence_regression")] == [ROUTER]
+        [frozen] = _named(sb, "learning.frozen")
+        assert (frozen["details"]["skill_id"], frozen["details"]["reason"]) == (
+            ROUTER, "skill.confidence_regression")
+
+
 def test_reporting_anomalies_do_not_freeze(tmp_path):
-    """D2: stall / latency / rejection rate only report."""
+    """Operator chat answer D2 ("okay", 2026-10-26, to PLAN-0966): stall / latency / rejection rate only report."""
     from core.learning import anomaly_monitor
 
     assert anomaly_monitor.FREEZES_LEARNING == {"skill.config_oscillation", "skill.confidence_regression"}

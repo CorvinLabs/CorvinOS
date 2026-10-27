@@ -10,16 +10,23 @@ Weights AND their confidence are persisted and loaded back, so the ADR-0723 conf
 gate (a learned weight is used only at confidence > 0.5) survives a restart.
 
 Learning brake (ADR-2304): ``save_weights`` refuses while ``os.definition_of_done_verifier``
-is frozen (``skill_adapter.refuse_if_frozen``), so every writer of this file is braked.
+is frozen (``skill_adapter.refuse_if_frozen``), so every writer of this file is braked. The
+check and the write (and the caller's chain record, ``record=``) run under the skill's config
+flock, the lock a freeze takes. What freezes the DoD skill automatically: more than 3 chained
+``skill_config_updated`` records for it in one hour (``anomaly_monitor``, config oscillation).
 """
 
 import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 FILE_NAME = "dod_weights.json"
+
+
+class ChangeNotRecorded(RuntimeError):
+    """``save_weights(record=...)``: the audit-first record did not commit; nothing stored."""
 #: The skill id the learning brake (ADR-2304) freezes the DoD weights under.
 DOD_SKILL_ID = "os.definition_of_done_verifier"
 
@@ -73,15 +80,31 @@ class WeightPersistence:
         weights: Dict[str, Dict[str, float]],
         confidence: Dict[str, Dict[str, float]],
         sample_count: Optional[Dict[str, int]] = None,
+        *,
+        record: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Persist atomically (temp file + replace, mode 0600). Returns success.
 
         Raises ``LearningFrozen`` (ADR-2304) when the DoD skill's learning is frozen: the
         write is refused and recorded (``learning.freeze_refused_write``), nothing changes.
-        """
-        from core.skills.os_skills.skill_adapter import refuse_if_frozen  # noqa: PLC0415
 
-        refuse_if_frozen(DOD_SKILL_ID, self.tenant_id, target="dod_weights")
+        The brake check, ``record`` (the caller's audit-first chain write, e.g. the
+        ``skill_config_updated`` of the feedback route) and the file write run under the DoD
+        skill's config flock - the lock the learning host's freeze takes - so no freeze can
+        land between "not frozen" and "stored" (s2-2): a change is either refused before it
+        is chained, or chained and stored. ``record`` returning False raises
+        :class:`ChangeNotRecorded` and nothing is written. Raises ``SkillConfigLockBusy``
+        when the lock stays held past its deadline.
+        """
+        from core.skills.os_skills.skill_adapter import brake_lock, refuse_if_frozen  # noqa: PLC0415
+
+        with brake_lock(DOD_SKILL_ID, self.tenant_id):
+            refuse_if_frozen(DOD_SKILL_ID, self.tenant_id, target="dod_weights")
+            if record is not None and not record():
+                raise ChangeNotRecorded("the weight change was not chained; not stored")
+            return self._write(weights, confidence, sample_count)
+
+    def _write(self, weights, confidence, sample_count) -> bool:
         data = {
             "version": "0.2.0",
             "tenant_id": self.tenant_id,
