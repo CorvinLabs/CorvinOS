@@ -580,16 +580,13 @@ def _confirm_locked(*, name: str, kind: str, side: str, path: Path, local_iid: s
               "(audit-first). The pair stays pending.", file=sys.stderr)
         return 1
     try:
-        # "resumed": this very pair's row is already there — a confirm that died between
-        # the ledger row and the file write is completed, not refused forever.
+        # Phase 1, `reserved`. "resumed": this very pair's row is still reserved — a confirm
+        # that died between the reservation and the file write is completed, not refused
+        # forever. A `completed` row is always a reuse. The ledger lock fails CLOSED.
         _oob.record_fingerprint(local_fp, kid=kid, side=side, peer_id=name,
                                 pairing_id=pairing_id)
     except _oob.OfflinePairError as exc:
         print(f"error: {exc}; confirm refused, the pair stays pending", file=sys.stderr)
-        return 1
-    except _friendship.FriendshipLockBusy:
-        print("error: the fingerprint ledger is busy; nothing was enabled — try again.",
-              file=sys.stderr)
         return 1
     cfg.update({
         "enabled": True,
@@ -602,6 +599,16 @@ def _confirm_locked(*, name: str, kind: str, side: str, path: Path, local_iid: s
         cfg["sender_instance_id_pin"] = peer_iid
         cfg["peer_instance_id"] = peer_iid
     _atomic_write(path, cfg)
+    try:
+        # Phase 2: the row becomes `completed` — from now on a replay of this file is a
+        # reuse, never a resume (round 3). Should this step fail, the file is already
+        # confirmed, so `pair-confirm` refuses it as "not pending"; the reserved row only
+        # matters while a pending file with these exact values exists.
+        _oob.complete_fingerprint(local_fp, kid=kid, side=side, peer_id=name,
+                                  pairing_id=pairing_id)
+    except _oob.OfflinePairError as exc:
+        print(f"warning: confirmed, but the ledger row could not be marked completed ({exc})",
+              file=sys.stderr)
     print(f"# OK: offline pair {name!r} confirmed on this side ({side}); fingerprint {fpp}…")
     print("# It is usable once the other operator confirmed on their side too.")
     return 0

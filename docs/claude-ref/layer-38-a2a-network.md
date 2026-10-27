@@ -88,12 +88,15 @@ helpers in `bridges/shared/a2a_offline_pairing.py`):
    under the A2A config lock (`a2a_friendship.config_file_lock`; a busy lock refuses, nothing changes),
    re-reads the file, and writes — audit-first — `a2a.offline_pair_confirmed` (`side`, `actor: operator`,
    `fingerprint_prefix`) and `a2a.pairing_authorized`, enters the fingerprint AND the key id in the tenant
-   reuse ledger (`<tenant>/global/a2a/offline_pair_fingerprints.json`, read-check-write under an exclusive
-   lock; a fingerprint or key id already used is refused, `fingerprint_reused`; a ledger of the wrong shape is
-   `ledger_unreadable`, never read as empty), and only then sets `enabled: true`, `oob_state: confirmed`,
-   `attestation: attested_out_of_band`, `oob_fingerprint`; on A also `sender_instance_id_pin` = B. A confirm
-   that died between the ledger row and the file write can be completed: the same pair (same fingerprint,
-   key id, side, name and pairing id) resumes; anything else is a reuse.
+   reuse ledger as a `reserved` row (`<tenant>/global/a2a/offline_pair_fingerprints.json`, read-check-write
+   under an exclusive lock that fails CLOSED — `ledger_lock_unavailable` when `.offline_pair_ledger.lock`
+   cannot be opened or taken within 5 s, nothing enabled; a fingerprint or key id already used is refused,
+   `fingerprint_reused`; a ledger of the wrong shape is `ledger_unreadable`, never read as empty), then sets
+   `enabled: true`, `oob_state: confirmed`, `attestation: attested_out_of_band`, `oob_fingerprint` (on A also
+   `sender_instance_id_pin` = B), and only after that file write marks the row `completed`. A confirm that
+   died between the reservation and the file write can be completed: only this pair's own `reserved` row
+   (same fingerprint, key id, side, name and pairing id) resumes. A `completed` row is always a reuse — so
+   a hand-copied printed endpoint file (already `pending`) of a finished pairing is refused.
 
 **Fingerprint:** `SHA-256("corvin-a2a-oob-fingerprint-v1" ‖ receiver instance id ‖ sender instance id ‖
 key id)`, first 80 bits as `XXXX-XXXX-XXXX-XXXX-XXXX`; key id = SHA-256 over both HMAC keys, first 64 bits.
@@ -128,7 +131,10 @@ covered by the path gate (`path_gate.py`); integrity against the same user needs
 rest of the A2A config. The accepted envelope's `A2A.envelope_received` carries
 `attestation: attested_out_of_band`. Manifest revocation of the sender instance still applies. An offline
 pair from before ADR-2295 (neither `pairing_mode` nor `oob_state`) keeps the old behaviour: accepted until
-`attestation_mandatory_after`, then `network_attestation_required`.
+`attestation_mandatory_after`, then `network_attestation_required`. Without a fetched manifest that date
+never comes (the empty manifest's default is "never", `a2a_manifest.py:61`), so a legacy-shaped file (no
+`pairing_mode`) is accepted indefinitely — a same-user process that strips `pairing_mode` and `oob_state`
+from a pending pair gets exactly that; it is part of the same-user limit above.
 
 **Limit (stated, not hidden):** the fingerprint check is only as good as the operators' care. A confirm
 typed without really comparing (or compared over the same network) is a weaker attestation than the

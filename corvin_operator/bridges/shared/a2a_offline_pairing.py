@@ -201,29 +201,102 @@ def fingerprint_used(fp: str, path: Path | None = None, *, kid: str | None = Non
     return any(_row_matches(r, n, kid) for r in _read_ledger(path or ledger_path()))
 
 
+LEDGER_LOCK_NAME = ".offline_pair_ledger.lock"
+LEDGER_LOCK_TIMEOUT_S = 5.0
+ROW_RESERVED = "reserved"
+ROW_COMPLETED = "completed"
+
+
 @contextlib.contextmanager
 def _ledger_lock(directory: Path):
-    """Cross-process exclusive lock for the ledger's read-check-write (review F1).
+    """STRICT cross-process exclusive lock for the ledger's read-check-write (F1, round 3).
 
-    The same primitive the A2A config files use (``a2a_friendship.config_file_lock``:
-    ``fcntl.flock`` on POSIX, ``msvcrt.locking`` on Windows, bounded wait). A busy lock
-    raises ``FriendshipLockBusy`` — the caller refuses; nothing is written unlocked
-    because of contention.
+    Fail-CLOSED, unlike ``a2a_friendship.config_file_lock`` (which runs unlocked when its
+    lock file cannot be opened, and is left that way for its other callers): if the lock
+    file cannot be opened or the lock cannot be taken within ``LEDGER_LOCK_TIMEOUT_S``,
+    this raises ``OfflinePairError("ledger_lock_unavailable")`` and nothing is written.
+    ``fcntl.flock`` on POSIX, ``msvcrt.locking`` (non-blocking, polled) on Windows.
     """
-    import a2a_friendship  # type: ignore[import-not-found]
+    lock_path = directory / LEDGER_LOCK_NAME
+    try:
+        fh = open(lock_path, "a+")  # noqa: SIM115 — closed in finally
+    except OSError as exc:
+        raise OfflinePairError("ledger_lock_unavailable",
+                               f"fingerprint ledger lock unavailable ({type(exc).__name__})") from exc
+    locked = False
+    try:
+        try:
+            os.chmod(lock_path, 0o600)
+        except OSError:
+            pass
+        deadline = time.monotonic() + LEDGER_LOCK_TIMEOUT_S
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt  # type: ignore[import-not-found]
 
-    with a2a_friendship.config_file_lock(directory):
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
+                else:
+                    import fcntl
+
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise OfflinePairError("ledger_lock_unavailable",
+                                           "fingerprint ledger lock is busy") from None
+                time.sleep(0.02)
         yield
+    finally:
+        if locked:
+            try:
+                if os.name == "nt":
+                    import msvcrt  # type: ignore[import-not-found]
+
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                else:
+                    import fcntl
+
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        fh.close()
+
+
+def _write_ledger(p: Path, rows: list[dict]) -> None:
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".fp-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({"fingerprints": rows}, fh, sort_keys=True, indent=2)
+            fh.write("\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _own_reserved_row(r: dict, n: str, kid: str, side: str, peer: str, pid: str) -> bool:
+    """This very pair's row AND still ``reserved`` (a row without status = completed)."""
+    return (normalise(r.get("fingerprint", "")) == n and r.get("key_id") == kid
+            and r.get("side") == side and r.get("peer_id") == peer
+            and r.get("pairing_id") == pid and r.get("status") == ROW_RESERVED)
 
 
 def record_fingerprint(fp: str, *, kid: str, side: str, peer_id: str, pairing_id: str = "",
                        path: Path | None = None) -> str:
-    """Enter ``fp``/``kid`` in the tenant ledger under an exclusive lock.
+    """RESERVE ``fp``/``kid`` in the tenant ledger (phase 1 of 2), under the strict lock.
 
-    Returns ``"recorded"``, or ``"resumed"`` when a row for the SAME fingerprint, key id,
-    side, peer and pairing id is already there — a confirm that died between the ledger
-    row and the file write may be completed (review F10). Any other match raises
-    ``fingerprint_reused``.
+    Returns ``"recorded"`` (a new ``reserved`` row) or ``"resumed"`` when the only match is
+    this very pair's own ``reserved`` row — a confirm that died between the reservation and
+    the file write. A ``completed`` row (or a row of any other pair) is ALWAYS a reuse:
+    ``fingerprint_reused``. Phase 2 is ``complete_fingerprint`` after the file write.
     """
     p = path or ledger_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -234,46 +307,48 @@ def record_fingerprint(fp: str, *, kid: str, side: str, peer_id: str, pairing_id
         rows = _read_ledger(p)
         hits = [r for r in rows if _row_matches(r, n, kid)]
         if hits:
-            if all(normalise(r.get("fingerprint", "")) == n and r.get("key_id") == kid
-                   and r.get("side") == side and r.get("peer_id") == peer
-                   and r.get("pairing_id") == pid for r in hits):
+            if all(_own_reserved_row(r, n, kid, side, peer, pid) for r in hits):
                 return "resumed"
             raise OfflinePairError("fingerprint_reused",
                                    "this fingerprint was already used by an earlier pairing")
         rows.append({"fingerprint": n, "key_id": kid, "side": side, "peer_id": peer,
-                     "pairing_id": pid, "at": int(time.time())})
-        fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".fp-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump({"fingerprints": rows}, fh, sort_keys=True, indent=2)
-                fh.write("\n")
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, p)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+                     "pairing_id": pid, "status": ROW_RESERVED, "at": int(time.time())})
+        _write_ledger(p, rows)
     return "recorded"
+
+
+def complete_fingerprint(fp: str, *, kid: str, side: str, peer_id: str, pairing_id: str = "",
+                         path: Path | None = None) -> None:
+    """Phase 2: mark this pair's ``reserved`` row ``completed`` (after the file write)."""
+    p = path or ledger_path()
+    n = normalise(fp)
+    peer = str(peer_id)[:128]
+    pid = str(pairing_id)[:64]
+    with _ledger_lock(p.parent):
+        rows = _read_ledger(p)
+        mine = [r for r in rows if _own_reserved_row(r, n, kid, side, peer, pid)]
+        if not mine:
+            raise OfflinePairError("ledger_row_missing", "no reserved ledger row for this pair")
+        for r in mine:
+            r["status"] = ROW_COMPLETED
+            r["completed_at"] = int(time.time())
+        _write_ledger(p, rows)
 
 
 def resumable(fp: str, *, kid: str, side: str, peer_id: str, pairing_id: str,
               path: Path | None = None) -> bool:
-    """True when every ledger match is this very pair's own row (see ``record_fingerprint``)."""
+    """True when every ledger match is this very pair's own ``reserved`` row."""
     n = normalise(fp)
     hits = [r for r in _read_ledger(path or ledger_path()) if _row_matches(r, n, kid)]
     return bool(hits) and all(
-        normalise(r.get("fingerprint", "")) == n and r.get("key_id") == kid
-        and r.get("side") == side and r.get("peer_id") == str(peer_id)[:128]
-        and r.get("pairing_id") == str(pairing_id)[:64] for r in hits)
+        _own_reserved_row(r, n, kid, side, str(peer_id)[:128], str(pairing_id)[:64]) for r in hits)
 
 
 __all__ = [
     "ATTESTED_HOSTED", "ATTESTED_OUT_OF_BAND", "OfflinePairError", "PAIRING_MODE_OFFLINE",
     "PAIRING_MODE_ONLINE", "PREFIX_LEN", "STATE_CONFIRMED", "STATE_PENDING",
-    "endpoint_fingerprint", "fingerprint", "fingerprint_used", "fingerprints_equal",
-    "is_pending", "is_unconfirmed", "key_id", "ledger_path", "normalise",
+    "complete_fingerprint", "endpoint_fingerprint", "fingerprint", "fingerprint_used",
+    "fingerprints_equal", "is_pending", "is_unconfirmed", "key_id", "ledger_path", "normalise",
     "origin_attested_out_of_band", "origin_fingerprint", "prefix", "record_fingerprint", "resumable",
     "valid_instance_id",
 ]
