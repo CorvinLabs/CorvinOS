@@ -237,8 +237,12 @@ if the nonce was already consumed.
 `network_attestation` to TaskEnvelope (HMAC-covered, backward-compatible).
 The attestation uses a cryptographic trust anchor (RS256 signed manifest).
 Nodes without a valid membership credential are rejected at the receiver gate.
-`--offline-pair` bypasses this for isolated networks (must be explicitly invoked;
-there is no auto-fallback).
+`--offline-pair` replaces it for closed networks (must be explicitly invoked;
+there is no auto-fallback): online pairing is checked once against a hosted
+service; offline pairing needs no service and is verified by the two operators,
+who compare a fingerprint out of band and each confirm it (`pair-confirm`).
+Only a pair confirmed on both sides is accepted (as `attested_out_of_band`);
+every step is in each installation's audit chain (ADR-2295).
 
 **Audit-first invariant:** `A2A.envelope_received` is written to the L16 hash
 chain before any response or spawn. If the chain write fails, the request is

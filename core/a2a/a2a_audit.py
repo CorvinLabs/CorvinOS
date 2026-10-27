@@ -4,6 +4,9 @@ Emits three critical Layer 38 security events into the unified hash chain:
 - a2a.genesis_block_created: NBAC (Nonce-Based Auth Chain) initialization
 - a2a.offline_pair_initiated: offline pairing protocol start
 - a2a.nonce_collision_detected: nonce reuse detection
+- ADR-2295 pairing records (written by ``corvin_a2a.py``): a2a.pairing_authorized (one
+  shape for an online and an offline pair), a2a.offline_pair_confirmed (an operator's
+  out-of-band fingerprint confirm), a2a.offline_pair_refused (mismatch / reuse)
 
 All events carry metadata only — nonce prefixes (first 8 hex chars, never full),
 peer identifiers, and counters. NO payload content, NO private keys, NO full nonce values.
