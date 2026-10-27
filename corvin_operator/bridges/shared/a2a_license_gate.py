@@ -101,6 +101,20 @@ def network_status(*, entry_point: str, tenant_id: str | None = None) -> dict[st
     return verdict
 
 
+def network_denied(*, entry_point: str, tenant_id: str | None = None) -> bool:
+    """True iff this installation may NOT use the A2A network. Fail-closed: any error denies.
+
+    The boolean form of :func:`require_a2a_network` for the shared inbound cores
+    (``process_ping_request``, ``process_friendship_ack_request``) so every host backend answers
+    the member gate the same way.
+    """
+    try:
+        require_a2a_network(entry_point=entry_point, tenant_id=tenant_id)
+    except Exception:  # noqa: BLE001 — a failing check is a refusal, never a pass
+        return True
+    return False
+
+
 def require_a2a_network(*, entry_point: str, tenant_id: str | None = None) -> None:
     """Return normally iff this installation may use the A2A network.
 

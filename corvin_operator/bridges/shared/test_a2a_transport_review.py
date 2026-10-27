@@ -146,5 +146,75 @@ class TestExpiredDroppedAuditCarriesTaskId(unittest.TestCase):
         self.assertIn("late_s", floor)
 
 
+class TestPeerRevokedPairingCarriesNothing(unittest.TestCase):
+    """A signed revoke notice ends the pairing in BOTH directions (the console already frees its licence seat)."""
+
+    def _setup(self, root):
+        import hmac as _h
+        import a2a_friendship as ft
+        a, b = _Instance(root, "a"), _Instance(root, "b")
+        kid = _pair(a, b, "http://127.0.0.1:9")
+        key = json.loads((b.origins / f"{kid}.json").read_text())["hmac_key"]
+        issued = int(time.time())
+        sender = a.iid
+        sig = _h.new(bytes.fromhex(key), ft._revoke_canonical(kid, issued, sender), "sha256").hexdigest()
+        notice = {"type": "revoke", "kid": kid, "issued_at": issued, "peer_url": "",
+                  "sender_instance_id": sender, "signature": sig}
+        return a, b, kid, notice, ft
+
+    def _patches(self, root):
+        return [
+            mock.patch.dict(os.environ, {"CORVIN_HOME": str(root / "home"),
+                                         "CORVIN_A2A_ATTESTATION_DISABLED": "1"}),
+            mock.patch("corvin_core.feature_flags.is_enabled", return_value=True),
+            mock.patch("remote_trigger_sender._network_denied", lambda *a, **k: None),
+            mock.patch("remote_trigger_sender._record_feed_task", lambda *a, **k: None),
+            mock.patch("remote_trigger_sender._record_feed_response", lambda *a, **k: None),
+            mock.patch.object(rts.RemoteTriggerSender, "_build_network_attestation",
+                              staticmethod(lambda cfg: None)),
+        ]
+
+    def test_inbound_task_from_a_revoked_peer_is_refused_and_so_is_sending_to_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            a, b, kid, notice, ft = self._setup(root)
+            ps = self._patches(root)
+            for p in ps:
+                p.start()
+            try:
+                # before the notice: A -> B works (receiver executes)
+                a_snd = a.sender()
+                with mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                                       staticmethod(lambda url, env, t: b.receiver.receive(env).to_dict())):
+                    before = a_snd.send(kid, "hello", timeout_s=5)
+                self.assertEqual(before.status, "ok", before)
+                n_ran = len(b.got)
+                with mock.patch.object(ft, "_local_instance_id", return_value=b.iid):
+                    code, _ = ft.process_friendship_ack_request(
+                        notice, pending_dir=root / "p", origins_dir=b.origins, endpoints_dir=b.endpoints)
+                self.assertEqual(code, 200)
+                # after: A -> B is refused by B's origin registry
+                with mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                                       staticmethod(lambda url, env, t: b.receiver.receive(env).to_dict())):
+                    after = a.sender().send(kid, "again", timeout_s=5)
+                self.assertNotEqual(after.status, "ok", "revoked origin still carried a task")
+                # the receiver validated and rejected (the instruction never reached the worker path)
+                import remote_trigger_receiver as rtr
+                with self.assertRaises(rtr.ValidationError) as cm:
+                    b.receiver._registry.load(kid)
+                self.assertEqual(str(cm.exception.reason if hasattr(cm.exception, "reason") else cm.exception),
+                                 "origin_peer_revoked")
+                # and B no longer sends to the revoked peer
+                b_snd = b.sender()
+                res = b_snd.send(kid, "bye", timeout_s=5)
+                self.assertFalse(res.ok)
+                reasons = [(c.kwargs.get("details") or {}).get("reason")
+                           for c in b_snd._inst_forge_se.write_event.call_args_list]
+                self.assertIn("endpoint_peer_revoked", reasons)
+            finally:
+                for p in reversed(ps):
+                    p.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

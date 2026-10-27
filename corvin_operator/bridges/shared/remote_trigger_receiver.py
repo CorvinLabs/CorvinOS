@@ -829,6 +829,10 @@ class OriginRegistry:
         if ((config.get("pairing_mode") == "offline" or "oob_state" in config)
                 and config.get("oob_state") != "confirmed"):
             raise ValidationError("origin_offline_pair_unconfirmed")
+        # The PEER ended this pairing (signed revoke notice -> `_peer_revoked_at`): it can never
+        # carry a task again, which is also why the console frees its licence seat.
+        if config.get("_peer_revoked_at"):
+            raise ValidationError("origin_peer_revoked")
         if not config.get("enabled", False):
             raise ValidationError("origin_disabled")
 

@@ -198,6 +198,17 @@ def _is_hex64(value: Any) -> bool:
     )
 
 
+def _member_gate_denied(entry_point: str) -> bool:
+    try:
+        try:
+            import a2a_license_gate as _gate  # type: ignore[import-not-found]  # noqa: PLC0415
+        except ImportError:
+            from corvin_operator.bridges.shared import a2a_license_gate as _gate  # noqa: PLC0415
+        return _gate.network_denied(entry_point=entry_point)
+    except Exception:  # noqa: BLE001 — fail-closed
+        return True
+
+
 def process_ping_request(
     req: Any, receiver: Any, *, client_addr: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
@@ -221,6 +232,11 @@ def process_ping_request(
     import hashlib
     import hmac as _hmac
     import time as _time_module
+
+    # a2a.network is member-only: every host (stdlib, console, gateway) funnels through here, so
+    # the gate lives here and not in each route (the console/gateway routes had none).
+    if _member_gate_denied("a2a_http_server.process_ping_request"):
+        return 403, {"reason": "license_required"}
 
     if not isinstance(req, dict):
         return 400, {"reason": "envelope_not_object"}

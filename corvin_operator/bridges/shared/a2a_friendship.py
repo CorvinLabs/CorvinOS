@@ -2421,6 +2421,18 @@ def process_friendship_ack_request(
     used to count-then-write unlocked, BEFORE the signature check — ten
     concurrent acks all passed a limit of one).
     """
+    # a2a.network is member-only: the shared core of every host answers the same opaque refusal
+    # the stdlib handler gives (until now only that handler checked it).
+    try:
+        try:
+            import a2a_license_gate as _gate  # type: ignore[import-not-found]  # noqa: PLC0415
+        except ImportError:
+            from corvin_operator.bridges.shared import a2a_license_gate as _gate  # noqa: PLC0415
+        _denied = _gate.network_denied(entry_point="a2a_friendship.process_friendship_ack_request")
+    except Exception:  # noqa: BLE001 — fail-closed
+        _denied = True
+    if _denied:
+        return 403, {"reason": "license_required"}
     if not isinstance(req, dict):
         return 400, {"reason": "envelope_not_object"}
     if req.get("type") == REVOKE_NOTICE_TYPE:

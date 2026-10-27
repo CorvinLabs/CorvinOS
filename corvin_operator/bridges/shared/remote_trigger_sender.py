@@ -474,6 +474,11 @@ class RemoteEndpointRegistry:
         if ((config.get("pairing_mode") == "offline" or "oob_state" in config)
                 and config.get("oob_state") != "confirmed"):
             raise EndpointError("endpoint_offline_pair_unconfirmed")
+        # The PEER ended this pairing (its signed revoke notice stamped `_peer_revoked_at`,
+        # a2a_friendship._process_revoke_notice): nothing is sent to it any more. The console
+        # already counts such a record as holding no licence seat.
+        if config.get("_peer_revoked_at"):
+            raise EndpointError("endpoint_peer_revoked")
         if not config.get("enabled", False):
             raise EndpointError("endpoint_disabled")
 

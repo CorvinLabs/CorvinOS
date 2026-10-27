@@ -184,6 +184,10 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     must install on their side. Operator transports it through a secure
     out-of-band channel (signal/age-encrypted email/etc).
     """
+    refusal = _network_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
     peer = args.peer_name
     url = args.peer_url
     # The peer endpoint URL is POSTed to as-is by RemoteTriggerSender, which
@@ -368,6 +372,10 @@ def _cmd_pair_import(args: argparse.Namespace) -> int:
     written ``enabled: false`` / ``oob_state: pending`` and is refused by the sender until
     ``pair-confirm`` matched the fingerprint the other operator read out.
     """
+    refusal = _network_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
     try:
         raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text("utf-8")
         cfg = json.loads(raw[raw.index("{"):])
@@ -467,6 +475,10 @@ def _cmd_pair_confirm(args: argparse.Namespace) -> int:
     pairing record are written, the fingerprint is entered in the tenant's reuse ledger,
     and only then is this side's file enabled. Any mismatch changes nothing.
     """
+    refusal = _network_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
     name = args.name
     if not _safe_name(name):
         print(f"error: invalid name {name!r}", file=sys.stderr)
@@ -1276,6 +1288,10 @@ def _cmd_agents(args: argparse.Namespace) -> int:
 
 def _cmd_invite(args: argparse.Namespace) -> int:
     """Generate a self-contained A2A invite token (ADR-0063)."""
+    refusal = _network_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
     iid = instance_identity.get_instance_id()
     scope = [p.strip() for p in args.scope.split(",") if p.strip()]
 
@@ -1376,6 +1392,10 @@ def _cmd_invite(args: argparse.Namespace) -> int:
 
 def _cmd_accept(args: argparse.Namespace) -> int:
     """Accept an A2A invite token and install origin + endpoint files."""
+    refusal = _network_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
     token_str = args.token.strip()
     try:
         result = _inv.parse_invite(token_str)

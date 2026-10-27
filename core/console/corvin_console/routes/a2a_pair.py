@@ -421,6 +421,7 @@ def pair_generate(
     body: GenerateRequest,
 ) -> dict[str, Any]:
     """Generate a one-time bidirectional invite code."""
+    _require_a2a_network_for_pairing()
     instance_id = ""
     try:
         from instance_identity import get_instance_id  # type: ignore[import]
@@ -525,6 +526,7 @@ async def pair_redeem(
     CSRF-gated like every other console mutation — the SPA already
     attaches ``X-CSRF-Token`` on this call.
     """
+    _require_a2a_network_for_pairing()
 
     # Decode invite
     try:
@@ -689,6 +691,7 @@ def pair_accept(body: AcceptRequest) -> dict[str, Any]:
     No session cookie required — authentication is via the one-time accept_key
     embedded in the pending invite.
     """
+    _require_a2a_network_for_pairing()
     pending_file = _pending_dir() / f"{body.accept_id}.json"
     processed_file = _pending_dir() / f"{body.accept_id}.used"
     # Verify FIRST, claim SECOND. The invite used to be claimed (renamed) before the signature
@@ -860,6 +863,7 @@ def generate_cli_invite(
     _csrf: Annotated[None, Depends(require_csrf)],
 ) -> CLIInviteResponse:
     """Generate an ADR-0063 CLI-style invite token."""
+    _require_a2a_network_for_pairing()
     import a2a_invite as _inv  # type: ignore[import-not-found]
     import a2a_invite_registry as _reg  # type: ignore[import-not-found]
     from instance_identity import get_instance_id  # type: ignore[import-not-found]
@@ -925,6 +929,7 @@ def accept_cli_invite(
     _csrf: Annotated[None, Depends(require_csrf)],
 ) -> CLIAcceptResponse:
     """Accept an ADR-0063 CLI invite token and install origin + endpoint files."""
+    _require_a2a_network_for_pairing()
     import a2a_invite as _inv  # type: ignore[import-not-found]
     import a2a_invite_registry as _reg  # type: ignore[import-not-found]
     from instance_identity import get_instance_id  # type: ignore[import-not-found]
@@ -1457,6 +1462,7 @@ def friendship_token_confirm(
     ``friendship_create`` above, which a tool call from the MCP subprocess
     cannot provide. One-time use: the pending request is consumed on read.
     """
+    _require_a2a_network_for_pairing()   # before the staged request is consumed
     tenant_dir = _a2a_paths.tenant_global_dir(_host_tenant(rec))
     preview = _pending_ft.peek_pending_token_request(tenant_dir, pending_id)
     if preview is None:
@@ -2464,6 +2470,7 @@ def patch_endpoint(
     # this endpoint's keys must not be clobbered by a stale read-back. The
     # file lock (A2, 2026-07-20) extends the guarantee across PROCESSES
     # (bridge receiver reconnect updates, voice CLI set-url).
+    changed: list[str] = []
     with _pair_lock, _ft.config_file_lock(_origins_dir(), _endpoints_dir()):
         if not endpoint_path.exists():
             raise HTTPException(status_code=404, detail=f"Endpoint {endpoint_id!r} not found")
@@ -2472,20 +2479,39 @@ def patch_endpoint(
         except Exception as exc:
             raise HTTPException(status_code=500, detail="Failed to read endpoint file") from exc
         if body.label is not None:
+            changed.append("label")
             cleaned = _clean_label(body.label)
             if cleaned:
                 cfg["label"] = cleaned
             else:
                 cfg.pop("label", None)
         if validated_url is not None:
+            changed.append("url")
             cfg["url"] = validated_url
         if body.enabled is not None:
+            changed.append(f"enabled={body.enabled}")
             cfg["enabled"] = body.enabled
             if body.enabled:
                 cfg.pop("_operator_disabled", None)
             else:
                 cfg["_operator_disabled"] = True
         if body.reset_instance_pin:
+            # A pair confirmed out of band (ADR-2295) is pinned by a fingerprint the two operators
+            # compared; clearing the pin would let the next verified response re-bind it to
+            # whoever answers first. Re-pair instead.
+            _opath0 = _origins_dir() / f"{endpoint_id}.json"
+            _oob = cfg.get("attestation") == "attested_out_of_band"
+            if not _oob and _opath0.exists():
+                try:
+                    _oob = json.loads(_opath0.read_text("utf-8")).get("attestation") == "attested_out_of_band"
+                except (OSError, ValueError):
+                    _oob = True   # unreadable: fail closed
+            if _oob:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This pairing was confirmed out of band; its identity pin cannot be "
+                           "reset. Remove the pairing and pair again.")
+            changed.append("reset_instance_pin")
             for _k in ("instance_id", "_peer_instance_id", "_instance_id_pin_source",
                        "_instance_id_pinned_at", "_peer_bind_pub"):
                 cfg.pop(_k, None)
@@ -2500,14 +2526,17 @@ def patch_endpoint(
                 except (OSError, ValueError):
                     pass
         if body.default_ttl_s is not None:
+            changed.append("default_ttl_s")
             cfg["default_ttl_s"] = body.default_ttl_s
         _write_secure(endpoint_path, cfg)
+    # WHICH fields changed (patch_origin does the same): a pin reset must not read like a rename.
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="a2a.endpoint.updated",
         target_kind="a2a_endpoint",
         target_id=endpoint_id,
+        trigger=",".join(changed) if changed else None,
     )
     return {
         "ok": True,

@@ -1332,7 +1332,10 @@ promised path looks like there, and what it took:
   `/ask @peer` → `WALRUS`, a four-turn conversation that agrees on a code word with an operator
   message, pause and resume in between).
 - **A pairing the peer ended.** `_process_revoke_notice` stamps `_peer_revoked_at` and keeps the record
-  (operator's decision what to do with it) — but nothing showed it: UNREACHABLE/offline with the URL
+  (operator's decision what to do with it). The record carries no task in either direction any more:
+  `OriginRegistry.load` refuses it (`origin_peer_revoked`) and `RemoteEndpointRegistry.load` refuses it
+  (`endpoint_peer_revoked`), which is also why the console frees its licence seat
+  (`test_a2a_transport_review.py::TestPeerRevokedPairingCarriesNothing`). Before, nothing showed it: UNREACHABLE/offline with the URL
   hint, and the dead record still counted for `a2a_peers_max`, so on the free tier the SAME peer's new
   token answered 402 "at most 1 peer". `peer_revoked_at` now rides `connections`, `diagnostics` and the
   feed's peers; the UI shows *ENDED BY PEER* / *pairing ended by <peer>* with the way back; the seat
@@ -1534,6 +1537,19 @@ three chokepoints:
 | outbound | `RemoteTriggerSender.ping` → `_network_denied("remote_trigger_sender.ping")` | no probe leaves the machine; `PingResult(reachable=False, error_category=REJECTED)` |
 | outbound | `RemoteTriggerSender.send_reconnect` → `_network_denied(…)` | nothing is pushed; returns `False` |
 
+The gate also stands at the top of the two shared inbound cores every host backend calls —
+`a2a_http_server.process_ping_request` and `a2a_friendship.process_friendship_ack_request` (`a2a_license_gate.network_denied`,
+fail-closed) — so the stdlib server, the console (`standalone.py`) and the gateway (`app.py`) all answer a Free install
+`403 {"reason":"license_required"}` on `/v1/a2a/ping` and `/v1/a2a/friendship-ack` (until the transport review the console and
+gateway routes skipped it). Proof: `core/console/tests/test_a2a_ping_ack_member_gate.py`.
+
+**Every pairing WRITER is gated, not only create/import.** Console: `pair/generate`, `pair/redeem`, `pair/accept`,
+`pair/cli-invite`, `pair/cli-accept`, `friendship-token/confirm` (before the staged request is consumed), `friendship/create`
+and `friendship/import` answer 402 `member_seat_required` through `_require_a2a_network_for_pairing()`. CLI (`corvin_a2a.py`):
+`pair` (incl. `--offline-pair`), `pair-import`, `pair-confirm`, `invite`, `accept`, `create-token`, `import-token` call
+`_network_refusal()` first and write nothing. Local configuration (`set-role`, `list-endpoints`, `label-endpoint`) stays
+ungated. Proof: `test_a2a_pairing_gate_and_pin_routes.py`, `test_corvin_a2a_pairing_gate.py`.
+
 **Fail-closed.** Every failure of the check resolves to a denial, never to a pass: a missing or broken
 `a2a_license_gate` module (`ImportError` in either the bare or the `corvin_operator.bridges.shared` import),
 a tenant or credential error, a `LicenseDenied`, or a verdict other than `Decision.ALLOW`. Inside the gate,
@@ -1671,7 +1687,10 @@ creation, a corrupt file is replaced; `a2a_binding.py`).
 - **Recovery after a peer reinstalls** (new instance id and binding key):
   re-pair with a new token, because keys are never re-learned. Endpoint PATCH
   `reset_instance_pin` (clears the instance pin, `_peer_instance_id` and
-  `_peer_bind_pub`) only unblocks a legacy pairing's instance-id pin.
+  `_peer_bind_pub`) only unblocks a legacy pairing's instance-id pin. It is REFUSED (409) for a pairing confirmed out
+  of band (`attestation == attested_out_of_band` on the endpoint or the origin, ADR-2295): re-pair instead. The
+  `a2a.endpoint.updated` audit record carries the changed fields (`trigger`, e.g. `reset_instance_pin,label`),
+  like `a2a.origin.updated`.
 
 ### Executors (review rounds 2–4)
 
