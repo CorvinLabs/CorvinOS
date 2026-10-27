@@ -65,6 +65,23 @@ send(task)
    loss from OTHER engines never unlocks TDE delegation.
 4. Whole-task outcomes are recorded as proxy entries (down-weighted) from real
    success/failure — never fabricated values.
+5. **Measured cost on every measured entry (ADR-2306 decision 3, T-0319).** A measured
+   `LossEntry` carries `usage_delegated` and `usage_local`: the usage of the policy side
+   (the delegated worker) and of the local/reference side, each as a four-component block
+   (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`)
+   plus `total_tokens`, `cost_usd` and `model`, normalised by `loss_profile_tracker.usage_block`.
+   `tokens_delegated` / `tokens_local` stay the totals and are derived from the blocks.
+   A side without a measurement (mock IPC, text-format run, a custom executor returning a
+   plain value) stays `None` — it is never recorded as zero. Blocks are content-free (counts,
+   price, model id only). Entries written before this change load unchanged with `None`
+   blocks. With real totals present, `estimate_cost_ratio` can finally return a number.
+   Proof: `tests/test_tde_loss_usage_tokens.py` (call site and engine entry point, no LLM)
+   and `tests/test_tde_e2e_live.py::test_live_loss_profile_carries_tokens` (real claude CLI,
+   `CLAUDE_LIVE_E2E=1`).
+   **Not yet measured:** the planner call (`analysis_runner._run_lm_call`) still runs with
+   `--output-format text`, so the InitialAnalysis tokens are absent from any TDE cost
+   figure. A comparison of TDE against a direct turn therefore undercounts TDE until that
+   call reports usage.
 
 ## Audit events (hash-chained, content-free)
 

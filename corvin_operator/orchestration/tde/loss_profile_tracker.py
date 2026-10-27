@@ -36,6 +36,38 @@ from typing import Any, Optional
 
 _logger = logging.getLogger(__name__)
 
+# ADR-2306 decision 3: cost is the four token components, never one sum. These are the
+# keys of the normalised usage dict that ``worker_ipc.parse_cli_envelope`` produces.
+USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def usage_block(usage: Any) -> "Optional[dict[str, Any]]":
+    """Normalise a per-call usage dict into the block stored on a loss entry.
+
+    Content-free by construction: only integer token counts, an optional price and a model
+    id string. ``None`` when ``usage`` is not a dict or carries no tokens at all (a mock or
+    text-format run), so an absent measurement stays absent and is never recorded as zero.
+    """
+    if not isinstance(usage, dict):
+        return None
+    block: dict[str, Any] = {}
+    for key in USAGE_KEYS:
+        raw = usage.get(key, 0)
+        try:
+            value = 0 if isinstance(raw, bool) else int(raw or 0)
+        except (TypeError, ValueError):
+            value = 0
+        block[key] = max(0, value)
+    total = sum(block.values())
+    if total <= 0:
+        return None
+    block["total_tokens"] = total
+    cost = usage.get("cost_usd")
+    block["cost_usd"] = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0 else None
+    model = usage.get("model")
+    block["model"] = model[:128] if isinstance(model, str) and model else None
+    return block
+
 
 @dataclass
 class LossEntry:
@@ -62,6 +94,11 @@ class LossEntry:
     # Gap #2: Real token measurement (ADR-0218/0219)
     tokens_delegated: Optional[int] = None
     tokens_local: Optional[int] = None
+    # ADR-2306 decision 3 (T-0319): the measured usage of BOTH sides in four components,
+    # plus model id and price (see ``usage_block``). ``tokens_*`` above stay the totals.
+    # None = no measurement for that side (mock / text-format run); never zero-filled.
+    usage_delegated: Optional[dict] = None
+    usage_local: Optional[dict] = None
 
 
 class LossProfileTracker:
@@ -111,6 +148,8 @@ class LossProfileTracker:
         model_id: Optional[str] = None,
         tokens_delegated: Optional[int] = None,
         tokens_local: Optional[int] = None,
+        usage_delegated: Optional[dict] = None,
+        usage_local: Optional[dict] = None,
     ):
         """Record a delegation outcome.
 
@@ -132,7 +171,18 @@ class LossProfileTracker:
                 caller has no per-step model (proxy / legacy).
             tokens_delegated: Gap #2 — actual tokens consumed by delegated execution
             tokens_local: Gap #2 — actual tokens consumed by local execution
+            usage_delegated: ADR-2306 — the delegated/policy side's measured usage dict
+                (``parse_cli_envelope`` shape); stored as a four-component block.
+            usage_local: the same for the local/reference side.
+                When a ``tokens_*`` total is not given it is derived from the block.
         """
+
+        block_delegated = usage_block(usage_delegated)
+        block_local = usage_block(usage_local)
+        if tokens_delegated is None and block_delegated is not None:
+            tokens_delegated = block_delegated["total_tokens"]
+        if tokens_local is None and block_local is not None:
+            tokens_local = block_local["total_tokens"]
 
         entry = LossEntry(
             timestamp=time.time(),
@@ -145,6 +195,8 @@ class LossProfileTracker:
             alternative_scores=alternative_scores or {},
             tokens_delegated=tokens_delegated,
             tokens_local=tokens_local,
+            usage_delegated=block_delegated,
+            usage_local=block_local,
         )
 
         self.history.append(entry)
@@ -445,6 +497,8 @@ class LossProfileTracker:
                             alternative_scores=dict(d.get("alternative_scores", {}) or {}),
                             tokens_delegated=int(d.get("tokens_delegated")) if d.get("tokens_delegated") is not None else None,
                             tokens_local=int(d.get("tokens_local")) if d.get("tokens_local") is not None else None,
+                            usage_delegated=usage_block(d.get("usage_delegated")),
+                            usage_local=usage_block(d.get("usage_local")),
                         ))
                     except (TypeError, ValueError):
                         continue

@@ -1,0 +1,24 @@
+{
+  "baseline": "direct_opus",
+  "decision": {
+    "delta": 0.05,
+    "alpha": 0.05,
+    "bootstrap": 10000,
+    "min_stratum_tasks": 30
+  },
+  "arms": [
+    {"name": "direct_opus", "kind": "direct", "tier": "opus"},
+    {"name": "baseline_retest", "kind": "direct", "tier": "opus", "role": "retest"},
+    {"name": "direct_sonnet", "kind": "direct", "tier": "sonnet"},
+    {"name": "direct_haiku", "kind": "direct", "tier": "haiku"},
+    {"name": "route_rule", "kind": "route", "map": {"mechanical": "haiku", "reasoning": "sonnet"}},
+    {"name": "cascade", "kind": "cascade", "tiers": ["haiku", "sonnet", "opus"], "verifier": "visible"}
+  ],
+  "notes": {
+    "baseline": "Always the strongest tier on every task, one call. Change it only with a new preregistration (CONCEPT-0122).",
+    "baseline_retest": "Control arm: the same policy as the baseline, run again. If it is not non-inferior at delta, delta is below the baseline's own noise (ADR-2306 decision 2).",
+    "delta": "Non-inferiority margin on the success rate. A placeholder default: derive it per CONCEPT-0121 section 4 and fix it BEFORE the run.",
+    "route_rule": "Static rule by the corpus label: a hand-written stand-in for the OS router, not a learned policy.",
+    "cascade": "Small tier first; escalate when the NON-oracle visible check fails (format, visible examples). Tokens of every attempt are counted."
+  }
+}

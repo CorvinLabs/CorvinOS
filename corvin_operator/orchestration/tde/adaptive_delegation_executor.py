@@ -639,6 +639,10 @@ class AdaptiveDelegationExecutor:
                     complexity=self.complexity,
                     measured=True,
                     model_id=_delegated_model,
+                    # ADR-2306 decision 3 (T-0319): the measured usage of BOTH sides, four
+                    # components each. Absent (mock / text format) stays None, never zero.
+                    usage_delegated=step_result.token_usage,
+                    usage_local=local_result.token_usage,
                 )
                 tde_audit.emit(
                     "loss_recorded", task_type=step.action, engine="tiered_delegation",
@@ -688,6 +692,8 @@ class AdaptiveDelegationExecutor:
                                 complexity=self.complexity,
                                 measured=True,
                                 model_id=_cand_arm,
+                                usage_delegated=_cand_result.token_usage,
+                                usage_local=local_result.token_usage,
                             )
                             tde_audit.emit(
                                 "loss_recorded", task_type=step.action,

@@ -1,0 +1,17 @@
+{
+  "profiles": {
+    "full": {
+      "file": "tasks_full.jsonl",
+      "per_category": 48,
+      "sha256": "10f4f31721382bd7839922c58edea37958f9b39f17aae30b16bf8dd4018be6bb",
+      "tasks": 240
+    },
+    "smoke": {
+      "file": "tasks_smoke.jsonl",
+      "per_category": 12,
+      "sha256": "3db1c4aa3f99910a0779991e7a9d12e2210d26f964fb59db3699e38b028dcba0",
+      "tasks": 60
+    }
+  },
+  "seed": 20261027
+}

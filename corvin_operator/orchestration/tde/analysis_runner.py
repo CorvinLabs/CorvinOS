@@ -16,6 +16,7 @@ Contract:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import logging
 import subprocess
@@ -84,6 +85,24 @@ class AnalysisUnavailable(RuntimeError):
     """The LM analysis stack (claude CLI) is not available or failed."""
 
 
+# ADR-2306 decision 3 (T-0319): the planner is a real LLM call whose tokens count toward the cost of a delegated run.
+# ``_run_lm_call`` returns plain text (tests patch it), so the usage of its last call travels in a context variable
+# that ``run_initial_analysis_sync`` reads in the same thread and attaches to the analysis as ``planner_usage``.
+_LAST_USAGE: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("tde_analysis_last_usage", default=None)
+
+
+def _split_envelope(stdout: str, model: str = "") -> "tuple[str, Optional[dict], Optional[str]]":
+    """(text, usage, error) from a ``claude -p --output-format json`` reply; a plain-text reply passes through unchanged.
+
+    ``model`` is the model this call was asked to run on: the CLI's envelope carries no model field, so without it the
+    usage block would be unattributable (found by the live test, 2026-10-27)."""
+    try:
+        from .worker_ipc import parse_cli_envelope  # noqa: PLC0415 — avoid import cycle
+    except ImportError:  # a stubbed worker_ipc (tests) without the parser: behave like the text format
+        return stdout, None, None
+    return parse_cli_envelope(stdout, model=model)
+
+
 def _bridges_shared_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "bridges" / "shared"
 
@@ -102,7 +121,7 @@ def _run_lm_call(prompt: str, timeout_s: int, proc_holder: Optional[Any] = None)
         # chat turn. POSITIONAL argv. Reply contract unaffected (stdout).
         helper_model.resolve_claude_bin(), "-p", _guard_prompt_head(prompt),
         "--max-turns", "1",
-        "--output-format", "text",
+        "--output-format", "json",
         "--disallowedTools", "*",
         *helper_model.claude_args(helper_model.SITE_INITIAL_ANALYSIS),
     ]
@@ -129,7 +148,17 @@ def _run_lm_call(prompt: str, timeout_s: int, proc_holder: Optional[Any] = None)
         raise AnalysisUnavailable(
             f"analysis exit {rc}: {stderr.strip()[:300]}"
         )
-    return stdout.strip()
+    try:
+        model_tag = helper_model.resolve_helper_model(helper_model.SITE_INITIAL_ANALYSIS) or ""
+    except Exception:  # noqa: BLE001 — attribution is best-effort, the analysis itself must not fail on it
+        model_tag = ""
+    text, usage, env_error = _split_envelope(stdout, model=model_tag)
+    if env_error:
+        # The CLI answers a soft failure (max turns, API error) as an is_error envelope with exit 0; the error
+        # text must never be parsed as an analysis (same rule as the worker path, worker_ipc.parse_cli_envelope).
+        raise AnalysisUnavailable(f"analysis error: {env_error}")
+    _LAST_USAGE.set(usage)
+    return text.strip()
 
 
 def run_initial_analysis_sync(
@@ -151,9 +180,13 @@ def run_initial_analysis_sync(
         ValueError: LM response was not a valid analysis JSON.
     """
     prompt = make_task_analysis_prompt(task, context or {})
+    _LAST_USAGE.set(None)  # a stale value must never be attributed to a call that reported none
     raw = _run_lm_call(prompt, timeout_s, proc_holder=proc_holder)
+    planner_usage = _LAST_USAGE.get()
     analysis = parse_task_analysis_response(raw)
     analysis.cache_key = hashlib.sha256(task.encode()).hexdigest()[:16]
+    # Measured tokens of THIS planner call (four components, ``worker_ipc.parse_cli_envelope`` shape) or None.
+    analysis.planner_usage = planner_usage
     _logger.info(
         "InitialAnalysis: type=%s complexity=%s confidence=%.2f steps=%d",
         analysis.classification.task_type,

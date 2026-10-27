@@ -37,7 +37,7 @@ from .adaptive_delegation_executor import (
     StepResult,
 )
 from .l34_delegation_gate import L34DelegationGate
-from .loss_profile_tracker import get_session_tracker
+from .loss_profile_tracker import get_session_tracker, usage_block
 from .worker_ipc import get_worker_ipc
 
 _logger = logging.getLogger(__name__)
@@ -639,6 +639,11 @@ class TieredDelegationEngine:
             return {"engine": self.name, "success": False,
                     "error": f"unschedulable plan: {exc}"}
         summary = _summarize(results)
+        # ADR-2306 decision 3 (T-0319): the planner call's measured usage (four components) when the analysis
+        # reported one. Kept SEPARATE from the step totals above so those keep their meaning; a cost comparison of
+        # TDE against a direct turn must add the two. None = the analysis carried no measurement (heuristic plan,
+        # injected plan, text-format reply): absent, never zero.
+        summary["planner_usage"] = usage_block(getattr(analysis, "planner_usage", None))
         summary["wall_time_ms"] = int((time.time() - start) * 1000)
         # Badge concept fields (docs/claude-ref/tde-graph-concept.md): sourced
         # from the analysis this run already classified with, and from the

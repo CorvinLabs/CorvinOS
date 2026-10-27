@@ -1,0 +1,9 @@
+{
+  "pins": {
+    "haiku": "claude-haiku-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "opus": "claude-opus-5-5"
+  },
+  "pin_rule": "Concrete ids only. Aliases and 'latest' are refused before a live run (ab_bench.check_live_ready). The manifest of every run records the pins.",
+  "source": "Ids named in the Claude Code environment note of the session of 2026-10-27. Verify them against the CLI before the first live run; this file is the single place to change them."
+}

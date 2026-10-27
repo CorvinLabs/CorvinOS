@@ -19,6 +19,36 @@ This guide explains how to run, interpret, and extend the scientific LLM benchma
 
 ---
 
+## Token A/B benchmark (`token_ab/`, ADR-2307, CONCEPT-0122)
+
+`tests/benchmarking/token_ab/` is a second, stricter harness for one question: does a routing or
+cascade variant save tokens without losing task success against a fixed baseline? It differs from
+the framework below in four ways: success comes from a deterministic oracle (exact answer or
+hidden unit tests, no LLM judge), cost is measured from the CLI's JSON envelope in four token
+components plus `cost_usd`, the decision uses a paired cluster bootstrap with a
+non-inferiority margin and a per-category Holm correction, and every run is recorded in an
+append-only `raw.jsonl` so the analysis replays byte for byte.
+
+- Pinned: corpus SHA-256 (`corpus/MANIFEST.json`), concrete model ids (`config/models.json`), seed,
+  harness and configuration hashes (all in each run's `manifest.json`).
+- Arms: `direct_*`, `route_rule`, `cascade`, and the control arm `baseline_retest` (the baseline run
+  again; if it is not non-inferior at delta, delta is below the baseline's own noise).
+- Model-written code (category `code`) is graded inside bubblewrap (no network, read-only
+  filesystem); a live run refuses to start without it.
+- Not built yet: an arm for the real delegation path (TDE). It needs the planner call to report
+  tokens first (see `corvin_operator/orchestration/tde/README.md`, learning loop item 5).
+
+```bash
+pytest tests/benchmarking/token_ab -q                                   # self-tests, no model calls
+CLAUDE_LIVE_E2E=1 pytest tests/benchmarking/token_ab/test_token_ab_live.py -q -s   # real calls, Haiku only, capped
+python3 tests/benchmarking/token_ab/ab_bench.py power --p0 0.9 --delta 0.05       # tasks needed for a margin
+```
+
+The simulated runner (`--runner fake`) tests the machinery only and stamps a SIMULATION banner on
+every report. Its numbers must never be quoted as measurements.
+
+---
+
 ## Quick Start
 
 ### 1. Setup (One-time)

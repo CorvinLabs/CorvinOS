@@ -180,3 +180,63 @@ def test_live_l34_prescan_forces_local():
     )
     assert engine_name == "claude_code"
     assert result["engine_selection"]["l34_forced"] is True
+
+
+def test_live_loss_profile_carries_tokens(audit_sandbox):
+    """T-0319 / ADR-2306 decision 3, REAL calls: real delegated workers and a real shadow run
+    (no reference model configured, so the shadow re-runs the worker model) must leave
+    MEASURED loss entries that carry the usage of BOTH sides in four components.
+
+    Fictional, synthetic steps only. The semantic judge is switched off (lexical fallback) so
+    the only LLM calls are the worker and the shadow of each step."""
+    from initial_analysis import GlobalPlan, Step
+    from tde.loss_profile_tracker import USAGE_KEYS, get_session_tracker
+    from tde.tde_engine import TieredDelegationEngine
+
+    plan = GlobalPlan(
+        steps=[
+            Step(step=1, action="analyze_data",
+                 description="State in one sentence whether `def add_item(items, item): items = items + [item]; return item` returns the list."),
+            Step(step=2, action="analyze_data",
+                 description="State in one sentence what `find_max([-3, -1])` returns for `m = 0; for n in nums: if n > m: m = n; return m`."),
+            Step(step=3, action="synthesize", depends_on=[1, 2],
+                 description="Combine the two findings into one two-sentence review."),
+        ],
+        estimated_duration_s=60, estimated_tokens=6000,
+    )
+    key = "t0319-live"
+    engine = TieredDelegationEngine(real_ipc=True)
+    result = asyncio.run(engine.execute(
+        plan, {"statement": dict(STATEMENT)},
+        session_key=key, use_semantic_judge=False, budget_tokens=200_000))
+    assert result["success"] is True, result.get("error")
+
+    tracker = get_session_tracker(session_key=key)
+    measured = [e for e in tracker.history if e.measured]
+    assert measured, "forced exploration must have produced at least one measured entry"
+    for e in measured:
+        for side in ("usage_delegated", "usage_local"):
+            u = getattr(e, side)
+            assert u, f"{e.task_type}: {side} missing, a real call must report usage"
+            assert all(isinstance(u[k], int) and u[k] >= 0 for k in USAGE_KEYS)
+            assert u["total_tokens"] > 0 and u["input_tokens"] + u["output_tokens"] + u["cache_read_input_tokens"] + u["cache_creation_input_tokens"] == u["total_tokens"]
+            assert isinstance(u["model"], str) and u["model"].startswith("claude-")
+        assert e.tokens_delegated == e.usage_delegated["total_tokens"]
+        assert e.tokens_local == e.usage_local["total_tokens"]
+        print(f"LIVE {e.task_type}: loss={e.loss_pct:.1f}% delegated={e.usage_delegated} local={e.usage_local}")
+
+
+def test_live_planner_reports_usage():
+    """T-0319 / ADR-2306, REAL call: the InitialAnalysis (planner) call now runs with --output-format json and
+    reports its measured tokens, so a TDE cost figure can include them. One Haiku call on a fictional task."""
+    from tde.analysis_runner import run_initial_analysis_sync
+    from tde.loss_profile_tracker import USAGE_KEYS
+
+    context = {"statement": dict(STATEMENT), "task_text": TASK}
+    analysis = run_initial_analysis_sync(TASK, context, timeout_s=240)
+    assert analysis.global_plan.steps, "the planner must still produce a plan from the envelope's result text"
+    u = analysis.planner_usage
+    assert u, "a real planner call must report usage"
+    assert all(isinstance(u[k], int) and u[k] >= 0 for k in USAGE_KEYS)
+    assert u["total_tokens"] > 0 and isinstance(u["model"], str) and u["model"].startswith("claude-")
+    print(f"LIVE planner usage: {u} steps={len(analysis.global_plan.steps)}")

@@ -1,0 +1,14 @@
+{
+  "note": "SIMULATION FIXTURES. Arbitrary numbers that exercise the harness. They are NOT measurements of any model and must never be cited.",
+  "p_correct": {
+    "haiku":  {"extract": 0.90, "transform": 0.85, "arith": 0.60, "logic": 0.40, "code": 0.50},
+    "sonnet": {"extract": 0.97, "transform": 0.95, "arith": 0.90, "logic": 0.80, "code": 0.85},
+    "opus":   {"extract": 0.99, "transform": 0.98, "arith": 0.97, "logic": 0.93, "code": 0.95}
+  },
+  "p_format_fail": {"haiku": 0.10, "sonnet": 0.03, "opus": 0.01},
+  "tokens": {
+    "in_base": 150,
+    "out": {"haiku": 60, "sonnet": 90, "opus": 140},
+    "cache_read": {"haiku": 0, "sonnet": 0, "opus": 0}
+  }
+}

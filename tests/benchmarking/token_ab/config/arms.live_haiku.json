@@ -1,0 +1,18 @@
+{
+  "baseline": "direct_haiku",
+  "decision": {
+    "delta": 0.15,
+    "alpha": 0.05,
+    "bootstrap": 5000,
+    "min_stratum_tasks": 30
+  },
+  "arms": [
+    {"name": "direct_haiku", "kind": "direct", "tier": "haiku"},
+    {"name": "baseline_retest", "kind": "direct", "tier": "haiku", "role": "retest"},
+    {"name": "cascade_haiku2", "kind": "cascade", "tiers": ["haiku", "haiku"], "verifier": "visible"}
+  ],
+  "notes": {
+    "purpose": "Cheap live smoke of the harness with the default test model only (claude-haiku-5-5). It measures the harness path and the test-retest noise of one model, NOT a savings claim: all arms use the same model.",
+    "delta": "0.15 is a smoke value chosen only so that a 15-task run is not trivially underpowered to read; it is not a derived margin."
+  }
+}
