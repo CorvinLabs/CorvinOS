@@ -146,12 +146,21 @@ EVALUATING_REASON = "evaluating"
 _EVALUATING = Readiness(False, EVALUATING_REASON, 0, None, 0)
 
 
+#: Bumped by :func:`clear_cache`. A refresh that started before an invalidation (a
+#: rollback trip/reset) computed its verdict on the old state and is discarded.
+_generation = 0
+
+
 def _refresh(key: tuple[str, str]) -> None:
+    with _lock:
+        gen = _generation
     try:
         result = evaluate(*key)
     except Exception:  # noqa: BLE001 — an unreadable ledger is simply "not ready"
         result = Readiness(False, "evaluation_failed", 0, None, 0)
     with _lock:
+        if gen != _generation:
+            return   # invalidated mid-flight: never store a pre-invalidation verdict
         _cache[key] = (time.monotonic(), result)
         _refreshing.discard(key)
 
@@ -190,6 +199,8 @@ def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) ->
 
 
 def clear_cache() -> None:
+    global _generation
     with _lock:
+        _generation += 1
         _cache.clear()
         _refreshing.clear()

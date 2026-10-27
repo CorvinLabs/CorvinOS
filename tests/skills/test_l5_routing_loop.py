@@ -352,6 +352,30 @@ class TestReadiness:
         gate.set()
         assert (during.ready, during.reason) == (False, "evaluating")
 
+    def test_a_refresh_in_flight_across_a_rollback_reset_is_discarded(self, monkeypatch):
+        """A verdict computed before a rollback state change must not land after it
+        (the change clears the cache; a late refresh used to refill it)."""
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        started, gate, done = threading.Event(), threading.Event(), threading.Event()
+        real = readiness.evaluate
+
+        def slow(*a, **k):
+            started.set()
+            gate.wait(5)
+            try:
+                return real(*a, **k)
+            finally:
+                done.set()
+        monkeypatch.setattr(readiness, "evaluate", slow)
+        assert readiness.cached_evaluate(TENANT, "console").reason == "evaluating"
+        assert started.wait(5)
+        rollback_detector.reset_rollback(TENANT, audit=lambda et, d: True)   # invalidates
+        gate.set()
+        assert done.wait(5)
+        time.sleep(0.05)
+        assert (TENANT, "console") not in readiness._cache
+
     def test_background_refresh_answers_not_ready_until_it_lands(self):
         _seed(470)
         _seed(40, bundled="acs", used="acs", skill="native")
