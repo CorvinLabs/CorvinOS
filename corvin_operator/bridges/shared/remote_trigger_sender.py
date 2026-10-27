@@ -1360,7 +1360,8 @@ class RemoteTriggerSender:
             import a2a_outbox as _outbox  # type: ignore[import-not-found]  # noqa: PLC0415
             maybe = bool(getattr(result, "maybe_delivered", False)) or cat == ErrorCategory.TIMEOUT_TRANSPORT
             entry = _outbox.enqueue(endpoint_id, task_id, instruction, deadline_s=deadline_s,
-                                    maybe_delivered=maybe)
+                                    maybe_delivered=maybe,
+                                    elapsed_s=float(getattr(result, "duration_ms", 0) or 0) / 1000.0)
             if entry is None:
                 return False
             self._audit_best_effort(

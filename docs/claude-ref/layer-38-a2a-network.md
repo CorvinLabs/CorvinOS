@@ -2282,7 +2282,9 @@ Tests: `test_a2a_usage_block_e2e.py` (real HTTP, real signatures), `tests/federa
 `partner-usage.test.tsx`.
 
 **Round-two gate notes (usage id, empty host, outbound class).** (1) The usage `model_id` is the token grammar above;
-an id it drops loses the whole block (unpriced), never the answer. (2) An output object whose origin has no `peer_url`
+an id it drops loses the whole block (unpriced), never the answer. The grammar caps digits (10 in the whole id),
+size/variant/quantisation tokens (2), plain integer tokens (2, or 1 beside a date) and allows at most one plausible
+release date, so a split date or number cannot ride in a model id. (2) An output object whose origin has no `peer_url`
 (and no endpoint file) under an enabled tenant egress policy is refused `object_peer_host_unknown`, not
 `object_egress_denied`: L35 is never asked about a made-up host, and the hint (`a2a_objects.REFUSAL_HINTS`) tells the
 operator to set `peer_url` or re-pair. (3) The `endpoint_role_unset` refusal text names the detected class

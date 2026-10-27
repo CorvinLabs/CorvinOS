@@ -148,7 +148,7 @@ def backoff_s(attempts: int) -> float:
 
 def enqueue(endpoint_id: str, task_id: str, text: str, *, deadline_s: int | float | None,
             maybe_delivered: bool, tenant_id: str | None = None,
-            now: float | None = None) -> dict[str, Any] | None:
+            now: float | None = None, elapsed_s: float = 0.0) -> dict[str, Any] | None:
     """Keep ``text`` for ``endpoint_id`` until it can be delivered. ``None`` = not kept (the
     caller reports the failure as before): bad ids, empty or oversized text, a full outbox, a
     task already known, or an unusable deadline."""
@@ -176,7 +176,13 @@ def enqueue(endpoint_id: str, task_id: str, text: str, *, deadline_s: int | floa
             if maybe_delivered:
                 # The failed attempt may have left a copy in a relay queue (alive until its
                 # deliver-by + grace). Hold every retry, active peer or not, until it is gone.
-                entry["stale_until"] = t + _send_budget_s() + RELAY_GRACE_S
+                # ``elapsed_s`` is the send time already spent before this call: the copy's deliver-by was
+                # stamped at send start, so only the REST of the budget (plus grace) can still be queued.
+                try:
+                    spent = max(0.0, float(elapsed_s))
+                except (TypeError, ValueError):
+                    spent = 0.0
+                entry["stale_until"] = t + max(0.0, _send_budget_s() - spent) + RELAY_GRACE_S
             table[tid] = entry
             _persist(root, entry)
             return dict(entry)

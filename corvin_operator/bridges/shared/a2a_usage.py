@@ -49,7 +49,7 @@ MAX_TOKENS = 10 ** 10
 _CLAUDE_ID_RE = re.compile(
     r"(?:anthropic/|(?:(?:eu|us|apac|global|au|jp)\.)?anthropic\.)?"
     r"claude-(?:(?:haiku|sonnet|opus|fable|mythos)-\d{1,2}(?:[-.]\d{1,2})?|\d(?:[-.]\d)?-(?:haiku|sonnet|opus))"
-    r"(?:-(?P<d1>\d{8}))?(?:-v\d{1,2}(?::\d{1,2})?|@(?P<d2>\d{8}))?(?:\[1m\])?"
+    r"(?:-(?P<d1>\d{8})|-latest)?(?:-v\d{1,2}(?::\d{1,2})?|@(?P<d2>\d{8}))?(?:\[1m\])?"
 )
 
 #: Third-party families: a CLOSED list of the leading word. A model id is peer-signed text that lands in the
@@ -61,7 +61,7 @@ _FAMILIES = frozenset({
     "codestral", "ministral", "pixtral", "magistral", "devstral", "qwen", "qwq", "deepseek", "grok", "command",
     "phi", "kimi", "glm", "sonar", "nova", "titan", "zephyr", "yi", "dolphin", "vicuna", "falcon", "olmo",
     "smollm", "starcoder", "granite", "llava", "nemotron", "hermes", "orca", "solar", "jamba", "ernie",
-    "nomic", "mxbai", "bge", "snowflake", "openchat", "wizardlm", "neural", "stable", "tulu", "internlm", "minicpm",
+    "open", "nomic", "mxbai", "bge", "snowflake", "openchat", "wizardlm", "neural", "stable", "tulu", "internlm", "minicpm",
 })
 #: Vendor prefixes (``vendor/model``) and Bedrock third-party prefixes (``[us.]vendor.model``).
 _VENDORS = frozenset({
@@ -73,7 +73,7 @@ _QUALIFIERS = frozenset({
     "latest", "preview", "instruct", "chat", "mini", "nano", "small", "medium", "large", "lite", "flash", "pro",
     "max", "turbo", "codex", "coder", "audio", "vision", "thinking", "cloud", "haiku", "sonnet", "opus", "oss",
     "base", "code", "reasoner", "versatile", "embed", "text", "express", "premier", "plus", "r", "exp",
-    "experimental", "image", "search", "dense", "nemo", "moe", "mixtral", "next", "vl", "guard", "fp16", "embedding", "realtime", "transcribe", "tts", "ultra", "fast", "reasoning",
+    "experimental", "it", "qat", "air", "mistral", "image", "search", "dense", "nemo", "moe", "mixtral", "next", "vl", "guard", "fp16", "embedding", "realtime", "transcribe", "tts", "ultra", "fast", "reasoning",
 })
 _BEDROCK_RE = re.compile(r"(?:(?:eu|us|apac|global|au|jp)\.)?(" + "|".join(
     sorted(re.escape(v) for v in _VENDORS if "-" not in v)) + r")\.")
@@ -87,6 +87,9 @@ _GENERIC_MAX_LEN = 64
 _GENERIC_MAX_TOKENS = 10
 _GENERIC_MAX_NUMBERS = 4
 _GENERIC_MAX_WORDS = 4
+_GENERIC_MAX_SHAPES = 2  # size / variant / quantisation tokens together
+_GENERIC_MAX_DIGITS = 10  # digit characters in the whole id
+_GENERIC_MAX_BARE_INTS = 2  # plain integer tokens; ONE when a date is present (a split date is a date)
 
 #: Kept for importers that want a cheap pre-filter; the authority is :func:`valid_model_id`.
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}$")
@@ -124,7 +127,7 @@ def _generic_ok(value: str) -> bool:
     fam = _FAMILY_TOKEN_RE.fullmatch(toks[0])
     if not fam or fam.group(1) not in _FAMILIES or (fam.group(1) == "o" and not fam.group(2)):
         return False
-    dates = numbers = words = 0
+    dates = numbers = words = shapes = bare = 0
     i = 1
     while i < len(toks):
         t = toks[i]
@@ -151,13 +154,16 @@ def _generic_ok(value: str) -> bool:
         elif t in _QUALIFIERS:
             words += 1
         elif _SIZE_RE.fullmatch(t) or _QUANT_RE.fullmatch(t) or _VARIANT_RE.fullmatch(t):
-            pass
+            shapes += 1
         elif _VERSION_RE.fullmatch(t):
             numbers += 1
+            bare += t.isdigit()
         else:
             return False
         i += step
-    return dates <= 1 and numbers <= _GENERIC_MAX_NUMBERS and words <= _GENERIC_MAX_WORDS
+    return (dates <= 1 and numbers <= _GENERIC_MAX_NUMBERS and words <= _GENERIC_MAX_WORDS
+            and shapes <= _GENERIC_MAX_SHAPES and sum(c.isdigit() for c in value) <= _GENERIC_MAX_DIGITS
+            and bare <= (1 if dates else _GENERIC_MAX_BARE_INTS))
 
 
 def _claude_ok(value: str) -> bool:
