@@ -185,7 +185,11 @@ def route_session_dir(workdir: Path, provider: str) -> Path:
     base = Path(workdir)
     if base.name.startswith(ROUTE_SESSION_PREFIX):
         base = base.parent
-    return base / (ROUTE_SESSION_PREFIX + safe_chat_key(provider))
+    # The readable part alone is lossy ("a-b" and "a_b" collapse): the hash of the raw id keeps two
+    # providers cleared for different data out of one CLI session.
+    import hashlib  # noqa: PLC0415
+    digest = hashlib.sha256(str(provider).encode("utf-8")).hexdigest()[:8]
+    return base / (ROUTE_SESSION_PREFIX + safe_chat_key(provider) + "-" + digest)
 
 
 def _route_dirs(workdir: Path) -> list[Path]:

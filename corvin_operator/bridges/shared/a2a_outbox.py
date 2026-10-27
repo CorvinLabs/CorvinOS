@@ -33,6 +33,7 @@ CI lint: this module MUST NOT ``import anthropic``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -64,6 +65,8 @@ FINAL = frozenset({"sent", "delivered", "expired", "cancelled", "unconfirmed", "
 _lock = threading.RLock()
 _mem: dict[str, dict[str, dict[str, Any]]] = {}      # root -> task_id -> entry
 _inflight: set[str] = set()                           # task ids being sent right now
+
+_log = logging.getLogger(__name__)
 
 Audit = Callable[[str, str, dict], None]
 
@@ -170,6 +173,10 @@ def enqueue(endpoint_id: str, task_id: str, text: str, *, deadline_s: int | floa
                      "created_at": t, "deadline_at": t + deadline, "attempts": 0,
                      "next_at": t + BACKOFF_MIN_S, "last_attempt_at": 0.0,
                      "maybe_delivered": bool(maybe_delivered)}
+            if maybe_delivered:
+                # The failed attempt may have left a copy in a relay queue (alive until its
+                # deliver-by + grace). Hold every retry, active peer or not, until it is gone.
+                entry["stale_until"] = t + _send_budget_s() + RELAY_GRACE_S
             table[tid] = entry
             _persist(root, entry)
             return dict(entry)
@@ -227,9 +234,18 @@ def close(task_id: str, state: str, *, tenant_id: str | None = None,
             e.update(state=state, text="", closed_at=time.time() if now is None else float(now))
             # Rewrite the file: appending a text-less line would leave the original line (and the
             # withdrawn text) on disk until compaction.
-            try:
-                _rewrite(root, _load(root))
-            except Exception:  # noqa: BLE001 — never into the send path
+            ok = False
+            for _attempt in (1, 2):
+                try:
+                    _rewrite(root, _load(root))
+                    ok = True
+                    break
+                except Exception:  # noqa: BLE001 — never into the send path
+                    continue
+            if not ok:
+                # The old line, with the withdrawn text, is still on disk: say so loudly.
+                _log.error("a2a_outbox: could not rewrite the outbox file; the text of closed "
+                           "task %s may remain on disk until the next compaction", e.get("task_id"))
                 _persist(root, e)
             return dict(e)
     except Exception:  # noqa: BLE001
@@ -424,21 +440,22 @@ def _drain_one(sender: Any, e: dict[str, Any], audit: Audit | None,
     # mid-send is treated as unconfirmed on the next pass, never as provably undelivered.
     # The row is re-read under the lock by update(): a cancel/erase that landed since the
     # snapshot makes it return None and nothing is sent. The text sent is the one read here.
-    fresh = update(tid, tenant_id=tenant_id, last_attempt_at=now, attempts=attempts + 1,
-                   maybe_delivered=True, stale_until=now + _send_budget_s() + RELAY_GRACE_S)
+    # The relay copy lives from the REAL send start (earlier entries of this pass may have blocked
+    # for minutes), so every timestamp below is taken from a fresh clock, not the pass-start `now`.
+    started = time.time()
+    fresh = update(tid, tenant_id=tenant_id, last_attempt_at=started, attempts=attempts + 1,
+                   maybe_delivered=True, stale_until=started + _send_budget_s() + RELAY_GRACE_S)
     if fresh is None:
         counts["kept"] += 1
         return
     _emit(audit, "A2A.outbox_retried", e, attempts=attempts + 1)
     counts["resent"] += 1
-    started = time.time()
     res = sender.send(ep, fresh.get("text") or "", task_id=tid, feed_task_recorded=True, outbox_retry=True)
-    elapsed = max(0.0, time.time() - started)
-    done = now + elapsed                      # when the blocking send RETURNED, on the pass's clock
-    stale_until = now + max(elapsed, _send_budget_s()) + RELAY_GRACE_S
+    done = time.time()                        # when the blocking send RETURNED
+    stale_until = started + max(done - started, _send_budget_s()) + RELAY_GRACE_S
 
     if getattr(res, "ok", False):
-        _close_and_report(e, "sent", audit, tenant_id, now=now, feed_status=None, feed_error=None)
+        _close_and_report(e, "sent", audit, tenant_id, now=done, feed_status=None, feed_error=None)
         counts["sent"] += 1
         return
     cat = getattr(res, "error_category", "")
@@ -451,7 +468,7 @@ def _drain_one(sender: Any, e: dict[str, Any], audit: Audit | None,
         counts["kept"] += 1
         return
     # The peer answered and refused (rejected, auth, filtered ...): send() already wrote that row.
-    _close_and_report(e, "failed", audit, tenant_id, now=now, feed_status=None, feed_error=None)
+    _close_and_report(e, "failed", audit, tenant_id, now=done, feed_status=None, feed_error=None)
     counts["failed"] += 1
 
 

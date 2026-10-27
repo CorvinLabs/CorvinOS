@@ -138,15 +138,16 @@ class TestRetryWaitsForTheStaleCopy(_HomeCase):
         now = time.time() + 1000
         self.keep("R1", now=now - 100)
         s = _SlowTimeoutSender(stage={"reachable": True, "supported": True, "stage": "unknown"})
+        real_start = time.time()   # the relay copy lives from the REAL send start, not the pass clock
         a2a_outbox.drain(s, tenant_id="_default", now=now, is_active=lambda ep: True)
         self.assertEqual(len(s.send_calls), 1)
         import remote_trigger_sender as rts
         budget = max(rts._DEFAULT_TIMEOUT_S, rts._DEFAULT_TTL_S + rts._TIMEOUT_MARGIN_S)
-        horizon = now + budget + 30.0     # deliver-by + the relay's _DELIVER_BY_GRACE_S
+        horizon = real_start + budget + 30.0     # deliver-by + the relay's _DELIVER_BY_GRACE_S
         e = a2a_outbox.get("R1")
         self.assertGreaterEqual(e["next_at"], horizon)
         # even an active peer, long after the 15 s minimum gap, is left alone until the horizon
-        a2a_outbox.drain(s, tenant_id="_default", now=now + horizon - now - 1, is_active=lambda ep: True)
+        a2a_outbox.drain(s, tenant_id="_default", now=horizon - 1, is_active=lambda ep: True)
         self.assertEqual(len(s.send_calls), 1)
         a2a_outbox.drain(s, tenant_id="_default", now=horizon + 1, is_active=lambda ep: True)
         self.assertEqual(len(s.send_calls), 2)

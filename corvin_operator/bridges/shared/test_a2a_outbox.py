@@ -204,14 +204,14 @@ class TestDrainDecisions(_HomeCase):
         self.assertEqual(len(s.send_calls), 1)
 
     def test_an_answer_timeout_asks_the_peer_first_and_resends_only_if_it_never_heard_of_the_task(self):
-        self.keep("t-1", maybe=True)
+        self.keep("t-1", maybe=True, deadline=20000, now=time.time() - 5000)  # relay hold long over
         s = _ScriptedSender()                                  # reachable, supported, stage unknown
         self.drain(s, active=True)
         self.assertEqual(s.status_calls, [(PEER, "t-1")])
         self.assertEqual(len(s.send_calls), 1)
 
     def test_a_peer_that_already_has_the_task_is_never_sent_it_again(self):
-        self.keep("t-1", maybe=True)
+        self.keep("t-1", maybe=True, deadline=20000, now=time.time() - 5000)  # relay hold long over
         s = _ScriptedSender(stage={"reachable": True, "supported": True, "stage": "processing",
                                    "stage_seq": 4, "reason": "", "via": "direct"})
         counts = self.drain(s, active=True)
@@ -223,7 +223,7 @@ class TestDrainDecisions(_HomeCase):
         self.assertEqual(self.feed_rows()[-1]["status"], "unconfirmed")
 
     def test_a_peer_that_cannot_answer_a_stage_query_is_never_retried(self):
-        self.keep("t-1", maybe=True)
+        self.keep("t-1", maybe=True, deadline=20000, now=time.time() - 5000)  # relay hold long over
         s = _ScriptedSender(stage={"reachable": True, "supported": False, "stage": "unknown",
                                    "stage_seq": 0, "reason": "", "via": "direct"})
         counts = self.drain(s, active=True)
@@ -231,7 +231,7 @@ class TestDrainDecisions(_HomeCase):
         self.assertEqual((counts["unconfirmed"], a2a_outbox.get("t-1")["state"]), (1, "unconfirmed"))
 
     def test_an_offline_peer_cannot_be_asked_so_nothing_is_sent_and_the_entry_waits(self):
-        self.keep("t-1", maybe=True)
+        self.keep("t-1", maybe=True, deadline=20000, now=time.time() - 5000)  # relay hold long over
         s = _ScriptedSender(stage={"reachable": False, "supported": False, "stage": "unknown",
                                    "stage_seq": 0, "reason": "", "via": "direct"})
         self.drain(s, active=True)
@@ -473,8 +473,10 @@ class TestOfflinePeerEndToEnd(unittest.TestCase):
             attempts.append(r)
             return r
         sender.send = spy
+        # the first attempt queued a relay copy: the retry waits out its deliver-by + grace
+        later = time.time() + a2a_outbox._send_budget_s() + a2a_outbox.RELAY_GRACE_S + 1
         counts = a2a_outbox.drain(sender, audit=lambda e, s, d: drain_audits.append(e),
-                                  is_active=lambda ep: True)
+                                  is_active=lambda ep: True, now=later)
         self.assertEqual(counts["resent"], 1, counts)
         self.assertEqual(counts["sent"], 1, (counts, [(r.ok, r.status, r.error_category, r.error_detail,
                                                        r.maybe_delivered) for r in attempts]))
