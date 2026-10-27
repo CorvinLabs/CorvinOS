@@ -222,6 +222,7 @@ def delete_chat_session(
 ) -> dict[str, Any]:
     if not chat_runtime.delete_session(rec.tenant_id, sid):
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
+    followup_grading.forget_chat(rec.tenant_id, f"web:{sid}")
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,

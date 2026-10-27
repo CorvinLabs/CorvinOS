@@ -6625,6 +6625,8 @@ async def _stream_turn_impl(
     # shapes the prompt; the gates still inspect the task text, not the brief.
     _cel_brief_text = ""
     _cel_ran_stage_ids: list[str] = []  # G4: stages that ran this turn, for the outcome loop
+    _fg_injected: list[str] = []  # follow-up grading: skill ids the skill block carries
+    _fg_block = ""
     if _CEL_AVAILABLE and _feature_flags.is_enabled("vibe_engineering", sess.tenant_id):
         try:
             # ACTIVE brain (ADR-0282/0283) — a SECOND ships-dark flag on top of
@@ -6758,15 +6760,13 @@ async def _stream_turn_impl(
                 ]
             except Exception:  # noqa: BLE001
                 _cel_ran_stage_ids = []
-            try:  # outcome grading: the skills this turn injected; the NEXT prompt grades them
+            try:  # outcome grading: the ids the rendered skill block really carries;
+                # recorded only once the native spawn starts with it (below)
                 from . import followup_grading as _fg  # noqa: PLC0415
-                _fg_bound = getattr(locals().get("_bundle"), "skills_to_bind", None) or []
-                _fg.record_turn_skills(
-                    sess.tenant_id, sess.chat_key, tasks_dir=tasks_dir, run_id=task_id,
-                    skill_names=[getattr(s, "skill_id", "") for s in _fg_bound],
-                    user_text=prompt)
+                _fg_block = str(locals().get("_sk_block") or "")
+                _fg_injected = _fg.injected_skill_ids(locals().get("_bundle"), _fg_block)
             except Exception:  # noqa: BLE001 — grading bookkeeping never breaks a turn
-                pass
+                _fg_injected, _fg_block = [], ""
         except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
             _cel_brief_text = ""
     # ADR-0395 (cache-stable CEL). The volatile CEL brief in the --append-system-prompt
@@ -8600,6 +8600,13 @@ async def _stream_turn_impl(
         "event": "task.started", "engine": "claude",
         "turn": sess.turn_count, "pid": proc.pid,
     })
+    if _fg_injected and _fg_block and _fg_block in _cel_brief_text:
+        try:  # follow-up grading: THIS engine received these skills; the next prompt grades them
+            from . import followup_grading as _fg  # noqa: PLC0415
+            _fg.record_turn_skills(sess.tenant_id, sess.chat_key, tasks_dir=tasks_dir,
+                                   run_id=task_id, skill_names=_fg_injected)
+        except Exception:  # noqa: BLE001 — grading bookkeeping never breaks a turn
+            pass
     _os_audit("os_turn.started", {"model": _os_model_used})
     yield {"type": "engine", "engine": _os_engine or "claude_code",
            "label": "Claude Code (OS-Engine)"}
@@ -8866,6 +8873,11 @@ async def _stream_turn_impl(
                 # An injected /btw yields a SECOND result after the turn's own
                 # one; accumulate so TTS and the ledger keep the main answer.
                 _this_result = evt.get("result") or ""
+                if _fg_injected and evt.get("is_error"):
+                    # An error answer is not an outcome the skills produced: no follow-up grade.
+                    with contextlib.suppress(Exception):
+                        from . import followup_grading as _fg  # noqa: PLC0415
+                        _fg.forget_chat(sess.tenant_id, sess.chat_key)
                 if _bg is not None:                                              # ADR-2236
                     _bg.note_result(evt)                                         # ADR-2236
                     for _tr in _bg.flush():                                      # ADR-2236
