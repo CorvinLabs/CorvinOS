@@ -2188,3 +2188,27 @@ ADR-0760 window (`GET /v1/console/federation/usage`, `PartnerUsage`), never an a
 catalogue's `cost_per_task_usd` stays a self-declared hint that the UI labels as such; selection ignores the block.
 Tests: `test_a2a_usage_block_e2e.py` (real HTTP, real signatures), `tests/federation/test_federation_usage_e2e.py`,
 `partner-usage.test.tsx`.
+
+### Measured attachment limits per transport (T-0301, 2026-10-27)
+
+Measured through the real `RemoteTriggerSender.send`, a real `a2a_http_server` peer with real HMAC pairing, and for the
+relay a LOCAL relay started from this repository (`a2a_relay.build_relay_router` under uvicorn on 127.0.0.1, the router
+`ops/a2a-relay` deploys; the direct URL is dead so every byte crosses it). No hosted relay was contacted. The accepted
+maximum was found by bisection over the total raw size of 16 attachments. `test_a2a_attachment_limit_measured_e2e.py`
+pins every number below and prints them (`[T-0301 measured]`).
+
+| Measured | Direct HTTP | Relay |
+|---|---|---|
+| Request: accepted maximum, total raw bytes of all attachments | **1 048 576** (1 MiB) | **1 048 576** (1 MiB) |
+| Request: one byte over | refused locally before anything leaves the machine: `protocol_error`, *Invalid attachment* | same |
+| Request: count | 16 pass, 17 refused (*Invalid attachment*) | same |
+| Response: worker output files returned inline | 1 048 576 bytes in total; one byte more is not sent and is reported as `attachments_dropped: {byte_cap: 1}` | same |
+| Non-conforming sender (local check bypassed), 1 MiB + 1 | reaches the peer, which answers a signed `rejected` (audit reason `attachments_total_too_large`) | same |
+| Transport ceiling above the attachment cap (both attachment checks bypassed, 1 KiB resolution) | 3 069 KiB raw still reaches the peer; above it the peer's 4 MiB body cap answers 413 and closes the socket, which the sender reports as `unreachable` (*maybe delivered: no*) | 3 069 KiB raw; above it the sender's own frame check refuses before connecting: `protocol_error`, *Message exceeds relay size limit* |
+
+So the attachment cap (16 files, 1 MiB raw **in total**, `a2a_attachments.py`) is the binding limit on both transports
+and in both directions; the transports would carry about three times as much, because the relay's plaintext cap is
+pinned to the direct path's 4 MiB body cap. A file larger than the cap cannot travel inline at all: ADR-2287 (below)
+moves it as a signed reference. The comment above `remote_trigger_sender._MAX_RESPONSE_BYTES` that read "16 x 1 MiB" was
+corrected to these numbers. The 413 that surfaces as `unreachable` on the direct path is a known mislabel, recorded
+here and left unchanged (no wire change in T-0301).
