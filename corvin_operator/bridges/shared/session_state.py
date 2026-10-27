@@ -172,6 +172,49 @@ def tenant_sessions_root(tenant_id: str | None = None) -> Path | None:
 MANUAL_RESET_REASONS: frozenset[str] = frozenset({"manual"})
 
 
+#: Directory-name prefix of a ROUTE session (ADR-2268): the claude CLI state of turns that were
+#: rerouted to a declared provider lives in ``<chat workdir>/.route-<provider>/`` and never in the
+#: chat workdir itself. The CLI resumes whatever session sits under its cwd, so a rerouted
+#: exchange in the native workdir would be replayed to the default endpoint by the next native
+#: turn (and the reverse). One session per endpoint; neither resumes the other.
+ROUTE_SESSION_PREFIX = ".route-"
+
+
+def route_session_dir(workdir: Path, provider: str) -> Path:
+    """The session directory of turns rerouted to ``provider`` (created by the caller)."""
+    base = Path(workdir)
+    if base.name.startswith(ROUTE_SESSION_PREFIX):
+        base = base.parent
+    return base / (ROUTE_SESSION_PREFIX + safe_chat_key(provider))
+
+
+def _route_dirs(workdir: Path) -> list[Path]:
+    try:
+        return sorted(p for p in Path(workdir).glob(ROUTE_SESSION_PREFIX + "*")
+                      if p.is_dir() and not p.is_symlink())
+    except OSError:
+        return []
+
+
+def _wipe_state(workdir: Path) -> list[str]:
+    removed: list[str] = []
+    for name in CLAUDE_STATE_FILES:
+        p = workdir / name
+        if p.exists() or p.is_symlink():
+            p.unlink()
+            removed.append(name)
+    for p in sorted(workdir.glob(CLAUDE_STATE_GLOB)):
+        is_real_dir = p.is_dir() and not p.is_symlink()
+        if is_real_dir:
+            shutil.rmtree(p)
+        elif p.exists() or p.is_symlink():
+            p.unlink()
+        else:
+            continue
+        removed.append(p.name + "/" if is_real_dir else p.name)
+    return removed
+
+
 def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified",
                                chat_key: str = "") -> list[str]:
     """Delete only Claude's conversation state in ``workdir``; keep project files.
@@ -200,21 +243,14 @@ def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified",
     except (OSError, ValueError, AttributeError):
         _prev_session = ""
 
-    for name in CLAUDE_STATE_FILES:
-        p = workdir / name
-        if p.exists() or p.is_symlink():
-            p.unlink()
-            removed.append(name)
-
-    for p in sorted(workdir.glob(CLAUDE_STATE_GLOB)):
-        is_real_dir = p.is_dir() and not p.is_symlink()
-        if is_real_dir:
-            shutil.rmtree(p)
-        elif p.exists() or p.is_symlink():
-            p.unlink()
-        else:
-            continue
-        removed.append(p.name + "/" if is_real_dir else p.name)
+    removed = _wipe_state(workdir)
+    if workdir.name.startswith(ROUTE_SESSION_PREFIX):
+        # A route session: the chat's boundary is recorded against the CHAT workdir.
+        workdir = workdir.parent
+    else:
+        # A chat-level reset (/new, overflow) clears every route session of the chat too.
+        for rd in _route_dirs(workdir):
+            removed += [rd.name + "/" + n for n in _wipe_state(rd)]
 
     if removed or reason in MANUAL_RESET_REASONS:
         try:
@@ -244,4 +280,8 @@ def has_claude_session_state(workdir: Path) -> bool:
         return False
     if any(workdir.glob(CLAUDE_STATE_GLOB)):
         return True
-    return any((workdir / n).exists() for n in CLAUDE_STATE_FILES)
+    if any((workdir / n).exists() for n in CLAUDE_STATE_FILES):
+        return True
+    if not workdir.name.startswith(ROUTE_SESSION_PREFIX):
+        return any(has_claude_session_state(rd) for rd in _route_dirs(workdir))
+    return False

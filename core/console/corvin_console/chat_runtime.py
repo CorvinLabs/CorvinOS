@@ -8420,6 +8420,42 @@ async def _stream_turn_impl(
         _append_turn(sess, "assistant", [{"kind": "text", "text": _route_problem}])
         yield {"type": "done"}
         return
+    # ADR-2268: one claude session per endpoint. The CLI resumes (`--continue`) whatever session
+    # sits under its cwd, so a rerouted exchange in the session workdir would be replayed to the
+    # DEFAULT endpoint by the next native turn, and a rerouted turn would resume a native session
+    # the provider is not cleared to read. A rerouted turn runs in `<workdir>/.route-<provider>/`;
+    # `<workdir>/.cli_session` / `<route dir>/.cli_session` record that a CLI session exists there.
+    # A native turn resumes only when no route session exists in this chat or the native session
+    # itself is recorded (sessions from before this change carry no marker and no route dir).
+    _cli_cwd = sess.workdir
+    _cont_wanted = "--continue" in args
+    try:
+        from session_state import route_session_dir as _route_dir  # noqa: PLC0415
+        if _l34_route.rerouted:
+            _cli_cwd = _route_dir(sess.workdir, str(_l34_route.provider or "route"))
+            _cli_cwd.mkdir(parents=True, exist_ok=True)
+            _view = Path(sess.workdir) / ".corvin-history.md"
+            if _view.is_file():
+                shutil.copyfile(_view, _cli_cwd / ".corvin-history.md")
+            _cont_wanted = _cont_wanted and (_cli_cwd / ".cli_session").exists()
+        else:
+            _has_route = any(p.is_dir() for p in Path(sess.workdir).glob(".route-*"))
+            _cont_wanted = _cont_wanted and (
+                not _has_route or (Path(sess.workdir) / ".cli_session").exists())
+        (_cli_cwd / ".cli_session").touch()
+    except Exception:  # noqa: BLE001 — never resume across routes if the isolation cannot be set up
+        if _l34_route.rerouted:
+            _route_problem_iso = ("[security] The sensitive-data route could not be built "
+                                  "(session_isolation) — request blocked.")
+            yield {"type": "delta", "text": _route_problem_iso}
+            yield {"type": "result", "text": _route_problem_iso, "usage": None}
+            touch(sess, increment_turn=True)
+            _append_turn(sess, "assistant", [{"kind": "text", "text": _route_problem_iso}])
+            yield {"type": "done"}
+            return
+        _cont_wanted = False
+    if not _cont_wanted:
+        args[:] = [a for a in args if a != "--continue"]
     # ADR-2241 amendment: a PreToolUse hook on Bash snapshots the files a command
     # names BEFORE it runs, so its card can show what it changed. Per-turn dir,
     # removed in the turn's `finally`; a failure here only means "no Bash diff".
@@ -8439,7 +8475,7 @@ async def _stream_turn_impl(
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        cwd=str(sess.workdir),
+        cwd=str(_cli_cwd),
         env=_spawn_env,
         limit=8 * 1024 * 1024,  # 8 MB — default 64 KB is too small for large tool results
     )

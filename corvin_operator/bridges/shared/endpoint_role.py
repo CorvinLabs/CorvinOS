@@ -112,15 +112,19 @@ def refusal_text() -> str:
 def outbound_refusal(cfg: Any, instruction: str) -> tuple[str | None, str]:
     """``(reason, grade_name)``: ``reason`` is ``endpoint_role_unset`` or ``None`` (this rule allows).
 
-    Classification is the same heuristic the workflow gate uses (``data_classification.classify_task``).
-    A classifier failure refuses where the rule can apply (role ``unset``) - fail-closed - and changes
+    "Classified" means what the rest of L34 means: ``classify_task(..., detector=True)``, the highest of
+    marker, secret bank, personal-data zone and the ADR-2268 detector bank (e-mail, IBAN, card, phone,
+    tax id, ...). Residual gap, stated not hidden: the detector bank is pattern based, so free-text
+    personal or health data without such a token (a name plus a diagnosis) still grades PUBLIC; the
+    operator closes that with a ``[class:...]`` marker or by stating the endpoint's role.
+    A classifier failure (including a failing detector step, which raises) refuses where the rule can apply (role ``unset``) - fail-closed - and changes
     nothing for an endpoint with a stated role.
     """
     role = role_of(cfg)
     try:
         import data_classification as _dc  # type: ignore[import-not-found]  # noqa: PLC0415
 
-        grade = _dc.classify_task(instruction or "", persona="assistant")
+        grade = _dc.classify_task(instruction or "", persona="assistant", detector=True)
         grade_name = grade.name
         above_public = grade > _dc.DataClassification.PUBLIC
     except Exception:  # noqa: BLE001 - cannot prove the payload is public

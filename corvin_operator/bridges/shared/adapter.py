@@ -4404,8 +4404,14 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
                      profile: dict | None = None,
                      tenant_id: str | None = None,
                      sender: str | None = None,
-                     workload_hint: dict | None = None) -> dict:
+                     workload_hint: dict | None = None,
+                     route_problem_out: list | None = None) -> dict:
     """Build a fresh env dict for the claude-code spawn.
+
+    ``route_problem_out``: when a list is passed, a refusal reason from
+    ``apply_claude_code_provider_env`` (a provider is assigned to claude_code but its route
+    cannot be built) is appended to it; the caller must then refuse the turn instead of
+    spawning on the default endpoint, like the console does (T-0229).
 
     Always sets CORVIN_CHANNEL_ID = '<bridge>:<sanitized chat_key>' so
     forge.scope.detect_scope() can route forged tools into a per-channel
@@ -4587,9 +4593,10 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
             _route_problem = apply_claude_code_provider_env(env, _tid)
             if _route_problem:
                 # L35 validated the assigned provider's host while this spawn would go to
-                # the default endpoint. The bridge keeps spawning (a strict refusal for
-                # rerouted turns is T-0229); the mismatch is at least named.
+                # the default endpoint: the caller refuses the turn (T-0229).
                 log(f"provider route: {_route_problem}")
+                if route_problem_out is not None:
+                    route_problem_out.append(_route_problem)
         except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
             pass
     return env
@@ -4989,6 +4996,15 @@ def _reset_session_state(workdir: Path, *, reason: str = "unspecified",
     return reset_claude_session_state(workdir, reason=reason, chat_key=chat_key)
 
 
+def _route_session_dir(workdir: Path, provider: str) -> Path:
+    """``<chat workdir>/.route-<provider>`` — the claude session of turns rerouted to *provider*."""
+    try:
+        from .session_state import route_session_dir  # type: ignore
+    except ImportError:
+        from session_state import route_session_dir  # type: ignore
+    return route_session_dir(workdir, provider)
+
+
 def _build_context_bar(channel: str, chat_key: str, profile: dict | None) -> str:
     """Return a compact one-line session status like '[🎯 Ship billing…] [👾 coder] [📅 2 tasks]'.
     Returns '' when nothing non-default is active so no empty line is prepended.
@@ -5383,8 +5399,12 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     except Exception:  # noqa: BLE001
         pass
 
+    _route_problems: list[str] = []
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
-                           sender=sender, workload_hint=workload_hint)
+                           sender=sender, workload_hint=workload_hint,
+                           route_problem_out=_route_problems)
+    if _route_problems:  # T-0229: never spawn on the default endpoint L35 did not judge
+        return f"[security] {_route_problems[0]}"
     env["VOICE_HOOK_RECURSION"] = "1"
     # (ADR-2091 removed the ADR-0126 claude_code_local Ollama redirect and its
     # 'local' credential sentinel; _build_spawn_env strips any stale value.)
@@ -5653,6 +5673,7 @@ def _call_claude_streaming_via_engine(
     resume_session_id: str | None = None,
     msg_id: str | None = None,
     workload_hint: dict | None = None,
+    route_problem: str | None = None,
 ) -> str:
     """Engine-driven streaming path (ADR-0002, Phase 2.5 — sole code path).
 
@@ -5741,6 +5762,43 @@ def _call_claude_streaming_via_engine(
         if _route_problem is not None:
             _turn_refused("l34_route_unavailable")
             return _route_problem
+    elif route_problem:
+        # A provider is assigned to claude_code (L35 judged ITS host) but the spawn env could not
+        # be built for it: refuse like the console (T-0229) instead of going to the default
+        # endpoint. A rerouted turn builds its own strict env and never reads this.
+        log(f"route gate: assigned provider route unavailable — {route_problem}")
+        _turn_refused("l34_route_unavailable")
+        return f"[security] {route_problem}"
+
+    # ADR-2268: one claude session per endpoint. The CLI resumes whatever session sits under its
+    # cwd, so a rerouted exchange in the chat workdir would be replayed to the default endpoint
+    # by the next native turn (and a rerouted turn would resume a native session the provider is
+    # not cleared to read). A rerouted turn runs in `<chat>/.route-<provider>/`; the chat workdir
+    # keeps the native session untouched. `workdir` stays the chat dir (tasks, ledger, retries).
+    sess_wd = workdir
+    if l34_route.rerouted:
+        sess_wd = _route_session_dir(workdir, str(l34_route.provider or "route"))
+        try:
+            sess_wd.mkdir(parents=True, exist_ok=True)
+            # The re-supplied history view is generated in the chat dir (already withheld
+            # against the default engine, which is the stricter of the two); the worker
+            # reads it from its cwd.
+            _view = workdir / ".corvin-history.md"
+            if _view.is_file():
+                shutil.copyfile(_view, sess_wd / ".corvin-history.md")
+        except OSError as _re:
+            _turn_refused("l34_route_unavailable")
+            return ("[security] The sensitive-data route could not be built "
+                    f"({type(_re).__name__}) — request blocked.")
+        has_session = (any(sess_wd.glob(".claude*")) or (sess_wd / ".session_started").exists())
+        resume_session_id = None
+        try:
+            with open(sess_wd / ".main_session.json", encoding="utf-8") as _rf:
+                resume_session_id = json.load(_rf).get("session_id") or None
+        except (OSError, ValueError, AttributeError):
+            resume_session_id = None
+        if resume_session_id:
+            has_session = True
 
     # ADR-0133 CLAG M3 — chain integrity gate before OS-turn engine spawn (L22).
     clag_msg = _check_clag_spawn_or_fail(channel=channel, chat_key=chat_key)
@@ -5876,7 +5934,7 @@ def _call_claude_streaming_via_engine(
             # at exactly 120 s even with events still flowing.
             for ev in engine.spawn(
                 _spawn_prompt,  # ADR-0395: CEL brief prepended here (post-gate), not in system
-                working_dir=workdir,
+                working_dir=sess_wd,
                 env=env,
                 channel=channel,
                 chat_key=chat_key,
@@ -6522,21 +6580,21 @@ def _call_claude_streaming_via_engine(
             # engine's answer exists at this point; a vanished session dir
             # must heal, never raise the finished turn into poison.
             try:
-                (workdir / ".session_started").touch()
+                (sess_wd / ".session_started").touch()
             except OSError as _se:
                 # Broad OSError: Windows delete-pending -> PermissionError,
                 # dir-replaced-by-file -> NotADirectoryError; all must heal.
                 log(f"session dir unwritable mid-turn ({_se}) — recreating: {workdir}")
                 try:
-                    workdir.mkdir(parents=True, exist_ok=True)
-                    (workdir / ".session_started").touch()
+                    sess_wd.mkdir(parents=True, exist_ok=True)
+                    (sess_wd / ".session_started").touch()
                 except OSError as _e:
                     log(f"session dir recreate failed: {_e}")
 
         # ADR-0050 §1 — persist Claude's session_id for --resume on next turn.
         # Written only on a non-error turn so stale IDs don't accumulate.
         if _captured_session_id and not error_text and not timed_out:
-            _msf = workdir / ".main_session.json"
+            _msf = sess_wd / ".main_session.json"
             try:
                 try:
                     import fcntl as _fcntl  # noqa: PLC0415
@@ -6662,7 +6720,7 @@ def _call_claude_streaming_via_engine(
                         except Exception:  # noqa: BLE001
                             pass
                         try:
-                            _reset_session_state(workdir, reason="context_overflow", chat_key=str(chat_key or ""))
+                            _reset_session_state(sess_wd, reason="context_overflow", chat_key=str(chat_key or ""))
                         except Exception as _wipe_err:  # noqa: BLE001
                             log(f"session reset failed: {_wipe_err}")
                         return call_claude_streaming(
@@ -6689,7 +6747,7 @@ def _call_claude_streaming_via_engine(
                 log("--resume stale-marker detected — clearing resume-id, "
                     "retrying with --continue")
                 try:
-                    (workdir / ".main_session.json").unlink(missing_ok=True)
+                    (sess_wd / ".main_session.json").unlink(missing_ok=True)
                 except Exception:  # noqa: BLE001
                     pass
                 return _call_claude_streaming_via_engine(
@@ -6773,7 +6831,7 @@ def _call_claude_streaming_via_engine(
                     except Exception:  # noqa: BLE001
                         pass
                     try:
-                        _reset_session_state(workdir, reason="session_corrupted", chat_key=str(chat_key or ""))
+                        _reset_session_state(sess_wd, reason="session_corrupted", chat_key=str(chat_key or ""))
                     except Exception as wipe_err:  # noqa: BLE001
                         log(f"session reset failed: {wipe_err}")
                 elif has_session:
@@ -8230,8 +8288,10 @@ def _call_claude_streaming_impl(
     except Exception:  # noqa: BLE001
         pass
 
+    _route_problems: list[str] = []
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
-                           sender=sender, workload_hint=workload_hint)
+                           sender=sender, workload_hint=workload_hint,
+                           route_problem_out=_route_problems)
     env["VOICE_HOOK_RECURSION"] = "1"
 
     # Provider mode: keep BASE_URL + credential for proxy auth (ADR-0181 M3).
@@ -8746,6 +8806,7 @@ def _call_claude_streaming_impl(
             workdir, env, has_session,
             resume_session_id=_resume_id, msg_id=msg_id,
             workload_hint=workload_hint,
+            route_problem=(_route_problems[0] if _route_problems else None),
         )
     finally:
         _mark_turn_done(chat_key)

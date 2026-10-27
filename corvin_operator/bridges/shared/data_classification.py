@@ -1423,6 +1423,9 @@ def secret_floor_refusal(
     refused and ``data_flow.blocked`` is written to the tenant's chain (class name, engine
     id and rule only — never the prompt).
 
+    A caller-declared class never lowers the verdict: when a *prompt* accompanies it, the prompt
+    is classified too and a literal credential is refused whatever the declared class.
+
     Everything below SECRET is untouched: PUBLIC, INTERNAL and CONFIDENTIAL stay the
     operator's opt-in (the zero-config default of :func:`load_guard_for_tenant`), and no
     audit record is written for them.
@@ -1435,10 +1438,12 @@ def secret_floor_refusal(
     refusal never depends on it.
     """
     secret = DataClassification.SECRET
-    if classification is not None:
-        if DataClassification.parse(classification) is not secret:
-            return None
-    else:
+    # A declared class may only RAISE the verdict (ADR-2299): the video producer declares
+    # INTERNAL for its grounding pack, and a literal credential inside that text must still
+    # hit the floor. So the prompt, when there is one, is classified in every case.
+    declared_secret = (classification is not None
+                       and DataClassification.parse(classification) is secret)
+    if not declared_secret and (classification is None or prompt):
         try:
             if classify_task(prompt or "", persona=persona) is not secret:
                 return None
@@ -1447,6 +1452,8 @@ def secret_floor_refusal(
             _logging.getLogger(__name__).warning(
                 "secret_floor_refusal: classify_task failed (%r) — no policy, allowing", exc)
             return None
+    elif not declared_secret:
+        return None
 
     writer: "AuditWriter | None" = None
     try:

@@ -1384,6 +1384,18 @@ index line or a reference to the history view (the worker can Read/Grep
 `shared/test_session_ledger_e2e.py` (adapter process + `session_reset.py`),
 `tests/e2e/test_session_ledger_console_e2e.py` (console WebSocket).
 
+### One claude session per endpoint (ADR-2268)
+
+A turn rerouted to a declared provider runs in `<chat workdir>/.route-<provider>/`
+(`session_state.route_session_dir`), never in the chat workdir: the CLI resumes whatever session
+sits under its cwd, so a rerouted exchange there would be replayed to the default endpoint by the
+next native turn. The chat workdir keeps the native session; the route directory has its own
+`.session_started` / `.main_session.json`, so a rerouted turn never resumes the native session and
+a native turn never resumes a route session. `reset_claude_session_state` (`/new`, overflow,
+corruption) clears the chat's route sessions together with the native one and records the ledger
+boundary against the chat; a reset on a route directory records it against its parent. This is
+not a new reset reason: `manual` still is the only one that fences re-supply.
+
 ### CEL session identity on the bridge
 
 The adapter used to call the CEL with `session=None`, which pooled every chat

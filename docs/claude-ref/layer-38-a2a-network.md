@@ -2173,7 +2173,10 @@ reconnect handler and the relay never name the key, so a peer cannot set or chan
 
 **The rule.** Anything classified above `PUBLIC` toward an endpoint whose role is `unset` is refused with the closed
 reason `endpoint_role_unset` (`A2A.outbound_refused` in the chain, payload grade only), even when `peer_policy` released
-the grade. Public data is unaffected, and a stated role changes nothing else: `peer_policy` still applies. The rule sits
+the grade. "Classified" is what the rest of L34 means: `classify_task(..., detector=True)`, the highest of marker, secret
+bank, personal-data zone and the ADR-2268 detector bank (e-mail, IBAN, card, phone, tax id), so a national-format phone
+number is refused too. Residual gap: the detector is pattern based, free text such as a name with a diagnosis and no such
+token still grades `PUBLIC`; mark it `[class:...]` or state the endpoint's role. Public data is unaffected, and a stated role changes nothing else: `peer_policy` still applies. The rule sits
 in `RemoteTriggerSender.send` (every chat, MCP, CLI, group, conversation and outbox send), in
 `core.federation.delegation.delegate` (asked before its audit-first record, so a refused task is never recorded as
 delegated) and in the workflow gate `peer_gate.evaluate_peer_outbound`. Proof: `tests/federation/test_endpoint_gdpr_role_e2e.py`

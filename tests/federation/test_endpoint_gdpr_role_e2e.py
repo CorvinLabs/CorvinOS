@@ -199,3 +199,29 @@ def test_workflow_step_goes_once_the_role_is_stated_and_policy_still_applies(two
 def test_workflow_public_step_is_unaffected_by_an_unset_role(two):
     run = _run([_peer()], run_id="rolerun0004")
     assert run.state == "complete", run.error
+
+
+# ── "classified" means what the rest of L34 means (ADR-2268 detector bank, review L34-4) ──
+
+#: Detector-visible, heuristic-invisible: a national-format mobile number is PUBLIC to the
+#: marker/secret/zone heuristic alone and CONFIDENTIAL to the ADR-2268 detector bank.
+DETECTOR_ONLY = "Please call the customer back on 0151 2345 6789 today."
+DETECTOR_VISIBLE = ["Reply to jane.doe@example.com, IBAN DE89 3704 0044 0532 0130 00", DETECTOR_ONLY]
+
+
+@pytest.mark.parametrize("text", DETECTOR_VISIBLE)
+def test_unset_role_refuses_text_the_detector_bank_grades_above_public(federation_pair, text):
+    ctx = federation_pair
+    res = ctx["sender"].send("peer-B", text)
+    assert (res.ok, res.status) == (False, "rejected"), (res.status, res.error_detail)
+    assert res.data == {"reason": "endpoint_role_unset"}
+    assert _peer_received(ctx) == [] and _RecordingEngine.spawns == []
+    d = _a_events(ctx, "A2A.outbound_refused")[0]["details"]
+    assert d["data_class"] == "CONFIDENTIAL"
+    assert text not in json.dumps(ctx["sender"]._inst_forge_se.events)
+
+
+def test_a_stated_role_lets_detector_visible_text_go(federation_pair):
+    ctx = federation_pair
+    _set_role(ctx, "processor")
+    assert ctx["sender"].send("peer-B", DETECTOR_ONLY).ok

@@ -199,3 +199,32 @@ def test_a2a_worker_refuses_a_secret_without_policy_and_starts_no_engine(home):
     assert res.status == "rejected" and res.reason_code == "data_flow", res
     assert started == []
     assert any(r.get("event_type") == "data_flow.blocked" for r in _records(home))
+
+
+# ── an explicit class may only RAISE (review L34-3): the video producer declares INTERNAL ──
+
+
+@pytest.mark.parametrize("declared", ["INTERNAL", "internal", "PUBLIC", "CONFIDENTIAL"])
+def test_a_declared_lower_class_cannot_hide_a_credential_in_the_prompt(home, declared):
+    out = spawn_gates.check_l34("claude_code", "_default", classification=declared,
+                                prompt=SECRET_PROMPT, persona="assistant", corvin_home=home)
+    assert out is not None and "SECRET" in out
+    blocked = [r for r in _records(home) if r.get("event_type") == "data_flow.blocked"]
+    assert len(blocked) == 1, _records(home)
+    assert TOKEN_FRAGMENT not in _chain(home).read_text("utf-8")
+
+
+def test_console_gate_with_declared_internal_refuses_a_credential_in_the_pack(home):
+    """The route the video producer takes: ``classification="INTERNAL"`` plus the pack text."""
+    from corvin_console import _spawn_gates as console_gates
+    out = console_gates.check_console_spawn_or_refusal(
+        "grounding pack: " + SECRET_PROMPT, tenant_id="_default", persona="assistant",
+        channel="web", chat_key="video:j1", engine_id="claude_code", classification="INTERNAL")
+    assert out is not None and "SECRET" in out
+
+
+def test_a_declared_internal_class_with_an_ordinary_prompt_still_passes(home):
+    assert spawn_gates.check_l34("claude_code", "_default", classification="INTERNAL",
+                                 prompt="narration about the quarterly roadmap",
+                                 persona="assistant", corvin_home=home) is None
+    assert _records(home) == []

@@ -184,5 +184,41 @@ class ConsoleSensitiveRerouteE2E(unittest.TestCase):
         self.assertNotIn("jane.doe", text)
 
 
+    # -- ADR-2268: one claude session per endpoint ------------------------------------------
+    def _args(self) -> list[str]:
+        return self.argdump.read_text().splitlines()
+
+    def _fresh_spawn(self) -> None:
+        self.dump.unlink(missing_ok=True)
+        self.argdump.unlink(missing_ok=True)
+
+    def test_a_native_turn_after_a_reroute_does_not_resume_the_rerouted_session(self) -> None:
+        """Same console session: turn 1 rerouted, turn 2 public. --continue would replay turn 1
+        (prompt + answer) to the default endpoint; turn 3 resumes the NATIVE session again."""
+        self._write(_policy(allow_default=True))
+        sess = self.cr.create_session("_default")
+        _drain(self.cr.stream_turn(sess, MAIL))
+        self.assertEqual(self._spawn_env().get("ANTHROPIC_BASE_URL"), f"https://{PROVIDER_HOST}/v1")
+        self._fresh_spawn()
+        _drain(self.cr.stream_turn(sess, "write a haiku about spring"))
+        self.assertNotEqual(self._spawn_env().get("ANTHROPIC_BASE_URL"), f"https://{PROVIDER_HOST}/v1")
+        self.assertNotIn("--continue", self._args(), "native turn resumed the rerouted session")
+        self._fresh_spawn()
+        _drain(self.cr.stream_turn(sess, "and another one about autumn"))
+        self.assertIn("--continue", self._args(), "the native session must resume normally")
+
+    def test_a_rerouted_turn_does_not_resume_the_native_session(self) -> None:
+        self._write(_policy(allow_default=True))
+        sess = self.cr.create_session("_default")
+        _drain(self.cr.stream_turn(sess, "write a haiku about spring"))
+        self._fresh_spawn()
+        _drain(self.cr.stream_turn(sess, MAIL))
+        self.assertEqual(self._spawn_env().get("ANTHROPIC_BASE_URL"), f"https://{PROVIDER_HOST}/v1")
+        self.assertNotIn("--continue", self._args(), "rerouted turn resumed the native session")
+        self._fresh_spawn()
+        _drain(self.cr.stream_turn(sess, MAIL))
+        self.assertIn("--continue", self._args(), "a rerouted chat keeps its own session")
+
+
 if __name__ == "__main__":
     unittest.main()

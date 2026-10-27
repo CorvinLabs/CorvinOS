@@ -160,6 +160,10 @@ with zero egress — no bundled engine is — and writes `data_flow.blocked` (cl
 rule; never the prompt) to the tenant's chain. Every spawn-site gate that reads a `None`
 guard asks it: `spawn_gates.check_l34` (bridge, console, ACS), the delegation gate and the
 inbound A2A worker. A classifier error there allows (no policy: an error is not evidence).
+A caller-declared class never lowers the verdict: when a prompt accompanies it (the video
+producer declares `INTERNAL` for its grounding pack and narration), the prompt is classified
+too and a literal credential is refused whatever the declared class. A tenant WITH a policy is
+still judged by the class the caller declared (residual gap: there the prompt is not re-read).
 
 `DataClassification.parse()` returns `None` for an unknown value (it used to
 return `INTERNAL`, which every default row allows on a cloud engine — a typo in a
@@ -306,6 +310,19 @@ producing a guard that quietly allows what its own table forbids:
   itself, so a rerouted turn may carry less history than the provider would be allowed to see
   (over-withholding, never leaking), and `ClaudeCodeEngine` still strips a `provider/` prefix
   from a Claude-lineage model id.
+  **One claude session per endpoint.** The CLI resumes whatever session sits under its cwd, so a
+  rerouted exchange in the chat workdir would be replayed to the default endpoint by the next
+  native turn (and a rerouted turn would resume a native session the provider is not cleared to
+  read). A rerouted turn therefore runs in `<chat workdir>/.route-<provider>/` (bridge:
+  `session_state.route_session_dir`; console: the same directory plus a `.cli_session` marker per
+  directory), the native session stays in the chat workdir, a native turn never carries
+  `--resume`/`--continue` of a route session and the reverse; a following turn on the same route
+  resumes that route's own session. `/new` and every session reset clear the route sessions with
+  the native one. The rerouted turn starts without the native CLI transcript; its history comes
+  from the ledger view (copied into the route directory, withheld against `claude_code`).
+  A provider assigned to `claude_code` whose route cannot be built refuses the bridge turn as it
+  does the console turn (`apply_claude_code_provider_env` returns the reason; T-0229).
+  E2E: `test_bridge_reroute_session_isolation_e2e.py`, `test_console_sensitive_reroute_e2e.py`.
   Adversarial record (T-0223, `test_sensitive_route_adversarial.py`): the detector folds zero-width/format characters and compatibility forms (NFKC) and scans original and folded text, so a zero-width space or a full-width `@` no longer hides an address. **Known limit:** a spelled-out address (`jane dot doe at example dot com`) is not detected; the `[class:...]` marker and the matrix are the mitigation. No route case degrades to the default endpoint: a missing credential, unknown or undeclared provider, illegal model id or changed host raises `ProviderRouteError`.
   E2E: `test_bridge_sensitive_reroute_e2e.py`, `core/console/tests/test_console_sensitive_reroute_e2e.py`.
 
