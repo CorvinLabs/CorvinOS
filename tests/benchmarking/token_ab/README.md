@@ -32,6 +32,13 @@ CLAUDE_LIVE_E2E=1 pytest tests/benchmarking/token_ab/test_token_ab_live.py -q -s
 CLAUDE_LIVE_PILOT=1 pytest tests/benchmarking/token_ab/test_token_ab_pilot_live.py -q -s   # Opus/Sonnet/Haiku pilot, ~0.7 USD, capped at 0.90
 ```
 
+Profiles: `smoke` (60 tasks) and `full` (240) are the easy corpus: Opus, Sonnet and Haiku all solved the smoke tasks in the
+2026-10-27 pilot. `hard` (60 tasks, `hard_tasks.py`: long-table aggregation, six-person puzzles, multi-step arithmetic, text-rule
+chains, code with edge cases) is meant to separate models. First Haiku-only probe (2026-10-27, 60 tasks, 0.21 USD): success 0.933,
+and the failures sit in one category, `text_rules` (8 of 12); the other four categories were 12 of 12, so they still do not
+separate anything for Haiku. All four failures were checked by hand: genuine letter-level model errors, the oracle was right.
+An ADOPT on fewer tasks than the power formula asks for is capped to INCONCLUSIVE (`cap_underpowered`, default on).
+
 Measured price of one call of ~6.1k context tokens (2026-10-27, CLI `total_cost_usd`): Opus 5.5 0.0440 USD, Sonnet 5.5 0.0220,
 Haiku 5.5 about 0.0015. Plan costs from these, not from rate-card factors: a full run (240 tasks, 3 repetitions, 3 direct arms)
 is about 720 calls per arm, i.e. roughly 32 USD for Opus alone before the other arms.

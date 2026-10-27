@@ -5,7 +5,10 @@ Every task has a deterministic oracle (exact answer or hidden unit tests), so no
 Same seed + same profile => byte-identical JSONL (the SHA-256 is pinned in corpus/MANIFEST.json).
 
 Usage:
-    gen_corpus.py [--profile smoke|full] [--out PATH] [--check]
+    gen_corpus.py [--profile smoke|full|hard] [--out PATH] [--check]
+
+Profiles smoke and full are the easy corpus (all of Opus, Sonnet and Haiku solved the smoke tasks in the 2026-10-27 pilot);
+profile hard (hard_tasks.py) is built to separate the models.
 """
 import argparse
 import hashlib
@@ -15,11 +18,15 @@ import random
 import sys
 from pathlib import Path
 
-SEED = 20261027
-PROFILES = {"smoke": 12, "full": 48}  # tasks per category
-CATEGORIES = ["extract", "transform", "arith", "logic", "code"]
-LABEL = {"extract": "mechanical", "transform": "mechanical", "arith": "reasoning", "logic": "reasoning", "code": "reasoning"}
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from hard_tasks import HARD_CATEGORIES, HARD_GENS, HARD_LABEL  # noqa: E402
+
+SEED = 20261027
+PROFILES = {"smoke": 12, "full": 48, "hard": 12}  # tasks per category
+CATEGORIES = ["extract", "transform", "arith", "logic", "code"]
+PROFILE_CATEGORIES = {"hard": HARD_CATEGORIES}  # every other profile uses CATEGORIES
+LABEL = {"extract": "mechanical", "transform": "mechanical", "arith": "reasoning", "logic": "reasoning", "code": "reasoning", **HARD_LABEL}
 ANSWER_RULE = "Finish with a final line of the exact form `ANSWER: <value>` and nothing after it."
 
 NAMES = ["Alma", "Boris", "Chen", "Dara", "Emil", "Fiona", "Goran", "Hana", "Ivo", "Jana", "Kofi", "Lena", "Mika", "Nora",
@@ -202,13 +209,13 @@ def gen_code(rng, i):
                 reference_code=f"# reference generated from CODE_SPECS[{i % len(CODE_SPECS)}] (lambda in gen_corpus.py)")
 
 
-GENS = {"extract": gen_extract, "transform": gen_transform, "arith": gen_arith, "logic": gen_logic, "code": gen_code}
+GENS = {"extract": gen_extract, "transform": gen_transform, "arith": gen_arith, "logic": gen_logic, "code": gen_code, **HARD_GENS}
 
 
 def build(profile):
     n = PROFILES[profile]
     tasks = []
-    for cat in CATEGORIES:
+    for cat in PROFILE_CATEGORIES.get(profile, CATEGORIES):
         rng = random.Random(f"{SEED}|{profile}|{cat}")
         for i in range(n):
             t = GENS[cat](rng, i)

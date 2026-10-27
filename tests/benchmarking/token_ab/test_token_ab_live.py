@@ -64,3 +64,31 @@ def test_live_haiku_benchmark_runs_end_to_end(tmp_path):
     spent = sum(c["cost_usd"] for c in calls)
     print(f"\nLIVE calls={len(calls)} spent_usd={spent:.4f} raw_sha256={s['raw_sha256']}")
     print((run / "report.md").read_text(encoding="utf-8"))
+
+
+def test_live_haiku_hard_probe(tmp_path):
+    """Does profile `hard` separate models at all? Haiku only (default test model), 60 tasks, 1 repetition, two identical arms,
+    hard caps 130 calls / 0.60 USD. The result is printed; the only hard assertion is that the machinery ran and measured."""
+    rc = ab.main(["run", "--runner", "claude", "--profile", "hard", "--reps", "1", "--seed", "20261027",
+                  "--arms-config", str(HERE / "config" / "arms.hard_probe.json"), "--run-id", "hard-probe",
+                  "--results-dir", str(tmp_path), "--max-calls", "130", "--max-cost-usd", "0.6", "--allow-code-exec"])
+    run = tmp_path / "hard-probe"
+    out = HERE / "results" / "hard-probe-last"
+    shutil.copytree(run, out, dirs_exist_ok=True)
+    man = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    assert rc == 0, f"probe did not complete: status={man['status']}"
+    recs = ab.load_raw(run)
+    assert len(recs) == 120
+    errors = [c["error"] for r in recs for c in r["calls"] if c["error"]]
+    assert not errors, f"{len(errors)} calls failed: {errors[:5]}"
+    ab.main(["analyze", "--run-dir", str(run), "--bootstrap", "3000"])
+    shutil.copytree(run, out, dirs_exist_ok=True)
+    s = json.loads((run / "summary.json").read_text(encoding="utf-8"))
+    spent = sum(c["cost_usd"] for r in recs for c in r["calls"])
+    by_cat = {}
+    for r in recs:
+        if r["arm"] == "direct_haiku":
+            by_cat.setdefault(r["category"], []).append(r["correct"])
+    print(f"\nHARD-PROBE spent_usd={spent:.4f} haiku_success={s['arms']['direct_haiku']['success']['mean']:.3f}")
+    print("HARD-PROBE per category (direct_haiku):", {k: f"{sum(v)}/{len(v)}" for k, v in sorted(by_cat.items())})
+    print((run / "report.md").read_text(encoding="utf-8"))

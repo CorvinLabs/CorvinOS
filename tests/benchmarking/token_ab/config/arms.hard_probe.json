@@ -1,0 +1,17 @@
+{
+  "baseline": "direct_haiku",
+  "decision": {
+    "delta": 0.15,
+    "alpha": 0.05,
+    "bootstrap": 5000,
+    "min_stratum_tasks": 12
+  },
+  "arms": [
+    {"name": "direct_haiku", "kind": "direct", "tier": "haiku"},
+    {"name": "baseline_retest", "kind": "direct", "tier": "haiku", "role": "retest"}
+  ],
+  "notes": {
+    "purpose": "Haiku-only probe of the hard profile: does it separate models at all? If the cheapest model already solves every task, the profile is no better than smoke. Two identical arms give the test-retest noise on this corpus.",
+    "min_stratum_tasks": "12 so that each of the five hard categories (12 tasks) is evaluated with the Holm correction instead of staying exploratory."
+  }
+}

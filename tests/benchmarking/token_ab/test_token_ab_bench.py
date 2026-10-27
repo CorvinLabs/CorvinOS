@@ -27,7 +27,7 @@ def run_fake(tmp, name, seed=1, extra=()):
 class CorpusTests(unittest.TestCase):
     def test_pinned_hashes_reproduce(self):
         man = json.loads((HERE / "corpus" / "MANIFEST.json").read_text(encoding="utf-8"))
-        for profile in ("smoke", "full"):
+        for profile in ("smoke", "full", "hard"):
             self.assertEqual(gc.sha256(gc.dumps(gc.build(profile))), man["profiles"][profile]["sha256"], profile)
 
     def test_loader_verifies_hash_and_shape(self):
@@ -57,7 +57,7 @@ class CorpusTests(unittest.TestCase):
 class GraderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tasks, _ = ab.load_corpus("smoke")
+        cls.tasks = ab.load_corpus("smoke")[0] + ab.load_corpus("hard")[0]  # the easy and the hard corpus
 
     def test_reference_passes_and_wrong_fails_for_every_task(self):
         for t in self.tasks:
@@ -82,8 +82,9 @@ class GraderTests(unittest.TestCase):
 
 
 class StatsTests(unittest.TestCase):
-    def cmp(self, tok_x, tok_b, suc_x, suc_b, seed="s"):
-        return ab.compare(tok_x, tok_b, suc_x, suc_b, 0.05, 0.05, 1000, seed)
+    def cmp(self, tok_x, tok_b, suc_x, suc_b, seed="s", cap=False):
+        # cap=False tests the pure decision rule; the cap has its own tests (CapTests)
+        return ab.compare(tok_x, tok_b, suc_x, suc_b, 0.05, 0.05, 1000, seed, cap_underpowered=cap)
 
     def test_identical_arms_are_inconclusive_never_adopted(self):
         c = self.cmp([100] * 40, [100] * 40, [1.0] * 40, [1.0] * 40)
@@ -285,7 +286,7 @@ class HolmTests(unittest.TestCase):
         self.assertEqual(ab.holm_reject({"a": 0.001, "b": 0.5, "c": 0.0001}, 0.05), {"c": True, "a": True, "b": False})
 
 
-def _synth_run(tmp, name, rules, *, min_tasks=10, delta=0.05, roles=None, per_cat=12):
+def _synth_run(tmp, name, rules, *, min_tasks=10, delta=0.05, roles=None, per_cat=12, cap=False):
     """A run directory built from rules {arm: {category: (n_failures, cost)}} with a perfect baseline `base` (cost 100)."""
     run = Path(tmp) / name
     run.mkdir(parents=True)
@@ -302,7 +303,8 @@ def _synth_run(tmp, name, rules, *, min_tasks=10, delta=0.05, roles=None, per_ca
     (run / "raw.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
     man = {"run_id": name, "runner": "claude", "seed": 1, "reps": 1, "models": {}, "python": "3", "claude_version": None,
            "harness_sha256": "x", "config_sha256": "x", "corpus": {"profile": "smoke", "sha256": "x", "tasks_run": 3 * per_cat, "skipped": []},
-           "arms": arms, "roles": roles or {}, "decision": {"delta": delta, "alpha": 0.05, "bootstrap": 500, "min_stratum_tasks": min_tasks, "baseline": "base"}}
+           "arms": arms, "roles": roles or {}, "decision": {"delta": delta, "alpha": 0.05, "bootstrap": 500, "min_stratum_tasks": min_tasks, "baseline": "base",
+                                                                              "cap_underpowered": cap}}
     (run / "manifest.json").write_text(json.dumps(man), encoding="utf-8")
     return run
 
@@ -363,6 +365,125 @@ class ClassGateTests(unittest.TestCase):
         self.assertIn("Klassen-Gate", report)
         self.assertIn("Kontrollarm", report)
         self.assertIn("nach Holm", report)
+
+
+class CapTests(unittest.TestCase):
+    """An ADOPT on too few tasks must not read as certainty (pilot 2026-10-27: 10 tasks, success 1.000 on all arms)."""
+
+    def cmp(self, tok_x, tok_b, suc_x, suc_b, cap=True):
+        return ab.compare(tok_x, tok_b, suc_x, suc_b, 0.05, 0.05, 1000, "s", cap_underpowered=cap)
+
+    def test_adopt_on_too_few_tasks_is_capped_to_inconclusive(self):
+        c = self.cmp([40] * 10, [100] * 10, [1.0] * 10, [1.0] * 10)
+        self.assertTrue(c["power"]["underpowered"] and c["saves"] and c["non_inferior"])
+        self.assertEqual((c["decision"], c["capped_underpowered"]), ("INCONCLUSIVE", True))
+
+    def test_the_cap_can_be_switched_off(self):
+        c = self.cmp([40] * 10, [100] * 10, [1.0] * 10, [1.0] * 10, cap=False)
+        self.assertEqual((c["decision"], c["capped_underpowered"]), ("ADOPT", False))
+
+    def test_an_adequately_powered_adopt_stays(self):
+        n = ab.n_required(0.95, 0.05) + 5
+        c = self.cmp([40] * n, [100] * n, [1.0] * n, [1.0] * n)
+        self.assertEqual((c["decision"], c["capped_underpowered"]), ("ADOPT", False))
+
+    def test_reject_is_never_capped(self):
+        c = self.cmp([10] * 10, [100] * 10, [0.5] * 10, [1.0] * 10)
+        self.assertEqual((c["decision"], c["capped_underpowered"]), ("REJECT", False))
+
+    def test_analysis_and_report_name_the_cap(self):
+        with tempfile.TemporaryDirectory() as t:
+            run = _synth_run(t, "r", {"x": {"a": (0, 40), "b": (0, 40), "c": (0, 40)}}, cap=True)
+            man = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+            s = ab.analyze(run, 500)
+            report = ab.render_report(s, man)
+        c = s["comparisons"]["x"]
+        self.assertEqual((c["decision"], c["capped_underpowered"]), ("INCONCLUSIVE", True))
+        self.assertIn("ADOPT gedeckelt", report)
+
+
+class HardCorpusTests(unittest.TestCase):
+    """Profile `hard`: built to separate the models, still with deterministic oracles."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tasks, _ = ab.load_corpus("hard")
+
+    def test_shape(self):
+        import hard_tasks as ht
+        self.assertEqual(len(self.tasks), 60)
+        self.assertEqual({t["category"] for t in self.tasks}, set(ht.HARD_CATEGORIES))
+        self.assertEqual({t["label"] for t in self.tasks}, {"mechanical", "reasoning"})
+        self.assertEqual(len({t["task_id"] for t in self.tasks}), 60)
+        for t in (x for x in self.tasks if x["category"] == "code_hard"):
+            self.assertEqual(len(t["tests"]), 24)
+
+    def test_table_agg_expectations_recomputed_independently_from_the_prompt(self):
+        import re
+        seen = set()
+        for t in (x for x in self.tasks if x["category"] == "table_agg"):
+            head, _, rest = t["prompt"].partition(":\n")
+            table, _, tail = rest.partition("\n\n")
+            rows = [r.split(",") for r in table.splitlines()[1:]]
+            q = tail.split(" Finish with")[0]
+            m = re.match(r"What is the total salary of all rows with dept = (\w+), hire_year >= (\d+) and status = active\?", q)
+            if m:
+                want = sum(int(r[4]) for r in rows if r[1] == m[1] and int(r[3]) >= int(m[2]) and r[5] == "active")
+                seen.add("sum")
+            m2 = re.match(r"In how many distinct cities are there at least 2 rows with dept = (\w+) and salary > (\d+)\?", q)
+            if m2:
+                from collections import Counter
+                cnt = Counter(r[2] for r in rows if r[1] == m2[1] and int(r[4]) > int(m2[2]))
+                want = sum(1 for v in cnt.values() if v >= 2)
+                seen.add("cities")
+            m3 = re.match(r"Among the rows with status = active and city = (\w+), which id has the highest salary\?", q)
+            if m3:
+                want = max((r for r in rows if r[2] == m3[1] and r[5] == "active"), key=lambda r: int(r[4]))[0]
+                seen.add("max")
+            self.assertEqual(str(want), t["expected"], t["task_id"])
+        self.assertEqual(seen, {"sum", "cities", "max"})
+
+    def test_a_perfect_answer_is_graded_correct_and_a_flipped_one_is_not_for_every_task(self):
+        for t in self.tasks:
+            self.assertTrue(ab.is_correct(t, ab.reference_text(t, True)), t["task_id"])
+            self.assertFalse(ab.is_correct(t, ab.reference_text(t, False)), t["task_id"])
+
+
+class ReferenceFunctionTests(unittest.TestCase):
+    """The expected values of the code_hard tasks come from these functions, so they are checked against hand-computed cases."""
+
+    def test_hand_computed_cases(self):
+        import hard_tasks as h
+        self.assertEqual(h.merge_intervals([[1, 3], [2, 6], [8, 10], [15, 18]]), [[1, 6], [8, 10], [15, 18]])
+        self.assertEqual(h.merge_intervals([[1, 2], [2, 3]]), [[1, 3]])  # touching intervals merge
+        self.assertEqual(h.merge_intervals([]), [])
+        self.assertEqual(h.roman_to_int("MCMXCIV"), 1994)
+        self.assertEqual(h.int_to_roman(1994), "MCMXCIV")
+        self.assertEqual(h.eval_expr("2 + 3 * (4 - 1)"), 11)
+        self.assertEqual(h.edit_distance("kitten", "sitting"), 3)
+        self.assertEqual(h.edit_distance("", "abc"), 3)
+        self.assertEqual(h.lcs_length("abcde", "ace"), 3)
+        self.assertEqual(h.count_islands(["11000", "11000", "00100", "00011"]), 3)
+        self.assertEqual(h.topo_lex(4, [[0, 1], [0, 2], [1, 3], [2, 3]]), [0, 1, 2, 3])
+        self.assertEqual(h.topo_lex(3, [[2, 0], [1, 0]]), [1, 2, 0])  # lexicographically smallest, not insertion order
+        self.assertEqual(h.topo_lex(2, [[0, 1], [1, 0]]), [])  # a cycle
+        self.assertEqual(h.shortest_path(3, [[0, 1, 1], [1, 2, 2], [0, 2, 5]], 0, 2), 3)
+        self.assertEqual(h.shortest_path(3, [[0, 1, 1]], 0, 2), -1)
+        self.assertEqual(h.first_bracket_error("([)]"), 2)
+        self.assertEqual(h.first_bracket_error("(("), 2)  # never closed: the length
+        self.assertEqual(h.first_bracket_error("a(b)[c]"), -1)
+        self.assertEqual(h.first_bracket_error("a)"), 1)
+        self.assertEqual(h.rotate_matrix([[1, 2, 3], [4, 5, 6]]), [[4, 1], [5, 2], [6, 3]])
+        self.assertEqual(h.spiral_order([[1, 2, 3], [4, 5, 6], [7, 8, 9]]), [1, 2, 3, 6, 9, 8, 7, 4, 5])
+        self.assertEqual(h.spiral_order([[1, 2, 3]]), [1, 2, 3])
+        self.assertEqual(h.spiral_order([[1], [2], [3]]), [1, 2, 3])
+        self.assertEqual(h.add_business_days("2026-10-23", 1), "2026-10-26")  # Friday + 1 weekday = Monday
+        self.assertEqual(h.add_business_days("2026-10-26", 5), "2026-11-02")
+        self.assertEqual(h.add_business_days("2026-10-24", 0), "2026-10-24")  # n = 0 returns the start unchanged
+
+    def test_roman_roundtrip_for_every_value(self):
+        import hard_tasks as h
+        self.assertTrue(all(h.roman_to_int(h.int_to_roman(n)) == n for n in range(1, 4000)))
 
 
 if __name__ == "__main__":

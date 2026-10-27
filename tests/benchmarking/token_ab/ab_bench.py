@@ -358,8 +358,13 @@ def n_required(p0, delta, alpha=0.05, power=0.8):
     return math.ceil((nd.inv_cdf(1 - alpha) + nd.inv_cdf(power)) ** 2 * 2 * p * (1 - p) / delta ** 2)
 
 
-def compare(tok_x, tok_b, suc_x, suc_b, delta, alpha, boot, seed):
-    """Paired cluster bootstrap over tasks. tok_*: primary cost per task, suc_*: success rate per task."""
+def compare(tok_x, tok_b, suc_x, suc_b, delta, alpha, boot, seed, cap_underpowered=True):
+    """Paired cluster bootstrap over tasks. tok_*: primary cost per task, suc_*: success rate per task.
+
+    ``cap_underpowered``: an ADOPT on fewer tasks than the power formula asks for is capped to INCONCLUSIVE. With a handful of
+    tasks and no variance the bootstrap interval collapses to a point, which would read as certainty (found by the
+    2026-10-27 pilot: 10 tasks, all solved by every arm, "ADOPT" at n 10 < 27). REJECT is never capped: a visible harm or a
+    higher cost is not made less true by a small sample."""
     n = len(tok_x)
     rng = random.Random(seed)
     sav, dsu = [], []
@@ -380,7 +385,10 @@ def compare(tok_x, tok_b, suc_x, suc_b, delta, alpha, boot, seed):
     req = n_required(p_b, delta, alpha)
     # one-sided bootstrap p-value of H0: "the success difference is at most -delta" (small = non-inferiority is supported)
     p_ni = (1 + sum(1 for x in dsu if x <= -delta)) / (boot + 1)
-    return {"n_tasks": n, "savings": {"point": s_pt, "ci": [s_lo, s_hi]}, "d_success": {"point": d_pt, "lo_one_sided": d_lo, "hi_one_sided": d_hi},
+    capped = bool(cap_underpowered and decision == "ADOPT" and n < req)
+    if capped:
+        decision = "INCONCLUSIVE"
+    return {"capped_underpowered": capped, "n_tasks": n, "savings": {"point": s_pt, "ci": [s_lo, s_hi]}, "d_success": {"point": d_pt, "lo_one_sided": d_lo, "hi_one_sided": d_hi},
             "non_inferior": non_inf, "inferior": inferior, "saves": saves, "costs_more": costs_more, "decision": decision,
             "p_noninferior": p_ni, "power": {"n_required_unpaired": req, "n_have": n, "underpowered": n < req}}
 
@@ -476,7 +484,8 @@ def analyze(run_dir, boot=None):
             return None
         return compare([per_task(arm, t, "metric") for t in subset], [per_task(baseline, t, "metric") for t in subset],
                        [per_task(arm, t, "success") for t in subset], [per_task(baseline, t, "success") for t in subset],
-                       cfg["delta"], cfg["alpha"], boot, f"{man['seed']}|boot|{arm}|{tag}")
+                       cfg["delta"], cfg["alpha"], boot, f"{man['seed']}|boot|{arm}|{tag}",
+                       cap_underpowered=cfg.get("cap_underpowered", True))
 
     comparisons = {}
     for a in arms:
@@ -534,9 +543,11 @@ def render_report(summary, man):
         pw = c["power"]
         pn = f"unterpowert (n {pw['n_have']} < {pw['n_required_unpaired']})" if pw["underpowered"] else "ok"
         L.append(f"| {a} | {c['savings']['point'] * 100:+.1f} % | {fmt_ci(c['savings']['ci'])} | {c['d_success']['point']:+.3f} | "
-                 f"{c['d_success']['lo_one_sided']:+.3f} | {'ja' if c['non_inferior'] else 'nein'} | **{c['decision']}** | {pn} |")
+                 f"{c['d_success']['lo_one_sided']:+.3f} | {'ja' if c['non_inferior'] else 'nein'} | **{c['decision']}**"
+                 f"{' (ADOPT gedeckelt: unterpowert)' if c.get('capped_underpowered') else ''} | {pn} |")
     L += ["", "Entscheidungsregel: ADOPT nur wenn die untere einseitige Grenze von Δ Erfolg ≥ −δ liegt UND das Ersparnis-Intervall über 0 liegt. "
-          "REJECT, wenn die obere Grenze unter −δ liegt oder die Variante teurer ist. Sonst INCONCLUSIVE. „Unterpowert“ heißt: Mit dieser Aufgabenzahl "
+          "REJECT, wenn die obere Grenze unter −δ liegt oder die Variante teurer ist. Sonst INCONCLUSIVE. Ein ADOPT bei zu wenigen Aufgaben wird zu INCONCLUSIVE gedeckelt "
+          "(`cap_underpowered`, Standard an). „Unterpowert“ heißt: Mit dieser Aufgabenzahl "
           "ist Nicht-Unterlegenheit bei δ nur unter hoher Paarkorrelation belegbar; mehr Aufgaben (Profil `full`) oder größeres δ nötig.", "",
           "## Strata (Kategorien: Holm-korrigiert, sofern genug Aufgaben; Labels explorativ)", "",
           "| Arm | Stratum | n | Ersparnis | Δ Erfolg (untere Grenze) | p (nicht unterlegen) | Entscheidung | nach Holm | explorativ |", "|---|---|---|---|---|---|---|---|---|"]
@@ -676,7 +687,7 @@ def main(argv=None):
     sp = ap.add_subparsers(dest="cmd", required=True)
     r = sp.add_parser("run")
     r.add_argument("--runner", choices=["fake", "claude"], required=True)
-    r.add_argument("--profile", choices=["smoke", "full"], default="smoke")
+    r.add_argument("--profile", choices=["smoke", "full", "hard"], default="smoke")
     r.add_argument("--seed", type=int, default=1)
     r.add_argument("--reps", type=int, default=3)
     r.add_argument("--arms", default=None)

@@ -6,6 +6,12 @@
       "sha256": "10f4f31721382bd7839922c58edea37958f9b39f17aae30b16bf8dd4018be6bb",
       "tasks": 240
     },
+    "hard": {
+      "file": "tasks_hard.jsonl",
+      "per_category": 12,
+      "sha256": "c2e827df97cbefb40baa5eda874037786f1f7cdd136583178e73b2048d270287",
+      "tasks": 60
+    },
     "smoke": {
       "file": "tasks_smoke.jsonl",
       "per_category": 12,
