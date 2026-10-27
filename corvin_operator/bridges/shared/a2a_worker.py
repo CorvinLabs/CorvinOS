@@ -1290,6 +1290,25 @@ def _collect_within_ttl(engine: Any, prompt: str, spawn_kwargs: dict, ttl_s: flo
     return result
 
 
+def _open_harvest_fd(entry: Path, expect: "tuple[int, int]") -> "int | None":
+    """Open ``entry`` read-only without following a symlink and return the descriptor only when the OPEN
+    file is a regular file with one link and the inode the harvest inspected; else ``None``."""
+    import stat as _stat  # noqa: PLC0415
+
+    try:
+        fd = os.open(entry, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if (_stat.S_ISREG(st.st_mode) and st.st_nlink == 1 and (st.st_dev, st.st_ino) == tuple(expect)):
+            return fd
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
 def _harvest_outputs(out_dir: Path, result_schema: dict) -> list:
     """Attachment list only; see :func:`_harvest_report` for the same harvest with its drop report."""
     return _harvest_report(out_dir, result_schema)[0]
@@ -1395,27 +1414,46 @@ def _harvest_report(out_dir: Path, result_schema: dict,
             capped = "count_cap"
             dropped[capped] = dropped.get(capped, 0) + 1
             continue
-        size = entry.stat().st_size
-        if total_bytes + size > MAX_ATTACHMENTS_TOTAL_BYTES:
-            if by_reference:
-                import a2a_objects  # noqa: PLC0415 — same directory, only on this path
-                staged, why = a2a_objects.stage_file(entry, expect=(_st.st_dev, _st.st_ino))
-                if staged is not None:
-                    staged_out.append(staged)  # type: ignore[union-attr]
-                else:
-                    key = why[len("object_"):] if why and why.startswith("object_") else (why or "unreadable")
-                    dropped[key] = dropped.get(key, 0) + 1
-                continue
-            capped = "byte_cap"
-            dropped[capped] = dropped.get(capped, 0) + 1
-            continue
-        try:
-            att = Attachment.from_file(entry)
-        except Exception:
+        # TOCTOU: everything above judged the DIRECTORY ENTRY by path; a leftover worker process can swap
+        # it for a symlink/hardlink between that and the read. Open once with O_NOFOLLOW, judge the OPEN
+        # descriptor (regular, one link, the very inode lstat saw) and read from it, never by path again.
+        fd = _open_harvest_fd(entry, (_st.st_dev, _st.st_ino))
+        if fd is None:
             dropped["unreadable"] = dropped.get("unreadable", 0) + 1
             continue
-        out.append(att.to_dict())
-        total_bytes += size
+        try:
+            size = os.fstat(fd).st_size
+            if total_bytes + size <= MAX_ATTACHMENTS_TOTAL_BYTES:
+                with os.fdopen(fd, "rb", closefd=True) as fh:
+                    fd = -1
+                    raw = fh.read(size + 1)
+                if len(raw) != size:  # grew or shrank under us: not the file that was judged
+                    dropped["unreadable"] = dropped.get("unreadable", 0) + 1
+                    continue
+                import a2a_attachments as _aa  # noqa: PLC0415 — same directory
+                out.append(Attachment.from_bytes(
+                    name=entry.name, mime=_aa._guess_mime(entry), content=raw).to_dict())
+                total_bytes += size
+                continue
+        except OSError:
+            dropped["unreadable"] = dropped.get("unreadable", 0) + 1
+            continue
+        finally:
+            if fd is not None and fd >= 0:
+                os.close(fd)
+        # Over the inline budget: by reference (stage_file re-opens with the same O_NOFOLLOW + inode check)
+        # or counted as byte_cap.
+        if by_reference:
+            import a2a_objects  # noqa: PLC0415 — same directory, only on this path
+            staged, why = a2a_objects.stage_file(entry, expect=(_st.st_dev, _st.st_ino))
+            if staged is not None:
+                staged_out.append(staged)  # type: ignore[union-attr]
+            else:
+                key = why[len("object_"):] if why and why.startswith("object_") else (why or "unreadable")
+                dropped[key] = dropped.get(key, 0) + 1
+            continue
+        capped = "byte_cap"
+        dropped[capped] = dropped.get(capped, 0) + 1
 
     return out, dropped
 

@@ -258,6 +258,18 @@ class TestMalformedBlocksAreDropped(_Base):
         self.assertTrue(res.ok)
         self.assertEqual(res.usage, {})
 
+    def test_pii_shaped_model_drops_the_block_and_never_reaches_a_chain(self):
+        """A model id that looks like a model name but is a person's data (closed grammar, review finding)."""
+        pii = "Max-Mustermann-geb.1980-01-01-HIV-positiv"
+        res = self._send_forged({**self._GOOD, "model_id": pii})
+        self.assertTrue(res.ok)
+        self.assertEqual(res.usage, {})
+        # The requester's records. (A2A.response_signed is the RECEIVER's and is forged here by patching its
+        # builder, which skips the check a real receiver applies in the same function.)
+        mine = [e for e in _emitted if e.get("event_type") != "A2A.response_signed"]
+        self.assertTrue(any(e.get("event_type") == "A2A.response_received" for e in mine))
+        self.assertNotIn("Mustermann", json.dumps(mine, default=str))
+
     def test_wrong_source_drops_the_block(self):
         res = self._send_forged({**self._GOOD, "source": "peer_invoice"})
         self.assertEqual(res.usage, {})

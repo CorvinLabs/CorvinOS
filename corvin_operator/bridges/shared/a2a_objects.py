@@ -441,7 +441,10 @@ def object_gate(*, origin_cfg: dict, origin_id: str, name: str, size: int, class
 
         gate = load_egress_gate_for_tenant(tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default")
         if gate is not None:
-            host = peer_host(origin_id, origin_cfg, endpoints_dir) or "unknown"
+            host = peer_host(origin_id, origin_cfg, endpoints_dir)
+            if not host:
+                # No host to evaluate: asking L35 about a made-up name would pass any default-allow policy.
+                return "object_egress_denied"
             if not gate.validate(host, channel="a2a_object").allowed:
                 return "object_egress_denied"
     except Exception:  # noqa: BLE001 — L35 that cannot be evaluated refuses
@@ -469,6 +472,7 @@ def stage_file(src: Path, *, tenant_id: str | None = None,
     import stat as _stat  # noqa: PLC0415
 
     root = store_dir(tenant_id)
+    staged_at_ns = time.time_ns()   # BEFORE any byte moves: an erasure marker at or after this refuses issue()
     try:
         fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
@@ -530,7 +534,22 @@ def stage_file(src: Path, *, tenant_id: str | None = None,
     from a2a_attachments import _guess_mime  # noqa: PLC0415 — one MIME table
 
     return {"staged_path": str(dest), "name": src.name, "mime": _guess_mime(src),
-            "size": size, "sha256": h.hexdigest()}, None
+            "size": size, "sha256": h.hexdigest(), "staged_at_ns": staged_at_ns}, None
+
+
+def _erasure_marker(root: Path, origin_id: str) -> Path:
+    return root / "erased" / hashlib.sha256(origin_id.encode("utf-8")).hexdigest()[:32]
+
+
+def _erased_since(root: Path, origin_id: str, staged_at_ns: Any) -> bool:
+    """Did an Art. 17 erasure of ``origin_id`` run at or after this staging began? Caller holds the lock.
+    A staging with no stamp (never produced by :func:`stage_file`) is treated as erased: fail closed."""
+    if not isinstance(staged_at_ns, int) or isinstance(staged_at_ns, bool):
+        return True
+    try:
+        return int(_erasure_marker(root, origin_id).read_text("ascii").strip()) >= staged_at_ns
+    except (OSError, ValueError):
+        return False
 
 
 def discard_staged(staged: list[dict] | None) -> None:
@@ -594,6 +613,9 @@ def issue(staged: dict, *, origin_id: str, origin_cfg: dict, task_id: str, floor
             "state": "issued"}
     try:
         with _StoreLock(root):
+            if _erased_since(root, origin_id, staged.get("staged_at_ns")):
+                # Art. 17 ran for this origin while the harvest was in flight: no fresh record for it.
+                return _refuse("object_store_error")
             os.replace(sp, _bin_path(root, ref_id))
             _write_meta(root, meta)
     except OSError:
@@ -785,6 +807,17 @@ def erase_origin(origin_id: str, *, tenant_id: str | None = None) -> int:
         return 0
     n = 0
     with _StoreLock(root):
+        # The marker is what a harvest already in flight meets in issue(): its staged bytes are not keyed to
+        # an origin, so the erasure is recorded per origin and checked against the staging start time.
+        try:
+            marker = _erasure_marker(root, origin_id)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(str(time.time_ns()), "ascii")
+            for old in marker.parent.iterdir():     # a marker older than any staging can still be in flight
+                if time.time() - old.stat().st_mtime > MAX_TTL_S + 3600:
+                    old.unlink(missing_ok=True)
+        except OSError:
+            pass
         for mp in root.glob("*.json"):
             meta = _read_meta(root, mp.stem)
             if meta is not None and meta.get("origin_id") == origin_id:

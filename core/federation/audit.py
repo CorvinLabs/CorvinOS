@@ -118,12 +118,34 @@ def _core_write_event() -> Callable[..., Any]:
     return _we
 
 
+def safe_model_id(value: object) -> str | None:
+    """``value`` when it is a model id of the closed ``a2a_usage`` grammar, else ``None``.
+
+    A peer-signed model id is free text until proven otherwise; it never reaches the chain unchecked.
+    """
+    try:
+        shared = Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"
+        if str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        import a2a_usage  # type: ignore[import-not-found]
+
+        return value if a2a_usage.valid_model_id(value) else None  # type: ignore[return-value]
+    except Exception:  # noqa: BLE001 - fail closed: no id rather than an unchecked one
+        return None
+
+
 def emit(event: str, *, tenant_id: str, **details: Any) -> str:
     """Write one record; return its hash. Raises :class:`FederationAuditError` on any failure."""
     allowed = ALLOWED_FIELDS.get(event)
     if allowed is None:
         raise FederationAuditError(f"unregistered federation event: {event}")
     payload = {k: v for k, v in details.items() if v is not None}
+    if "model_id" in payload:
+        checked = safe_model_id(payload["model_id"])
+        if checked is None:
+            del payload["model_id"]
+        else:
+            payload["model_id"] = checked
     payload["tenant_id"] = tenant_id
     extras = set(payload) - allowed
     if extras:
