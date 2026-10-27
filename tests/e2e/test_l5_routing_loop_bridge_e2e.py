@@ -401,6 +401,27 @@ def test_a_turn_refused_before_any_engine_ran_is_not_judged(bridge, monkeypatch)
     _verify(base)
 
 
+def test_a_user_cancelled_turn_is_not_judged(bridge, monkeypatch):
+    """s3_routing-3 (bridge side): a /cancel'd native turn is neither a success nor a
+    failure of the engine. The CLI stand-in ends the way the real spawn branch does
+    on a user /cancel: ``_turn_refused("cancelled", cancelled=True)`` and no answer."""
+    adapter, base, acs = bridge
+
+    def cancelled_cli(**kwargs):
+        adapter._TURN_OUTCOME.cli_spawned = True
+        adapter._turn_refused("cancelled", cancelled=True)
+        return ""
+    monkeypatch.setattr(adapter, "_call_claude_streaming_impl", cancelled_cli)
+    _send(adapter, base, "wie spät ist es?")
+    (row,) = _ledger()
+    assert (row["outcome"]["ok"], row["outcome"].get("excluded")) == (None, "cancelled")
+    from core.skills.os_skills.monitoring import routing_ledger
+
+    s = routing_ledger.summarize(routing_ledger.read_records(TENANT), surface="bridge")
+    assert (s["decisions"], s["not_judged_by_reason"]) == (0, {"cancelled": 1}), s
+    _verify(base)
+
+
 def test_one_old_console_dual_write_record_does_not_open_the_bridge(bridge, monkeypatch):
     """s3_routing-1 (P6): one historic console Phase-2 turn and a fresh reset passed the soak."""
     adapter, base, acs = bridge
