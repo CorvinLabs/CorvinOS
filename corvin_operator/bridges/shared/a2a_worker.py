@@ -302,6 +302,11 @@ class WorkerResult:
     # byte of content. Empty = nothing was dropped. The receiver signs it into the response data
     # and the audit record so the sender can tell a partial result from a complete one (PLAN-0965 F-02).
     attachments_dropped: dict = field(default_factory=dict)
+    # ADR-2287: output files that did not fit inline, copied into the holder's object store staging
+    # area (``a2a_objects.stage_file``) because the requester asked for references
+    # (``result_schema.attachments_by_reference``). Not servable yet: the receiver gates and issues
+    # them (``a2a_objects.issue``) or discards them. Each: ``{staged_path, name, mime, size, sha256}``.
+    out_staged: list = field(default_factory=list)
     # ADR-2292: the engine-attested usage block (``a2a_usage.build_usage_block``) — the model the
     # ENGINE reported and its four-way token split, the same two values the worker span closes on.
     # Empty when the engine reported no model: the receiver then signs no block at all.
@@ -1171,8 +1176,11 @@ def spawn_a2a_worker(
 
     parsed = parse_worker_output(raw, result_schema)
 
-    # 7. Harvest output attachments.
-    out_attachments, attachments_dropped = _harvest_report(out_dir, result_schema or {})
+    # 7. Harvest output attachments (ADR-2287: files over the inline budget are staged as objects
+    # when the requester asked for references — the scratch directory is deleted right below).
+    out_staged: list = []
+    out_attachments, attachments_dropped = _harvest_report(out_dir, result_schema or {},
+                                                           staged_out=out_staged)
 
     # 8. Cleanup.
     shutil.rmtree(workspace, ignore_errors=True)
@@ -1199,6 +1207,7 @@ def spawn_a2a_worker(
         reason_code=_classify_engine_failure(err, "engine_error") if err else "",
         error=err,
         attachments_dropped=attachments_dropped,
+        out_staged=out_staged,
         usage=_usage_block(_model_id, result.usage),
     )
 
@@ -1286,8 +1295,16 @@ def _harvest_outputs(out_dir: Path, result_schema: dict) -> list:
     return _harvest_report(out_dir, result_schema)[0]
 
 
-def _harvest_report(out_dir: Path, result_schema: dict) -> tuple[list, dict]:
+def _harvest_report(out_dir: Path, result_schema: dict,
+                    staged_out: list | None = None) -> tuple[list, dict]:
     """Pick files from ``out_dir`` and build :class:`Attachment` records, and report what was left out.
+
+    ADR-2287: when the requester set ``result_schema['attachments_by_reference'] = true`` and the
+    caller passes ``staged_out``, a file that does not fit the remaining inline budget is not dropped
+    as ``byte_cap``: it is copied into the holder's object staging area (``a2a_objects.stage_file``)
+    and appended to ``staged_out``; the receiver gates and issues it as a reference. It still counts
+    against the 16-entry list cap. A file the staging refuses is counted under its closed reason
+    (``too_large``, ``store_full``, ``store_error``, ``unreadable``).
 
     Filter rules (in order):
       1. Only regular files at the top level (no subdir descent).
@@ -1318,10 +1335,12 @@ def _harvest_report(out_dir: Path, result_schema: dict) -> tuple[list, dict]:
         )
 
     allowed_names: list[str] | None = None
+    by_reference = False
     if isinstance(result_schema, dict):
         raw_allowed = result_schema.get("attachments_out_allowed")
         if isinstance(raw_allowed, list):
             allowed_names = [str(n) for n in raw_allowed]
+        by_reference = result_schema.get("attachments_by_reference") is True and staged_out is not None
 
     out: list = []
     dropped: dict[str, int] = {}
@@ -1372,12 +1391,21 @@ def _harvest_report(out_dir: Path, result_schema: dict) -> tuple[list, dict]:
             # A cap was already hit: everything eligible after it stays out, and is counted.
             dropped[capped] = dropped.get(capped, 0) + 1
             continue
-        if len(out) >= MAX_ATTACHMENTS_COUNT:
+        if len(out) + len(staged_out or []) >= MAX_ATTACHMENTS_COUNT:
             capped = "count_cap"
             dropped[capped] = dropped.get(capped, 0) + 1
             continue
         size = entry.stat().st_size
         if total_bytes + size > MAX_ATTACHMENTS_TOTAL_BYTES:
+            if by_reference:
+                import a2a_objects  # noqa: PLC0415 — same directory, only on this path
+                staged, why = a2a_objects.stage_file(entry)
+                if staged is not None:
+                    staged_out.append(staged)  # type: ignore[union-attr]
+                else:
+                    key = why[len("object_"):] if why and why.startswith("object_") else (why or "unreadable")
+                    dropped[key] = dropped.get(key, 0) + 1
+                continue
             capped = "byte_cap"
             dropped[capped] = dropped.get(capped, 0) + 1
             continue

@@ -675,6 +675,13 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2242 message lifecycle: stage changes on the receiver, status queries both sides.
     "A2A.task_stage_changed":         "INFO",
     "A2A.task_status_queried":        "INFO",
+    # ADR-2287 large objects by signed reference (a2a_objects.py). Metadata only: ref-id prefix,
+    # size, sha256 prefix, classification, origin, closed reason codes. Never a name, never bytes.
+    "A2A.object_issued":              "INFO",     # holder: a reference was issued (audit-first)
+    "A2A.object_pulled":              "INFO",     # holder: one chunk served (audit-first)
+    "A2A.object_expired":             "INFO",     # holder: TTL passed or pull budget used up
+    "A2A.object_refused":             "WARNING",  # holder: issue/inline/pull refused by a gate
+    "A2A.object_fetched":             "INFO",     # requester: a pull finished (ok or refused)
     "A2A.reconnect_sent":             "INFO",
     "A2A.reconnect_send_failed":      "WARNING",
     # Layer 38 M4 — A2A Invite-Token Protocol (ADR-0063)
@@ -3677,6 +3684,14 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         ("A2A.ping_result", {"reachable", "error_category"}),
         ("A2A.task_stage_changed", {"stage", "prev_stage"}),
         ("A2A.task_status_queried", {"stage"}),
+        # ADR-2287: prefixes, sizes, classification and closed codes only — never names or bytes.
+        ("A2A.object_issued", {"ref_prefix", "size", "sha_prefix", "classification", "ttl_s",
+                               "max_pulls"}),
+        ("A2A.object_pulled", {"ref_prefix", "size", "sha_prefix", "classification", "offset",
+                               "length", "served_bytes"}),
+        ("A2A.object_expired", {"ref_prefix", "size", "sha_prefix", "classification"}),
+        ("A2A.object_refused", {"ref_prefix", "size", "sha_prefix", "classification", "stage"}),
+        ("A2A.object_fetched", {"ref_prefix", "size", "sha_prefix"}),
         ("A2A.reconnect_sent", set()),
         ("A2A.reconnect_send_failed", set()),
         ("A2A.instance_pinned", set()),

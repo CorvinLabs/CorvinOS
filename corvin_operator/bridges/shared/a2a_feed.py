@@ -658,6 +658,12 @@ def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]
         _ob = a2a_outbox.erase_peer(subject_id, tenant_id)
     except Exception:  # noqa: BLE001
         _ob = 0
+    # ADR-2287: objects this instance holds for the subject (bytes + records), not message-bound.
+    try:
+        import a2a_objects  # noqa: PLC0415
+        _ob += a2a_objects.erase_origin(subject_id, tenant_id=tenant_id)
+    except Exception:  # noqa: BLE001
+        pass
     if not path.exists() and not (root / _STAGES_FILE).exists():
         return _ob, 0
     with _store_lock(root):
@@ -719,6 +725,11 @@ def clear(tenant_id: str | None = None) -> tuple[int, int]:
     try:
         import a2a_outbox  # noqa: PLC0415
         a2a_outbox.clear(tenant_id)
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # ADR-2287: objects held for peers live under this store too
+        import a2a_objects  # noqa: PLC0415
+        blobs += a2a_objects.clear(tenant_id=tenant_id)
     except Exception:  # noqa: BLE001
         pass
     return msgs, blobs

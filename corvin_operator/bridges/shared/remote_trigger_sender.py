@@ -72,6 +72,7 @@ CI lint: module MUST NOT ``import anthropic``.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac as _hmac
 import http.client
@@ -139,6 +140,9 @@ except ImportError:
 
 # ADR-2294: the GDPR-role rule of every outbound send (classified data needs a stated role).
 import endpoint_role as _endpoint_role  # type: ignore[import-not-found]  # noqa: E402  (shared dir is on sys.path above)
+# ADR-2287: references to large objects and the signed object-pull op.
+import a2a_attachments as a2a_attachments_mod  # type: ignore[import-not-found]  # noqa: E402
+import a2a_objects  # type: ignore[import-not-found]  # noqa: E402
 
 # ── IBC attestation (ADR-0103 Protocol v7 / IBC concept) ─────────────────
 try:
@@ -683,6 +687,29 @@ class SendResult:
     # (an old receiver, or an engine that reported no model) or the block was malformed.
     # Token counts and a model id only — never a price: the requester prices them itself.
     usage: dict = field(default_factory=dict)
+    # ADR-2287: output files above the inline cap, as SIGNED references
+    # ``{name, mime, size, sha256, classification, ref_id, inline: false}`` (shape-checked by
+    # ``a2a_objects.validate_reference``). Fetch the bytes with :meth:`RemoteTriggerSender.pull_object`.
+    # ``attachments`` above stays inline-only, so every existing reader is unchanged.
+    attachment_refs: list = field(default_factory=list)
+
+
+@dataclass
+class ObjectPullResult:
+    """Outcome of :meth:`RemoteTriggerSender.pull_object` (ADR-2287).
+
+    ``ok`` only when every chunk verified and the final sha256 equals the signed reference's.
+    ``reason`` is a closed code from ``a2a_objects.REFUSALS`` on failure. ``data`` holds the bytes
+    when no ``dest`` was given; with ``dest`` the verified object is at ``path`` and ``data`` is None.
+    """
+    ok: bool
+    reason: str = ""
+    size: int = 0
+    sha256: str = ""
+    data: "bytes | None" = None
+    path: "str | None" = None
+    via: str = "direct"
+    duration_ms: int = 0
 
 
 @dataclass
@@ -896,6 +923,8 @@ _AUDIT_ALLOWED_KEYS = frozenset({
     "model_id", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
     # ADR-2294: the payload grade of a locally refused send (PUBLIC/INTERNAL/CONFIDENTIAL/SECRET).
     "data_class",
+    # ADR-2287 A2A.object_fetched: an 8-char ref-id prefix, the object size, a 16-hex digest prefix.
+    "ref_prefix", "size", "sha_prefix",
 })
 _AUDIT_VIA_VALUES = frozenset({"direct", "relay"})
 _AUDIT_STATUS_VALUES = frozenset({
@@ -1461,7 +1490,10 @@ class RemoteTriggerSender:
                        or cfg.get("our_origin_id")
                        or self._instance_id,
             instruction=instruction,
-            result_schema=result_schema or {},
+            # ADR-2287: this sender can pull references, so it asks for them (signed with the
+            # envelope). An explicit ``attachments_by_reference: false`` keeps the inline-only
+            # behaviour; a receiver that predates ADR-2287 ignores the key.
+            result_schema={"attachments_by_reference": True, **(result_schema or {})},
             ttl_s=ttl_s,
             hmac_key_hex=cfg["hmac_key"],
             sender_instance_id=self._instance_id,
@@ -1641,8 +1673,23 @@ class RemoteTriggerSender:
 
         # 6) Verify response attachments (digest, name, caps).
         resp_attachments_raw = response.get("attachments", []) or []
+        verified_refs: list[dict] = []
         try:
-            verified_atts = validate_attachments(resp_attachments_raw)
+            # ADR-2287: references (``inline: false``) are shape-checked on their own; the inline
+            # caps and digest checks apply to the inline files exactly as before. The count cap
+            # covers the whole list.
+            if not isinstance(resp_attachments_raw, list):
+                raise AttachmentError("attachments_not_list")
+            if len(resp_attachments_raw) > a2a_attachments_mod.MAX_ATTACHMENTS_COUNT:
+                raise AttachmentError("attachments_too_many")
+            _inline_raw = [a for a in resp_attachments_raw if not a2a_objects.is_reference(a)]
+            for _r in resp_attachments_raw:
+                if a2a_objects.is_reference(_r):
+                    try:
+                        verified_refs.append(a2a_objects.validate_reference(_r))
+                    except ValueError as _rexc:
+                        raise AttachmentError("reference_invalid") from _rexc
+            verified_atts = validate_attachments(_inline_raw)
         except AttachmentError as exc:
             self._audit_best_effort(
                 "A2A.response_rejected", "WARNING",
@@ -1710,6 +1757,7 @@ class RemoteTriggerSender:
             our_chain_tail=sender_chain_tail or "",
             peer_chain_tail=_receiver_tail if isinstance(_receiver_tail, str) else "",
             usage=usage_block,
+            attachment_refs=verified_refs,
         )
 
     def send_reconnect(self, endpoint_id: str, new_url: str, *,
@@ -1894,7 +1942,7 @@ class RemoteTriggerSender:
     def _http_ping_probe(
         self, endpoint_id: str, timeout_s: float = 5, audit: bool = True,
         *, task_id: str | None = None, out: dict | None = None,
-        prefer_relay: bool = False,
+        prefer_relay: bool = False, object_pull: dict | None = None,
     ) -> tuple[bool, str | None, str | None, str]:
         """ADR-0199: Signed ping request-response (network probe).
 
@@ -1915,24 +1963,18 @@ class RemoteTriggerSender:
             return False, error_cat, error_det, "direct"
 
         # Build ping request: {ping_id, issued_at, origin_id, signature}
-        ping_id = str(uuid.uuid4())
-        issued_at = int(time.time())
-        origin_id = cfg.get("origin_id_for_send") or cfg.get("our_origin_id") or self._instance_id
-
-        ping_request = {
-            "ping_id": ping_id,
-            "issued_at": issued_at,
-            "origin_id": origin_id,
-        }
-
-        # Sign with HMAC key (same as TaskEnvelope)
-        canonical = json.dumps(ping_request, separators=(",", ":"), sort_keys=True)
-        signature = _hmac.new(
-            bytes.fromhex(cfg["hmac_key"]),
-            canonical.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        ping_request["signature"] = signature
+        ping_request = self._ping_request(cfg, self._instance_id)
+        ping_id, issued_at, origin_id = (ping_request["ping_id"], ping_request["issued_at"],
+                                         ping_request["origin_id"])
+        if object_pull is not None:
+            # ADR-2287 object-pull op: its own HMAC over the ping's three fields + op + arguments
+            # (a2a_objects.pull_canonical), so a captured pull cannot be re-aimed at another object
+            # or range; the ping id is its one-time request id (the holder refuses a second use).
+            ping_request["object_pull"] = dict(object_pull)
+            ping_request["pull_sig"] = a2a_objects.sign_pull(
+                cfg["hmac_key"], ping_id=ping_id, issued_at=issued_at, origin_id=origin_id,
+                ref_id=object_pull["ref_id"], offset=object_pull["offset"],
+                length=object_pull["length"])
         if task_id:
             # ADR-2242 task-stage query: the ping's own signature above stays over the
             # original three fields, so a peer that predates this just ignores the extra
@@ -2082,6 +2124,139 @@ class RemoteTriggerSender:
         except Exception:  # noqa: BLE001
             pass
         return res
+
+    # ── ADR-2287: pull a referenced object ────────────────────────────
+
+    @staticmethod
+    def _ping_request(cfg: dict, instance_id: str) -> dict:
+        """A fresh signed ping ``{ping_id, issued_at, origin_id, signature}`` (ADR-0199)."""
+        ping_request = {
+            "ping_id": str(uuid.uuid4()),
+            "issued_at": int(time.time()),
+            "origin_id": cfg.get("origin_id_for_send") or cfg.get("our_origin_id") or instance_id,
+        }
+        canonical = json.dumps(ping_request, separators=(",", ":"), sort_keys=True)
+        ping_request["signature"] = _hmac.new(
+            bytes.fromhex(cfg["hmac_key"]), canonical.encode("utf-8"), hashlib.sha256,
+        ).hexdigest()
+        return ping_request
+
+    def _object_pull_request(self, endpoint_id: str, ref_id: str, offset: int, length: int,
+                             timeout_s: float = 10) -> tuple[bool, dict | None, str | None, str]:
+        """One signed ``object-pull`` over the ping transport (direct, relay fallback, the relay
+        first once it is known to be the route). Returns ``(answered, verified_response, error_category,
+        via)``; the response's signature, task-id echo, reflection guard and instance pin are already
+        checked by :meth:`_http_ping_probe`."""
+        out: dict = {}
+        ok, cat, _det, via = self._http_ping_probe(
+            endpoint_id, timeout_s=max(2, min(30, timeout_s)), audit=False, out=out, prefer_relay=True,
+            object_pull={"ref_id": ref_id, "offset": int(offset), "length": int(length)})
+        return ok, (out.get("response") if ok else None), cat, via
+
+    def pull_object(self, endpoint_id: str, ref: dict, *, dest: "Path | str | None" = None,
+                    timeout_s: float = 10) -> ObjectPullResult:
+        """Fetch the bytes of a reference from ``endpoint_id`` (the holder that issued it), chunk by
+        chunk over the signed ``object-pull`` op, and accept them only if the final sha256 equals the
+        SIGNED reference's. With ``dest`` the bytes stream to ``<dest>.part`` and are renamed into
+        place only after the digest matched; a refused pull leaves nothing behind. Never raises.
+
+        Refusals (closed, ``a2a_objects.REFUSALS``): ``object_bad_reference``, ``object_too_large``
+        (above this instance's own ceiling — a holder cannot make us fetch more), the holder's codes
+        (``object_unavailable``, ``object_pull_replayed``, ``object_pull_budget_exhausted``,
+        ``object_classification_exceeded``, ``object_egress_denied``, ``object_bad_range``),
+        ``object_pull_unsupported`` (the holder answered a plain pong: a build without the op),
+        ``object_bad_chunk``, ``object_digest_mismatch``, ``object_unreachable``, ``object_auth_failed``.
+        One ``A2A.object_fetched`` record per call: prefixes, size, status, reason — never a name."""
+        start = time.time()
+        via = "direct"
+        size, sha = 0, ""
+        part: "Path | None" = None
+        target = Path(dest) if dest is not None else None
+
+        def _done(reason: str, data: "bytes | None" = None, path: "str | None" = None) -> ObjectPullResult:
+            if part is not None and reason:
+                try:
+                    part.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self._audit_best_effort(
+                "A2A.object_fetched", "INFO" if not reason else "WARNING",
+                {"endpoint_id": endpoint_id, "ref_prefix": str((ref or {}).get("ref_id", ""))[:8],
+                 "size": size, "sha_prefix": sha[:16], "status": "ok" if not reason else "rejected",
+                 "reason": reason, "via": via, "duration_ms": _ms(start)})
+            return ObjectPullResult(ok=not reason, reason=reason, size=size, sha256=sha, data=data,
+                                    path=path, via=via, duration_ms=_ms(start))
+
+        try:
+            ref = a2a_objects.validate_reference(ref)
+        except ValueError:
+            return _done("object_bad_reference")
+        size, sha = int(ref["size"]), ref["sha256"]
+        if _network_denied("remote_trigger_sender.pull_object"):
+            return _done("object_unreachable")
+        if size > a2a_objects.operator_max_bytes():
+            return _done("object_too_large")
+        h = hashlib.sha256()
+        buf = bytearray() if target is None else None
+        fh = None
+        try:
+            if target is not None:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                part = target.with_name(f".{target.name}.{secrets.token_hex(4)}.part")
+                fh = open(part, "xb")
+            offset = 0
+            while offset < size:
+                length = min(a2a_objects.CHUNK_MAX_BYTES, size - offset)
+                resp, reason = None, ""
+                for _attempt in range(3):
+                    ok, resp, cat, via = self._object_pull_request(endpoint_id, ref["ref_id"], offset,
+                                                                    length, timeout_s)
+                    if ok:
+                        reason = ""
+                        break
+                    reason = ("object_auth_failed" if cat == ErrorCategory.AUTH_FAILED
+                              else "object_unreachable")
+                    if cat == ErrorCategory.AUTH_FAILED:
+                        break
+                    time.sleep(0.5 * (_attempt + 1))
+                if reason or resp is None:
+                    return _done(reason or "object_unreachable")
+                refusal = resp.get("object_refusal")
+                chunk = resp.get("object_chunk")
+                if refusal is not None:
+                    return _done(refusal if refusal in a2a_objects.REFUSALS else "object_unavailable")
+                if not isinstance(chunk, dict):
+                    return _done("object_pull_unsupported")
+                try:
+                    data = base64.b64decode(str(chunk.get("data_b64", "")), validate=True)
+                except Exception:  # noqa: BLE001
+                    return _done("object_bad_chunk")
+                if (chunk.get("ref_id") != ref["ref_id"] or chunk.get("offset") != offset
+                        or chunk.get("length") != length or len(data) != length):
+                    return _done("object_bad_chunk")
+                h.update(data)
+                if fh is not None:
+                    fh.write(data)
+                else:
+                    buf += data  # type: ignore[operator]
+                offset += length
+            if not _hmac.compare_digest(h.hexdigest(), sha):
+                return _done("object_digest_mismatch")
+            if fh is not None:
+                fh.close()
+                fh = None
+                os.replace(part, target)  # type: ignore[arg-type]
+                part = None
+                return _done("", path=str(target))
+            return _done("", data=bytes(buf))  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001 — never raises; a local I/O fault is not the peer's refusal
+            return _done("object_bad_chunk")
+        finally:
+            if fh is not None:
+                try:
+                    fh.close()
+                except OSError:
+                    pass
 
     # ── Internals ─────────────────────────────────────────────────────
 

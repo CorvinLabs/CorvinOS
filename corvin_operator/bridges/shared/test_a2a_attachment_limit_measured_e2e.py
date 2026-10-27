@@ -165,33 +165,37 @@ class TwoInstances:
 
     def __init__(self, root: Path, *, transport: str, engine: FileEngine, forge_se: Any = None,
                  relay: "LocalRelay | None" = None, loop: "asyncio.AbstractEventLoop | None" = None,
-                 origin_extra: "dict | None" = None) -> None:
+                 origin_extra: "dict | None" = None, n_kids: int = 1) -> None:
         self.root, self.transport, self.engine = root, transport, engine
-        self.kid, key = secrets.token_hex(8), secrets.token_hex(32)
         self.a_endpoints = root / "a" / "endpoints"
         self.b_origins = root / "b" / "origins"
         self.b_endpoints = root / "b" / "endpoints"
         for d in (self.a_endpoints, self.b_origins, self.b_endpoints):
             d.mkdir(parents=True)
-        tok = ft.FriendshipToken(kid=self.kid, key=key, url="http://127.0.0.1:1", label=None, expires=None)
-        origin = ft.to_origin_dict(tok)
-        origin.update({"spawn_worker": True, "allowed_personas": ["compute-csv"], "max_ttl_s": 300,
-                       **(origin_extra or {})})
-        write_json(self.b_origins / f"{self.kid}.json", origin)
         self.server = a2a_http_server.build_server(
             host="127.0.0.1", port=0, origins_dir=self.b_origins, endpoints_dir=self.b_endpoints,
             engine_factory=lambda: engine, instance_id=IID_B, forge_se=forge_se)
-        a2a_http_server.serve_in_thread(self.server)
-        self.receiver = self.server.RequestHandlerClass.receiver
         h, p = self.server.server_address[:2]
         url = f"http://{h}:{p}" if transport == "direct" else f"http://127.0.0.1:{free_port()}"
-        ep = ft.to_endpoint_dict(ft.FriendshipToken(kid=self.kid, key=key, url=url, label=None, expires=None))
-        ep.update({"instance_id": IID_B, "default_ttl_s": 120})
-        write_json(self.a_endpoints / f"{self.kid}.json", ep)
-        # B's endpoint back to A: the kid's peer host for the holder-side L35 check (friendship pairs
-        # always hold both files).
-        write_json(self.b_endpoints / f"{self.kid}.json",
-                   {**ep, "url": "http://127.0.0.1:9/v1/a2a/receive", "instance_id": IID_A})
+        self.kids: list[str] = []
+        for _ in range(n_kids):
+            kid, key = secrets.token_hex(8), secrets.token_hex(32)
+            self.kids.append(kid)
+            tok = ft.FriendshipToken(kid=kid, key=key, url="http://127.0.0.1:1", label=None, expires=None)
+            origin = ft.to_origin_dict(tok)
+            origin.update({"spawn_worker": True, "allowed_personas": ["compute-csv"], "max_ttl_s": 300,
+                           **(origin_extra or {})})
+            write_json(self.b_origins / f"{kid}.json", origin)
+            ep = ft.to_endpoint_dict(ft.FriendshipToken(kid=kid, key=key, url=url, label=None, expires=None))
+            ep.update({"instance_id": IID_B, "default_ttl_s": 120})
+            write_json(self.a_endpoints / f"{kid}.json", ep)
+            # B's endpoint back to A: the kid's peer host for the holder-side L35 check (a friendship
+            # pair always holds both files under one kid).
+            write_json(self.b_endpoints / f"{kid}.json",
+                       {**ep, "url": "http://127.0.0.1:9/v1/a2a/receive", "instance_id": IID_A})
+        self.kid = self.kids[0]
+        a2a_http_server.serve_in_thread(self.server)
+        self.receiver = self.server.RequestHandlerClass.receiver
         self.sender = rts.RemoteTriggerSender(endpoints_dir=self.a_endpoints, instance_id=IID_A,
                                               forge_se=forge_se)
         self.listener = None
@@ -201,10 +205,17 @@ class TwoInstances:
                                                     origins_dir=self.b_origins, instance_id=IID_B)
             asyncio.run_coroutine_threadsafe(self.listener.run_forever(reconnect_backoff_s=0.5), loop)
             deadline = time.time() + 15
-            while self.listener.status.get("registered", 0) < 1 and time.time() < deadline:
+            while self.listener.status.get("registered", 0) < n_kids and time.time() < deadline:
                 time.sleep(0.05)
-            if self.listener.status.get("registered") != 1:
+            if self.listener.status.get("registered") != n_kids:
                 raise RuntimeError(f"relay listener did not register: {self.listener.status}")
+
+    def origin_path(self, kid: "str | None" = None) -> Path:
+        return self.b_origins / f"{kid or self.kid}.json"
+
+    def update_origin(self, kid: "str | None" = None, **changes: Any) -> None:
+        p = self.origin_path(kid)
+        write_json(p, {**json.loads(p.read_text()), **changes})
 
     def close(self, loop: "asyncio.AbstractEventLoop | None" = None) -> None:
         if self.listener is not None and loop is not None:
@@ -218,6 +229,7 @@ class TransportCase(unittest.TestCase):
 
     transport = "direct"
     forge_se: Any = None   # None = the real tenant chain
+    pair_kwargs: dict = {}
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -225,9 +237,12 @@ class TransportCase(unittest.TestCase):
         self.home = self.root / "home"
         (self.home / "tenants" / "_default" / "global").mkdir(parents=True)
         self._patches = [
+            # VOICE_AUDIT_PATH: the repo conftest points it at a per-test sandbox file; here it is
+            # the sandboxed tenant's own chain, which is what the T-0302 tests read and verify.
             mock.patch.dict(os.environ, {"CORVIN_HOME": str(self.home), "CORVIN_TENANT_ID": "_default",
                                          "CORVIN_A2A_ATTESTATION_DISABLED": "1",
-                                         "CORVIN_A2A_FEED_DIR": str(self.root / "feed")}),
+                                         "VOICE_AUDIT_PATH": str(self.home / "tenants" / "_default" / "global"
+                                                                 / "forge" / "audit.jsonl")}),
             mock.patch("remote_trigger_sender._record_feed_task", lambda *a, **k: None),
             mock.patch("remote_trigger_sender._record_feed_response", lambda *a, **k: None),
             mock.patch.object(rts.RemoteTriggerSender, "_build_network_attestation",
@@ -245,12 +260,13 @@ class TransportCase(unittest.TestCase):
         for p in self._patches:
             p.start()
         os.environ.pop(rts._REMOTE_ENDPOINTS_ENV, None)
+        os.environ.pop("CORVIN_A2A_FEED_DIR", None)   # the object store lives in the tenant's feed dir
         if self.transport == "relay":
             self.loop = asyncio.new_event_loop()
             self._loop_thread = threading.Thread(target=self.loop.run_forever, daemon=True)
             self._loop_thread.start()
         self.engine = FileEngine()
-        self.pair = self.make_pair()
+        self.pair = self.make_pair(**self.pair_kwargs)
 
     def make_pair(self, **kw: Any) -> TwoInstances:
         return TwoInstances(self.root / secrets.token_hex(3), transport=self.transport, engine=self.engine,
@@ -388,13 +404,15 @@ class _LimitMeasurement:
         self.assertEqual(self.engine.inputs, [], "nothing over the attachment cap ever reached the worker")
 
     def test_response_files_inline_maximum(self):
-        """The peer's worker writes one file: CAP bytes come back inline, CAP+1 is reported as dropped."""
+        """The peer's worker writes one file: CAP bytes come back inline, CAP+1 is reported as dropped
+        (inline only: a requester asking for references gets CAP+1 by reference, ADR-2287)."""
+        inline_only = {"properties": {"ok": {"type": "boolean"}}, "attachments_by_reference": False}
         self.engine.files = {"result.bin": b"r" * CAP}
-        res = self.send(schema={"properties": {"ok": {"type": "boolean"}}})
+        res = self.send(schema=inline_only)
         self.assertTrue(res.ok, res)
         self.assertEqual([a["name"] for a in res.attachments], ["result.bin"])
         self.engine.files = {"result.bin": b"r" * (CAP + 1)}
-        res = self.send(schema={"properties": {"ok": {"type": "boolean"}}})
+        res = self.send(schema=inline_only)
         self.assertTrue(res.ok, res)
         self.assertEqual(res.attachments, [])
         self.assertEqual(res.data.get("attachments_dropped"), {"count": 1, "reasons": {"byte_cap": 1}})

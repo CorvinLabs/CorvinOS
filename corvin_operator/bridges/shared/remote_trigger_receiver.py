@@ -28,6 +28,7 @@ ADR-0048 compliance:
 """
 from __future__ import annotations
 
+import base64
 import collections
 import hashlib
 import hmac as _hmac
@@ -958,6 +959,10 @@ class RemoteTriggerReceiver:
         # Tenant for events whose allowlist REQUIRES tenant_id. None = resolve
         # per event via _resolve_tenant_id() (CORVIN_TENANT_ID → _default).
         self._tenant_id: str | None = None
+        # ADR-2287: endpoints dir the object gate reads a pairing's peer host from (L35). Set by
+        # a2a_http_server.build_server; None = the env-or-default dir. (Not ``_endpoints_dir``:
+        # that name is this class's own static helper.)
+        self._objects_endpoints: Path | None = None
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -1538,9 +1543,11 @@ class RemoteTriggerReceiver:
         try:
             from a2a_attachments import attachments_audit_details  # type: ignore[import-not-found]
             from a2a_attachments import Attachment as _Att  # type: ignore[import-not-found]
+            # ADR-2287 references carry no content; each has its own A2A.object_issued record.
             _out_atts_for_audit = [
                 _Att.from_dict(a) if isinstance(a, dict) else a
                 for a in worker_attachments
+                if not (isinstance(a, dict) and a.get("inline") is False)
             ]
             _out_audit = attachments_audit_details(_out_atts_for_audit)
         except Exception:
@@ -1569,7 +1576,10 @@ class RemoteTriggerReceiver:
             _feed_record(
                 direction="out", kind="response", peer_id=env.origin_id, peer_label=origin_config.get("label"),
                 task_id=env.task_id, data=worker_data, status=resp.status,
-                attachments=worker_attachments, duration_ms=_ms(start),
+                # the holder keeps referenced bytes in its object store, not twice in the feed
+                attachments=[a for a in worker_attachments
+                             if not (isinstance(a, dict) and a.get("inline") is False)],
+                duration_ms=_ms(start),
             )
         return resp
 
@@ -1742,6 +1752,7 @@ class RemoteTriggerReceiver:
         # If the worker failed structurally (timeout/engine error), emit
         # filtered with empty data and propagate the failure status.
         if worker_result.status != "ok":
+            self._discard_staged(worker_result)
             # WHY it was refused travels as a CLOSED code in the signed response data and
             # in the audit record — never the free text in ``error`` (exception names, gate
             # wording). Before this the cause died here: the sender got a bare "rejected"
@@ -1769,6 +1780,12 @@ class RemoteTriggerReceiver:
         # purpose: it is the receiver's own statement about completeness, not worker output.
         _dropped = getattr(worker_result, "attachments_dropped", None) or {}
         _dropped = {str(k): int(v) for k, v in _dropped.items() if isinstance(v, int) and v > 0}
+        # ADR-2287: every output object passes ONE gate (a2a_objects.object_gate) — inline files here,
+        # references at issue and again at every pull; files over the inline budget become references.
+        out_atts, _gate_dropped = self._release_outputs(env, origin_config, out_atts, worker_result,
+                                                        inbound_attachments)
+        for _k, _v in _gate_dropped.items():
+            _dropped[_k] = _dropped.get(_k, 0) + _v
         n_dropped = sum(_dropped.values())
         if n_dropped:
             filtered = {**filtered, "attachments_dropped": {"count": n_dropped, "reasons": _dropped}}
@@ -1787,6 +1804,88 @@ class RemoteTriggerReceiver:
              "attachments_dropped_count": n_dropped},
         )
         return status_out, filtered, out_atts
+
+    # ── ADR-2287: output objects (inline and by reference) ───────────
+
+    @staticmethod
+    def _discard_staged(worker_result: Any) -> None:
+        try:
+            import a2a_objects  # type: ignore[import-not-found]  # noqa: PLC0415
+            a2a_objects.discard_staged(getattr(worker_result, "out_staged", None))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _objects_endpoints_dir(self) -> Path | None:
+        ep = getattr(self, "_objects_endpoints", None)
+        if ep is not None:
+            return Path(ep)
+        try:
+            import a2a_http_server  # type: ignore[import-not-found]  # noqa: PLC0415
+            return a2a_http_server._endpoints_dir()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _release_outputs(self, env: "TaskEnvelope", origin_config: dict, inline: list,
+                         worker_result: Any, inbound_attachments: list) -> tuple[list, dict]:
+        """Gate every output object and issue references for the staged ones.
+
+        Inline files and references meet the same :func:`a2a_objects.object_gate` (name, size
+        ceiling, L34 classification against ``max_data_classification``, L35 egress to the origin's
+        host). The classification of an output is ``max(the task's inbound attachment class, L34 of
+        its content)``. A refusal drops the file and is counted under its closed reason (the
+        ``object_`` prefix stripped) in ``attachments_dropped``; references come after the inline
+        files. Fail-closed: if the gate cannot run, nothing is released."""
+        dropped: dict[str, int] = {}
+        staged = list(getattr(worker_result, "out_staged", None) or [])
+        try:
+            import a2a_objects  # type: ignore[import-not-found]  # noqa: PLC0415
+            from a2a_attachments import effective_classification  # type: ignore[import-not-found]  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            self._discard_staged(worker_result)
+            n = len(inline) + len(staged)
+            return [], ({"gate_error": n} if n else {})
+        tenant = self._tenant_id or _resolve_tenant_id()
+        ep_dir = self._objects_endpoints_dir()
+        floor = effective_classification(list(inbound_attachments or [])) if inbound_attachments else "PUBLIC"
+
+        def _count(reason: str) -> None:
+            key = reason[len("object_"):] if reason.startswith("object_") else reason
+            dropped[key] = dropped.get(key, 0) + 1
+
+        released: list = []
+        for att in inline:
+            raw = b""
+            try:
+                raw = base64.b64decode(str(att.get("content_b64", "")), validate=True)
+                cls = a2a_objects.max_level(floor, a2a_objects.classify_bytes(raw))
+                reason = a2a_objects.object_gate(
+                    origin_cfg=origin_config, origin_id=env.origin_id, name=str(att.get("name", "")),
+                    size=len(raw), classification=cls, tenant_id=tenant, endpoints_dir=ep_dir)
+            except Exception:  # noqa: BLE001
+                reason = "object_gate_error"
+            if reason:
+                _count(reason)
+                self._audit_best_effort(
+                    "A2A.object_refused", "WARNING",
+                    {"task_id": env.task_id, "origin_id": env.origin_id, "stage": "inline",
+                     "reason": reason, "size": len(raw),
+                     "sha_prefix": str(att.get("sha256", ""))[:16]})
+                continue
+            released.append(att)
+        for s in staged:
+            try:
+                ref, reason = a2a_objects.issue(
+                    s, origin_id=env.origin_id, origin_cfg=origin_config, task_id=env.task_id,
+                    floor=floor, tenant_id=tenant, endpoints_dir=ep_dir,
+                    audit_strict=self._audit_strict, audit=self._audit_best_effort)
+            except Exception:  # noqa: BLE001
+                a2a_objects.discard_staged([s])
+                ref, reason = None, "object_store_error"
+            if ref is None:
+                _count(reason or "object_store_error")
+                continue
+            released.append(ref)
+        return released, dropped
 
     # ── Validation steps 1–6 ─────────────────────────────────────────
 

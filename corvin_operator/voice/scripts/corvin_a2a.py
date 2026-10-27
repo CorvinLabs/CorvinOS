@@ -972,6 +972,18 @@ def _cmd_send(args: argparse.Namespace) -> int:
             dest = out_dir / att.name
             dest.write_bytes(raw_bytes)
             written_attachments.append(str(dest))
+    # ADR-2287: files above the inline cap came back as signed references — pull each one over
+    # the signed object-pull op; only a digest-verified object is written.
+    pulled_refs: list[dict] = []
+    if args.attach_out_dir and getattr(res, "attachment_refs", None):
+        out_dir = Path(args.attach_out_dir).expanduser()
+        for ref in res.attachment_refs:
+            pr = sender.pull_object(endpoint_id, ref, dest=out_dir / ref["name"])
+            pulled_refs.append({"name": ref["name"], "ok": pr.ok, "reason": pr.reason})
+            if pr.ok and pr.path:
+                written_attachments.append(pr.path)
+            else:
+                print(f"warn: could not pull {ref['name']}: {pr.reason}", file=sys.stderr)
 
     output = {
         "ok": res.ok,
@@ -988,6 +1000,12 @@ def _cmd_send(args: argparse.Namespace) -> int:
             for a in res.attachments
         ],
     }
+    if getattr(res, "attachment_refs", None):
+        output["attachment_refs"] = [
+            {"name": r["name"], "mime": r["mime"], "sha256": r["sha256"], "bytes": r["size"],
+             "classification": r["classification"]} for r in res.attachment_refs]
+    if pulled_refs:
+        output["attachment_refs_pulled"] = pulled_refs
     if written_attachments:
         output["attachments_written"] = written_attachments
     if not res.ok:

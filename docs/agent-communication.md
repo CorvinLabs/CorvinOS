@@ -174,6 +174,17 @@ filter because it is the receiver's own statement about completeness. Files the 
 counted (the first was asked for, the second must not tell a hostile worker what the filter caught).
 Proof: `corvin_operator/bridges/shared/test_a2a_attachments_dropped_e2e.py`.
 
+**Files above the inline cap travel by reference (ADR-2287).** A requester on this build asks for references
+(`result_schema.attachments_by_reference: true`, set by `RemoteTriggerSender.send`; `false` keeps the drop report
+above). A file that does not fit the remaining inline budget is then not dropped: the holder gates it (name, size
+ceiling, L34 classification against the origin's `max_data_classification`, L35 egress), records `A2A.object_issued`
+and puts a reference `{name, mime, size, sha256, classification, ref_id, inline: false}` into the signed response's
+`attachments` list. `SendResult.attachment_refs` carries it; `RemoteTriggerSender.pull_object` (and
+`corvin-a2a send --attach-out-dir`) fetches the bytes over the signed `object-pull` op and keeps them only if the
+final sha256 equals the signed one. The inline files meet the same gate, so a file refused for classification or
+egress is counted in `attachments_dropped` (`classification_exceeded`, `egress_denied`, `too_large`, …) whether it
+would have travelled inline or by reference. Details: `docs/claude-ref/layer-38-a2a-network.md` § Large objects.
+
 **What a worker can do with each media type (measured, not assumed).** The protocol accepts any media type as bytes;
 what the receiving worker does with the file depends on its engine and its tool grant. Measured on 2026-10-25 with a
 real `claude_code` worker behind a real HTTP receiver, origin granted `allow_read_files` only (no Bash, no network), one

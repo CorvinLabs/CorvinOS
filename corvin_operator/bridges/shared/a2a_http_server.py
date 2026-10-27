@@ -129,6 +129,10 @@ _PING_ANON_RATE_RPM = 1200.0   # pre-auth, callers that pass no address
 # stays only as a coarse flood ceiling.
 _PING_PREAUTH_PAIR_RPM = 120.0
 _PING_FLOOD_CEILING_RPM = 6000.0
+# ADR-2287 object pulls: one per chunk (1 MiB), so a 256 MiB object is 256 pulls. Own buckets, so a
+# large pull neither starves the peer's liveness pings nor is starved by them.
+_OBJECT_PULL_PREAUTH_RPM = 1200.0
+_OBJECT_PULL_RPM = 600.0
 
 
 _PING_SEEN: "collections.OrderedDict[tuple[str, str], float]" = collections.OrderedDict()
@@ -250,10 +254,14 @@ def process_ping_request(
     # of pings (valid or not) must not burn CPU/disk via OriginRegistry.load.
     # Keyed on the SOURCE, never on the claimed origin_id — see
     # _PING_RATE_BUCKETS above.
+    # ADR-2287: an object pull is a ping with an extra signed op; a large object is many pulls, so
+    # pulls draw on their own (larger) buckets instead of starving the peer's liveness pings.
+    _is_pull = "object_pull" in req
     try:
         _src = f"addr:{str(client_addr)[:64]}" if client_addr else "anon"
         _claimed = str(origin_id)[:128] if isinstance(origin_id, str) else "?"
-        _pre_ok = (_ping_rate_ok(f"{_src}|origin:{_claimed}", _PING_PREAUTH_PAIR_RPM)
+        _pre_ok = (_ping_rate_ok(f"{_src}|{'pull' if _is_pull else 'origin'}:{_claimed}",
+                                 _OBJECT_PULL_PREAUTH_RPM if _is_pull else _PING_PREAUTH_PAIR_RPM)
                    and _ping_rate_ok(_src, _PING_FLOOD_CEILING_RPM))
         if not _pre_ok:
             return 429, {"reason": "rate_limited"}
@@ -314,10 +322,22 @@ def process_ping_request(
     # answered without charging, so replays cannot drain the real peer's
     # budget into 429s.
     try:
-        if not _ping_seen(origin_id[:128], str(ping_id)[:128]):
+        if _is_pull:
+            # charged every time: a replayed pull is refused by the object store, not waved through
+            if not _ping_rate_ok(f"pull:{origin_id[:128]}", _OBJECT_PULL_RPM):
+                return 429, {"reason": "rate_limited"}
+        elif not _ping_seen(origin_id[:128], str(ping_id)[:128]):
             if not _ping_rate_ok(f"origin:{origin_id[:128]}"):
                 return 429, {"reason": "rate_limited"}
     except Exception:
+        pass
+
+    # ADR-2287: the object store's TTL sweep rides on the authenticated ping (each peer pings about
+    # once a minute); unforced, it runs at most once a minute per store.
+    try:
+        import a2a_objects as _objs  # noqa: PLC0415
+        _objs.sweep_expired(audit=getattr(receiver, "_audit_best_effort", None))
+    except Exception:  # noqa: BLE001 — retention never breaks a ping
         pass
 
     # Record heartbeat (if supported)
@@ -384,6 +404,39 @@ def process_ping_request(
                             "via": "responder"})
     except Exception:  # noqa: BLE001 — a failed stage lookup is still a valid pong
         response.pop("task_stage", None)
+
+    # ADR-2287: the signed ``object-pull`` op. Its own HMAC covers the ping's three fields plus the
+    # op, ref_id, offset and length (a captured pull cannot be re-aimed); a pull whose signature
+    # does not verify gets the same opaque 403 as a bad ping — never a byte, never a hint. The answer
+    # (one chunk or one closed refusal code) is signed below with the rest of the pong.
+    if _is_pull:
+        _op, _psig = req.get("object_pull"), req.get("pull_sig")
+        if not isinstance(_op, dict) or not _is_hex64(_psig):
+            return 403, {"reason": "ping_rejected"}
+        _ref, _off, _len = _op.get("ref_id"), _op.get("offset"), _op.get("length")
+        try:
+            import a2a_objects as _objs  # noqa: PLC0415
+            _pexp = _hmac.new(bytes.fromhex(origin_cfg["hmac_key"]), _objs.pull_canonical(
+                ping_id=ping_id, issued_at=issued_at, origin_id=origin_id, ref_id=_ref,
+                offset=_off, length=_len), hashlib.sha256).hexdigest()
+        except Exception:  # noqa: BLE001 — unencodable fields: refused like a bad signature
+            return 403, {"reason": "ping_rejected"}
+        if not _hmac.compare_digest(_psig.lower(), _pexp):
+            return 403, {"reason": "ping_rejected"}
+        try:
+            _ep = getattr(receiver, "_objects_endpoints", None)
+            _chunk, _refusal = _objs.serve(
+                origin_id=origin_id, origin_cfg=origin_cfg, ref_id=_ref, offset=_off, length=_len,
+                pull_id=ping_id, tenant_id=getattr(receiver, "_tenant_id", None),
+                endpoints_dir=Path(_ep) if _ep is not None else _endpoints_dir(),
+                audit_strict=receiver._audit_strict,
+                audit=getattr(receiver, "_audit_best_effort", None))
+        except Exception:  # noqa: BLE001 — a holder fault is "unavailable", never a 500 with detail
+            _chunk, _refusal = None, "object_unavailable"
+        if _chunk is not None:
+            response["object_chunk"] = _chunk
+        else:
+            response["object_refusal"] = _refusal if _refusal in _objs.REFUSALS else "object_unavailable"
 
     # Sign response with recv_key
     response_canonical = json.dumps(response, separators=(",", ":"), sort_keys=True)
@@ -939,6 +992,9 @@ def build_server(
         forge_se=forge_se,
         group_message_handler=group_message_handler,
     )
+    # ADR-2287: the object gate's L35 check reads a pairing's peer host from here (None = the
+    # env-or-default dir, like the friendship-ack handler).
+    receiver._objects_endpoints = endpoints_dir
 
     class _Handler(_A2AHandler):
         pass

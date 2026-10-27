@@ -2212,3 +2212,49 @@ pinned to the direct path's 4 MiB body cap. A file larger than the cap cannot tr
 moves it as a signed reference. The comment above `remote_trigger_sender._MAX_RESPONSE_BYTES` that read "16 x 1 MiB" was
 corrected to these numbers. The 413 that surfaces as `unreachable` on the direct path is a known mislabel, recorded
 here and left unchanged (no wire change in T-0301).
+
+### Large objects: a signed reference, then a signed pull (ADR-2287, T-0302, 2026-10-27)
+
+![large object pull](../diagrams/33-a2a-large-object-pull.svg)
+
+Direction: **worker output** (the peer's worker wrote a file, the requester wants it). The holder is the peer that
+ran the worker; the requester pulls. Inline stays exactly as before for everything that fits the 1 MiB / 16-file cap.
+
+| Step | Where | What |
+|---|---|---|
+| Ask | `remote_trigger_sender._send_impl` | The signed envelope's `result_schema` carries `attachments_by_reference: true` unless the caller set it `false`. A receiver that predates ADR-2287 ignores the key and keeps dropping with `byte_cap`; a holder never issues a reference to a requester that did not ask (an old requester would refuse the whole response on a content-less attachment). |
+| Stage | `a2a_worker._harvest_report` → `a2a_objects.stage_file` | A file over the remaining inline budget is copied (hashed while copying) into `<tenant>/global/a2a_feed/objects/staging/` before the scratch directory is deleted. Not servable yet. The operator's hard ceiling and the store quota (2 GiB per tenant) already apply. It still counts against the 16-entry list. |
+| Gate + issue | `RemoteTriggerReceiver._release_outputs` → `a2a_objects.object_gate` / `issue` | ONE gate for every output object, inline or staged: name rules, size ceiling (`max_object_bytes` per origin under `spec.a2a.object_max_bytes`, default 256 MiB, never above 4 GiB), **L34** — the object's class is `max(the task's inbound attachment class, classify_task(content))` for text, `INTERNAL` for binary (the ADR-0077 C-6 default for an unlabelled attachment; the text heuristics read noise as personal data) — against the origin's `max_data_classification` (default `INTERNAL`), and **L35** — the tenant egress policy (`load_egress_gate_for_tenant`) against the origin's host (its `peer_url`/`url`, else the pairing's endpoint file; unknown = `"unknown"`, which a deny policy refuses). A refusal deletes the staged bytes, records `A2A.object_refused` and counts `attachments_dropped.<code without object_>`. A passed staged file is moved into the store and recorded `A2A.object_issued` (audit FIRST: if the record does not commit the bytes are deleted and nothing is handed out). TTL `object_ttl_s` (default 900 s, 60 s .. 24 h), budget `object_max_pulls` × size bytes (default 3, at most 10). |
+| Reference | signed `ResponseEnvelope.attachments` | `{name, mime, size, sha256, classification, ref_id, inline: false}`, no `content_b64`; covered by the response HMAC. The requester shape-checks it (`a2a_objects.validate_reference`: exactly these keys, legal name, size 1..4 GiB, 64-hex digest, closed class, `ref_id` 32-64 url-safe chars) and exposes it as `SendResult.attachment_refs`; `SendResult.attachments` stays inline-only. The count cap covers the whole list. |
+| Pull | `RemoteTriggerSender.pull_object` → `_object_pull_request` → `_http_ping_probe(object_pull=…)` | One signed ping per chunk (≤ 1 MiB, `CHUNK_MAX_BYTES`) carrying `object_pull: {ref_id, offset, length}` and `pull_sig` = HMAC(hmac_key, `{ping_id, issued_at, origin_id, op: "object-pull", ref_id, offset, length}`). Same transport ladder as the ADR-2242 stage query: direct, relay fallback, relay first once it is the known route. A refused chunk is retried at most twice with a FRESH request (a lost answer must not turn into a self-inflicted replay). A requester never pulls more than its own operator ceiling. |
+| Serve | `a2a_http_server.process_ping_request` → `a2a_objects.serve` | After the ping signature and freshness: the pull signature (bad = the opaque 403 of a bad ping), then: unknown, expired and another origin's `ref_id` answer the same `object_unavailable` (no enumeration oracle; the TTL sweep removes the expired one first), a used ping id `object_pull_replayed` (the ledger is on disk before the chunk leaves), a range outside the object or longer than 1 MiB `object_bad_range`, an exhausted budget `object_pull_budget_exhausted` (the bytes are deleted the moment the budget is used up; the tombstone answers until the TTL), and the same `object_gate` again (`object_classification_exceeded`, `object_egress_denied`, `object_too_large`). Each served chunk is recorded `A2A.object_pulled` FIRST; an unrecorded chunk is never served. The answer — `object_chunk: {ref_id, offset, length, data_b64}` or `object_refusal: <code>` — is signed with the rest of the pong (recv_key). Pulls draw on their own rate buckets (1200/min pre-auth per source+origin, 600/min per authenticated origin) so a large pull neither starves nor is starved by liveness pings. |
+| Verify | `pull_object` | Each chunk must echo the requested `ref_id`/`offset`/`length` and decode to exactly `length` bytes; the final sha256 must equal the SIGNED reference's (`object_digest_mismatch` otherwise). With `dest` the bytes stream to a hidden `.part` file renamed into place only after the digest matched; a refused pull leaves nothing behind. One `A2A.object_fetched` record per pull. A holder that answers a plain pong (a build without the op) gives `object_pull_unsupported` — a closed refusal, never a silent loss. |
+| Retention + erasure | `a2a_objects.sweep_expired`, `erase_origin`, `clear` | Expired references are swept on every issue and pull and, unforced (at most once a minute), from every authenticated ping (`A2A.object_expired`, reason `ttl`, or `budget` when the budget ran out). The store lives inside the A2A feed directory, so `L-a2a-feed` erasure covers it: `a2a_feed.erase_peer` calls `erase_origin` (bytes + record), `a2a_feed.clear` calls `clear`. Staging files older than 24 h are removed by the sweep. |
+
+**Audit (metadata only).** `A2A.object_issued` / `object_pulled` / `object_expired` / `object_refused` (holder) and
+`A2A.object_fetched` (requester) carry an 8-char ref-id prefix, size, a 16-hex sha256 prefix, classification, origin /
+endpoint, offsets and closed reason codes. Never a file name, never a byte, never a full digest or ref id. All five are in
+`EVENT_SEVERITY` and `_EVENT_ALLOWLIST`; the requester's backstop (`_AUDIT_ALLOWED_KEYS`) knows `ref_prefix`, `size`,
+`sha_prefix`.
+
+**Behaviour change for inline output files.** Before ADR-2287 an output file that fit inline passed only the name and
+cap rules. It now meets the same `object_gate` as a reference: a text file whose content classifies above the origin's
+`max_data_classification` (a `[class:confidential]` marker, a secret, personal data) or an egress policy that forbids
+the origin's host drops it, counted in `attachments_dropped`. The response `data` (the worker's JSON answer) is not
+gated by this — it is not an object.
+
+**Not built (named, not hidden).** The REQUEST direction (a sender attaching a file above 1 MiB to a task) is still
+refused locally with *Invalid attachment*; references are issued only for worker output. The console's peer chat and the
+MCP `a2a_send` tool show no reference row and do not pull; the CLI (`corvin-a2a send --attach-out-dir`) and the Python
+API (`RemoteTriggerSender.pull_object`) do. An offline holder means the pull fails (`object_unreachable`) until it is
+back and the TTL has not run out.
+
+Proof: `corvin_operator/bridges/shared/test_a2a_large_object_reference_e2e.py` — every scenario once over direct HTTP and
+once over a local relay (12 MiB + 12 345 B object by reference with matching digest; digest swap on the holder and a
+chunk altered in flight both refused; a replayed pull refused; another origin, an unknown and an expired `ref_id` give
+byte-identical answers apart from the ping id, clock and signature; per-origin ceiling, pull budget, oversized range and
+a requester-side ceiling refused; L34 at issue (inline and reference alike) and again at pull; L35 at issue and at pull;
+small files inline and byte-identical; a requester that does not ask gets the old drop report; an old holder gives
+`object_pull_unsupported`; an unsigned pull gets the opaque refusal; erasure removes the object; the tenant chain verifies
+after every test) plus the CLI. Mutation probes: origin binding switched off (`_origin_matches` → True) and the replay
+ledger switched off both turn their tests red on both transports.

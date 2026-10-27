@@ -124,7 +124,11 @@ class TestAttachmentsDropped(unittest.TestCase):
         server, sender = self._pair(Path(self._tmp.name), engine)
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        return sender.send("peer", instruction="produce the parts", result_schema={"properties": {"ok": {"type": "boolean"}}},
+        # Inline only: a requester that asks for references (the default since ADR-2287) gets the
+        # files over the byte cap as references instead (test_a2a_large_object_reference_e2e.py).
+        return sender.send("peer", instruction="produce the parts",
+                           result_schema={"properties": {"ok": {"type": "boolean"}},
+                                          "attachments_by_reference": False},
                            ttl_s=60, timeout_s=60)
 
     def test_byte_cap_overflow_is_reported_in_the_signed_response_and_the_audit(self):
