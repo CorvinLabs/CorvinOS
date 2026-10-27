@@ -170,6 +170,15 @@ def _host_tenant(rec: session_auth.SessionRecord) -> str:
     return host
 
 
+def _require_host_session(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> None:
+    """Route dependency of every mutating A2A pairing/endpoint/origin route: those files are
+    host-scoped, so a session of another tenant is refused (403) before the handler runs —
+    the same rule the feed routes apply. The handler's own CSRF check is unchanged."""
+    _host_tenant(rec)
+
+
 def _staged_ttl_ok(value: Any) -> bool:
     import math  # noqa: PLC0415
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -406,7 +415,7 @@ class GenerateRequest(BaseModel):
     ttl_minutes: int = Field(default=60, ge=5, le=2880)
 
 
-@router.post("/remote-trigger/pair/generate")
+@router.post("/remote-trigger/pair/generate", dependencies=[Depends(_require_host_session)])
 def pair_generate(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     body: GenerateRequest,
@@ -505,7 +514,7 @@ class RedeemRequest(BaseModel):
     spawn_worker: bool = Field(default=False)
 
 
-@router.post("/remote-trigger/pair/redeem")
+@router.post("/remote-trigger/pair/redeem", dependencies=[Depends(_require_host_session)])
 async def pair_redeem(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     body: RedeemRequest,
@@ -673,7 +682,7 @@ class AcceptRequest(BaseModel):
     signature: str
 
 
-@router.post("/remote-trigger/pair/accept")
+@router.post("/remote-trigger/pair/accept", dependencies=[Depends(_require_host_session)])
 def pair_accept(body: AcceptRequest) -> dict[str, Any]:
     """Server-to-server: redeemer calls this so the issuer installs pairing files.
 
@@ -844,7 +853,7 @@ class CLIInviteResponse(BaseModel):
     exp: float | None
 
 
-@router.post("/remote-trigger/pair/cli-invite")
+@router.post("/remote-trigger/pair/cli-invite", dependencies=[Depends(_require_host_session)])
 def generate_cli_invite(
     body: CLIInviteRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -909,7 +918,7 @@ class CLIAcceptResponse(BaseModel):
     exp: float | None
 
 
-@router.post("/remote-trigger/pair/cli-accept")
+@router.post("/remote-trigger/pair/cli-accept", dependencies=[Depends(_require_host_session)])
 def accept_cli_invite(
     body: CLIAcceptRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -1026,7 +1035,7 @@ def list_invites(
     }
 
 
-@router.delete("/remote-trigger/pair/invites/{ikey}")
+@router.delete("/remote-trigger/pair/invites/{ikey}", dependencies=[Depends(_require_host_session)])
 def revoke_invite(
     ikey: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -1158,7 +1167,7 @@ class MyUrlRequest(BaseModel):
     url: str = Field(..., min_length=1, max_length=512)
 
 
-@router.post("/remote-trigger/pair/my-url")
+@router.post("/remote-trigger/pair/my-url", dependencies=[Depends(_require_host_session)])
 def set_my_a2a_url(
     body: MyUrlRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -1227,7 +1236,7 @@ class RelayUrlRequest(BaseModel):
     url: str = Field(..., min_length=1, max_length=512)
 
 
-@router.post("/remote-trigger/pair/relay-url")
+@router.post("/remote-trigger/pair/relay-url", dependencies=[Depends(_require_host_session)])
 def set_my_a2a_relay_url(
     body: RelayUrlRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -1278,7 +1287,7 @@ class FriendshipCreateResponse(BaseModel):
     expires: float | None
 
 
-@router.post("/remote-trigger/pair/friendship/create")
+@router.post("/remote-trigger/pair/friendship/create", dependencies=[Depends(_require_host_session)])
 def friendship_create(
     body: FriendshipCreateRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -1436,7 +1445,7 @@ def friendship_token_pending_peek(
     )
 
 
-@router.post("/remote-trigger/pair/friendship-token/confirm/{pending_id}")
+@router.post("/remote-trigger/pair/friendship-token/confirm/{pending_id}", dependencies=[Depends(_require_host_session)])
 def friendship_token_confirm(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     pending_id: str,
@@ -1488,7 +1497,7 @@ def friendship_token_confirm(
     )
 
 
-@router.post("/remote-trigger/pair/friendship-token/discard/{pending_id}")
+@router.post("/remote-trigger/pair/friendship-token/discard/{pending_id}", dependencies=[Depends(_require_host_session)])
 def friendship_token_discard(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     pending_id: str,
@@ -1536,7 +1545,7 @@ class FriendshipImportResponse(BaseModel):
     peer_reports_reachable: bool = False
 
 
-@router.post("/remote-trigger/pair/friendship/import")
+@router.post("/remote-trigger/pair/friendship/import", dependencies=[Depends(_require_host_session)])
 def friendship_import(
     body: FriendshipImportRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -1755,7 +1764,7 @@ class FriendshipSetUrlRequest(BaseModel):
     peer_url: str = Field(..., min_length=1, max_length=512)
 
 
-@router.post("/remote-trigger/pair/friendship/set-url")
+@router.post("/remote-trigger/pair/friendship/set-url", dependencies=[Depends(_require_host_session)])
 def friendship_set_url(
     body: FriendshipSetUrlRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -1796,7 +1805,7 @@ def friendship_set_url(
 
 # ── DELETE /remote-trigger/pair/friendship/{kid} ──────────────────────
 
-@router.delete("/remote-trigger/pair/friendship/{kid}")
+@router.delete("/remote-trigger/pair/friendship/{kid}", dependencies=[Depends(_require_host_session)])
 def friendship_revoke(
     kid: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -2036,7 +2045,7 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
     }
 
 
-@router.post("/remote-trigger/pair/friendship/{kid}/recheck")
+@router.post("/remote-trigger/pair/friendship/{kid}/recheck", dependencies=[Depends(_require_host_session)])
 def friendship_recheck(
     kid: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -2068,7 +2077,7 @@ class EnableRelayRequest(BaseModel):
     relay_url: str = Field(default="", max_length=512)
 
 
-@router.post("/remote-trigger/pair/friendship/{kid}/enable-relay")
+@router.post("/remote-trigger/pair/friendship/{kid}/enable-relay", dependencies=[Depends(_require_host_session)])
 def friendship_enable_relay(
     kid: str,
     body: EnableRelayRequest,
@@ -2252,7 +2261,7 @@ def _validate_endpoint_url(raw: str) -> str:
     return url
 
 
-@router.patch("/remote-trigger/origins/{origin_id}")
+@router.patch("/remote-trigger/origins/{origin_id}", dependencies=[Depends(_require_host_session)])
 def patch_origin(
     origin_id: str,
     body: OriginPatchRequest,
@@ -2342,7 +2351,7 @@ def patch_origin(
 # ── DELETE /remote-trigger/origins/{origin_id} ────────────────────────
 
 
-@router.delete("/remote-trigger/origins/{origin_id}")
+@router.delete("/remote-trigger/origins/{origin_id}", dependencies=[Depends(_require_host_session)])
 def delete_origin(
     origin_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -2384,7 +2393,7 @@ def delete_origin(
 # ── DELETE /remote-trigger/endpoints/{endpoint_id} ───────────────────
 
 
-@router.delete("/remote-trigger/endpoints/{endpoint_id}")
+@router.delete("/remote-trigger/endpoints/{endpoint_id}", dependencies=[Depends(_require_host_session)])
 def delete_endpoint(
     endpoint_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -2437,7 +2446,7 @@ class EndpointPatchRequest(BaseModel):
     reset_instance_pin: bool = Field(default=False)
 
 
-@router.patch("/remote-trigger/endpoints/{endpoint_id}")
+@router.patch("/remote-trigger/endpoints/{endpoint_id}", dependencies=[Depends(_require_host_session)])
 def patch_endpoint(
     endpoint_id: str,
     body: EndpointPatchRequest,
@@ -2533,7 +2542,7 @@ class EndpointGdprRoleRequest(BaseModel):
             raise ValueError(str(exc)) from exc
 
 
-@router.put("/remote-trigger/endpoints/{endpoint_id}/gdpr-role")
+@router.put("/remote-trigger/endpoints/{endpoint_id}/gdpr-role", dependencies=[Depends(_require_host_session)])
 def put_endpoint_gdpr_role(
     endpoint_id: str,
     body: EndpointGdprRoleRequest,

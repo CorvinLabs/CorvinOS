@@ -91,6 +91,12 @@ def _load_paths():
     return mod
 
 
+def host_tenant() -> str:
+    """The tenant A2A state belongs to on this instance (host-scoped): ``CORVIN_TENANT_ID``,
+    else ``_default`` — the one resolver every writer AND the outbox drain use."""
+    return _load_paths()._resolve_tenant_id(None)
+
+
 def feed_dir(tenant_id: str | None = None) -> Path:
     override = os.environ.get("CORVIN_A2A_FEED_DIR")
     if override:

@@ -1423,6 +1423,12 @@ promised path looks like there, and what it took:
   with a Cancel button (`GET /a2a/feed` → `outbox` map of task id → deadline, attempts; never text;
   `POST /a2a/feed/outbox/{task_id}/cancel`). The `ConnectivityManager` runs the drain in its OWN task every
   10 s (`OUTBOX_TICK_S`) so a blocking send never delays the presence passes.
+  The drain reads the HOST tenant's outbox (`a2a_feed.host_tenant()`, the tenant every sender enqueues into;
+  `start_manager(tenant_id=)` overrides it) — never a literal `_default`. After an attempt that may have left a
+  copy queued at the relay, the next attempt waits until that copy's deliver-by (send budget) + the relay's
+  30 s grace has passed (`stale_until`), and the retry clock starts when the blocking send RETURNED. The pairing,
+  endpoint and origin MUTATION routes (`a2a_pair.py`) refuse a session of a non-host tenant with 403, like the
+  feed routes (`_require_host_session`).
   **Rules a retry follows** (`a2a_outbox._drain_one`): a failure that proved non-delivery is resent when the
   peer looks active or after 30 s → 300 s backoff, never closer than 15 s; a failure that MAY have delivered
   is resent only after the signed stage query (`task_status`, ADR-2242) says the peer has never heard of the
@@ -1430,7 +1436,9 @@ promised path looks like there, and what it took:
   stage query is never retried (the message ends `unconfirmed`). Every attempt is a fresh envelope with the
   same `task_id`; an entry is marked "may have delivered" BEFORE each attempt, so a crash mid-send is never
   read as a clean miss. Closing an entry (sent, delivered, expired, cancelled, unconfirmed, failed) deletes
-  its text; `a2a_feed.erase_peer`/`clear` erase the outbox too (GDPR Art. 17). Audit: `A2A.outbox_enqueued`,
+  its text from memory AND rewrites `outbox.jsonl` (no line on disk keeps it); a drain pass re-reads each entry
+  under the lock right before sending, so an entry cancelled or erased (Art. 17) while an earlier send blocks is
+  never sent, and what is sent is the freshly read text; `a2a_feed.erase_peer`/`clear` erase the outbox too (GDPR Art. 17). Audit: `A2A.outbox_enqueued`,
   `A2A.outbox_retried`, `A2A.outbox_closed` (ids, state, counts; never text).
   **A bug this exposed:** the relay pins a reply slot (`<kid>:reply:<task_id>`) to the random credential of
   its first registrant, so ANY second attempt with the same `task_id` was refused with `auth_key_mismatch`

@@ -20,7 +20,8 @@ Invariants
 ----------
 
 * **Bounded.** At most ``MAX_WAITING`` waiting entries, text <= 16 KiB, deadline <= 7 days.
-* **Text is kept only while waiting.** Closing an entry (any state) deletes its text.
+* **Text is kept only while waiting.** Closing an entry (any state) deletes its text from memory AND
+  rewrites the file, so no line on disk carries it.
 * **Never raises into the send path.** Every public function swallows storage errors.
 * **Erasable.** ``erase_peer`` / ``clear`` are called by ``a2a_feed`` (GDPR Art. 17, L36).
 
@@ -52,6 +53,8 @@ BACKOFF_MAX_S = 300.0
 _MAX_FILE_BYTES = 1024 * 1024
 _FINAL_KEEP_S = 7 * 86400
 _ID_MAX = 128
+#: the relay drops a queued copy only this long after its deliver-by (a2a_relay._DELIVER_BY_GRACE_S)
+RELAY_GRACE_S = 30.0
 
 WAITING = "waiting"
 #: closed states: sent (peer answered), delivered (peer knows the task), expired, cancelled,
@@ -68,6 +71,15 @@ Audit = Callable[[str, str, dict], None]
 def _root(tenant_id: str | None = None) -> Path:
     import a2a_feed  # noqa: PLC0415 — same dir/lock/retention as the feed
     return a2a_feed.feed_dir(tenant_id)
+
+
+def _send_budget_s() -> float:
+    """How long one blocking send may wait (= the deliver-by horizon of the copy it queues)."""
+    try:
+        import remote_trigger_sender as rts  # noqa: PLC0415
+        return float(max(rts._DEFAULT_TIMEOUT_S, rts._DEFAULT_TTL_S + rts._TIMEOUT_MARGIN_S))
+    except Exception:  # noqa: BLE001
+        return 120.0
 
 
 def _clean_id(v: Any) -> str:
@@ -213,7 +225,12 @@ def close(task_id: str, state: str, *, tenant_id: str | None = None,
             if e is None or e.get("state") != WAITING:
                 return None
             e.update(state=state, text="", closed_at=time.time() if now is None else float(now))
-            _persist(root, e)
+            # Rewrite the file: appending a text-less line would leave the original line (and the
+            # withdrawn text) on disk until compaction.
+            try:
+                _rewrite(root, _load(root))
+            except Exception:  # noqa: BLE001 — never into the send path
+                _persist(root, e)
             return dict(e)
     except Exception:  # noqa: BLE001
         return None
@@ -328,10 +345,14 @@ def drain(sender: Any, *, audit: Audit | None = None,
     t = time.time() if now is None else float(now)
     counts = {"checked": 0, "expired": 0, "resent": 0, "sent": 0, "delivered": 0,
               "kept": 0, "unconfirmed": 0, "failed": 0}
-    for e in waiting(tenant_id):
-        tid = e["task_id"]
+    for snap in waiting(tenant_id):
+        tid = snap["task_id"]
         with _lock:
-            if tid in _inflight:
+            # The snapshot may be stale: an earlier blocking send gave the operator time to cancel
+            # or erase this entry. Re-read it and send only what is STILL waiting, with its
+            # current text.
+            e = get(tid, tenant_id)
+            if e is None or e.get("state") != WAITING or tid in _inflight:
                 continue
             _inflight.add(tid)
         try:
@@ -355,6 +376,11 @@ def _drain_one(sender: Any, e: dict[str, Any], audit: Audit | None,
         counts["expired"] += 1
         return
     if now - float(e.get("last_attempt_at") or 0) < MIN_ATTEMPT_GAP_S:
+        counts["kept"] += 1
+        return
+    if now < float(e.get("stale_until") or 0):
+        # The previous copy may still sit in a relay queue and run on the peer until its
+        # deliver-by (+ grace) passes: a retry before then could run the task twice.
         counts["kept"] += 1
         return
     active = False
@@ -396,10 +422,20 @@ def _drain_one(sender: Any, e: dict[str, Any], audit: Audit | None,
 
     # Crash-safe: mark the entry "may have delivered" BEFORE the attempt, so a process that dies
     # mid-send is treated as unconfirmed on the next pass, never as provably undelivered.
-    update(tid, tenant_id=tenant_id, last_attempt_at=now, attempts=attempts + 1, maybe_delivered=True)
+    # The row is re-read under the lock by update(): a cancel/erase that landed since the
+    # snapshot makes it return None and nothing is sent. The text sent is the one read here.
+    fresh = update(tid, tenant_id=tenant_id, last_attempt_at=now, attempts=attempts + 1,
+                   maybe_delivered=True, stale_until=now + _send_budget_s() + RELAY_GRACE_S)
+    if fresh is None:
+        counts["kept"] += 1
+        return
     _emit(audit, "A2A.outbox_retried", e, attempts=attempts + 1)
     counts["resent"] += 1
-    res = sender.send(ep, e.get("text") or "", task_id=tid, feed_task_recorded=True, outbox_retry=True)
+    started = time.time()
+    res = sender.send(ep, fresh.get("text") or "", task_id=tid, feed_task_recorded=True, outbox_retry=True)
+    elapsed = max(0.0, time.time() - started)
+    done = now + elapsed                      # when the blocking send RETURNED, on the pass's clock
+    stale_until = now + max(elapsed, _send_budget_s()) + RELAY_GRACE_S
 
     if getattr(res, "ok", False):
         _close_and_report(e, "sent", audit, tenant_id, now=now, feed_status=None, feed_error=None)
@@ -408,8 +444,10 @@ def _drain_one(sender: Any, e: dict[str, Any], audit: Audit | None,
     cat = getattr(res, "error_category", "")
     provably_not = (cat == "unreachable") and not getattr(res, "maybe_delivered", False)
     if provably_not or cat == "timeout_transport" or getattr(res, "maybe_delivered", False):
-        update(tid, tenant_id=tenant_id, maybe_delivered=not provably_not,
-               next_at=now + backoff_s(attempts + 1))
+        # A provable miss left no copy anywhere; anything else may sit queued at the relay.
+        hold = 0.0 if provably_not else stale_until
+        update(tid, tenant_id=tenant_id, maybe_delivered=not provably_not, last_attempt_at=done,
+               stale_until=hold, next_at=max(done + backoff_s(attempts + 1), hold))
         counts["kept"] += 1
         return
     # The peer answered and refused (rejected, auth, filtered ...): send() already wrote that row.

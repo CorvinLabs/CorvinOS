@@ -364,12 +364,17 @@ def _healthy(summary: dict[str, Any]) -> bool:
 class ConnectivityManager:
     def __init__(
         self, *, receiver: Any, origins_dir: Path, endpoints_dir: Path,
-        pending_dir: Path, tenant_id: str = "_default",
+        pending_dir: Path, tenant_id: str | None = None,
     ) -> None:
         self._receiver = receiver
         self._origins_dir = Path(origins_dir)
         self._endpoints_dir = Path(endpoints_dir)
         self._pending_dir = Path(pending_dir)
+        if tenant_id is None:
+            # A2A is host-scoped: senders enqueue into the HOST tenant's outbox, so the drain must
+            # read that same one (a literal "_default" never drained any other host).
+            import a2a_feed  # noqa: PLC0415
+            tenant_id = a2a_feed.host_tenant()
         self._tenant_id = tenant_id
         self.ingress = a2a_ingress.IngressRunner(
             receiver=receiver, endpoints_dir=self._endpoints_dir,
@@ -696,6 +701,7 @@ def get_manager() -> ConnectivityManager | None:
 
 async def start_manager(
     *, receiver: Any, origins_dir: Path, endpoints_dir: Path, pending_dir: Path,
+    tenant_id: str | None = None,
 ) -> ConnectivityManager:
     """Start (once per process) and return the connectivity manager."""
     global _MANAGER
@@ -703,7 +709,7 @@ async def start_manager(
         return _MANAGER
     mgr = ConnectivityManager(
         receiver=receiver, origins_dir=origins_dir,
-        endpoints_dir=endpoints_dir, pending_dir=pending_dir,
+        endpoints_dir=endpoints_dir, pending_dir=pending_dir, tenant_id=tenant_id,
     )
     mgr.start()
     _MANAGER = mgr
