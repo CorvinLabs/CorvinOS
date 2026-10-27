@@ -40,6 +40,7 @@ Compliance:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -132,6 +133,7 @@ class FeedbackResponse(BaseModel):
     hypotheses: list[HypothesisDTO]
     current_config: dict[str, float]
     current_version: Optional[str]
+    trust_weight: float = 1.0  # ADR-0534 Layer 3 weight that scaled every hypothesis delta
 
 
 class PreferencesDTO(BaseModel):
@@ -238,11 +240,13 @@ def _emit_learning(
         return False
 
 
-def _write_feedback_gated(tenant_id: str, request: Any) -> None:
+def _write_feedback_gated(tenant_id: str, request: Any, producer: str) -> float:
     """Persist this feedback as a FEEDBACK learning event, THROUGH the ADR-0534 gate, now.
 
-    Returns only when the event was accepted and committed (core chain first,
-    then disk). ``_emit_learning`` cannot serve here: it only queues, the gate
+    Returns the trust weight the gate stamped on the event, only when the event
+    was accepted and committed (core chain first, then disk). ``producer`` is
+    the authenticated principal (the session's consent subject); the gate keys
+    the trust weight on a hash of it and strips it before persisting. ``_emit_learning`` cannot serve here: it only queues, the gate
     runs later on the emitter's worker, and a rejection (throttle, no matching
     execution, untrusted source) was then LOST after the route had already
     answered "recorded" and let the optimizer act on the feedback. The caller
@@ -264,10 +268,18 @@ def _write_feedback_gated(tenant_id: str, request: Any) -> None:
             "would_repeat": request.would_repeat,
             "has_reason": bool(request.reason),  # the text itself never enters a chain
             "source": "console.learning",
+            "producer": producer,  # hashed by the gate, never persisted
         },
         lom="core/console/corvin_console/routes/method_discovery_api.py:_write_feedback_gated",
     )
     em.write_sync(ev)
+    from core.learning.feedback_gate import admitted_trust_weight  # noqa: PLC0415
+
+    weight = admitted_trust_weight(ev.event_id)
+    if weight is None or not 0.0 < weight <= 1.0:
+        # Recorded, but the weight is unknown: the optimizer must not act as if it were 1.
+        raise RuntimeError("trust weight of the admitted feedback is unknown")
+    return weight
 
 
 def _version_dto(v: Any) -> ConfigVersionDTO:
@@ -309,8 +321,9 @@ async def submit_feedback(
        learning event is written synchronously through the ADR-0534 trust gate —
        rejected (422) or not committed (503), nothing below runs
     2. ``FeedbackInterpreter`` → deterministic ``ConfigHypothesis`` list
-    3. each hypothesis → ``SkillAdapter.run_optimizer_epoch`` fed with the
-       REAL recent task outcomes (``outcome_sink.recent_outcomes``)
+    3. each hypothesis, its delta scaled by the gate's trust weight for this
+       producer (ADR-0534 Layer 3) → ``SkillAdapter.run_optimizer_epoch`` fed
+       with the REAL recent task outcomes (``outcome_sink.recent_outcomes``)
     4. audit: console chain ``learning.feedback_received`` + hash-chained
        ``feedback`` learning event; an accepted hypothesis additionally
        announces ``skill_config_updated`` (via the adapter).
@@ -349,7 +362,8 @@ async def submit_feedback(
     from core.learning.feedback_gate import FeedbackRejected  # noqa: PLC0415
 
     try:
-        await asyncio.to_thread(_write_feedback_gated, rec.tenant_id, request)
+        trust_weight = await asyncio.to_thread(
+            _write_feedback_gated, rec.tenant_id, request, "console:" + consent_subject(rec))
     except FeedbackRejected as exc:
         console_audit.action_denied(
             tenant_id=rec.tenant_id,
@@ -397,6 +411,9 @@ async def submit_feedback(
         adapter = adapters.get(hyp.skill_id)
         if adapter is None:
             adapter = adapters[hyp.skill_id] = _adapter(rec, _skill_id(hyp.skill_id))
+        # ADR-0534 Layer 3: the step is scaled by the producer's trust weight, the same
+        # way loop_closure.apply_outcome_to_skill scales the stream4 step.
+        hyp = dataclasses.replace(hyp, delta=hyp.delta * trust_weight)
         try:
             accepted, why = adapter.run_optimizer_epoch(hyp, successes, total)
         except SkillConfigLockBusy:
@@ -429,6 +446,7 @@ async def submit_feedback(
         hypotheses=out,
         current_config=primary.get_current_config().to_dict(),
         current_version=history[-1].version_id if history else None,
+        trust_weight=trust_weight,
     )
 
 

@@ -65,7 +65,15 @@ def client(tmp_path, monkeypatch):
 
     app = FastAPI()
     app.include_router(route.router, prefix="/v1/console")
-    rec = _fake_session_record("_default")
+    # an owner session: only owner sessions carry consent (core.compliance.consent)
+    rec = dataclasses.replace(_fake_session_record("_default"), tier="owner")
+    # The route is consent-gated (GDPR Art. 6, learning_feedback scope, review c120 P2).
+    from core.compliance import consent_store as _consent_store
+    from core.compliance.consent import consent_subject
+
+    _consent_store._stores.clear()
+    _consent_store.get_consent_store("_default").grant_consent(
+        user_id=consent_subject(rec), scope="learning_feedback")
     app.dependency_overrides[console_deps.require_session] = lambda: rec
     app.dependency_overrides[console_deps.require_csrf] = lambda: rec
     app.dependency_overrides[route.require_session] = lambda: rec
@@ -219,6 +227,12 @@ def test_feedback_on_a_skill_that_never_ran_is_refused_and_moves_nothing(client,
     assert hist["total_count"] == 0
 
 
+def _session_source() -> str:
+    from core.compliance.consent import consent_subject
+    rec = dataclasses.replace(_fake_session_record("_default"), tier="owner")
+    return "console:" + consent_subject(rec)
+
+
 def test_low_trust_shrinks_the_config_step(client, tmp_path):
     """Rejections lower the source's trust; the next accepted outcome moves the
     router's threshold by trust_weight × the full step."""
@@ -234,7 +248,8 @@ def test_low_trust_shrinks_the_config_step(client, tmp_path):
         bad = LearningEvent.create(EventType.FEEDBACK, "os.delegation_router", "_default",
                                    signal={"claimed_output_hash": "sha256:" + "f" * 64})
         with pytest.raises(feedback_gate.FeedbackRejected):
-            feedback_gate.admit(bad, store, now=t0 + i * 120)
+            # the same producer as the client's session (trust is per source, review c120 s1-7)
+            feedback_gate.admit(bad, store, now=t0 + i * 120, source=_session_source())
     before = load_skill_config("os.delegation_router", "_default")[0].confidence_threshold
     r = client.post(BASE, json=_body("os.delegation_router", "t-w", rating=2)).json()
     assert r["trust_weight"] == pytest.approx(0.1)  # 4/4 rejected → the 0.1 floor

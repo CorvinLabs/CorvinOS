@@ -23,9 +23,17 @@ from core.skills.feedback.loop_closure import apply_outcome_to_skill
 from core.skills.feedback.schema import FeedbackEvent, FeedbackType, OutcomeFeedback, validate_feedback
 from core.skills.os_skills.audit_integration import emit_skill_audit_event
 
+from core.compliance.consent import consent_required, consent_subject
+
+from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_session
 from ..deps import require_session_csrf_on_mutation
+
+try:
+    from core.skills.os_skills.feedback_loop import LEARNING_FEEDBACK_CONSENT_SCOPE
+except ImportError:  # pragma: no cover — stripped install; same scope name
+    LEARNING_FEEDBACK_CONSENT_SCOPE = "learning_feedback"
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/feedback/skill", tags=["skill_feedback"])
@@ -145,8 +153,13 @@ class FeedbackStatusResponse(BaseModel):
 # Routes
 # ============================================================================
 
-def _admit_through_trust_gate(req, tenant_id: str, signal) -> float:
-    """Run ADR-0534's gate for this feedback; return its trust weight or raise 422."""
+def _admit_through_trust_gate(req, tenant_id: str, signal, producer: str) -> float:
+    """Run ADR-0534's gate for this feedback; return its trust weight or raise 422.
+
+    ``producer`` is the authenticated principal (the session's consent
+    subject): the gate keys the trust weight on a hash of it, so one bad
+    producer cannot lower another's weight on the same skill.
+    """
     from core.learning.event_store import EventStore  # noqa: PLC0415
     from core.learning.feedback_gate import FeedbackRejected, admit  # noqa: PLC0415
     from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
@@ -158,7 +171,8 @@ def _admit_through_trust_gate(req, tenant_id: str, signal) -> float:
         lom="core/console/corvin_console/routes/stream4_skill_feedback.py:submit_skill_feedback",
     )
     try:
-        admitted = admit(probe, EventStore(tenant_home(tenant_id), tenant_id=tenant_id))
+        admitted = admit(probe, EventStore(tenant_home(tenant_id), tenant_id=tenant_id),
+                         source=producer)
     except FeedbackRejected as e:
         raise HTTPException(status_code=422, detail={
             "error": "feedback_rejected", "reason": e.reason, "audit_ref": e.audit_ref})
@@ -216,6 +230,22 @@ async def submit_skill_feedback(
           "message": "Feedback received and processed by optimizer"
         }
     """
+    # GDPR Art. 6 consent gate — the same scope and the same deny-by-default
+    # store as POST /learning/feedback: this route moves os.delegation_router's
+    # learned config too. Checked BEFORE anything is gated, audited as feedback
+    # or stored; a denial is a 403 and is itself audited.
+    try:
+        await consent_required(LEARNING_FEEDBACK_CONSENT_SCOPE)(rec)
+    except HTTPException as exc:
+        console_audit.action_denied(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="learning.skill_feedback",
+            target_kind="skill",
+            target_id=req.skill_id,
+            reason="consent_required" if exc.status_code == 403 else "consent_unverifiable",
+        )
+        raise
 
     try:
         # The schema's OUTCOME signal is bool or "yes"/"no"/"other" — the rating's sign
@@ -240,7 +270,8 @@ async def submit_skill_feedback(
         # ADR-0534 trust gate — this is the one route whose feedback moves a
         # live skill config, so it must not bypass the gate EventStore applies
         # to every stored FEEDBACK event. Rejection: audited, nothing stored.
-        trust_weight = _admit_through_trust_gate(req, rec.tenant_id, signal)
+        trust_weight = _admit_through_trust_gate(
+            req, rec.tenant_id, signal, "console:" + consent_subject(rec))
 
         # Audit-first: the outcome signal is chained before anything is stored. The
         # helper reports False instead of raising, so a missing commit aborts here.

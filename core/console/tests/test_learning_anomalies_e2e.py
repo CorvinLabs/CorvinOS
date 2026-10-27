@@ -13,6 +13,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_admin_route import _sandbox  # noqa: E402
 
 
+def _grant_feedback_consent(client) -> None:
+    """POST /feedback/skill is consent-gated (learning_feedback, review c120 P2)."""
+    from corvin_console import auth as _auth
+    from core.compliance import consent_store as _consent_store
+    from core.compliance.consent import consent_subject
+
+    rec = _auth.load_session(client.cookies.get("corvin_console_sid"))
+    _consent_store._stores.clear()
+    _consent_store.get_consent_store(rec.tenant_id).grant_consent(
+        user_id=consent_subject(rec), scope="learning_feedback")
+
+
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
@@ -36,6 +48,7 @@ class LearningAnomaliesE2E(unittest.TestCase):
 
     def test_refused_feedback_becomes_one_audited_anomaly_shown_by_the_daemon_route(self):
         with _sandbox(self.tmp) as (client, csrf, home, _):
+            _grant_feedback_consent(client)
             # flow_guard never ran in this sandbox: the reality check refuses every rating, and the
             # throttle refuses the burst; every attempt lands in the persisted decision ledger.
             codes = []
@@ -69,6 +82,7 @@ class LearningAnomaliesE2E(unittest.TestCase):
 
     def test_an_operator_rates_a_recorded_decision_and_the_router_config_moves(self):
         with _sandbox(self.tmp) as (client, csrf, home, _):
+            _grant_feedback_consent(client)
             from core.learning.event_store import EventStore
             from core.learning.learning_events import EventType, LearningEvent
             from core.paths.tenant import tenant_home
