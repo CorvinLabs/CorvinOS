@@ -158,7 +158,7 @@ def test_console_shows_real_token_sums_per_partner_priced_with_our_own_rates(con
                                              "agent_id": "haiku-cheap"}, headers=h)
         assert r.status_code == 200 and r.json()["ok"], r.text
     haiku = _RecordingEngine.spawns[-1]["model"]
-    _engine_reports(monkeypatch, model="acme-local-7b", usage={"input_tokens": 300, "output_tokens": 40})
+    _engine_reports(monkeypatch, model="llama-3.2-3b", usage={"input_tokens": 300, "output_tokens": 40})
     r = c.post(f"{BASE}/delegate", json={"instruction": "Check that.", "endpoint_id": "peer-B",
                                          "agent_id": "haiku-cheap"}, headers=h)
     assert r.status_code == 200 and r.json()["ok"], r.text
@@ -177,8 +177,8 @@ def test_console_shows_real_token_sums_per_partner_priced_with_our_own_rates(con
     want_usd = 2 * _turn_cost_usd(price, 2000, 500, 1000, 10000, model=haiku)
     assert models[haiku]["priced"] is True
     assert models[haiku]["cost_usd"] == pytest.approx(want_usd, rel=1e-6)
-    assert models["acme-local-7b"]["priced"] is False and models["acme-local-7b"]["cost_usd"] is None
-    assert models["acme-local-7b"]["input_tokens"] == 300
+    assert models["llama-3.2-3b"]["priced"] is False and models["llama-3.2-3b"]["cost_usd"] is None
+    assert models["llama-3.2-3b"]["input_tokens"] == 300
     assert row["cost_usd"] == pytest.approx(want_usd, rel=1e-6)
     assert (row["priced_tasks"], row["unpriced_tasks"]) == (2, 1)
     # The peer's own catalogue figure is shown, labelled as declared, and never summed into the cost.
