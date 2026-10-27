@@ -22,7 +22,7 @@
 
 ## What you get
 
-- **Pairing without a central service.** A one-time friendship token (`corvin-a2a:ft1:…`) carries the pairing secret; you send it through any channel you trust. No account, no broker.
+- **Pairing — and exactly what it depends on.** A one-time friendship token (`corvin-a2a:ft1:…`, console *Connect* or `create-token`) carries the pairing secret; you send it through any channel you trust and no hosted service is asked. With `corvin-a2a pair`, **online pairing is checked once against a hosted service; offline pairing (`--offline-pair`) needs no service and is verified by the two operators**, who compare a fingerprint out of band. Traffic between paired installations is peer-to-peer either way.
 - **Signed, replay-proof tasks.** Every TaskEnvelope is HMAC-SHA256 signed, carries a nonce and a TTL, and is checked against the receiver's protocol (version 8).
 - **The receiver stays in charge.** A peer's task is recorded, not executed — unless the receiver set `spawn_worker` for that peer, and even then a per-peer `allow_*` denylist limits which tools the worker may touch.
 - **Proof on both sides.** Pairing, invites, every envelope and every filtered result land in each instance's own hash-chained audit chain; the receiver writes its record before it answers.
@@ -70,6 +70,7 @@ Every failure — bad signature, replay, unknown origin, missing consent — ans
 | Relay fallback (AES-256-GCM store-and-forward) | **GATED** — flag `a2a_relay_fallback` | `a2a_relay.py` |
 | LAN bind | **GATED** — flag `a2a_lan_bind` | gateway |
 | `a2a_send` from chat (two-step, browser + CSRF confirm) | **GATED** | Forge MCP tool |
+| Offline pairing with an out-of-band fingerprint (`pair --offline-pair` → `pair-import` → `pair-confirm` on both sides; accepted as `attested_out_of_band`, no grace cut-off; CLI only) | **LIVE** | `a2a_offline_pairing.py`, `corvin_a2a.py` |
 | Instance-bound attestation (IBC) | **PARTIAL** — new pairings require it; auto-renew open (ADR-2099) | `instance_identity.py` |
 | Group chat with foreign agents (inside the console chat; fan-out, mirror groups, hub relay) | **LIVE** | `chat_group_store.py`, `routes/chat_groups.py`, `pages/chat.tsx` |
 
@@ -99,13 +100,21 @@ corvin-a2a send <endpoint_id> "Summarise the attached report" --attach report.pd
 corvin-a2a revoke-token <kid>
 ```
 
-Grant execution only when you want the peer to run work on your instance: `corvin-a2a pair --spawn-worker` (or `invite --spawn-worker`) sets it for that one origin, and the origin's `allow_*` settings decide which tools its worker may use. `corvin-a2a pair --offline-pair` records the pairing audit-first and refuses if the record cannot commit.
+Grant execution only when you want the peer to run work on your instance: `corvin-a2a pair --spawn-worker` (or `invite --spawn-worker`) sets it for that one origin, and the origin's `allow_*` settings decide which tools its worker may use. `corvin-a2a pair --offline-pair` records the pairing audit-first and refuses if the record cannot commit. The offline pair stays pending until both operators confirmed the same fingerprint:
+
+```bash
+corvin-a2a pair --offline-pair peer-b https://this.host:8000   # A: hand the printed file to B
+corvin-a2a pair-import endpoint.json                          # B: prints B's instance id + fingerprint
+corvin-a2a pair-confirm peer-b --peer-instance-id <B> --fingerprint <read by B>   # A
+corvin-a2a pair-confirm corvin-local --fingerprint <read by A>                    # B
+```
 
 ## Honest limits
 
 - **Execution is off by default.** A freshly paired peer can deliver tasks; it cannot make your instance run them until you set `spawn_worker` for it.
 - **Relay and LAN bind are gated.** Two instances that cannot reach each other directly need the relay flag turned on.
 - **IBC auto-renewal is open** (ADR-2099).
+- **An offline pair is only as good as the two operators' care.** The fingerprint must be compared through a channel outside the network you pair (phone, paper). A confirm typed without really comparing is a weaker attestation than the hosted check, and it is accepted without the attestation grace cut-off — the trust moves from a service to two people. A wrong fingerprint on either side changes nothing, one side alone completes nothing, and a fingerprint is never reused. The console has no offline-pairing dialog; it is CLI only.
 - **The completeness ADR is still PROPOSED.** A2A audit coverage is documented in ADR-2042, which has not been accepted.
 - **A2A is member-only.** A Free install can run everything else, but it cannot join the network: creating or importing a token, sending from the chat, the CLI and every ping answer *A2A network requires a member seat* (HTTP 402 `license_limit` / `a2a.network` in the console). Two fresh installs therefore cannot talk to each other until one seat each is active — the peers tab, the diagnostics and the feed carry `network.allowed` so the UI says so instead of "unreachable".
 - **A peer without a seat is named.** If the other install has no member seat, its hello answer says so and your peers tab shows *PEER HAS NO MEMBER SEAT* (the thread: *<peer> has no member seat*) instead of "unreachable" or "set your own A2A URL"; the CLI's `create-token` / `import-token` refuse on a Free install exactly like the console.

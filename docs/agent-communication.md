@@ -114,8 +114,23 @@ half of all requests.
 corvin-instance-id show
 
 # Pair two instances and generate key files
+# (online: checked once against the hosted Corvin Labs pairing service)
 corvin-a2a pair <peer-label> <peer-url>
+
+# Closed network: no service is asked; the two operators verify the pair (ADR-2295).
+# The pair stays pending until BOTH sides confirmed the same fingerprint,
+# compared out of band (phone, paper):
+corvin-a2a pair --offline-pair <peer-label> <this-url>     # on A, prints the endpoint file
+corvin-a2a pair-import <endpoint-file>                     # on B, prints B's id + fingerprint
+corvin-a2a pair-confirm <peer-label> --peer-instance-id <B> --fingerprint <B's>   # on A
+corvin-a2a pair-confirm <endpoint-id> --fingerprint <A's>                         # on B
 ```
+
+Online pairing is checked once against a hosted service; offline pairing needs no
+service and is verified by the two operators. A confirmed offline pair is accepted
+by receivers as `attested_out_of_band`, without the attestation grace cut-off; it is
+only as good as the operators' comparison. Details:
+[`docs/claude-ref/layer-38-a2a-network.md`](claude-ref/layer-38-a2a-network.md) § Two pairing modes.
 
 ### Diagnosing a peer
 

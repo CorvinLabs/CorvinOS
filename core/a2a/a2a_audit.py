@@ -29,10 +29,24 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "tenant_id", "instance_id", "network_id", "nonce_prefix", "epoch",
     }),
     "a2a.offline_pair_initiated": frozenset({
-        "tenant_id", "task_id", "peer_id", "pairing_id", "ttl_s",
+        "tenant_id", "task_id", "peer_id", "pairing_id", "ttl_s", "side",
     }),
     "a2a.nonce_collision_detected": frozenset({
         "tenant_id", "nonce_prefix", "epoch", "collision_count",
+    }),
+    # ADR-2295 — one record shape for an online and an offline pair; an offline
+    # one adds the 8-char fingerprint prefix. Never keys, URLs, the full fingerprint.
+    "a2a.pairing_authorized": frozenset({
+        "tenant_id", "peer_id", "pairing_id", "ttl_s", "side", "pairing_mode",
+        "attestation", "fingerprint_prefix",
+    }),
+    # ADR-2295 — an operator confirmed the out-of-band fingerprint (each side).
+    "a2a.offline_pair_confirmed": frozenset({
+        "tenant_id", "peer_id", "pairing_id", "side", "actor", "fingerprint_prefix",
+    }),
+    # ADR-2295 — a confirm/import refused (mismatch, reuse). Closed reason only.
+    "a2a.offline_pair_refused": frozenset({
+        "tenant_id", "peer_id", "pairing_id", "side", "reason",
     }),
 }
 
@@ -41,6 +55,9 @@ _REQUIRED_FIELDS: dict[str, frozenset[str]] = {
     "a2a.genesis_block_created": frozenset({"tenant_id"}),
     "a2a.offline_pair_initiated": frozenset({"tenant_id"}),
     "a2a.nonce_collision_detected": frozenset({"tenant_id"}),
+    "a2a.pairing_authorized": frozenset({"tenant_id", "pairing_mode", "attestation", "side"}),
+    "a2a.offline_pair_confirmed": frozenset({"tenant_id", "side", "actor", "fingerprint_prefix"}),
+    "a2a.offline_pair_refused": frozenset({"tenant_id", "side", "reason"}),
 }
 
 

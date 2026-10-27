@@ -458,6 +458,11 @@ class RemoteEndpointRegistry:
         with path.open("r", encoding="utf-8") as fh:
             config = json.load(fh)
 
+        # ADR-2295: an offline pair this side's operator has not confirmed (out-of-band
+        # fingerprint) is refused on its state alone, whatever `enabled` says. Checked
+        # first so the refusal names the real cause.
+        if "oob_state" in config and config.get("oob_state") != "confirmed":
+            raise EndpointError("endpoint_offline_pair_unconfirmed")
         if not config.get("enabled", False):
             raise EndpointError("endpoint_disabled")
 
@@ -713,6 +718,11 @@ class PingResult:
 # (host.fritz.box:8443) and 64-char hex keys straight into audit.jsonl.
 # An allowlist of templates cannot leak by construction.
 _ERROR_DETAIL_GENERIC = "error_detail_unavailable"
+# ADR-2295: an offline pair this side's operator has not confirmed (oob_state pending).
+_OFFLINE_PAIR_UNCONFIRMED_DETAIL = (
+    "Offline pair not confirmed on this side - compare the fingerprint with the "
+    "other operator and run corvin-a2a pair-confirm"
+)
 _ERROR_DETAIL_TEMPLATES = frozenset({
     "Response body exceeded maximum size",
     "HTTP error",
@@ -738,6 +748,7 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
     # a2a.network is a member-only capability (ADR-0700 §2.1) — the local gate
     # refused before anything left this machine.
     "A2A network requires a member seat",
+    _OFFLINE_PAIR_UNCONFIRMED_DETAIL,
     _ERROR_DETAIL_GENERIC,
 })
 # WHY a peer's worker path refused a task (a2a_worker.WorkerResult.reason_code, carried in
@@ -1386,7 +1397,10 @@ class RemoteTriggerSender:
                 instance_id="", instance_id_match=False, data={},
                 attachments=[], duration_ms=_ms(start),
                 error_category=ErrorCategory.INTERNAL_ERROR,
-                error_detail=self._sanitize_error("Endpoint config unavailable"),
+                error_detail=self._sanitize_error(
+                    _OFFLINE_PAIR_UNCONFIRMED_DETAIL
+                    if exc.reason == "endpoint_offline_pair_unconfirmed"
+                    else "Endpoint config unavailable"),
             )
 
         ttl_s = int(ttl_s if ttl_s is not None else cfg.get("default_ttl_s", _DEFAULT_TTL_S))

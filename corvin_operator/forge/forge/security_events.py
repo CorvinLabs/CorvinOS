@@ -1003,6 +1003,10 @@ EVENT_SEVERITY: dict[str, str] = {
     # Metadata only: nonce_prefix, peer_id, task_id. NEVER: full nonce, payload content.
     "a2a.genesis_block_created":        "INFO",    # L38: NBAC chain initialized
     "a2a.offline_pair_initiated":       "INFO",    # L38: offline pairing started
+    # ADR-2295 — out-of-band fingerprint confirm (an operator action, each side)
+    # and its refusal (mismatch / reuse). Fingerprint PREFIX only, never keys.
+    "a2a.offline_pair_confirmed":       "INFO",
+    "a2a.offline_pair_refused":         "WARNING",
     "a2a.nonce_collision_detected":     "WARNING", # L38: nonce collision in validation
     # Layer 4 — Plugin Lifecycle (core/plugins/corvin_plugins/lifecycle.py)
     # Metadata only: plugin_id, error_class. NEVER: error text with sensitive content.
@@ -3641,7 +3645,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         ("A2A.envelope_received", {"nonce_prefix", "purpose_id", "sender_instance_id",
                                    "instance_id_match", "ttl_s", "attachments_count",
                                    "attachments_total_bytes", "attachment_sha_prefixes",
-                                   "attachment_validation_error"}),
+                                   "attachment_validation_error",
+                                   # ADR-2295: "attested_out_of_band" for a confirmed offline pair
+                                   "attestation"}),
         ("A2A.envelope_sent", {"nonce_prefix", "ttl_s", "attachments_count"}),
         # ADR-2292: the engine-attested usage scalars of the signed usage block — on the
         # receiver's signing record and on the requester's receipt.
@@ -4428,7 +4434,19 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "tenant_id", "instance_id", "network_id", "nonce_prefix", "epoch",
     }),
     "a2a.offline_pair_initiated": frozenset({
-        "tenant_id", "task_id", "peer_id", "pairing_id", "ttl_s",
+        "tenant_id", "task_id", "peer_id", "pairing_id", "ttl_s", "side",
+    }),
+    # ADR-2295 — mirrored by core/a2a/a2a_audit.py::_ALLOWED_FIELDS. One shape for
+    # an online and an offline pair; offline adds the 8-char fingerprint prefix.
+    "a2a.pairing_authorized": frozenset({
+        "tenant_id", "peer_id", "pairing_id", "ttl_s", "side", "pairing_mode",
+        "attestation", "fingerprint_prefix",
+    }),
+    "a2a.offline_pair_confirmed": frozenset({
+        "tenant_id", "peer_id", "pairing_id", "side", "actor", "fingerprint_prefix",
+    }),
+    "a2a.offline_pair_refused": frozenset({
+        "tenant_id", "peer_id", "pairing_id", "side", "reason",
     }),
     "a2a.nonce_collision_detected": frozenset({
         "tenant_id", "nonce_prefix", "epoch", "collision_count",

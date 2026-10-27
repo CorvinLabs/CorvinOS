@@ -32,6 +32,7 @@ import remote_trigger_sender as rts  # type: ignore[import-not-found]
 from a2a_attachments import Attachment  # type: ignore[import-not-found]
 import a2a_invite as _inv  # type: ignore[import-not-found]
 import a2a_invite_registry as _reg  # type: ignore[import-not-found]
+import a2a_offline_pairing as _oob  # type: ignore[import-not-found]
 
 
 # ── Path resolution ───────────────────────────────────────────────────────
@@ -259,13 +260,13 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     # only licensed senders with a valid SesT can connect. Offline-paired
     # origins explicitly opt-out; the HMAC is still the primary gate but
     # forged-SesT protection is absent. See ADR-0140 for threat model.
-    if getattr(args, "offline_pair", False):
-        # Audit-FIRST (ADR-2042): an offline pair switches network attestation
-        # off for this origin — a deliberate security downgrade. It must be on
-        # the tenant chain BEFORE the origin file exists; if the record cannot
-        # be committed, the pairing is refused (fail-closed).
+    offline = bool(getattr(args, "offline_pair", False))
+    if offline:
+        # Audit-FIRST (ADR-2042): an offline pair carries no hosted-service
+        # attestation. It must be on the tenant chain BEFORE the origin file
+        # exists; if the record cannot be committed, the pairing is refused.
         if not _audit_offline_pair_initiated(
-            peer_id=peer, pairing_id=pairing_id, ttl_s=args.max_ttl_s,
+            peer_id=peer, pairing_id=pairing_id, ttl_s=args.max_ttl_s, side="receiver",
         ):
             print(
                 "error: could not record a2a.offline_pair_initiated in the audit "
@@ -273,17 +274,26 @@ def _cmd_pair(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+        # ADR-2295: the pair is PENDING until both operators confirmed the same
+        # out-of-band fingerprint (`corvin-a2a pair-confirm` on each side). A
+        # pending origin is disabled and refused by the receiver on oob_state.
         origin_cfg["require_network_attestation"] = False
-        print(
-            "WARNING (ADR-0103): --offline-pair disables network membership "
-            "attestation for this origin. Only use for air-gapped networks that "
-            "do not participate in the Corvin Labs A2A network. Receivers "
-            "cannot distinguish a legitimate sender from a fork without "
-            "network_attestation.",
-            file=sys.stderr,
-        )
+        origin_cfg["enabled"] = False
+        origin_cfg["pairing_mode"] = _oob.PAIRING_MODE_OFFLINE
+        origin_cfg["oob_state"] = _oob.STATE_PENDING
     else:
         origin_cfg["require_network_attestation"] = True
+        # ADR-2295: the same record shape an offline pair writes at its confirm.
+        if not _audit_pairing_authorized(
+            peer_id=peer, pairing_id=pairing_id, ttl_s=args.max_ttl_s, side="receiver",
+            mode=_oob.PAIRING_MODE_ONLINE, attestation=_oob.ATTESTED_HOSTED,
+        ):
+            print(
+                "error: could not record a2a.pairing_authorized in the audit chain; "
+                "pairing refused (audit-first).",
+                file=sys.stderr,
+            )
+            return 1
 
     _atomic_write(origin_path, origin_cfg)
 
@@ -305,6 +315,28 @@ def _cmd_pair(args: argparse.Namespace) -> int:
         # so the receiver can verify the M1-gated pairing was mutually authorised.
         "pairing_id": pairing_id,
     }
+    if offline:
+        peer_endpoint["enabled"] = False
+        peer_endpoint["pairing_mode"] = _oob.PAIRING_MODE_OFFLINE
+        peer_endpoint["oob_state"] = _oob.STATE_PENDING
+
+    if offline:
+        # An offline pair talks to no service at all (ADR-2295) — not even the
+        # optional peer registration below.
+        print(f"# OK: wrote local origin file (PENDING): {origin_path}")
+        print("#")
+        print("# Offline pairing — no hosted service is asked; the two operators verify it.")
+        print("# 1. Give the peer the endpoint file below (signed email, age-encrypted file, USB).")
+        print("#    The peer installs it with:  corvin-a2a pair-import <file>")
+        print("#    and reads you its instance id and the fingerprint it prints.")
+        print(f"# 2. Here, show your fingerprint: corvin-a2a pair-confirm {peer} --peer-instance-id <their id>")
+        print("#    Compare both fingerprints by phone or on paper — NOT over the network you pair.")
+        print(f"# 3. Here, confirm:  corvin-a2a pair-confirm {peer} --peer-instance-id <their id> "
+              "--fingerprint <the one they read>")
+        print("#    The peer confirms on their side the same way. Until BOTH confirmed, nothing is accepted.")
+        print()
+        print(json.dumps(peer_endpoint, sort_keys=True, indent=2))
+        return 0
 
     # ADR-0095 M2: optional server-side peer registration.
     # Adds a server-signed PeerPermit to the origin file for enforced
@@ -323,16 +355,219 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── offline pairing: import + out-of-band confirm (ADR-2295) ──────────────
+
+def _safe_name(name: str) -> bool:
+    return bool(name) and not ("/" in name or "\\" in name or ":" in name or name.startswith("."))
+
+
+def _cmd_pair_import(args: argparse.Namespace) -> int:
+    """Install the endpoint file an offline ``pair`` printed, as PENDING, and print the fingerprint.
+
+    The SENDING side of an offline pair. Nothing becomes usable here: the endpoint is
+    written ``enabled: false`` / ``oob_state: pending`` and is refused by the sender until
+    ``pair-confirm`` matched the fingerprint the other operator read out.
+    """
+    try:
+        raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text("utf-8")
+        cfg = json.loads(raw[raw.index("{"):])
+    except (OSError, ValueError) as exc:
+        print(f"error: cannot read the endpoint file ({type(exc).__name__})", file=sys.stderr)
+        return 2
+    if not isinstance(cfg, dict):
+        print("error: the endpoint file is not a JSON object", file=sys.stderr)
+        return 2
+    missing = [k for k in ("endpoint_id", "url", "hmac_key", "recv_key", "instance_id", "pairing_id")
+               if not cfg.get(k)]
+    if missing:
+        print(f"error: endpoint file is missing {', '.join(missing)}", file=sys.stderr)
+        return 2
+    if cfg.get("pairing_mode") != _oob.PAIRING_MODE_OFFLINE:
+        print("error: not an offline-pair endpoint file (pairing_mode != offline); an online "
+              "pair's endpoint file is installed as before.", file=sys.stderr)
+        return 2
+    ep_id = str(cfg["endpoint_id"])
+    if not _safe_name(ep_id) or not _oob.valid_instance_id(str(cfg["instance_id"])):
+        print("error: invalid endpoint_id or instance_id in the endpoint file", file=sys.stderr)
+        return 2
+    target = _endpoints_dir() / f"{ep_id}.json"
+    if target.exists() and not args.force:
+        print(f"error: {target} exists; pass --force to overwrite", file=sys.stderr)
+        return 1
+
+    local_iid = instance_identity.get_instance_id()
+    fp = _oob.endpoint_fingerprint(cfg, local_iid)
+    pairing_id = str(cfg["pairing_id"])[:64]
+    try:
+        reused = _oob.fingerprint_used(fp)
+    except _oob.OfflinePairError as exc:
+        print(f"error: {exc}; offline pairing refused", file=sys.stderr)
+        return 1
+    if reused:
+        _audit_pairing_event("a2a.offline_pair_refused", peer_id=ep_id, pairing_id=pairing_id,
+                             side="sender", reason="fingerprint_reused")
+        print("error: this endpoint file's fingerprint was already used by an earlier pairing — "
+              "a fingerprint is never reused. Ask the peer for a fresh `pair --offline-pair`.",
+              file=sys.stderr)
+        return 1
+    ttl = int(cfg.get("default_ttl_s") or 60)
+    if not _audit_offline_pair_initiated(peer_id=ep_id, pairing_id=pairing_id, ttl_s=ttl, side="sender"):
+        print("error: could not record a2a.offline_pair_initiated in the audit chain; "
+              "offline pairing refused (audit-first).", file=sys.stderr)
+        return 1
+    cfg.update({"enabled": False, "oob_state": _oob.STATE_PENDING})
+    for k in ("attestation", "oob_fingerprint", "oob_confirmed_at"):
+        cfg.pop(k, None)
+    _atomic_write(target, cfg)
+
+    if args.json:
+        print(json.dumps({"endpoint_id": ep_id, "instance_id": local_iid, "fingerprint": fp,
+                          "pairing_id": pairing_id, "state": _oob.STATE_PENDING}, sort_keys=True))
+        return 0
+    print(f"# OK: installed endpoint (PENDING): {target}")
+    print(f"this installation's instance id: {local_iid}")
+    print(f"fingerprint:                     {fp}")
+    print("# Read both to the other operator through a channel outside this network (phone, paper).")
+    print("# They run `corvin-a2a pair-confirm <peer> --peer-instance-id <this id> --fingerprint <this>`")
+    print(f"# and read you THEIR fingerprint; then run here: corvin-a2a pair-confirm {ep_id} --fingerprint <theirs>")
+    return 0
+
+
+def _pending_target(name: str, kind: str | None) -> tuple[str, Path, dict] | None:
+    """Find the offline-pair file ``name`` (origin = receiving side, endpoint = sending side)."""
+    found: list[tuple[str, Path, dict]] = []
+    for k, d in (("origin", _origins_dir()), ("endpoint", _endpoints_dir())):
+        if kind and kind != k:
+            continue
+        p = d / f"{name}.json"
+        if p.is_file():
+            try:
+                cfg = json.loads(p.read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(cfg, dict) and cfg.get("pairing_mode") == _oob.PAIRING_MODE_OFFLINE:
+                found.append((k, p, cfg))
+    pending = [f for f in found if _oob.is_pending(f[2])]
+    if len(pending) > 1:
+        raise SystemExit("error: both an origin and an endpoint named "
+                         f"{name!r} are pending; pass --kind origin|endpoint")
+    if pending:
+        return pending[0]
+    return found[0] if found else None
+
+
+def _cmd_pair_confirm(args: argparse.Namespace) -> int:
+    """Show (no --fingerprint) or confirm (--fingerprint) an offline pair's fingerprint.
+
+    The operator types the fingerprint the OTHER operator read out. It must equal the one
+    this installation computes; then — audit-first — the operator's confirm and the
+    pairing record are written, the fingerprint is entered in the tenant's reuse ledger,
+    and only then is this side's file enabled. Any mismatch changes nothing.
+    """
+    name = args.name
+    if not _safe_name(name):
+        print(f"error: invalid name {name!r}", file=sys.stderr)
+        return 2
+    hit = _pending_target(name, args.kind)
+    if hit is None:
+        print(f"error: no offline pair named {name!r} here", file=sys.stderr)
+        return 1
+    kind, path, cfg = hit
+    side = "receiver" if kind == "origin" else "sender"
+    if not _oob.is_pending(cfg):
+        print(f"error: the offline pair {name!r} is not pending (state: "
+              f"{cfg.get('oob_state', 'legacy')}); pair again to replace it", file=sys.stderr)
+        return 1
+    local_iid = instance_identity.get_instance_id()
+    if kind == "origin":
+        peer_iid = (args.peer_instance_id or "").strip()
+        if not _oob.valid_instance_id(peer_iid):
+            print("error: --peer-instance-id is required on the receiving side (the id the peer "
+                  "operator read to you from `pair-import`)", file=sys.stderr)
+            return 2
+        local_fp = _oob.origin_fingerprint(cfg, local_iid, peer_iid)
+    else:
+        peer_iid = str(cfg.get("instance_id") or "")
+        if args.peer_instance_id and args.peer_instance_id.strip() != peer_iid:
+            print("error: --peer-instance-id differs from the instance id in the endpoint file",
+                  file=sys.stderr)
+            return 1
+        local_fp = _oob.endpoint_fingerprint(cfg, local_iid)
+    pairing_id = str(cfg.get("pairing_id") or "")[:64]
+
+    if not args.fingerprint:
+        if args.json:
+            print(json.dumps({"name": name, "side": side, "instance_id": local_iid,
+                              "fingerprint": local_fp, "state": _oob.STATE_PENDING}, sort_keys=True))
+        else:
+            print(f"this installation's instance id: {local_iid}")
+            print(f"fingerprint:                     {local_fp}")
+            print("# Compare with the other operator out of band, then re-run with --fingerprint <theirs>.")
+        return 0
+
+    if not _oob.fingerprints_equal(args.fingerprint, local_fp):
+        _audit_pairing_event("a2a.offline_pair_refused", peer_id=name, pairing_id=pairing_id,
+                             side=side, reason="fingerprint_mismatch")
+        print("error: the fingerprint does not match the one this installation computes — the "
+              "keys or the instance ids differ (a changed file in transit, or the wrong peer). "
+              f"Nothing was changed; the pair stays pending. Ours: {local_fp}", file=sys.stderr)
+        return 1
+    try:
+        reused = _oob.fingerprint_used(local_fp)
+    except _oob.OfflinePairError as exc:
+        print(f"error: {exc}; confirm refused", file=sys.stderr)
+        return 1
+    if reused:
+        _audit_pairing_event("a2a.offline_pair_refused", peer_id=name, pairing_id=pairing_id,
+                             side=side, reason="fingerprint_reused")
+        print("error: this fingerprint was already used by an earlier pairing; a fingerprint is "
+              "never reused — pair again with fresh keys.", file=sys.stderr)
+        return 1
+
+    fpp = _oob.prefix(local_fp)
+    ttl = int(cfg.get("max_ttl_s") or cfg.get("default_ttl_s") or 60)
+    # Audit-FIRST: the operator's action and the pairing record, before anything is usable.
+    if not _audit_pairing_event("a2a.offline_pair_confirmed", peer_id=name, pairing_id=pairing_id,
+                                side=side, actor="operator", fingerprint_prefix=fpp) or \
+            not _audit_pairing_authorized(peer_id=name, pairing_id=pairing_id, ttl_s=ttl, side=side,
+                                          mode=_oob.PAIRING_MODE_OFFLINE,
+                                          attestation=_oob.ATTESTED_OUT_OF_BAND,
+                                          fingerprint_prefix=fpp):
+        print("error: could not record the confirmation in the audit chain; confirm refused "
+              "(audit-first). The pair stays pending.", file=sys.stderr)
+        return 1
+    try:
+        _oob.record_fingerprint(local_fp, side=side, peer_id=name)
+    except _oob.OfflinePairError as exc:
+        print(f"error: {exc}; confirm refused, the pair stays pending", file=sys.stderr)
+        return 1
+    cfg.update({
+        "enabled": True,
+        "oob_state": _oob.STATE_CONFIRMED,
+        "attestation": _oob.ATTESTED_OUT_OF_BAND,
+        "oob_fingerprint": local_fp,
+        "oob_confirmed_at": int(time.time()),
+    })
+    if kind == "origin":
+        cfg["sender_instance_id_pin"] = peer_iid
+        cfg["peer_instance_id"] = peer_iid
+    _atomic_write(path, cfg)
+    print(f"# OK: offline pair {name!r} confirmed on this side ({side}); fingerprint {fpp}…")
+    print("# It is usable once the other operator confirmed on their side too.")
+    return 0
+
+
 _A2A_FEATURES_SERVER_PROD = "https://corvin-features-production.up.railway.app"
 
 
-def _audit_offline_pair_initiated(*, peer_id: str, pairing_id: str, ttl_s: int) -> bool:
-    """Write ``a2a.offline_pair_initiated`` to THE tenant chain; True iff committed.
+def _audit_pairing_event(event: str, **details: Any) -> bool:
+    """Write one ``a2a.*`` pairing event to THE tenant chain; True iff committed.
 
-    Goes through ``a2a_audit.emit`` so the payload is
-    validated against the event's allow-list (tenant_id, peer_id, pairing_id,
-    ttl_s — no keys, no URL). ``a2a_audit.emit`` logs and swallows a writer
+    Goes through ``a2a_audit.emit`` so the payload is validated against the
+    event's allow-list (ids, enums, a fingerprint PREFIX — never keys, URLs or
+    the full fingerprint). ``a2a_audit.emit`` logs and swallows a writer
     failure, so success is observed through the injected writer instead.
+    Callers that are audit-first refuse on False.
     """
     try:
         import a2a_audit  # type: ignore[import-not-found]
@@ -346,18 +581,34 @@ def _audit_offline_pair_initiated(*, peer_id: str, pairing_id: str, ttl_s: int) 
         chain.parent.mkdir(parents=True, exist_ok=True)
         committed: list[bool] = []
 
-        def _write(path: Path, event: str, *, details: dict, severity: str | None = None) -> None:
-            se.write_event(path, event, severity=severity, details=details, hash_chain=True)
+        def _write(path: Path, ev: str, *, details: dict, severity: str | None = None) -> None:
+            se.write_event(path, ev, severity=severity, details=details, hash_chain=True)
             committed.append(True)
 
-        a2a_audit.emit(
-            "a2a.offline_pair_initiated", path=chain, tenant_id=tenant_id,
-            write_event_fn=_write, peer_id=str(peer_id)[:128],
-            pairing_id=str(pairing_id)[:64], ttl_s=int(ttl_s),
-        )
+        a2a_audit.emit(event, path=chain, tenant_id=tenant_id, write_event_fn=_write, **details)
         return bool(committed)
     except Exception:  # noqa: BLE001 — caller treats False as refuse
         return False
+
+
+def _audit_offline_pair_initiated(*, peer_id: str, pairing_id: str, ttl_s: int,
+                                  side: str = "receiver") -> bool:
+    """``a2a.offline_pair_initiated`` (audit-first start of an offline pair, either side)."""
+    return _audit_pairing_event("a2a.offline_pair_initiated", peer_id=str(peer_id)[:128],
+                                pairing_id=str(pairing_id)[:64], ttl_s=int(ttl_s), side=side)
+
+
+def _audit_pairing_authorized(*, peer_id: str, pairing_id: str, ttl_s: int, side: str,
+                              mode: str, attestation: str, fingerprint_prefix: str | None = None) -> bool:
+    """``a2a.pairing_authorized`` — ONE record shape for an online and an offline pair (ADR-2295).
+
+    Online: written when the hosted service issued the certificate. Offline: written
+    when this side's operator confirmed the out-of-band fingerprint, plus its prefix.
+    """
+    extra = {} if fingerprint_prefix is None else {"fingerprint_prefix": fingerprint_prefix}
+    return _audit_pairing_event("a2a.pairing_authorized", peer_id=str(peer_id)[:128],
+                                pairing_id=str(pairing_id)[:64], ttl_s=int(ttl_s), side=side,
+                                pairing_mode=mode, attestation=attestation, **extra)
 
 
 def _a2a_features_url() -> str:
@@ -439,9 +690,9 @@ def _authorize_pairing_m1(
 
     if offline:
         print(
-            "# WARNING: --offline-pair used. Pairing certificate NOT verified "
-            "by Corvin Labs. This instance will not be accepted by M2 receivers "
-            "after the attestation grace period expires.",
+            "# NOTE: --offline-pair used. No hosted service is asked; this pair is "
+            "verified by the two operators, who compare a fingerprint out of band "
+            "and each run `corvin-a2a pair-confirm`. Unconfirmed, it is not usable.",
             file=sys.stderr,
         )
         return None, None
@@ -1752,10 +2003,29 @@ def main(argv: list[str] | None = None) -> int:
     p_pair.add_argument("--force", action="store_true",
                         help="overwrite existing origin file")
     p_pair.add_argument("--offline-pair", action="store_true", dest="offline_pair",
-                        help="bypass the Corvin Labs pairing gate "
-                             "(for isolated / air-gapped networks only; "
-                             "issued pairs will not be accepted by M2 receivers "
-                             "after the attestation grace period)")
+                        help="pair without the hosted Corvin Labs pairing service "
+                             "(closed networks): the pair stays PENDING until both "
+                             "operators confirmed the same fingerprint, compared out "
+                             "of band, with `pair-confirm` (ADR-2295)")
+
+    p_pimp = sub.add_parser(
+        "pair-import",
+        help="install the endpoint file of an offline pair (PENDING) and print the fingerprint")
+    p_pimp.add_argument("file", help="the endpoint JSON printed by `pair --offline-pair`, or '-' for stdin")
+    p_pimp.add_argument("--force", action="store_true", help="overwrite an existing endpoint file")
+    p_pimp.add_argument("--json", action="store_true", dest="json", help="machine-readable output")
+
+    p_pconf = sub.add_parser(
+        "pair-confirm",
+        help="show (no --fingerprint) or confirm an offline pair's out-of-band fingerprint")
+    p_pconf.add_argument("name", help="the peer name (receiving side) or endpoint id (sending side)")
+    p_pconf.add_argument("--fingerprint", default="",
+                         help="the fingerprint the OTHER operator read to you; must match ours")
+    p_pconf.add_argument("--peer-instance-id", default="", dest="peer_instance_id",
+                         help="receiving side: the instance id the other operator read to you")
+    p_pconf.add_argument("--kind", choices=("origin", "endpoint"), default=None,
+                         help="only when an origin and an endpoint of the same name are both pending")
+    p_pconf.add_argument("--json", action="store_true", dest="json", help="machine-readable output")
 
     p_send = sub.add_parser("send", help="send a TaskEnvelope to an endpoint")
     p_send.add_argument("endpoint_id")
@@ -1918,6 +2188,8 @@ def main(argv: list[str] | None = None) -> int:
 
     handlers = {
         "pair": _cmd_pair,
+        "pair-import": _cmd_pair_import,
+        "pair-confirm": _cmd_pair_confirm,
         "send": _cmd_send,
         "diagnose": _cmd_diagnose,
         "list-origins": _cmd_list_origins,

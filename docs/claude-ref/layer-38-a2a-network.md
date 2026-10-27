@@ -48,23 +48,86 @@ On success the **PairingCertificate** (30-day JWT) and `pairing_id` are written 
 the origin JSON file alongside the HMAC keys.
 
 **Fail-closed:** network errors or a 403 from the gate abort the pairing. Use
-`--offline-pair` for isolated / air-gapped networks that do not connect to
-Corvin Labs.
+`--offline-pair` for closed / air-gapped networks that do not connect to
+Corvin Labs (next section).
 
-**What this means for "no central server":** the traffic between two paired installations is peer-to-peer
-(direct or through a relay), but ONLINE pairing is checked once against a hosted Corvin Labs service, and the
-certificate it issues lasts 30 days. An offline pair skips that check, carries no network attestation, and
-is refused by M2 receivers after the attestation grace period (`corvin_a2a.py` `--offline-pair` help). The
-network gate itself (`a2a.network`, member seats) is local deterrence; the peer-side Member Credential check
-(ADR-0702) is accepted but not built. Do not describe A2A as "no central server" without these three facts.
+### Two pairing modes — what each depends on (ADR-2295)
+
+**Online pairing is checked once against a hosted service; offline pairing needs no service and is
+verified by the two operators.** That sentence is the whole contract — say both halves, always.
+
+| | Online (`pair`) | Offline (`pair --offline-pair` → `pair-import` → `pair-confirm` ×2) |
+|---|---|---|
+| Depends on | the hosted Corvin Labs pairing service, once (`POST /v1/pair/authorize`, 30-day certificate) | nothing outside the two installations |
+| Verified by | the service (SesT fingerprint, revocation) | the two operators, comparing a fingerprint out of band (phone, paper) |
+| Receiver after the attestation grace period | accepted with a valid `network_attestation` block | accepted as `attested_out_of_band` (no grace cut-off) — only once BOTH sides confirmed |
+| Audit (`a2a.pairing_authorized`) | `pairing_mode: online`, `attestation: hosted_service` | same fields, `pairing_mode: offline`, `attestation: attested_out_of_band`, plus `fingerprint_prefix` (8 hex) on each side |
+
+Traffic between two paired installations is peer-to-peer either way (direct or through a relay). The network
+gate itself (`a2a.network`, member seats) is local deterrence; the peer-side Member Credential check
+(ADR-0702) is accepted but not built — ADR-2295 changes neither. Do not describe either mode as "no central
+server" without these facts.
+
+**The offline two-step flow** (`corvin_a2a.py::_cmd_pair` / `_cmd_pair_import` / `_cmd_pair_confirm`,
+helpers in `bridges/shared/a2a_offline_pairing.py`):
+
+1. **A (receiving side):** `corvin-a2a pair --offline-pair peer-b <A's url>` — audit-first
+   `a2a.offline_pair_initiated` (`side: receiver`), then writes the origin `enabled: false`,
+   `pairing_mode: offline`, `oob_state: pending` and prints the endpoint file for B (also pending). It talks
+   to no service (not even the optional peer registration).
+2. **B (sending side):** `corvin-a2a pair-import <file>` — refuses a file whose fingerprint B already used
+   (a replayed endpoint file from an earlier pairing), audit-first `a2a.offline_pair_initiated`
+   (`side: sender`), writes the endpoint pending, and prints B's instance id and the **fingerprint**.
+3. **Both operators compare** through a channel outside the network they pair. A shows its own value with
+   `corvin-a2a pair-confirm peer-b --peer-instance-id <B's id>`.
+4. **Each side confirms** by typing the fingerprint the OTHER operator read out:
+   `pair-confirm peer-b --peer-instance-id <B> --fingerprint <B's>` on A,
+   `pair-confirm <endpoint> --fingerprint <A's>` on B. A value that differs from the one this installation
+   computes changes nothing and writes `a2a.offline_pair_refused` (`reason: fingerprint_mismatch`). A
+   matching one writes — audit-first — `a2a.offline_pair_confirmed` (`side`, `actor: operator`,
+   `fingerprint_prefix`) and `a2a.pairing_authorized`, enters the fingerprint in the tenant reuse ledger
+   (`<tenant>/global/a2a/offline_pair_fingerprints.json`; a used one is refused, `fingerprint_reused`), and
+   only then sets `enabled: true`, `oob_state: confirmed`, `attestation: attested_out_of_band`,
+   `oob_fingerprint`; on A also `sender_instance_id_pin` = B.
+
+**Fingerprint:** `SHA-256("corvin-a2a-oob-fingerprint-v1" ‖ receiver instance id ‖ sender instance id ‖
+key id)`, first 80 bits as `XXXX-XXXX-XXXX-XXXX-XXXX`; key id = SHA-256 over both HMAC keys (16 hex). A key
+swapped in transit or the wrong peer instance gives different values on the two sides. Fresh keys per
+pairing ⇒ a fresh fingerprint; the ledger refuses reuse. The audit chain carries only the 8-hex prefix.
+
+**Both sides must confirm.** The sender refuses an endpoint with `oob_state` ≠ `confirmed`
+(`endpoint_offline_pair_unconfirmed`, before the `enabled` check — flipping `enabled` by hand completes
+nothing); the receiver refuses such an origin (`origin_offline_pair_unconfirmed`). So a channel B → A works
+only when B confirmed its endpoint AND A confirmed its origin.
+
+**Receiver acceptance** (`remote_trigger_receiver._check_network_attestation`, no `network_attestation`
+block): an origin with `attestation: attested_out_of_band` is accepted without the manifest's grace
+cut-off iff `oob_state` is `confirmed`, the HMAC-covered `sender_instance_id` equals the pin, and the
+fingerprint recomputed from the file's keys, the pin and the receiver's own instance id equals
+`oob_fingerprint`. A claim that does not verify (hand-edited, rotated keys) is refused
+(`out_of_band_attestation_invalid`, audited `a2a.attestation_failed`) — never downgraded to the grace path.
+The accepted envelope's `A2A.envelope_received` carries `attestation: attested_out_of_band`. Manifest
+revocation of the sender instance still applies. An offline pair from before ADR-2295 (no `oob_state`)
+keeps the old behaviour: accepted until `attestation_mandatory_after`, then `network_attestation_required`.
+
+**Limit (stated, not hidden):** the fingerprint check is only as good as the operators' care. A confirm
+typed without really comparing (or compared over the same network) is a weaker attestation than the
+hosted check; the trust shifts from a service to two people.
 
 ```bash
-# Standard (requires network + valid SesT):
+# Online (network + valid SesT):
 corvin-a2a pair mypeer https://remote.host:8000/v1/a2a/receive
 
-# Isolated network:
-corvin-a2a pair --offline-pair mypeer https://remote.host:8000/v1/a2a/receive
+# Closed network, two steps, both operators confirm:
+corvin-a2a pair --offline-pair mypeer https://this.host:8000      # on A; hand the printed file to B
+corvin-a2a pair-import endpoint.json                             # on B; prints B's id + fingerprint
+corvin-a2a pair-confirm mypeer --peer-instance-id <B> --fingerprint <B's>   # on A
+corvin-a2a pair-confirm corvin-local --fingerprint <A's>                    # on B
 ```
+
+Proof: `bridges/shared/test_a2a_offline_pair_oob_e2e.py` (two sandboxed installations, CLI as a
+subprocess, A's real HTTP receiver; wrong fingerprint on either side, single-side confirm, reuse, legacy
+grace, tampered origin, audit shape vs. an online pair, `verify_chain` on every chain).
 
 ---
 
@@ -105,8 +168,9 @@ After HMAC verification succeeds:
 | `sest_fp` not on manifest revocation list | `network_attestation_revoked` |
 | `pairing_id` not on manifest revocation list | `network_attestation_pairing_revoked` |
 
-If `network_attestation` is absent: check `attestation_mandatory_after` from the
-manifest. Before that timestamp (grace period), the envelope is accepted with a
+If `network_attestation` is absent: an origin confirmed as `attested_out_of_band` (ADR-2295, above) is
+accepted when it verifies and refused when it does not. Otherwise check `attestation_mandatory_after` from
+the manifest. Before that timestamp (grace period), the envelope is accepted with a
 WARNING. After it, the envelope is rejected with `network_attestation_required`.
 
 **Disable for tests:**
