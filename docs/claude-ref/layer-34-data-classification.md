@@ -445,7 +445,7 @@ test asserts the set.
    - GitHub `gh[ousr]_…` tokens (personal, OAuth, user, server, refresh) and fine-grained `github_pat_…`
    - Slack `xox[bpoa]-…`
    - PEM `-----BEGIN … PRIVATE KEY-----`
-   - `password = …` assignment
+   - `password = …` assignment (known limit: also fires on prose such as `password: required field`, a false positive of `secret_floor_refusal`; reword or stage the text as a file)
    - T-0248 (2026-10-21 review): OpenRouter `sk-or-v1-` + 64 hex, GitLab `glpat-` + 20-char body
      (the routable form's dotted segments included), HuggingFace `hf_` + 34, Groq `gsk_` + 52,
      xAI `xai-` + 80, npm `npm_` + 36 — each at the vendor's documented length, bounded on both

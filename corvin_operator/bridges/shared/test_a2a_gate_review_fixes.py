@@ -114,8 +114,14 @@ class TestObjectGateEmptyHost(unittest.TestCase):
 
     def test_unknown_host_with_a_policy_present_is_refused(self):
         gate = _AllowAllGate()
-        self.assertEqual(self._gate(gate), "object_egress_denied")
+        self.assertEqual(self._gate(gate), "object_peer_host_unknown")
         self.assertNotIn("unknown", gate.hosts, "L35 must never be asked about a made-up host")
+
+    def test_the_empty_host_reason_is_in_the_closed_vocabulary_and_names_peer_url(self):
+        import a2a_objects
+
+        self.assertIn("object_peer_host_unknown", a2a_objects.REFUSALS)
+        self.assertIn("peer_url", a2a_objects.REFUSAL_HINTS["object_peer_host_unknown"])
 
     def test_known_host_still_goes_through_the_policy(self):
         gate = _AllowAllGate()
@@ -180,6 +186,56 @@ class TestErasureVersusInFlightStaging(unittest.TestCase):
         self.o.erase_origin("peerB")
         ref, why = self._issue(staged)
         self.assertIsNone(why)
+
+    def test_erasure_creates_the_store_and_marker_when_nothing_was_stored_yet(self):
+        root = self.o.store_dir(None)
+        self.assertFalse(root.exists())
+        self.o.erase_origin("peerA")
+        self.assertTrue(self.o._erasure_marker(root, "peerA").is_file())
+        # a harvest that began BEFORE that erasure (stamp in the past) must now be refused
+        self.assertTrue(self.o._erased_since(root, "peerA", 1))
+
+    def test_an_unparseable_marker_counts_as_erased(self):
+        root = self.o.store_dir(None)
+        self.o.erase_origin("peerA")
+        self.o._erasure_marker(root, "peerA").write_text("not-a-number", "ascii")
+        self.assertTrue(self.o._erased_since(root, "peerA", 2 ** 62))
+
+    def test_an_unreadable_marker_counts_as_erased(self):
+        root = self.o.store_dir(None)
+        self.o.erase_origin("peerA")
+        m = self.o._erasure_marker(root, "peerA")
+        m.unlink()
+        m.mkdir()          # reading a directory raises OSError other than "missing"
+        self.assertTrue(self.o._erased_since(root, "peerA", 2 ** 62))
+
+    def test_no_marker_at_all_is_not_erased(self):
+        root = self.o.store_dir(None)
+        self.o._ensure(root)
+        self.assertFalse(self.o._erased_since(root, "peerA", 5))
+
+
+class TestStageFileFifo(unittest.TestCase):
+    def test_a_fifo_swapped_in_is_unreadable_and_never_blocks(self):
+        import threading
+        import unittest.mock as mock
+
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.dict(os.environ, {"CORVIN_A2A_FEED_DIR": td + "/g/a2a_feed", "CORVIN_HOME": td + "/h"}):
+                import a2a_objects
+
+                fifo = Path(td) / "out.fifo"
+                os.mkfifo(fifo)
+                out: list = []
+                t = threading.Thread(target=lambda: out.append(a2a_objects.stage_file(fifo)), daemon=True)
+                t.start()
+                t.join(5)
+                if t.is_alive():   # unblock the stuck open so the process can exit, then fail
+                    fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                    os.close(fd)
+                    t.join(2)
+                    self.fail("stage_file blocked on a FIFO")
+                self.assertEqual(out[0], (None, "unreadable"))
 
 
 if __name__ == "__main__":

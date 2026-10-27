@@ -89,7 +89,7 @@ REF_KEYS = frozenset({"name", "mime", "size", "sha256", "classification", "ref_i
 REFUSALS = frozenset({
     # holder: issue or pull (object_gate)
     "object_bad_name", "object_too_large", "object_classification_exceeded", "object_egress_denied",
-    "object_gate_error",
+    "object_peer_host_unknown", "object_gate_error",
     # holder: issue
     "object_store_full", "object_store_error", "object_audit_failed",
     # holder: pull
@@ -444,7 +444,8 @@ def object_gate(*, origin_cfg: dict, origin_id: str, name: str, size: int, class
             host = peer_host(origin_id, origin_cfg, endpoints_dir)
             if not host:
                 # No host to evaluate: asking L35 about a made-up name would pass any default-allow policy.
-                return "object_egress_denied"
+                # A distinct reason: this is a pairing gap the operator fixes, not an L35 policy denial.
+                return "object_peer_host_unknown"
             if not gate.validate(host, channel="a2a_object").allowed:
                 return "object_egress_denied"
     except Exception:  # noqa: BLE001 — L35 that cannot be evaluated refuses
@@ -453,6 +454,14 @@ def object_gate(*, origin_cfg: dict, origin_id: str, name: str, size: int, class
 
 
 # ── Staging (worker side) ────────────────────────────────────────────────
+
+#: Operator-facing hint per reason that needs an operator action (fixed text, no peer content).
+REFUSAL_HINTS: dict[str, str] = {
+    "object_peer_host_unknown": (
+        "The tenant has an egress policy but this connection has no host to check it against: set "
+        "peer_url on the origin file (or re-pair so the endpoint file carries the url)."),
+}
+
 
 def stage_file(src: Path, *, tenant_id: str | None = None,
                expect: "tuple[int, int] | None" = None) -> tuple[dict | None, str | None]:
@@ -474,7 +483,9 @@ def stage_file(src: Path, *, tenant_id: str | None = None,
     root = store_dir(tenant_id)
     staged_at_ns = time.time_ns()   # BEFORE any byte moves: an erasure marker at or after this refuses issue()
     try:
-        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # O_NONBLOCK: a FIFO a leftover worker process swapped in must fail the fstat check below, not block
+        # this open forever (same as the harvest's own open).
+        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return None, "unreadable"
     reserved = 0
@@ -543,13 +554,16 @@ def _erasure_marker(root: Path, origin_id: str) -> Path:
 
 def _erased_since(root: Path, origin_id: str, staged_at_ns: Any) -> bool:
     """Did an Art. 17 erasure of ``origin_id`` run at or after this staging began? Caller holds the lock.
-    A staging with no stamp (never produced by :func:`stage_file`) is treated as erased: fail closed."""
+    A staging with no stamp (never produced by :func:`stage_file`) is treated as erased: fail closed, and so
+    is a marker that exists but cannot be read or parsed. Only a marker that is absent means "not erased"."""
     if not isinstance(staged_at_ns, int) or isinstance(staged_at_ns, bool):
         return True
     try:
         return int(_erasure_marker(root, origin_id).read_text("ascii").strip()) >= staged_at_ns
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return False
+    except (OSError, ValueError):
+        return True
 
 
 def discard_staged(staged: list[dict] | None) -> None:
@@ -803,9 +817,12 @@ def sweep_expired(*, tenant_id: str | None = None, audit: "Audit | None" = None,
 def erase_origin(origin_id: str, *, tenant_id: str | None = None) -> int:
     """GDPR Art. 17: every object held for ``origin_id`` (bytes and record). Returns the count."""
     root = store_dir(tenant_id)
-    if not origin_id or not root.is_dir():
+    if not origin_id:
         return 0
     n = 0
+    # Unconditional: an erasure that finds no store yet must still leave its marker, or a harvest already
+    # in flight (staging not yet created the directory) would be issued after the erasure.
+    _ensure(root)
     with _StoreLock(root):
         # The marker is what a harvest already in flight meets in issue(): its staged bytes are not keyed to
         # an origin, so the erasure is recorded per origin and checked against the staging start time.

@@ -1339,8 +1339,13 @@ promised path looks like there, and what it took:
   hint, and the dead record still counted for `a2a_peers_max`, so on the free tier the SAME peer's new
   token answered 402 "at most 1 peer". `peer_revoked_at` now rides `connections`, `diagnostics` and the
   feed's peers; the UI shows *ENDED BY PEER* / *pairing ended by <peer>* with the way back; the seat
-  count skips it. The sender's refusal text for a send over such a pairing already said "no longer
-  recognises this connection".
+  count skips it. A send over such a pairing now answers *The partner ended this pairing - pair again to resume*
+  (`_PEER_REVOKED_DETAIL`), no longer the generic *Endpoint config unavailable* a disabled endpoint gets.
+  Limits: a Free or lapsed install does not record a peer's signed revoke notice on console/gateway (the
+  member gate precedes it), and a Free install cannot finish `pair-confirm` for an offline pair it started
+  as a member. A chain tail (`receiver_chain_tail`) is read only from a SIGNED response; an unsigned legacy
+  rejection yields `peer_chain_tail == ""` and no `A2A.chain_anchor_verified` record. `pair/accept` is
+  public (no session cookie; the one-time accept key authenticates it) - `test_a2a_pair_accept_public.py`.
 - **`/agents` in a peer thread** answered `peer: []` five minutes after the last catalog fetch (fresh
   catalogs only) while `/ask @peer` refreshed on its own; it refreshes once, best-effort, now.
 - **Observed, not changed:** a message to a peer whose console is stopped goes to the relay, times out
@@ -1441,7 +1446,9 @@ promised path looks like there, and what it took:
   `task_id` — a peer that knows the task is left alone (its stage is shown), a peer that cannot answer a
   stage query is never retried (the message ends `unconfirmed`). Every attempt is a fresh envelope with the
   same `task_id`; an entry is marked "may have delivered" BEFORE each attempt, so a crash mid-send is never
-  read as a clean miss. Closing an entry (sent, delivered, expired, cancelled, unconfirmed, failed) deletes
+  read as a clean miss. A failure that may have queued a relay copy (the first one, at enqueue, and every
+  later one) holds all retries until that copy's deliver-by + 30 s grace, measured from the REAL send start
+  (a fresh clock, not the pass start: earlier entries of a pass block for minutes). Closing an entry (sent, delivered, expired, cancelled, unconfirmed, failed) deletes
   its text from memory AND rewrites `outbox.jsonl` (no line on disk keeps it); a drain pass re-reads each entry
   under the lock right before sending, so an entry cancelled or erased (Art. 17) while an earlier send blocks is
   never sent, and what is sent is the freshly read text; `a2a_feed.erase_peer`/`clear` erase the outbox too (GDPR Art. 17). Audit: `A2A.outbox_enqueued`,
@@ -2255,17 +2262,35 @@ drops the whole block when a key is unknown, a count is not a non-negative integ
 model-id grammar or `source` differs. The grammar (`a2a_usage.valid_model_id`, one definition for both sides, the
 sender's audit backstop and the federation writer) accepts a Claude id in the `model_lineage` scheme (optionally
 `provider/`-qualified, `[region.]anthropic.` Bedrock, `-vN:M` / `@YYYYMMDD` suffix, `[1m]`) or a third-party id of a
-listed family (`gpt`, `o<n>`, `gemini`, `llama`, `mistral`, `qwen`, `deepseek`, `grok`, ...) in a tight shape (at
-most 64 characters, 4 hyphens, 3 dots, one long digit run, no word over 12 letters). A peer-signed id is free text
+listed family (`gpt`, `o<n>`, `gemini`, `llama`, `mistral`, `qwen`, `deepseek`, `grok`, `kimi`, `ministral`, `zephyr`, ...,
+optionally behind a listed `vendor/` or Bedrock `[region.]vendor.` prefix). Third-party ids are a TOKEN grammar: after
+the family every `-`/`:`-separated token must be a version (`3.1`, `v3`, `4o`), a size (`70b`, `1t`, `a3b`, `8x7b`), a
+quantisation (`q4_K_M`), a word of a small closed qualifier set (`latest`, `preview`, `instruct`, `mini`, `lite`,
+`flash`, `coder`, `cloud`, ...) or AT MOST ONE plausible release date (`YYYYMMDD` or `YYYY-MM-DD` with year 2019..2030,
+`MM-DD`, `YYMM`, `MMDD`); a name, a diagnosis or a date of birth (`gpt-anna-schmidt-19800312`, `claude-opus-5-19800312`)
+fails on the unknown word or the out-of-range date. Caps: 64 characters, 10 tokens, 4 version tokens, 4 qualifier
+words, uppercase and control characters refused. Ollama tags (`llama3.2:3b`, `gpt-oss:120b-cloud`) and Claude 3
+spellings (`claude-3-5-sonnet-20241022`) pass. A peer-signed id is free text
 until proven otherwise and lands in the tenant audit chain, and a name plus a date of birth is lowercase
-alphanumerics too, so shape alone cannot protect the chain: an id of an unlisted family is dropped with the block
-(unpriced is honest) and `federation.task_result_received` omits a `model_id` that fails the grammar; a partly valid split would misprice the run. The block is attributed, not
+alphanumerics too, so shape alone cannot protect the chain: an id of an unlisted family or with an unlisted word
+(e.g. a fine-tune suffix such as `llama3.2:my-finetune`) is dropped with the block, so that run is shown unpriced (unpriced is honest) and `federation.task_result_received` omits a `model_id` that fails the grammar; a partly valid split would misprice the run. The block is attributed, not
 verified: the HMAC proves the peer sent it, not that the numbers are true. Recorded as allowlisted scalars on both
 sides (`A2A.response_signed`, `federation.task_result_received`); the console shows sums per partner with the
 ADR-0760 window (`GET /v1/console/federation/usage`, `PartnerUsage`), never an average of percentages, and the
 catalogue's `cost_per_task_usd` stays a self-declared hint that the UI labels as such; selection ignores the block.
 Tests: `test_a2a_usage_block_e2e.py` (real HTTP, real signatures), `tests/federation/test_federation_usage_e2e.py`,
 `partner-usage.test.tsx`.
+
+**Round-two gate notes (usage id, empty host, outbound class).** (1) The usage `model_id` is the token grammar above;
+an id it drops loses the whole block (unpriced), never the answer. (2) An output object whose origin has no `peer_url`
+(and no endpoint file) under an enabled tenant egress policy is refused `object_peer_host_unknown`, not
+`object_egress_denied`: L35 is never asked about a made-up host, and the hint (`a2a_objects.REFUSAL_HINTS`) tells the
+operator to set `peer_url` or re-pair. (3) The `endpoint_role_unset` refusal text names the detected class
+(`endpoint_role.refusal_text(grade)`, a grade name from a closed set, never content) and says a stated partner role
+clears it. **Known limit:** the shared L34 detector grades some ordinary long digit runs (a build number, an ISBN, a
+millisecond timestamp, an invoice number) above `PUBLIC`, so such a message to a role-`unset` peer is refused until the
+role is set; the detector is deliberately not weakened here. The sender must pass the grade
+(`refusal_text(grade)`) and list `refusal_texts()` in its error-detail templates for the class to reach the operator.
 
 ### Measured attachment limits per transport (T-0301, 2026-10-27)
 

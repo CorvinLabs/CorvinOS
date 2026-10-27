@@ -44,46 +44,127 @@ MAX_TOKENS = 10 ** 10
 
 #: The Claude naming scheme (the same one ``model_lineage._ID_RE`` parses), as engines and providers spell it:
 #: ``claude-sonnet-5``, ``claude-haiku-4-5-20251001``, ``anthropic/claude-opus-5``,
-#: ``eu.anthropic.claude-sonnet-5-v2:0``, ``claude-sonnet-5@20250929`` (Vertex), ``claude-opus-5[1m]``.
+#: ``eu.anthropic.claude-sonnet-5-v2:0``, ``claude-sonnet-5@20250929`` (Vertex), ``claude-opus-5[1m]``, and the
+#: legacy Claude 3 order ``claude-3-5-sonnet-20241022`` / ``anthropic/claude-3.7-sonnet``.
 _CLAUDE_ID_RE = re.compile(
     r"(?:anthropic/|(?:(?:eu|us|apac|global|au|jp)\.)?anthropic\.)?"
-    r"claude-(?:haiku|sonnet|opus|fable|mythos)-\d{1,2}(?:-\d{1,2})?(?:-\d{8})?"
-    r"(?:-v\d{1,2}(?::\d{1,2})?|@\d{8})?(?:\[1m\])?"
+    r"claude-(?:(?:haiku|sonnet|opus|fable|mythos)-\d{1,2}(?:[-.]\d{1,2})?|\d(?:[-.]\d)?-(?:haiku|sonnet|opus))"
+    r"(?:-(?P<d1>\d{8}))?(?:-v\d{1,2}(?::\d{1,2})?|@(?P<d2>\d{8}))?(?:\[1m\])?"
 )
 
-#: Third-party families. A CLOSED list: a model id is peer-signed text that lands in the tenant audit chain, and
-#: free text cannot be told from a model name by shape alone (a name plus a date of birth is lowercase
-#: alphanumerics too). An id of a family not listed here drops the block - unpriced is honest.
-_GENERIC_FAMILIES = (
-    "gpt", "chatgpt", "codex", "o[1-9]", "gemini", "gemma", "llama", "mistral", "mixtral", "codestral",
-    "qwen[0-9]*", "deepseek", "grok", "command", "phi[0-9]*", "kimi", "glm", "sonar", "nova", "titan",
-)
-_GENERIC_ID_RE = re.compile(
-    r"(?:(?:openai|google|meta|mistral|deepseek|qwen|xai|cohere|moonshot|perplexity|amazon)/)?"
-    r"(?:" + "|".join(_GENERIC_FAMILIES) + r")(?:[-.][a-z0-9]{1,16})*"
-)
-#: Hard structural caps of the generic shape.
+#: Third-party families: a CLOSED list of the leading word. A model id is peer-signed text that lands in the
+#: tenant audit chain; free text cannot be told from a model name by shape alone, so after the family every
+#: token must be a version, a size, a quantisation, ONE plausible release date, or a word from
+#: :data:`_QUALIFIERS`. An id of a family not listed drops the block - unpriced is honest.
+_FAMILIES = frozenset({
+    "gpt", "chatgpt", "codex", "o", "gemini", "gemma", "llama", "codellama", "tinyllama", "mistral", "mixtral",
+    "codestral", "ministral", "pixtral", "magistral", "devstral", "qwen", "qwq", "deepseek", "grok", "command",
+    "phi", "kimi", "glm", "sonar", "nova", "titan", "zephyr", "yi", "dolphin", "vicuna", "falcon", "olmo",
+    "smollm", "starcoder", "granite", "llava", "nemotron", "hermes", "orca", "solar", "jamba", "ernie",
+    "nomic", "mxbai", "bge", "snowflake", "openchat", "wizardlm", "neural", "stable", "tulu", "internlm", "minicpm",
+})
+#: Vendor prefixes (``vendor/model``) and Bedrock third-party prefixes (``[us.]vendor.model``).
+_VENDORS = frozenset({
+    "openai", "google", "meta", "meta-llama", "mistral", "mistralai", "deepseek", "deepseek-ai", "qwen", "xai",
+    "x-ai", "cohere", "moonshot", "moonshotai", "perplexity", "amazon", "nvidia", "microsoft", "ai21", "zai-org",
+    "z-ai",
+})
+_QUALIFIERS = frozenset({
+    "latest", "preview", "instruct", "chat", "mini", "nano", "small", "medium", "large", "lite", "flash", "pro",
+    "max", "turbo", "codex", "coder", "audio", "vision", "thinking", "cloud", "haiku", "sonnet", "opus", "oss",
+    "base", "code", "reasoner", "versatile", "embed", "text", "express", "premier", "plus", "r", "exp",
+    "experimental", "image", "search", "dense", "nemo", "moe", "mixtral", "next", "vl", "guard", "fp16", "embedding", "realtime", "transcribe", "tts", "ultra", "fast", "reasoning",
+})
+_BEDROCK_RE = re.compile(r"(?:(?:eu|us|apac|global|au|jp)\.)?(" + "|".join(
+    sorted(re.escape(v) for v in _VENDORS if "-" not in v)) + r")\.")
+_FAMILY_TOKEN_RE = re.compile(r"([a-z]+)(\d[\d.]*)?")
+_VERSION_RE = re.compile(r"v?\d{1,3}(?:\.\d{1,3}){0,3}[a-z]?")
+_SIZE_RE = re.compile(r"(?:a|\d{1,2}x)?\d{1,4}(?:\.\d)?[bkmt]")
+_QUANT_RE = re.compile(r"[qQ]\d(?:_[KkMmSsLl0-9])*")
+_VARIANT_RE = re.compile(r"[a-z]\d{1,2}")  # k2, r1, v3 as in kimi-k2, deepseek-r1
+_YEAR_LO, _YEAR_HI = 2019, 2030
 _GENERIC_MAX_LEN = 64
-_GENERIC_MAX_DOTS = 3
-_GENERIC_MAX_HYPHENS = 4
+_GENERIC_MAX_TOKENS = 10
+_GENERIC_MAX_NUMBERS = 4
+_GENERIC_MAX_WORDS = 4
 
 #: Kept for importers that want a cheap pre-filter; the authority is :func:`valid_model_id`.
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}$")
 
 
+def _ymd_ok(y: int, m: int, d: int) -> bool:
+    return _YEAR_LO <= y <= _YEAR_HI and 1 <= m <= 12 and 1 <= d <= 31
+
+
+def _date8_ok(run: str) -> bool:
+    return len(run) == 8 and run.isdigit() and _ymd_ok(int(run[:4]), int(run[4:6]), int(run[6:]))
+
+
+def _is2(t: str) -> bool:
+    return len(t) == 2 and t.isdigit()
+
+
 def _generic_ok(value: str) -> bool:
-    if len(value) > _GENERIC_MAX_LEN or not _GENERIC_ID_RE.fullmatch(value):
+    if len(value) > _GENERIC_MAX_LEN or not value.isascii():
         return False
-    body = value.rsplit("/", 1)[-1]
-    if body.count(".") > _GENERIC_MAX_DOTS or body.count("-") > _GENERIC_MAX_HYPHENS:
+    body = value
+    if "/" in body:
+        vendor, _, body = body.partition("/")
+        if vendor not in _VENDORS or "/" in body:
+            return False
+    else:
+        m = _BEDROCK_RE.match(body)
+        if m:
+            body = body[m.end():]
+    if body.count(":") > 1 or not body:
         return False
-    runs = [r for r in re.findall(r"\d+", body) if len(r) >= 4]
-    # A snapshot date or a build number is at most ONE long digit run; a birth date has several.
-    return len(runs) <= 1 and all(len(r) <= 8 for r in runs) and not _long_word(body)
+    toks = body.replace(":", "-").split("-")
+    if len(toks) > _GENERIC_MAX_TOKENS or any(not t for t in toks):
+        return False
+    fam = _FAMILY_TOKEN_RE.fullmatch(toks[0])
+    if not fam or fam.group(1) not in _FAMILIES or (fam.group(1) == "o" and not fam.group(2)):
+        return False
+    dates = numbers = words = 0
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        step = 1
+        if t.isdigit() and len(t) == 8:
+            if not _date8_ok(t):
+                return False
+            dates += 1
+        elif t.isdigit() and len(t) == 4:
+            if i + 2 < len(toks) + 0 and _is2(toks[i + 1]) and _is2(toks[i + 2]) \
+                    and _ymd_ok(int(t), int(toks[i + 1]), int(toks[i + 2])):
+                step = 3
+                dates += 1
+            elif _YEAR_LO % 100 <= int(t[:2]) <= _YEAR_HI % 100 and 1 <= int(t[2:]) <= 12:  # YYMM
+                dates += 1
+            elif 1 <= int(t[:2]) <= 12 and 1 <= int(t[2:]) <= 31:  # MMDD
+                dates += 1
+            else:
+                return False
+        elif _is2(t) and i + 1 < len(toks) and _is2(toks[i + 1]) \
+                and 1 <= int(t) <= 12 and 1 <= int(toks[i + 1]) <= 31:
+            step = 2
+            dates += 1
+        elif t in _QUALIFIERS:
+            words += 1
+        elif _SIZE_RE.fullmatch(t) or _QUANT_RE.fullmatch(t) or _VARIANT_RE.fullmatch(t):
+            pass
+        elif _VERSION_RE.fullmatch(t):
+            numbers += 1
+        else:
+            return False
+        i += step
+    return dates <= 1 and numbers <= _GENERIC_MAX_NUMBERS and words <= _GENERIC_MAX_WORDS
 
 
-def _long_word(body: str) -> bool:
-    return any(len(w) > 12 for w in re.findall(r"[a-z]+", body))
+def _claude_ok(value: str) -> bool:
+    m = _CLAUDE_ID_RE.fullmatch(value)
+    if not m:
+        return False
+    return all(_date8_ok(d) for d in (m.group("d1"), m.group("d2")) if d)
 
 
 def _usage_split(usage: Any) -> dict[str, int]:
@@ -107,7 +188,7 @@ def valid_model_id(value: object) -> bool:
     """
     if not isinstance(value, str) or not value.isascii() or len(value) > 128:
         return False
-    return bool(_CLAUDE_ID_RE.fullmatch(value)) or _generic_ok(value)
+    return _claude_ok(value) or _generic_ok(value)
 
 
 def _valid_count(value: object) -> bool:
