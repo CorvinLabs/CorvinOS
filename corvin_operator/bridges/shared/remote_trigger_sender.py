@@ -1676,8 +1676,10 @@ class RemoteTriggerSender:
         status = str(response.get("status", "rejected"))
         data = dict(response.get("data", {}))
 
-        # 6) Verify response attachments (digest, name, caps).
-        resp_attachments_raw = response.get("attachments", []) or []
+        # 6) Verify response attachments (digest, name, caps). An UNSIGNED legacy rejection
+        # (ADR-0077 C-5) proves nothing about its body: usage, inline files and object
+        # references are taken from a signed response only (ADR-2292/ADR-2287).
+        resp_attachments_raw = (response.get("attachments", []) or []) if _resp_is_signed else []
         verified_refs: list[dict] = []
         try:
             # ADR-2287: references (``inline: false``) are shape-checked on their own; the inline
@@ -1711,7 +1713,8 @@ class RemoteTriggerSender:
             )
 
         # ADR-2292: read only AFTER the HMAC check above, so the block is the peer's signed statement.
-        usage_block = a2a_usage.parse_usage_block(response.get("usage"))
+        usage_block = (a2a_usage.parse_usage_block(response.get("usage"))
+                       if _resp_is_signed else a2a_usage.parse_usage_block(None))
         self._audit_best_effort(
             "A2A.response_received", "INFO",
             {"endpoint_id": endpoint_id, "task_id": task_id,

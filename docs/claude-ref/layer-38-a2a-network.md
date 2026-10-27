@@ -1413,7 +1413,10 @@ promised path looks like there, and what it took:
   more than `_DELIVER_BY_GRACE_S` (30 s, the clock-skew allowance), sending no answer and writing
   `A2A.relay_expired_dropped` (task id and seconds late, never text). A missing or malformed stamp means no
   deadline (the old behaviour); a peer on an older build does not know the key and runs the task as before.
-  The relay is unchanged. Proof: `test_a2a_relay_deliver_by.py` (real relay, an offline peer, both outcomes).
+  The deadline is checked again after the task has acquired its heavy-dispatch slot (16 concurrent): a task
+  that waited for a slot past its deadline is dropped with the same record, never run late.
+  The relay is unchanged. Proof: `test_a2a_relay_deliver_by.py` (real relay, an offline peer, both outcomes),
+  `test_a2a_transport_review.py::TestHeavySlotDeadline`.
   The envelope `ttl_s` is the worker's wall-time budget, not a delivery deadline; freshness stays +-300 s.
 - **Sender outbox (T-0252 step 2, ADR-2300):** a plain-text chat message that could not be delivered because
   the peer is offline (`unreachable`) or did not answer in time (`timeout_transport`) is KEPT in
@@ -2180,6 +2183,10 @@ Guard: `test_adr_2293_no_foreign_a2a.py` (files absent, no production mention wi
 `build_server`, `/a2a` and the agent card answer 404 over a real HTTP server with `/healthz` as the control).
 
 ### What a federated run cost: the signed usage block (ADR-2292)
+
+The sender reads `usage`, inline attachments and object references ONLY from a response whose HMAC verified. The
+legacy unsigned rejection (ADR-0077 C-5) keeps just its `status` and an empty `data`; any usage block, file or
+reference it carries is ignored (`test_a2a_transport_review.py::TestUnsignedResponseCarriesNothing`).
 
 The signed response carries an optional `usage` object, covered by the response HMAC like every other field:
 `{model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, source: "engine_attested"}`

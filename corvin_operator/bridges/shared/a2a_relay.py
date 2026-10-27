@@ -1266,19 +1266,27 @@ class RelayListener:
                 _deliver_by = _pop_deliver_by(payload)   # always stripped: the receiver never sees it
                 if _my_instance and payload.get("sender_instance_id") == _my_instance:
                     return  # our own task, routed back to us — never execute it
-                if _deliver_by is not None and time.time() - _deliver_by > _DELIVER_BY_GRACE_S:
+                def _expired() -> bool:
                     # T-0252: the sender stopped waiting before this reached us (we were
                     # offline and the relay queued it). Running it now would spend a worker
                     # on an answer nobody reads, and a resend would run it twice. No answer
                     # is sent: the sender's connection is long gone.
+                    if _deliver_by is None or time.time() - _deliver_by <= _DELIVER_BY_GRACE_S:
+                        return False
                     _auditor = getattr(self._receiver, "_audit_best_effort", None)
                     if callable(_auditor):
                         _auditor("A2A.relay_expired_dropped", "INFO", {
                             "task_id": str(payload.get("task_id") or "")[:128],
                             "late_s": int(time.time() - _deliver_by),
                         })
+                    return True
+
+                if _expired():
                     return
                 async with self._heavy_slot():
+                    # ADR-2300: the wait for a free slot can outlast the deadline — check again.
+                    if _expired():
+                        return
                     response = await _run_work(self._receiver.receive, payload)
                 response_dict = response.to_dict()
 
