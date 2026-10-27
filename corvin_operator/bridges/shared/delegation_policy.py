@@ -242,6 +242,34 @@ def _consult_router(registry, *, tenant_id: str, bundled: str, force_delegate: b
     return engine, conf, float(threshold)
 
 
+def _mirror_dual_write(*, tenant_id: str, bundled: str, force_delegate: bool,
+                       is_big_data: bool, mode: str, features: dict) -> str:
+    """The dual_write route WITHOUT executing the Skill (``route_and_record(record=False)``)."""
+    try:
+        from core.skills.os_skills.delegation_router import advise_from_input  # noqa: PLC0415
+        from core.skills.os_skills.monitoring import dual_write  # noqa: PLC0415
+
+        out = advise_from_input({
+            "tenant_id": tenant_id, "bundled_engine": bundled,
+            "force_delegate": force_delegate, "is_big_data": is_big_data,
+            "mode": mode, "features": dict(features), "shadow": False,
+        })
+        engine = out.get("engine") if out.get("engine") in WORKER_ENGINE_MODES else None
+        conf = out.get("confidence")
+        if isinstance(conf, bool) or not isinstance(conf, (int, float)):
+            conf = None
+        threshold = out.get("confidence_threshold", _DEFAULT_ACCEPT_THRESHOLD)
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            threshold = _DEFAULT_ACCEPT_THRESHOLD
+        used, _source, _clamped = dual_write.clamp(
+            bundled=bundled, skill_engine=engine, skill_conf=conf,
+            force_delegate=force_delegate, threshold=float(threshold),
+        )
+        return used
+    except Exception:  # noqa: BLE001 — a query that cannot decide mirrors the rule
+        return bundled
+
+
 def route_and_record(
     *,
     tenant_id: str,
@@ -263,8 +291,13 @@ def route_and_record(
     outcome with :func:`record_turn_outcome`.
 
     ``record=False`` is a pure query for callers that must mirror the turn's
-    decision without being it (the console's engine guard): same answer, no
-    ledger row, no audit, and in shadow no Skill execution at all.
+    decision without being it (the console's engine guard): no ledger row, no
+    audit and no Skill execution in any phase (no ``skill.executed`` record). In
+    dual_write it applies the Skill's advice as a pure function
+    (``delegation_router.advise_from_input``) and the same clamp, so it returns
+    the engine the turn serves when the turn's ``routing.phase2_decision``
+    record commits; a turn whose record fails to commit serves the bundled
+    engine instead (audit-first), which this query cannot foresee.
 
     ``post_hoc=True`` records a turn whose engine ALREADY ran (a path that never
     reached the rule). It is pinned to shadow: the Skill's advice is recorded,
@@ -299,8 +332,12 @@ def route_and_record(
         phase = "shadow"
     if post_hoc:
         phase = "shadow"
-    if not record and phase == "shadow":
-        return bundled
+    if not record:
+        if phase == "shadow" or registry is None:
+            return bundled
+        return _mirror_dual_write(tenant_id=tenant_id, bundled=bundled,
+                                  force_delegate=force_delegate, is_big_data=is_big_data,
+                                  mode=mode, features=feats)
 
     skill_engine: str | None = None
     skill_conf: float | None = None
@@ -359,8 +396,14 @@ def record_turn_outcome(
     ok: bool,
     latency_ms: float,
     source: str = "bundled",
+    excluded: str | None = None,
 ) -> None:
-    """Join the finished turn to its decision; judge rollback on Skill-served turns."""
+    """Join the finished turn to its decision; judge rollback on Skill-served turns.
+
+    ``excluded`` (``cancelled`` | ``orphaned`` | ``no_engine``) records a NOT-JUDGED
+    outcome (ADR-2092 G1 as amended 2026-10-27): it is counted, but it leaves the
+    join rate, every success rate and the rollback judge — so it never triggers one.
+    """
     if not turn_id:
         return
     try:
@@ -375,9 +418,9 @@ def record_turn_outcome(
             tenant_id=tenant_id, turn_id=turn_id,
             surface=surface if surface in ROUTING_SURFACES else "console",
             used=used if used in WORKER_ENGINE_MODES else WORKER_ENGINE_DEFAULT,
-            ok=ok, latency_ms=latency_ms,
+            ok=ok, latency_ms=latency_ms, excluded=excluded,
         )
-        if source == "skill":
+        if source == "skill" and excluded is None:
             # The judge scans the ledger; off the caller's thread, because the
             # console reports outcomes from inside its event loop.
             import threading as _threading  # noqa: PLC0415

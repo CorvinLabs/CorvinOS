@@ -54,6 +54,19 @@ def bridge(tmp_path, monkeypatch):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     monkeypatch.delenv("CORVIN_ACP_PHASE", raising=False)
+    # Order independence (review s3_routing-10): the console stream_turn harness
+    # plants a file-less stand-in for `license` in sys.modules. The licence twin
+    # finder (corvin_operator/license/__init__.py) then hands that stand-in out as
+    # `corvin_operator.license` too, and the harness tearDown pops only `license`.
+    # The adapter's `from license.validator import …` then resolves the twin stub
+    # ("'license' is not a package"), falls back to the Free tier and blocks the
+    # discord bridge — every turn here writes no reply. Drop every file-less
+    # stand-in under either twin name for this test only.
+    for name in [m for m in sys.modules
+                 if m in ("license", "corvin_operator.license")
+                 or m.startswith(("license.", "corvin_operator.license."))]:
+        if getattr(sys.modules[name], "__file__", None) is None:
+            monkeypatch.delitem(sys.modules, name)
     sys.modules.pop("adapter", None)
     adapter = importlib.import_module("adapter")
     booted = adapter._boot_acp_skills()
@@ -126,14 +139,16 @@ def _seed_ready_history():
                                           used=kw.get("bundled", "native"), ok=True, latency_ms=5)
     seed(470)
     seed(40, bundled="acs")
-    # ADR-2092 G4: the bridge enters Phase 2 only after a 7-day console soak.
-    soak = {"v": 1, "kind": "decision", "ts": time.time() - 8 * 86400,
-            "turn_id": routing_ledger.new_turn_id(), "surface": "console",
-            "phase": "dual_write", "bundled": "native", "skill": "native",
-            "skill_conf": 0.9, "used": "native", "source": "bundled",
-            "clamped": False, "features": {}}
+    # ADR-2092 G4: the bridge enters Phase 2 only after a CONTINUOUS 7-day console
+    # soak (readiness.CONSOLE_SOAK_S): console dual_write decisions every 12 h for 8 days.
     with open(routing_ledger.ledger_path(TENANT), "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(soak) + "\n")
+        for half_days in range(16, -1, -1):
+            soak = {"v": 1, "kind": "decision", "ts": time.time() - half_days * 43200,
+                    "turn_id": routing_ledger.new_turn_id(), "surface": "console",
+                    "phase": "dual_write", "bundled": "native", "skill": "native",
+                    "skill_conf": 0.9, "used": "native", "source": "bundled",
+                    "clamped": False, "features": {}}
+            fh.write(json.dumps(soak) + "\n")
     from core.skills.os_skills.monitoring import readiness
 
     assert readiness.cached_evaluate(TENANT, "bridge", background=False).ready
@@ -325,8 +340,8 @@ def test_lifecycle_trailing_skill_trips_rollback_and_returns_to_shadow(bridge, m
     refused = [e for e in _chain(base) if e["event_type"] == "routing.phase2_refused"]
     assert [e["details"]["reason"] for e in refused] == ["rollback_active"]
 
-    # 5. An operator reset does not reopen Phase 2 by itself: the evidence gate now
-    #    sees native trailing delegated in the bucket and keeps the turn in shadow.
+    # 5. An operator reset does not reopen Phase 2 by itself: the reset restarts the
+    #    7-day console soak (review s3_routing-1), so the bridge stays in shadow.
     import delegation_policy as dp
 
     rollback_detector.reset_rollback(
@@ -334,7 +349,7 @@ def test_lifecycle_trailing_skill_trips_rollback_and_returns_to_shadow(bridge, m
     assert not rollback_detector.rollback_active(TENANT)
     readiness.clear_cache()
     verdict = readiness.cached_evaluate(TENANT, "bridge", background=False)
-    assert not verdict.ready and verdict.reason.startswith("native_trails_delegated")
+    assert (verdict.ready, verdict.reason) == (False, "console_soak_incomplete")
     _send(adapter, base, "Big Data?")
     assert acs == ["Big Data?", "Big Data?"]
     assert [e["event_type"] for e in _chain(base)].count("routing.rollback_reset") == 1
@@ -365,4 +380,112 @@ def test_live_shaped_history_never_disagrees_so_phase2_stays_shadow(bridge, monk
     row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
     assert (row["phase"], row["used"], row["source"]) == ("shadow", "native", "bundled")
     assert acs == []
+    _verify(base)
+
+
+# ── review s3_routing round 1 (2026-10-27) ──────────────────────────────────
+
+def test_a_turn_refused_before_any_engine_ran_is_not_judged(bridge, monkeypatch):
+    """s3_routing-4: a budget refusal used to be recorded as a native SUCCESS."""
+    adapter, base, acs = bridge
+    monkeypatch.setattr(adapter, "_budget_preflight",
+                        lambda chat_key, prompt: (False, "Budget exhausted - request refused"))
+    out = _send(adapter, base, "wie spät ist es?")
+    assert out, "the refusal is still answered"
+    (row,) = _ledger()
+    assert (row["outcome"]["ok"], row["outcome"].get("excluded")) == (None, "no_engine")
+    from core.skills.os_skills.monitoring import routing_ledger
+
+    s = routing_ledger.summarize(routing_ledger.read_records(TENANT), surface="bridge")
+    assert (s["decisions"], s["not_judged"], s["by_source"]["bundled"]["n"]) == (0, 1, 0), s
+    _verify(base)
+
+
+def test_one_old_console_dual_write_record_does_not_open_the_bridge(bridge, monkeypatch):
+    """s3_routing-1 (P6): one historic console Phase-2 turn and a fresh reset passed the soak."""
+    adapter, base, acs = bridge
+    from core.skills.os_skills.monitoring import readiness, rollback_detector, routing_ledger
+
+    _seed_ready_history()
+    # Replace the continuous soak with ONE console dual_write turn eight days ago.
+    path = routing_ledger.ledger_path(TENANT)
+    kept = [ln for ln in path.read_text().splitlines()
+            if '"phase":"dual_write"' not in ln.replace(" ", "")]
+    old = {"v": 1, "kind": "decision", "ts": time.time() - 8 * 86400,
+           "turn_id": routing_ledger.new_turn_id(), "surface": "console",
+           "phase": "dual_write", "bundled": "native", "skill": "native",
+           "skill_conf": 0.9, "used": "native", "source": "bundled",
+           "clamped": False, "features": {}}
+    path.write_text("\n".join(kept + [json.dumps(old)]) + "\n")
+    import delegation_policy as dp
+
+    rollback_detector.reset_rollback(TENANT, audit=lambda et, d: dp._audit(et, d, tenant_id=TENANT))
+    readiness.clear_cache()
+    assert readiness.cached_evaluate(TENANT, "bridge", background=False).reason == "console_soak_incomplete"
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    _send(adapter, base, "Big Data?")
+    assert acs == ["Big Data?"]           # bundled ACS route kept, nothing de-escalated
+    row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
+    assert (row["phase"], row["source"]) == ("shadow", "bundled")
+    _verify(base)
+
+
+def test_a_shadow_turn_never_reads_the_learned_router_config(bridge, monkeypatch):
+    """s3_routing-8: the learned config is read (and acted on) only by the gated Phase 2 path."""
+    adapter, base, acs = bridge
+    from core.skills.os_skills import skill_adapter
+
+    calls = []
+    real = skill_adapter.load_skill_config
+    monkeypatch.setattr(skill_adapter, "load_skill_config",
+                        lambda *a, **k: (calls.append(a), real(*a, **k))[1])
+    _send(adapter, base, "Big Data?")
+    (rec,) = _router_records(_chain(base))
+    assert rec["details"]["decision"]["shadow"] is True
+    assert calls == []
+
+
+def test_the_evaluating_placeholder_is_never_audited_as_a_refusal(bridge, monkeypatch):
+    """s3_routing-9: the first turn of every process audited 'evaluating' as a refusal."""
+    adapter, base, acs = bridge
+    from core.skills.os_skills.monitoring import readiness
+
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    readiness.clear_cache()
+    _send(adapter, base, "Big Data?")       # cache empty: answered "evaluating"
+    assert _wait_for(lambda: readiness._cache.get((TENANT, "bridge")) is not None)
+    _send(adapter, base, "Big Data?")       # the real verdict
+    reasons = [e["details"]["reason"] for e in _chain(base)
+               if e["event_type"] == "routing.phase2_refused"]
+    assert reasons == ["console_soak_incomplete"], reasons
+    _verify(base)
+
+
+def test_a_trip_whose_record_does_not_commit_persists_nothing_but_stops_phase2(bridge, monkeypatch):
+    """s3_routing-7: the rollback state file was written although the audit did not commit."""
+    adapter, base, acs = bridge
+    from core.skills.os_skills.monitoring import rollback_detector
+    import delegation_policy as dp
+
+    _seed_ready_history()
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    _send(adapter, base, "Big Data?")       # cleared: the Skill de-escalates
+    assert acs == []
+    _seed_skill_served(120, ok=False)
+    real = dp._audit
+    monkeypatch.setattr(dp, "_audit", lambda et, d, *, tenant_id: (
+        False if et == "routing.rollback_triggered" else real(et, d, tenant_id=tenant_id)))
+    _send(adapter, base, "Big Data?")       # its outcome runs the judge, which trips
+    assert _wait_for(lambda: rollback_detector.rollback_active(TENANT))
+    assert not rollback_detector.state_path(TENANT).exists()   # audit-first: nothing persisted
+    _send(adapter, base, "Big Data?")       # fail-safe: Phase 2 is off in this process
+    assert acs == ["Big Data?"]
+    monkeypatch.setattr(dp, "_audit", real)
+    _seed_skill_served(1, ok=False)
+    rows = [r for r in _ledger() if r["source"] == "skill"]
+    dp.record_turn_outcome(tenant_id=TENANT, turn_id=rows[0]["turn_id"], surface="bridge",
+                           used="native", ok=False, latency_ms=1, source="skill")
+    assert _wait_for(lambda: rollback_detector.state_path(TENANT).exists())  # retried, committed
+    trips = [e for e in _chain(base) if e["event_type"] == "routing.rollback_triggered"]
+    assert len(trips) == 1
     _verify(base)

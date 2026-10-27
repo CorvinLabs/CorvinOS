@@ -9685,15 +9685,25 @@ def _report_route_outcome(tenant_id: str, meta: dict, answer, chat_key: str,
     """Join the finished turn to its routing decision (ADR-2092 G1).
 
     Success is what the served engine reported: a delegated engine succeeded when
-    it produced the answer; a native turn by its OS engine span status. Without a
-    span status (a turn refused before any engine ran) the answer's presence is
-    the only signal there is.
+    it produced the answer; a native turn by its OS engine span status.
+
+    Two kinds of turn are NOT-JUDGED (ADR-2092 G1 as amended 2026-10-27), the
+    same definition the console uses: a turn the user cancelled (``/cancel``),
+    and a native turn refused before any engine ran (budget, quota, a pre-spawn
+    gate — ``_turn_refused`` with no engine span). They are recorded with
+    ``excluded`` and leave the join rate and every success rate; a refusal is
+    never a native success.
     """
     status = _LAST_OS_TURN_STATUS.pop(chat_key, None)
     if "routed_engine" not in meta or meta.get("outcome_reported"):
         return
     meta["outcome_reported"] = True
     delegated = bool(meta.get("engine"))
+    excluded = None
+    if getattr(_TURN_OUTCOME, "failed", None) == "cancelled":
+        excluded = "cancelled"
+    elif not delegated and status is None and getattr(_TURN_OUTCOME, "refused", None):
+        excluded = "no_engine"
     if delegated:
         ok = bool(answer)
     elif status is not None:
@@ -9708,6 +9718,7 @@ def _report_route_outcome(tenant_id: str, meta: dict, answer, chat_key: str,
             used=str(meta.get("engine") or "native"), ok=ok,
             latency_ms=(time.monotonic() - started) * 1000.0,
             source=str(meta.get("route_source") or "bundled"),
+            excluded=excluded,
         )
     except Exception as e:  # noqa: BLE001
         log(f"route outcome skipped ({type(e).__name__})")

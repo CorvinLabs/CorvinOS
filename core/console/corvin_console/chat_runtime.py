@@ -4565,7 +4565,10 @@ def _worker_engine_target(
         surface="console",
         sink=sink,
         turn_id=(sink or {}).get("turn_id"),
-        features=_routing_features(prompt, tenant_id=tenant_id) if sink is not None else None,
+        # The engine guard (sink None) needs the SAME features as the turn, or in a
+        # cleared Phase 2 the Skill's advice differs between guard and turn
+        # (review s3_routing-5).
+        features=_routing_features(prompt, tenant_id=tenant_id),
     )
 
 
@@ -4575,17 +4578,23 @@ def _new_route_meta() -> dict:
     return {"turn_id": uuid.uuid4().hex[:20]}
 
 
-def _record_console_route(tenant_id: str, meta: dict, prompt: str) -> None:
+def _record_console_route(tenant_id: str, meta: dict, prompt: str, *,
+                          explicit_tde: bool = False) -> None:
     """Routing record for a console turn the triage never reached (delegation off,
-    throttled, or ``/use-engine claude_code``): it runs native (ADR-2092 G0)."""
+    throttled, or ``/use-engine claude_code``): it runs native (ADR-2092 G0).
+
+    ``explicit_tde`` — ``/use-engine tiered_delegation`` on a TDE install: the
+    user chose the engine, so it is recorded as a forced TDE route (the Skill
+    confirms a forced route and readiness never counts it as a disagreement)."""
     try:
         if str(_BRIDGES_SHARED) not in sys.path:
             sys.path.insert(0, str(_BRIDGES_SHARED))
         from delegation_policy import route_and_record, routing_features  # noqa: PLC0415
 
+        engine = "tde" if explicit_tde else "native"
         route_and_record(
-            tenant_id=tenant_id, bundled="native", force_delegate=False,
-            is_big_data=False, mode="native", surface="console",
+            tenant_id=tenant_id, bundled=engine, force_delegate=explicit_tde,
+            is_big_data=False, mode=engine, surface="console",
             turn_id=meta.get("turn_id"),
             features=routing_features(prompt, tenant_id=tenant_id), sink=meta,
             post_hoc=True,
@@ -4595,7 +4604,10 @@ def _record_console_route(tenant_id: str, meta: dict, prompt: str) -> None:
 
 
 def _report_console_route_outcome(tenant_id: str, meta: dict, *, served: str,
-                                  ok: bool, started: float) -> None:
+                                  ok: bool, started: float,
+                                  excluded: "str | None" = None) -> None:
+    """``excluded`` marks a NOT-JUDGED turn (``cancelled`` / ``no_engine``): recorded and
+    counted, never part of the join rate, a success rate or the rollback judge."""
     if "routed_engine" not in meta or meta.get("outcome_reported"):
         return
     meta["outcome_reported"] = True
@@ -4606,6 +4618,7 @@ def _report_console_route_outcome(tenant_id: str, meta: dict, *, served: str,
             tenant_id=tenant_id, turn_id=meta.get("turn_id"), surface="console",
             used=served, ok=ok, latency_ms=(time.monotonic() - started) * 1000.0,
             source=str(meta.get("route_source") or "bundled"),
+            excluded=excluded,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -7090,15 +7103,23 @@ async def _stream_turn_impl(
         # ADR-2092 G1 — join the finished turn to its routing decision. The
         # engine that SERVED is native unless the delegation actually ran (a
         # quota fallback serves natively) or a branch named it explicitly
-        # (forced TDE). A turn in which no engine ran (gate refusal, TDE
-        # switched off, empty directive) reports no outcome: it is neither a
-        # native success nor a native failure. The NameError guards are
+        # (forced TDE). Two kinds of turn are NOT-JUDGED (ADR-2092 G1 as
+        # amended 2026-10-27): one in which no engine ran (gate refusal, TDE
+        # switched off, debug engine, empty directive) and one the console cut
+        # itself (rc == -1: client disconnect / cancellation). Both are
+        # recorded with ``excluded`` — neither a success nor a failure of the
+        # served engine, and out of the join rate. The NameError guards are
         # defensive — every current caller runs after the routing gate.
         try:
             _rm = _route_meta
         except NameError:
             _rm = None
-        if _rm is not None and not _rm.get("no_engine"):
+        if _rm is not None and _rm.get("no_engine"):
+            _report_console_route_outcome(
+                sess.tenant_id, _rm, served=str(_rm.get("routed_engine") or "native"),
+                ok=False, started=_route_t0, excluded="no_engine",
+            )
+        elif _rm is not None:
             try:
                 _fb = bool(_quota_fallback)
             except NameError:
@@ -7115,6 +7136,7 @@ async def _stream_turn_impl(
                 sess.tenant_id, _rm,
                 served=(_rm.get("served") or (_wt if (_wd and not _fb) else "native")),
                 ok=(rc == 0), started=_route_t0,
+                excluded=("cancelled" if rc == -1 else None),
             )
 
     # Persist the user-side of this turn immediately so a tab refresh
@@ -7170,9 +7192,14 @@ async def _stream_turn_impl(
     # reason `_del_enabled` is: the gate's compliance row and the engine that
     # actually spawns must not diverge across the `await _ccc_dispatch` below.
     _worker_mode = _feature_flags.worker_engine_mode(sess.tenant_id)
+    # An explicit `/use-engine tiered_delegation <task>` is the user's engine
+    # choice: it never reaches the router (a cleared Phase 2 could otherwise
+    # audit a de-escalation the TDE branch below never serves) and is recorded
+    # after the fact as what runs, below.
     _pre_delegate = (_del_enabled
                      and not _del_throttled
                      and not _force_direct
+                     and not _tde_force
                      and (_force_delegate or _should_delegate(
                          prompt, tenant_id=sess.tenant_id, sink=_route_meta)))
     # The pre-filter only says "delegation-worthy"; the operator's mode decides
@@ -7186,7 +7213,21 @@ async def _stream_turn_impl(
         if _pre_delegate else "native"
     )
     if "routed_engine" not in _route_meta:
-        _record_console_route(sess.tenant_id, _route_meta, prompt)
+        _record_console_route(sess.tenant_id, _route_meta, prompt,
+                              explicit_tde=(_tde_force and _worker_mode == "tde"))
+    if "routed_engine" in _route_meta:
+        # Restart-killed turns (ADR-2092 G1 as amended 2026-10-27): the boot reaper
+        # finds the routing turn through this event and records it NOT-JUDGED
+        # (``orphaned``). Ids and enums only; never prompt text.
+        try:
+            tm.record_event(task_id, {
+                "event": "task.routing",
+                "routing_turn_id": str(_route_meta.get("turn_id") or ""),
+                "routing_surface": "console",
+                "routed_engine": str(_route_meta.get("routed_engine") or "native"),
+            })
+        except Exception:  # noqa: BLE001 — the routing link never costs the turn
+            pass
     _will_delegate = _pre_delegate and _worker_target != "native"
     # _os_engine already resolved above (before turn.start debug event)
     # Off the event loop: the L44 classifier inside is a model call that takes

@@ -982,7 +982,37 @@ class TaskManager:
                 # Best-effort: one unreadable/locked task must not abort the
                 # rest of the sweep.
                 continue
+            if reason == "orphaned_on_restart":
+                self._record_orphaned_route(task_id, meta)
         return reaped
+
+    def _record_orphaned_route(self, task_id: str, meta: dict[str, Any]) -> None:
+        """ADR-2092 G1 (amended 2026-10-27): a turn killed by a restart is NOT-JUDGED.
+
+        The turn recorded its routing decision and then a ``task.routing`` event
+        naming the routing ``turn_id``; it died before its outcome. Record the
+        outcome as ``excluded: orphaned`` so the turn leaves the join rate instead
+        of counting as a lost outcome forever. Best-effort, never fatal.
+        """
+        try:
+            link = None
+            for _seq, ev in self.events_since(task_id, start_seq=None):
+                if ev.get("event") == "task.routing":
+                    link = ev
+            if link is None:
+                return
+            tenant_id = str((meta.get("input") or {}).get("tenant_id") or "_default")
+            from core.skills.os_skills.monitoring import routing_ledger  # noqa: PLC0415
+
+            routing_ledger.record_outcome(
+                tenant_id=tenant_id,
+                turn_id=str(link.get("routing_turn_id") or ""),
+                surface=str(link.get("routing_surface") or ""),
+                used=str(link.get("routed_engine") or "native"),
+                ok=False, latency_ms=0.0, excluded="orphaned",
+            )
+        except Exception:  # noqa: BLE001 — the routing ledger never costs the sweep
+            pass
 
     def events_since(
         self,
