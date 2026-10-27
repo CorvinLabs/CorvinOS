@@ -2,7 +2,7 @@
 
 ``POST /v1/console/learning/feedback`` -> ``SkillAdapter.run_optimizer_epoch``: an accepted
 hypothesis carries ``:unverified_causality`` in ``optimizer_reason`` and in the persisted
-version's ``change_reason`` unless Phase 2 dual-write holds on every routing surface.
+version's ``change_reason``, unconditionally: no Phase 2 state removes it (ADR-2305 Part 1).
 Everything else (acceptance, version, config, ``skill_config_updated`` audit) is unchanged.
 
 Seeds go through production writers only (the adapter's persisted epoch counter, OUTCOME
@@ -90,10 +90,11 @@ def test_acceptance_is_labelled_while_phase2_is_off(tmp_path, monkeypatch):
         assert any(e["event_type"] == "config_updated" for e in sb.events_on_disk())
 
 
-def test_no_label_when_every_adr_2092_gate_holds(tmp_path, monkeypatch):
-    """Gates held: Phase 2 requested, Skill booted (by boot_learning_registry), no rollback,
-    readiness ready on both surfaces. The gates themselves are not under test here — only that
-    the label follows ``effective_phase``."""
+def test_label_stays_when_every_adr_2092_gate_holds(tmp_path, monkeypatch):
+    """Gates held: Phase 2 requested, no rollback, readiness ready on both surfaces. The label
+    must STAY (ADR-2305 Part 1, decided 2026-10-27): only the causal test (Part 2) removes it,
+    and Phase 2 alone is not causal (the epoch test measures before it applies, and compares
+    two tenant-wide windows without a control group)."""
     from core.skills.os_skills.monitoring import dual_write, readiness, rollback_detector
 
     monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
@@ -110,9 +111,9 @@ def test_no_label_when_every_adr_2092_gate_holds(tmp_path, monkeypatch):
         body, emitter = _prime_and_accept(sb)
         accepted = [h for h in body["hypotheses"] if h["accepted"]]
         assert len(accepted) == 1
-        assert accepted[0]["optimizer_reason"] == "improvement_100.00%_accepted"
-        assert not _cfg(sb)["versions"][0]["change_reason"].endswith(MARK)
-        assert {"bridge", "console"} <= set(asked)
+        assert accepted[0]["optimizer_reason"] == "improvement_100.00%_accepted" + MARK
+        assert _cfg(sb)["versions"][0]["change_reason"].endswith(MARK)
+        assert not asked, "no gate is consulted any more: the label is unconditional"
         emitter.stop(timeout=5.0)
         _verify_tenant_chain(sb)
 

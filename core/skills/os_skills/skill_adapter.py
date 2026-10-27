@@ -32,12 +32,13 @@ The config produced here is READ by ``DelegationRouterSkill`` via
 :func:`load_skill_config` — that is what closes the loop (feedback → hypothesis
 → accepted config → the next routing decision uses it).
 
-Epoch-test label (ADR-2305 Part 1, PLAN-0966 WP2): an accepted hypothesis carries
+Epoch-test label (ADR-2305 Part 1, PLAN-0966 WP2): every accepted hypothesis carries
 the suffix :data:`UNVERIFIED_CAUSALITY` in its returned reason and in the new
-version's ``change_reason`` unless the learned config can act
-(:func:`learned_config_can_act`: Phase 2 dual-write cleared by every ADR-2092 gate
-on every routing surface). Until then nothing reads the learned threshold, so an
-acceptance cannot be a measured effect. Behaviour is otherwise unchanged.
+version's ``change_reason``. The label is removed only by a causal test (ADR-2305
+Part 2), which does not exist yet; Phase 2 dual-write does not remove it, because
+the epoch test compares two windows without a control group, on tenant-wide
+outcomes, and applies a hypothesis only after measuring. Behaviour is otherwise
+unchanged.
 
 Learning brake (ADR-2304, PLAN-0966 WP3): ``OptimizerState.frozen`` (persisted
 with the config). While frozen, BOTH writers (:meth:`SkillAdapter.apply_config_delta`,
@@ -81,7 +82,6 @@ __all__ = [
     "skill_config_path",
     "LOCK_TIMEOUT_SECONDS",
     "UNVERIFIED_CAUSALITY",
-    "learned_config_can_act",
     "LearningFrozen",
     "NotFrozen",
     "BRAKE_EVENTS",
@@ -90,16 +90,9 @@ __all__ = [
     "valid_skill_id",
 ]
 
-#: ADR-2305 Part 1: suffix of an acceptance the epoch test cannot attribute causally.
+#: ADR-2305 Part 1: suffix of every acceptance. Removed only by the causal test (Part 2).
 UNVERIFIED_CAUSALITY = ":unverified_causality"
 
-#: The skills whose learned config is read back by a consumer (the same set as
-#: ``routes/stream4_skill_feedback.CONFIG_CONSUMERS``). Any other skill's config acts nowhere.
-_CONFIG_READERS = frozenset({"os.delegation_router"})
-
-#: The routing surfaces the ADR-2092 gates are evaluated for
-#: (``delegation_policy.ROUTING_SURFACES``; not imported: that module lives in the bridge tree).
-_ROUTING_SURFACES = ("bridge", "console")
 
 #: ADR-2304 audit events, content-free: ids and closed enums only (``reason`` is the
 #: anomaly event name, ``target`` one of ``skill_config`` / ``dod_weights``). Mirrored in
@@ -144,30 +137,6 @@ def _brake_emit(event: str, details: dict, *, tenant_id: str, severity: str) -> 
     audit_sink.register_events(BRAKE_EVENTS)
     audit_sink.emit(event, details, tenant_id=tenant_id, severity=severity)
 
-
-def learned_config_can_act(tenant_id: str, skill_id: str = "os.delegation_router") -> bool:
-    """True only when a learned config of ``skill_id`` is read on every routing surface.
-
-    That is the case when the skill has a config reader at all and
-    ``monitoring.dual_write.effective_phase`` answers ``dual_write`` (``CORVIN_ACP_PHASE=
-    phase2_dual_write`` AND Skill booted AND no rollback AND readiness ready) for every
-    surface. A pure query: no audit writer is passed, so it records nothing. Any failure
-    answers False — the label stays (the honest direction).
-    """
-    if skill_id not in _CONFIG_READERS:
-        return False
-    try:
-        from core.skills.os_skills.monitoring import dual_write  # noqa: PLC0415
-        from core.skills import skill_registry_phase1 as _reg  # noqa: PLC0415
-
-        registry = getattr(_reg, "_global_registry", None)
-        available = registry is not None and registry.get(skill_id) is not None
-        return all(
-            dual_write.effective_phase(tenant_id=tenant_id, surface=s,
-                                       skill_available=available, audit=None) == "dual_write"
-            for s in _ROUTING_SURFACES)
-    except Exception:  # noqa: BLE001 — cannot decide ⇒ not shown as causal
-        return False
 
 #: Deadline for the per-skill config flock. Same value and same contract as
 #: ``core.infinite_session.event_store.LOCK_TIMEOUT_SECONDS`` and
@@ -512,29 +481,24 @@ class SkillAdapter:
 
         Returns:
             (accepted, reason): whether hypothesis was accepted. An accepted reason ends in
-            :data:`UNVERIFIED_CAUSALITY` unless :func:`learned_config_can_act` (ADR-2305).
+            :data:`UNVERIFIED_CAUSALITY` (ADR-2305 Part 1: always, until the causal test exists).
 
         Raises:
             LearningFrozen: the skill's learning is frozen (ADR-2304); nothing changed,
                 not even the epoch counter.
         """
-        # Evaluated outside the lock: the readiness check may read the routing ledger.
-        causal = learned_config_can_act(self.tenant_id, self.skill_id)
         with self._locked():
-            return self._run_optimizer_epoch_locked(
-                hypothesis, recent_successes, recent_total, causal=causal)
+            return self._run_optimizer_epoch_locked(hypothesis, recent_successes, recent_total)
 
     def _run_optimizer_epoch_locked(
         self,
         hypothesis: Optional[ConfigHypothesis],
         recent_successes: int,
         recent_total: int,
-        *,
-        causal: bool = False,
     ) -> tuple[bool, str]:
         if self.state.frozen:
             raise self._refuse_frozen("skill_config")
-        label = "" if causal else UNVERIFIED_CAUSALITY
+        label = UNVERIFIED_CAUSALITY
         self.state.epoch += 1
         recent_success_rate = recent_successes / recent_total if recent_total > 0 else 0.0
 

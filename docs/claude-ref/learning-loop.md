@@ -119,8 +119,8 @@ operator ──► POST /v1/console/learning/feedback   {task_id, outcome_qualit
                         accepted → new config VERSION (snapshot persisted) + CONFIG_UPDATED event
                                    + console audit "skill_config_updated:hypothesis_accepted"
                         label (ADR-2305 Part 1): an acceptance is NOT causal evidence — the
-                                   reason and the version's change_reason end in
-                                   ":unverified_causality" unless Phase 2 dual-write holds
+                                   reason and the version's change_reason ALWAYS end in
+                                   ":unverified_causality" until the causal test (Part 2) exists
                         frozen skill (ADR-2304) → no epoch, optimizer_reason "learning_frozen"
 
 next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tenant)
@@ -162,14 +162,14 @@ not an experiment: the baseline is overwritten by the last window (epochs 1–50
 learned threshold, so an acceptance cannot be an effect of the change. An accepted hypothesis
 therefore reads `optimizer_reason: "improvement_<x>%_accepted:unverified_causality"` and its version
 `change_reason: "<rule reason>:unverified_causality"` (also in `GET config-versions` and
-`GET learning/checkpoint`) unless `skill_adapter.learned_config_can_act()` holds: the skill has a
-config reader (`os.delegation_router`) AND `monitoring.dual_write.effective_phase` answers
-`dual_write` on BOTH surfaces (`bridge`, `console`) — `CORVIN_ACP_PHASE=phase2_dual_write`, Skill
-booted, no rollback, readiness ready. The check is a pure query (no audit writer passed, nothing
-recorded) and any failure keeps the label. Acceptance threshold, versioning, rollback and the
-`skill_config_updated` audit are unchanged; the marker is an enum suffix, never free text, and does
-not enter the chain. Readers of the text: the console `POST feedback` answer and the two version
-lists; no code compares it (checked 2026-10-26: one test asserts `baseline_collection_phase`).
+`GET learning/checkpoint`). The label is unconditional. It is NOT removed when Phase 2 dual-write
+holds on every surface: the epoch test measures before it applies, compares two tenant-wide
+windows of 10 tasks without a control group, and applies only a hypothesis whose improvement reaches
+the MDE 0.05 — with no reader of the learned threshold outside the gated Phase 2, an acceptance is a
+threshold crossing, not a measured effect. Only the causal test (ADR-2305 Part 2) removes it.
+Acceptance threshold, versioning, rollback and the `skill_config_updated` audit are unchanged; the
+marker is an enum suffix, never free text, and does not enter the chain. Readers of the text: the
+console `POST feedback` answer and the two version lists; no code compares it.
 Proof: `tests/learning/test_adr_2305_unverified_causality_e2e.py`.
 
 ### Operator interface (`routes/learning.py`, `routes/learning_metrics.py`) — real data or an honest error code (2026-09-07)
@@ -423,9 +423,8 @@ Proof: `tests/learning/test_feedback_trust_gate_e2e.py`,
 * Learning brake (ADR-2304): a freeze is audit-first, only stops writes, never rolls back,
   never lifts itself, and has no flag, env variable or setting; it covers `SkillAdapter` AND
   the DoD weights. Only `skill.config_oscillation` / `skill.confidence_regression` freeze.
-* The `:unverified_causality` label (ADR-2305 Part 1) is dropped only when Phase 2 dual-write
-  holds on every routing surface (every ADR-2092 gate); a requested but refused Phase 2, or a
-  gate check that fails, keeps it. Removing the label altogether waits for the causal test (Part 2).
+* The `:unverified_causality` label (ADR-2305 Part 1) is always present on an accepted hypothesis.
+  No Phase 2 state removes it; only the causal test (Part 2), which does not exist yet, may.
 
 ## Verification
 
