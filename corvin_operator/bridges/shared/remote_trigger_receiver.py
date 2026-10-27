@@ -822,7 +822,11 @@ class OriginRegistry:
         # confirmed is refused on its state alone — flipping `enabled` by hand (or
         # from any UI toggle) must not complete a pair. Checked first so the
         # refusal names the real cause.
-        if "oob_state" in config and config.get("oob_state") != "confirmed":
+        # Same rule as a2a_offline_pairing.is_unconfirmed: a record of the new flow
+        # (pairing_mode offline) is unconfirmed unless oob_state == confirmed, so
+        # deleting oob_state does not make a pending pair a legacy one (review F3).
+        if ((config.get("pairing_mode") == "offline" or "oob_state" in config)
+                and config.get("oob_state") != "confirmed"):
             raise ValidationError("origin_offline_pair_unconfirmed")
         if not config.get("enabled", False):
             raise ValidationError("origin_disabled")
@@ -1176,8 +1180,7 @@ class RemoteTriggerReceiver:
                 audit_detail["purpose_id"] = env.purpose_id[:64]
             # ADR-2295: name the trust basis of a confirmed offline pair (it passed
             # _check_network_attestation's out-of-band verification to get here).
-            if (env.network_attestation is None
-                    and origin_config.get("attestation") == "attested_out_of_band"
+            if (origin_config.get("attestation") == "attested_out_of_band"
                     and os.environ.get("CORVIN_A2A_ATTESTATION_DISABLED", "0") != "1"):
                 audit_detail["attestation"] = "attested_out_of_band"
             self._audit_strict("A2A.envelope_received", "INFO", audit_detail)
@@ -1827,6 +1830,27 @@ class RemoteTriggerReceiver:
             )
             return
 
+        # ADR-2295: a CONFIRMED offline pair is attested out of band by the two
+        # operators — accepted without the manifest's grace cut-off. Checked BEFORE
+        # branching on the attestation block (review F7): an envelope that carries
+        # a block must not skip it. It must verify: confirmed state, the HMAC-covered
+        # sender instance equal to the pin, and the fingerprint recomputed from this
+        # file's keys, the pin and this receiver's own instance id equal to the
+        # confirmed one. An inconsistent claim is refused (not downgraded to the
+        # grace path). A same-user process that rewrites the file consistently is
+        # outside what this check can see (stated in layer-38).
+        if origin_config.get("attestation") == "attested_out_of_band":
+            if _oob is not None and _oob.origin_attested_out_of_band(
+                origin_config, self._instance_id, env.sender_instance_id,
+            ):
+                return
+            self._audit_best_effort(
+                "a2a.attestation_failed", "WARNING",
+                {"origin_id": env.origin_id,
+                 "reason": "out_of_band_attestation_invalid"},
+            )
+            raise ValidationError("out_of_band_attestation_invalid", recv_key)
+
         na: dict | None = env.network_attestation
 
         if na is not None:
@@ -1925,23 +1949,6 @@ class RemoteTriggerReceiver:
                     pass  # manifest unavailable — skip revocation check
 
         else:
-            # ADR-2295: a CONFIRMED offline pair is attested out of band by the two
-            # operators — accepted without the manifest's grace cut-off. It must still
-            # verify: confirmed state, the HMAC-covered sender instance equal to the
-            # pin, and the fingerprint recomputed from this file's keys, the pin and
-            # this receiver's own instance id equal to the confirmed one. A claim
-            # that does not verify is refused (not downgraded to the grace path).
-            if origin_config.get("attestation") == "attested_out_of_band":
-                if _oob is not None and _oob.origin_attested_out_of_band(
-                    origin_config, self._instance_id, env.sender_instance_id,
-                ):
-                    return
-                self._audit_best_effort(
-                    "a2a.attestation_failed", "WARNING",
-                    {"origin_id": env.origin_id,
-                     "reason": "out_of_band_attestation_invalid"},
-                )
-                raise ValidationError("out_of_band_attestation_invalid", recv_key)
             # FND-16: a per-origin require_network_attestation flag forces
             # attestation-present regardless of the manifest grace deadline. The
             # empty-manifest default is "mandatory_after = never", so without a

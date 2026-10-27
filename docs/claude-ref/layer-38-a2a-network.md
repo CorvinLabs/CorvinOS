@@ -60,7 +60,7 @@ verified by the two operators.** That sentence is the whole contract — say bot
 |---|---|---|
 | Depends on | the hosted Corvin Labs pairing service, once (`POST /v1/pair/authorize`, 30-day certificate) | nothing outside the two installations |
 | Verified by | the service (SesT fingerprint, revocation) | the two operators, comparing a fingerprint out of band (phone, paper) |
-| Receiver after the attestation grace period | accepted with a valid `network_attestation` block | accepted as `attested_out_of_band` (no grace cut-off) — only once BOTH sides confirmed |
+| Receiver after the attestation grace period | accepted with a valid `network_attestation` block | accepted as `attested_out_of_band` (no grace cut-off) — only once the receiving operator confirmed; the sender refuses its own unconfirmed half (per side, see below) |
 | Audit (`a2a.pairing_authorized`) | `pairing_mode: online`, `attestation: hosted_service` | same fields, `pairing_mode: offline`, `attestation: attested_out_of_band`, plus `fingerprint_prefix` (8 hex) on each side |
 
 Traffic between two paired installations is peer-to-peer either way (direct or through a relay). The network
@@ -83,36 +83,60 @@ helpers in `bridges/shared/a2a_offline_pairing.py`):
 4. **Each side confirms** by typing the fingerprint the OTHER operator read out:
    `pair-confirm peer-b --peer-instance-id <B> --fingerprint <B's>` on A,
    `pair-confirm <endpoint> --fingerprint <A's>` on B. A value that differs from the one this installation
-   computes changes nothing and writes `a2a.offline_pair_refused` (`reason: fingerprint_mismatch`). A
-   matching one writes — audit-first — `a2a.offline_pair_confirmed` (`side`, `actor: operator`,
-   `fingerprint_prefix`) and `a2a.pairing_authorized`, enters the fingerprint in the tenant reuse ledger
-   (`<tenant>/global/a2a/offline_pair_fingerprints.json`; a used one is refused, `fingerprint_reused`), and
-   only then sets `enabled: true`, `oob_state: confirmed`, `attestation: attested_out_of_band`,
-   `oob_fingerprint`; on A also `sender_instance_id_pin` = B.
+   computes changes nothing, prints NO fingerprint value (the operator must re-compare out of band, not
+   copy ours) and writes `a2a.offline_pair_refused` (`reason: fingerprint_mismatch`). A matching one runs
+   under the A2A config lock (`a2a_friendship.config_file_lock`; a busy lock refuses, nothing changes),
+   re-reads the file, and writes — audit-first — `a2a.offline_pair_confirmed` (`side`, `actor: operator`,
+   `fingerprint_prefix`) and `a2a.pairing_authorized`, enters the fingerprint AND the key id in the tenant
+   reuse ledger (`<tenant>/global/a2a/offline_pair_fingerprints.json`, read-check-write under an exclusive
+   lock; a fingerprint or key id already used is refused, `fingerprint_reused`; a ledger of the wrong shape is
+   `ledger_unreadable`, never read as empty), and only then sets `enabled: true`, `oob_state: confirmed`,
+   `attestation: attested_out_of_band`, `oob_fingerprint`; on A also `sender_instance_id_pin` = B. A confirm
+   that died between the ledger row and the file write can be completed: the same pair (same fingerprint,
+   key id, side, name and pairing id) resumes; anything else is a reuse.
 
 **Fingerprint:** `SHA-256("corvin-a2a-oob-fingerprint-v1" ‖ receiver instance id ‖ sender instance id ‖
-key id)`, first 80 bits as `XXXX-XXXX-XXXX-XXXX-XXXX`; key id = SHA-256 over both HMAC keys (16 hex). A key
-swapped in transit or the wrong peer instance gives different values on the two sides. Fresh keys per
-pairing ⇒ a fresh fingerprint; the ledger refuses reuse. The audit chain carries only the 8-hex prefix.
+key id)`, first 80 bits as `XXXX-XXXX-XXXX-XXXX-XXXX`; key id = SHA-256 over both HMAC keys, first 64 bits.
+A key swapped in transit or the wrong peer instance gives different values on the two sides. Fresh keys per
+pairing ⇒ a fresh fingerprint; the ledger refuses reuse by fingerprint and by key id (a replayed endpoint
+file under another instance id has a new fingerprint but the old key id). The audit chain carries only the
+8-hex prefix.
 
-**Both sides must confirm.** The sender refuses an endpoint with `oob_state` ≠ `confirmed`
-(`endpoint_offline_pair_unconfirmed`, before the `enabled` check — flipping `enabled` by hand completes
-nothing); the receiver refuses such an origin (`origin_offline_pair_unconfirmed`). So a channel B → A works
-only when B confirmed its endpoint AND A confirmed its origin.
+**What the fingerprint does NOT cover:** it binds the keys and the two instance ids only. The URL, the TTL and
+the pairing id in the endpoint file are not verified by it — check the URL by other means. The endpoint file
+carries the HMAC keys: keep it confidential in transit (encrypted file, USB in hand); anyone holding it holds
+the pair's keys.
 
-**Receiver acceptance** (`remote_trigger_receiver._check_network_attestation`, no `network_attestation`
-block): an origin with `attestation: attested_out_of_band` is accepted without the manifest's grace
-cut-off iff `oob_state` is `confirmed`, the HMAC-covered `sender_instance_id` equals the pin, and the
-fingerprint recomputed from the file's keys, the pin and the receiver's own instance id equals
-`oob_fingerprint`. A claim that does not verify (hand-edited, rotated keys) is refused
-(`out_of_band_attestation_invalid`, audited `a2a.attestation_failed`) — never downgraded to the grace path.
-The accepted envelope's `A2A.envelope_received` carries `attestation: attested_out_of_band`. Manifest
-revocation of the sender instance still applies. An offline pair from before ADR-2295 (no `oob_state`)
-keeps the old behaviour: accepted until `attestation_mandatory_after`, then `network_attestation_required`.
+**Both sides must confirm — per side, not end to end.** The sender refuses an endpoint and the receiver an
+origin of the new flow (`pairing_mode: offline`) whose `oob_state` is not `confirmed`
+(`endpoint_offline_pair_unconfirmed` / `origin_offline_pair_unconfirmed`), before the `enabled` check —
+flipping `enabled` or deleting `oob_state` by hand completes nothing. So with two current builds a channel
+B → A works only when B confirmed its endpoint AND A confirmed its origin. **Limit:** the receiver cannot see
+whether the SENDING side confirmed — a sender on an older build, or an endpoint file copied by hand into an
+older install, sends without B's confirmation once A confirmed. A's confirm is what A can enforce.
+
+**Receiver acceptance** (`remote_trigger_receiver._check_network_attestation`, run BEFORE the
+`network_attestation` block is looked at, so an envelope carrying a block does not skip it): an origin with
+`attestation: attested_out_of_band` is accepted without the manifest's grace cut-off iff `oob_state` is
+`confirmed`, the HMAC-covered `sender_instance_id` equals the pin, and the fingerprint recomputed from the
+file's keys, the pin and the receiver's own instance id equals `oob_fingerprint`. An INCONSISTENT claim
+(hand-edited fingerprint, rotated keys, re-pointed pin) is refused (`out_of_band_attestation_invalid`, audited
+`a2a.attestation_failed`), not downgraded to the grace path. **Limit:** this is a consistency check, not a
+proof of the operators' confirm — a process running as the same OS user can recompute the fingerprint from
+the stored keys and write a consistent `confirmed` file. The origin/endpoint files and the ledger are not
+covered by the path gate (`path_gate.py`); integrity against the same user needs OS-level isolation, like the
+rest of the A2A config. The accepted envelope's `A2A.envelope_received` carries
+`attestation: attested_out_of_band`. Manifest revocation of the sender instance still applies. An offline
+pair from before ADR-2295 (neither `pairing_mode` nor `oob_state`) keeps the old behaviour: accepted until
+`attestation_mandatory_after`, then `network_attestation_required`.
 
 **Limit (stated, not hidden):** the fingerprint check is only as good as the operators' care. A confirm
 typed without really comparing (or compared over the same network) is a weaker attestation than the
 hosted check; the trust shifts from a service to two people.
+
+**Online pairing and the audit write:** `pair` (online) writes `a2a.pairing_authorized` audit-first and
+refuses when that write fails — but only AFTER the hosted service issued its certificate, which is then
+orphaned (never installed locally; it expires after 30 days).
 
 ```bash
 # Online (network + valid SesT):
@@ -125,7 +149,10 @@ corvin-a2a pair-confirm mypeer --peer-instance-id <B> --fingerprint <B's>   # on
 corvin-a2a pair-confirm corvin-local --fingerprint <A's>                    # on B
 ```
 
-Proof: `bridges/shared/test_a2a_offline_pair_oob_e2e.py` (two sandboxed installations, CLI as a
+Proof: `bridges/shared/test_a2a_offline_pair_review_fixes.py` (review round: concurrent ledger writers,
+ledger shape, no fingerprint on a mismatch, deleted `oob_state`, a sender attaching an attestation block,
+key-id reuse, the config lock, resume after an interrupted confirm) and
+`bridges/shared/test_a2a_offline_pair_oob_e2e.py` (two sandboxed installations, CLI as a
 subprocess, A's real HTTP receiver; wrong fingerprint on either side, single-side confirm, reuse, legacy
 grace, tampered origin, audit shape vs. an online pair, `verify_chain` on every chain).
 

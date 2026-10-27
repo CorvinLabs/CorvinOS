@@ -158,7 +158,9 @@ def _json_tail(stdout: str) -> dict:
     return json.loads(stdout[stdout.index("{"):])
 
 
-class OfflinePairE2E(unittest.TestCase):
+class _PairHarness(unittest.TestCase):
+    """Two installations + A's receiver; the pairing steps as helpers (no tests here)."""
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -254,6 +256,8 @@ class OfflinePairE2E(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr[-3000:])
         return fp_a, b_iid
 
+
+class OfflinePairE2E(_PairHarness):
     # ── tests ─────────────────────────────────────────────────────────────
     def test_both_confirm_then_accepted_after_the_grace_period(self):
         fp, b_iid = self._full_pair()

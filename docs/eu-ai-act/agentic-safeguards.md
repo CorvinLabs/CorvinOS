@@ -241,8 +241,12 @@ Nodes without a valid membership credential are rejected at the receiver gate.
 there is no auto-fallback): online pairing is checked once against a hosted
 service; offline pairing needs no service and is verified by the two operators,
 who compare a fingerprint out of band and each confirm it (`pair-confirm`).
-Only a pair confirmed on both sides is accepted (as `attested_out_of_band`);
-every step is in each installation's audit chain (ADR-2295).
+Each side refuses its own unconfirmed half, so two current builds exchange
+nothing until both operators confirmed; a confirmed pair is accepted as
+`attested_out_of_band`, and every step is in each installation's audit chain
+(ADR-2295). Limits: confirmation is per side (a receiver cannot see whether
+the sender confirmed), the fingerprint does not cover the endpoint URL, and
+the stored pairing files are protected by file mode, not by the path gate.
 
 **Audit-first invariant:** `A2A.envelope_received` is written to the L16 hash
 chain before any response or spawn. If the chain write fails, the request is

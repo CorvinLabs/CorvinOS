@@ -399,7 +399,10 @@ def _cmd_pair_import(args: argparse.Namespace) -> int:
     fp = _oob.endpoint_fingerprint(cfg, local_iid)
     pairing_id = str(cfg["pairing_id"])[:64]
     try:
-        reused = _oob.fingerprint_used(fp)
+        # by fingerprint AND key id: a replayed endpoint file under another instance id
+        # gives a fresh fingerprint over the same keys (review F9). No resume at import.
+        reused = _oob.fingerprint_used(
+            fp, kid=_oob.key_id(str(cfg["hmac_key"]), str(cfg["recv_key"])))
     except _oob.OfflinePairError as exc:
         print(f"error: {exc}; offline pairing refused", file=sys.stderr)
         return 1
@@ -508,20 +511,60 @@ def _cmd_pair_confirm(args: argparse.Namespace) -> int:
     if not _oob.fingerprints_equal(args.fingerprint, local_fp):
         _audit_pairing_event("a2a.offline_pair_refused", peer_id=name, pairing_id=pairing_id,
                              side=side, reason="fingerprint_mismatch")
+        # Never print our value here (review F2): an operator who sees it next to a
+        # mismatch would be tempted to copy it instead of re-comparing out of band.
         print("error: the fingerprint does not match the one this installation computes — the "
               "keys or the instance ids differ (a changed file in transit, or the wrong peer). "
-              f"Nothing was changed; the pair stays pending. Ours: {local_fp}", file=sys.stderr)
+              "Do not confirm. Nothing was changed; the pair stays pending. Re-compare out of "
+              "band: ask the other operator to read their value again, and check the instance "
+              "id you were given.", file=sys.stderr)
         return 1
+
+    # The read-modify-write runs under the A2A config lock (review F10): a concurrent
+    # edit of this file (e.g. an operator setting enabled=false) is not overwritten, and
+    # the state is re-read inside the lock.
     try:
-        reused = _oob.fingerprint_used(local_fp)
-    except _oob.OfflinePairError as exc:
-        print(f"error: {exc}; confirm refused", file=sys.stderr)
+        with _friendship.config_file_lock(path.parent):
+            return _confirm_locked(name=name, kind=kind, side=side, path=path,
+                                   local_iid=local_iid, peer_iid=peer_iid,
+                                   typed_fp=args.fingerprint)
+    except _friendship.FriendshipLockBusy:
+        print("error: the A2A configuration is busy (another writer holds its lock); nothing "
+              "was changed — try again in a moment.", file=sys.stderr)
         return 1
-    if reused:
+
+
+def _confirm_locked(*, name: str, kind: str, side: str, path: Path, local_iid: str,
+                    peer_iid: str, typed_fp: str) -> int:
+    try:
+        cfg = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        print(f"error: cannot read {path}", file=sys.stderr)
+        return 1
+    if not isinstance(cfg, dict) or not _oob.is_pending(cfg):
+        print(f"error: the offline pair {name!r} is no longer pending; nothing was changed",
+              file=sys.stderr)
+        return 1
+    local_fp = (_oob.origin_fingerprint(cfg, local_iid, peer_iid) if kind == "origin"
+                else _oob.endpoint_fingerprint(cfg, local_iid))
+    if not _oob.fingerprints_equal(typed_fp, local_fp):
+        print("error: the file changed while confirming; do not confirm — re-compare out of "
+              "band.", file=sys.stderr)
+        return 1
+    pairing_id = str(cfg.get("pairing_id") or "")[:64]
+    kid = _oob.key_id(str(cfg.get("hmac_key", "")), str(cfg.get("recv_key", "")))
+    try:
+        used = _oob.fingerprint_used(local_fp, kid=kid)
+        resume = used and _oob.resumable(local_fp, kid=kid, side=side, peer_id=name,
+                                         pairing_id=pairing_id)
+    except _oob.OfflinePairError as exc:
+        print(f"error: {exc}; confirm refused, the pair stays pending", file=sys.stderr)
+        return 1
+    if used and not resume:
         _audit_pairing_event("a2a.offline_pair_refused", peer_id=name, pairing_id=pairing_id,
                              side=side, reason="fingerprint_reused")
-        print("error: this fingerprint was already used by an earlier pairing; a fingerprint is "
-              "never reused — pair again with fresh keys.", file=sys.stderr)
+        print("error: this fingerprint (or these keys) was already used by an earlier pairing; "
+              "a fingerprint is never reused — pair again with fresh keys.", file=sys.stderr)
         return 1
 
     fpp = _oob.prefix(local_fp)
@@ -537,9 +580,16 @@ def _cmd_pair_confirm(args: argparse.Namespace) -> int:
               "(audit-first). The pair stays pending.", file=sys.stderr)
         return 1
     try:
-        _oob.record_fingerprint(local_fp, side=side, peer_id=name)
+        # "resumed": this very pair's row is already there — a confirm that died between
+        # the ledger row and the file write is completed, not refused forever.
+        _oob.record_fingerprint(local_fp, kid=kid, side=side, peer_id=name,
+                                pairing_id=pairing_id)
     except _oob.OfflinePairError as exc:
         print(f"error: {exc}; confirm refused, the pair stays pending", file=sys.stderr)
+        return 1
+    except _friendship.FriendshipLockBusy:
+        print("error: the fingerprint ledger is busy; nothing was enabled — try again.",
+              file=sys.stderr)
         return 1
     cfg.update({
         "enabled": True,

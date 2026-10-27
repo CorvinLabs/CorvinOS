@@ -129,7 +129,11 @@ corvin-a2a pair-confirm <endpoint-id> --fingerprint <A's>                       
 Online pairing is checked once against a hosted service; offline pairing needs no
 service and is verified by the two operators. A confirmed offline pair is accepted
 by receivers as `attested_out_of_band`, without the attestation grace cut-off; it is
-only as good as the operators' comparison. Details:
+only as good as the operators' comparison. Limits: the fingerprint binds the keys and
+both instance ids only (not the URL, TTL or pairing id — and the endpoint file carries
+the keys, so keep it confidential); confirmation is enforced per side, so a receiver
+cannot tell whether the sender confirmed; the pairing files are not path-gated, so a
+same-user process could rewrite them consistently. Details:
 [`docs/claude-ref/layer-38-a2a-network.md`](claude-ref/layer-38-a2a-network.md) § Two pairing modes.
 
 ### Diagnosing a peer

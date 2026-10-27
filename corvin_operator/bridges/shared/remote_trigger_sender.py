@@ -461,7 +461,11 @@ class RemoteEndpointRegistry:
         # ADR-2295: an offline pair this side's operator has not confirmed (out-of-band
         # fingerprint) is refused on its state alone, whatever `enabled` says. Checked
         # first so the refusal names the real cause.
-        if "oob_state" in config and config.get("oob_state") != "confirmed":
+        # Same rule as a2a_offline_pairing.is_unconfirmed: a record of the new flow
+        # (pairing_mode offline) is unconfirmed unless oob_state == confirmed, so
+        # deleting oob_state does not make a pending pair a legacy one (review F3).
+        if ((config.get("pairing_mode") == "offline" or "oob_state" in config)
+                and config.get("oob_state") != "confirmed"):
             raise EndpointError("endpoint_offline_pair_unconfirmed")
         if not config.get("enabled", False):
             raise EndpointError("endpoint_disabled")
