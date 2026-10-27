@@ -263,23 +263,65 @@ def _scope_of(reg: Any, name: str) -> str | None:
         return None
 
 
+#: Scopes that belong to the tenant they are resolved for (forge.scope):
+#: ``project`` is the shared repo checkout, ``task`` the platform temp dir.
+_TENANT_OWNED_SCOPES = frozenset({"session", "user"})
+
+
+def _duplicate_grade_error() -> type:
+    try:
+        from skill_forge.registry import DuplicateGrade  # type: ignore  # noqa: PLC0415
+        return DuplicateGrade
+    except Exception:  # noqa: BLE001 — older skill-forge: nothing can match
+        class _Never(Exception):
+            pass
+        return _Never
+
+
+def _followup_dedupe_marker(channel: str | None, *, now: float | None = None) -> str:
+    """16-hex marker for (channel, UTC day). The day is inside the hash, so two
+    days' markers of one channel cannot be linked; the id itself is never stored."""
+    import hashlib  # noqa: PLC0415
+    import time as _time  # noqa: PLC0415
+    day = _time.strftime("%Y-%m-%d", _time.gmtime(_time.time() if now is None else now))
+    raw = f"followup-grade|{day}|{channel or ''}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
 def _grade_with_canary(reg: Any, *, name: str, channel_id: str | None,
                        run_id: str, score: float, notes: str, kind: str,
-                       organic: bool = False) -> Any:
+                       organic: bool = False, dedupe_marker: str | None = None) -> Any:
     """Grade ``name`` for the turn ``run_id``.
 
     No active canary (or the chat was served the live body): the registry
     grade, exactly as before — plus a ``live`` tally on the canary. Served the
     candidate: the grade goes to the canary only.
+
+    ``dedupe_marker``: returns None (nothing written) when a grade with the
+    same marker exists — in the registry's grade notes, or for the canary
+    candidate in its grade run ids (``<run>~dd=<marker>``).
     """
     scope = _scope_of(reg, name)
     can = _canary_for(reg, scope) if scope else None
     variant = can.served_variant(name, channel_id) if can is not None else None
     if variant == "candidate":
+        if dedupe_marker:
+            tag = f"~dd={dedupe_marker}"
+            state = can.active(name) or {}
+            if any(str(g.get("run_id", "")).endswith(tag) for g in state.get("grades") or []):
+                return None
+            run_id = f"{str(run_id)[:40]}{tag}"
         return can.record_grade(name, variant="candidate", score=score,
                                 run_id=run_id, kind=kind)
-    res = reg.grade(name, run_id, float(score), notes=notes, organic=organic) \
-        if organic else reg.grade(name, run_id, float(score), notes=notes)
+    if dedupe_marker:
+        try:
+            res = reg.grade(name, run_id, float(score), notes=notes, organic=organic,
+                            dedupe_marker=dedupe_marker)
+        except _duplicate_grade_error():
+            return None
+    else:
+        res = reg.grade(name, run_id, float(score), notes=notes, organic=organic) \
+            if organic else reg.grade(name, run_id, float(score), notes=notes)
     if variant == "live":
         try:
             can.record_grade(name, variant="live", score=score, run_id=run_id, kind=kind)
@@ -1039,72 +1081,125 @@ def auto_grade_from_output(
 # Precedence: rejection > approval > rephrase. Picks the most-conservative
 # signal so "thanks but actually wrong" lands as rejection.
 #
-# Approval is matched on WORD boundaries (token sequences), never as a raw
-# substring: "top" must not fire inside "stopp" / "laptop", "great" not inside
-# "greater", "super" not inside "superscript". Rejection keeps its substring
-# match (unchanged) — it already wins precedence, and a stricter rejection
-# match would only turn some rejections into approvals.
+# Both approval and rejection are matched on WORD boundaries (token
+# sequences), never as raw substrings: "top" must not fire inside "stopp" /
+# "laptop", "great" not inside "greater", "nochmal" not inside "nochmals",
+# "wrong" not inside "wrongful", "no, " not inside "Bruno, ".
 #
 # An approval grade is ORGANIC (see grade_from_user_followup) and may lift a
-# skill over the promotion bar, so the approval side is deliberately strict:
-#   * word-boundary match (above);
-#   * negation guard: a negator within _OUTCOME_NEGATION_WINDOW tokens before
-#     or after the phrase ("nicht gut gemacht", "not a good job", "alles andere
-#     als perfekt", "danke, aber nicht ganz") voids the approval — it does NOT
-#     become a rejection, it is simply no signal;
-#   * length guard: approval only when the message has at most
-#     _OUTCOME_APPROVAL_MAX_WORDS tokens.
+# skill over the promotion bar; a rejection demotes. A missed signal costs one
+# absent grade; a false one changes what gets injected. So both sides are
+# conservative (review c120 s1-8/9/10, decided rule set):
 #
-# _OUTCOME_APPROVAL_MAX_WORDS = 12 is a DECISION, not a measurement: praise
-# for the previous answer is short ("Gut gemacht, danke!", "Perfect, that's
-# exactly it."), plus at most a short follow-up clause. A longer message is a
-# new request or a discussion in which a praise word is incidental ("…the
-# great thing about Postgres is…") and must not grade the previous turn.
-# A missed approval costs one absent grade; a false one can promote a skill.
+# Approval only when ALL hold:
+#   * at most _OUTCOME_APPROVAL_MAX_WORDS (12) tokens;
+#   * no question mark anywhere ("is that correct?", "stimmt das?");
+#   * no negator ANYWHERE in the message (single tokens and the multi-word
+#     forms in _OUTCOME_NEGATOR_PHRASES: "alles andere als", "far from",
+#     "would not say", "not really", ...). Voids the approval; it does NOT
+#     become a rejection;
+#   * no rejection cue and no void cue (_OUTCOME_APPROVAL_VOIDERS: a new request
+#     — "bitte", "jetzt", "please", "now" — contrast — "aber", "but",
+#     "anders", "else" — a conditional — "wäre", "would" — or
+#     sarcasm markers — "kaputt", "broken", "wasting");
+#   * not a quotation (any double-quote or guillemet character: quoting
+#     someone else's praise is not the user's praise) and carries no
+#     eye-roll / anger emoji (_OUTCOME_SARCASM_EMOJI);
+#   * no token longer than _OUTCOME_MAX_TOKEN_CHARS (40) characters;
+#   * a phrase from _OUTCOME_APPROVAL_PHRASES, or the WHOLE message is one of
+#     the generic words in _OUTCOME_APPROVAL_EXACT ("gut", "good", "nice",
+#     "stimmt", "correct", "genau", "great", ...), which never count inside a
+#     sentence.
 #
-# _OUTCOME_APPROVAL_EXACT are words too generic to count inside a sentence
-# ("gut, dann mach X", "good question") — they count only when they are the
-# whole message (punctuation/emoji ignored).
+# Rejection: a token phrase from _OUTCOME_REJECTION_PHRASES, or "nein"/"no"/
+# "nope" directly followed by , . ! or ending the message; "nochmal" followed
+# by a thank-you ("nochmal danke") is praise, not a retry request. Only in
+# messages of at most _OUTCOME_REJECTION_MAX_WORDS tokens, no question mark,
+# no token over 40 characters.
+#
+# _OUTCOME_APPROVAL_MAX_WORDS = 12 and _OUTCOME_REJECTION_MAX_WORDS = 20 are
+# DECISIONS, not measurements: a reaction to the previous answer is short. A
+# longer message is a new request or a discussion in which a praise or
+# criticism word is incidental ("…the great thing about Postgres is…",
+# "…die Spalte falsch_flag umbenennen…") and must not grade the previous turn.
+# The rejection limit is a little looser than the approval one because a real
+# correction often carries a short reason ("nein, das ist falsch, die Datei
+# heißt config.yaml und nicht settings.yaml").
 
 _OUTCOME_APPROVAL_PHRASES = (
     # German
-    "danke", "dankeschön", "vielen dank", "perfekt", "passt", "top", "genau",
-    "super", "klasse", "supi", "stimmt", "richtig",
+    "danke", "dankeschön", "vielen dank", "perfekt", "klasse", "supi",
     "gut gemacht", "sehr gut", "super gemacht", "toll gemacht",
     "klasse gemacht", "prima", "toll", "spitze", "wunderbar", "hervorragend",
     "ausgezeichnet", "großartig", "grossartig", "genial", "klasse arbeit",
-    "gute arbeit", "genau so",
+    "gute arbeit",
     # English
-    "thanks", "thank you", "perfect", "exactly", "great", "awesome",
-    "spot on", "correct",
+    "thanks", "thank you", "perfect", "exactly", "awesome",
+    "spot on",
     "well done", "good job", "great job", "nice job", "nice work",
     "good work", "great work", "excellent", "brilliant", "fantastic",
     "nailed it", "love it", "looks good", "works now",
 )
 
+#: Generic words: an approval only when they are the whole message.
 _OUTCOME_APPROVAL_EXACT = frozenset({
-    "gut", "good", "nice", "schön", "cool", "very good",
+    "gut", "good", "nice", "stimmt", "correct", "genau", "great",
+    "richtig", "super", "top", "passt", "schön", "cool", "very good",
+    "genau so", "ok super", "okay super",
 })
 
 _OUTCOME_APPROVAL_MAX_WORDS = 12
-_OUTCOME_NEGATION_WINDOW = 3  # tokens before / after an approval phrase
+_OUTCOME_REJECTION_MAX_WORDS = 20
+_OUTCOME_MAX_TOKEN_CHARS = 40
 
 _OUTCOME_NEGATORS = frozenset({
     # German
     "nicht", "kein", "keine", "keinen", "keinem", "keiner", "keines",
-    "nie", "niemals", "kaum", "nix", "nichts", "nein",
+    "nie", "niemals", "kaum", "nix", "nichts", "nein", "weniger",
     # English (contractions arrive apostrophe-folded: "isn't" -> "isnt")
-    "not", "no", "never", "hardly", "barely", "nope", "nothing",
-    "isnt", "wasnt", "arent", "werent", "dont", "doesnt", "didnt",
+    "not", "no", "never", "hardly", "barely", "nope", "nothing", "neither",
+    "nor", "isnt", "wasnt", "arent", "werent", "dont", "doesnt", "didnt",
     "cant", "cannot", "couldnt", "wont", "wouldnt", "shouldnt", "aint",
     "hasnt", "havent", "hadnt",
 })
-# Multi-word negators, matched as contiguous tokens inside the window.
+#: Multi-word negators, matched as contiguous tokens anywhere in the message.
 _OUTCOME_NEGATOR_PHRASES = (
     ("alles", "andere", "als"), ("far", "from"), ("anything", "but"),
+    ("would", "not", "say"), ("wouldnt", "say"), ("not", "really"),
+    ("nicht", "wirklich"), ("geht", "so"), ("so", "lala"),
 )
 
+#: Tokens that void an approval without being a rejection themselves: a new
+#: request, a contrast, or a sarcasm marker next to the praise word.
+_OUTCOME_APPROVAL_VOIDERS = frozenset({
+    "bitte", "please", "jetzt", "now", "aber", "but", "doch", "trotzdem",
+    "however", "though", "although", "wieder", "again", "kaputt", "broken",
+    "anders", "anderes", "else", "wäre", "would",
+    "waste", "wasting", "wasted", "verschwendet", "verschwendest",
+    "schlecht", "bad", "worse", "worst", "schlimmer", "fehler", "error",
+    "fail", "failed", "fails", "failing", "crash", "crashes", "crashed",
+    "crasht", "abgestürzt", "useless", "nutzlos", "sinnlos", "pointless",
+})
+
+#: Rejection cues as token sequences.
+_OUTCOME_REJECTION_PHRASES = (
+    # German
+    "falsch", "passt nicht", "stimmt nicht", "nicht das was", "nochmal",
+    "leider nicht", "hat nicht", "geht nicht", "funktioniert nicht",
+    # English
+    "wrong", "incorrect", "not what", "try again",
+    "didnt work", "doesnt work", "did not work", "does not work",
+)
+#: "nochmal" followed by one of these is "thanks again", not a retry request.
+_OUTCOME_NOCHMAL_THANKS = frozenset({"danke", "dankeschön", "vielen", "thanks", "merci"})
+
+#: Double quotes and guillemets (apostrophes are contractions, not quotes).
+_OUTCOME_QUOTE_CHARS = frozenset('"“”„«»‹›‟〝〞＂`')
+#: Eye-roll / anger / thumbs-down next to praise is sarcasm, not praise.
+_OUTCOME_SARCASM_EMOJI = frozenset("🙄😒😑🤦😤😠😡🤬👎💩")
+
 _TOKEN_RE = None  # compiled lazily (keeps import cost at zero)
+_NO_START_RE = None
 
 
 def _outcome_tokens(text: str) -> list[str]:
@@ -1112,28 +1207,9 @@ def _outcome_tokens(text: str) -> list[str]:
     and the typographic ’ behaves like '. Unicode-aware (umlauts, ß)."""
     global _TOKEN_RE
     if _TOKEN_RE is None:
-        import re
         _TOKEN_RE = re.compile(r"\w+")
     folded = text.lower().replace("’", "'").replace("'", "")
     return _TOKEN_RE.findall(folded)
-
-
-def _is_negator_at(tokens: list[str], i: int) -> bool:
-    if tokens[i] in _OUTCOME_NEGATORS:
-        return True
-    for phrase in _OUTCOME_NEGATOR_PHRASES:
-        n = len(phrase)
-        if tuple(tokens[i:i + n]) == phrase:
-            return True
-    return False
-
-
-def _negated(tokens: list[str], start: int, end: int) -> bool:
-    """True iff a negator sits within the window before ``start`` or after
-    ``end`` (exclusive), or inside the phrase span itself."""
-    lo = max(0, start - _OUTCOME_NEGATION_WINDOW)
-    hi = min(len(tokens), end + _OUTCOME_NEGATION_WINDOW)
-    return any(_is_negator_at(tokens, i) for i in range(lo, hi))
 
 
 def _phrase_positions(tokens: list[str], phrase: tuple[str, ...]):
@@ -1143,40 +1219,58 @@ def _phrase_positions(tokens: list[str], phrase: tuple[str, ...]):
             yield i, i + n
 
 
-_APPROVAL_TOKENS: tuple[tuple[str, ...], ...] | None = None
+def _has_phrase(tokens: list[str], phrase: tuple[str, ...]) -> bool:
+    return next(_phrase_positions(tokens, phrase), None) is not None
 
 
-def _approval_phrase_tokens() -> tuple[tuple[str, ...], ...]:
-    global _APPROVAL_TOKENS
-    if _APPROVAL_TOKENS is None:
-        _APPROVAL_TOKENS = tuple(
-            tuple(_outcome_tokens(p)) for p in _OUTCOME_APPROVAL_PHRASES
-            if _outcome_tokens(p)
-        )
-    return _APPROVAL_TOKENS
+_PHRASE_TOKENS: dict[str, tuple[tuple[str, ...], ...]] = {}
 
 
-def _is_approval(text: str) -> bool:
-    """Strict approval test: word-boundary phrase, not negated, short message."""
-    tokens = _outcome_tokens(text)
-    if not tokens or len(tokens) > _OUTCOME_APPROVAL_MAX_WORDS:
+def _tokenised(key: str, phrases: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    got = _PHRASE_TOKENS.get(key)
+    if got is None:
+        got = tuple(tuple(_outcome_tokens(p)) for p in phrases if _outcome_tokens(p))
+        _PHRASE_TOKENS[key] = got
+    return got
+
+
+def _has_negator(tokens: list[str]) -> bool:
+    if any(t in _OUTCOME_NEGATORS for t in tokens):
+        return True
+    return any(_has_phrase(tokens, p) for p in _OUTCOME_NEGATOR_PHRASES)
+
+
+def _is_rejection(text: str, tokens: list[str]) -> bool:
+    global _NO_START_RE
+    if len(tokens) > _OUTCOME_REJECTION_MAX_WORDS:
+        return False
+    if _NO_START_RE is None:
+        # "nein" / "no" / "nope" as a whole word followed by , . ! or the end.
+        _NO_START_RE = re.compile(r"(?<!\w)(?:nein|no|nope)(?:\s*[,.!]|\s*$)")
+    if _NO_START_RE.search(text):
+        return True
+    for phrase in _tokenised("rejection", _OUTCOME_REJECTION_PHRASES):
+        for start, end in _phrase_positions(tokens, phrase):
+            if phrase == ("nochmal",) and end < len(tokens) \
+                    and tokens[end] in _OUTCOME_NOCHMAL_THANKS:
+                continue
+            return True
+    return False
+
+
+def _is_approval(text: str, tokens: list[str]) -> bool:
+    """Strict approval test (rule set above)."""
+    if len(tokens) > _OUTCOME_APPROVAL_MAX_WORDS:
+        return False
+    if any(c in _OUTCOME_QUOTE_CHARS or c in _OUTCOME_SARCASM_EMOJI for c in text):
+        return False
+    if _has_negator(tokens) or any(t in _OUTCOME_APPROVAL_VOIDERS for t in tokens):
         return False
     if " ".join(tokens) in _OUTCOME_APPROVAL_EXACT:
         return True
-    for phrase in _approval_phrase_tokens():
-        for start, end in _phrase_positions(tokens, phrase):
-            if not _negated(tokens, start, end):
-                return True
-    return False
+    return any(_has_phrase(tokens, p)
+               for p in _tokenised("approval", _OUTCOME_APPROVAL_PHRASES))
 
-_OUTCOME_REJECTION_PHRASES = (
-    # German
-    "falsch", "passt nicht", "stimmt nicht", "nicht das was", "nochmal",
-    "nein,", "nein.", "nein!", "leider nicht", "hat nicht", "geht nicht",
-    # English
-    "wrong", "incorrect", "no, ", "no. ", "not what", "try again",
-    "didn't work", "doesn't work",
-)
 
 _OUTCOME_APPROVAL_SCORE = 0.9
 _OUTCOME_REJECTION_SCORE = 0.1
@@ -1193,16 +1287,21 @@ def detect_outcome_signal(
 
     Precedence: rejection > approval > rephrase. The score is the absolute
     target for ``registry.grade()`` (clamped to [0.0, 1.0]); None means no
-    signal was detected and no grade should be written.
+    signal was detected and no grade should be written. Rephrase needs
+    ``prev_user_text`` (the bridge passes it; the console keeps no prompt text
+    and therefore never produces a rephrase signal).
     """
     if not user_text:
         return (None, 0.0)
     text = user_text.lower().strip()
     if not text:
         return (None, 0.0)
-    if any(p in text for p in _OUTCOME_REJECTION_PHRASES):
+    tokens = _outcome_tokens(text)
+    explicit = bool(tokens) and "?" not in text and not any(
+        len(t) > _OUTCOME_MAX_TOKEN_CHARS for t in tokens)
+    if explicit and _is_rejection(text, tokens):
         return ("rejection", _OUTCOME_REJECTION_SCORE)
-    if _is_approval(text):
+    if explicit and _is_approval(text, tokens):
         return ("approval", _OUTCOME_APPROVAL_SCORE)
     if prev_user_text:
         import difflib
@@ -1224,8 +1323,18 @@ def grade_from_user_followup(
     prev_user_text: str | None = None,
     project_root: Path | None = None,
     tenant_id: str | None = None,
+    dedupe_channel: str | None = None,
 ) -> list[dict]:
     """Apply outcome signal to skills active in the previous turn.
+
+    ``tenant_id`` given (the console, which serves several tenants): only
+    skills resolving to a tenant-owned scope (``session`` / ``user``) are
+    graded. ``dedupe_channel`` (default: ``channel_id``) keys the
+    once-per-skill-per-channel-per-UTC-day limit; only a day-bound hash of it
+    is stored (in the grade note), never the id itself.
+
+    A grade whose audit record cannot be committed is not persisted (the
+    registry is audit-first) and is not in the returned list.
 
     Called by both chat surfaces: the bridge (``adapter.process_one``) and the
     console web chat (``corvin_console.followup_grading``, which passes its
@@ -1275,19 +1384,33 @@ def grade_from_user_followup(
     except Exception:  # noqa: BLE001
         return []
 
+    marker = _followup_dedupe_marker(dedupe_channel if dedupe_channel is not None
+                                     else channel_id)
     graded: list[dict] = []
     for name in prev_skill_names:
         try:
+            if tenant_id and _scope_of(reg, name) not in _TENANT_OWNED_SCOPES:
+                # A caller that names its tenant serves several (the console):
+                # project scope is the shared repo checkout and task scope the
+                # platform temp dir, neither belongs to this tenant. Grading
+                # them would write another tenant's learned state with the
+                # record in THIS tenant's chain (review c120 s4-2).
+                continue
             # ORGANIC: this grade is backed by a real prior run (prev_run_id
             # is required above) and by the operator's own follow-up turn —
             # the one grade source that may lift a skill over the promotion
             # bar. Auto-grade (usage detection) and bootstrap seeds stay
             # non-organic and are clamped to AUTO_GRADE_CAP_MAX.
+            # At most ONE organic follow-up grade per skill per channel per UTC
+            # day (dedupe at write time): repeating "gut gemacht" cannot farm.
             res = _grade_with_canary(
                 reg, name=name, channel_id=channel_id, run_id=prev_run_id,
                 score=float(score), kind="outcome", organic=True,
                 notes=f"outcome ({signal}) prev_run={prev_run_id}",
+                dedupe_marker=marker,
             )
+            if res is None:
+                continue  # already graded from this channel today
             graded.append({
                 "name": name, "signal": signal,
                 "score": float(score), "result": res,

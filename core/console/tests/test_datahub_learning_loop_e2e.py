@@ -45,10 +45,12 @@ class DataHubLearningLoopTest(unittest.TestCase):
         return skill_inject.collect_active_skills(
             channel_id=None, profile={}, task_text="show me the order rows", tenant_id="_default")
 
-    def _followup(self, text):
+    def _followup(self, text, channel_id=None):
+        # One organic follow-up grade per skill per channel per UTC day (review c120):
+        # a test that needs several reactions gives each its own channel.
         from corvin_operator.bridges.shared import skill_inject
         return skill_inject.grade_from_user_followup(
-            channel_id=None, profile={}, user_text=text, prev_run_id="run-1",
+            channel_id=channel_id, profile={}, user_text=text, prev_run_id="run-1",
             prev_skill_names=[self.skill])
 
     def test_producers_write_content_free_events_to_the_inbox(self):
@@ -81,8 +83,8 @@ class DataHubLearningLoopTest(unittest.TestCase):
         with _sandbox(self.tmp) as (client, csrf, home, _):
             aid = self._create(client, csrf)
             self._inject()
-            for _ in range(3):
-                self._followup("falsch, nochmal")
+            for i in range(3):
+                self.assertTrue(self._followup("falsch, nochmal", channel_id=f"chat-{i}"))
 
             from core.background.learning_host import LearningHost, state_path
             from core.skills.os_skills.datahub_unified import regenerate
@@ -155,8 +157,8 @@ class DataHubLearningLoopTest(unittest.TestCase):
         with _sandbox(self.tmp) as (client, csrf, _home, _):
             self._create(client, csrf)
             self._inject()
-            for _ in range(3):
-                self._followup("falsch")
+            for i in range(3):
+                self.assertTrue(self._followup("falsch", channel_id=f"chat-{i}"))
             from core.background.learning_host import LearningHost
             _run(LearningHost("_default").tick())
 

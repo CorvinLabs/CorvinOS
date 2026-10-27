@@ -67,6 +67,29 @@ TABLE = (
      "that it runs nightly", None),
     ("Danke für gestern, heute habe ich aber ein ganz anderes Problem mit der "
      "Datenbank und dem Backup", None),
+    # review c120 s1-8: negation anywhere, multi-word negators anywhere
+    ("alles andere als echt gut gemacht", None), ("far from being a really good job", None),
+    ("das hast du nicht so richtig wirklich gut gemacht", None),
+    ("not really a very good job at all", None), ("I would not say this was a good job", None),
+    ("genau das wollte ich nicht", None),
+    # review c120 s1-9: rejection on word boundaries only
+    ("nochmals danke!", "approval"), ("Bruno, perfekt danke", "approval"),
+    ("super, das ist genau richtig, nochmal danke", "approval"), ("wrongful? great", None),
+    ("gut gemacht, aber nochmal bitte", "rejection"),
+    # rejection length limit (_OUTCOME_REJECTION_MAX_WORDS = 20)
+    ("Bitte benenne in der Tabelle die Spalte falsch_flag in is_false um und ergänze "
+     "danach noch eine kurze Beschreibung im README für die anderen Entwickler falsch", None),
+    # review c120 s1-10: generic words, questions, requests, sarcasm, quotes, long tokens
+    ("is that correct?", None), ("stimmt das?", None), ("richtig?", None),
+    ("was ist genau der unterschied?", None), ("stimmt", "approval"), ("correct", "approval"),
+    ("danke, und jetzt bitte die tests für das modul schreiben", None),
+    ("perfekt, jetzt lösche bitte alle dateien", None), ("na super. wieder kaputt", None),
+    ("Great, now everything is broken", None), ("thanks for wasting my time", None),
+    ("ja klar, ganz toll gemacht 🙄", None),
+    ("\"gut gemacht\" sagt der chef, aber ich nicht wirklich", None),
+    ("„gut gemacht“", None), ("x" * 100000 + " gut gemacht", None),
+    ("danke!!! " + "x" * 41, None),
+    ("korrekt wäre was anderes, danke", None), ("that would be perfect", None),
 )
 
 
@@ -155,3 +178,15 @@ def test_process_one_english_praise_writes_an_approval_grade(bridge) -> None:
 
 def test_process_one_negated_praise_writes_no_grade(bridge) -> None:
     assert _turn(bridge, "praise-neg", "nicht gut gemacht") == []
+
+
+def test_process_one_repeated_praise_grades_once_per_channel_per_day(bridge) -> None:
+    """Decision (review c120): one organic follow-up grade per skill per channel per
+    UTC day, deduped at write time. Only a day-bound hash of the channel is stored."""
+    first = _turn(bridge, "praise-d1", "Gut gemacht!")
+    assert [float(g["score"]) for g in first] == [0.9], first
+    assert _turn(bridge, "praise-d2", "Gut gemacht!") == []
+    assert _turn(bridge, "praise-d3", "Danke!") == []
+    assert _turn(bridge, "praise-d4", "Nein, das ist falsch.") == []   # any signal, once a day
+    note = str(first[0].get("notes", ""))
+    assert "dd=" in note and "sandbox-outcome" not in note and "outcome-praise-chat" not in note
