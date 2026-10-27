@@ -378,6 +378,18 @@ class SkillRegistryLockBusy(TimeoutError):
     """
 
 
+class DuplicateGrade(Exception):
+    """``grade(dedupe_marker=...)`` found a grade carrying the same marker:
+    nothing was written or audited."""
+
+
+def _log_audit_dropped(action: str, path: Path) -> None:
+    import logging  # noqa: PLC0415
+    logging.getLogger(__name__).warning(
+        "skill-forge audit write for %s failed; record dropped rather than "
+        "appended unchained to the hash chain %s", action, path)
+
+
 #: Hard cap for a NON-organic grade — one the grading party awards itself
 #: (a persona grading a skill it just used through the MCP tool without a real
 #: run behind it, the post-turn auto-grade, a bootstrap seed). Mirrors
@@ -817,7 +829,12 @@ class SkillRegistry:
                 )
                 return
             except OSError:
-                pass
+                if self.hash_chain:
+                    _log_audit_dropped(event_type, path)
+                    return
+        elif self.hash_chain:
+            _log_audit_dropped(event_type, path)
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
@@ -964,7 +981,7 @@ class SkillRegistry:
 
     def grade(
         self, name: str, run_id: str, score: float, *, notes: str = "",
-        organic: bool = False,
+        organic: bool = False, dedupe_marker: str | None = None,
     ) -> SkillSpec:
         """Append a grade to a skill's history. Score in [0.0, 1.0].
 
@@ -974,6 +991,18 @@ class SkillRegistry:
         promotion bar (mean >= 0.5). Only a caller that vouches for a REAL
         usage outcome passes ``organic=True``; the clamp is recorded in the
         ``skill.grade`` audit record (``organic`` / ``capped``).
+
+        AUDIT-FIRST: the hash-chained ``skill.grade`` record is committed
+        BEFORE the grade is persisted. If the chain write fails (any
+        exception, including ``OSError``) nothing is persisted and the
+        exception propagates — a learning write never exists without its
+        record, and a failed write never leaves an unchained line in the chain.
+
+        ``dedupe_marker``: when given and an existing grade's ``notes`` already
+        carry the token ``dd=<marker>``, nothing is written or audited and
+        :class:`DuplicateGrade` is raised. The check and the write share the
+        registry lock, so two concurrent writers cannot both pass it. The
+        marker is appended to ``notes`` of the new grade.
         """
         if not (0.0 <= score <= 1.0):
             raise ValueError(f"score must be in [0,1], got {score!r}")
@@ -982,14 +1011,30 @@ class SkillRegistry:
         if not organic and score > AUTO_GRADE_CAP_MAX:
             score = AUTO_GRADE_CAP_MAX
         capped = score != requested
+        marker_tok = f"dd={dedupe_marker}" if dedupe_marker else ""
+        if marker_tok:
+            notes = f"{notes} {marker_tok}".strip()
         with self._locked():
             data = self._load()
             if name not in data:
                 raise KeyError(name)
             grades = list(data[name].get("grades") or [])
+            if marker_tok and any(
+                marker_tok in str((g or {}).get("notes", "")).split() for g in grades
+            ):
+                raise DuplicateGrade(name)
             grades.append(asdict(Grade(
                 run_id=run_id, score=float(score), ts=time.time(), notes=notes
             )))
+            # The record first (raises on any failure, nothing persisted yet).
+            # sha/scope/type are unchanged by a grade, so the spec built from
+            # the CURRENT entry describes the post-grade state exactly.
+            self._audit(
+                "skill.grade", SkillSpec.from_dict(data[name]),
+                extra={"run_id": run_id, "score": float(score),
+                       "organic": bool(organic), "capped": capped},
+                required=True,
+            )
             data[name]["grades"] = grades
             self._save(data)
 
@@ -1003,13 +1048,7 @@ class SkillRegistry:
                     meta_path, json.dumps(meta, indent=2) + "\n"
                 )
 
-            spec = SkillSpec.from_dict(data[name])
-            self._audit(
-                "skill.grade", spec,
-                extra={"run_id": run_id, "score": float(score),
-                       "organic": bool(organic), "capped": capped},
-            )
-            return spec
+            return SkillSpec.from_dict(data[name])
 
     # -- audit -------------------------------------------------------------
 
@@ -1049,7 +1088,11 @@ class SkillRegistry:
         spec: SkillSpec,
         *,
         extra: dict[str, Any] | None = None,
+        required: bool = False,
     ) -> None:
+        """Append ``action`` to the chain. ``required=True`` (audit-first
+        callers) raises on any write failure; otherwise a failed write onto a
+        hash chain is dropped with a warning, never appended unchained."""
         details: dict[str, Any] = {
             "sha":   spec.sha256,
             "scope": spec.scope,
@@ -1080,8 +1123,20 @@ class SkillRegistry:
                 )
                 return
             except OSError:
-                pass
-        # Fallback when forge isn't on PYTHONPATH at all.
+                if required or self.hash_chain:
+                    # Never a raw, unchained line into a hash chain: it fails
+                    # verify_chain and with it the ADR-0232 boot tripwire.
+                    if required:
+                        raise
+                    _log_audit_dropped(action, path)
+                    return
+        elif self.hash_chain:
+            # No chain writer importable: a raw append would be unchained.
+            if required:
+                raise RuntimeError(f"{action}: no hash-chain audit writer available")
+            _log_audit_dropped(action, path)
+            return
+        # Unchained registry (hash_chain=False) only: plain append.
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
