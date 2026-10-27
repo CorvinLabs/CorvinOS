@@ -1,7 +1,8 @@
 """
 TTS Provider Abstraction — Quality-First with Fallback Strategy
 
-Pattern: Primary provider (OpenAI, high-quality, paid) + fallback provider (Edge TTS, free).
+Pattern: Primary provider (OpenAI, high-quality, paid) + fallback providers
+(Edge TTS, then gTTS as the last-resort voice; both free, no key).
 Strategy: Try quality first; fallback to availability only on error.
 
 Implements ADR-0201 (Budget/Fallback) + ADR-0445 (Resilience) patterns.
@@ -22,6 +23,7 @@ class TTSProvider(Enum):
     """Available TTS providers"""
     OPENAI = "openai"
     EDGE_TTS = "edge_tts"
+    GTTS = "gtts"
 
 
 @dataclass
@@ -188,18 +190,77 @@ class EdgeTTSProvider(TTSProviderBase):
             return None
 
 
+class GTTSProvider(TTSProviderBase):
+    """gTTS (Google Translate public endpoint): last-resort voice, no API key.
+
+    Needs network and sends the text to Google, so it is only reached when
+    OpenAI and Edge TTS are unavailable or failed. One voice per language."""
+
+    def __init__(self):
+        super().__init__("gtts")
+        self.quality_score = 0.5
+
+        try:
+            import gtts
+            self.gtts = gtts
+            self._imported = True
+        except ImportError:
+            self._imported = False
+            logger.warning("gTTS not installed; gTTS fallback unavailable")
+
+    def is_available(self) -> bool:
+        return self._imported
+
+    async def synthesize(
+        self,
+        text: str,
+        voice: str = "",
+        language: str = "en-US"
+    ) -> Optional[AudioResult]:
+        """Synthesize with gTTS; `voice` is ignored (gTTS has one voice per language)."""
+        if not self.is_available():
+            logger.warning("gTTS not available (package not installed)")
+            return None
+
+        lang = (language or "en").split("-")[0].lower() or "en"
+
+        def _render() -> bytes:
+            import io
+            buf = io.BytesIO()
+            self.gtts.gTTS(text=(text or "").strip() or "...", lang=lang, timeout=30).write_to_fp(buf)
+            return buf.getvalue()
+
+        try:
+            audio_bytes = await asyncio.to_thread(_render)
+            if not audio_bytes:
+                return None
+            return AudioResult(
+                audio_bytes=audio_bytes,
+                mime_type="audio/mpeg",
+                duration_ms=int(len(text.split()) * 0.4 * 1000),  # Rough estimate
+                provider="gtts",
+                quality_score=self.quality_score,
+                success=True
+            )
+        except Exception as e:
+            logger.error(f"gTTS failed: {type(e).__name__}: {e}")
+            return None
+
+
 class QualityFirstTTSManager:
     """
     Quality-First TTS Manager with Fallback Strategy.
 
     Pattern: Try high-quality provider first; fallback to availability provider on failure.
     - Primary: OpenAI (high quality, paid)
-    - Fallback: Edge TTS (good quality, free, always available)
+    - Fallback: Edge TTS (good quality, free)
+    - Last resort: gTTS (lower quality, free, sends the text to Google)
     """
 
     def __init__(self):
         self.primary = OpenAITTSProvider()
         self.fallback = EdgeTTSProvider()
+        self.last_resort = GTTSProvider()
         self.last_provider_used = None
 
     async def synthesize(
@@ -223,6 +284,8 @@ class QualityFirstTTSManager:
             return await self.primary.synthesize(text, voice, language)
         elif force_provider == TTSProvider.EDGE_TTS:
             return await self.fallback.synthesize(text, voice, language)
+        elif force_provider == TTSProvider.GTTS:
+            return await self.last_resort.synthesize(text, voice, language)
 
         # Quality-First strategy: try primary, fallback on failure
         if self.primary.is_available():
@@ -242,9 +305,19 @@ class QualityFirstTTSManager:
                 self.last_provider_used = "edge_tts"
                 logger.info("✅ TTS: Edge TTS synthesis succeeded (fallback)")
                 return result
+            logger.warning("TTS: Edge TTS synthesis failed, attempting gTTS...")
 
-        # Both providers failed
-        logger.error("❌ TTS: All providers failed; no audio available")
+        # Last resort: gTTS (no key, but needs network and sends the text to Google)
+        if self.last_resort.is_available():
+            logger.info("TTS: Trying last-resort provider (gTTS)...")
+            result = await self.last_resort.synthesize(text, voice, language)
+            if result and result.success:
+                self.last_provider_used = "gtts"
+                logger.warning("TTS: gTTS synthesis succeeded (last resort; text sent to Google)")
+                return result
+
+        # All providers failed
+        logger.error("TTS: All providers failed; no audio available")
         return None
 
     def get_status(self) -> dict:
@@ -252,6 +325,7 @@ class QualityFirstTTSManager:
         return {
             "primary_available": self.primary.is_available(),
             "fallback_available": self.fallback.is_available(),
+            "last_resort_available": self.last_resort.is_available(),
             "last_provider_used": self.last_provider_used,
             "primary_quality": self.primary.quality_score,
             "fallback_quality": self.fallback.quality_score,

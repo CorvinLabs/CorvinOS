@@ -52,9 +52,10 @@ the class that needs consent.
 **What it does, stated so nobody has to guess.** Nothing is contacted at boot or in the background. A video is made
 only when an operator asks for one; the narration text (derived from the task, never the task's files) then goes to
 the narration host: **OpenAI TTS first** (needs the operator's key) and **edge-tts** (Microsoft voices, no key) when
-OpenAI declines — an exhausted, invalid or missing key falls back instead of stopping the job; if both decline the job
-fails with a named error, never a silent video. Piper is not part of the chain. Every host is gated per job by the
-console's L34/L35 checks (`egress_gate.DEFAULT_ENGINE_HOSTS`: `api.openai.com`, `speech.platform.bing.com`; the
+OpenAI declines — an exhausted, invalid or missing key falls back instead of stopping the job; **gTTS** (Google Translate
+voice, no key) is the last resort and is skipped when the L35 gate does not admit `translate.google.com`; if all decline
+the job fails with a named error, never a silent video. Piper is not part of the chain. Every host is gated per job by the
+console's L34/L35 checks (`egress_gate.DEFAULT_ENGINE_HOSTS`: `api.openai.com`, `speech.platform.bing.com`, `translate.google.com`; the
 optional storyboard backend adds `api.anthropic.com`), and declared in the manifest (`egress_hosts`, `pii_risk: medium`).
 The default engine is `auto` (that chain); `openai` means OpenAI only and refuses instead of falling back.
 **Where the settings live (2026-10-24).** The panel's narration engine and maximum length are the plugin's own

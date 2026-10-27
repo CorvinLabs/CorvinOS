@@ -750,14 +750,18 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             runner = _RecordingRunner()
             mod.get_runner = lambda: runner
             ran: list = []
+            real_find_spec = mod.importlib.util.find_spec  # gTTS counts as a narration engine: simulate it absent
             with mock.patch.object(mod, "_stored_openai_key", lambda: None), \
                  mock.patch("importlib.metadata.version", lambda n: "7.2.8" if n == "edge-tts" else "1.0"), \
+                 mock.patch.object(mod.importlib.util, "find_spec",
+                                   lambda n, *a, **k: None if n == "gtts" else real_find_spec(n, *a, **k)), \
                  mock.patch.object(mod.subprocess, "run", lambda cmd, **k: ran.append(cmd)):
                 self._benign_l44()
                 resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
                                    headers={"X-CSRF-Token": csrf})
             self.assertEqual(resp.status_code, 503, resp.text)
             self.assertIn("edge-tts>=7.3.1", resp.text)
+            self.assertIn("gTTS>=2.5.0", resp.text)
             self.assertFalse(ran, "a request must never start a package install")
             self.assertFalse(runner.calls, "no job starts without a narration engine")
 

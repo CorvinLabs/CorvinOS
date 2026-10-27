@@ -628,6 +628,16 @@ def _tts_egress_refusal(tts_engine: str, tenant_id: str, chat_key: str) -> Optio
     return None
 
 
+def _gtts_host_admitted(tenant_id: str, chat_key: str) -> bool:
+    """True when the egress gate admits translate.google.com (the gTTS tier of "auto"); any doubt is False."""
+    try:
+        from spawn_gates import check_l35  # type: ignore  # path set up by _spawn_gates
+
+        return check_l35("video_producer", tenant_id, channel="web", chat_key=chat_key) is None
+    except Exception:  # noqa: BLE001 - fail closed: the tier is skipped, narration stays with the other tiers
+        return False
+
+
 def _grounding_audit(tenant_id: str, event: str, details: Dict[str, Any]) -> bool:
     """Write a grounding decision to the tenant chain; False if it did not commit."""
     try:
@@ -987,10 +997,10 @@ def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
     tts_engine = _effective_tts_engine(tts_engine)
     if tts_engine == "gtts" and importlib.util.find_spec("gtts") is None:
         missing.append("gTTS (pip install 'gTTS>=2.5.0' into the console environment)")
-    if tts_engine == "auto" and not _ensure_edge_tts() and not (
+    if tts_engine == "auto" and not _ensure_edge_tts() and importlib.util.find_spec("gtts") is None and not (
             importlib.util.find_spec("openai") is not None and _openai_configured()):
-        missing.append("a narration engine: edge-tts (pip install 'edge-tts>=7.3.1' into the console environment) "
-                       "or an OpenAI TTS key")
+        missing.append("a narration engine: gTTS (pip install 'gTTS>=2.5.0' into the console environment), "
+                       "edge-tts (pip install 'edge-tts>=7.3.1') or an OpenAI TTS key")
     if importlib.util.find_spec("PIL") is None:
         missing.append("Pillow (pip install 'Pillow>=10.0.0' into the console environment)")
     if not _ensure_ffmpeg():
@@ -1537,6 +1547,9 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     config = {
         "storage_base": str(_tenant_base(rec)),
         "tts_engine": settings["tts_engine"],
+        # gTTS is the last tier of "auto" and sends the narration to translate.google.com: only when L35 admits it
+        "tts_gtts_allowed": settings["tts_engine"] != "auto" or await asyncio.to_thread(
+            _gtts_host_admitted, rec.tenant_id, chat_key),
         "max_duration_minutes": settings["max_duration_minutes"],
         "storyboard_backend": backend,
         "storyboard_model": model,

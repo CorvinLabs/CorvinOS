@@ -68,7 +68,7 @@ echo "[bootstrap] installing telemetry dependencies (OTLP metrics export, ADR-06
 echo "[bootstrap] installing voice dependencies (TTS/STT, no API key required for edge-tts)"
 # edge-tts: Microsoft Edge TTS, no API key, pure-Python — universal TTS fallback.
 # openai + anthropic: SDK for cloud TTS/STT and Claude engine.
-"${VENV_DIR}/bin/python" -m pip install --quiet "edge-tts>=7.3.1" "openai>=1.0" "anthropic>=0.25" "imageio-ffmpeg>=0.5.1" "Pillow>=10.0.0"
+"${VENV_DIR}/bin/python" -m pip install --quiet "edge-tts>=7.3.1" "gTTS>=2.5.0" "openai>=1.0" "anthropic>=0.25" "imageio-ffmpeg>=0.5.1" "Pillow>=10.0.0"
 
 # pywhispercpp: local STT (whisper.cpp binding), no API key, works offline.
 # ADR-0185 M1: replaces faster-whisper as the canonical local STT engine —
@@ -103,7 +103,7 @@ print(f'  cryptography  {cryptography.__version__}')
 "
 "${VENV_DIR}/bin/python" -c "
 import importlib.util
-for pkg, mod in [('edge-tts','edge_tts'),('openai','openai'),('pywhispercpp','pywhispercpp')]:
+for pkg, mod in [('edge-tts','edge_tts'),('gTTS','gtts'),('openai','openai'),('pywhispercpp','pywhispercpp')]:
     found = importlib.util.find_spec(mod) is not None
     print(f'  {pkg:20s} {\"✓\" if found else \"✗ (not installed)\"}')
 "
