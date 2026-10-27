@@ -1,13 +1,17 @@
-"""ADR-0534 Layer 3 — trust weight of a feedback subject.
+"""ADR-0534 Layer 3 — trust weight of a feedback SOURCE on a subject.
 
 ``trust_weight = max(FLOOR, 1 - rejected / total)`` over the last ``WINDOW``
-gate decisions on the subject. The floor is 0.1, not 0: a source that was
+gate decisions on the subject BY THE SAME PRODUCER: the gate passes the
+(subject, source) history (``DecisionLedger.source_history``), so one faulty or
+hostile producer lowers only its own weight, never an honest producer's on the
+same skill, and the alert names that producer (``source_key``). The floor is 0.1, not 0: a source that was
 wrong for a while can recover. Below ``ALERT_BELOW`` (0.3) the gate emits
 ``learning.adversarial_feedback_detected``.
 
 The weight is stamped into the accepted event's ``signal["trust_weight"]``;
 every consumer that turns feedback into a number (operator-rating stats, the
-workflow optimizer's Beta update) multiplies by it. A signal recorded before
+workflow optimizer's Beta update, the stream4 loop closure, the
+``/learning/feedback`` optimizer epoch) multiplies by it. A signal recorded before
 this gate existed carries no weight and counts as 1.0.
 """
 

@@ -50,7 +50,7 @@ def test_rating_without_a_real_execution_is_refused_and_audited(tmp_path: Path):
         rec = _chain(sb, "learning.feedback_rejected")
         assert len(rec) == 1
         assert rec[0]["details"]["audit_ref"] == detail["audit_ref"]
-        assert rec[0]["details"]["skill_id"] == "skill:os.flow_guard"
+        assert rec[0]["details"]["skill_id"] == "os.flow_guard"  # canonical subject (c120 s1-6)
         assert _chain(sb, "learning.feedback") == []  # nothing became learnable
 
 
@@ -98,8 +98,10 @@ def test_burst_is_throttled_and_counts_against_trust(tmp_path: Path):
 
 
 def test_low_trust_source_is_down_weighted_and_flagged(tmp_path: Path):
-    """Rejections lower the subject's trust; the next accepted signal carries
-    the lower weight and the weighted stats use it."""
+    """Rejections lower the PRODUCER's trust on the subject; its next accepted
+    signal carries the lower weight and the weighted stats use it. The bad
+    signals carry the operator-rating producer's lom, so they are attributed to
+    the same source as the rating route (trust is per source since c120 s1-7)."""
     from core.learning import feedback_gate
     from core.learning.event_store import EventStore
     from core.learning.learning_events import EventType, LearningEvent
@@ -113,7 +115,9 @@ def test_low_trust_source_is_down_weighted_and_flagged(tmp_path: Path):
             bad = LearningEvent.create(EventType.FEEDBACK, "skill:os.flow_guard", sb.tenant_id,
                                        signal={"kind": "operator_rated_skill", "rating": 1,
                                                "skill_id": "os.flow_guard",
-                                               "claimed_output_hash": "sha256:" + "0" * 64})
+                                               "claimed_output_hash": "sha256:" + "0" * 64},
+                                       lom="core.learning.operator_feedback:"
+                                           "OperatorFeedbackHandler.record_skill_rating")
             with pytest.raises(feedback_gate.FeedbackRejected) as exc:
                 feedback_gate.admit(bad, store, now=t0 + i * 120)
             assert exc.value.reason == "output_hash_mismatch"

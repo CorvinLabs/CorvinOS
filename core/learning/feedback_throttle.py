@@ -5,7 +5,11 @@ either way it must not reach an optimizer. The window is counted from the
 PERSISTED decision ledger (``feedback_gate.DecisionLedger``), never from an
 in-process deque: the console builds a fresh handler per request, so a
 process-local history would never see a second signal and the throttle would
-never fire.
+never fire. The gate passes the SUBJECT's own history (its per-subject index,
+keyed on the canonical subject — ``skill:X`` and ``X`` are one subject), read
+under the subject's file lock, so neither junk on other subjects nor parallel
+requests or processes can open the window. The budget is per subject across
+all producers.
 
 There is no operator override secret (the ADR draft had one). An override is
 a bypass of a fail-closed gate, and CLAUDE.md forbids those; an operator who

@@ -5034,11 +5034,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "learning.feedback": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     "learning.feedback.user_provided": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     # ADR-0534 feedback trust gate — ids, counts, closed-enum reasons only.
-    "learning.feedback_accepted": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "trust_weight", "executions_in_window"}),
-    "learning.feedback_throttled": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "reason", "signals_in_window", "max_allowed", "window_sec"}),
-    "learning.feedback_rejected": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "reason", "executions_in_window"}),
-    "learning.feedback_reality_mismatch": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "reason", "executions_in_window"}),
-    "learning.adversarial_feedback_detected": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "reason", "trust_weight", "rejection_count", "accepted_count"}),
+    "learning.feedback_accepted": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "trust_weight", "executions_in_window"}),
+    "learning.feedback_throttled": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "signals_in_window", "max_allowed", "window_sec"}),
+    "learning.feedback_rejected": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "executions_in_window"}),
+    "learning.feedback_reality_mismatch": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "executions_in_window"}),
+    "learning.adversarial_feedback_detected": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "trust_weight", "rejection_count", "accepted_count"}),
     # ADR-2304 learning brake — ids and closed enums only (reason = the anomaly event name).
     "learning.frozen": frozenset({"tenant_id", "skill_id", "reason", "version_id", "lom", "component"}),
     "learning.unfrozen": frozenset({"tenant_id", "skill_id", "reason", "version_id", "lom", "component"}),
