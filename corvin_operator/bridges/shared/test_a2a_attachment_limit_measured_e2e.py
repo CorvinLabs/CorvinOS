@@ -100,6 +100,7 @@ class FileEngine:
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
         self.inputs: list[list[str]] = []
+        self.payload: dict = {"ok": True}   # the worker's structured answer
 
     def spawn(self, prompt, *, working_dir=None, **_ignored) -> Iterator[_Ev]:
         wd = Path(working_dir)
@@ -108,7 +109,7 @@ class FileEngine:
         out_dir.mkdir(exist_ok=True)
         for name, data in self.files.items():
             (out_dir / name).write_bytes(data)
-        payload = json.dumps({"ok": True})
+        payload = json.dumps(self.payload)
         yield _Ev(type="text_delta", text=payload)
         yield _Ev(type="turn_completed", text=payload)
 

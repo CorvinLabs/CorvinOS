@@ -947,10 +947,6 @@ def _cmd_send(args: argparse.Namespace) -> int:
 
     endpoint_id = _resolve_endpoint_id(args.endpoint_id, _endpoints_dir())
     sender = rts.RemoteTriggerSender(endpoints_dir=_endpoints_dir())
-    if args.attach_out_dir:
-        # ADR-2287: this caller pulls references, so it asks for them (opt-in, signed with the
-        # envelope). Without --attach-out-dir nothing would pull them, so it does not ask.
-        result_schema = {**(result_schema or rts.CHAT_RESULT_SCHEMA), "attachments_by_reference": True}
     res = sender.send(
         endpoint_id,
         instruction=instruction,
@@ -958,6 +954,10 @@ def _cmd_send(args: argparse.Namespace) -> int:
         ttl_s=args.ttl,
         timeout_s=args.timeout,
         attachments=attachments or None,
+        # ADR-2287: this caller pulls references, so it asks for them (merged into the schema by
+        # send(), the default schema is not replaced). Without --attach-out-dir nothing would pull
+        # them, so it does not ask.
+        attachments_by_reference=bool(args.attach_out_dir),
     )
 
     # ── Persist returned attachments if --attach-out-dir given ──────

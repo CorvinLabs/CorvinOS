@@ -280,6 +280,14 @@ _ARCHIVE_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08", b"\x1f\x8b", b"\x
 _MEDIA_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"%PDF-", b"OggS", b"ID3",
                 b"\x1aE\xdf\xa3", b"fLaC")
 _MARKER_ANY_RE = re.compile(r"\[class:(public|internal|confidential|secret)\]", re.IGNORECASE)
+#: a readable run inside a media container: 12+ printable characters (tab included)
+_READABLE_RUN_RE = re.compile("[\t\x20-\x7e -\U0010ffff]{12,}")
+
+
+def _readable_runs(text: str) -> str:
+    """The readable lines of a decoded media container: runs of 12+ printable characters that contain a
+    space (random bytes almost never do; a sentence always does)."""
+    return "\n".join(r for r in _READABLE_RUN_RE.findall(text) if " " in r)
 
 
 def _sniff(head: bytes) -> str:
@@ -333,6 +341,12 @@ def _classify_stream(read: Callable[[int], bytes]) -> str:
         decoder = codecs.getincrementaldecoder("utf-16")(errors="strict")
     elif kind == "text":
         decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+    elif kind == "media":
+        # Round-two finding 1: the media magic must not short-circuit the text scan. A container may
+        # carry readable text (an ID3 tag or a comment in an MP3, uncompressed text objects in a PDF,
+        # PNG text chunks). The INTERNAL floor stands; undecodable bytes are skipped, never an error,
+        # so genuine media with no text stays INTERNAL.
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="ignore")
     raw_carry, text_carry = "", ""
     window = head
     while True:
@@ -352,7 +366,11 @@ def _classify_stream(read: Callable[[int], bytes]) -> str:
                 if kind == "utf16":
                     piece = piece.replace("\x00", "")
                 text = text_carry + piece
-                level = classify_task(text).name
+                # A media container's text is only its READABLE runs (a line of printable characters
+                # with a space): random bytes decoded as text read as personal data. Markers and the
+                # secret bank still see every byte.
+                scan = _readable_runs(text) if kind == "media" else text
+                level = classify_task(scan).name
                 markers = [m.group(1).upper() for m in _MARKER_ANY_RE.finditer(text)]
                 best = max_level(best, level, *markers)
                 if best == "SECRET":

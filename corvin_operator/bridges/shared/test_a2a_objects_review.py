@@ -287,5 +287,38 @@ class TestStagingOpen(_Store):
         self.assertEqual(o.stage_file(p), (None, "unreadable"))
 
 
+class TestMediaContainersStillReadTheirText(_Store):
+    """Round-two finding 1 (MEDIUM): a media magic must not short-circuit the text scan. A file that
+    starts with a media signature but carries readable text is classified by that text too."""
+
+    ID3_SECRET = b"ID3\n[class:secret]\nboard minutes, item 4 is confidential\n"
+    PDF_PERSONAL = b"%PDF-1.4\n" + PII
+
+    def test_id3_prefixed_secret_marker_is_secret(self):
+        self.assertEqual(o.classify_bytes(self.ID3_SECRET), "SECRET")
+
+    def test_id3_prefixed_secret_marker_is_refused_at_issue(self):
+        ref, why = self.issue(self.ID3_SECRET, {"max_data_classification": "INTERNAL"}, "minutes.mp3")
+        self.assertEqual((ref, why), (None, "object_classification_exceeded"))
+
+    def test_pdf_prefixed_personal_data_text_is_refused_for_an_internal_origin(self):
+        self.assertEqual(o.classify_bytes(self.PDF_PERSONAL), "CONFIDENTIAL")
+        ref, why = self.issue(self.PDF_PERSONAL, {"max_data_classification": "INTERNAL"}, "list.pdf")
+        self.assertEqual((ref, why), (None, "object_classification_exceeded"))
+
+    def test_genuine_png_and_mp3_without_sensitive_text_stay_internal_and_are_issued(self):
+        import hashlib as _h
+
+        noise = b"".join(_h.sha256(bytes([i % 256, i // 256])).digest() for i in range(40000))
+        png = b"\x89PNG\r\n\x1a\n" + noise
+        mp3 = b"\xff\xfb\x90\x64" + noise
+        for label, data in (("png", png), ("mp3", mp3)):
+            with self.subTest(label):
+                self.assertEqual(o.classify_bytes(data), "INTERNAL")
+                ref, why = self.issue(data, {"max_data_classification": "INTERNAL"}, f"x.{label}")
+                self.assertIsNotNone(ref, why)
+                self.assertEqual(ref["classification"], "INTERNAL")
+
+
 if __name__ == "__main__":
     unittest.main()

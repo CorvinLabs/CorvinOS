@@ -50,6 +50,9 @@ CAP = a2a_attachments.MAX_ATTACHMENTS_TOTAL_BYTES
 SCHEMA = {"properties": {"ok": {"type": "boolean"}}}
 # references are opt-in (review finding 5): only a requester that can pull asks for them
 ASK_REFS = {**SCHEMA, "attachments_by_reference": True}
+#: ASCII personal data (names, e-mail, IBAN): classifies CONFIDENTIAL as text
+PII_TEXT = ("name,email,iban\n" + "".join(
+    f"Max Mustermann{i},max{i}@example.com,DE89370400440532013{i:03d}\n" for i in range(200))).encode()
 BIG = 12 * 1024 * 1024 + 12345          # above 10 MiB (ADR-2287 evidence), not a chunk multiple
 
 
@@ -205,6 +208,28 @@ class _ObjectScenarios:
         recs = self.events("A2A.object_pulled")
         self.assertEqual([r["details"]["stage"] for r in recs], ["chunk"])
         self.assertEqual((recs[0]["details"]["offset"], recs[0]["details"]["length"]), (CAP, 100))
+
+    def test_media_prefixed_text_is_refused_at_issue_over_the_transport(self):
+        """Round-two finding 1: a media signature in front of readable text is classified by the text."""
+        pad = PII_TEXT * (CAP // len(PII_TEXT) + 2)
+        id3_secret = b"ID3\n[class:secret]\nboard minutes\n" + pad
+        pdf_personal = b"%PDF-1.4\n" + pad
+        res = self.produce({"minutes.mp3": id3_secret, "list.pdf": pdf_personal})
+        self.assertTrue(res.ok, res)
+        self.assertEqual(res.attachment_refs, [])
+        self.assertEqual(res.data["attachments_dropped"],
+                         {"count": 2, "reasons": {"classification_exceeded": 2}})
+
+    def test_media_object_is_refused_at_pull_when_the_origin_max_drops(self):
+        """A PDF-prefixed personal-data file is issued for a CONFIDENTIAL-max origin; when the operator
+        lowers that origin to INTERNAL, the pull is refused by the same gate (the stored class decides)."""
+        pad = PII_TEXT * (CAP // len(PII_TEXT) + 2)
+        self.pair.update_origin(max_data_classification="CONFIDENTIAL")
+        ref = self.one_ref(self.produce({"list.pdf": b"%PDF-1.4\n" + pad}))
+        self.assertEqual(ref["classification"], "CONFIDENTIAL")
+        self.pair.update_origin(max_data_classification="INTERNAL")
+        pulled = self.pair.sender.pull_object(self.pair.kid, ref)
+        self.assertEqual((pulled.ok, pulled.reason), (False, "object_classification_exceeded"))
 
     def test_a_receiver_not_built_by_build_server_issues_and_serves_too(self):
         """The gateway and the console build the receiver themselves (no ``_objects_endpoints``):
@@ -488,6 +513,52 @@ class TestCliPullsReferences(_ObjectCase):
         self.assertEqual(rc, 0)
         self.assertEqual((out / "cli.bin").read_bytes(), big)
         self.assertEqual((out / "note.txt").read_bytes(), b"hi")
+
+    def _run_cli(self, argv_extra, *, capture_send=None):
+        import contextlib
+        import io as _io
+
+        sys.path.insert(0, str(_repo / "corvin_operator" / "voice" / "scripts"))
+        import corvin_a2a
+
+        buf = _io.StringIO()
+        real_send = self.pair.sender.send
+
+        def recording_send(*a, **k):
+            if capture_send is not None:
+                capture_send.append(dict(k))
+            return real_send(*a, **k)
+
+        self.pair.sender.send = recording_send  # type: ignore[method-assign]
+        try:
+            with mock.patch.dict(os.environ, {"REMOTE_ENDPOINTS_DIR": str(self.pair.a_endpoints)}), \
+                    mock.patch.object(rts, "RemoteTriggerSender", lambda endpoints_dir=None, **k: self.pair.sender), \
+                    contextlib.redirect_stdout(buf):
+                rc = corvin_a2a.main(["send", self.pair.kid, "produce", *argv_extra, "--timeout", "90"])
+        finally:
+            del self.pair.sender.send
+        return rc, json.loads(buf.getvalue())
+
+    def test_cli_asks_for_references_without_substituting_the_chat_schema(self):
+        """Round-two finding 2: ``--attach-out-dir`` without ``--schema`` must not replace the default
+        result schema with the chat one; it only adds the by-reference flag."""
+        sent: list[dict] = []
+        self.engine.files = {}
+        out = self.root / "cli-schema"
+        rc, _ = self._run_cli(["--attach-out-dir", str(out)], capture_send=sent)
+        self.assertEqual(rc, 0)
+        self.assertIsNone(sent[0]["result_schema"], "no --schema: the default schema applies, not a copy")
+        self.assertTrue(sent[0]["attachments_by_reference"])
+
+    def test_cli_data_of_a_plain_run_is_unchanged_with_and_without_attach_out_dir(self):
+        """The CLI's ``data`` for a run without references is what it was before ADR-2287."""
+        self.engine.payload = {"output": "hello"}
+        self.engine.files = {}
+        _, plain = self._run_cli([])
+        out = self.root / "cli-plain-data"
+        _, with_dir = self._run_cli(["--attach-out-dir", str(out)])
+        self.assertEqual(plain["data"], {"output": "hello"})
+        self.assertEqual(with_dir["data"], plain["data"])
 
     def test_cli_refuses_a_duplicate_name_instead_of_overwriting(self):
         """Review finding 10: a (signed, but hostile) response naming one file twice — two references,

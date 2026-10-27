@@ -1175,6 +1175,7 @@ class RemoteTriggerSender:
         thread_ref: dict | None = None,
         outbox_deadline_s: int | None = None,
         outbox_retry: bool = False,
+        attachments_by_reference: bool = False,
     ) -> SendResult:
         """Send a signed TaskEnvelope and record the exchange in the A2A feed.
 
@@ -1244,6 +1245,10 @@ class RemoteTriggerSender:
         # as an empty "filtered" response. An explicit schema (even {}) wins.
         if result_schema is None:
             result_schema = CHAT_RESULT_SCHEMA
+        if attachments_by_reference:
+            # ADR-2287: opt-in, merged into the schema the caller already has (or the default one).
+            # The default schema itself is never replaced by anything else.
+            result_schema = {**result_schema, "attachments_by_reference": True}
         task_id = task_id or str(uuid.uuid4())
         # The connection name travels with every feed record, so a
         # conversation stays readable after the connection is revoked.
@@ -1490,11 +1495,9 @@ class RemoteTriggerSender:
                        or cfg.get("our_origin_id")
                        or self._instance_id,
             instruction=instruction,
-            # ADR-2287: references are OPT-IN. Only a caller that will pull them sets
-            # ``result_schema.attachments_by_reference: true`` (today: ``corvin-a2a send
-            # --attach-out-dir``); every other caller (console feed, groups, outbox, federation,
-            # MCP) keeps the inline files plus the ``attachments_dropped`` report and leaves nothing
-            # held on the peer for nobody (review finding 5).
+            # ADR-2287: references are OPT-IN (``attachments_by_reference`` in send()); no caller
+            # adds the flag by default, so the console feed, groups, outbox, federation and MCP keep
+            # the inline files plus the ``attachments_dropped`` report (review finding 5).
             result_schema=result_schema or {},
             ttl_s=ttl_s,
             hmac_key_hex=cfg["hmac_key"],
