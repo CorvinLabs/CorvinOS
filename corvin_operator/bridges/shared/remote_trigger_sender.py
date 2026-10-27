@@ -757,6 +757,10 @@ class PingResult:
 # (host.fritz.box:8443) and 64-char hex keys straight into audit.jsonl.
 # An allowlist of templates cannot leak by construction.
 _ERROR_DETAIL_GENERIC = "error_detail_unavailable"
+# The peer's signed revoke notice ended this pairing: say so, not "unavailable" (that text also
+# covers a disabled endpoint, which the operator can re-enable - this one cannot be).
+_PEER_REVOKED_DETAIL = "The partner ended this pairing - pair again to resume"
+
 # ADR-2295: an offline pair this side's operator has not confirmed (oob_state pending).
 _OFFLINE_PAIR_UNCONFIRMED_DETAIL = (
     "Offline pair not confirmed on this side - compare the fingerprint with the "
@@ -788,6 +792,7 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
     # refused before anything left this machine.
     "A2A network requires a member seat",
     _OFFLINE_PAIR_UNCONFIRMED_DETAIL,
+    _PEER_REVOKED_DETAIL,
     _ERROR_DETAIL_GENERIC,
 })
 # WHY a peer's worker path refused a task (a2a_worker.WorkerResult.reason_code, carried in
@@ -841,7 +846,7 @@ _ERROR_DETAIL_TEMPLATES = frozenset(_ERROR_DETAIL_TEMPLATES) | frozenset(_WORKER
     "The peer is busy with other tasks - try again in a moment",
     "The peer did not accept this group message (not a member there, or the group is unknown to it)",
     # ADR-2294: refused locally - classified data to an endpoint whose GDPR role is unset.
-    _endpoint_role.refusal_text(),
+    *_endpoint_role.refusal_texts(),
 })
 
 # ADR-0197 §2: the only non-template content ever emitted as error_detail is
@@ -1333,7 +1338,7 @@ class RemoteTriggerSender:
             ok=False, status="rejected", task_id=tid, instance_id="", instance_id_match=False,
             data={"reason": reason}, attachments=[], duration_ms=0,
             error_category=ErrorCategory.REJECTED,
-            error_detail=_sanitize_error(_endpoint_role.refusal_text()),
+            error_detail=_sanitize_error(_endpoint_role.refusal_text(grade)),
         )
 
     def _keep_in_outbox(self, endpoint_id: str, task_id: str, instruction: str, result: "SendResult",
@@ -1446,6 +1451,7 @@ class RemoteTriggerSender:
                 error_detail=self._sanitize_error(
                     _OFFLINE_PAIR_UNCONFIRMED_DETAIL
                     if exc.reason == "endpoint_offline_pair_unconfirmed"
+                    else _PEER_REVOKED_DETAIL if exc.reason == "endpoint_peer_revoked"
                     else "Endpoint config unavailable"),
             )
 
@@ -1733,7 +1739,9 @@ class RemoteTriggerSender:
 
         # ADR-0116 M4: emit chain_anchor_verified when receiver includes its
         # chain tail in the ResponseEnvelope.  Best-effort (never blocks result).
-        _receiver_tail = response.get("receiver_chain_tail")
+        # Read ONLY from a signed response: an unsigned legacy rejection is attacker-controlled
+        # and must neither write an anchor record nor reach SendResult.peer_chain_tail.
+        _receiver_tail = response.get("receiver_chain_tail") if _resp_is_signed else ""
         if isinstance(_receiver_tail, str) and _receiver_tail:
             self._audit_best_effort(
                 "A2A.chain_anchor_verified", "INFO",

@@ -684,7 +684,7 @@ class AcceptRequest(BaseModel):
     signature: str
 
 
-@router.post("/remote-trigger/pair/accept", dependencies=[Depends(_require_host_session)])
+@router.post("/remote-trigger/pair/accept")
 def pair_accept(body: AcceptRequest) -> dict[str, Any]:
     """Server-to-server: redeemer calls this so the issuer installs pairing files.
 

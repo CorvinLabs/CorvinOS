@@ -102,9 +102,26 @@ def organisation_of(cfg: Any) -> str:
         return ""
 
 
-def refusal_text() -> str:
-    """The fixed operator-facing text of an ``endpoint_role_unset`` refusal."""
-    return _REFUSAL_TEXT
+_GRADES = ("INTERNAL", "CONFIDENTIAL", "SECRET")
+
+
+def refusal_text(grade: str = "") -> str:
+    """The fixed operator-facing text of an ``endpoint_role_unset`` refusal.
+
+    ``grade`` is the detected class NAME (never content); only a name from the closed set is ever used, so
+    the result is always one of :func:`refusal_texts` (the sender's error-detail allowlist). The shared
+    detector also grades some ordinary long digit runs (a build number, an ISBN, a millisecond timestamp)
+    above public - a known false positive; stating the partner's role clears it either way."""
+    if grade not in _GRADES:
+        return _REFUSAL_TEXT
+    return (f"Refused: this message was graded {grade} and this connection has no GDPR role yet "
+            "(the grader also flags some long digit runs such as build numbers). "
+            + _REFUSAL_TEXT.split("yet, so data classified above public is not sent to it. ", 1)[1])
+
+
+def refusal_texts() -> tuple[str, ...]:
+    """Every text :func:`refusal_text` can return (a closed set, for error-detail allowlists)."""
+    return (_REFUSAL_TEXT, *(refusal_text(g) for g in _GRADES))
 
 
 # ── the outbound rule ─────────────────────────────────────────────────────

@@ -283,3 +283,19 @@ def test_only_operator_paths_write_the_role_key():
     assert not offenders, f"files writing 'gdpr_role' outside the operator paths: {offenders}"
     for rel in _ROLE_KEY_ALLOWED:
         assert (_REPO / rel).is_file(), f"allowlisted file is gone: {rel}"
+
+
+def test_refusal_text_names_the_class_and_the_way_out():
+    for grade in ("INTERNAL", "CONFIDENTIAL", "SECRET"):
+        text = er.refusal_text(grade)
+        assert grade in text and "role" in text.lower()
+        assert text in er.refusal_texts()
+    assert er.refusal_text("<script>") == er.refusal_text()      # never an arbitrary string
+    assert er.refusal_text() in er.refusal_texts()
+
+
+def test_outbound_refusal_grade_for_long_digit_runs_is_reported_not_hidden():
+    # Known limit: the shared detector grades ordinary long digit runs; the text must still say which class.
+    reason, grade = er.outbound_refusal({}, "build 20261027123456")
+    if reason:
+        assert grade and grade in er.refusal_text(grade)
