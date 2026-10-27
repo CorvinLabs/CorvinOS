@@ -678,7 +678,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2287 large objects by signed reference (a2a_objects.py). Metadata only: ref-id prefix,
     # size, sha256 prefix, classification, origin, closed reason codes. Never a name, never bytes.
     "A2A.object_issued":              "INFO",     # holder: a reference was issued (audit-first)
-    "A2A.object_pulled":              "INFO",     # holder: one chunk served (audit-first)
+    "A2A.object_pulled":              "INFO",     # holder: a pull started/completed, or an out-of-order chunk (audit-first)
     "A2A.object_expired":             "INFO",     # holder: TTL passed or pull budget used up
     "A2A.object_refused":             "WARNING",  # holder: issue/inline/pull refused by a gate
     "A2A.object_fetched":             "INFO",     # requester: a pull finished (ok or refused)
@@ -3688,7 +3688,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         ("A2A.object_issued", {"ref_prefix", "size", "sha_prefix", "classification", "ttl_s",
                                "max_pulls"}),
         ("A2A.object_pulled", {"ref_prefix", "size", "sha_prefix", "classification", "offset",
-                               "length", "served_bytes"}),
+                               "length", "served_bytes", "stage", "chunks"}),
         ("A2A.object_expired", {"ref_prefix", "size", "sha_prefix", "classification"}),
         ("A2A.object_refused", {"ref_prefix", "size", "sha_prefix", "classification", "stage"}),
         ("A2A.object_fetched", {"ref_prefix", "size", "sha_prefix"}),

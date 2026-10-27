@@ -1399,7 +1399,7 @@ def _harvest_report(out_dir: Path, result_schema: dict,
         if total_bytes + size > MAX_ATTACHMENTS_TOTAL_BYTES:
             if by_reference:
                 import a2a_objects  # noqa: PLC0415 — same directory, only on this path
-                staged, why = a2a_objects.stage_file(entry)
+                staged, why = a2a_objects.stage_file(entry, expect=(_st.st_dev, _st.st_ino))
                 if staged is not None:
                     staged_out.append(staged)  # type: ignore[union-attr]
                 else:

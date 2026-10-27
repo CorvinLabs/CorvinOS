@@ -174,9 +174,9 @@ filter because it is the receiver's own statement about completeness. Files the 
 counted (the first was asked for, the second must not tell a hostile worker what the filter caught).
 Proof: `corvin_operator/bridges/shared/test_a2a_attachments_dropped_e2e.py`.
 
-**Files above the inline cap travel by reference (ADR-2287).** A requester on this build asks for references
-(`result_schema.attachments_by_reference: true`, set by `RemoteTriggerSender.send`; `false` keeps the drop report
-above). A file that does not fit the remaining inline budget is then not dropped: the holder gates it (name, size
+**Files above the inline cap travel by reference (ADR-2287).** A requester that will pull asks for references
+(`result_schema.attachments_by_reference: true` — opt-in, set today only by `corvin-a2a send --attach-out-dir`; every
+other caller keeps the drop report above). A file that does not fit the remaining inline budget is then not dropped: the holder gates it (name, size
 ceiling, L34 classification against the origin's `max_data_classification`, L35 egress), records `A2A.object_issued`
 and puts a reference `{name, mime, size, sha256, classification, ref_id, inline: false}` into the signed response's
 `attachments` list. `SendResult.attachment_refs` carries it; `RemoteTriggerSender.pull_object` (and

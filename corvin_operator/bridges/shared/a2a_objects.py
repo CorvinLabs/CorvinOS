@@ -70,8 +70,15 @@ DEFAULT_OPERATOR_MAX_BYTES = 256 * 1024 * 1024
 ABSOLUTE_MAX_BYTES = 4 * 1024 * 1024 * 1024
 #: all held objects of a tenant together
 STORE_QUOTA_BYTES = 2 * 1024 * 1024 * 1024
-#: content classification reads at most this much of an object
+#: content classification reads the WHOLE object in windows of this size (review finding 1) ...
 CLASSIFY_SCAN_BYTES = 1024 * 1024
+#: ... each window re-reads this much of the previous one, so a secret, a ``[class:…]`` marker or a
+#: multi-byte character cut by a window edge is still seen whole (longest bank pattern: a JWT)
+CLASSIFY_OVERLAP_CHARS = 16 * 1024
+#: staging refuses when the volume's free space would drop below this (review finding 8)
+MIN_FREE_DISK_BYTES = 512 * 1024 * 1024
+#: a pull's request id (the ping id) longer than the replay ledger keeps is refused (finding 4)
+MAX_PULL_ID_LEN = 128
 
 REF_ID_RE = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -87,6 +94,7 @@ REFUSALS = frozenset({
     "object_store_full", "object_store_error", "object_audit_failed",
     # holder: pull
     "object_unavailable", "object_pull_replayed", "object_bad_range", "object_pull_budget_exhausted",
+    "object_bad_request",
     # puller
     "object_pull_unsupported", "object_digest_mismatch", "object_bad_chunk", "object_bad_reference",
     "object_unreachable", "object_auth_failed",
@@ -94,8 +102,54 @@ REFUSALS = frozenset({
 
 _lock = threading.RLock()
 _last_sweep: dict[str, float] = {}
+#: bytes reserved by stagers whose copy is in flight, per store root (review finding 8)
+_reserved: dict[str, int] = {}
+_flock_depth = threading.local()
 
 Audit = Callable[[str, str, dict], None]
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # Windows: the threading lock alone (one A2A server process per install there)
+    _fcntl = None  # type: ignore[assignment]
+
+
+class _StoreLock:
+    """Serialise every mutation of one store across threads AND processes (the gateway, the
+    console host and the erasure orchestrator may each touch it): the module RLock plus an
+    ``flock`` on ``<store>/.lock``. Re-entrant inside one thread."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.fd: int | None = None
+
+    def __enter__(self) -> "_StoreLock":
+        _lock.acquire()
+        depth = getattr(_flock_depth, "n", 0)
+        _flock_depth.n = depth + 1
+        if depth == 0 and _fcntl is not None:
+            try:
+                self.root.mkdir(parents=True, exist_ok=True)
+                self.fd = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+                _fcntl.flock(self.fd, _fcntl.LOCK_EX)
+            except OSError:
+                if self.fd is not None:
+                    os.close(self.fd)
+                self.fd = None
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        try:
+            if self.fd is not None:
+                os.close(self.fd)   # closing the description releases the flock
+        finally:
+            _flock_depth.n = getattr(_flock_depth, "n", 1) - 1
+            _lock.release()
+
+
+def _reset_for_tests() -> None:
+    _last_sweep.clear()
+    _reserved.clear()
 
 
 class ObjectAuditError(Exception):
@@ -214,47 +268,117 @@ def ceiling_for(origin_cfg: dict, tenant_id: str | None = None) -> int:
     return _clamp_int((origin_cfg or {}).get("max_object_bytes", op), 1, op, op)
 
 
-#: an object that is not text carries no label and nothing the text classifier can read: it is
-#: INTERNAL, the same conservative default an unlabelled attachment gets (ADR-0077 C-6)
+#: a known media container (image, audio, video, PDF) carries no label and nothing the text classifier
+#: can read: INTERNAL, the same conservative default an unlabelled attachment gets (ADR-0077 C-6).
+#: Everything else that is not readable text — archives, compressed streams, undecodable bytes — is
+#: CONFIDENTIAL: it can hide anything, so it fails toward refusal (review finding 3).
 BINARY_CLASSIFICATION = "INTERNAL"
+OPAQUE_CLASSIFICATION = "CONFIDENTIAL"
+
+_ARCHIVE_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08", b"\x1f\x8b", b"\xfd7zXZ\x00",
+                  b"7z\xbc\xaf\x27\x1c", b"BZh", b"\x28\xb5\x2f\xfd", b"Rar!\x1a\x07")
+_MEDIA_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"%PDF-", b"OggS", b"ID3",
+                b"\x1aE\xdf\xa3", b"fLaC")
+_MARKER_ANY_RE = re.compile(r"\[class:(public|internal|confidential|secret)\]", re.IGNORECASE)
 
 
-def _as_text(data: bytes) -> "str | None":
-    """The scan window as text, or None for a binary object (NUL byte or not UTF-8; a multi-byte
-    character cut by the window's end does not make it binary)."""
-    window = data[:CLASSIFY_SCAN_BYTES]
-    if b"\x00" in window:
-        return None
-    try:
-        return window.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        if len(data) > CLASSIFY_SCAN_BYTES and exc.start >= len(window) - 3:
-            return window[:exc.start].decode("utf-8", errors="strict")
-        return None
+def _sniff(head: bytes) -> str:
+    """``archive`` | ``media`` | ``utf16`` | ``text`` from the first bytes of an object."""
+    if head.startswith(_ARCHIVE_MAGIC):
+        return "archive"
+    if (head.startswith(_MEDIA_MAGIC) or (head[:4] == b"RIFF" and head[8:12] in (b"WEBP", b"WAVE", b"AVI "))
+            or head[4:8] == b"ftyp" or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")):
+        return "media"
+    if head.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf16"
+    return "text"
+
+
+def _secret_patterns() -> list:
+    from data_classification import _SECRET_PATTERNS  # type: ignore  # noqa: PLC0415
+
+    return list(_SECRET_PATTERNS)
+
+
+def _classify_stream(read: Callable[[int], bytes]) -> str:
+    """L34 classification of a WHOLE object, read in ``CLASSIFY_SCAN_BYTES`` windows.
+
+    * Every window (raw bytes read as Latin-1, so the bank sees ASCII secrets inside any container)
+      is searched for the secret bank — a hit is SECRET, whatever the format.
+    * Archives and compressed streams are CONFIDENTIAL (``OPAQUE_CLASSIFICATION``); known media
+      containers are INTERNAL (``BINARY_CLASSIFICATION``).
+    * Everything else is decoded as text — UTF-16 when it has a BOM, otherwise UTF-8 with NUL bytes
+      removed (a stray NUL, or BOM-less UTF-16 of ASCII, cannot turn text into "binary") — through an
+      incremental decoder, so a character cut by a window edge is joined, never an error. Each window's
+      text (with ``CLASSIFY_OVERLAP_CHARS`` of the previous one in front) goes through
+      ``data_classification.classify_task``, and a ``[class:…]`` marker counts anywhere, not only at
+      the start. Undecodable text is CONFIDENTIAL.
+    * The highest level wins; SECRET stops the scan. Any error is CONFIDENTIAL (fail-closed)."""
+    import codecs  # noqa: PLC0415
+
+    from data_classification import classify_task  # type: ignore  # noqa: PLC0415
+
+    patterns = _secret_patterns()
+    best = "PUBLIC"
+    head = read(CLASSIFY_SCAN_BYTES)
+    if not head:
+        return best
+    kind = _sniff(head)
+    if kind == "archive":
+        best = OPAQUE_CLASSIFICATION
+    elif kind == "media":
+        best = BINARY_CLASSIFICATION
+    decoder = None
+    if kind == "utf16":
+        decoder = codecs.getincrementaldecoder("utf-16")(errors="strict")
+    elif kind == "text":
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+    raw_carry, text_carry = "", ""
+    window = head
+    while True:
+        raw = raw_carry + window.decode("latin-1")
+        if any(p.search(raw) for p in patterns):
+            return "SECRET"
+        raw_carry = raw[-CLASSIFY_OVERLAP_CHARS:]
+        nxt = read(CLASSIFY_SCAN_BYTES)
+        if decoder is not None:
+            try:
+                piece = decoder.decode(window if kind == "utf16" else window.replace(b"\x00", b""),
+                                       final=not nxt)
+            except UnicodeDecodeError:
+                decoder = None
+                best = max_level(best, OPAQUE_CLASSIFICATION)
+            else:
+                if kind == "utf16":
+                    piece = piece.replace("\x00", "")
+                text = text_carry + piece
+                level = classify_task(text).name
+                markers = [m.group(1).upper() for m in _MARKER_ANY_RE.finditer(text)]
+                best = max_level(best, level, *markers)
+                if best == "SECRET":
+                    return best
+                text_carry = text[-CLASSIFY_OVERLAP_CHARS:]
+        if not nxt:
+            return best
+        window = nxt
 
 
 def classify_bytes(data: bytes) -> str:
-    """L34 classification of an object's content: a TEXT object (its first ``CLASSIFY_SCAN_BYTES``)
-    goes through the classifier every spawn gate uses (``data_classification.classify_task``: secret
-    patterns, ``[class:…]`` marker, personal-data zone); a binary object is
-    :data:`BINARY_CLASSIFICATION` (the text heuristics read noise as personal data). A classifier
-    error is CONFIDENTIAL (fail-closed), never PUBLIC."""
+    """:func:`_classify_stream` over an in-memory object (the inline outputs)."""
     try:
-        text = _as_text(data)
-        if text is None:
-            return BINARY_CLASSIFICATION
-        from data_classification import classify_task  # type: ignore  # noqa: PLC0415
+        import io  # noqa: PLC0415
 
-        return classify_task(text).name
+        return _classify_stream(io.BytesIO(data).read)
     except Exception:  # noqa: BLE001
         return "CONFIDENTIAL"
 
 
 def _classify_file(path: Path) -> str:
+    """:func:`_classify_stream` over a staged file, the whole file."""
     try:
         with open(path, "rb") as fh:
-            return classify_bytes(fh.read(CLASSIFY_SCAN_BYTES))
-    except OSError:
+            return _classify_stream(fh.read)
+    except Exception:  # noqa: BLE001
         return "CONFIDENTIAL"
 
 
@@ -309,44 +433,68 @@ def object_gate(*, origin_cfg: dict, origin_id: str, name: str, size: int, class
 
 # ── Staging (worker side) ────────────────────────────────────────────────
 
-def stage_file(src: Path, *, tenant_id: str | None = None) -> tuple[dict | None, str | None]:
+def stage_file(src: Path, *, tenant_id: str | None = None,
+               expect: "tuple[int, int] | None" = None) -> tuple[dict | None, str | None]:
     """Copy a worker output file into the holder's staging area, hashing while copying.
 
     The worker's scratch directory is deleted right after the harvest, so the bytes must move before
     the receiver decides; nothing staged is servable until :func:`issue` accepted it. Returns
-    ``(staged, None)`` or ``(None, reason)``. The operator's hard ceiling and the store quota apply
-    here already (the per-origin ceiling and every other gate apply in :func:`issue`)."""
+    ``(staged, None)`` or ``(None, reason)``.
+
+    * The source is opened with ``O_NOFOLLOW`` and checked on the OPEN descriptor: a regular file,
+      one link, and — when the harvest passes ``expect`` — the same ``(st_dev, st_ino)`` it inspected.
+      A symlink or hardlink a leftover worker process swapped in afterwards is ``unreadable``.
+    * The operator's hard ceiling, the store quota (with the sizes of in-flight copies RESERVED under
+      the lock, so concurrent stagers cannot overrun it) and a free-disk floor
+      (``MIN_FREE_DISK_BYTES``) apply here; the per-origin ceiling and every other gate in :func:`issue`.
+    """
+    import stat as _stat  # noqa: PLC0415
+
+    root = store_dir(tenant_id)
     try:
-        size = src.stat().st_size
+        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return None, "unreadable"
-    if size > operator_max_bytes(tenant_id):
-        return None, "object_too_large"
-    root = store_dir(tenant_id)
+    reserved = 0
     dest = root / "staging" / f"{secrets.token_hex(16)}.part"
     try:
-        with _lock:
+        st = os.fstat(fd)
+        if (not _stat.S_ISREG(st.st_mode) or st.st_nlink != 1
+                or (expect is not None and (st.st_dev, st.st_ino) != tuple(expect))):
+            return None, "unreadable"
+        size = st.st_size
+        if size > operator_max_bytes(tenant_id):
+            return None, "object_too_large"
+        with _StoreLock(root):
             _ensure(root)
-            if _store_bytes(root) + size > STORE_QUOTA_BYTES:
+            key = str(root)
+            if _store_bytes(root) + _reserved.get(key, 0) + size > STORE_QUOTA_BYTES:
                 return None, "object_store_full"
+            try:
+                free = shutil.disk_usage(root).free
+            except OSError:
+                free = 0
+            if free - size < MIN_FREE_DISK_BYTES:
+                return None, "object_store_full"
+            _reserved[key] = _reserved.get(key, 0) + size
+            reserved = size
         h = hashlib.sha256()
         copied = 0
-        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        out = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
-            with open(src, "rb") as fh:
-                while True:
-                    buf = fh.read(1024 * 1024)
-                    if not buf:
-                        break
-                    copied += len(buf)
-                    if copied > size:          # grew while we copied: refuse rather than guess
-                        raise OSError("source changed")
-                    h.update(buf)
-                    view = memoryview(buf)
-                    while view:
-                        view = view[os.write(fd, view):]
+            while True:
+                buf = os.read(fd, 1024 * 1024)
+                if not buf:
+                    break
+                copied += len(buf)
+                if copied > size:          # grew while we copied: refuse rather than guess
+                    raise OSError("source changed")
+                h.update(buf)
+                view = memoryview(buf)
+                while view:
+                    view = view[os.write(out, view):]
         finally:
-            os.close(fd)
+            os.close(out)
         if copied != size:
             dest.unlink(missing_ok=True)
             return None, "unreadable"
@@ -356,6 +504,11 @@ def stage_file(src: Path, *, tenant_id: str | None = None) -> tuple[dict | None,
     except Exception:  # noqa: BLE001
         dest.unlink(missing_ok=True)
         return None, "object_store_error"
+    finally:
+        os.close(fd)
+        if reserved:
+            with _lock:   # the finished .part now counts itself in _store_bytes
+                _reserved[str(root)] = max(0, _reserved.get(str(root), 0) - reserved)
     from a2a_attachments import _guess_mime  # noqa: PLC0415 — one MIME table
 
     return {"staged_path": str(dest), "name": src.name, "mime": _guess_mime(src),
@@ -422,7 +575,7 @@ def issue(staged: dict, *, origin_id: str, origin_cfg: dict, task_id: str, floor
             "expires_at": now + ttl_s, "max_pulls": max_pulls, "served_bytes": 0, "pull_ids": [],
             "state": "issued"}
     try:
-        with _lock:
+        with _StoreLock(root):
             os.replace(sp, _bin_path(root, ref_id))
             _write_meta(root, meta)
     except OSError:
@@ -464,12 +617,19 @@ def serve(*, origin_id: str, origin_cfg: dict, ref_id: Any, offset: Any, length:
           audit_strict: Audit, audit: "Audit | None" = None) -> tuple[dict | None, str | None]:
     """Answer one authenticated pull: ``({ref_id, offset, length, data_b64}, None)`` or
     ``(None, closed_code)``. The caller (``a2a_http_server.process_ping_request``) has verified the
-    ping signature, its freshness and the pull signature; the answer it signs carries this result."""
+    ping signature, its freshness and the pull signature; the answer it signs carries this result.
+
+    Audit first, without one record per chunk (review finding 11): the chunk at offset 0 opens a pull
+    and is recorded (``stage: start``) BEFORE it is served; the chunks that continue that pull in order
+    are covered by it; the final chunk is recorded (``stage: complete`` with the chunk count) before it
+    is served. A pull of the whole object in one chunk is one ``complete`` record. A chunk that is not
+    the continuation of a recorded pull gets its own record (``stage: chunk``) first. The gate runs on
+    EVERY chunk."""
     if not isinstance(ref_id, str) or not REF_ID_RE.fullmatch(ref_id):
         return None, "object_unavailable"
     root = store_dir(tenant_id)
     sweep_expired(tenant_id=tenant_id, audit=audit, force=True)
-    with _lock:
+    with _StoreLock(root):
         meta = _read_meta(root, ref_id)
         # unknown, expired (swept above) and another origin's reference: one answer
         if meta is None or not _origin_matches(meta, origin_id):
@@ -481,6 +641,9 @@ def serve(*, origin_id: str, origin_cfg: dict, ref_id: Any, offset: Any, length:
                 audit("A2A.object_refused", "WARNING", {**fields, "stage": "pull", "reason": reason})
             return None, reason
 
+        # the replay ledger keeps whole ids; one it could not keep whole is refused (review finding 4)
+        if not isinstance(pull_id, str) or not pull_id or len(pull_id) > MAX_PULL_ID_LEN:
+            return _refuse("object_bad_request")
         if pull_id in (meta.get("pull_ids") or []):
             return _refuse("object_pull_replayed")
         if meta.get("state") == "exhausted":
@@ -508,13 +671,29 @@ def serve(*, origin_id: str, origin_cfg: dict, ref_id: Any, offset: Any, length:
         if len(data) != length:
             return None, "object_unavailable"
         served = int(meta.get("served_bytes") or 0) + length
-        try:
-            audit_strict("A2A.object_pulled", "INFO",
-                         {**fields, "offset": offset, "length": length, "served_bytes": served})
-        except Exception:  # noqa: BLE001 — audit first: an unrecorded chunk is never served
+        final = offset + length == size
+        if offset == 0:
+            stage, chunks = ("complete" if final else "start"), 1
+        elif meta.get("pull_next") == offset:
+            stage, chunks = ("complete" if final else ""), int(meta.get("pull_chunks") or 0) + 1
+        else:
+            stage, chunks = "chunk", int(meta.get("pull_chunks") or 0)
+        if stage:
+            rec = {**fields, "stage": stage, "offset": offset, "length": length, "served_bytes": served}
+            if stage == "complete":
+                rec["chunks"] = chunks
+            try:
+                audit_strict("A2A.object_pulled", "INFO", rec)
+            except Exception:  # noqa: BLE001 — audit first: an unrecorded chunk is never served
+                return None, "object_unavailable"
+        # an erasure (another process) may have removed the object meanwhile: never recreate it
+        if not (_bin_path(root, ref_id).exists() and _meta_path(root, ref_id).exists()):
             return None, "object_unavailable"
         meta["served_bytes"] = served
-        meta["pull_ids"] = [*(meta.get("pull_ids") or []), str(pull_id)[:128]]
+        meta["pull_ids"] = [*(meta.get("pull_ids") or []), pull_id]
+        if stage != "chunk":
+            meta["pull_chunks"] = chunks
+            meta["pull_next"] = None if final else offset + length
         exhausted = served >= budget
         if exhausted:
             meta["state"] = "exhausted"
@@ -542,11 +721,18 @@ def sweep_expired(*, tenant_id: str | None = None, audit: "Audit | None" = None,
         return 0
     _last_sweep[key] = t
     removed = 0
-    with _lock:
+    with _StoreLock(root):
         for mp in root.glob("*.json"):
             ref_id = mp.stem
             meta = _read_meta(root, ref_id)
             if meta is None:
+                # an unreadable record older than the hard TTL can never be served: bytes + record go
+                try:
+                    if t - mp.stat().st_mtime > MAX_TTL_S:
+                        _remove(root, ref_id)
+                        removed += 1
+                except OSError:
+                    pass
                 continue
             if float(meta.get("expires_at") or 0) > t:
                 continue
@@ -555,6 +741,15 @@ def sweep_expired(*, tenant_id: str | None = None, audit: "Audit | None" = None,
             removed += 1
             if had_bytes and audit is not None:
                 audit("A2A.object_expired", "INFO", {**audit_fields(meta), "reason": "ttl"})
+        # bytes without a record (a crash between moving them in and writing the record): once older
+        # than the hard TTL nothing can serve them, but they count against the quota — remove
+        for bp in root.glob("*.bin"):
+            try:
+                if not _meta_path(root, bp.stem).exists() and t - bp.stat().st_mtime > MAX_TTL_S:
+                    bp.unlink()
+                    removed += 1
+            except OSError:
+                pass
         # staging files older than the hard TTL belong to a receiver that died mid-issue
         for part in (root / "staging").glob("*.part") if (root / "staging").is_dir() else []:
             try:
@@ -571,7 +766,7 @@ def erase_origin(origin_id: str, *, tenant_id: str | None = None) -> int:
     if not origin_id or not root.is_dir():
         return 0
     n = 0
-    with _lock:
+    with _StoreLock(root):
         for mp in root.glob("*.json"):
             meta = _read_meta(root, mp.stem)
             if meta is not None and meta.get("origin_id") == origin_id:
@@ -584,7 +779,7 @@ def clear(*, tenant_id: str | None = None) -> int:
     root = store_dir(tenant_id)
     if not root.is_dir():
         return 0
-    with _lock:
+    with _StoreLock(root):
         n = len(list(root.glob("*.json")))
         shutil.rmtree(root, ignore_errors=True)
     return n

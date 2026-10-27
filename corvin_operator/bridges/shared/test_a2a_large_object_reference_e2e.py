@@ -48,12 +48,15 @@ from test_a2a_attachment_limit_measured_e2e import (  # noqa: E402,F401  (harnes
 
 CAP = a2a_attachments.MAX_ATTACHMENTS_TOTAL_BYTES
 SCHEMA = {"properties": {"ok": {"type": "boolean"}}}
+# references are opt-in (review finding 5): only a requester that can pull asks for them
+ASK_REFS = {**SCHEMA, "attachments_by_reference": True}
 BIG = 12 * 1024 * 1024 + 12345          # above 10 MiB (ADR-2287 evidence), not a chunk multiple
 
 
 def _blob(n: int, seed: int = 7) -> bytes:
-    """Deterministic, incompressible-looking bytes (no text markers, classifies PUBLIC)."""
-    out = bytearray()
+    """A deterministic, incompressible-looking binary media object (PNG signature in front): it
+    classifies INTERNAL, the media default. Bytes of no known format are CONFIDENTIAL (review finding 3)."""
+    out = bytearray(b"\x89PNG\r\n\x1a\n")
     block = hashlib.sha256(bytes([seed])).digest()
     while len(out) < n:
         block = hashlib.sha256(block).digest()
@@ -94,7 +97,7 @@ class _ObjectCase(TransportCase):
 
     def produce(self, files: dict[str, bytes], *, kid: "str | None" = None, schema: "dict | None" = None):
         self.engine.files = files
-        return self.pair.sender.send(kid or self.pair.kid, "produce the files", result_schema=schema or SCHEMA,
+        return self.pair.sender.send(kid or self.pair.kid, "produce the files", result_schema=schema or ASK_REFS,
                                      ttl_s=60, timeout_s=90)
 
     def one_ref(self, res) -> dict:
@@ -163,10 +166,14 @@ class _ObjectScenarios:
         self.assertEqual(pulled.data, big)
         self.assertEqual(pulled.sha256, ref["sha256"])
         self.assertEqual(pulled.via, self.transport)
-        # audit: issued once, one pulled record per chunk, metadata only
+        # audit: issued once; a sequential pull writes two records (start, before any byte leaves,
+        # and complete with the chunk count) instead of one per chunk (review finding 11)
         issued, chunks = self.events("A2A.object_issued"), self.events("A2A.object_pulled")
         self.assertEqual(len(issued), 1)
-        self.assertEqual(len(chunks), -(-BIG // a2a_objects.CHUNK_MAX_BYTES))
+        n_chunks = -(-BIG // a2a_objects.CHUNK_MAX_BYTES)
+        self.assertEqual([c["details"]["stage"] for c in chunks], ["start", "complete"])
+        self.assertEqual(chunks[-1]["details"]["chunks"], n_chunks)
+        self.assertEqual(chunks[-1]["details"]["served_bytes"], BIG)
         d = issued[0]["details"]
         self.assertEqual((d["ref_prefix"], d["size"], d["sha_prefix"], d["classification"], d["origin_id"]),
                          (ref["ref_id"][:8], BIG, ref["sha256"][:16], "INTERNAL", self.pair.kid))
@@ -176,6 +183,28 @@ class _ObjectScenarios:
             self.assertNotIn(leak, chain_text, "the chain carries prefixes and metadata only")
         for r in [*issued, *chunks]:
             self.assertFalse(r["details"].get("_dropped_fields"), r)
+
+    def test_a_default_send_does_not_ask_for_references(self):
+        """Review finding 5: only a caller that pulls asks for references. A plain ``send`` (console
+        feed, groups, outbox, federation, MCP) keeps the byte_cap report and leaves nothing held."""
+        self.engine.files = {"big.bin": _blob(CAP + 1)}
+        res = self.pair.sender.send(self.pair.kid, "produce the files", result_schema=SCHEMA, ttl_s=60,
+                                    timeout_s=90)
+        self.assertTrue(res.ok, res)
+        self.assertEqual(res.attachment_refs, [])
+        self.assertEqual(res.data["attachments_dropped"], {"count": 1, "reasons": {"byte_cap": 1}})
+        self.assertEqual(self.events("A2A.object_issued"), [])
+        self.assertEqual(list(a2a_objects.store_dir("_default").glob("*.bin")), [])
+
+    def test_a_chunk_pulled_out_of_order_is_recorded_before_it_is_served(self):
+        """Review finding 11: the start/complete records cover a sequential pull; a chunk that is not
+        part of a recorded pull still gets its own record first (audit-first is kept)."""
+        ref = self.one_ref(self.produce({"ooo.bin": _blob(3 * CAP)}))
+        resp = self.raw_pull(ref["ref_id"], CAP, 100)
+        self.assertIn("object_chunk", resp)
+        recs = self.events("A2A.object_pulled")
+        self.assertEqual([r["details"]["stage"] for r in recs], ["chunk"])
+        self.assertEqual((recs[0]["details"]["offset"], recs[0]["details"]["length"]), (CAP, 100))
 
     def test_a_receiver_not_built_by_build_server_issues_and_serves_too(self):
         """The gateway and the console build the receiver themselves (no ``_objects_endpoints``):
@@ -459,6 +488,45 @@ class TestCliPullsReferences(_ObjectCase):
         self.assertEqual(rc, 0)
         self.assertEqual((out / "cli.bin").read_bytes(), big)
         self.assertEqual((out / "note.txt").read_bytes(), b"hi")
+
+    def test_cli_refuses_a_duplicate_name_instead_of_overwriting(self):
+        """Review finding 10: a (signed, but hostile) response naming one file twice — two references,
+        or a reference and an inline file differing only in case — never overwrites a written file."""
+        import contextlib
+        import io as _io
+
+        import remote_trigger_receiver as rtr
+        sys.path.insert(0, str(_repo / "corvin_operator" / "voice" / "scripts"))
+        import corvin_a2a
+
+        first, second = _blob(CAP + 5, seed=1), _blob(CAP + 9, seed=2)
+        self.engine.files = {"dup.bin": first, "other.bin": second, "Note.txt": b"inline"}
+        real = rtr.RemoteTriggerReceiver._release_outputs
+
+        def hostile(self_, *a, **k):
+            released, dropped = real(self_, *a, **k)
+            refs = {r["name"]: r for r in released if r.get("inline") is False}
+            # the second reference is renamed onto the first one's name, a third onto the inline file
+            evil = dict(refs["other.bin"], name="dup.bin")
+            evil2 = dict(refs["other.bin"], name="note.txt")
+            return [*released, evil, evil2], dropped
+
+        out = self.root / "cli-dup"
+        schema = self.root / "schema.json"
+        schema.write_text(json.dumps(SCHEMA))
+        buf = _io.StringIO()
+        with mock.patch.object(rtr.RemoteTriggerReceiver, "_release_outputs", hostile), \
+                mock.patch.dict(os.environ, {"REMOTE_ENDPOINTS_DIR": str(self.pair.a_endpoints)}), \
+                mock.patch.object(rts, "RemoteTriggerSender", lambda endpoints_dir=None, **k: self.pair.sender), \
+                contextlib.redirect_stdout(buf):
+            corvin_a2a.main(["send", self.pair.kid, "produce", "--schema", str(schema),
+                             "--attach-out-dir", str(out), "--timeout", "90"])
+        self.assertEqual((out / "dup.bin").read_bytes(), first, "the first dup.bin was overwritten")
+        self.assertEqual((out / "Note.txt").read_bytes(), b"inline")
+        self.assertFalse((out / "note.txt").exists() and (out / "note.txt").read_bytes() != b"inline")
+        pulled = json.loads(buf.getvalue())["attachment_refs_pulled"]
+        reasons = sorted(p["reason"] for p in pulled if not p["ok"])
+        self.assertEqual(reasons, ["duplicate_name", "duplicate_name"])
 
 
 if __name__ == "__main__":

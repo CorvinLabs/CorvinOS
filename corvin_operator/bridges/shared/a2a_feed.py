@@ -659,11 +659,9 @@ def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]
     except Exception:  # noqa: BLE001
         _ob = 0
     # ADR-2287: objects this instance holds for the subject (bytes + records), not message-bound.
-    try:
-        import a2a_objects  # noqa: PLC0415
-        _ob += a2a_objects.erase_origin(subject_id, tenant_id=tenant_id)
-    except Exception:  # noqa: BLE001
-        pass
+    # A failure propagates: the L36 handler must report FAILED, never "erased" with objects left.
+    import a2a_objects  # noqa: PLC0415
+    _ob += a2a_objects.erase_origin(subject_id, tenant_id=tenant_id)
     if not path.exists() and not (root / _STAGES_FILE).exists():
         return _ob, 0
     with _store_lock(root):

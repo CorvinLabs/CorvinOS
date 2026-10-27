@@ -963,6 +963,13 @@ class RemoteTriggerReceiver:
         # a2a_http_server.build_server; None = the env-or-default dir. (Not ``_endpoints_dir``:
         # that name is this class's own static helper.)
         self._objects_endpoints: Path | None = None
+        # ADR-2287 retention at start (review finding 6): expired objects and orphaned bytes are
+        # swept when a receiver comes up, not only when traffic arrives. Never blocks the start.
+        try:
+            import a2a_objects  # type: ignore[import-not-found]  # noqa: PLC0415
+            a2a_objects.sweep_expired(force=True, audit=self._audit_best_effort)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── Public API ────────────────────────────────────────────────────
 

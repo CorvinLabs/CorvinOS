@@ -1490,10 +1490,12 @@ class RemoteTriggerSender:
                        or cfg.get("our_origin_id")
                        or self._instance_id,
             instruction=instruction,
-            # ADR-2287: this sender can pull references, so it asks for them (signed with the
-            # envelope). An explicit ``attachments_by_reference: false`` keeps the inline-only
-            # behaviour; a receiver that predates ADR-2287 ignores the key.
-            result_schema={"attachments_by_reference": True, **(result_schema or {})},
+            # ADR-2287: references are OPT-IN. Only a caller that will pull them sets
+            # ``result_schema.attachments_by_reference: true`` (today: ``corvin-a2a send
+            # --attach-out-dir``); every other caller (console feed, groups, outbox, federation,
+            # MCP) keeps the inline files plus the ``attachments_dropped`` report and leaves nothing
+            # held on the peer for nobody (review finding 5).
+            result_schema=result_schema or {},
             ttl_s=ttl_s,
             hmac_key_hex=cfg["hmac_key"],
             sender_instance_id=self._instance_id,

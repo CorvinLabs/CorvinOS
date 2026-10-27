@@ -947,6 +947,10 @@ def _cmd_send(args: argparse.Namespace) -> int:
 
     endpoint_id = _resolve_endpoint_id(args.endpoint_id, _endpoints_dir())
     sender = rts.RemoteTriggerSender(endpoints_dir=_endpoints_dir())
+    if args.attach_out_dir:
+        # ADR-2287: this caller pulls references, so it asks for them (opt-in, signed with the
+        # envelope). Without --attach-out-dir nothing would pull them, so it does not ask.
+        result_schema = {**(result_schema or rts.CHAT_RESULT_SCHEMA), "attachments_by_reference": True}
     res = sender.send(
         endpoint_id,
         instruction=instruction,
@@ -957,12 +961,19 @@ def _cmd_send(args: argparse.Namespace) -> int:
     )
 
     # ── Persist returned attachments if --attach-out-dir given ──────
+    # One name, one file (review finding 10): a response that names a file twice — inline or by
+    # reference, compared case-insensitively — never overwrites what was already written; the
+    # duplicate is refused with the closed reason ``duplicate_name``.
     written_attachments: list[str] = []
+    written_names: set[str] = set()
     if args.attach_out_dir and res.attachments:
         out_dir = Path(args.attach_out_dir).expanduser()
         out_dir.mkdir(parents=True, exist_ok=True)
         for att_dict in res.attachments:
             att = Attachment.from_dict(att_dict)
+            if att.name.casefold() in written_names:
+                print(f"warn: skipping duplicate attachment name {att.name}", file=sys.stderr)
+                continue
             try:
                 raw_bytes = att.decode()
             except Exception as exc:
@@ -971,6 +982,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
                 continue
             dest = out_dir / att.name
             dest.write_bytes(raw_bytes)
+            written_names.add(att.name.casefold())
             written_attachments.append(str(dest))
     # ADR-2287: files above the inline cap came back as signed references — pull each one over
     # the signed object-pull op; only a digest-verified object is written.
@@ -978,6 +990,11 @@ def _cmd_send(args: argparse.Namespace) -> int:
     if args.attach_out_dir and getattr(res, "attachment_refs", None):
         out_dir = Path(args.attach_out_dir).expanduser()
         for ref in res.attachment_refs:
+            if ref["name"].casefold() in written_names:
+                pulled_refs.append({"name": ref["name"], "ok": False, "reason": "duplicate_name"})
+                print(f"warn: not pulling {ref['name']}: duplicate_name", file=sys.stderr)
+                continue
+            written_names.add(ref["name"].casefold())
             pr = sender.pull_object(endpoint_id, ref, dest=out_dir / ref["name"])
             pulled_refs.append({"name": ref["name"], "ok": pr.ok, "reason": pr.reason})
             if pr.ok and pr.path:
