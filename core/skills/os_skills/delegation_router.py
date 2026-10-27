@@ -30,6 +30,10 @@ Output::
      "bundled_engine": str?, "shadow": bool?, "confidence_threshold": float?,
      "learned_config_version": str?}
 
+``confidence_threshold`` / ``learned_config_version`` (the learned config) are read
+and returned only when ``shadow`` is false — the learned config is read and acted on
+only by the gated Phase 2 path.
+
 ``engine`` and ``decision`` carry the same value: ``engine`` is what the Skill audit
 projection (``skill_registry_phase1.decision_summary``) keeps and what L10's context
 adapter reads; ``decision`` is kept for existing readers.
@@ -92,40 +96,55 @@ class DelegationRouterSkill(Skill):
         ))
 
     def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        tenant_id = input.get("tenant_id", "_default")
-        bundled = input.get("bundled_engine") or "native"
-        force_delegate = bool(input.get("force_delegate", False))
-        is_big_data = bool(input.get("is_big_data", False))
-        mode = input.get("mode") if input.get("mode") in _ENGINES else "native"
-        features = dict(input.get("features") or {})
-        if "complexity" not in features:
-            features["complexity"] = _tier_from_legacy(input.get("complexity"))
-        if not input.get("bundled_engine") and (force_delegate or is_big_data):
-            bundled = "acs"
+        return advise_from_input(input)
 
-        try:
-            engine, confidence, reasoning = advise(
-                bundled=bundled, force_delegate=force_delegate,
-                is_big_data=is_big_data, mode=mode, features=features,
-            )
-        except Exception as exc:  # noqa: BLE001 — advice failure confirms the rule
-            logger.warning("DelegationRouter advice failed (%s)", type(exc).__name__)
-            engine, confidence, reasoning = bundled, 0.5, f"advice_error:{type(exc).__name__}"
 
-        result: Dict[str, Any] = {
-            "engine": engine,
-            "decision": engine,
-            "confidence": confidence,
-            "reasoning": reasoning,
-        }
-        threshold = _learned_threshold(tenant_id)
-        if threshold is not None:
-            result["confidence_threshold"] = threshold[0]
-            result["learned_config_version"] = threshold[1]
-        if input.get("shadow"):
-            result["shadow"] = True
-            result["bundled_engine"] = bundled
+def advise_from_input(input: Dict[str, Any]) -> Dict[str, Any]:
+    """The Skill's whole decision as a pure function of its input.
+
+    :meth:`DelegationRouterSkill.execute` returns exactly this. The console's
+    engine guard calls it directly (``route_and_record(record=False)``) so that a
+    pure query never executes the Skill and writes no ``skill.executed`` record.
+
+    The learned acceptance threshold is read only outside shadow: in shadow the
+    advice is recorded, never acted on, so no threshold is consulted (and no file
+    is read on the console's event loop for it).
+    """
+    tenant_id = input.get("tenant_id", "_default")
+    bundled = input.get("bundled_engine") or "native"
+    force_delegate = bool(input.get("force_delegate", False))
+    is_big_data = bool(input.get("is_big_data", False))
+    mode = input.get("mode") if input.get("mode") in _ENGINES else "native"
+    features = dict(input.get("features") or {})
+    if "complexity" not in features:
+        features["complexity"] = _tier_from_legacy(input.get("complexity"))
+    if not input.get("bundled_engine") and (force_delegate or is_big_data):
+        bundled = "acs"
+
+    try:
+        engine, confidence, reasoning = advise(
+            bundled=bundled, force_delegate=force_delegate,
+            is_big_data=is_big_data, mode=mode, features=features,
+        )
+    except Exception as exc:  # noqa: BLE001 — advice failure confirms the rule
+        logger.warning("DelegationRouter advice failed (%s)", type(exc).__name__)
+        engine, confidence, reasoning = bundled, 0.5, f"advice_error:{type(exc).__name__}"
+
+    result: Dict[str, Any] = {
+        "engine": engine,
+        "decision": engine,
+        "confidence": confidence,
+        "reasoning": reasoning,
+    }
+    if input.get("shadow"):
+        result["shadow"] = True
+        result["bundled_engine"] = bundled
         return result
+    threshold = _learned_threshold(tenant_id)
+    if threshold is not None:
+        result["confidence_threshold"] = threshold[0]
+        result["learned_config_version"] = threshold[1]
+    return result
 
 
 def _learned_threshold(tenant_id: Any) -> Optional[tuple[float, Optional[str]]]:

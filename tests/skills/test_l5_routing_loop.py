@@ -11,6 +11,7 @@ import itertools
 import json
 import stat
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -263,10 +264,93 @@ class TestReadiness:
         _seed(470, surface="bridge")
         _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
         assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
-        _backdated_console_dual_write(days=3)
+        _console_dual_write_run(days=3)
         assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
-        _backdated_console_dual_write(days=8)
+        _console_dual_write_run(days=8)
         assert readiness.evaluate(TENANT, "bridge").ready
+
+    def test_one_old_console_dual_write_record_is_no_soak(self):
+        """Review s3_routing-1 (P6): one historic dual_write turn used to pass the soak."""
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _backdated_console_dual_write(days=8)
+        assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
+
+    def test_a_gap_of_more_than_a_day_restarts_the_soak(self):
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _console_dual_write_run(days=10, until_days=4)   # ended four days ago
+        _console_dual_write_run(days=3)                  # resumed three days ago
+        assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
+
+    def test_a_rollback_reset_restarts_the_soak(self):
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _console_dual_write_run(days=9)
+        rollback_detector.reset_rollback(TENANT, audit=AuditSpy())   # reset "now"
+        readiness.clear_cache()
+        assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
+        # The same reset nine days ago no longer holds the bridge back.
+        path = rollback_detector.state_path(TENANT)
+        path.write_text(json.dumps({"tripped": False, "at": time.time() - 8.5 * 86400}))
+        assert readiness.evaluate(TENANT, "bridge").ready
+
+    def test_an_unreadable_rollback_history_is_no_soak(self):
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _console_dual_write_run(days=9)
+        path = rollback_detector.state_path(TENANT)
+        path.write_text(json.dumps({"tripped": False}))      # no timestamp: fail-closed
+        assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
+
+    def test_not_judged_turns_leave_the_join_rate_and_are_counted(self):
+        """ADR-2092 G1 as amended 2026-10-27: cancelled / orphaned / no-engine turns."""
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        for reason in ("cancelled", "orphaned", "no_engine") * 10:
+            tid = routing_ledger.new_turn_id()
+            routing_ledger.record_decision(
+                tenant_id=TENANT, turn_id=tid, surface="console", phase="shadow",
+                bundled="acs", used="acs", source="bundled", skill="native",
+                features={"complexity": "simple"})
+            assert routing_ledger.record_outcome(
+                tenant_id=TENANT, turn_id=tid, surface="console", used="acs",
+                ok=False, latency_ms=0, excluded=reason)
+        r = readiness.evaluate(TENANT, "console")
+        assert (r.ready, r.decisions, r.join_rate, r.not_judged) == (True, 510, 1.0, 30), r
+        s = routing_ledger.summarize(routing_ledger.read_records(TENANT), surface="console")
+        assert s["not_judged_by_reason"] == {"cancelled": 10, "orphaned": 10, "no_engine": 10}
+
+    def test_an_unknown_exclusion_reason_is_refused_and_old_lines_still_read(self):
+        assert routing_ledger.record_outcome(
+            tenant_id=TENANT, turn_id="abc123", surface="console", used="acs",
+            ok=False, latency_ms=0, excluded="because") is False
+        path = routing_ledger.ledger_path(TENANT)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as fh:
+            fh.write(json.dumps({"v": 1, "kind": "outcome", "ts": time.time(), "turn_id": "x1",
+                                 "surface": "console", "used": "acs", "ok": True,
+                                 "latency_ms": 5}) + "\n")
+            fh.write(json.dumps({"v": 1, "kind": "outcome", "ts": time.time(), "turn_id": "x2",
+                                 "surface": "console", "used": "acs", "ok": True,
+                                 "excluded": "cancelled", "latency_ms": 5}) + "\n")
+        assert [r["turn_id"] for r in routing_ledger.read_records(TENANT)] == ["x1"]
+
+    def test_a_stale_ready_verdict_is_not_served_while_it_refreshes(self, monkeypatch):
+        """Review s3_routing-6: a stale entry returned its old verdict during the refresh."""
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        assert readiness.cached_evaluate(TENANT, "console", background=False).ready
+        key = (TENANT, "console")
+        with readiness._lock:
+            ts, verdict = readiness._cache[key]
+            readiness._cache[key] = (ts - readiness._CACHE_TTL_S - 1, verdict)
+        gate = threading.Event()
+        real = readiness.evaluate
+        monkeypatch.setattr(readiness, "evaluate", lambda *a, **k: (gate.wait(5), real(*a, **k))[1])
+        during = readiness.cached_evaluate(TENANT, "console")
+        gate.set()
+        assert (during.ready, during.reason) == (False, "evaluating")
 
     def test_background_refresh_answers_not_ready_until_it_lands(self):
         _seed(470)
@@ -282,6 +366,14 @@ class TestReadiness:
         _seed(470)
         _seed(40, bundled="acs", used="acs", skill="native", force=True)
         assert readiness.evaluate(TENANT, "console").reason == "skill_never_disagrees"
+
+
+def _console_dual_write_run(*, days: float, until_days: float = 0.0, step_h: float = 12.0):
+    """Console dual_write decisions every ``step_h`` hours from ``days`` ago to ``until_days`` ago."""
+    t = days
+    while t >= until_days:
+        _backdated_console_dual_write(days=t)
+        t -= step_h / 24.0
 
 
 def _backdated_console_dual_write(*, days: float):

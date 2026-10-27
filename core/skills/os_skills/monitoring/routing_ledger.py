@@ -2,7 +2,15 @@
 
 ADR-2092 G0/G1. Every OS turn on every surface writes exactly one ``decision`` record
 (bundled rule's engine, the Skill's advice, the engine actually used) and, when the
-turn finishes, one ``outcome`` record joined to it by ``turn_id``. The rollback judge
+turn finishes, one ``outcome`` record joined to it by ``turn_id``.
+
+An outcome has three kinds: ``ok: true``, ``ok: false`` and NOT-JUDGED. A turn that
+was cancelled (client disconnect, task cancel), killed by a restart (reaped at boot)
+or in which no engine ran (gate/budget refusal, debug engine, empty directive) is
+recorded with ``"ok": null`` and ``"excluded": <reason from EXCLUDED_REASONS>``. It is
+counted and shown (``summarize()["not_judged"]``) but excluded from the join-rate
+numerator AND denominator, from every success rate and from the rollback judge
+(ADR-2092 G1 as amended 2026-10-27). The rollback judge
 (``rollback_detector``) and the Phase 2 readiness check (``readiness``) read only this
 file, so bridge and console — two processes — are judged on one shared history.
 
@@ -28,6 +36,8 @@ ENGINES = frozenset({"native", "acs", "tde"})
 SURFACES = frozenset({"bridge", "console"})
 PHASES = frozenset({"shadow", "dual_write"})
 SOURCES = frozenset({"bundled", "skill"})
+#: Why an outcome is not judged. Closed: a reader rejects any other value.
+EXCLUDED_REASONS = frozenset({"cancelled", "orphaned", "no_engine"})
 
 #: The only feature keys a decision may carry, and their admissible values.
 #: ``bool`` means a real bool; a frozenset is a closed string vocabulary.
@@ -157,21 +167,29 @@ def record_outcome(
     used: str,
     ok: bool,
     latency_ms: float,
+    excluded: Optional[str] = None,
 ) -> bool:
+    """``excluded`` (a reason from :data:`EXCLUDED_REASONS`) records a NOT-JUDGED
+    outcome: ``ok`` is then stored as ``null`` whatever was passed."""
     if surface not in SURFACES or used not in ENGINES:
         return False
     if not isinstance(turn_id, str) or not turn_id.isalnum() or len(turn_id) > 64:
         return False
-    return _append(tenant_id, {
+    if excluded is not None and excluded not in EXCLUDED_REASONS:
+        return False
+    rec = {
         "v": 1,
         "kind": "outcome",
         "ts": round(time.time(), 3),
         "turn_id": turn_id,
         "surface": surface,
         "used": used,
-        "ok": bool(ok),
+        "ok": None if excluded is not None else bool(ok),
         "latency_ms": int(max(0.0, float(latency_ms or 0.0))),
-    })
+    }
+    if excluded is not None:
+        rec["excluded"] = excluded
+    return _append(tenant_id, rec)
 
 
 def read_records(tenant_id: str, *, since_ts: float = 0.0) -> list[dict]:
@@ -216,8 +234,23 @@ def _well_formed(rec: Any) -> bool:
         return (rec.get("bundled") in ENGINES and rec.get("source") in SOURCES
                 and isinstance(rec.get("features"), dict))
     if kind == "outcome":
+        # Backward compatible: every line written before 2026-10-27 is a judged
+        # outcome (ok bool, no "excluded" key).
+        if "excluded" in rec:
+            return rec.get("excluded") in EXCLUDED_REASONS and rec.get("ok") is None
         return isinstance(rec.get("ok"), bool)
     return False
+
+
+def is_not_judged(row: dict) -> bool:
+    """A joined row whose outcome is NOT-JUDGED (cancelled / orphaned / no engine)."""
+    outcome = row.get("outcome")
+    return isinstance(outcome, dict) and outcome.get("excluded") in EXCLUDED_REASONS
+
+
+def judged(rows: Iterable[dict]) -> list[dict]:
+    """Joined rows that count: an outcome that is ok/not-ok, or no outcome at all."""
+    return [r for r in rows if not is_not_judged(r)]
 
 
 def join(records: Iterable[dict], *, surface: Optional[str] = None) -> list[dict]:
@@ -236,8 +269,18 @@ def join(records: Iterable[dict], *, surface: Optional[str] = None) -> list[dict
 
 
 def summarize(records: Iterable[dict], *, surface: Optional[str] = None) -> dict:
-    """Join rate, agreement and per-source success — the numbers every gate reads."""
-    joined = join(records, surface=surface)
+    """Join rate, agreement and per-source success — the numbers every gate reads.
+
+    ``decisions`` counts only turns that are judged or still missing their outcome;
+    NOT-JUDGED turns are reported apart in ``not_judged`` / ``not_judged_by_reason``.
+    """
+    all_joined = join(records, surface=surface)
+    joined = judged(all_joined)
+    not_judged: dict[str, int] = {}
+    for row in all_joined:
+        if is_not_judged(row):
+            reason = row["outcome"]["excluded"]
+            not_judged[reason] = not_judged.get(reason, 0) + 1
     with_outcome = [j for j in joined if j["outcome"] is not None]
     by_source: dict[str, dict] = {}
     for src in SOURCES:
@@ -249,6 +292,8 @@ def summarize(records: Iterable[dict], *, surface: Optional[str] = None) -> dict
     return {
         "decisions": len(joined),
         "outcomes": len(with_outcome),
+        "not_judged": sum(not_judged.values()),
+        "not_judged_by_reason": not_judged,
         "join_rate": (len(with_outcome) / len(joined)) if joined else None,
         "advised": len(advised),
         "agreement_rate": (agree / len(advised)) if advised else None,

@@ -25,9 +25,18 @@ MIN_JOIN_RATE = 0.95
 MIN_BUCKET_SAMPLES = 30
 MAX_PROXY_DROP = 0.02
 WINDOW_S = 30 * 86400
-#: ADR-2092 G4 rollout order: the bridge may enter Phase 2 only after the console
-#: has run it for this long without a rollback trip.
+#: ADR-2092 G4 rollout order (the soak rule, :func:`console_soak_start`): the bridge
+#: may enter Phase 2 only when the console has been in dual_write CONTINUOUSLY for
+#: ``CONSOLE_SOAK_S``. The soak starts at the LATER of (a) the first console decision
+#: recorded with phase ``dual_write`` in the current unbroken run, (b) the last
+#: rollback trip and (c) the last rollback reset. "Unbroken" means no two consecutive
+#: console dual_write decisions — and not the newest one and now — are more than
+#: ``SOAK_MAX_GAP_S`` apart, so dual_write decisions must be present in the last 24 h
+#: and a console that left dual_write (env switched back, a rollback, an idle day)
+#: restarts the clock. The phase read is the EFFECTIVE one recorded per decision, not
+#: the requested ``CORVIN_ACP_PHASE``.
 CONSOLE_SOAK_S = 7 * 86400
+SOAK_MAX_GAP_S = 86400
 _CACHE_TTL_S = 300.0
 _cache: dict[tuple[str, str], tuple[float, "Readiness"]] = {}
 
@@ -42,10 +51,42 @@ class Readiness:
     #: Decisions whose bundled rule chose a non-native engine. Zero means Phase 2
     #: has no subject on this surface: it can only de-escalate TO native.
     delegating_decisions: int = 0
+    #: NOT-JUDGED turns (cancelled / orphaned by a restart / no engine ran): counted
+    #: here and excluded from ``decisions``, the join rate and every success rate.
+    not_judged: int = 0
 
 
 def _complexity(row: dict) -> str:
     return (row.get("features") or {}).get("complexity", "unknown")
+
+
+def console_soak_start(records: list[dict], tenant_id: str, *,
+                       now: float) -> Optional[float]:
+    """Start of the console's current continuous dual_write soak, or None.
+
+    The rule (see ``CONSOLE_SOAK_S``): walk the console ``dual_write`` decisions
+    newest-first while each gap (newest-to-now included) is at most
+    ``SOAK_MAX_GAP_S``; the oldest decision reached starts the run. The soak starts
+    at the later of that and the last rollback trip/reset. None — no soak — when the
+    console has no dual_write decision in the last ``SOAK_MAX_GAP_S`` or the rollback
+    history cannot be read (fail-closed).
+    """
+    live = sorted((r["ts"] for r in records if r.get("kind") == "decision"
+                   and r.get("surface") == "console" and r.get("phase") == "dual_write"),
+                  reverse=True)
+    if not live or now - live[0] > SOAK_MAX_GAP_S:
+        return None
+    start = live[0]
+    for ts in live[1:]:
+        if start - ts > SOAK_MAX_GAP_S:
+            break
+        start = ts
+    changed, readable = rollback_detector.last_change_ts(tenant_id)
+    if not readable:
+        return None
+    if changed is not None:
+        start = max(start, changed)
+    return start
 
 
 def evaluate(tenant_id: str, surface: str, *, now: Optional[float] = None) -> Readiness:
@@ -53,9 +94,11 @@ def evaluate(tenant_id: str, surface: str, *, now: Optional[float] = None) -> Re
     if rollback_detector.rollback_active(tenant_id):
         return Readiness(False, "rollback_active", 0, None, 0)
     records = routing_ledger.read_records(tenant_id, since_ts=now - WINDOW_S)
-    joined = routing_ledger.join(records, surface=surface)
+    # NOT-JUDGED turns (cancelled, orphaned, no engine) leave every number below.
+    joined = routing_ledger.judged(routing_ledger.join(records, surface=surface))
     summary = routing_ledger.summarize(records, surface=surface)
     n, join_rate = summary["decisions"], summary["join_rate"]
+    nj = summary["not_judged"]
     delegating = sum(1 for r in joined if r.get("bundled") != "native")
     disagree = [r for r in joined if r.get("skill") == "native" and r.get("bundled") != "native"
                 and not (r.get("features") or {}).get("force_delegate")]
@@ -65,38 +108,42 @@ def evaluate(tenant_id: str, surface: str, *, now: Optional[float] = None) -> Re
         # The bundled rule never delegated, so there is nothing to de-escalate: more
         # samples cannot change this, so say so before asking for more. Distinct from
         # a Skill that had the chance to disagree and never did.
-        return Readiness(False, "no_delegation_subject", n, join_rate, 0, 0)
+        return Readiness(False, "no_delegation_subject", n, join_rate, 0, 0, nj)
     if surface == "bridge":
-        console_live = [r["ts"] for r in records if r.get("kind") == "decision"
-                        and r.get("surface") == "console" and r.get("phase") == "dual_write"]
-        if not console_live or now - min(console_live) < CONSOLE_SOAK_S:
+        soak_start = console_soak_start(records, tenant_id, now=now)
+        if soak_start is None or now - soak_start < CONSOLE_SOAK_S:
             # Report the surface's REAL counts: a hard 0 here read as "the bridge
             # produced no decisions" when it had hundreds.
             return Readiness(False, "console_soak_incomplete", n, join_rate,
-                             len(disagree), delegating)
+                             len(disagree), delegating, nj)
     if n < MIN_READY_SAMPLES:
-        return Readiness(False, "insufficient_samples", n, join_rate, len(disagree), delegating)
+        return Readiness(False, "insufficient_samples", n, join_rate, len(disagree), delegating, nj)
     if join_rate is None or join_rate < MIN_JOIN_RATE:
-        return Readiness(False, "join_rate_below_floor", n, join_rate, len(disagree), delegating)
+        return Readiness(False, "join_rate_below_floor", n, join_rate, len(disagree), delegating, nj)
     if not disagree:
-        return Readiness(False, "skill_never_disagrees", n, join_rate, 0, delegating)
+        return Readiness(False, "skill_never_disagrees", n, join_rate, 0, delegating, nj)
     for bucket in sorted({_complexity(r) for r in disagree}):
         delegated = [r for r in disagree if _complexity(r) == bucket and r["outcome"] is not None
                      and r["outcome"].get("used") != "native"]
         native = [r for r in joined if r["outcome"] is not None
                   and r["outcome"].get("used") == "native" and _complexity(r) == bucket]
         if len(delegated) < MIN_BUCKET_SAMPLES or len(native) < MIN_BUCKET_SAMPLES:
-            return Readiness(False, f"insufficient_bucket_samples:{bucket}", n, join_rate, len(disagree), delegating)
+            return Readiness(False, f"insufficient_bucket_samples:{bucket}", n, join_rate,
+                             len(disagree), delegating, nj)
         d_rate = sum(1 for r in delegated if r["outcome"]["ok"]) / len(delegated)
         n_rate = sum(1 for r in native if r["outcome"]["ok"]) / len(native)
         if d_rate - n_rate > MAX_PROXY_DROP:
-            return Readiness(False, f"native_trails_delegated:{bucket}", n, join_rate, len(disagree), delegating)
-    return Readiness(True, "ready", n, join_rate, len(disagree), delegating)
+            return Readiness(False, f"native_trails_delegated:{bucket}", n, join_rate,
+                             len(disagree), delegating, nj)
+    return Readiness(True, "ready", n, join_rate, len(disagree), delegating, nj)
 
 
 _refreshing: set[tuple[str, str]] = set()
 _lock = threading.Lock()
-_EVALUATING = Readiness(False, "evaluating", 0, None, 0)
+#: The transient placeholder while a verdict is computed. Not a gate verdict:
+#: ``dual_write.effective_phase`` serves shadow for it without auditing a refusal.
+EVALUATING_REASON = "evaluating"
+_EVALUATING = Readiness(False, EVALUATING_REASON, 0, None, 0)
 
 
 def _refresh(key: tuple[str, str]) -> None:
@@ -115,7 +162,8 @@ def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) ->
     The console calls this from inside ``stream_turn``; a ledger scan there is a
     synchronous file read on the event loop (the 2026-09-13 stall shape). A stale
     or missing verdict is refreshed on a daemon thread and, until it lands, the
-    answer is "not ready" — the fail-safe direction.
+    answer is "not ready" (reason ``evaluating``) — the fail-safe direction: a
+    stale verdict, "ready" included, is never served while its refresh runs.
     """
     key = (tenant_id, surface)
     now = time.monotonic()
@@ -131,11 +179,14 @@ def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) ->
         if start:
             _refresh(key)
         with _lock:
-            return _cache.get(key, (0.0, _EVALUATING))[1]
+            hit = _cache.get(key)
+            if hit is not None and time.monotonic() - hit[0] < _CACHE_TTL_S:
+                return hit[1]
+            return _EVALUATING
     if start:
         threading.Thread(target=_refresh, args=(key,), daemon=True,
                          name="l5-readiness").start()
-    return hit[1] if hit is not None else _EVALUATING
+    return _EVALUATING
 
 
 def clear_cache() -> None:

@@ -7,7 +7,9 @@ Two pure-ish functions the routing call site composes:
   in this process, the tenant has no tripped rollback, and the ledger-based readiness
   check passes for the surface. ``phase2_real`` is refused outright (no recovery path
   is defined for it). Anything refused runs as shadow, and the refusal is audited once
-  per process per reason — never once per turn.
+  per process per reason — never once per turn. The readiness cache's transient
+  ``evaluating`` placeholder also runs as shadow but is not a refusal and is never
+  audited as one.
 * :func:`clamp` — the ADR-0251 D2 bound applied to the Skill: its advice may confirm
   the bundled engine or de-escalate to ``native``; it may never escalate, never pick an
   engine the operator did not select, and never override an explicit ``/delegate``.
@@ -73,6 +75,10 @@ def effective_phase(*, tenant_id: str, surface: str, skill_available: bool,
         _refuse_once(audit, tenant_id, surface, requested, "rollback_active")
         return "shadow"
     verdict = readiness.cached_evaluate(tenant_id, surface)
+    if verdict.reason == readiness.EVALUATING_REASON:
+        # The cache placeholder while a verdict is computed, not a gate verdict:
+        # shadow, and no refusal record (the real reason is audited once it lands).
+        return "shadow"
     if not verdict.ready:
         _refuse_once(audit, tenant_id, surface, requested, verdict.reason)
         return "shadow"
@@ -103,3 +109,4 @@ def reset_for_tests() -> None:
     with _refusals_lock:
         _refusals_seen.clear()
     readiness.clear_cache()
+    rollback_detector.reset_for_tests()
