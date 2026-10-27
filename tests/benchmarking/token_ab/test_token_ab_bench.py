@@ -367,6 +367,26 @@ class ClassGateTests(unittest.TestCase):
         self.assertIn("nach Holm", report)
 
 
+class CategoryFilterTests(unittest.TestCase):
+    """--categories limits a run to named categories (used for the targeted text_rules run)."""
+
+    def test_only_the_named_category_runs_and_the_manifest_says_so(self):
+        with tempfile.TemporaryDirectory() as t:
+            rc = ab.main(["run", "--runner", "fake", "--profile", "hard", "--categories", "text_rules", "--reps", "1", "--seed", "1",
+                          "--run-id", "c", "--results-dir", t, "--arms-config", str(HERE / "config" / "arms.text_rules.json")])
+            self.assertEqual(rc, 0)
+            recs = ab.load_raw(Path(t, "c"))
+            self.assertEqual({r["category"] for r in recs}, {"text_rules"})
+            self.assertEqual(len(recs), 12 * 3)  # 12 tasks x 3 arms
+            man = json.loads(Path(t, "c", "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual((man["corpus"]["categories"], man["corpus"]["tasks_run"]), (["text_rules"], 12))
+
+    def test_an_unknown_category_is_refused(self):
+        with tempfile.TemporaryDirectory() as t:
+            with self.assertRaises(SystemExit):
+                ab.main(["run", "--runner", "fake", "--profile", "hard", "--categories", "nope", "--run-id", "c", "--results-dir", t])
+
+
 class CapTests(unittest.TestCase):
     """An ADOPT on too few tasks must not read as certainty (pilot 2026-10-27: 10 tasks, success 1.000 on all arms)."""
 

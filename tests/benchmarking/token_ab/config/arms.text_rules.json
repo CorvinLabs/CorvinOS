@@ -1,0 +1,19 @@
+{
+  "baseline": "direct_opus",
+  "decision": {
+    "delta": 0.15,
+    "alpha": 0.05,
+    "bootstrap": 5000,
+    "min_stratum_tasks": 12
+  },
+  "arms": [
+    {"name": "direct_opus", "kind": "direct", "tier": "opus"},
+    {"name": "direct_sonnet", "kind": "direct", "tier": "sonnet"},
+    {"name": "direct_haiku", "kind": "direct", "tier": "haiku"}
+  ],
+  "notes": {
+    "purpose": "Opus and Sonnet (and Haiku, for a paired comparison in the same run) on the 12 text_rules tasks of profile hard, the only category on which Haiku failed in the 2026-10-27 probe (8 of 12). Question: does the stronger model solve what Haiku misses?",
+    "cost": "Estimate, NOT measured on this corpus: about 1 USD, extrapolated from measured per-call prices of the pilot (Opus 0.0464, Sonnet 0.0238, Haiku 0.0014 USD per ~6k-token call). Hard cap 1.50 USD set by the operator.",
+    "delta": "0.15 is a smoke value; 12 tasks cannot establish non-inferiority."
+  }
+}

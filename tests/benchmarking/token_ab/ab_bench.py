@@ -582,6 +582,12 @@ def load_config(runner_name, arms_config=None):
 def cmd_run(a):
     models, armcfg, sim = load_config(a.runner, a.arms_config)
     tasks, corpus_sha = load_corpus(a.profile)
+    cats = [c for c in (a.categories or "").split(",") if c]
+    if cats:
+        unknown = set(cats) - {t["category"] for t in tasks}
+        if unknown:
+            die(f"unknown category in --categories: {sorted(unknown)} (profile {a.profile} has {sorted({t['category'] for t in tasks})})")
+        tasks = [t for t in tasks if t["category"] in cats]
     tasks = select_tasks(tasks, a.tasks_per_category)
     arms = armcfg["arms"]
     if a.arms:
@@ -618,7 +624,8 @@ def cmd_run(a):
             claude_version = "unknown"
     man = {"run_id": run_id, "runner": a.runner, "seed": a.seed, "reps": a.reps, "models": models["pins"], "python": sys.version.split()[0],
            "claude_version": claude_version, "harness_sha256": sha256_file(__file__), "config_sha256": sha256_bytes(canon(cfg_blob).encode()),
-           "corpus": {"profile": a.profile, "sha256": corpus_sha, "tasks_run": len(tasks) - len(skipped), "skipped": skipped},
+           "corpus": {"profile": a.profile, "sha256": corpus_sha, "tasks_run": len(tasks) - len(skipped), "skipped": skipped,
+                      "categories": cats or None},
            "arms": [x["name"] for x in arms], "roles": {x["name"]: x["role"] for x in arms if x.get("role")},
            "decision": armcfg["decision"] | {"baseline": armcfg["baseline"]},
            "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "status": "running"}
@@ -693,6 +700,7 @@ def main(argv=None):
     r.add_argument("--arms", default=None)
     r.add_argument("--arms-config", default=None, help="alternative arms.json (default config/arms.json)")
     r.add_argument("--tasks-per-category", type=int, default=None)
+    r.add_argument("--categories", default=None, help="comma-separated category filter, e.g. text_rules")
     r.add_argument("--run-id", default=None)
     r.add_argument("--results-dir", default=str(HERE / "results"))
     r.add_argument("--max-calls", type=int, default=None)

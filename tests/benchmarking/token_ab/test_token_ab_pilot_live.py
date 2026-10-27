@@ -53,3 +53,30 @@ def test_pilot_opus_sonnet_haiku(tmp_path):
     shutil.copytree(run, out, dirs_exist_ok=True)
     print(f"\nPILOT calls={len(calls)} spent_usd={sum(c['cost_usd'] for c in calls):.4f}")
     print((run / "report.md").read_text(encoding="utf-8"))
+
+
+def test_text_rules_opus_sonnet_haiku(tmp_path):
+    """Opus, Sonnet and Haiku on the 12 text_rules tasks of profile `hard` (the category Haiku failed on, 8 of 12, in the
+    2026-10-27 probe). Spends real money: hard cap 1.50 USD set by the operator; the estimate of about 1 USD is an
+    extrapolation from measured per-call prices of the pilot, NOT a measurement on this corpus."""
+    rc = ab.main(["run", "--runner", "claude", "--profile", "hard", "--categories", "text_rules", "--reps", "1",
+                  "--seed", "20261027", "--arms-config", str(HERE / "config" / "arms.text_rules.json"),
+                  "--run-id", "text-rules", "--results-dir", str(tmp_path), "--max-calls", "40", "--max-cost-usd", "1.5",
+                  "--allow-code-exec"])
+    run = tmp_path / "text-rules"
+    out = HERE / "results" / "text-rules-last"
+    shutil.copytree(run, out, dirs_exist_ok=True)  # keep the evidence even when an assertion below fails
+    man = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    assert rc == 0, f"run did not complete: status={man['status']}"
+    recs = ab.load_raw(run)
+    assert len(recs) == 36
+    errors = [(c["tier"], c["error"]) for r in recs for c in r["calls"] if c["error"]]
+    assert not errors, f"{len(errors)} calls failed: {errors[:5]}"
+    ab.main(["analyze", "--run-dir", str(run), "--bootstrap", "5000"])
+    shutil.copytree(run, out, dirs_exist_ok=True)
+    per_arm = {}
+    for r in recs:
+        per_arm.setdefault(r["arm"], []).append(r["correct"])
+    spent = sum(c["cost_usd"] for r in recs for c in r["calls"])
+    print(f"\nTEXT-RULES spent_usd={spent:.4f} success=" + str({k: f"{sum(v)}/{len(v)}" for k, v in sorted(per_arm.items())}))
+    print((run / "report.md").read_text(encoding="utf-8"))

@@ -38,6 +38,9 @@ chains, code with edge cases) is meant to separate models. First Haiku-only prob
 and the failures sit in one category, `text_rules` (8 of 12); the other four categories were 12 of 12, so they still do not
 separate anything for Haiku. All four failures were checked by hand: genuine letter-level model errors, the oracle was right.
 An ADOPT on fewer tasks than the power formula asks for is capped to INCONCLUSIVE (`cap_underpowered`, default on).
+Targeted run on the `text_rules` category (12 tasks, 1 repetition, 2026-10-27, measured cost 1.07 USD for 36 calls): Opus 12/12 at
+0.0571 USD per run, Sonnet 12/12 at 0.0298, Haiku 10/12 at 0.0019 (8/12 and 11/12 in the two earlier runs, so Haiku's own noise is
+large). One category, 12 tasks, one repetition: an indication, not a proof. Run it with `--categories text_rules`.
 
 Measured price of one call of ~6.1k context tokens (2026-10-27, CLI `total_cost_usd`): Opus 5.5 0.0440 USD, Sonnet 5.5 0.0220,
 Haiku 5.5 about 0.0015. Plan costs from these, not from rate-card factors: a full run (240 tasks, 3 repetitions, 3 direct arms)

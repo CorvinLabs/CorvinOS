@@ -1,9 +1,12 @@
 {
   "note": "SIMULATION FIXTURES. Arbitrary numbers that exercise the harness. They are NOT measurements of any model and must never be cited.",
   "p_correct": {
-    "haiku":  {"extract": 0.90, "transform": 0.85, "arith": 0.60, "logic": 0.40, "code": 0.50},
-    "sonnet": {"extract": 0.97, "transform": 0.95, "arith": 0.90, "logic": 0.80, "code": 0.85},
-    "opus":   {"extract": 0.99, "transform": 0.98, "arith": 0.97, "logic": 0.93, "code": 0.95}
+    "haiku":  {"extract": 0.90, "transform": 0.85, "arith": 0.60, "logic": 0.40, "code": 0.50,
+               "table_agg": 0.80, "logic6": 0.50, "calc_multi": 0.70, "text_rules": 0.60, "code_hard": 0.50},
+    "sonnet": {"extract": 0.97, "transform": 0.95, "arith": 0.90, "logic": 0.80, "code": 0.85,
+               "table_agg": 0.92, "logic6": 0.80, "calc_multi": 0.90, "text_rules": 0.85, "code_hard": 0.80},
+    "opus":   {"extract": 0.99, "transform": 0.98, "arith": 0.97, "logic": 0.93, "code": 0.95,
+               "table_agg": 0.97, "logic6": 0.93, "calc_multi": 0.97, "text_rules": 0.95, "code_hard": 0.93}
   },
   "p_format_fail": {"haiku": 0.10, "sonnet": 0.03, "opus": 0.01},
   "tokens": {
