@@ -29,7 +29,12 @@ pytest tests/benchmarking/token_ab -q                      # self-tests: corpus 
 python3 tests/benchmarking/token_ab/ab_bench.py run --runner fake --profile smoke --seed 1 --run-id sim-1   # simulation, SIMULATION banner
 python3 tests/benchmarking/token_ab/ab_bench.py analyze --run-dir tests/benchmarking/token_ab/results/sim-1
 CLAUDE_LIVE_E2E=1 pytest tests/benchmarking/token_ab/test_token_ab_live.py -q -s   # real calls, Haiku only, capped (see the file)
+CLAUDE_LIVE_PILOT=1 pytest tests/benchmarking/token_ab/test_token_ab_pilot_live.py -q -s   # Opus/Sonnet/Haiku pilot, ~0.7 USD, capped at 0.90
 ```
+
+Measured price of one call of ~6.1k context tokens (2026-10-27, CLI `total_cost_usd`): Opus 5.5 0.0440 USD, Sonnet 5.5 0.0220,
+Haiku 5.5 about 0.0015. Plan costs from these, not from rate-card factors: a full run (240 tasks, 3 repetitions, 3 direct arms)
+is about 720 calls per arm, i.e. roughly 32 USD for Opus alone before the other arms.
 
 A live run of the full arm set (`config/arms.json`) costs real tokens (runs = tasks x reps x arms; calls = one per run, up to
 three for the cascade). It needs `--max-calls`, `--allow-code-exec` and bubblewrap. Preregister `delta` per class first

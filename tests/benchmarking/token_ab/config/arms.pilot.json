@@ -1,0 +1,19 @@
+{
+  "baseline": "direct_opus",
+  "decision": {
+    "delta": 0.15,
+    "alpha": 0.05,
+    "bootstrap": 5000,
+    "min_stratum_tasks": 30
+  },
+  "arms": [
+    {"name": "direct_opus", "kind": "direct", "tier": "opus"},
+    {"name": "direct_sonnet", "kind": "direct", "tier": "sonnet"},
+    {"name": "direct_haiku", "kind": "direct", "tier": "haiku"}
+  ],
+  "notes": {
+    "purpose": "Pilot of the Opus/Sonnet/Haiku comparison (CONCEPT-0122 section 7): measured price per run and per-tier success on 10 synthetic tasks. It reads prices, it adopts nothing.",
+    "delta": "0.15 is a smoke value for a 10-task run, not a derived margin. With 10 tasks every comparison is underpowered; the pilot cannot establish non-inferiority.",
+    "no_control_arm": "Left out on purpose: measured on 2026-10-27, one ~6.1k-token call costs 0.0440 USD on Opus 5.5, 0.0220 on Sonnet 5.5 and about 0.0015 on Haiku 5.5, so a second Opus arm does not fit the 1 USD cap."
+  }
+}
