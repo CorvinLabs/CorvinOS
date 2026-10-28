@@ -580,31 +580,40 @@ def _claude_cli_available() -> bool:
     return shutil.which("claude") is not None
 
 
+_NO_CLAUDE_DETAIL = ("CorvinTV needs an internet connection and a running Claude Code (signed in) or an "
+                    "ANTHROPIC_API_KEY. Start Claude Code, check the connection, and try again.")
+
+
 def _storyboard_backend(tenant_id: str, chat_key: str, task: str) -> tuple:
     """Where the storyboard LLM call goes. The host decides, after its own gates:
     the Anthropic API when a key is configured, else this host's Claude Code
-    login (the ``claude`` CLI the console already runs), else local Ollama.
-    Both remote paths send the task text to api.anthropic.com, so both need the
+    login (the ``claude`` CLI the console already runs). There is NO local
+    fallback (Ollama was removed): CorvinTV needs to be online with Claude Code
+    available, and a job that cannot get that is refused here, before it starts.
+    Both paths send the task text to api.anthropic.com, so both need the
     L35 egress gate AND the L34 classification of the task under the
-    ``claude_code`` engine; any refusal or doubt keeps the call local.
+    ``claude_code`` engine; any refusal or doubt refuses the job.
     Sonnet, not Opus: on the real storyboard prompt both produced fully valid,
     equally varied template choices, Sonnet in ~14 s for ~$0.03 vs ~17-42 s
     for ~$0.06 (measured 2026-10-08, ADR-2238 amendment)."""
     api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     if not api_key and not _claude_cli_available():
-        return "ollama", None
+        raise HTTPException(status_code=503, detail=_NO_CLAUDE_DETAIL)
     try:
         from spawn_gates import check_l34, check_l35  # type: ignore  # path set up by _spawn_gates
-        if check_l35("claude_code", tenant_id, channel="web", chat_key=chat_key) is not None:
-            return "ollama", None
-        if check_l34("claude_code", tenant_id, prompt=task, persona="assistant",
-                     channel="web", chat_key=chat_key) is not None:
-            return "ollama", None
+        refusal = check_l35("claude_code", tenant_id, channel="web", chat_key=chat_key)
+        if refusal is None:
+            refusal = check_l34("claude_code", tenant_id, prompt=task, persona="assistant",
+                                channel="web", chat_key=chat_key)
+        if refusal is not None:
+            raise HTTPException(status_code=403, detail=refusal)
         import model_selector  # type: ignore  # bridges/shared, same import as chat_runtime
         return ("anthropic" if api_key else "claude_cli"), model_selector.tier_model("sonnet")
-    except Exception as e:  # noqa: BLE001 — any doubt → the local backend
-        logger.warning("video producer: storyboard backend check failed (%s) — using local", type(e).__name__)
-        return "ollama", None
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — any doubt → the job is refused, never sent on unchecked
+        logger.warning("video producer: storyboard backend check failed (%s) — job refused", type(e).__name__)
+        raise HTTPException(status_code=503, detail="The storyboard route could not be checked; the job was not started") from e
 
 
 # The gate must name the host the narration really goes to (ADR-2211): the engine id picks
@@ -677,8 +686,6 @@ def _grounding_for_job(tenant_id: str, chat_key: str, job_id: str, task: str, ba
         return None, None
     if not g.is_candidate_task(task):
         return None, None
-    if backend == "ollama":
-        return None, {"status": "unavailable", "reason": "local_storyboard_model"}
     kb = kb_repo()
     if kb is None:
         return None, {"status": "unavailable", "reason": "no_knowledge_base"}

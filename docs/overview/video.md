@@ -20,13 +20,13 @@
 
 > **Type one sentence, get back a narrated explainer video — produced on your own machine, behind the same gates as every other CorvinOS run.**
 
-<p align="center"><img src="img/video-hero.svg" alt="Pipeline: a text task passes the L44, L34 and L35 gates; an LLM writes a storyboard of up to eight scenes (Claude Sonnet when the L35 and L34 gates admit Anthropic, local Ollama otherwise or on failure); OpenAI TTS narrates each scene; scenes with a template become animated web slides (Pillow stills as the fallback); ffmpeg encodes and joins; output is an MP4 without subtitles, plus poster, slides and quality metrics." width="100%"/></p>
+<p align="center"><img src="img/video-hero.svg" alt="Pipeline: a text task passes the L44, L34 and L35 gates; an LLM writes a storyboard of up to eight scenes (Claude Sonnet through the host's Claude Code login or an Anthropic API key, when the L35 and L34 gates admit Anthropic; no local fallback — a job that cannot reach Claude is refused or ends with a clear message); OpenAI TTS narrates each scene; scenes with a template become animated web slides (Pillow stills as the fallback); ffmpeg encodes and joins; output is an MP4 without subtitles, plus poster, slides and quality metrics." width="100%"/></p>
 
 ## What you get
 
 - **A finished artefact, not a prompt.** One task text produces `output.mp4` — with no subtitles —, a poster image and one slide per scene.
 - **Corvin explainers are grounded in the knowledge base and the code.** When the task is about Corvin (or names a decision id), the console builds a fact pack from Corvin-Knowledge decisions and the git-tracked code — for the knowledge base's own tenant only — runs it through L44, L34 (declared INTERNAL) and L35, audits what leaves the host, and the storyboard may only state numbers, identifiers and paths that are in that pack. Real console screenshots with measured hotspots and a "you are here" layer strip come with it (ADR-2240).
-- **Claude writes the storyboard, behind the gates.** On a host where the console already runs Claude Code, the storyboard is written by Claude Sonnet through that login (or an Anthropic API key) — only if L35 admits `api.anthropic.com` and L34 admits the task for the `claude_code` engine. Forbid that host and every job stays on the local Ollama model.
+- **Claude writes the storyboard, behind the gates.** On a host where the console already runs Claude Code, the storyboard is written by Claude Sonnet through that login (or an Anthropic API key) — only if L35 admits `api.anthropic.com` and L34 admits the task for the `claude_code` engine. Forbid that host, or be offline with no Claude Code, and the job is refused: CorvinTV no longer has a local Ollama model.
 - **Gated like any other run.** The task passes the acceptable-use gate (L44), data classification (L34) and the egress gate (L35) before anything is generated.
 - **Measurable output.** Each job reports per-step progress and ffprobe quality metrics; feedback on a single scene is recorded in the audit chain before it is stored.
 - **A plugin you can take out.** It ships through the Corvin Marketplace; uninstall it and the sidebar entry is gone.

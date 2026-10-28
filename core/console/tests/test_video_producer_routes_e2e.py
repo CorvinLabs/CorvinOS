@@ -510,8 +510,8 @@ class VideoProducerRoutesE2E(unittest.TestCase):
 
     def test_storyboard_uses_the_hosts_claude_login_only_when_the_gates_admit_anthropic(self):
         """No API key on this kind of host: the storyboard goes to the Claude Code CLI the
-        console already runs (Sonnet, measured), and stays on local Ollama when there is
-        no CLI or when L35 forbids api.anthropic.com."""
+        console already runs (Sonnet, measured); with no CLI, or when L35 forbids api.anthropic.com,
+        the job is refused (no local fallback)."""
         from unittest import mock
 
         fake = self._tmp / "claude"
@@ -530,14 +530,17 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             self.assertTrue(cfg["storyboard_model"].startswith("claude-sonnet-"), cfg["storyboard_model"])
 
             self._deny_host(home, "api.anthropic.com")
-            self.assertEqual(self._create(client, csrf).status_code, 200)
-            self.assertEqual(runner.calls[-1][2]["storyboard_backend"], "ollama")
-            self.assertIsNone(runner.calls[-1][2]["storyboard_model"])
+            n = len(runner.calls)
+            r = self._create(client, csrf)  # the egress gate refuses api.anthropic.com: no local fallback, no job
+            self.assertEqual(r.status_code, 403, r.text)
+            self.assertEqual(len(runner.calls), n)
 
             _write_tenant_yaml(home, "_default", {"egress": {"enabled": False}})
             os.environ["CORVIN_CLAUDE_BIN"] = str(self._tmp / "no-such-claude")
-            self.assertEqual(self._create(client, csrf).status_code, 200)
-            self.assertEqual(runner.calls[-1][2]["storyboard_backend"], "ollama")
+            r = self._create(client, csrf)  # no Claude Code and no API key: refused before anything starts
+            self.assertEqual(r.status_code, 503, r.text)
+            self.assertIn("Claude Code", r.text)
+            self.assertEqual(len(runner.calls), n)
 
     def test_secret_in_task_is_refused_by_l34(self):
         with _sandbox(self._tmp) as (client, csrf, home, _clients):

@@ -141,11 +141,10 @@ class VideoProducerGroundingE2E(unittest.TestCase):
             _route_module().get_runner = lambda: runner
             self.assertEqual(self._create(client, csrf, task="Erkläre Photosynthese für Schüler").status_code, 200)
             self.assertNotIn("grounding_pack", runner.calls[-1][2])
-            os.environ["CORVIN_CLAUDE_BIN"] = str(self._tmp / "no-such-claude")  # -> local Ollama
-            self.assertEqual(self._create(client, csrf).status_code, 200)
-            cfg = runner.calls[-1][2]
-            self.assertNotIn("grounding_pack", cfg)
-            self.assertEqual(cfg["grounding_status"], {"status": "unavailable", "reason": "local_storyboard_model"})
+            n = len(runner.calls)
+            os.environ["CORVIN_CLAUDE_BIN"] = str(self._tmp / "no-such-claude")  # no local fallback: refused
+            self.assertEqual(self._create(client, csrf).status_code, 503)
+            self.assertEqual(len(runner.calls), n)
 
 
 if __name__ == "__main__":
