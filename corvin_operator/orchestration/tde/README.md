@@ -69,11 +69,12 @@ send(task)
    `LossEntry` carries `usage_delegated` and `usage_local`: the usage of the policy side
    (the delegated worker) and of the local/reference side, each as a four-component block
    (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`)
-   plus `total_tokens`, `cost_usd` and `model`, normalised by `loss_profile_tracker.usage_block`.
+   plus `total_tokens`, `cost_usd`, `model` and `model_version` (`"5.5"` for `claude-haiku-5-5`, from the
+   shared `model_lineage.parse`; `None` for an unparseable id), normalised by `loss_profile_tracker.usage_block`.
    `tokens_delegated` / `tokens_local` stay the totals and are derived from the blocks.
    A side without a measurement (mock IPC, text-format run, a custom executor returning a
    plain value) stays `None` — it is never recorded as zero. Blocks are content-free (counts,
-   price, model id only). Entries written before this change load unchanged with `None`
+   price, model id and version only). Entries written before this change load unchanged with `None`
    blocks. With real totals present, `estimate_cost_ratio` can finally return a number.
    Proof: `tests/test_tde_loss_usage_tokens.py` (call site and engine entry point, no LLM)
    and `tests/test_tde_e2e_live.py::test_live_loss_profile_carries_tokens` (real claude CLI,

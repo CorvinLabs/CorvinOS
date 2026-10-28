@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 from collections import OrderedDict
@@ -66,7 +67,32 @@ def usage_block(usage: Any) -> "Optional[dict[str, Any]]":
     block["cost_usd"] = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0 else None
     model = usage.get("model")
     block["model"] = model[:128] if isinstance(model, str) and model else None
+    # ADR-2306 decision 3 (T-0319): the model VERSION next to the id, so a lineage change (Haiku 4.5 ->
+    # 5.5) splits the evidence instead of silently pooling two models under one family.
+    block["model_version"] = _model_version(block["model"])
     return block
+
+
+def _model_version(model: "Optional[str]") -> "Optional[str]":
+    """``"5.5"`` for ``claude-haiku-5-5``, ``None`` when the id is not a parseable Claude id. Uses the one
+    shared parser (``model_lineage.parse``); never a private copy of its rules."""
+    if not model:
+        return None
+    try:
+        try:
+            import model_lineage as _ml  # type: ignore[import-not-found]  # noqa: PLC0415
+        except ImportError:
+            shared = Path(__file__).resolve().parents[2] / "bridges" / "shared"
+            if shared.is_dir() and str(shared) not in sys.path:
+                sys.path.insert(0, str(shared))
+            import model_lineage as _ml  # type: ignore[import-not-found]  # noqa: PLC0415
+        parsed = _ml.parse(model)
+    except Exception:  # noqa: BLE001 - a missing parser leaves the version unknown, never wrong
+        return None
+    if not parsed:
+        return None
+    _family, (major, minor) = parsed
+    return f"{major}.{minor}"
 
 
 @dataclass

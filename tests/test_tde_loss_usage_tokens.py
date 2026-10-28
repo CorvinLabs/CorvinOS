@@ -63,7 +63,7 @@ class TestUsageBlock:
     def test_block_is_content_free(self):
         b = usage_block({**_usage(), "text": "SECRET PROMPT", "result": "SECRET"})
         assert "SECRET" not in json.dumps(b)
-        assert set(b) == set(USAGE_KEYS) | {"total_tokens", "cost_usd", "model"}
+        assert set(b) == set(USAGE_KEYS) | {"total_tokens", "cost_usd", "model", "model_version"}
 
 
 class TestTrackerRecording:
@@ -172,3 +172,89 @@ class TestEngineEntryPoint:
         # The consequence the whole change exists for: the cost ratio is computable at last.
         ratio = tracker.estimate_cost_ratio("analyze_data", model_id="claude-haiku-5-5")
         assert ratio is not None and ratio > 0
+
+
+class TestModelVersion:
+    @pytest.mark.parametrize("model,version", [
+        ("claude-haiku-5-5", "5.5"), ("claude-opus-5", "5.0"),
+        ("claude-haiku-4-5-20251001", "4.5"), ("anthropic/claude-sonnet-5-5", "5.5"),
+        ("gpt-4o", None), (None, None),
+    ])
+    def test_version_comes_from_the_shared_parser(self, model, version):
+        assert usage_block(_usage(model=model))["model_version"] == version
+
+
+class _EnvelopeIPC:
+    """A worker that answers the way the real CLI does: a ``--output-format json`` envelope string,
+    normalised by the production parser ``parse_cli_envelope`` (no hand-built usage dict)."""
+
+    async def send_delegation(self, envelope, *, proc_holder=None):
+        from tde.worker_ipc import parse_cli_envelope  # noqa: PLC0415
+        raw = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": json.dumps({"output": {"echo": envelope.step.step}}),
+            "usage": {"input_tokens": 7, "output_tokens": 11, "cache_read_input_tokens": 300,
+                      "cache_creation_input_tokens": 13},
+            "total_cost_usd": 0.0021,
+        })
+        text, usage, error = parse_cli_envelope(raw, model="claude-haiku-5-5")
+        assert error is None and usage is not None
+        return {"success": True, "output": json.loads(text)["output"], "error": None, "usage": usage}
+
+
+class TestPersistedProfileE2E:
+    """DoD of T-0319: the real executor path (TieredDelegationEngine -> AdaptiveDelegationExecutor)
+    with a worker returning a CLI envelope writes loss_profile.jsonl entries carrying four token parts
+    on both sides plus model id AND model version, and the tenant audit chain still verifies."""
+
+    def test_written_profile_carries_tokens_and_model_version_and_chain_verifies(self, monkeypatch):
+        import time  # noqa: PLC0415
+        from tde import loss_profile_tracker as lpt  # noqa: PLC0415
+
+        monkeypatch.setenv("CORVIN_TDE_LOSS_PERSIST", "1")
+        key = "_default:t0319-persist-e2e"
+        path = lpt._persist_path_for(key)
+        assert path is not None, "a tenant session key must resolve to a persistence file"
+        lpt._session_trackers.pop(key, None)
+
+        shared = Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"
+        if str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        import audit as _audit  # type: ignore  # noqa: PLC0415
+        from forge.security_events import verify_chain  # type: ignore  # noqa: PLC0415
+        from tde import tde_audit  # noqa: PLC0415
+        tde_audit.reset_for_tests()  # resolve the backend afresh in this sandbox
+
+        async def local_exec(step, statement, *, proc_holder=None):
+            return LocalResult(output={"echo": step.step},
+                               usage=_usage(inp=4, out=5, cr=40, cw=2, model="claude-sonnet-5-5"))
+
+        started = time.time()
+        engine = TieredDelegationEngine(local_step_executor=local_exec, real_ipc=False)
+        result = asyncio.run(engine.execute(
+            _plan(n=6), {"statement": {"data": "synthetic"}},
+            worker_ipc=_EnvelopeIPC(), use_semantic_judge=False, session_key=key, budget_tokens=500_000))
+        assert result["success"] is True
+
+        assert path.is_file(), f"no loss_profile.jsonl written at {path}"
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        fresh = [r for r in rows if r.get("timestamp", 0) >= started and r.get("measured")]
+        assert fresh, "the run must persist measured entries"
+        for r in fresh:
+            d, loc = r["usage_delegated"], r["usage_local"]
+            assert (d["input_tokens"], d["output_tokens"], d["cache_read_input_tokens"],
+                    d["cache_creation_input_tokens"]) == (7, 11, 300, 13)
+            assert d["model"] == "claude-haiku-5-5" and d["model_version"] == "5.5"
+            assert d["cost_usd"] == pytest.approx(0.0021)
+            assert loc["model"] == "claude-sonnet-5-5" and loc["model_version"] == "5.5"
+            assert r["tokens_delegated"] == 331 and r["tokens_local"] == 51
+
+        # Positive control first: the chain this process appends to must carry this run's tde.*
+        # records, otherwise "it verifies" would be vacuous.
+        chain = _audit.audit_path()
+        assert chain.exists(), f"the run emits tde.* events, so {chain} must exist"
+        recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        assert any(str(r.get("event_type", r.get("event", ""))).startswith("tde.") for r in recs), \
+            "no tde.* record reached the chain"
+        ok, problems = verify_chain(chain)
+        assert ok, problems[:3]
