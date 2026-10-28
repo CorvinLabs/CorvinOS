@@ -32,6 +32,7 @@ jobs:
       - run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install pytest pytest-xdist pyyaml
+          pip install -e .
 
       - run: pytest tests/e2e/test_windows_installation_e2e.py -v --tb=short --junit-xml=test-results-${{ matrix.python-version }}.xml -m "not slow" --maxfail=3
         env:
@@ -60,6 +61,7 @@ jobs:
       - run: |
           python -m pip install --upgrade pip
           pip install pytest pyyaml
+          pip install -e .
 
       - run: pytest tests/e2e/test_windows_installation_e2e.py::TestFullWindowsInstallToConsoleBoot -v --tb=short -m slow --timeout=60
         continue-on-error: true
