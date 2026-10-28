@@ -2,8 +2,10 @@
 
 ADR-2281 §2 (PLAN-0964). The register is the list of every learning system with
 its production callers. These tests check that the register is well-formed and
-that each recorded caller still exists at the recorded line. They do not check
-that a caller really runs: that is the job of the E2E tests named in `tests`.
+that each recorded caller ("path:line:needle") still names its reference: the
+needle must appear within 3 lines of the recorded line (review c120,
+s5_completeness-3). They do not check that a caller really runs: that is the job
+of the E2E tests named in `tests`.
 
 Per state: every A has a caller; every B has a caller and an `intake` (the
 condition under which its output may act); every D names the decision that
@@ -15,7 +17,7 @@ docs/claude-ref/learning-loop.md must name the same state per system.
 
 ADR-2303: every B entry carries a ``signal_contract``; a proxy (``proxy_of``
 not ``none``) never has a ``target``; ``consumer`` is ``none`` or a resolving
-``path:line``; ``validity`` is numbers or ``unmeasured``. Form only, not truth.
+``path:line:needle``; ``validity`` is numbers or ``unmeasured``. Form only, not truth.
 """
 
 import json
@@ -54,13 +56,45 @@ def _load() -> list[dict]:
     return data["systems"]
 
 
-def _callers() -> list[tuple[str, str, str]]:
-    out = []
-    for system in _load():
-        for ref in system.get("callers", []):
-            path, _, line = ref.rpartition(":")
-            out.append((system["id"], path, line))
-    return out
+# "path:line:needle" - the needle is a token of the referenced call/import/registration.
+_REF = re.compile(r"^(?P<path>[\w./-]+\.\w+):(?P<line>\d+):(?P<needle>\S.*)$")
+NEEDLE_WINDOW = 3   # the needle must sit within +/-3 lines of the recorded line
+
+
+def _callers() -> list[tuple[str, str]]:
+    return [(system["id"], ref) for system in _load() for ref in system.get("callers", [])]
+
+
+_FILE_CACHE: dict[Path, list[str]] = {}
+
+
+def _lines(target: Path) -> list[str]:
+    if target not in _FILE_CACHE:
+        _FILE_CACHE[target] = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    return _FILE_CACHE[target]
+
+
+def _ref_violation(ref: str) -> str | None:
+    """Why ``ref`` ("path:line:needle") does not point at its reference, or None.
+
+    The cited line, or one within NEEDLE_WINDOW lines of it, must contain the needle: a
+    reference that drifted onto a blank line, a comment or another router's include fails,
+    and so does one whose call was deleted while the file kept its length."""
+    m = _REF.match(str(ref))
+    if not m:
+        return f"{ref!r} is not path:line:needle"
+    target = REPO / m["path"]
+    if not target.is_file():
+        return f"{m['path']} does not exist"
+    lines, line, needle = _lines(target), int(m["line"]), m["needle"].strip()
+    if not 1 <= line <= len(lines):
+        return f"{m['path']}:{line} is past the end of the file ({len(lines)} lines)"
+    window = lines[max(0, line - 1 - NEEDLE_WINDOW): line + NEEDLE_WINDOW]
+    if not any(needle in text for text in window):
+        hits = [i + 1 for i, text in enumerate(lines) if needle in text][:5]
+        return (f"{m['path']}:{line} has no {needle!r} within {NEEDLE_WINDOW} lines "
+                f"(the needle is at lines {hits or 'nowhere'})")
+    return None
 
 
 def test_register_exists_and_parses():
@@ -83,15 +117,22 @@ def test_live_systems_have_a_caller():
             assert s.get("callers"), f"{s['id']} is A but lists no caller"
 
 
-@pytest.mark.parametrize(("sys_id", "path", "line"), _callers())
-def test_caller_exists_at_recorded_line(sys_id, path, line):
-    target = REPO / path
-    assert target.is_file(), f"{sys_id}: caller file missing: {path}"
-    assert line.isdigit(), f"{sys_id}: caller line not a number: {line!r}"
-    n_lines = len(target.read_text(encoding="utf-8", errors="replace").splitlines())
-    assert 1 <= int(line) <= n_lines, (
-        f"{sys_id}: {path}:{line} is past the end of the file ({n_lines} lines)"
-    )
+@pytest.mark.parametrize(("sys_id", "ref"), _callers())
+def test_caller_exists_at_recorded_line(sys_id, ref):
+    assert _ref_violation(ref) is None, f"{sys_id}: {_ref_violation(ref)}"
+
+
+def test_caller_check_fails_on_a_shifted_line_and_a_wrong_needle():
+    """Negative control on a copy of a real reference (the register is not touched):
+    the same needle cited 40 lines off, or a needle that is not at the line, fails."""
+    sys_id, ref = next((s, r) for s, r in _callers() if s == "L05")
+    m = _REF.match(ref)
+    assert m and _ref_violation(ref) is None, "positive control: the real L05 reference resolves"
+    shifted = f"{m['path']}:{int(m['line']) + 40}:{m['needle']}"
+    assert "has no" in (_ref_violation(shifted) or ""), f"{sys_id}: a shifted line passed"
+    wrong = f"{m['path']}:{m['line']}:no_such_symbol_anywhere_here"
+    assert "has no" in (_ref_violation(wrong) or "")
+    assert "is not path:line:needle" in (_ref_violation(f"{m['path']}:{m['line']}") or "")
 
 
 @pytest.mark.parametrize(
@@ -111,13 +152,13 @@ def test_shadow_systems_state_their_intake():
 
 
 CONTRACT_KEYS = ("signal", "proxy_of", "validity", "consumer", "target", "guard", "control", "rollback")
-_CONSUMER_REF = re.compile(r"^(?P<path>[\w./-]+\.\w+):(?P<line>\d+)$")
 
 
 def _contract_violations(systems: list[dict]) -> list[str]:
     """ADR-2303: every B entry carries a ``signal_contract`` (A may); a proxy is never a
     target; ``validity`` is numbers or ``unmeasured``; ``consumer`` is ``none`` or a
-    ``path:line`` inside an existing file. Returns one message per violation."""
+    ``path:line:needle`` that resolves like a caller; a signal that is not a proxy and
+    ``writes`` a parameter names it as its ``target``. Returns one message per violation."""
     out: list[str] = []
     for s in systems:
         contract = s.get("signal_contract")
@@ -146,17 +187,19 @@ def _contract_violations(systems: list[dict]) -> list[str]:
                     out.append(f"{where}: validity bounds must be numbers")
             elif validity != "unmeasured":
                 out.append(f"{where}: validity is a mapping of numbers or 'unmeasured'")
+            writes = e.get("writes")
+            if writes is not None:
+                if not str(writes).strip() or str(writes).strip() == "none":
+                    out.append(f"{where}: 'writes' names the stored parameter (omit it when nothing is written)")
+                elif proxy == "none" and target != str(writes).strip():
+                    # a non-proxy signal that moves a parameter must call it its target
+                    out.append(f"{where}: writes {writes!r} from a signal that is not a proxy, "
+                               f"but its target is {target!r}")
             consumer = str(e.get("consumer") or "")
             if consumer != "none":
-                m = _CONSUMER_REF.match(consumer)
-                if not m:
-                    out.append(f"{where}: consumer {consumer!r} is neither 'none' nor path:line")
-                else:
-                    target_file = REPO / m["path"]
-                    n = (len(target_file.read_text(encoding="utf-8", errors="replace").splitlines())
-                         if target_file.is_file() else 0)
-                    if not 1 <= int(m["line"]) <= n:
-                        out.append(f"{where}: consumer {consumer!r} does not resolve")
+                why = _ref_violation(consumer)
+                if why is not None:
+                    out.append(f"{where}: consumer does not resolve: {why}")
             elif target != "none":
                 out.append(f"{where}: a target ({target!r}) needs a named consumer")
     return out
@@ -182,18 +225,53 @@ def test_contract_check_catches_a_missing_contract_and_a_proxy_target():
     broken = copy.deepcopy(systems)
     l07 = next(s for s in broken if s["id"] == "L07")["signal_contract"]
     assert l07["proxy_of"] != "none", "positive control: L07 is recorded as a proxy"
-    l07.update(target="stage_selection", consumer="core/skills/os_skills/delegation_router.py:138")
+    l07.update(target="stage_selection",
+               consumer="core/skills/os_skills/delegation_router.py:143:_learned_threshold")
     assert any("cannot be a target" in v for v in _contract_violations(broken))
 
     broken = copy.deepcopy(systems)
     broken_l11 = next(s for s in broken if s["id"] == "L11")["signal_contract"]
     broken_l11[0].pop("skill")
     broken_l11[1]["validity"] = {"min_samples": "many"}
-    broken_l11[2]["consumer"] = "core/does/not/exist.py:1"
+    broken_l11[2]["consumer"] = "core/does/not/exist.py:1:anything"
+    broken_l11[3]["consumer"] = "core/skills/os_skills/delegation_router.py:143"   # no needle
     found = _contract_violations(broken)
     assert any("names its skill" in v for v in found)
     assert any("bounds must be numbers" in v for v in found)
-    assert any("does not resolve" in v for v in found)
+    assert any("does not exist" in v for v in found)
+    assert any("is not path:line:needle" in v for v in found)
+
+
+def test_router_threshold_writers_are_registered_as_proxies():
+    """Review c120 s5_completeness-2: ``confidence_threshold`` is moved by the operator
+    star rating (stream4) and by the epoch test on the tenant's last 10 outcomes - both
+    proxies of routing correctness. Every L05 row that writes it says so, keeps
+    ``target: none``, and both writers are listed callers. The routing-ledger join (L12)
+    is not a proxy and learns no parameter."""
+    import copy
+
+    systems = _load()
+    l05 = next(s for s in systems if s["id"] == "L05")
+    rows = l05["signal_contract"]
+    writers = [r for r in rows if r.get("writes") == "confidence_threshold"]
+    assert len(writers) == 2, "positive control: L05 records two threshold writers"
+    for r in writers:
+        assert r["proxy_of"] != "none" and r["target"] == "none", r["writer"]
+    callers = " ".join(l05["callers"])
+    assert "stream4_skill_feedback.py" in callers and "apply_outcome_to_skill" in callers
+    assert "method_discovery_api.py" in callers and "run_optimizer_epoch" in callers
+    l12 = next(s for s in systems if s["id"] == "L12")["signal_contract"]
+    assert l12["proxy_of"] == "none" and l12["target"] == "none" and "writes" not in l12
+
+    # Negative controls on copies: calling a proxy row a target, or relabelling it as
+    # "not a proxy" while it keeps writing the threshold without naming it, both fail.
+    broken = copy.deepcopy(systems)
+    next(s for s in broken if s["id"] == "L05")["signal_contract"][0]["target"] = "confidence_threshold"
+    assert any("L05/os.delegation_router: a proxy" in v for v in _contract_violations(broken))
+    broken = copy.deepcopy(systems)
+    next(s for s in broken if s["id"] == "L05")["signal_contract"][1]["proxy_of"] = "none"
+    assert any("writes 'confidence_threshold' from a signal that is not a proxy" in v
+               for v in _contract_violations(broken))
 
 
 def test_dead_systems_name_their_retiring_decision():

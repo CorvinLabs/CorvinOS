@@ -15,7 +15,7 @@ mechanisms; **which system is live is stated only by the register**.
 ## The register (ADR-2281) — single statement of state
 
 `core/learning/learning_systems.yaml` lists every learning system with its production
-callers (`path:line`, re-read when recorded), its tests and its state: **A** live and read ·
+callers (`path:line:needle`, every line re-read 2026-10-27), its tests and its state: **A** live and read ·
 **B** live but shadow / no reader yet, with an `intake` naming when its output may act ·
 **D** dead, retired by the named decision (ADR-2282) until its last module is deleted. Nothing
 here, in CLAUDE.md or elsewhere may call a system "wired", "live" or "complete" unless its
@@ -23,7 +23,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 
 | Check | File | Fails on |
 |---|---|---|
-| Register | `tests/learning/test_learning_systems_register.py` | a caller file/line that does not exist, a missing test file, an A without caller, a B without `intake`, a B without a valid `signal_contract` (ADR-2303, below), a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
+| Register | `tests/learning/test_learning_systems_register.py` | a caller (or contract `consumer`) whose file does not exist or whose needle — the called function or imported module — is not within 3 lines of the cited line (a reference that drifted onto a blank line, a comment or another router's include fails; a register copy with a shifted line is the negative control), a missing test file, an A without caller, a B without `intake`, a B without a valid `signal_contract` (ADR-2303, below), a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
 | Reachability ratchet | `scripts/learning_reachability.py` + `scripts/learning_reachability_baseline.json`, `tests/learning/test_learning_reachability_ratchet.py` | a NEW unreachable module in the learning scopes (same graph as `zero_caller_sweep`), and a STALE baseline entry (module reachable again or deleted). Shrink-only |
 | Call-site pins | `tests/learning/test_learning_call_site_pins.py` | L06 injection gate / follow-up grade and L10 distill scheduling / injection through `adapter.process_one`; L14 `emit_*_confidence` through `POST /v1/console/forge-bundles/import`. Each was shown red with its call site cut |
 
@@ -37,7 +37,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | L05 | Delegation-router config loop (os.delegation_router learned config) | B |
 | L06 | Skill grades, injection gate, promotion | A |
 | L07 | CEL turn grades | B |
-| L08 | Model selector learner (descriptive only) | B |
+| L08 | Model selector learner (descriptive only, shown on the Models page) | A |
 | L09 | Savings meter (Free-tier cost.optimize allowance) | A |
 | L10 | User model distillation (L28, opt-in per chat) | A |
 | L11 | Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter) | B |
@@ -48,7 +48,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | L16 | Compute search strategies (grid, random, bayes) and HAC attribution | A |
 | L17 | Learning and maturity panels (report health, not learning) | A |
 | L18 | Video learning feedback API (ratings, per-variant statistics, advice) | A |
-| L19 | Autonomous Forge (autopilot off by default) | B |
+| L19 | Autonomous Forge (skill canary autopilot, on by default) | A |
 | H03 | Plugin-declared learning loops (manifest discovery) | A |
 | R19–R19 | Brain hub leftover kept by ADR-2282: `subsystems/notification_daemon.py` (still imported by the unreachable `core/skill_forge/skill_forge_v2.py`); R01–R18 were removed with their deleted modules | D |
 <!-- register-table:end -->
@@ -58,21 +58,43 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 `control`, `rollback`; a system with several independent signals (L11) carries one contract per
 skill (`skill`). The register test enforces the form: a B entry without a contract fails; a proxy
 (`proxy_of` not `none`) with a `target` other than `none` fails — a proxy may guard, it is never
-optimised for; `consumer` is `none` or a `path:line` that resolves; `validity` is a mapping of
-numbers or `unmeasured`. Today only L05/L12 name numbers (the ADR-2092 gates: 500 joined decisions,
-join rate 0.95) and only they name a target (`confidence_threshold`, consumer
-`delegation_router.py:138`); L07 (`turn completed`, proxy of output quality) and L08 (0.85 / 0.2,
-proxy of answer quality) are proxies with `target: none`; L11, L13 and L19 learn nothing
-(`target: none`). The other validity bounds are `unmeasured` until PLAN-0966 WP4 measures them.
-The contract checks form, not truth, and grants no permission to learn.
+optimised for; `consumer` is `none` or a `path:line:needle` that resolves like a caller;
+`validity` is a mapping of numbers or `unmeasured`; an optional `writes` names the stored parameter
+a signal moves — a signal that is not a proxy and `writes` a parameter must name it as its
+`target`, so a proxy that moves a stored value cannot be relabelled "not a proxy" to pass.
+Today **no entry names a target.** L05 (the router config loop) carries one contract per writer,
+and both are proxies of routing correctness that `writes: confidence_threshold` with
+`target: none`: the operator star rating of `POST /v1/console/feedback/skill` (+/-0.05 per
+rating, trust-weighted, on an arbitrary `subject_id`, joined to no routing decision) and the
+epoch test of `POST /v1/console/learning/feedback` (the tenant's last 10 task outcomes,
+tenant-wide, not attributed to the router; ADR-2305). Their consumer is the gated Phase 2 path
+(`delegation_policy.py`, `confidence_threshold`), which reads nothing in shadow; before the
+threshold may act it needs a signal that is not a proxy (ADR-2305 Part 2) — a decision, not this
+register. Only L12 names validity numbers (the ADR-2092 gates: 500 judged decisions, join rate 0.95,
+7-day console soak): its signal — the routing ledger joined to the OUTCOME — is not a proxy but
+learns no parameter; its consumer is the readiness gate (`dual_write.py`,
+`readiness.cached_evaluate`). L07 (`turn completed`, proxy of output quality), L08 (0.85 / 0.2 and
+0.95 / 0.3, proxy of answer quality, consumer the Models page) are proxies with `target: none`; L11
+learns nothing (`target: none`). L13's only input is an operator's flow feedback, which may only
+add or raise a DENY rule of the route's own in-memory FlowGuard (audit-first since ADR-2283) — no
+production gate reads it. L19 (A since 2026-10-27; the entry said "autopilot off by default", but
+`autonomous.autopilot_settings` defaults it ON and the route module starts its scheduler at import)
+reads organic follow-up grades (a proxy of skill output quality; loss = mean < 0.5 over ≥ 3 grades
+in 14 days) to fork a candidate and run its canary gate; promotion stays an operator decision,
+`target: none`. The other validity bounds are `unmeasured` until PLAN-0966 WP4 measures them. The contract checks form, not truth, and grants no permission to learn.
+Proof of the proxy labels: `test_router_threshold_writers_are_registered_as_proxies` (with
+negative controls on register copies).
 
 Findings of 2026-10-25: **L10** (now A) — both adapter call sites ran, but
 `user_model.distill()` queried `conversation_recall.recall('')`, an empty FTS5 phrase that
 matched nothing, so no model was ever distilled. `recall()` now answers an empty query that
 names a chat with that chat's newest turns (oldest first; without a chat it still returns
 nothing), and the pin `test_l10_a_real_turn_yields_a_distilled_model` passes through
-`adapter.process_one`. **L08** (B) — the selector learner's only input is the 0.85 / 0.2 "turn ended without an error" proxy and the
-selection never reads it. The 19 unreachable `core/vibe_engineering` modules are classified
+`adapter.process_one`. **L08** (A since 2026-10-27) — the selector learner's only inputs are
+proxies (0.85 / 0.2 "bridge turn ended without / with an error", 0.95 / 0.3 per finished task) and
+the selection never reads it; its operator-facing reader is the Models page (`GET /v1/engine/config`
+→ each task card), which since 2026-10-27 labels the number "no-error score (proxy)" instead of
+"NN% confident" (review c120: twelve error-free turns read as "76% confident"). The 19 unreachable `core/vibe_engineering` modules are classified
 not-learning in the register (`classified_not_learning`), none is retired by ADR-2281.
 
 ## The loop
@@ -94,7 +116,13 @@ real turn ──► delegation_policy.route_and_record()   (EXACTLY once per OS 
 
 turn ends ──► delegation_policy.record_turn_outcome()   (bridge process_one / console _os_emit_completed)
                  • outcome row joined by turn_id: engine that SERVED + ok + latency
-                 • a Skill-served turn runs the rollback judge (≥100 samples/side, >2 % drop ⇒ trip)
+                 • NOT-JUDGED turns ("ok": null, "excluded": cancelled | orphaned | no_engine):
+                   counted (summarize()["not_judged"]), out of the join rate, every success
+                   rate and the rollback judge
+                 • a judged Skill-served turn runs the rollback judge (≥100 samples/side, >2 % drop ⇒ trip;
+                   the state file is written only after routing.rollback_triggered committed)
+boot reaper ──► TaskManager.reap_stale_running("orphaned_on_restart")
+                 └─ console turn linked by its task.routing event → outcome excluded "orphaned"
 
 task ends ──► TaskManager.record_event(task.completed | task.failed)
                  └─► core.learning.outcome_sink.emit_task_outcome()
@@ -115,6 +143,8 @@ operator ──► POST /v1/console/learning/feedback   {task_id, outcome_qualit
                    answered and the optimizer still ran on the hypotheses.
                  • FeedbackInterpreter → ConfigHypothesis[]   (deterministic rules, ADR-0549)
                  • SkillAdapter.run_optimizer_epoch(hyp, recent_outcomes(tenant, 10))
+                        hyp.delta scaled by the gate's trust weight (admitted_trust_weight;
+                        unknown weight ⇒ 503, no epoch)
                         50-epoch baseline → hypothesis phase → accept iff Δsuccess ≥ MDE (0.05)
                         accepted → new config VERSION (snapshot persisted) + CONFIG_UPDATED event
                                    + console audit "skill_config_updated:hypothesis_accepted"
@@ -133,13 +163,13 @@ next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tena
 
 | Piece | File | Contract |
 |---|---|---|
-| L5 routing call site | `corvin_operator/bridges/shared/delegation_policy.py::route_and_record` (Skill via `_consult_router`), reached from `resolve_delegation_route` / `resolve_worker_engine` when the caller passes the turn (`sink`/`turn_id`) — a call without it is a pure query (`record=False`: same answer, no row, no audit, no Skill run in shadow) | exactly ONE decision per turn per surface; runs AFTER the bundled rule + extension-point hook; degrades to the bundled engine on any failure; skips un-booted processes. The bridge boots the registry itself since 2026-09-28 (`adapter._boot_acp_skills`, ADR-2092 G0) — before that every bridge turn was skipped |
-| L5 routing ledger + gates | `core/skills/os_skills/monitoring/` — `routing_ledger` (decision/outcome rows, closed vocabulary, ADR-0297 `has_sensitive` gate on every string), `correctness_tracker` (observable success, skill- vs bundled-routed), `rollback_detector` (persisted trip, audited reset), `readiness` (≥500 decisions, join ≥0.95, per-complexity proxy evidence), `dual_write` (phase gate + clamp) | see ADR-2092; Phase 2 activation is refused and audited once per process per reason (`routing.phase2_refused`) until every gate holds |
+| L5 routing call site | `corvin_operator/bridges/shared/delegation_policy.py::route_and_record` (Skill via `_consult_router`), reached from `resolve_delegation_route` / `resolve_worker_engine` when the caller passes the turn (`sink`/`turn_id`) — a call without it is a pure query (`record=False`, the console engine guard): no row, no audit and no Skill execution in any phase (no `skill.executed`); in dual_write it applies the Skill's advice as a pure function (`delegation_router.advise_from_input`) and the same clamp, so it answers what the turn serves when the turn's `routing.phase2_decision` commits — a turn whose record fails to commit serves the bundled engine (audit-first), which the query cannot foresee | exactly ONE decision per turn per surface; runs AFTER the bundled rule + extension-point hook; degrades to the bundled engine on any failure; skips un-booted processes. The bridge boots the registry itself since 2026-09-28 (`adapter._boot_acp_skills`, ADR-2092 G0) — before that every bridge turn was skipped |
+| L5 routing ledger + gates | `core/skills/os_skills/monitoring/` — `routing_ledger` (decision/outcome rows, closed vocabulary, ADR-0297 `has_sensitive` gate on every string), `correctness_tracker` (observable success, skill- vs bundled-routed), `rollback_detector` (trip persisted only after `routing.rollback_triggered` committed — an uncommitted trip keeps Phase 2 off in that process and is retried; audited reset), `readiness` (≥500 judged decisions, join ≥0.95 over judged decisions, per-complexity proxy evidence; bridge additionally needs the continuous 7-day console soak), `dual_write` (phase gate + clamp) | see ADR-2092; Phase 2 activation is refused and audited once per process per reason (`routing.phase2_refused`) until every gate holds. The readiness cache's transient `evaluating` placeholder (first turn after a start, or while a stale verdict refreshes) runs shadow and is never audited as a refusal; a stale verdict — `ready` included — is never served while it refreshes, and a rollback trip/reset clears the cache (a refresh in flight across it is discarded) |
 | Outcome sink | `core/learning/outcome_sink.py` | `emit_task_outcome()` / `recent_outcomes()`; content-free; fail-soft; tenant from task metadata only |
-| Task chokepoint | `core/console/corvin_core/task_manager.py::TaskManager.record_event` | emits on `task.completed` / `task.failed`; `create_task(tenant_id=…)` at both console creation sites |
+| Task chokepoint | `core/console/corvin_core/task_manager.py::TaskManager.record_event` | emits on `task.completed` / `task.failed`; `create_task(tenant_id=…)` at every production creation site (console chat, CCC chat router, both bridge sites). An omitted `tenant_id` defaults to `_default` (ADR-0007) — the task's audit record and its OUTCOME name that tenant, never the environment (`test_task_without_tenant_is_filed_under_the_default_tenant`) |
 | Audit-first store | `core/learning/event_store.py::EventStore.write_event` | core chain record (`learning.<event_type>`, content-free) FIRST via `event_persistence.core_audit_event`; no chain commit ⇒ no disk record (RuntimeError); disk record carries `audit_ref` |
 | Config adapter | `core/skills/os_skills/skill_adapter.py` | under `<CORVIN_HOME>/tenants/<t>/skills/os_delegation_router_config.json`; versions persisted WITH config snapshots; epoch persisted; `rollback()` works after restart and records `active_version` (the version whose config is live — NOT the last list entry: a rollback restores an older config and keeps the newer versions, and reporting `versions[-1]` named the wrong version in the audit trail and the routing ledger); `load_skill_config()` is the read side (mtime-cached, never writes; files written before `active_version` existed fall back to the last entry) |
-| Router consumption | `core/skills/os_skills_phase1.py::DelegationRouterSkill.execute` | optional `tenant_id` input → learned `confidence_threshold`; `shadow`/`bundled_engine` echoed |
+| Router consumption | `core/skills/os_skills/delegation_router.py::DelegationRouterSkill.execute` → `_learned_threshold` (re-exported by `os_skills_phase1.py`) | optional `tenant_id` input → learned `confidence_threshold` (non-shadow calls only; a shadow call returns before reading it); `shadow`/`bundled_engine` echoed. The value is acted on only in `delegation_policy` dual_write (`confidence_threshold` as the de-escalation acceptance bar) |
 | Console API | `core/console/corvin_console/routes/method_discovery_api.py` | see table below; ALL real, ALL audited; CSRF on mutations; tenant from `SessionRecord` |
 | Panels | Learning Loops view (`routes/learning_analytics.py`), maturity (`routes/api_vibe_maturity.py`) | register L17 (A): they report the loops' health, they do not learn. The former `web-next/src/panels/LearningDashboard.tsx` no longer exists (checked 2026-10-25), and no web-next file reads the `learning_enabled` flag |
 
@@ -330,12 +360,19 @@ by `POST /features/toggle`, so an operator decision is never stale.
 
 * **Model-selector learner = a descriptive statistic.** Its per-turn input is a binary
   proxy (`model_selector_shadow.py`: `quality_score = 0.85` when the turn ended without an
-  error, `0.2` when it failed) plus operator ratings, and nothing in the model selection
-  reads it. The Models → Learning tab says so ("What the learner has recorded, per tier",
-  `web-next/src/pages/models/tabs/learning.tsx`; pinned by `tests/unit/learning-tab.test.tsx`).
+  error, `0.2` when it failed; the task outcome listener `0.95` / `0.3`) plus operator ratings,
+  and nothing in the model selection reads it. The Models → Learning tab says so ("What the
+  learner has recorded, per tier", `web-next/src/pages/models/tabs/learning.tsx`; pinned by
+  `tests/unit/learning-tab.test.tsx`). The per-tier task cards of the Models page read the same
+  score through `GET /v1/engine/config` and label it **"no-error score (proxy)"** with the hint
+  "Derived only from whether turns ended without an error; not a measure of answer quality."
+  (`engine-parts.tsx` `PROXY_SCORE_LABEL`; pinned by `tests/unit/task-type-card-evidence.test.tsx`).
+  Until 2026-10-27 the badge read "NN% confident" and the finding "✓ Learned confidence" —
+  a proxy presented as quality. That is why register L08 is A: it has an operator-facing reader.
 * **CEL turn grades: no console surface renders them.** The native console path records
-  `success=True` for every completed turn (`chat_runtime.py`, behind `outcome_feedback_loop`),
-  so such a grade means "turn completed", not "the stage helped". Measured 2026-10-25: the
+  `success=True` for every turn that reaches its end (`chat_runtime.py`, behind
+  `outcome_feedback_loop`; the delegated ACS/TDE branch records the run's own result), so such a
+  grade means "turn completed", not "the stage helped". Measured 2026-10-25: the
   only reader is `GET /v1/console/vibe-engineering/grades` (`routes/vibe_engineering.py`);
   its frontend hook `useStageGrades` (`web-next/src/adapters/vibe.ts`) has no consumer, so
   no panel shows a CEL grade and there is no label to change. A panel that starts rendering
@@ -356,16 +393,30 @@ on every `EventType.FEEDBACK` event BEFORE the audit-first write; a refusal rais
 
 | Layer | Module | Rule | Refusal event |
 |---|---|---|---|
-| 1 Throttle | `feedback_throttle.py` | ≤ 5 decisions / 60 s per subject, counted over `<tenant>/learning/feedback_gate/decisions.jsonl` (content-free; rejected attempts count) — never an in-process deque, the console builds a handler per request | `learning.feedback_throttled` |
+| 1 Throttle | `feedback_throttle.py` | ≤ 5 decisions / 60 s per subject (all producers), counted over that subject's own index `<tenant>/learning/feedback_gate/subjects/<sha256(subject)>/all.jsonl` (content-free; rejected attempts count; bounded tail read) — never an in-process deque, and never the tenant-wide tail, which junk on other subjects could flush | `learning.feedback_throttled` |
 | 2 Reality | `reality_check.py` | the skill ran (a `skill_executed` learning event of THIS tenant) within 24 h before the signal (+5 s skew); an optional `claimed_output_hash` must equal `execution_output_hash()` of one of those runs | `learning.feedback_rejected` (`subject_not_verifiable`, `no_corresponding_execution`) · `learning.feedback_reality_mismatch` |
-| 3 Trust | `adversarial_detector.py` | `trust_weight = max(0.1, 1 − rejected/total)` over the last 20 decisions, stamped into `signal.trust_weight`; < 0.3 → alert | `learning.adversarial_feedback_detected` (ERROR) |
+| 3 Trust | `adversarial_detector.py` | `trust_weight = max(0.1, 1 − rejected/total)` over the last 20 decisions on the subject BY THE SAME PRODUCER (`subjects/<h>/<source_key>.jsonl`), stamped into `signal.trust_weight`; < 0.3 → alert naming the producer's `source_key` | `learning.adversarial_feedback_detected` (ERROR) |
+
+**Subject, producer, atomicity (review c120).** The gate keys everything on one canonical subject
+(`feedback_gate.canonical_subject`: `skill:X` and `X` are both `X`, other forms stay raw), so two
+spellings never get two rate budgets. The trust weight belongs to the producer: `admit(source=…)`
+(the console routes pass `"console:" + consent_subject(rec)`), else `signal["producer"]` (stripped
+before the event is stored), else the event's `lom`. Only a tenant-scoped sha256 of it
+(`source_key`, `src_…`) is stored in the ledger and the gate's audit records. read → decide →
+append runs under an exclusive per-subject file lock (`subjects/<h>/.lock`, `fcntl.flock` /
+`msvcrt.locking`), and the clock is read under that lock, so parallel requests and processes
+(bridge + console) cannot exceed the window; a lock not obtained within 10 s refuses the feedback.
+`decisions.jsonl` is still appended (all subjects) for the anomaly monitor.
 
 Accepted → `learning.feedback_accepted` (with `trust_weight`). Consumers multiply by
 `adversarial_detector.weight_of(signal)` (1.0 for signals stored before the gate):
-operator-rating stats (weighted mean), the workflow optimizer's Beta update, and the router
-threshold step of `POST /feedback/skill` — that route moves a live config without storing a
-FEEDBACK event, so it calls `admit()` itself and passes `trust_weight` to
-`loop_closure.apply_outcome_to_skill`.
+operator-rating stats (weighted mean), the router threshold step of `POST /feedback/skill` — that
+route moves a live config without storing a FEEDBACK event, so it calls `admit()` itself and passes
+`trust_weight` to `loop_closure.apply_outcome_to_skill` — and the optimizer epoch of
+`POST /learning/feedback`, which scales every hypothesis delta by the weight the gate stamped
+(`feedback_gate.admitted_trust_weight(event_id)`; unknown weight → 503, the optimizer does not run)
+and returns it as `trust_weight`. (The workflow optimizer's Beta update named here before was
+retired with `workflow_optimizer_skill/confidence_calculator.py`, ADR-2282.)
 
 * `tool:<id>` ratings are refused (`subject_not_verifiable`): a tool has no execution record here.
 * `grade_pattern` checks the node exists and passes `subject_verified=True` (replaces Layer 2
@@ -399,32 +450,61 @@ surfaces: `skill_inject.detect_outcome_signal` and `skill_inject.grade_from_user
 
 | | Bridge | Console web chat |
 |---|---|---|
-| Snapshot "skills of the previous turn" | `adapter._record_last_turn_skills` after the post-turn auto-grade (skills the answer visibly used) | `chat_runtime._stream_turn_impl` → `followup_grading.record_turn_skills` with the skills the CEL step injected (`bundle.skills_to_bind`) |
+| Snapshot "skills of the previous turn" | `adapter._record_last_turn_skills` after the post-turn auto-grade (skills the answer visibly used) | `chat_runtime._stream_turn_impl`: the CEL step computes `followup_grading.injected_skill_ids(bundle, skill_block)` — the ids whose body the rendered skill block really carries (first `MAX_BINDINGS`, non-empty body, not PII-redacted); `followup_grading.record_turn_skills` runs only after the native `claude` subprocess started (`task.started` with its pid) with a prompt containing that block. `/debug-engine`, gate refusals, ACS/TDE delegation and every `no_engine` branch record nothing; an `is_error` result drops the snapshot |
 | Grading call | `adapter.process_one` (before the turn) | `routes/chat.py::_run_turn` → `followup_grading.grade_followup` (inside the session turn lock, before `stream_turn`) |
 | Switches | chat profile `inject_skills: false` / `outcome_grading: false` | the same two keys in `spec.web_chat` of `tenant.corvin.yaml` |
 | Consent | — (bridge has no console session) | active `learning_feedback` consent (`core.compliance.consent.consent_required`, the checker of `POST /learning/feedback`); a refusal or an unverifiable store = no signal |
-| Extra gate | — | the previous turn's task must be `COMPLETED` |
+| Extra gate | — | the previous turn's task must be `COMPLETED`; only skills of the session tenant's own scopes (`session`, `user`) are graded — never the shared repo `project` scope or the `task` scope (`grade_from_user_followup` with an explicit `tenant_id`) |
 | Audit | `skill.outcome_graded` (signal, skill names, score) | `console.action_performed`, `action=skill.outcome_graded.<signal>`, `target_kind=skill`, `run_id` = previous task |
 
 Both: the snapshot is in memory only, TTL 30 min, consumed by the first follow-up whether or
-not it carries a signal. The registry writes its own hash-chained `skill.grade` record.
+not it carries a signal. The console snapshot holds no prompt text (tenant, chat key, run id,
+skill ids, timestamp) and is dropped on chat delete; the console therefore produces approval and
+rejection signals only, never a rephrase signal. The registry writes its own hash-chained
+`skill.grade` record, AUDIT-FIRST: the record commits before the grade is persisted; if it cannot
+commit, nothing is persisted, the grade is not reported (no `skill.outcome_graded` /
+`console.action_performed`), and no unchained line is ever appended to the chain (the former raw
+`OSError` fallback is gone for hash-chained registries).
+
+**Once per day (decision):** an organic follow-up grade is written at most once per skill per
+channel per UTC day, deduped at write time under the registry lock
+(`SkillRegistry.grade(dedupe_marker=...)` → `DuplicateGrade`; for an active canary candidate, by
+the `~dd=<marker>` suffix of the canary grade's run id). The marker is
+`sha256("followup-grade|<UTC day>|<channel>")[:16]`, stored as `dd=<marker>` in the grade note —
+never the channel id, and not linkable across days. Bridge channel = `<channel>:<chat_key>`;
+console channel = `"console"` for the whole tenant (a new chat opens no new allowance).
+
+**Console grading gates, in order** (`followup_grading.grade_followup`, all must hold, any failure
+= no signal and nothing written): a session tenant → a snapshot for this chat younger than 30 min
+(popped, so it is consumed even if a later gate fails) → an active `learning_feedback` consent → the
+previous turn's task `COMPLETED` → then inside `grade_from_user_followup`: the tenant switches
+`spec.web_chat.inject_skills` / `outcome_grading` not `false`, a detected signal, only `session` /
+`user` scope skills of the session tenant, once per day per skill (above).
 
 **Detection rules** (precedence rejection > approval > rephrase, unchanged):
 
-* Rejection: substring match on `_OUTCOME_REJECTION_PHRASES` (unchanged).
-* Approval: token match on `_OUTCOME_APPROVAL_PHRASES` — word boundaries, so "top" never fires
-  inside "stopp"/"laptop", "great" not inside "greater". `_OUTCOME_APPROVAL_EXACT` ("gut", "good",
-  "nice", …) count only as the whole message.
-* Negation guard: a negator ("nicht", "kein*", "nie", "nein", "not", "no", "never", "isn't", …, and
-  "alles andere als" / "far from" / "anything but") within 3 tokens before or after the phrase voids the
-  approval. A negated praise is NO signal, not a rejection.
-* Length guard: approval only for messages of at most `_OUTCOME_APPROVAL_MAX_WORDS = 12` tokens. **A
-  decision, not a measurement:** praise for an answer is short; a longer message is a new request or a
-  discussion in which a praise word is incidental. A missed approval costs one grade; a false one can
-  promote a skill. It applies to approval only — rejection keeps its earlier behaviour.
+* Both sides match TOKENS (word boundaries), never substrings: "nochmal" does not fire inside
+  "nochmals", "wrong" not inside "wrongful", "no, " not inside "Bruno, ".
+* A message containing `?`, or a token longer than `_OUTCOME_MAX_TOKEN_CHARS = 40` characters, carries
+  no approval or rejection signal.
+* Rejection: a phrase from `_OUTCOME_REJECTION_PHRASES`, or "nein"/"no"/"nope" followed by `,` `.` `!` or
+  the end; "nochmal" followed by a thank-you ("nochmal danke") is not a rejection. Only for messages of at
+  most `_OUTCOME_REJECTION_MAX_WORDS = 20` tokens. **A decision, not a measurement:** a correction is short
+  but may carry a one-clause reason; a longer message is a new request in which a criticism word is
+  incidental.
+* Approval: at most `_OUTCOME_APPROVAL_MAX_WORDS = 12` tokens (a decision, unchanged); no negator ANYWHERE
+  in the message (single tokens and the multi-word forms "alles andere als", "far from", "anything but",
+  "would not say", "not really", "nicht wirklich", …); no void cue (`_OUTCOME_APPROVAL_VOIDERS`: a new
+  request "bitte"/"jetzt"/"please"/"now", a contrast "aber"/"but"/"anders"/"else", a conditional
+  "wäre"/"would", a sarcasm marker "kaputt"/"broken"/"wasting", …); no double quote / guillemet (a quotation) and no eye-roll/anger emoji; then a phrase from
+  `_OUTCOME_APPROVAL_PHRASES`, or the whole message is one of `_OUTCOME_APPROVAL_EXACT` ("gut", "good",
+  "nice", "stimmt", "correct", "genau", "great", "richtig", "super", "top", "passt", …), which never count
+  inside a sentence. A voided praise is NO signal, not a rejection. A missed signal costs one grade; a
+  false one changes what gets injected.
 
-**Privacy:** the user's text is read, never stored. The grade note names only the signal and the
-previous run id; the learning-inbox event carries skill id + signal; the console audit carries the enum.
+**Privacy:** the user's text is read, never stored — on the console not even the previous prompt is
+kept in memory. The grade note names only the signal, the previous run id and the day-bound dedupe
+hash; the learning-inbox event carries skill id + signal; the console audit carries the enum.
 
 **Scores and the cap are unchanged:** approval 0.9, rejection 0.1, rephrase 0.3. The follow-up grade
 is `organic=True` and is NOT clamped to `AUTO_GRADE_CAP_MAX` (0.3): one seed grade plus one approval
@@ -433,7 +513,12 @@ reaches a mean of 0.6, above the session→project promotion bar. Whether that s
 
 Proof: `corvin_operator/bridges/shared/test_outcome_praise_e2e.py` (phrase/negation table + three
 `adapter.process_one` turns), `core/console/tests/test_followup_grading_ws_e2e.py` (two turns over the
-real chat WebSocket: approval, rejection, negated/incidental praise, no consent, tenant opt-out).
+real chat WebSocket: approval, rejection, negated/incidental praise, no consent, tenant opt-out, a
+skill the renderer dropped, `/debug-engine`, an error answer, a cancelled turn, another tenant's project-scope skill with a
+real repo-shaped project root, no prompt text in the snapshot, chat delete, a failing `skill.grade`
+writer with `verify_chain` and the ADR-0232 `audit_chain_intact` tripwire green, once-per-day dedupe),
+`corvin_operator/skill-forge/tests/test_grade_audit_first.py` (MCP `skill_grade` over the JSON-RPC loop
+with a failing writer: error response, nothing persisted, chain verifies).
 
 ## Registry hardening (2026-09-07 adversarial review F-K2/F-K3/F-K5/F-K6/F-K8)
 
@@ -444,7 +529,7 @@ real chat WebSocket: approval, rejection, negated/incidental praise, no consent,
 | Compliance tier | `SkillMetadata.tier` (`compliance` / `core` / `installed`) | `os.capabilities` is `compliance`: `unregister()` / `disable_skill()` raise `SkillDisableRefused`, the 3-failure auto-disable is refused — every refusal is audited as `skill.disable.refused`. |
 | Lost-update guard | `SkillAdapter._locked()` | `fcntl.flock` on `<config>.lock` + RELOAD inside the lock around `run_optimizer_epoch` / `rollback`; two concurrent feedback requests advance the epoch by two, never one. |
 | Namespace gate | `skill_forge.registry.SkillRegistry(caller_persona=…)` | create/update/delete/grade/promote are gated on `forge.policy` namespaces when a persona is attached (MCP server hands its turn persona over; console routes act as `assistant` → `assistant.*` only, 422 otherwise). Fail-closed when the policy cannot be loaded. |
-| Grade cap | `SkillRegistry.grade(..., organic=False)` | non-organic grades (self-award, auto, bootstrap) are clamped to `AUTO_GRADE_CAP_MAX = 0.3` and audited `capped`; only a caller vouching for a real run passes `organic=True` (MCP `skill_grade` with a `run_id`; `skill_inject.grade_from_user_followup` — an outcome grade backed by the previous turn's `run_id` and the operator's own follow-up). The post-turn auto-grade stays non-organic. |
+| Grade cap | `SkillRegistry.grade(..., organic=False)` | non-organic grades (self-award, auto, bootstrap) are clamped to `AUTO_GRADE_CAP_MAX = 0.3` and audited `capped`; only a caller vouching for a real run passes `organic=True` (MCP `skill_grade` with a `run_id`; `skill_inject.grade_from_user_followup` — an outcome grade backed by the previous turn's `run_id` and the operator's own follow-up). The post-turn auto-grade stays non-organic. `grade()` is audit-first: the `skill.grade` record commits before the grade is persisted; a failed record raises and persists nothing. |
 | Ungraded injection | `skill_context.resolve_inject_ungraded` | conjunctive: `CORVIN_DELEGATE_INJECT_SKILLS_UNGRADED=1` alone never widens; `=0` always narrows. |
 
 ## Invariants (must NOT be weakened)
@@ -453,6 +538,33 @@ real chat WebSocket: approval, rejection, negated/incidental praise, no consent,
   Skill may only de-escalate to `native` (the ADR-0251 D2 bound hooks already obey),
   never over an explicit `/delegate`, and only after `routing.phase2_decision`
   committed to the chain (ADR-2092 G3/G4).
+* **An outcome has three kinds: `ok: true`, `ok: false`, NOT-JUDGED** (ADR-2092 G1 as
+  amended 2026-10-27, both surfaces). A turn that was cancelled (console client
+  disconnect / cancellation `rc == -1`, bridge `/cancel`), killed by a restart (the boot
+  reaper marks the console task `orphaned_on_restart` and records the routing turn named
+  by the task's `task.routing` event), or in which no engine ran (gate/budget/quota
+  refusal, debug engine, empty `/use-engine` directive) is recorded with `"ok": null`
+  and `"excluded": "<cancelled|orphaned|no_engine>"` (closed set,
+  `routing_ledger.EXCLUDED_REASONS`). It is counted and visible (`summarize()` →
+  `not_judged`, `not_judged_by_reason`; `Readiness.not_judged`) but excluded from the
+  join-rate numerator AND denominator, from every success rate and from the rollback
+  judge. A bridge refusal is never a native success any more; a cancelled ACS run is
+  never an ACS failure. Old ledger lines (no `excluded` key, bool `ok`) still read as
+  judged. A bridge turn killed by a restart has no task reaper link and still counts as
+  a missing outcome.
+* **The bridge soak (ADR-2092 G4) is continuous** (`readiness.console_soak_start`):
+  the bridge may enter Phase 2 only when the console has been in dual_write for
+  `CONSOLE_SOAK_S` (7 days) since the LATER of (a) the first console decision of the
+  current unbroken dual_write run, (b) the last rollback trip and (c) the last rollback
+  reset. "Unbroken": no two consecutive console decisions recorded `phase: dual_write` —
+  and not the newest one and now — are more than `SOAK_MAX_GAP_S` (24 h) apart, so
+  console dual_write decisions must exist in the last 24 h. An unreadable rollback
+  state is no soak (fail-closed). The phase read is the EFFECTIVE phase recorded per
+  decision: `CORVIN_ACP_PHASE=phase2_dual_write` on a console whose own gates do not
+  hold records `shadow` and starts no soak.
+* An explicit `/use-engine tiered_delegation` choice never reaches the router: no Phase-2
+  decision can be audited for a route the TDE branch does not serve; it is recorded post hoc
+  as a forced TDE route (`force_delegate`, shadow).
 * The core chain admits only the PROCESS tenant (ADR-0007). A learning event
   for another tenant is refused by the writer, detected by the read-back, and
   **not written to disk** — counted in `EventEmitter.write_failures`. Tests
@@ -467,7 +579,10 @@ real chat WebSocket: approval, rejection, negated/incidental praise, no consent,
   move a parameter by at most 0.20, and every accepted change is reversible.
 * Learning brake (ADR-2304): a freeze is audit-first, only stops writes, never rolls back,
   never lifts itself, and has no flag, env variable or setting; it covers `SkillAdapter` AND
-  the DoD weights. Only `skill.config_oscillation` / `skill.confidence_regression` freeze.
+  the DoD weights. Only `skill.config_oscillation` / `skill.confidence_regression` freeze; the
+  DoD weights freeze on the oscillation counted from their chained `skill_config_updated`
+  records (their weight file has no versions), never on confidence (their `skill_executed`
+  carries none).
 * The `:unverified_causality` label (ADR-2305 Part 1) is always present on an accepted hypothesis.
   No Phase 2 state removes it; only the causal test (Part 2), which does not exist yet, may.
 
@@ -513,9 +628,11 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   tests that exercised only them. What remains: `EventStore` / `outcome_sink` (events, register
   L03, A), `stream4_skill_feedback` -> `loop_closure.apply_outcome_to_skill` -> `SkillAdapter`
   (the one feedback path that writes a config, register L05, B: its reader is the gated Phase 2),
-  `model_selection_*` (descriptive statistics, L08, B) and the dashboards (L17, A). There
-  is no automatic optimizer: nothing reads a learned router threshold outside the gated Phase 2
-  path, so an optimizer for it would close no loop. Method note: a plain importer graph MISSES
+  `model_selection_*` (descriptive statistics over proxies, L08, A: shown on the Models page,
+  never read by the selection) and the dashboards (L17, A). The operator-triggered epoch test of
+  `POST /learning/feedback` also writes the router threshold (L05). There is no automatic
+  optimizer: nothing reads a learned router threshold outside the gated Phase 2 path, so an
+  optimizer for it would close no loop. Method note: a plain importer graph MISSES
   names re-exported by `core/learning/__init__.py` (`from core.learning import LearningIntegration`
   is a production import of `integration`); resolve re-exports before calling anything dead.
 * **ADR-2157's SkillScore modules retired (2026-10-26, ADR-2296, T-0282).** `core/skills/confidence_calculator.py`,
@@ -589,6 +706,13 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   365 decisions, join 0.923, 36 delegating, 0 disagreements → `insufficient_samples`
   (and the join rate is below 0.95). Bridge: 962 decisions, join 0.989, 26 delegating,
   1 disagreement → `console_soak_incomplete`. No Phase-2 decision is proposed.
+  Re-measured 2026-10-27 on a read-only copy of the live ledger with the amended
+  gates: console 369 decisions, join 0.9241, 36 delegating, 0 disagreements →
+  `insufficient_samples`; bridge 1072 decisions, join 0.9897 → `console_soak_incomplete`
+  (no console decision has ever been recorded with an effective `dual_write` phase).
+  No historic line is NOT-JUDGED: the exclusion applies to turns recorded from now on.
+  Had the 24 NOTE-0011 console turns (23 restart kills, 1 pre-spawn refusal) been
+  recorded NOT-JUDGED, the console would read 345 decisions, join 0.9884.
 * `DelegationRouterSkill` advises in model tiers (`claude-haiku-4 / sonnet-4 /
   opus-5`), not in `delegation_policy` engine ids (`native / acs / tde`); the
   shadow record carries both so agreement is measurable, but the advice cannot
@@ -600,8 +724,13 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
 ## Operator skill feedback route (Stream 4)
 
 `POST /v1/console/feedback/skill` (mounted from `routes/stream4_skill_feedback.py`) takes a
-rating in `-2..2` for `os.workflow_optimizer` / `os.security_orchestrator` / `os.flow_guard`.
-The rating's sign becomes the OUTCOME signal (`>0` yes, `<0` no, `0` other). The route chains a
+rating in `-2..2` for `os.delegation_router` / `os.workflow_optimizer` /
+`os.security_orchestrator` / `os.flow_guard` (`VALID_SKILLS`).
+The rating's sign becomes the OUTCOME signal (`>0` yes, `<0` no, `0` other).
+The route is consent-gated like `POST /learning/feedback`: without an active `learning_feedback`
+consent for the session's consent subject it answers 403, records `console.action_denied`
+(`reason: consent_required`) and gates, chains and stores nothing. It passes the ADR-0534 trust
+gate itself (refusal → 422) before anything is chained. The route chains a
 `skill_feedback` event FIRST (signal only — no free text); if the chain does not commit it
 answers 500 and stores nothing. It then appends the structured record (ids, rating, category —
 never the free-text reason) to `<tenant>/learning/skill_feedback/events.jsonl`
@@ -614,7 +743,9 @@ config back through `load_skill_config`) the outcome moves `confidence_threshold
 `config_applied` / `config_version`; a rating of 0 ("other") and a threshold already at its bound
 change nothing; for every other skill the feedback is audited and stored only, and the message
 says the skill reads no learned config yet. A config write that cannot be audited fails and the
-feedback stays stored.
+feedback stays stored. The rating names an arbitrary `subject_id` and is joined to no routing
+decision, so it is a **proxy** of routing correctness (register L05, `target: none`); the
+threshold it moves acts only in a cleared Phase 2.
 Proof: `tests/e2e/test_stream4_skill_feedback_console_e2e.py`.
 
 **Where an operator rates (2026-10-13).** Until then no reachable console surface posted here — the
@@ -656,7 +787,9 @@ The loop (`core/console/corvin_console/routes/dod_verifier_dashboard.py`):
    Then the tenant file is written.
 
 Each rating raises the confidence of one weight by 0.1, so a weight is first applied after its sixth
-accepted rating. Feedback traffic is near zero today: the loop is wired but mostly idle.
+accepted rating. Feedback traffic is near zero today: the loop is wired but mostly idle. More than
+3 chained weight changes in one hour freeze the weights (learning brake, below); a frozen weight
+file answers 409 `learning_frozen` and stores no change.
 Proof: `tests/learning/test_adr_2284_dod_weight_loop_e2e.py` (verify → 6 ratings → verify over HTTP;
 defaults until the gate, one chained record per change, the gate's throttle refuses a burst).
 
@@ -670,7 +803,7 @@ the record committed; it is forgotten when the condition clears.
 | Event | Condition | Source |
 |---|---|---|
 | `skill.high_rejection_rate` | > 20 % of ≥ 10 gate decisions on one subject refused in 24 h | `<tenant>/learning/feedback_gate/decisions.jsonl` |
-| `skill.config_oscillation` | > 3 config versions of one skill in 1 h | `<tenant>/skills/*_config.json` |
+| `skill.config_oscillation` | > 3 config versions of one skill in 1 h; for the DoD weights > 3 changes in 1 h | `<tenant>/skills/*_config.json` (`versions`); DoD: the tenant core chain's `skill_config_updated` records of `os.definition_of_done_verifier` (`param_name: dod_weights`) |
 | `skill.confidence_regression` | mean `output.confidence` of the last 24 h ≥ 0.10 below the 6 days before (≥ 20 each) | `skill_executed` learning events |
 | `skill.convergence_stall` (ADR-2284) | newest ≥ 20 (≤ 200) OUTCOME events of a skill in four equal windows: loss `1 − success_rate` > 0.20 in every window, max − min < 0.02 | OUTCOME learning events (`signal.success`, else `signal.passed`) |
 | `skill.latency_regression` (ADR-2284) | p95 of `latency_ms` over the last 24 h > 1.5 × the p95 of the 6 days before (≥ 20 each side, nearest-rank p95) | `skill.executed` records of the tenant CORE chain (legacy `skill_executed` too; newest ≤ 50 000 read, needle-filtered) — the learning store's `SKILL_EXECUTED` signal carries `execution_time_ms`, not `latency_ms`, so the chain is the stored source |
@@ -694,26 +827,39 @@ writes, e.g. `os.delegation_router`); until 2026-10-26 it fell back to the file 
 ### Learning brake (ADR-2304, PLAN-0966 WP3, 2026-10-26)
 
 An anomaly may stop a change, never cause one. `anomaly_monitor.FREEZES_LEARNING` =
-`skill.config_oscillation`, `skill.confidence_regression` (operator decision D2); stall, latency and
-rejection rate only report.
+`skill.config_oscillation`, `skill.confidence_regression` (operator chat answers of 2026-10-26 to
+PLAN-0966: D1 "ja", D2 "okay"; recorded as a dated amendment in ADR-2304, which stays `proposed`);
+stall, latency and rejection rate only report. For SkillAdapter skills the oscillation is counted
+from the config file's `versions`; for `os.definition_of_done_verifier` (whose weight file has no
+versions) from the tenant core chain's `skill_config_updated` records for that skill - more than 3
+in one hour, anomaly `param_name: dod_weights`. The confidence regression does not apply to the DoD
+skill: its production `skill_executed` records carry `output = {score, passed}`, never a confidence.
 
 | Step | Where | Contract |
 |---|---|---|
-| Freeze | `LearningHost._check_anomalies` → `_freeze` → `skill_adapter.freeze_learning` → `SkillAdapter.freeze` | only AFTER the anomaly record committed; audit-first: `learning.frozen` (WARNING) on the tenant chain, then `OptimizerState.frozen/frozen_reason/frozen_since` persisted in `<tenant>/skills/<skill>_config.json` (`optimizer`). Not committed → nothing frozen, the anomaly entry has no `freeze` key and the next check retries. Done once per anomaly episode (`freeze: frozen` on the host's anomaly entry); a bad skill id is `freeze: invalid_skill_id`, never retried |
-| Refuse | `SkillAdapter._apply_config_delta_locked`, `SkillAdapter._run_optimizer_epoch_locked`, `WeightPersistence.save_weights`, `dod_verifier_dashboard` feedback route | `LearningFrozen` raised, no config/weight change, not even an epoch tick; one `learning.freeze_refused_write` (`target: skill_config` or `dod_weights`). The refusal holds even if its record does not commit. The DoD weights are frozen under `os.definition_of_done_verifier` (`weight_persistence.DOD_SKILL_ID`); an unreadable brake file reads as frozen (`brake_state_unreadable`) |
-| Surface | `POST learning/feedback` → hypotheses `optimizer_reason: learning_frozen` (feedback still recorded); `POST /feedback/skill` → `config_applied: false` with the note `config not updated: LearningFrozen`; `POST /api/dod/feedback` → 409 `{error: learning_frozen}`, no `skill_config_updated` | |
-| Lift | `POST /v1/console/learning/config/unfreeze?skill_id=` (`routes/learning.py`) | `require_csrf` (no CSRF → 403); tenant from the session only (a skill frozen in another tenant is 404 `not_frozen` here); audit-first `learning.unfrozen`, then state, then console `learning.config_unfreeze`. 503 `audit_not_committed` leaves it frozen. Never automatic, no time-out |
+| Freeze | `LearningHost._check_anomalies` → `_freeze` → `skill_adapter.freeze_learning` → `SkillAdapter.freeze` | only AFTER the anomaly record committed; audit-first: `learning.frozen` (WARNING) on the tenant chain, then `OptimizerState.frozen/frozen_reason/frozen_since` persisted in `<tenant>/skills/<skill>_config.json` (`optimizer`). Not committed → nothing frozen, the anomaly entry has no `freeze` key and the next check retries. The new state is written to a temp file BEFORE the record and renamed after it: a temp-file failure records nothing; a rename failure after the record committed chains `learning.freeze_not_applied` (ERROR) and is retried. Done once per anomaly episode (`freeze: frozen` on the host's anomaly entry). Every retry counts `freeze_attempts` on the entry and the next `learning.frozen` carries `attempt` (so a retry never reads as a second, independent freeze). Only an id failing `valid_skill_id` - checked by the host itself - is `freeze: invalid_skill_id`, never retried; a config file that exists but does not parse (one malformed number is enough) is recorded once per episode as `learning.freeze_failed` (`cause: config_unreadable`) and retried until it parses |
+| Refuse | `SkillAdapter._apply_config_delta_locked`, `SkillAdapter._run_optimizer_epoch_locked`, `WeightPersistence.save_weights`, `dod_verifier_dashboard` feedback route | `LearningFrozen` raised, no config/weight change, not even an epoch tick; one `learning.freeze_refused_write` (`target: skill_config` or `dod_weights`). The refusal holds even if its record does not commit. The DoD weights are frozen under `os.definition_of_done_verifier` (`weight_persistence.DOD_SKILL_ID`); an unreadable brake file - including a malformed number - reads as frozen (`brake_state_unreadable`). A file without an `optimizer` block reads as never frozen (legitimate pre-2026-09-06 files; the brake always writes the block); an `optimizer` that is not an object is unreadable. `WeightPersistence.save_weights(record=...)` runs brake check, the caller's `skill_config_updated` and the write under the DoD skill's config flock (`skill_adapter.brake_lock`, the lock a freeze takes), so a freeze cannot land between check and write |
+| Surface | `POST learning/feedback` → hypotheses `optimizer_reason: learning_frozen` (feedback still recorded); `POST /feedback/skill` → `config_applied: false` with the note `config not updated: LearningFrozen`; `POST /api/dod/feedback` → 409 `{error: learning_frozen}`, no `skill_config_updated`; 503 `lock_busy` when the brake lock stays held | |
+| Lift | `POST /v1/console/learning/config/unfreeze?skill_id=` (`routes/learning.py`) | `require_csrf` (no CSRF → 403); tenant from the session only (a skill frozen in another tenant is 404 `not_frozen` here); audit-first `learning.unfrozen`, then state, then console `learning.config_unfreeze`. 503 `audit_not_committed` leaves it frozen. 503 `state_not_written` when the state could not be written (if `learning.unfrozen` had committed, `learning.unfreeze_not_applied` follows it; still frozen). 422 `skill_id_alias` (+ `canonical_skill_id`) for an id that names another skill's file (`os_delegation_router` for `os.delegation_router`): one canonical id per file, the stored id is never rewritten. 409 `brake_state_unreadable` for a file that does not parse. Never automatic, no time-out |
 
 A freeze never triggers a rollback (`SkillAdapter.rollback` stays the separate manual action and
 still works while frozen). There is **no switch** — no flag, no env variable, no setting. Fields of
-the three events: `skill_id`, `reason` (the anomaly event name), `version_id`, `tenant_id`
-(+ `target` on the refusal), registered in `EVENT_SEVERITY` / `_EVENT_ALLOWLIST` and at runtime via
+the six events (`learning.frozen`, `learning.unfrozen`, `learning.freeze_refused_write`,
+`learning.freeze_not_applied`, `learning.unfreeze_not_applied`, `learning.freeze_failed`):
+`skill_id`, `reason` (a freezing anomaly name, `brake_state_unreadable` or `unknown` - a value read
+from the file is normalised, never copied), `version_id` (`v<N>`, `none` or `unparsed`), `tenant_id`
+(+ `target` on the refusal, `attempt` on frozen / freeze_not_applied / freeze_failed, `cause` on
+freeze_failed), registered in `EVENT_SEVERITY` / `_EVENT_ALLOWLIST` and at runtime via
 `skill_adapter.BRAKE_EVENTS`. Today a router freeze has no routing effect (the learned threshold is
-read only in a cleared Phase 2, register L05); it bites on the DoD weights.
+read only in a cleared Phase 2, register L05); it bites on the DoD weights, which freeze
+automatically on more than 3 stored weight changes in one hour.
 There is no unfreeze button in the console yet; the host's anomaly entry (`GET
 /v1/console/api/learning/daemon`) carries `freeze: frozen`.
 Proof: `tests/learning/test_adr_2304_learning_brake_e2e.py` (seeded oscillation → one host tick →
-one `learning.frozen` → refused writes through the console routes → unfreeze over HTTP).
+one `learning.frozen` → refused writes through the console routes → unfreeze over HTTP; the DoD
+weights frozen from four changes made through `POST /api/dod/feedback`) and
+`tests/learning/test_adr_2304_brake_review_fixes_e2e.py` (concurrent freeze vs weight write,
+compensated freeze/unfreeze, alias refusal, malformed-number retry, closed reason/version shapes).
 
 ## Data Hub learning loop (PLAN-0948, ADR-2255, 2026-10-12)
 
