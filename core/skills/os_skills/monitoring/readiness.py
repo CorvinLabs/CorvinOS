@@ -27,17 +27,31 @@ MAX_PROXY_DROP = 0.02
 WINDOW_S = 30 * 86400
 #: ADR-2092 G4 rollout order (the soak rule, :func:`console_soak_start`): the bridge
 #: may enter Phase 2 only when the console has been in dual_write CONTINUOUSLY for
-#: ``CONSOLE_SOAK_S``. The soak starts at the LATER of (a) the first console decision
-#: recorded with phase ``dual_write`` in the current unbroken run, (b) the last
-#: rollback trip and (c) the last rollback reset. "Unbroken" means no two consecutive
-#: console dual_write decisions — and not the newest one and now — are more than
-#: ``SOAK_MAX_GAP_S`` apart, so dual_write decisions must be present in the last 24 h
-#: and a console that left dual_write (env switched back, a rollback, an idle day)
-#: restarts the clock. The phase read is the EFFECTIVE one recorded per decision, not
-#: the requested ``CORVIN_ACP_PHASE``.
+#: ``CONSOLE_SOAK_S``. The soak starts at the LATER of (a) the oldest console decision
+#: of the current unbroken dual_write run, (b) the last rollback trip and (c) the last
+#: rollback reset. The run is walked newest-first over the console decisions that
+#: CONSULTED the gate (ledger ``gate`` = ``verdict``; a line without ``gate`` reads as
+#: one) and it is broken by (1) any such decision recorded with phase ``shadow`` — the
+#: env switched back, a refusal, a not-ready verdict, a rollback — and (2) a gap of more
+#: than ``SOAK_MAX_GAP_S`` between two consecutive dual_write decisions, or between the
+#: newest one and now. Decisions that never consulted the gate count neither way:
+#: ``post_hoc`` (the engine had already run; pinned to shadow) and ``pending`` (no
+#: verdict existed yet — the readiness placeholder after a cold start, an invalidation
+#: or more than an hour without a verdict; the refresh it starts lands within the
+#: turn). The phase read is the EFFECTIVE one recorded per decision, not the requested
+#: ``CORVIN_ACP_PHASE``. Review r2_s2-3: shadow decisions between dual_write ones were
+#: ignored, so a console in shadow 96 % of a week completed the soak.
 CONSOLE_SOAK_S = 7 * 86400
 SOAK_MAX_GAP_S = 86400
 _CACHE_TTL_S = 300.0
+#: Stale-while-revalidate bound. A verdict older than ``_CACHE_TTL_S`` is refreshed,
+#: and until the refresh lands the last verdict is served, as long as it is younger
+#: than this. Older, missing, or invalidated by :func:`clear_cache` (a rollback trip or
+#: reset bumps the generation and empties the cache) -> the ``evaluating`` placeholder,
+#: which ``dual_write.effective_phase`` serves as shadow. Review r2_s2-1: answering
+#: ``evaluating`` for every merely stale entry served shadow to every turn that came
+#: more than 300 s after the previous one (66 % of the live console's turns).
+_CACHE_MAX_STALE_S = 3600.0
 _cache: dict[tuple[str, str], tuple[float, "Readiness"]] = {}
 
 
@@ -64,23 +78,24 @@ def console_soak_start(records: list[dict], tenant_id: str, *,
                        now: float) -> Optional[float]:
     """Start of the console's current continuous dual_write soak, or None.
 
-    The rule (see ``CONSOLE_SOAK_S``): walk the console ``dual_write`` decisions
-    newest-first while each gap (newest-to-now included) is at most
-    ``SOAK_MAX_GAP_S``; the oldest decision reached starts the run. The soak starts
-    at the later of that and the last rollback trip/reset. None — no soak — when the
-    console has no dual_write decision in the last ``SOAK_MAX_GAP_S`` or the rollback
-    history cannot be read (fail-closed).
+    The rule is stated at ``CONSOLE_SOAK_S``. None — no soak — when the newest
+    gate-consulting console decision is shadow, when the console has no dual_write
+    decision in the last ``SOAK_MAX_GAP_S`` or when the rollback history cannot be
+    read (fail-closed).
     """
-    live = sorted((r["ts"] for r in records if r.get("kind") == "decision"
-                   and r.get("surface") == "console" and r.get("phase") == "dual_write"),
-                  reverse=True)
-    if not live or now - live[0] > SOAK_MAX_GAP_S:
-        return None
-    start = live[0]
-    for ts in live[1:]:
-        if start - ts > SOAK_MAX_GAP_S:
+    consulted = sorted(
+        ((r["ts"], r.get("phase")) for r in records
+         if r.get("kind") == "decision" and r.get("surface") == "console"
+         and r.get("gate", "verdict") == "verdict"),
+        key=lambda x: x[0], reverse=True)
+    start: Optional[float] = None
+    prev = now
+    for ts, phase in consulted:
+        if phase != "dual_write" or prev - ts > SOAK_MAX_GAP_S:
             break
-        start = ts
+        start = prev = ts
+    if start is None:
+        return None
     changed, readable = rollback_detector.last_change_ts(tenant_id)
     if not readable:
         return None
@@ -155,6 +170,10 @@ def _refresh(key: tuple[str, str]) -> None:
     with _lock:
         gen = _generation
     try:
+        rollback_detector.maybe_retry_pending(key[0])
+    except Exception:  # noqa: BLE001 — the marker keeps restricting either way
+        pass
+    try:
         result = evaluate(*key)
     except Exception:  # noqa: BLE001 — an unreadable ledger is simply "not ready"
         result = Readiness(False, "evaluation_failed", 0, None, 0)
@@ -169,16 +188,23 @@ def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) ->
     """Never scans the ledger on the caller's thread when ``background`` is True.
 
     The console calls this from inside ``stream_turn``; a ledger scan there is a
-    synchronous file read on the event loop (the 2026-09-13 stall shape). A stale
-    or missing verdict is refreshed on a daemon thread and, until it lands, the
-    answer is "not ready" (reason ``evaluating``) — the fail-safe direction: a
-    stale verdict, "ready" included, is never served while its refresh runs.
+    synchronous file read on the event loop (the 2026-09-13 stall shape).
+
+    Stale-while-revalidate (review r2_s2-1): a verdict younger than ``_CACHE_TTL_S``
+    is served as is; an older one is refreshed on a daemon thread and served until
+    the refresh lands, up to ``_CACHE_MAX_STALE_S``. A missing verdict, one older
+    than that, and anything :func:`clear_cache` invalidated (every rollback trip or
+    reset) answer "not ready" (reason ``evaluating``) until a fresh one lands. The
+    rollback state is never read from here: ``effective_phase`` checks
+    ``rollback_active`` before it asks for a verdict.
     """
     key = (tenant_id, surface)
     now = time.monotonic()
     with _lock:
         hit = _cache.get(key)
-        fresh = hit is not None and now - hit[0] < _CACHE_TTL_S
+        age = None if hit is None else now - hit[0]
+        fresh = age is not None and age < _CACHE_TTL_S
+        servable = age is not None and age < _CACHE_MAX_STALE_S
         start = not fresh and key not in _refreshing
         if start:
             _refreshing.add(key)
@@ -189,13 +215,13 @@ def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) ->
             _refresh(key)
         with _lock:
             hit = _cache.get(key)
-            if hit is not None and time.monotonic() - hit[0] < _CACHE_TTL_S:
+            if hit is not None and time.monotonic() - hit[0] < _CACHE_MAX_STALE_S:
                 return hit[1]
             return _EVALUATING
     if start:
         threading.Thread(target=_refresh, args=(key,), daemon=True,
                          name="l5-readiness").start()
-    return _EVALUATING
+    return hit[1] if servable else _EVALUATING
 
 
 def clear_cache() -> None:

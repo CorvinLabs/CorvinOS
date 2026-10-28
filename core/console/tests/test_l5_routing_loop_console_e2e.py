@@ -294,3 +294,157 @@ class ConsoleNotJudgedOutcomesE2E(_StreamTurnE2EBase):
         self.assertTrue(row["features"].get("force_delegate"))
         self.assertEqual(row["outcome"]["used"], "tde")
         self.assertEqual([e for e in self._chain() if e["event_type"] == "routing.phase2_decision"], [])
+
+
+# ── review r2_s2 (2026-10-28) ───────────────────────────────────────────────
+
+class ConsoleRoundTwoRoutingE2E(_StreamTurnE2EBase):
+    def setUp(self) -> None:
+        super().setUp()
+        from core.skills.os_skills.monitoring import dual_write
+
+        dual_write.reset_for_tests()
+        self.addCleanup(dual_write.reset_for_tests)
+        self.addCleanup(os.environ.pop, "CORVIN_ACP_PHASE", None)
+
+    _rows = ConsoleNotJudgedOutcomesE2E._rows
+    _chain = ConsoleNotJudgedOutcomesE2E._chain
+    _slow_acs = ConsoleNotJudgedOutcomesE2E._slow_acs
+
+    def _ws_turn(self, prompt: str) -> list[dict]:
+        """One turn through the REAL chat WebSocket route (routes/chat.py)."""
+        from unittest.mock import MagicMock
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from corvin_console.routes import chat as chat_routes
+
+        rec = MagicMock()
+        rec.tenant_id = TENANT
+        rec.sid_fingerprint = "fp-r2-s2"
+        app = FastAPI()
+        app.include_router(chat_routes.router, prefix="/v1/console")
+        wire: list[dict] = []
+        with patch.object(chat_routes.session_auth, "load_session", return_value=rec), \
+             patch("corvin_console.routes._compute_license_gate.enforce_chat_turns",
+                   lambda *a, **k: None):
+            client = TestClient(app)
+            client.cookies.set("corvin_console_sid", "valid-sid")
+            with client.websocket_connect(
+                    f"/v1/console/chat/sessions/{self.sess.sid}/stream") as ws:
+                self.assertEqual(ws.receive_json()["type"], "ready")
+                ws.send_json({"type": "user", "text": prompt})
+                while True:
+                    ev = ws.receive_json()
+                    wire.append(ev)
+                    if ev.get("type") == "done":
+                        break
+        return wire
+
+    def test_guard_and_turn_route_on_one_phase_decision_over_the_websocket(self) -> None:
+        """r2_s2-2: on a cold/expired readiness cache the engine guard read 'evaluating'
+        (shadow: 'will delegate' -> the engine-unavailable 503 skipped) and the turn, after
+        the refresh landed, read 'ready' and de-escalated to the undrivable native engine."""
+        from audit import audit_event
+        from core.skills.boot import boot_skills
+        from core.skills.os_skills.monitoring import readiness
+
+        boot_skills(tenant_id=TENANT, wire_learning=False,
+                    audit_emit=lambda e, d: audit_event(e, details=d, tenant_id=TENANT))
+        _seed_console_ready()
+        os.environ["CORVIN_ACP_PHASE"] = "phase2_dual_write"
+        readiness.clear_cache()                   # cold: no verdict yet
+        self._pin_house_rules_allowed()
+        self._inject_license_ok()
+        self._inject_fake_acs()
+        spawn = self._no_spawn_guard()
+        real_guard = self.cr.will_delegate
+
+        def guard_then_refresh_lands(sess, prompt, **kw):
+            out = real_guard(sess, prompt, **kw)
+            # The refresh the guard's cold read started lands before the turn starts.
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                hit = readiness._cache.get((TENANT, "console"))
+                if hit is not None and hit[1].ready:
+                    break
+                time.sleep(0.02)
+            return out
+        import delegation_policy as dp
+
+        with patch.object(self.cr, "_delegation_enabled", return_value=True), \
+             patch.object(self.cr._feature_flags, "worker_engine_mode", return_value="acs"), \
+             patch.object(self.cr, "get_engine_unavailable_message",
+                          return_value="The OS engine is not set up."), \
+             patch.object(self.cr, "will_delegate", guard_then_refresh_lands), \
+             patch.object(dp, "routing_features",
+                          lambda p, tenant_id="_default": dict(SIMPLE_FEATS)):
+            wire = self._ws_turn(FANOUT)
+        self.assertFalse(any(e.get("type") == "error" and e.get("code") == 503 for e in wire), wire)
+        (row,) = [r for r in self._rows() if r.get("turn_id") and r["features"] == SIMPLE_FEATS
+                  | {"force_delegate": False, "is_big_data": False, "mode": "acs",
+                     "tde_available": False, "quota_ok": False}]
+        # The guard said "delegates" on a shadow decision; the turn served the same.
+        self.assertEqual((row["phase"], row.get("gate"), row["used"], row["source"]),
+                         ("shadow", "pending", "acs", "bundled"), row)
+        self.assertFalse(spawn["hit"], "the undrivable native engine must not be spawned")
+        self.assertEqual([e for e in self._chain() if e["event_type"] == "routing.phase2_decision"], [])
+
+    def test_the_detached_turn_watchdog_is_a_judged_failure(self) -> None:
+        """r2_s2-5: the server's own watchdog (detached_timeout) cut a hung engine and the
+        outcome was recorded NOT-JUDGED 'cancelled'. Driven through routes/chat.py
+        ``_detach_turn`` with its bound shortened."""
+        from corvin_console.routes import chat as chat_routes
+
+        self._pin_house_rules_allowed()
+        self._inject_license_ok()
+        self._slow_acs()
+        self._no_spawn_guard()
+
+        async def drive():
+            agen = self.cr.stream_turn(self.sess, FANOUT)
+
+            async def collect():
+                async for _ in agen:
+                    pass
+            t = asyncio.ensure_future(collect())
+            await asyncio.sleep(1.0)
+            with patch.object(chat_routes, "_detached_turn_max_s", return_value=2.0):
+                chat_routes._detach_turn(t, tenant_id=TENANT, sid_fingerprint="fp",
+                                         sid=self.sess.sid)
+            try:
+                await asyncio.wait_for(t, timeout=20)
+            except BaseException:  # noqa: BLE001
+                pass
+        with patch.object(self.cr, "_delegation_enabled", return_value=True), \
+             patch.object(self.cr._feature_flags, "worker_engine_mode", return_value="acs"):
+            asyncio.run(drive())
+        (row,) = self._rows()
+        self.assertEqual(row["used"], "acs")
+        self.assertEqual((row["outcome"]["ok"], row["outcome"].get("excluded")), (False, None))
+
+    def test_an_operator_stop_stays_not_judged(self) -> None:
+        self._pin_house_rules_allowed()
+        self._inject_license_ok()
+        self._slow_acs()
+        self._no_spawn_guard()
+
+        async def drive():
+            agen = self.cr.stream_turn(self.sess, FANOUT)
+
+            async def collect():
+                async for _ in agen:
+                    pass
+            t = asyncio.ensure_future(collect())
+            await asyncio.sleep(1.0)
+            self.cr.note_cancel_reason(TENANT, self.sess.sid, "operator")
+            t.cancel()
+            try:
+                await t
+            except BaseException:  # noqa: BLE001
+                pass
+        with patch.object(self.cr, "_delegation_enabled", return_value=True), \
+             patch.object(self.cr._feature_flags, "worker_engine_mode", return_value="acs"):
+            asyncio.run(drive())
+        (row,) = self._rows()
+        self.assertEqual((row["outcome"]["ok"], row["outcome"].get("excluded")), (None, "cancelled"))

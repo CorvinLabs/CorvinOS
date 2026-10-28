@@ -270,6 +270,21 @@ def _mirror_dual_write(*, tenant_id: str, bundled: str, force_delegate: bool,
         return bundled
 
 
+def turn_phase_decision(*, tenant_id: str, surface: str) -> object | None:
+    """Decide ONE turn's L5 phase up front, for a caller with more than one reader
+    of the same turn (the console: engine guard + turn). Pure: no audit, no ledger
+    row. ``None`` when the decision cannot be made — each reader then decides for
+    itself, as before."""
+    try:
+        from core.skills.os_skills.monitoring import dual_write  # noqa: PLC0415
+
+        surface = surface if surface in ROUTING_SURFACES else "console"
+        return dual_write.decide(tenant_id=tenant_id, surface=surface,
+                                 skill_available=_router_registry() is not None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def route_and_record(
     *,
     tenant_id: str,
@@ -283,6 +298,7 @@ def route_and_record(
     sink: dict | None = None,
     record: bool = True,
     post_hoc: bool = False,
+    phase_decision: object | None = None,
 ) -> str:
     """Serve the bundled engine or — in a cleared Phase 2 — the Skill's de-escalation.
 
@@ -302,7 +318,14 @@ def route_and_record(
     ``post_hoc=True`` records a turn whose engine ALREADY ran (a path that never
     reached the rule). It is pinned to shadow: the Skill's advice is recorded,
     never served, and no ``routing.phase2_decision`` is written for a route
-    change that did not happen.
+    change that did not happen. Its decision row carries ``gate: post_hoc``.
+
+    ``phase_decision`` (a ``dual_write.PhaseDecision``) carries ONE turn's phase
+    decision from an earlier reader of the same turn — the console engine guard —
+    so guard and turn never read the readiness cache twice (review r2_s2-2).
+    It is re-checked only in the restrictive direction (``dual_write.restrict``).
+    Without it the phase is decided here. ``sink["phase_decision"]`` receives the
+    decision used.
     """
     try:
         from core.skills.os_skills.monitoring import dual_write, routing_ledger  # noqa: PLC0415
@@ -322,16 +345,26 @@ def route_and_record(
         return _audit(event_type, details, tenant_id=tenant_id)
 
     registry = _router_registry()
+    gate = "verdict"
     try:
-        phase = dual_write.effective_phase(
-            tenant_id=tenant_id, surface=surface,
-            skill_available=registry is not None,
-            audit=_audit_fn if record else None,
-        )
+        carried = phase_decision
+        if (carried is not None and getattr(carried, "tenant_id", None) == tenant_id
+                and getattr(carried, "surface", None) == surface):
+            # One decision per turn (review r2_s2-2): the guard's decision is the
+            # turn's. It may only become MORE restrictive here, never less.
+            decision = dual_write.restrict(carried, skill_available=registry is not None)
+        else:
+            decision = dual_write.decide(tenant_id=tenant_id, surface=surface,
+                                         skill_available=registry is not None)
+        if sink is not None:
+            sink["phase_decision"] = decision
+        if record:
+            dual_write.audit_refusal(decision, _audit_fn)
+        phase, gate = decision.phase, decision.gate
     except Exception:  # noqa: BLE001 — a gate that cannot decide keeps shadow
         phase = "shadow"
     if post_hoc:
-        phase = "shadow"
+        phase, gate = "shadow", "post_hoc"
     if not record:
         if phase == "shadow" or registry is None:
             return bundled
@@ -375,7 +408,7 @@ def route_and_record(
         routing_ledger.record_decision(
             tenant_id=tenant_id, turn_id=turn_id, surface=surface, phase=phase,
             bundled=bundled, used=used, source=source, skill=skill_engine,
-            skill_conf=skill_conf, clamped=clamped, features=feats,
+            skill_conf=skill_conf, clamped=clamped, features=feats, gate=gate,
         )
     except Exception:  # noqa: BLE001 — the ledger never costs the turn
         pass
@@ -452,6 +485,7 @@ def resolve_worker_engine(
     surface: str = "console",
     features: dict | None = None,
     sink: dict | None = None,
+    phase_decision: object | None = None,
 ) -> str:
     """The bundled rule (plus the ADR-0251 hook), then :func:`route_and_record`."""
     bundled = _resolve_worker_engine(
@@ -469,6 +503,7 @@ def resolve_worker_engine(
         is_big_data=is_big_data, mode=mode, surface=surface,
         turn_id=turn_id or request_id, features=feats, sink=sink,
         record=sink is not None or bool(turn_id or request_id),
+        phase_decision=phase_decision,
     )
 
 

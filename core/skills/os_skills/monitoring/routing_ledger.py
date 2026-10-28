@@ -36,6 +36,11 @@ ENGINES = frozenset({"native", "acs", "tde"})
 SURFACES = frozenset({"bridge", "console"})
 PHASES = frozenset({"shadow", "dual_write"})
 SOURCES = frozenset({"bundled", "skill"})
+#: How a decision's phase came about: the gate answered (``verdict``), no verdict
+#: existed yet and the turn ran shadow (``pending``, the readiness placeholder), or
+#: the engine had already run and the record is pinned to shadow (``post_hoc``).
+#: Lines written before 2026-10-28 carry no ``gate`` and read as ``verdict``.
+GATES = frozenset({"verdict", "pending", "post_hoc"})
 #: Why an outcome is not judged. Closed: a reader rejects any other value.
 EXCLUDED_REASONS = frozenset({"cancelled", "orphaned", "no_engine"})
 
@@ -130,8 +135,11 @@ def record_decision(
     skill_conf: Optional[float] = None,
     clamped: bool = False,
     features: Optional[dict] = None,
+    gate: str = "verdict",
 ) -> bool:
     if surface not in SURFACES or phase not in PHASES or source not in SOURCES:
+        return False
+    if gate not in GATES:
         return False
     if bundled not in ENGINES or used not in ENGINES:
         return False
@@ -156,6 +164,7 @@ def record_decision(
         "source": source,
         "clamped": bool(clamped),
         "features": clean_features(features),
+        "gate": gate,
     })
 
 
@@ -232,7 +241,8 @@ def _well_formed(rec: Any) -> bool:
     kind = rec.get("kind")
     if kind == "decision":
         return (rec.get("bundled") in ENGINES and rec.get("source") in SOURCES
-                and isinstance(rec.get("features"), dict))
+                and isinstance(rec.get("features"), dict)
+                and rec.get("gate", "verdict") in GATES)
     if kind == "outcome":
         # Backward compatible: every line written before 2026-10-27 is a judged
         # outcome (ok bool, no "excluded" key).

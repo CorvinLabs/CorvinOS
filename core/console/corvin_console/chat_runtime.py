@@ -2394,7 +2394,8 @@ def get_engine_unavailable_message(tenant_id: str) -> str | None:
     return _engine_unavailable_message(_effective_os_engine(tenant_id, audit=False))
 
 
-def will_delegate(sess: "WebChatSession", prompt: str) -> bool:
+def will_delegate(sess: "WebChatSession", prompt: str, *,
+                  phase_decision: object | None = None) -> bool:
     """Public mirror of stream_turn's delegation decision (chat_runtime ~L2131).
 
     The WebSocket handler uses this to skip the engine-unavailable guard for
@@ -2403,6 +2404,11 @@ def will_delegate(sess: "WebChatSession", prompt: str) -> bool:
     (opencode/codex/copilot, or a missing claude) isn't drivable is wrong AND
     the refusal text itself points the user at delegation. Kept in lock-step
     with the runtime decision so gate and execution never disagree.
+
+    ``phase_decision`` is the turn's ONE L5 phase decision
+    (:func:`turn_phase_decision`); the caller passes the same object to
+    ``stream_turn(route_phase=...)``, so guard and turn never read the readiness
+    cache separately and answer differently (review r2_s2-2).
     """
     if not _delegation_enabled(sess.tenant_id):
         return False
@@ -2429,7 +2435,21 @@ def will_delegate(sess: "WebChatSession", prompt: str) -> bool:
         mode=_feature_flags.worker_engine_mode(sess.tenant_id),
         force_delegate=force_delegate,
         tenant_id=sess.tenant_id,
+        phase_decision=phase_decision,
     ) != "native"
+
+
+def turn_phase_decision(tenant_id: str) -> object | None:
+    """The console turn's ONE L5 phase decision, taken before the engine guard and
+    carried into the turn (review r2_s2-2). Pure: no audit, no ledger row."""
+    try:
+        if str(_BRIDGES_SHARED) not in sys.path:
+            sys.path.insert(0, str(_BRIDGES_SHARED))
+        from delegation_policy import turn_phase_decision as _decide  # noqa: PLC0415
+
+        return _decide(tenant_id=tenant_id, surface="console")
+    except Exception:  # noqa: BLE001 — each reader then decides for itself
+        return None
 
 
 _LANGUAGE_RULE_AUTODETECT = (
@@ -4526,6 +4546,7 @@ def _worker_engine_target(
     force_delegate: bool,
     tenant_id: str = "_default",
     sink: dict | None = None,
+    phase_decision: object | None = None,
 ) -> str:
     """Which engine runs this turn: "native" | "acs" | "tde".
 
@@ -4569,6 +4590,7 @@ def _worker_engine_target(
         # cleared Phase 2 the Skill's advice differs between guard and turn
         # (review s3_routing-5).
         features=_routing_features(prompt, tenant_id=tenant_id),
+        phase_decision=phase_decision,
     )
 
 
@@ -4601,6 +4623,22 @@ def _record_console_route(tenant_id: str, meta: dict, prompt: str, *,
         )
     except Exception:  # noqa: BLE001 — the routing record never costs the turn
         pass
+
+
+def _cut_turn_outcome(why: "str | None") -> "str | None":
+    """NOT-JUDGED reason for a console turn cut with rc == -1, or None = JUDGED.
+
+    ``why`` is the reason noted with :func:`note_cancel_reason` before the cancel.
+    ``detached_timeout`` (the server's wall-clock watchdog stopped a turn whose engine
+    ran ``_DETACHED_TURN_MAX_S`` without finishing) is a failure of the served engine:
+    None, recorded ``ok: false`` (review r2_s2-5). ``shutdown`` is a host restart cut
+    (``orphaned``, as the boot reaper records it). An operator stop, and a cut with no
+    noted reason, is ``cancelled``."""
+    if why == "detached_timeout":
+        return None
+    if why == "shutdown":
+        return "orphaned"
+    return "cancelled"
 
 
 def _report_console_route_outcome(tenant_id: str, meta: dict, *, served: str,
@@ -6420,8 +6458,12 @@ async def stream_turn(
     *,
     sid_fingerprint: str = "",
     recovery: dict[str, Any] | None = None,
+    route_phase: object | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Public entry point: ``_stream_turn_impl`` plus a guaranteed task finalizer.
+
+    ``route_phase`` — the L5 phase decision the WebSocket engine guard already used
+    for this turn (:func:`turn_phase_decision`); the turn routes on the same one.
 
     ``recovery`` (``turn_recovery``, BGT-15): ``{"attempt": n, "of_turn": <task_id>}`` marks
     this turn as the automatic re-run of a request a host restart cut off. ``prompt`` is then
@@ -6444,7 +6486,8 @@ async def stream_turn(
     _btw_turn_opened(sess.chat_key)
     try:
         async with contextlib.aclosing(
-            _stream_turn_impl(sess, prompt, sid_fingerprint=sid_fingerprint, recovery=recovery)
+            _stream_turn_impl(sess, prompt, sid_fingerprint=sid_fingerprint, recovery=recovery,
+                              route_phase=route_phase)
         ) as gen:
             async for event in gen:
                 if event.get("type") == "done":
@@ -6467,6 +6510,7 @@ async def _stream_turn_impl(
     *,
     sid_fingerprint: str = "",
     recovery: dict[str, Any] | None = None,
+    route_phase: object | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one turn against claude and yield normalised events.
 
@@ -7105,11 +7149,16 @@ async def _stream_turn_impl(
         # quota fallback serves natively) or a branch named it explicitly
         # (forced TDE). Two kinds of turn are NOT-JUDGED (ADR-2092 G1 as
         # amended 2026-10-27): one in which no engine ran (gate refusal, TDE
-        # switched off, debug engine, empty directive) and one the console cut
-        # itself (rc == -1: client disconnect / cancellation). Both are
-        # recorded with ``excluded`` — neither a success nor a failure of the
-        # served engine, and out of the join rate. The NameError guards are
-        # defensive — every current caller runs after the routing gate.
+        # switched off, debug engine, empty directive) and one that was cut
+        # (rc == -1) for a reason that says nothing about the engine — see
+        # ``_cut_turn_outcome``: an operator stop is ``cancelled``, a host
+        # shutdown ``orphaned``. Both are recorded with ``excluded`` — neither a
+        # success nor a failure of the served engine, and out of the join rate.
+        # The server's own detached-turn watchdog (the engine ran 30 minutes
+        # without finishing) is a JUDGED failure (review r2_s2-5). A client
+        # disconnect no longer cuts a turn (routes/chat.py ``_detach_turn``).
+        # The NameError guards are defensive — every current caller runs after
+        # the routing gate.
         try:
             _rm = _route_meta
         except NameError:
@@ -7136,7 +7185,8 @@ async def _stream_turn_impl(
                 sess.tenant_id, _rm,
                 served=(_rm.get("served") or (_wt if (_wd and not _fb) else "native")),
                 ok=(rc == 0), started=_route_t0,
-                excluded=("cancelled" if rc == -1 else None),
+                excluded=(_cut_turn_outcome(_peek_cancel_reason(sess.tenant_id, sess.sid))
+                          if rc == -1 else None),
             )
 
     # Persist the user-side of this turn immediately so a tab refresh
@@ -7209,7 +7259,8 @@ async def _stream_turn_impl(
     _worker_target = (
         _worker_engine_target(prompt, mode=_worker_mode,
                               force_delegate=_force_delegate,
-                              tenant_id=sess.tenant_id, sink=_route_meta)
+                              tenant_id=sess.tenant_id, sink=_route_meta,
+                              phase_decision=route_phase)
         if _pre_delegate else "native"
     )
     if "routed_engine" not in _route_meta:

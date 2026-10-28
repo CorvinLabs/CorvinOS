@@ -510,3 +510,95 @@ def test_a_trip_whose_record_does_not_commit_persists_nothing_but_stops_phase2(b
     trips = [e for e in _chain(base) if e["event_type"] == "routing.rollback_triggered"]
     assert len(trips) == 1
     _verify(base)
+
+
+# ── review r2_s2 (2026-10-28) ───────────────────────────────────────────────
+
+def test_a_turn_after_an_idle_gap_is_served_the_last_verdict(bridge, monkeypatch):
+    """r2_s2-1: every turn more than 300 s after the previous one was served shadow in a
+    cleared Phase 2; the last verdict is served while it refreshes (up to 1 h)."""
+    adapter, base, acs = bridge
+    from core.skills.os_skills.monitoring import readiness
+
+    _seed_ready_history()
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    key = (TENANT, "bridge")
+    with readiness._lock:
+        ts, verdict = readiness._cache[key]
+        readiness._cache[key] = (ts - 360.0, verdict)   # the next turn comes 6 min later
+    _send(adapter, base, "Big Data?")
+    assert acs == []
+    row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
+    assert (row["phase"], row["source"], row["gate"]) == ("dual_write", "skill", "verdict")
+    with readiness._lock:
+        ts, verdict = readiness._cache[key]
+        readiness._cache[key] = (ts - readiness._CACHE_MAX_STALE_S - 1, verdict)
+    _send(adapter, base, "Big Data?")                    # older than an hour: no verdict
+    assert acs == ["Big Data?"]
+    row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
+    assert (row["phase"], row["gate"]) == ("shadow", "pending")
+    _verify(base)
+
+
+def test_an_uncommitted_trip_survives_a_restart_and_is_committed_by_a_later_turn(bridge, monkeypatch):
+    """r2_s2-4: the pending trip lived in process memory, was retried only on a
+    Skill-served outcome (impossible while it held) and vanished on restart."""
+    adapter, base, acs = bridge
+    from core.skills.os_skills.monitoring import rollback_detector
+    import delegation_policy as dp
+
+    _seed_ready_history()
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    _send(adapter, base, "Big Data?")       # cleared: the Skill de-escalates
+    assert acs == []
+    _seed_skill_served(120, ok=False)
+    real = dp._audit
+    monkeypatch.setattr(dp, "_audit", lambda et, d, *, tenant_id: (
+        False if et == "routing.rollback_triggered" else real(et, d, tenant_id=tenant_id)))
+    monkeypatch.setattr(rollback_detector, "_default_audit", lambda tid: (lambda et, d: False))
+    _send(adapter, base, "Big Data?")       # its outcome runs the judge: trip, record fails
+    assert _wait_for(lambda: rollback_detector.pending_path(TENANT).exists())
+    assert not rollback_detector.state_path(TENANT).exists()
+    # The process restarts: every in-process state is gone, the marker is not.
+    rollback_detector.reset_for_tests()
+    from core.skills.os_skills.monitoring import readiness
+
+    readiness.clear_cache()
+    _send(adapter, base, "Big Data?")
+    assert acs == ["Big Data?"]             # Phase 2 stays off across the restart
+    row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
+    assert (row["phase"], row["source"]) == ("shadow", "bundled")
+    assert [e for e in _chain(base) if e["event_type"] == "routing.rollback_triggered"] == []
+    # The audit writer recovers: the next turn's phase decision commits the trip.
+    monkeypatch.setattr(rollback_detector, "_default_audit",
+                        lambda tid: (lambda et, d: real(et, d, tenant_id=tid)))
+    rollback_detector.reset_for_tests()     # lift the retry throttle of the failed attempt
+    _send(adapter, base, "Big Data?")
+    assert _wait_for(lambda: rollback_detector.state_path(TENANT).exists())
+    assert _wait_for(lambda: not rollback_detector.pending_path(TENANT).exists())
+    assert rollback_detector.rollback_active(TENANT)
+    trips = [e for e in _chain(base) if e["event_type"] == "routing.rollback_triggered"]
+    assert len(trips) == 1
+    assert acs == ["Big Data?", "Big Data?"]
+    _verify(base)
+
+
+def test_the_soak_breaks_at_a_console_shadow_decision(bridge, monkeypatch):
+    """r2_s2-3: shadow console decisions between dual_write ones were ignored."""
+    adapter, base, acs = bridge
+    from core.skills.os_skills.monitoring import readiness, routing_ledger
+
+    _seed_ready_history()
+    with open(routing_ledger.ledger_path(TENANT), "a") as fh:
+        fh.write(json.dumps({"v": 1, "kind": "decision", "ts": time.time() - 3600,
+                             "turn_id": routing_ledger.new_turn_id(), "surface": "console",
+                             "phase": "shadow", "bundled": "acs", "skill": "native",
+                             "skill_conf": 0.9, "used": "acs", "source": "bundled",
+                             "clamped": False, "features": {}, "gate": "verdict"}) + "\n")
+    readiness.clear_cache()
+    assert readiness.cached_evaluate(TENANT, "bridge", background=False).reason \
+        == "console_soak_incomplete"
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    _send(adapter, base, "Big Data?")
+    assert acs == ["Big Data?"]
+    _verify(base)

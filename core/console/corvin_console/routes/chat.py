@@ -734,7 +734,7 @@ async def chat_stream(
     # (live_turns.request_cancel) — distinguishes that from a chat deletion.
     _operator_cancelled = False
 
-    async def _run_turn(prompt: str) -> None:
+    async def _run_turn(prompt: str, route_phase: object | None = None) -> None:
         # Robustness contract: a turn failure must NEVER drop the WebSocket.
         # stream_turn yields its own {"error"}/{"done"} on handled failures,
         # but it can still raise before the first yield (task-dir mkdir,
@@ -775,7 +775,8 @@ async def chat_stream(
                 await _send({"type": "turn_started", "turn_id": _turn_id})
                 try:
                     async with contextlib.aclosing(
-                        chat_runtime.stream_turn(fresh, prompt, sid_fingerprint=rec.sid_fingerprint)
+                        chat_runtime.stream_turn(fresh, prompt, sid_fingerprint=rec.sid_fingerprint,
+                                                 route_phase=route_phase)
                     ) as gen:
                         async for event in gen:
                             await _emit(event)
@@ -981,8 +982,13 @@ async def chat_stream(
                 # missing) can still delegate from chat. Refusing here would both
                 # break delegation and contradict the refusal text, which itself
                 # points users at the delegation path.
+                # ONE L5 phase decision for this turn, read by the guard below AND
+                # carried into the turn: two separate readiness reads could answer
+                # differently (review r2_s2-2).
+                _route_phase = chat_runtime.turn_phase_decision(rec.tenant_id)
                 _engine_msg = chat_runtime.get_engine_unavailable_message(rec.tenant_id)
-                if _engine_msg and chat_runtime.will_delegate(sess, prompt):
+                if _engine_msg and chat_runtime.will_delegate(
+                        sess, prompt, phase_decision=_route_phase):
                     _engine_msg = None
                 # /create task and /erase are answered by the command itself
                 # (chat_runtime CCC hook) — they need no engine, so a missing
@@ -1022,7 +1028,7 @@ async def chat_stream(
                 # (or WebSocket disconnect) can interrupt it.  We race the task
                 # against the next receive_text() so we can react to "cancel"
                 # while the generator is running.
-                _stream_task = asyncio.create_task(_run_turn(prompt))
+                _stream_task = asyncio.create_task(_run_turn(prompt, _route_phase))
                 _user_cancelled = False
                 try:
                     while not _stream_task.done():

@@ -188,6 +188,54 @@ class TestRollback:
             rollback_detector.reset_rollback(TENANT, audit=AuditSpy(commit=False))
         assert rollback_detector.rollback_active(TENANT)
 
+    def test_an_uncommitted_trip_persists_a_restrictive_marker_and_is_retried(self, monkeypatch):
+        """Review r2_s2-4: the pending trip lived in process memory, was never retried
+        (no Skill-served turn while it held) and vanished on restart."""
+        _seed(100, source="skill", ok=False)
+        _seed(100, source="bundled", ok=True)
+        assert rollback_detector.evaluate(TENANT, audit=AuditSpy(commit=False)) is True
+        assert not rollback_detector.state_path(TENANT).exists()      # no trip state yet
+        assert rollback_detector.pending_path(TENANT).exists()
+        rollback_detector.reset_for_tests()                            # "restart"
+        assert rollback_detector.rollback_active(TENANT)               # still off
+        monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+        spy = AuditSpy(commit=True)
+        monkeypatch.setattr(rollback_detector, "_default_audit", lambda tid: spy)
+        # Any phase decision retries it (the turn itself stays shadow).
+        assert dual_write.decide(tenant_id=TENANT, surface="console",
+                                 skill_available=True).reason == "rollback_active"
+        deadline = time.time() + 5
+        while time.time() < deadline and rollback_detector.pending_path(TENANT).exists():
+            time.sleep(0.02)
+        assert [c[0] for c in spy.calls] == ["routing.rollback_triggered"]
+        assert json.loads(rollback_detector.state_path(TENANT).read_text())["tripped"] is True
+        assert not rollback_detector.pending_path(TENANT).exists()
+        assert rollback_detector.rollback_active(TENANT)
+
+    def test_a_retry_that_fails_again_keeps_the_marker(self, monkeypatch):
+        _seed(100, source="skill", ok=False)
+        _seed(100, source="bundled", ok=True)
+        rollback_detector.evaluate(TENANT, audit=AuditSpy(commit=False))
+        rollback_detector.maybe_retry_pending(TENANT, audit=AuditSpy(commit=False),
+                                              background=False)
+        assert rollback_detector.pending_path(TENANT).exists()
+        assert not rollback_detector.state_path(TENANT).exists()
+        assert rollback_detector.rollback_active(TENANT)
+
+    def test_an_unreadable_marker_restricts(self):
+        path = rollback_detector.pending_path(TENANT)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{torn")
+        assert rollback_detector.rollback_active(TENANT)
+
+    def test_an_operator_reset_clears_a_pending_trip(self):
+        _seed(100, source="skill", ok=False)
+        _seed(100, source="bundled", ok=True)
+        rollback_detector.evaluate(TENANT, audit=AuditSpy(commit=False))
+        rollback_detector.reset_rollback(TENANT, audit=AuditSpy())
+        assert not rollback_detector.pending_path(TENANT).exists()
+        assert not rollback_detector.rollback_active(TENANT)
+
     def test_reset_is_audited(self):
         _seed(100, source="skill", ok=False)
         _seed(100, source="bundled", ok=True)
@@ -336,21 +384,53 @@ class TestReadiness:
                                  "excluded": "cancelled", "latency_ms": 5}) + "\n")
         assert [r["turn_id"] for r in routing_ledger.read_records(TENANT)] == ["x1"]
 
-    def test_a_stale_ready_verdict_is_not_served_while_it_refreshes(self, monkeypatch):
-        """Review s3_routing-6: a stale entry returned its old verdict during the refresh."""
+    def test_a_stale_verdict_is_served_while_it_refreshes_up_to_the_max_age(self, monkeypatch):
+        """Review r2_s2-1 (stale-while-revalidate): every turn more than 300 s after the
+        previous one was served shadow. A stale verdict is served during its refresh up to
+        ``_CACHE_MAX_STALE_S``; an older one answers ``evaluating``."""
         _seed(470)
         _seed(40, bundled="acs", used="acs", skill="native")
         assert readiness.cached_evaluate(TENANT, "console", background=False).ready
         key = (TENANT, "console")
-        with readiness._lock:
-            ts, verdict = readiness._cache[key]
-            readiness._cache[key] = (ts - readiness._CACHE_TTL_S - 1, verdict)
         gate = threading.Event()
         real = readiness.evaluate
         monkeypatch.setattr(readiness, "evaluate", lambda *a, **k: (gate.wait(5), real(*a, **k))[1])
+        with readiness._lock:
+            ts, verdict = readiness._cache[key]
+            readiness._cache[key] = (ts - readiness._CACHE_TTL_S - 1, verdict)
         during = readiness.cached_evaluate(TENANT, "console")
+        assert (during.ready, during.reason) == (True, "ready")
+        with readiness._lock:
+            ts, verdict = readiness._cache[key]
+            readiness._cache[key] = (ts - readiness._CACHE_MAX_STALE_S, verdict)
+        too_old = readiness.cached_evaluate(TENANT, "console")
         gate.set()
-        assert (during.ready, during.reason) == (False, "evaluating")
+        assert (too_old.ready, too_old.reason) == (False, "evaluating")
+
+    def test_an_invalidated_verdict_is_never_served(self):
+        """A rollback trip/reset empties the cache: the next read is ``evaluating``."""
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        assert readiness.cached_evaluate(TENANT, "console", background=False).ready
+        rollback_detector.reset_rollback(TENANT, audit=lambda et, d: True)
+        assert readiness.cached_evaluate(TENANT, "console").reason == "evaluating"
+
+    def test_a_shadow_decision_after_the_run_start_restarts_the_soak(self):
+        """Review r2_s2-3: shadow decisions between dual_write ones were ignored."""
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _console_dual_write_run(days=9)
+        assert readiness.evaluate(TENANT, "bridge").ready
+        _backdated_console_decision(days=2, phase="shadow")
+        assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
+
+    @pytest.mark.parametrize("gate", ["post_hoc", "pending"])
+    def test_a_decision_that_never_consulted_the_gate_counts_neither_way(self, gate):
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _console_dual_write_run(days=9)
+        _backdated_console_decision(days=2, phase="shadow", gate=gate)
+        assert readiness.evaluate(TENANT, "bridge").ready
 
     def test_a_refresh_in_flight_across_a_rollback_reset_is_discarded(self, monkeypatch):
         """A verdict computed before a rollback state change must not land after it
@@ -400,12 +480,28 @@ def _console_dual_write_run(*, days: float, until_days: float = 0.0, step_h: flo
         t -= step_h / 24.0
 
 
+def _await_verdict(surface: str = "console") -> None:
+    """Wait for the background refresh a cold read started (it owns the refresh slot)."""
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if readiness.cached_evaluate(TENANT, surface, background=False).reason != "evaluating":
+            return
+        time.sleep(0.02)
+    raise AssertionError("readiness verdict never landed")
+
+
 def _backdated_console_dual_write(*, days: float):
+    _backdated_console_decision(days=days, phase="dual_write")
+
+
+def _backdated_console_decision(*, days: float, phase: str, gate: str | None = None):
     rec = {"v": 1, "kind": "decision", "ts": time.time() - days * 86400,
            "turn_id": routing_ledger.new_turn_id(), "surface": "console",
-           "phase": "dual_write", "bundled": "native", "skill": "native",
+           "phase": phase, "bundled": "native", "skill": "native",
            "skill_conf": 0.9, "used": "native", "source": "bundled",
            "clamped": False, "features": {}}
+    if gate is not None:
+        rec["gate"] = gate
     path = routing_ledger.ledger_path(TENANT)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as fh:
@@ -642,6 +738,86 @@ class TestRouteAndRecord:
         assert "routing.phase2_decision" not in calls
         row = [r for r in routing_ledger.read_records(TENANT) if r["turn_id"] == sink["turn_id"]][0]
         assert row["phase"] == "shadow"
+        assert row["gate"] == "post_hoc"
+
+    def test_decision_rows_say_whether_the_gate_answered(self, booted_registry, monkeypatch):
+        import delegation_policy as dp
+
+        monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        monkeypatch.setattr(dp, "_audit", lambda et, d, tenant_id: True)
+        _, cold = self._route(dp)          # cold cache: no verdict yet
+        _await_verdict()
+        _, warm = self._route(dp)
+        rows = {r["turn_id"]: r for r in routing_ledger.read_records(TENANT)}
+        assert (rows[cold["turn_id"]]["phase"], rows[cold["turn_id"]]["gate"]) == ("shadow", "pending")
+        assert (rows[warm["turn_id"]]["phase"], rows[warm["turn_id"]]["gate"]) == ("dual_write", "verdict")
+
+    def test_guard_and_turn_share_one_phase_decision_on_random_inputs(self, booted_registry,
+                                                                       monkeypatch):
+        """Review r2_s2-2: the console guard (record=False) and the turn read the readiness
+        cache separately and disagreed on a stale cache. With the turn's decision carried
+        to both they agree for every input and every cache state, cold included."""
+        import random
+
+        import delegation_policy as dp
+
+        monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+        monkeypatch.setattr(dp, "_audit", lambda et, d, tenant_id: True)
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        rnd = random.Random(20261028)
+        key = (TENANT, "console")
+        disagreements = []
+        for i in range(300):
+            state = rnd.choice(["cold", "fresh", "stale", "expired"])
+            readiness.clear_cache()
+            if state != "cold":
+                readiness.cached_evaluate(TENANT, "console", background=False)
+                age = {"fresh": 0.0, "stale": readiness._CACHE_TTL_S + 1,
+                       "expired": readiness._CACHE_MAX_STALE_S + 1}[state]
+                with readiness._lock:
+                    ts, verdict = readiness._cache[key]
+                    readiness._cache[key] = (ts - age, verdict)
+            feats = {"complexity": rnd.choice(["simple", "medium", "complex", "unknown"]),
+                     "len_bucket": rnd.choice(["xs", "s", "m", "l", "xl"]),
+                     "has_table": rnd.random() < .5, "has_code": rnd.random() < .5}
+            kw = dict(tenant_id=TENANT, bundled=rnd.choice(["acs", "tde", "native"]),
+                      force_delegate=rnd.random() < .2, is_big_data=rnd.random() < .2,
+                      mode=rnd.choice(["native", "acs", "tde"]), surface="console",
+                      features=feats)
+            decision = dp.turn_phase_decision(tenant_id=TENANT, surface="console")
+            guard = dp.route_and_record(record=False, phase_decision=decision, **kw)
+            # whatever the cache does in between (a refresh landing, expiry) …
+            readiness.clear_cache()
+            readiness.cached_evaluate(TENANT, "console", background=False)
+            sink: dict = {}
+            turn = dp.route_and_record(record=True, sink=sink, phase_decision=decision, **kw)
+            if guard != turn or sink["phase_decision"] != decision:
+                disagreements.append((state, kw["bundled"], guard, turn))
+        assert disagreements == []
+
+    def test_a_carried_decision_only_ever_restricts(self, booted_registry, monkeypatch):
+        """A rollback trip between guard and turn turns dual_write into shadow; a carried
+        shadow decision is never upgraded by a verdict that landed in between."""
+        import delegation_policy as dp
+
+        monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+        monkeypatch.setattr(dp, "_audit", lambda et, d, tenant_id: True)
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        cold = dp.turn_phase_decision(tenant_id=TENANT, surface="console")
+        assert (cold.phase, cold.reason) == ("shadow", "evaluating")
+        _await_verdict()
+        engine, sink = self._route(dp, phase_decision=cold)
+        assert engine == "acs" and sink["phase_decision"].phase == "shadow"
+        warm = dp.turn_phase_decision(tenant_id=TENANT, surface="console")
+        assert warm.phase == "dual_write"
+        rollback_detector.state_path(TENANT).parent.mkdir(parents=True, exist_ok=True)
+        rollback_detector.state_path(TENANT).write_text(json.dumps({"tripped": True, "at": 1.0}))
+        engine, sink = self._route(dp, phase_decision=warm)
+        assert engine == "acs" and sink["phase_decision"].reason == "rollback_active"
 
     def test_a_skill_timeout_leaves_the_rule_standing(self, booted_registry, monkeypatch):
         import delegation_policy as dp
