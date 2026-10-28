@@ -545,18 +545,18 @@ class TestPluginRegistryValidation:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, {repo!r}); "
-                    "from core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata; "
-                    "try: "
-                    "  extract_plugin_metadata({path!r}); "
-                    "  print('ERROR_NOT_RAISED'); "
-                    "except ValueError as e: "
-                    "  if 'missing required field: id' in str(e): "
-                    "    print('VALIDATION_OK'); "
-                    "  else: "
-                    "    print(f'WRONG_ERROR: {{e}}'); "
-                    "except Exception as e: "
-                    "  print(f'UNEXPECTED_ERROR: {type(e).__name__}: {{e}}')"
+                    "import sys; sys.path.insert(0, {repo!r})\n"
+                    "from core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata\n"
+                    "try:\n"
+                    "  extract_plugin_metadata({path!r})\n"
+                    "  print('ERROR_NOT_RAISED')\n"
+                    "except ValueError as e:\n"
+                    "  if 'missing required field: id' in str(e):\n"
+                    "    print('VALIDATION_OK')\n"
+                    "  else:\n"
+                    "    print(f'WRONG_ERROR: {{e}}')\n"
+                    "except Exception as e:\n"
+                    "  print(f'UNEXPECTED_ERROR: {{type(e).__name__}}: {{e}}')\n"
                 ).format(
                     repo=str(Path(__file__).parent.parent.parent),
                     path=str(plugin_path),
@@ -587,19 +587,19 @@ class TestPluginRegistryValidation:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, {repo!r}); "
-                    "from core.gateway.corvin_gateway.plugin_cmd import ( "
-                    "  extract_plugin_metadata, _validate_axes "
-                    "); "
-                    "try: "
-                    "  meta = extract_plugin_metadata({path!r}); "
-                    "  error_msg = _validate_axes(meta); "
-                    "  if error_msg and 'origin' in error_msg: "
-                    "    print('INVALID_ORIGIN_CAUGHT'); "
-                    "  else: "
-                    "    print(f'NO_ERROR: {{error_msg}}'); "
-                    "except Exception as e: "
-                    "  print(f'ERROR: {type(e).__name__}: {{e}}')"
+                    "import sys; sys.path.insert(0, {repo!r})\n"
+                    "from core.gateway.corvin_gateway.plugin_cmd import (\n"
+                    "  extract_plugin_metadata, _validate_axes\n"
+                    ")\n"
+                    "try:\n"
+                    "  meta = extract_plugin_metadata({path!r})\n"
+                    "  error_msg = _validate_axes(meta)\n"
+                    "  if error_msg and 'origin' in error_msg:\n"
+                    "    print('INVALID_ORIGIN_CAUGHT')\n"
+                    "  else:\n"
+                    "    print(f'NO_ERROR: {{error_msg}}')\n"
+                    "except Exception as e:\n"
+                    "  print(f'ERROR: {{type(e).__name__}}: {{e}}')\n"
                 ).format(
                     repo=str(Path(__file__).parent.parent.parent),
                     path=str(plugin_path),
@@ -630,19 +630,19 @@ class TestPluginRegistryValidation:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, {repo!r}); "
-                    "from core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata; "
-                    "from pathlib import Path; "
-                    "plugins_dir = Path({plugins_dir!r}); "
-                    "valid_count = 0; "
-                    "for plugin_dir in plugins_dir.iterdir(): "
-                    "  if plugin_dir.is_dir(): "
-                    "    try: "
-                    "      meta = extract_plugin_metadata(str(plugin_dir)); "
-                    "      valid_count += 1; "
-                    "    except ValueError: "
-                    "      pass; "
-                    "print(f'VALID_PLUGINS: {{valid_count}}')"
+                    "import sys; sys.path.insert(0, {repo!r})\n"
+                    "from core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata\n"
+                    "from pathlib import Path\n"
+                    "plugins_dir = Path({plugins_dir!r})\n"
+                    "valid_count = 0\n"
+                    "for plugin_dir in plugins_dir.iterdir():\n"
+                    "  if plugin_dir.is_dir():\n"
+                    "    try:\n"
+                    "      meta = extract_plugin_metadata(str(plugin_dir))\n"
+                    "      valid_count += 1\n"
+                    "    except ValueError:\n"
+                    "      pass\n"
+                    "print(f'VALID_PLUGINS: {{valid_count}}')\n"
                 ).format(
                     repo=str(Path(__file__).parent.parent.parent),
                     plugins_dir=str(install.plugins_dir),
@@ -670,16 +670,16 @@ class TestPluginRegistryValidation:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, {repo!r}); "
-                    "from core.gateway.corvin_gateway.plugin_cmd import load_tenant_config; "
-                    "try: "
-                    "  config = load_tenant_config('_default'); "
-                    "  assert isinstance(config, dict); "
-                    "  print('CONFIG_LOAD_OK'); "
-                    "except FileNotFoundError as e: "
-                    "  print(f'FILE_NOT_FOUND: {{e}}'); "
-                    "except Exception as e: "
-                    "  print(f'ERROR: {type(e).__name__}: {{e}}')"
+                    "import sys; sys.path.insert(0, {repo!r})\n"
+                    "from core.gateway.corvin_gateway.plugin_cmd import load_tenant_config\n"
+                    "try:\n"
+                    "  config = load_tenant_config('_default')\n"
+                    "  assert isinstance(config, dict)\n"
+                    "  print('CONFIG_LOAD_OK')\n"
+                    "except FileNotFoundError as e:\n"
+                    "  print(f'FILE_NOT_FOUND: {{e}}')\n"
+                    "except Exception as e:\n"
+                    "  print(f'ERROR: {{type(e).__name__}}: {{e}}')\n"
                 ).format(
                     repo=str(Path(__file__).parent.parent.parent),
                 ),
@@ -732,14 +732,14 @@ class TestFullWindowsInstallToConsoleBoot:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, {repo!r}); "
-                    "try: "
-                    "  from core.console.corvin_console.app import create_app; "
-                    "  app = create_app(tenant_id='_default'); "
-                    "  assert app is not None; "
-                    "  print('CONSOLE_IMPORT_OK'); "
-                    "except Exception as e: "
-                    "  print(f'ERROR: {type(e).__name__}: {{e}}')"
+                    "import sys; sys.path.insert(0, {repo!r})\n"
+                    "try:\n"
+                    "  from core.console.corvin_console.app import create_app\n"
+                    "  app = create_app(tenant_id='_default')\n"
+                    "  assert app is not None\n"
+                    "  print('CONSOLE_IMPORT_OK')\n"
+                    "except Exception as e:\n"
+                    "  print(f'ERROR: {{type(e).__name__}}: {{e}}')\n"
                 ).format(repo=str(Path(__file__).parent.parent.parent)),
             ],
             env=env,
