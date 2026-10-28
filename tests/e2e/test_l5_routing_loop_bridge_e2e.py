@@ -583,6 +583,27 @@ def test_an_uncommitted_trip_survives_a_restart_and_is_committed_by_a_later_turn
     _verify(base)
 
 
+def test_a_skill_route_onto_an_unavailable_engine_is_a_judged_failure(bridge, monkeypatch):
+    """r2_s2-P1: the Skill de-escalated to native on a host without a usable claude CLI;
+    the refusal was recorded NOT-JUDGED no_engine, so the rollback judge never saw it."""
+    adapter, base, acs = bridge
+    _seed_ready_history()
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    monkeypatch.delenv("ADAPTER_FAKE_CLAUDE")
+    monkeypatch.setattr(adapter, "_claude_cli_missing", lambda: True)
+    _send(adapter, base, "Big Data?")
+    assert acs == []
+    row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
+    assert (row["used"], row["source"]) == ("native", "skill")
+    assert (row["outcome"]["ok"], row["outcome"].get("excluded")) == (False, None)
+    # The bundled rule's own native turn on the same host stays NOT-JUDGED.
+    _send(adapter, base, "wie spät ist es?")
+    row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
+    assert row["source"] == "bundled"
+    assert (row["outcome"]["ok"], row["outcome"].get("excluded")) == (None, "no_engine")
+    _verify(base)
+
+
 def test_the_soak_breaks_at_a_console_shadow_decision(bridge, monkeypatch):
     """r2_s2-3: shadow console decisions between dual_write ones were ignored."""
     adapter, base, acs = bridge

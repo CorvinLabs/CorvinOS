@@ -9700,11 +9700,21 @@ def _report_route_outcome(tenant_id: str, meta: dict, answer, chat_key: str,
     meta["outcome_reported"] = True
     delegated = bool(meta.get("engine"))
     excluded = None
+    routed_unavailable = False
     if getattr(_TURN_OUTCOME, "failed", None) == "cancelled":
         excluded = "cancelled"
     elif not delegated and status is None and getattr(_TURN_OUTCOME, "refused", None):
-        excluded = "no_engine"
-    if delegated:
+        # Exception (review r2_s2-P1): the Skill routed this turn onto an engine
+        # that cannot run here (``engine_unavailable``). That is the one harm a
+        # de-escalation can cause, so it is a JUDGED failure of the routed
+        # engine — the rollback judge must see it — not "no engine ran".
+        routed_unavailable = (getattr(_TURN_OUTCOME, "refused", None) == "engine_unavailable"
+                              and meta.get("route_source") == "skill")
+        if not routed_unavailable:
+            excluded = "no_engine"
+    if routed_unavailable:
+        ok = False
+    elif delegated:
         ok = bool(answer)
     elif status is not None:
         ok = status == "ok"
