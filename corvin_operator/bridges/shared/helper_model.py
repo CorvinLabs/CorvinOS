@@ -306,6 +306,29 @@ def resolve_helper_model(site: str) -> str | None:
     return default_helper_model()
 
 
+def env_only_helper_model(site: str) -> str | None:
+    """The per-site environment model and nothing else, or ``None`` (ADR-2308).
+
+    Unlike :func:`resolve_helper_model` this never falls back to the Console
+    ``corvinOS`` row or to the newest Haiku: a site that is not configured must
+    leave its caller's behaviour exactly as it was. The global
+    ``CORVIN_HELPER_MODEL`` is not read either. An unset variable and every
+    opt-out value (``""``, ``none``, ``default``, ``off``) count as "not set".
+    A ``provider/`` prefix is stripped the way a pin is."""
+    raw = os.environ.get(_per_site_env_var(site))
+    if raw is None or raw.strip().lower() in _OPT_OUT_VALUES:
+        return None
+    value = raw.strip()
+    try:
+        try:
+            from model_selector import normalise_pin as _norm  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .model_selector import normalise_pin as _norm  # type: ignore  # noqa: PLC0415
+        return _norm(value, "claude_code") or value
+    except Exception:  # noqa: BLE001 - an unnormalised value beats no value
+        return value
+
+
 def claude_args(site: str) -> list[str]:
     """Return ``["--model", <model>]`` for argv composition, or ``[]``
     when the operator opted this site out (no model flag added).
