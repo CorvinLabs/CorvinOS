@@ -102,17 +102,21 @@ class TempWindowsInstall:
         plugin_dir = self.plugins_dir / plugin_name
         plugin_dir.mkdir(parents=True, exist_ok=True)
 
-        manifest = {}
+        # `name` is always written: an EMPTY manifest ({}) is falsy, so extract_plugin_metadata treats it
+        # as "no plugin.yaml" and raises "Could not extract plugin metadata" instead of the
+        # "missing required field: id" this fixture is meant to provoke.
+        manifest = {"name": plugin_name.replace("_", "-")}
         if plugin_id is not None:
             manifest["id"] = plugin_id
         if valid:
             manifest.update(
                 {
-                    "name": plugin_name.replace("_", "-"),
                     "version": version,
                     "origin": origin,
                     "boot_layer": boot_layer,
-                    "plugin_type": "generic",
+                    # Must be a real extension point: _validate_axes / PluginRecord reject
+                    # anything outside KNOWN_PLUGIN_TYPES, so "generic" made every fixture invalid.
+                    "plugin_type": "worker_engine",
                 }
             )
 
@@ -190,7 +194,10 @@ def malformed_plugin_bundle(
     )
 
     # Invalid origin
-    windows_temp_install.write_plugin_yaml("bad_origin_plugin")
+    # It needs an id: without one the id check fires first and the origin is never looked at.
+    windows_temp_install.write_plugin_yaml(
+        "bad_origin_plugin", plugin_id="bad_origin_plugin"
+    )
     bad_origin_path = (
         windows_temp_install.plugins_dir / "bad_origin_plugin" / "plugin.yaml"
     )
@@ -631,7 +638,7 @@ class TestPluginRegistryValidation:
                 "-c",
                 (
                     "import sys; sys.path.insert(0, {repo!r})\n"
-                    "from core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata\n"
+                    "from core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata, _validate_axes\n"
                     "from pathlib import Path\n"
                     "plugins_dir = Path({plugins_dir!r})\n"
                     "valid_count = 0\n"
@@ -639,7 +646,8 @@ class TestPluginRegistryValidation:
                     "  if plugin_dir.is_dir():\n"
                     "    try:\n"
                     "      meta = extract_plugin_metadata(str(plugin_dir))\n"
-                    "      valid_count += 1\n"
+                    "      if _validate_axes(meta) is None:\n"
+                    "        valid_count += 1\n"
                     "    except ValueError:\n"
                     "      pass\n"
                     "print(f'VALID_PLUGINS: {{valid_count}}')\n"
