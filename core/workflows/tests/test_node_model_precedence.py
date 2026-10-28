@@ -66,7 +66,7 @@ class Deps:
     def current(self, model):
         return self.retired.get(model, model)
 
-    def high_model(self, tenant_id):
+    def legacy_default(self, tenant_id):
         return self.high
 
     def autoselect_is_off(self):
@@ -186,6 +186,17 @@ def test_level3_has_no_effect_on_the_dag_path_whose_reference_is_the_cheapest_ti
     # DAG reference is haiku: there is no cheaper tier to recommend.
     r = resolve(node(), path="dag", table={"wf:agent": row(r=HAIKU)})
     assert (r.model_id, r.source) == ("", "site_default")
+
+
+def test_level3_has_no_effect_on_the_legacy_path_while_its_default_is_unmeasured():
+    # The CLI's own default is not a Corvin setting (measured: a tier above high_model). Unknown
+    # reference -> no recommendation acts there, whatever the table says.
+    r = resolve(node(), deps=Deps(high=None), table={"wf:agent": row(r=SONNET)})
+    assert (r.model_id, r.source) == ("", "site_default")
+
+
+def test_the_default_deps_do_not_invent_a_legacy_default():
+    assert mr.DefaultDeps().legacy_default("_default") is None
 
 
 def test_fan_out_uses_its_own_class_row():

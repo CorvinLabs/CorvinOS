@@ -539,7 +539,8 @@ class NodeExecutionError(RuntimeError):
     nodes consuming the error text."""
 
 
-def _run_node_claude(prompt: str, mcp_config: dict | None = None) -> str:
+def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str = "",
+                     meta: dict[str, Any] | None = None) -> str:
     """Execute a single workflow node via claude -p and return the text output.
 
     When mcp_config is provided (non-empty mcpServers), writes it to a
@@ -549,8 +550,24 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None) -> str:
     Every caller gates the prompt it passes here (the one that is really spawned) through
     ``_spawn_gates.check_console_spawn_or_refusal`` first; a failure is raised as
     ``NodeExecutionError``, never returned as text.
+
+    ADR-2308: ``model`` is passed as ``--model`` when non-empty (empty keeps the argv this
+    executor always had). The CLI is asked for its ``--output-format json`` envelope; the reply
+    text is its ``result``, and a reply that is not an envelope is returned as the plain text it
+    is. Every spawn writes an ``engine.span`` pair on the model the CLI REPORTED with the
+    four-way token split, and — when ``meta`` came from ``model_resolution.describe`` — the
+    ``workflow.node_model_resolved`` event. ``meta`` is filled with ``usage`` and ``span_id``.
     """
-    cmd = ["claude", "-p", "--output-format", "text"]
+    meta = meta if meta is not None else {}
+    tenant = str(meta.get("tenant_id") or "_default")
+    try:  # the shared envelope/span helpers; without them this executor keeps its old text mode
+        from corvin_workflows import engines_claude as _ec
+    except Exception:  # noqa: BLE001
+        _ec = None
+    cmd = ["claude", "-p"]
+    if model:
+        cmd += ["--model", model]
+    cmd += ["--output-format", "json" if _ec is not None else "text"]
     tmp_path: str | None = None
 
     # Always write a config file when any tools are requested — this activates
@@ -564,24 +581,41 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None) -> str:
         except Exception:
             tmp_path = None
 
+    span_id, t0 = "", time.perf_counter()
     try:
+        guarded = _guard_prompt_head(prompt)
+        if _ec is not None:
+            span_id = _ec.span_start(tenant, meta, model)
+            _ec.emit_resolution(tenant, meta, prompt, span_id)
         result = subprocess.run(
             cmd,
             # R4: whole-payload guard - workflow node instructions are authored
             # in the console and can embed forwarded chat/mail content. STDIN is
             # expanded by the CLI exactly like a positional prompt. Reply
-            # contract unaffected: stdout is returned verbatim.
-            input=_guard_prompt_head(prompt),
+            # contract unaffected: the reply text is returned as before.
+            input=guarded,
             capture_output=True,
             text=True,
             timeout=180,
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            if _ec is None:
+                return result.stdout.strip()
+            text, usage, reported, cost, is_error = _ec.split_envelope(result.stdout)
+            _ec.span_end(tenant, meta, span_id, reported, usage, "error" if is_error else "ok", t0)
+            meta["usage"] = {"model_id": reported, "cost_usd": cost, **_ec.usage_split(usage)}
+            meta["span_id"] = span_id
+            if is_error:
+                raise NodeExecutionError("Worker engine reported an error")
+            return text.strip()
+        if _ec is not None:
+            _ec.span_end(tenant, meta, span_id, "", {}, "error", t0)
         raise NodeExecutionError(f"Worker engine ended with exit code {result.returncode}")
     except FileNotFoundError:
         raise NodeExecutionError("Worker engine unavailable: the claude CLI was not found") from None
     except subprocess.TimeoutExpired:
+        if _ec is not None:
+            _ec.span_end(tenant, meta, span_id, "", {}, "error", t0)
         raise NodeExecutionError("Worker engine timed out after 180 s") from None
     except NodeExecutionError:
         raise
@@ -593,6 +627,39 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None) -> str:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+def _spawn_node(node: dict[str, Any], prompt: str, mcp_config: dict | None, tenant_id: str,
+                wid: str, rid: str, item_index: int | None = None) -> tuple[str, dict[str, Any]]:
+    """ADR-2308 on the console's own executor: resolve the node's model (``agent`` and ``fan_out``
+    only), spawn it, return ``(text, meta)`` where ``meta['usage']`` holds the reported model and
+    the four-way token split. Runs in a worker thread: the resolver's first import is slow and must
+    not stall the event loop. An invalid node value fails the node with ``model_unknown``; a
+    resolver fault leaves the spawn exactly as it was."""
+    meta: dict[str, Any] = {"node_id": str(node.get("id", "")), "tenant_id": tenant_id,
+                            "workflow_id": wid, "run_id": rid}
+    model = ""
+    try:
+        from corvin_workflows import model_resolution as _mr
+    except Exception:  # noqa: BLE001
+        _mr = None
+    if _mr is not None:
+        try:
+            model, extra = _mr.describe(node, tenant_id, "legacy", wid, rid, item_index)
+            meta.update(extra)
+        except _mr.ModelUnknown as exc:
+            raise NodeExecutionError(f"{exc} (model_unknown)") from None
+    if item_index is not None:
+        meta["item_index"] = item_index
+    return _run_node_claude(prompt, mcp_config, model=model, meta=meta), meta
+
+
+def _node_tokens(meta: dict[str, Any]) -> int:
+    """The four billed token counts of a finished spawn, summed (0 when the CLI sent no usage)."""
+    u = meta.get("usage") or {}
+    return sum(int(u.get(k, 0) or 0) for k in
+               ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"))
+
 
 def _build_mcp_with_forge(
     tenant_id: str,
@@ -787,8 +854,13 @@ def _run_fan_out_node(
     tenant_id: str = "_default",
     node_id: str = "fan_out",
     wid: str = "",
+    rid: str = "",
+    stats: dict[str, Any] | None = None,
 ) -> str:
     """Execute a fan_out node: run the same agent over N items from state.
+
+    ``stats`` (optional) receives ``tokens`` (the four billed parts summed over all items) and
+    ``model_id`` (the model the CLI reported for the last item) for the node_completed event.
 
     Round-4 finding #1: each per-item spawn is a distinct `claude -p` driven by
     item-substituted (data-derived) text, so each is gated fail-closed +
@@ -825,7 +897,7 @@ def _run_fan_out_node(
         return "[fan_out] no items found to process"
 
     results: list[str] = []
-    for item in items:
+    for item_index, item in enumerate(items):
         prompt = instructions_template.replace("{item}", item)
         _item_refusal = _spawn_gates.check_console_spawn_or_refusal(
             prompt, tenant_id=tenant_id, persona="assistant",
@@ -835,7 +907,11 @@ def _run_fan_out_node(
         if _item_refusal is not None:
             results.append(f"• {item}:\n  {_item_refusal}")
             continue
-        out = _run_node_claude(prompt, mcp_config)
+        out, spawn_meta = _spawn_node({**node, "id": node_id}, prompt, mcp_config, tenant_id, wid, rid,
+                                      item_index)
+        if stats is not None:
+            stats["tokens"] = stats.get("tokens", 0) + _node_tokens(spawn_meta)
+            stats["model_id"] = (spawn_meta.get("usage") or {}).get("model_id", "") or stats.get("model_id", "")
         results.append(f"• {item}:\n  {out.strip()}")
 
     return "\n\n".join(results)
@@ -3854,14 +3930,16 @@ async def _stream_run(
                 forge_tools = list(node.get("forge_tools") or [])
                 mcp_cfg = _build_mcp_with_forge(tenant_id, node_tools, forge_tools)
                 try:
+                    _fan_stats: dict[str, Any] = {}
                     output_text = await loop.run_in_executor(
                         None, _run_fan_out_node, node, state,
-                        mcp_cfg or None, tenant_id, node_id, wid
+                        mcp_cfg or None, tenant_id, node_id, wid, rid, _fan_stats
                     )
                     elapsed = round(time.time() - t0, 2)
                     state[node_id] = {"output": output_text}
                     yield _emit({"type": "node_completed", "node_id": node_id,
-                                 "elapsed_s": elapsed, "tokens": 0,
+                                 "elapsed_s": elapsed, "tokens": _fan_stats.get("tokens", 0),
+                                 "model_id": _fan_stats.get("model_id", ""),
                                  "output_preview": output_text[:200],
                                  "output": output_text[:50_000], "ts": time.time()})
                     # Scan output for media artifacts (ADR-0091 M2)
@@ -3935,14 +4013,16 @@ async def _stream_run(
                 all_ok = False
                 break
             try:
-                output_text = await loop.run_in_executor(None, _run_node_claude, prompt, mcp_config)
+                output_text, _spawn_meta = await loop.run_in_executor(
+                    None, lambda: _spawn_node(node, prompt, mcp_config, tenant_id, wid, rid))
                 elapsed = round(time.time() - t0, 2)
                 state[node_id] = {"output": output_text}
                 yield _emit({
                     "type": "node_completed",
                     "node_id": node_id,
                     "elapsed_s": elapsed,
-                    "tokens": 0,
+                    "tokens": _node_tokens(_spawn_meta),
+                    "model_id": (_spawn_meta.get("usage") or {}).get("model_id", ""),
                     "output_preview": output_text[:200],
                     "output": output_text[:50_000],
                     "ts": time.time(),

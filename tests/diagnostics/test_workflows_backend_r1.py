@@ -220,7 +220,7 @@ def test_wfb_r1_10_stream_gate_covers_upstream_context(sandbox, monkeypatch):
     replies = iter(["REPRO-UPSTREAM-MARKER", "done"])
     prompts: list[str] = []
 
-    def fake_claude(prompt, mcp_config=None):
+    def fake_claude(prompt, mcp_config=None, **_kw):  # ADR-2308: model= / meta= keywords
         prompts.append(prompt)
         return next(replies)
 

@@ -234,9 +234,9 @@ def _span_end(tenant: str, meta: dict[str, Any], span_id: str, reported_model: s
         _log.error("[workflow-engine] engine.span.end not written (%s)", type(exc).__name__)
 
 
-def _emit_resolution(tenant: str, call: EngineCall, prompt: str, span_id: str) -> None:
-    """ADR-2308: write ``workflow.node_model_resolved`` now that the prompt (hence ``ctx``) exists."""
-    meta = call.metadata
+def _emit_resolution(tenant: str, meta: dict[str, Any], prompt: str, span_id: str) -> None:
+    """ADR-2308: write ``workflow.node_model_resolved`` now that the prompt (hence ``ctx``) exists.
+    ``meta`` is what ``model_resolution.describe`` returned; empty means nothing was resolved."""
     resolution = meta.get("model_resolution")
     if resolution is None:
         return
@@ -246,6 +246,15 @@ def _emit_resolution(tenant: str, call: EngineCall, prompt: str, span_id: str) -
         node_id=str(meta.get("node_id", "")),
         node_class=_mr.node_class(meta.get("class_view") or {}, len(prompt)),
         resolution=resolution, span_id=span_id, item_index=meta.get("item_index"))
+
+
+# The console's own node executor spawns `claude -p` too (routes/workflows.py::_run_node_claude) and
+# must read the same envelope and write the same span and event: it uses these names, not a copy.
+split_envelope = _split_envelope
+usage_split = _usage_split
+span_start = _span_start
+span_end = _span_end
+emit_resolution = _emit_resolution
 
 
 def _build_prompt(call: EngineCall) -> str:
@@ -309,7 +318,7 @@ class ClaudeCliEngine:
         model = call.model or self.model
         meta = call.metadata
         span_id = _span_start(tenant, meta, model)
-        _emit_resolution(tenant, call, prompt, span_id)
+        _emit_resolution(tenant, meta, prompt, span_id)
         cmd = [
             "claude", "-p", _guard_prompt_head(prompt),
             "--model", model,

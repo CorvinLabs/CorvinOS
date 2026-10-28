@@ -97,8 +97,10 @@ class DefaultDeps:
     def current(self, model: str) -> str:
         return self._ml.current(model) or model
 
-    def high_model(self, tenant_id: str) -> str:
-        return self._ms.high_model(tenant_id)
+    def legacy_default(self, tenant_id: str) -> Optional[str]:
+        """The model the console's own executor runs an unset node on. That is the CLI's default,
+        not a Corvin setting, so there is nothing to read: unmeasured -> ``None``."""
+        return None
 
     def autoselect_is_off(self) -> bool:
         return os.environ.get("CORVIN_OS_MODEL_AUTOSELECT", "").strip().lower() == "off"
@@ -157,10 +159,13 @@ def _node_value(value: str, deps: Any) -> str:
     return deps.current(rid)
 
 
-def _path_reference(path: str, tenant_id: str, deps: Any) -> str:
-    """The tier the node runs on today (ADR-2308 decision 6): the console default tier on the
-    legacy path, the cheapest tier on the DAG engine."""
-    return deps.high_model(tenant_id) if path == "legacy" else deps.tier("haiku")
+def _path_reference(path: str, tenant_id: str, deps: Any) -> Optional[str]:
+    """The tier the node runs on today (ADR-2308 decision 6). DAG engine: the cheapest tier (its
+    alias). Console legacy path: the CLI's OWN default, which Corvin does not control and which
+    differs per account — measured 2026-10-28 on this install it was a tier above the console's
+    default (``high_model``), at about 100x the price of the cheapest tier. ``None`` until a
+    per-install measurement exists; then no recommendation acts on that path."""
+    return deps.legacy_default(tenant_id) if path == "legacy" else deps.tier("haiku")
 
 
 def _is_stale(row: dict[str, Any], deps: Any) -> bool:
@@ -175,7 +180,8 @@ def _recommendation(node, tenant_id, path, table, env, deps) -> Optional[Resolut
     row = table.get(gate_key(node)) if table else None
     if not row or _has_tools(node):
         return None
-    if row.get("r") != _path_reference(path, tenant_id, deps):
+    ref = _path_reference(path, tenant_id, deps)
+    if ref is None or row.get("r") != ref:
         return None
     status = row.get("gate_status", "none")
     if status == "rolled_back":
@@ -228,29 +234,50 @@ def validate_node_model(value: Any, deps: Any = None) -> None:
         raise ValueError(f"{exc} ({ModelUnknown.reason_code})") from None
 
 
-def stamp_call(call: Any, node: dict[str, Any], state: dict[str, Any], tenant_id: str,
-               path: str = "dag", item_index: Optional[int] = None) -> Resolution:
-    """Resolve the node's model and stamp it, plus what the engine needs to emit the audit event
-    after the prompt exists, onto ``call``. On an invalid node value the event is written here
-    (there is no prompt and no span) and :class:`ModelUnknown` propagates, so the node fails."""
-    wid, rid = str(state.get("__workflow__", "")), str(state.get("__run_id__", ""))
+def in_scope(node: dict[str, Any]) -> bool:
+    """Only these node types carry a model (ADR-2308 scope); every other type is left alone."""
+    return _node_type(node) in SCOPE_TYPES
+
+
+def describe(node: dict[str, Any], tenant_id: str, path: str, wid: str, rid: str,
+             item_index: Optional[int] = None) -> tuple[str, dict[str, Any]]:
+    """Resolve a node's model for ONE spawn and describe it for the spawner.
+
+    Returns ``(model_id, meta)``: ``model_id`` is what to pass as ``--model`` (empty keeps the
+    argv this path always had), ``meta`` is what the spawner needs to write the audit event once
+    the prompt exists (the context bucket needs its length). An out-of-scope node, or a reader
+    fault, returns ``("", {})``: the spawn is exactly what it was before. An invalid node value
+    writes its event here (there is no prompt and no span) and raises :class:`ModelUnknown`."""
+    if not in_scope(node):
+        return "", {}
     try:
         res = resolve_node_model(node, tenant_id, path, {})
     except ModelUnknown:
-        failed = Resolution("", "node", "none")
         emit_node_model_resolved(
             tenant_id=tenant_id, wid=wid, rid=rid, node_id=str(node.get("id", "")),
-            node_class=node_class(node, None), resolution=failed, item_index=item_index)
+            node_class=node_class(node, None), resolution=Resolution("", "node", "none"),
+            item_index=item_index)
         raise
     except Exception as exc:  # noqa: BLE001 - a reader fault must leave the node exactly as it was
         _log.warning("[workflow-engine] node model not resolved (%s); node unchanged", type(exc).__name__)
-        return Resolution("", "site_default", "none")
-    call.model = res.model_id  # empty keeps the engine's own argv; the event is still written
-    call.metadata.update({
+        return "", {}
+    meta: dict[str, Any] = {
         "model_resolution": res, "class_view": class_view(node), "workflow_id": wid,
         "run_id": rid, "tenant_id": tenant_id,
-    })
-    return res
+    }
+    if item_index is not None:
+        meta["item_index"] = item_index
+    return res.model_id, meta
+
+
+def stamp_call(call: Any, node: dict[str, Any], state: dict[str, Any], tenant_id: str,
+               path: str = "dag", item_index: Optional[int] = None) -> Resolution:
+    """Stamp the resolved model and the audit description onto an ``EngineCall`` (DAG engine)."""
+    model, meta = describe(node, tenant_id, path, str(state.get("__workflow__", "")),
+                           str(state.get("__run_id__", "")), item_index)
+    call.model = model
+    call.metadata.update(meta)
+    return meta.get("model_resolution") or Resolution("", "site_default", "none")
 
 
 def emit_node_model_resolved(*, tenant_id: str, wid: str, rid: str, node_id: str, node_class: str,
