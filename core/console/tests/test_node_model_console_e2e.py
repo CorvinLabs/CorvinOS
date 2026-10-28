@@ -26,6 +26,9 @@ positional = [a for i, a in enumerate(argv) if i and argv[i - 1] == "-p" and not
 prompt = positional[0] if positional else sys.stdin.read()
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps({"argv": argv, "prompt": prompt}) + "\\n")
+if "--max-turns" not in argv and "MARK-FAIL" in prompt:      # a node whose spawn fails
+    sys.stderr.write("simulated engine failure\\n")
+    sys.exit(1)
 if "--max-turns" in argv:                       # the L44 gate's own classifier call
     reply = json.dumps({"violated_rule_id": "", "confidence": 0.0, "reason": "ok"})
 elif positional:                                # the DAG engine asks for ONE JSON object
@@ -183,7 +186,8 @@ def test_legacy_path_writes_spans_and_resolution_events_only_for_in_scope_nodes(
         before_spans = len(_chain_events(tid, "engine.span.end"))
         _run(client, "legacy")
         ends = _chain_events(tid, "engine.span.end")[before_spans:]
-        assert ends and all(d["model_id"] == REPORTED for d in ends)
+        # every node spawn has a span, the excluded delegation_loop manager included
+        assert len(ends) == len(_calls(fake_cli)) and all(d["model_id"] == REPORTED for d in ends)
         assert all((d["input_tokens"], d["output_tokens"], d["cache_read_tokens"], d["cache_write_tokens"])
                    == (11, 7, 100, 20) for d in ends)
         resolved = _chain_events(tid, "workflow.node_model_resolved")
@@ -224,6 +228,33 @@ def test_the_level4_variable_sets_an_unset_node_on_the_legacy_path(tmp_path, fak
         calls = _calls(fake_cli)
         assert _model_of(_call_for(calls, "MARK-PLAIN")) == "site-model-3"
         assert _model_of(_call_for(calls, "MARK-WITH-MODEL")) != "site-model-3"   # the node value outranks level 4
+
+
+FAILING = """awp: "1.0.0"
+workflow:
+  name: failing_e2e
+  description: One agent node whose engine call fails.
+orchestration:
+  engine: dag
+  graph:
+    - id: boom
+      type: agent
+      agent: a
+      instructions: "MARK-FAIL"
+      model: opus
+"""
+
+
+def test_a_failed_legacy_node_is_spawned_exactly_once_and_the_span_ends_in_error(tmp_path, fake_cli):
+    with _sandbox(tmp_path) as (client, home, tid):
+        _make(tid, "failing", FAILING)
+        before = len(_chain_events(tid, "engine.span.end"))
+        events = _run(client, "failing")
+        assert any(e.get("type") == "node_failed" and e.get("node_id") == "boom" for e in events), events[-3:]
+        assert events[-1]["type"] == "run_completed" and events[-1]["ok"] is False
+        assert len([c for c in _calls(fake_cli) if "MARK-FAIL" in c["prompt"]]) == 1   # no retry, no escalation
+        ends = [d for d in _chain_events(tid, "engine.span.end")[before:] if d["status"] == "error"]
+        assert len(ends) == 1 and ends[0]["model_id"] == ""
 
 
 # ── DAG engine ───────────────────────────────────────────────────────────────

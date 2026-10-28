@@ -52,6 +52,9 @@ with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
 # The L44 house-rules gate runs its own classifier through this same `claude` (--max-turns 1):
 # answer it like a healthy model (no rule violated) so the gate really runs and really passes.
 classifier = "--max-turns" in sys.argv
+if not classifier and "-p" in sys.argv and "MARK-FAIL" in sys.argv[sys.argv.index("-p") + 1]:
+    sys.stderr.write("simulated engine failure\\n")
+    sys.exit(1)                                   # a node whose spawn fails
 reply = ({"violated_rule_id": "", "confidence": 0.0, "reason": "ok"} if classifier
          else {"items": ["x", "y"], "ok": True})
 envelope = {
@@ -209,6 +212,35 @@ def test_an_invalid_node_value_fails_validation_and_never_reaches_a_spawn(cli_en
         validate(_doc(tmp_path, bad))
     assert "model_unknown" in str(ei.value)
     assert not cli_env.exists() or _argv(cli_env) == []
+
+
+@pytest.mark.parametrize("stdout,text,model", [
+    ('{"ok": true}', '{"ok": true}', ""),                       # not an envelope: the plain reply, no model claimed
+    ("plain words", "plain words", ""),                          # not JSON at all
+    ('{"result": 5}', "", ""),                                  # an envelope whose result is not text
+    ('{"result": "r", "modelUsage": {"a": {"outputTokens": 1}, "b": {"outputTokens": 9}}}', "r", "b"),
+])
+def test_the_envelope_reader_is_fail_soft_and_claims_only_a_model_it_was_told(stdout, text, model):
+    from corvin_workflows.engines_claude import split_envelope
+    got_text, usage, reported, cost, is_error = split_envelope(stdout)
+    assert (got_text, reported, is_error) == (text, model, False)
+    assert isinstance(usage, dict)
+
+
+def test_an_envelope_that_reports_an_error_is_flagged():
+    from corvin_workflows.engines_claude import split_envelope
+    assert split_envelope('{"result": "boom", "is_error": true}')[4] is True
+
+
+def test_a_failed_node_is_spawned_exactly_once_and_the_span_ends_in_error(cli_env, tmp_path):
+    failing = WORKFLOW.replace("MARK-PLAIN", "MARK-FAIL")
+    before = len(_chain())
+    res = _run(tmp_path, _doc(tmp_path, failing))
+    assert res.state == "failed"
+    spawns = [c for c in _argv(cli_env) if "MARK-FAIL" in c[c.index("-p") + 1]]
+    assert len(spawns) == 1                          # no hidden retry, no escalation after a failure
+    ends = [d for d in _events("engine.span.end", before) if d["status"] == "error"]
+    assert len(ends) == 1 and ends[0]["model_id"] == ""   # no envelope arrived: no model is claimed
 
 
 def test_a_stub_engine_run_is_unchanged_and_writes_nothing(tmp_path):
