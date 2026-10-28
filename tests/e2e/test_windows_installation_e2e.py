@@ -271,7 +271,7 @@ class TestWindowsPathHandling:
         # Simulate minimal install step: create directories
         result = subprocess.run(
             [sys.executable, "-c", "from pathlib import Path; "
-             "p = Path('{path}'); "
+             "p = Path({path!r}); "
              "p.mkdir(parents=True, exist_ok=True); "
              "print(p.exists())".format(path=str(install.corvin_home))],
             env=env,
@@ -303,7 +303,7 @@ class TestWindowsPathHandling:
                 (
                     "import yaml; "
                     "from pathlib import Path; "
-                    "p = Path('{path}') / 'plugin.yaml'; "
+                    "p = Path({path!r}) / 'plugin.yaml'; "
                     "data = yaml.safe_load(p.read_text(encoding='utf-8')); "
                     "print('OK' if data.get('id') else 'FAIL')"
                 ).format(path=str(install.plugins_dir / "test_plugin")),
@@ -381,9 +381,9 @@ class TestWindowsEncoding:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, '{repo}'); "
+                    "import sys; sys.path.insert(0, {repo!r}); "
                     "from corvinOS.core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata; "
-                    "meta = extract_plugin_metadata('{plugin_path}'); "
+                    "meta = extract_plugin_metadata({plugin_path!r}); "
                     "print(f'id={{meta.plugin_id}} name={{meta.name}}')"
                 ).format(
                     repo=str(Path(__file__).parent.parent.parent),
@@ -419,7 +419,7 @@ class TestWindowsEncoding:
                 (
                     "import yaml; "
                     "from pathlib import Path; "
-                    "data = yaml.safe_load(Path('{path}').read_text(encoding='utf-8')); "
+                    "data = yaml.safe_load(Path({path!r}).read_text(encoding='utf-8')); "
                     "assert 'éàü' in data.get('spec', {}).get('metadata', {}).get('description', ''); "
                     "print('UTF8_OK')"
                 ).format(path=str(install.tenant_yaml_path)),
@@ -445,7 +445,7 @@ class TestWindowsEncoding:
                 "-c",
                 (
                     "from pathlib import Path; "
-                    "log = Path('{path}'); "
+                    "log = Path({path!r}); "
                     "log.parent.mkdir(parents=True, exist_ok=True); "
                     "log.write_text('Installation started. Charset: UTF-8. Unicode: éàü\\n', encoding='utf-8'); "
                     "# Verify re-read works "
@@ -497,7 +497,7 @@ class TestWindowsEncoding:
                 (
                     "import yaml; "
                     "from pathlib import Path; "
-                    "data = yaml.safe_load(Path('{path}').read_text(encoding='utf-8')); "
+                    "data = yaml.safe_load(Path({path!r}).read_text(encoding='utf-8')); "
                     "plugins = data.get('spec', {}).get('plugins', {}).get('installed', []); "
                     "assert any('éàü' in str(p) for p in plugins), f'UTF-8 not preserved: {plugins}'; "
                     "print('PLUGIN_REG_OK')"
@@ -546,10 +546,10 @@ class TestPluginRegistryValidation:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, '{repo}'); "
+                    "import sys; sys.path.insert(0, {repo!r}); "
                     "from corvinOS.core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata; "
                     "try: "
-                    "  extract_plugin_metadata('{path}'); "
+                    "  extract_plugin_metadata({path!r}); "
                     "  print('ERROR_NOT_RAISED'); "
                     "except ValueError as e: "
                     "  if 'missing required field: id' in str(e): "
@@ -588,12 +588,12 @@ class TestPluginRegistryValidation:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, '{repo}'); "
+                    "import sys; sys.path.insert(0, {repo!r}); "
                     "from corvinOS.core.gateway.corvin_gateway.plugin_cmd import ( "
                     "  extract_plugin_metadata, _validate_axes "
                     "); "
                     "try: "
-                    "  meta = extract_plugin_metadata('{path}'); "
+                    "  meta = extract_plugin_metadata({path!r}); "
                     "  error_msg = _validate_axes(meta); "
                     "  if error_msg and 'origin' in error_msg: "
                     "    print('INVALID_ORIGIN_CAUGHT'); "
@@ -631,10 +631,10 @@ class TestPluginRegistryValidation:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, '{repo}'); "
+                    "import sys; sys.path.insert(0, {repo!r}); "
                     "from corvinOS.core.gateway.corvin_gateway.plugin_cmd import extract_plugin_metadata; "
                     "from pathlib import Path; "
-                    "plugins_dir = Path('{plugins_dir}'); "
+                    "plugins_dir = Path({plugins_dir!r}); "
                     "valid_count = 0; "
                     "for plugin_dir in plugins_dir.iterdir(): "
                     "  if plugin_dir.is_dir(): "
@@ -671,7 +671,7 @@ class TestPluginRegistryValidation:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, '{repo}'); "
+                    "import sys; sys.path.insert(0, {repo!r}); "
                     "from corvinOS.core.gateway.corvin_gateway.plugin_cmd import load_tenant_config; "
                     "try: "
                     "  config = load_tenant_config('_default'); "
@@ -733,7 +733,7 @@ class TestFullWindowsInstallToConsoleBoot:
                 sys.executable,
                 "-c",
                 (
-                    "import sys; sys.path.insert(0, '{repo}'); "
+                    "import sys; sys.path.insert(0, {repo!r}); "
                     "try: "
                     "  from corvinOS.core.console.corvin_console.app import create_app; "
                     "  app = create_app(tenant_id='_default'); "
@@ -772,8 +772,8 @@ class TestFullWindowsInstallToConsoleBoot:
                 (
                     "import sys; "
                     "from pathlib import Path; "
-                    "sys.path.insert(0, '{repo}'); "
-                    "corvin_home = Path('{home}'); "
+                    "sys.path.insert(0, {repo!r}); "
+                    "corvin_home = Path({home!r}); "
                     "assert corvin_home.exists(); "
                     "config_path = corvin_home / 'tenants' / '_default' / 'global' / 'tenant.corvin.yaml'; "
                     "assert config_path.exists(), f'Config not found: {{config_path}}'; "
