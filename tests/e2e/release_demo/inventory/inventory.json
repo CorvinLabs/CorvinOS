@@ -2880,7 +2880,7 @@
     "src/pages/skills/SkillManagerDashboard.tsx": "d7d9036cc955c559c4579ad648daafd228463cba46b4da5a5d7d3b2affa49792",
     "src/pages/tasks/index.tsx": "d4bab92740275339f594447b41ba8b6cfa391ca580e22b886bf909f48640f081",
     "src/pages/vibe-engineering/VibeDashboard.tsx": "4dc491f27fcafb92a474a80aab1564b2cfdd28494bd3d548665c4c38f7779574",
-    "src/pages/video-producer.tsx": "cbfc6da49a46757e2ba9e01b45cf3833fda0a3e69b58d2d9f3162cd316fbcf51",
+    "src/pages/video-producer.tsx": "3e0efb43b61c555ca5e7de19e54fc9dcb20508dc9f2c42782bab0d5a3254d189",
     "src/panels/registry.tsx": "af889ab6bbe863e9f0e43ec62cf76525c81f5d550cbeaabcc42d63543945a306"
   }
 }

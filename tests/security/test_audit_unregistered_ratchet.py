@@ -30,9 +30,17 @@ def test_the_committed_baseline_passes_and_is_non_trivial():
 
 def test_a_name_missing_from_the_baseline_fails_the_gate(tmp_path):
     names = json.loads(BASELINE.read_text("utf-8"))
-    dropped = names[0]
+    # Drop a name the scan STILL reports. A baseline entry that got registered or lost its emitter
+    # is stale (shrink-only file, not yet shrunk); dropping one of those proves nothing and made this
+    # test fail on main once `A2A.google_envelope_sent` lost its emitter.
+    stale_marker = "NOTE registered now, remove from the baseline (--shrink-baseline): "
+    stale = {line.split(stale_marker, 1)[1].strip()
+             for line in _run().stdout.splitlines() if stale_marker in line}
+    live = [n for n in names if n not in stale]
+    assert live, "positive control: at least one baseline name must still be emitted unregistered"
+    dropped = live[0]
     probe = tmp_path / "baseline.json"
-    probe.write_text(json.dumps(names[1:]))
+    probe.write_text(json.dumps([n for n in names if n != dropped]))
     out = _run("--baseline", str(probe))
     assert out.returncode == 1, out.stdout[-1500:]
     assert f"not in the baseline: {dropped}" in out.stdout
