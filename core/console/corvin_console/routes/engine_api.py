@@ -635,15 +635,16 @@ async def get_model_usage(
 async def get_engine_config(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    """Read current per-task-type config + REAL, LEARNED confidence.
+    """Read current per-task-type config + the per-tier no-error score (a proxy).
 
     ``confidence_score``/``run_count`` per task type come from
     core.learning.model_selection_optimizer.ConfidenceOptimizer (ADR-0644,
-    Bayesian + EMA) for the tier's CURRENTLY selected model — real outcome
-    feedback closes this loop end to end (2026-09-10):
+    Bayesian + EMA) for the tier's CURRENTLY selected model. Its inputs are
+    proxies, not answer quality (register L08):
     corvin_operator/bridges/shared/model_selector_shadow.py classifies every real
-    turn (SHADOW — never alters routing) and reports its real success/failure
-    back into this same optimizer. 0 samples is the honest, expected state
+    turn (SHADOW — never alters routing) and reports 0.85 / 0.2 for a turn that
+    ended without / with an error; the task outcome listener reports 0.95 / 0.3.
+    The Models page labels the number "no-error score (proxy)". 0 samples is the honest, expected state
     until real turns accrue; ``is_converged`` only turns true once the
     variance criterion (ADR-0644: n>=5, then <0.05 variance over the last 50
     samples) is genuinely met — never claimed early.

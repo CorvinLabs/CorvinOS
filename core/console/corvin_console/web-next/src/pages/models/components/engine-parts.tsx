@@ -57,6 +57,15 @@ import {
   type ProviderSpec,
 } from '@/lib/api/engines';
 
+// The per-tier `confidence_score` is not a measure of answer quality. Its only inputs are
+// proxies: 0.85 / 0.2 per bridge turn that ended without / with an error, and 0.95 / 0.3
+// per finished task. Twelve error-free turns read as "76%", so it is labelled as the
+// proxy it is, never as "confidence".
+export const PROXY_SCORE_LABEL = 'no-error score (proxy)';
+export const PROXY_SCORE_LABEL_TITLE = 'No-error score (proxy)';
+export const PROXY_SCORE_HINT =
+  'Derived only from whether turns ended without an error; not a measure of answer quality.';
+
 // No model list and no provider list live in this file. Both are fetched:
 // models from /v1/engine/claude-models (curated registry ∪ Anthropic /v1/models ∪
 // Bedrock ListFoundationModels+ListInferenceProfiles), providers from the
@@ -364,9 +373,9 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
             <Badge
               variant="secondary"
               className={cn('ml-4', config.is_converged && 'border-emerald-500/40 text-emerald-700 dark:text-emerald-400')}
-              title={`Learned from ${config.run_count} real outcome${config.run_count === 1 ? '' : 's'}`}
+              title={`${PROXY_SCORE_HINT} From ${config.run_count} outcome${config.run_count === 1 ? '' : 's'}.`}
             >
-              {(config.confidence_score * 100).toFixed(0)}% confident{config.is_converged ? ' · converged' : ''}
+              {(config.confidence_score * 100).toFixed(0)}% {PROXY_SCORE_LABEL}{config.is_converged ? ' · converged' : ''}
             </Badge>
           )}
         </div>
@@ -462,7 +471,7 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
             <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-amber-700 dark:text-amber-300 space-y-1">
               <p>
-                No learned confidence yet:{' '}
+                No {PROXY_SCORE_LABEL} yet:{' '}
                 <span className="tabular-nums">
                   {fmtInt(config.classified_count)} of {fmtInt(totalClassified)}
                 </span>{' '}
@@ -498,7 +507,7 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
             <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
             <div className="text-sm text-muted-foreground space-y-1">
               <p>
-                Learning has started: {(config.confidence_score * 100).toFixed(0)}% over{' '}
+                Learning has started: {(config.confidence_score * 100).toFixed(0)}% {PROXY_SCORE_LABEL} over{' '}
                 <span className="tabular-nums">{fmtInt(config.run_count)}</span> outcome
                 sample{config.run_count === 1 ? '' : 's'} — lifetime, not limited to the
                 counting window.
@@ -513,9 +522,10 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
         ) : (
           <div className="p-3 border border-emerald-500/30 bg-emerald-500/10 rounded-md">
             <p className="text-sm text-emerald-700 dark:text-emerald-300 font-medium">
-              ✓ Learned confidence: {(config.confidence_score * 100).toFixed(0)}%
+              ✓ {PROXY_SCORE_LABEL_TITLE}: {(config.confidence_score * 100).toFixed(0)}%
               {config.is_converged && ' — converged'}
             </p>
+            <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80 mt-1">{PROXY_SCORE_HINT}</p>
             {/* The optimizer's sample count is LIFETIME and deliberately not
                 narrowed by the counting window: a confidence score is
                 accumulated evidence, and windowing it would discard the very

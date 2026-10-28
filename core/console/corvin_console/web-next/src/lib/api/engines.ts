@@ -290,10 +290,11 @@ export interface TaskModelConfig {
   // ADR-0181 provider id; null = native Anthropic
   provider: string | null;
   alternatives: string[];
-  // REAL, LEARNED (ADR-0644 Bayesian + EMA) — core.learning.
-  // model_selection_optimizer.ConfidenceOptimizer, fed by real turn outcomes
-  // (corvin_operator/bridges/shared/model_selector_shadow.py::report_turn_outcome).
-  // 0 until real turns for this tier's current model have completed.
+  // ADR-0644 Bayesian + EMA score from core.learning.model_selection_optimizer,
+  // fed ONLY by proxies: 0.85 / 0.2 per bridge turn that ended without / with an
+  // error (model_selector_shadow.py::report_turn_outcome) and 0.95 / 0.3 per
+  // finished task. Not answer quality — the Models page labels it
+  // "no-error score (proxy)". 0 until turns for this tier's current model completed.
   confidence_score: number;
   run_count: number;
   // True only once the real variance criterion is met (n>=5, then <0.05
@@ -360,9 +361,9 @@ export async function testExternalProvider(
   });
 }
 
-// ── ADR-0644: Model Selection Analytics (real Bayesian confidence, currently
-// empty until outcome/quality feedback is wired — core/learning/
-// model_selection_optimizer.py::process_feedback has no production caller yet) ──
+// ── ADR-0644: Model Selection Analytics (Bayesian score over proxy outcomes —
+// core/learning/model_selection_optimizer.py::process_feedback is called by
+// model_selector_shadow.report_turn_outcome and the task outcome listener) ──
 
 export interface ConfidenceEntry {
   model: string;
