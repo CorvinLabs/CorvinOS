@@ -3533,18 +3533,33 @@ original event every cycle.
 
 **Status: partial.** Built: the resolver (`core/workflows/corvin_workflows/model_resolution.py`), the
 DAG-engine path (`ClaudeCliEngine`) and the console's own executor (`_run_node_claude` / `_spawn_node`
-in `routes/workflows.py`). Not built: the gate table (level 3) and the oracle source — level 3 is off
-(way B, ADR-2308). ADR-2308 is `proposed`.
+in `routes/workflows.py`), the `model` field in the console's node inspector, the reported model and
+token total per node in the run stream on both paths, and the `node_model` readiness hint. Not built:
+the gate table (level 3), the oracle source and the escalation after a failure (decision 2) — all three
+are deferred with level 3 (way B, ADR-2308); `escalation_target` was removed on 2026-10-28 because
+nothing called it.
 
-**Scope.** Node types `agent` and `fan_out` (per item) on the two console paths — the console's own
+**Scope.** Node types `agent`, `fan_out` (per item) and `route` in `mode: classify` (the one route mode
+that calls a model; ADR-2308 amendment 2026-10-28) on the two console paths — the console's own
 executor (any run without a DAG-only node type) and `ClaudeCliEngine` (the console DAG route,
 `corvin-workflows` CLI and scheduler, the orchestration MCP server). Excluded: `delegation_loop`,
-`deliver`, `ask_human`, `peer_agent` and every other type; the AWP walker (no caller); ACS workflows
+`deliver`, `ask_human`, `peer_agent`, `route` in `mode: condition` (it never spawns, and a `model:` on
+it is rejected by the validator) and every other type; the AWP walker (no caller); ACS workflows
 (their own order in `acs_runtime._resolve_worker_model`). An engine that takes no per-call model
 (`accepts_node_model`, e.g. `StubEngine`) is not resolved at all. Every spawn on both paths — also of
 an excluded type — now asks the CLI for `--output-format json`, writes an `engine.span` pair and
 reports real tokens in the run stream (`node_completed.tokens`, `model_id`); only the model choice,
-the class and the resolution event are limited to the types above.
+the class and the resolution event are limited to the types above. On the DAG engine the token total
+and the reported model reach `node_completed` through `ClaudeCliEngine.take_node_usage(node_id)`,
+which the console's run recorder reads once per node (summed over all `fan_out` items); before
+2026-10-28 that path wrote `tokens: 0` and no model. An engine without the method (stub, synthetic,
+null) leaves the event as it was.
+
+**Console.** The node inspector offers `model` (unset, `haiku`, `sonnet`, `opus`; a saved registry id
+is shown as-is) on `agent`, `fan_out` and classify routes, and switching a route to `condition` drops
+it. A run's event list shows the reported model and the token total next to each completed node. The
+readiness report carries an `info` signal `node_model` ("N of M model node(s) have no `model:`"):
+counts only, no node ids, and it never blocks "ready" — a missing model is a cost hint, not a defect.
 
 **What an unset node runs on.** On the DAG engine: the alias `haiku`. On the console's own executor
 there is no `--model` at all, so the node runs on **the CLI's own default**, which Corvin does not set
@@ -3586,7 +3601,8 @@ nothing for it by construction — no model-switch gate may read it.
 **Must NOT do:** put a node value above the pin · replace an unknown model instead of rejecting it ·
 write a prompt, agent name or any free text into the profile · let a gate read a `proxy` entry ·
 resolve for an engine that takes no per-call model · put a model-id literal in the resolver (the three
-tier names live in `TIER_NAMES`) · escalate above level 3 or after a gate refusal.
+tier names live in `TIER_NAMES`) · escalate above level 3 or after a gate refusal · add a retry or
+escalation path before level 3 exists (it was removed as unreachable).
 
 → ADR: `corvin_decisions/decisions/ADR-2308-*.md` · plan `PLAN-0967` · tests
 `core/workflows/tests/test_node_model_precedence.py`, `test_node_model_engine_e2e.py`.

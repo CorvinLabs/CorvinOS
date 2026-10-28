@@ -1,4 +1,4 @@
-"""ADR-2308 / T-0327 — the node-model resolver, the escalation rule and ``node_class``.
+"""ADR-2308 / T-0327 — the node-model resolver and ``node_class``.
 
 The resolver is a pure function over injected dependencies, so these tests need neither a
 console nor a tenant home. The default-dependency wiring is exercised separately against the
@@ -202,31 +202,6 @@ def test_the_default_deps_do_not_invent_a_legacy_default():
 def test_fan_out_uses_its_own_class_row():
     r = resolve(node(type="fan_out"), table={"wf:fan_out": row()})
     assert (r.model_id, r.source) == (HAIKU, "recommendation")
-
-
-# ── escalation ───────────────────────────────────────────────────────────────
-
-def _res(source, model=HAIKU, gate="adopt"):
-    return mr.Resolution(model_id=model, source=source, gate_status=gate, shadow_model_id=None)
-
-
-def test_escalation_goes_one_tier_up_on_level3_after_node_failed():
-    assert mr.escalation_target(_res("recommendation"), node(), "node_failed", Deps()) == SONNET
-
-
-@pytest.mark.parametrize("source", ["pin", "node", "site_default", "recommendation_shadow"])
-def test_escalation_never_happens_off_level3(source):
-    assert mr.escalation_target(_res(source), node(), "node_failed", Deps()) is None
-
-
-@pytest.mark.parametrize("failure", ["spawn_refused", "missing_cli", "model_unknown", "timeout", "bad_envelope"])
-def test_escalation_skips_these_failures(failure):
-    assert mr.escalation_target(_res("recommendation"), node(), failure, Deps()) is None
-
-
-def test_escalation_skips_nodes_with_tools_and_the_top_tier():
-    assert mr.escalation_target(_res("recommendation"), node(tools=["t"]), "node_failed", Deps()) is None
-    assert mr.escalation_target(_res("recommendation", model=OPUS), node(), "node_failed", Deps()) is None
 
 
 # ── node_class ───────────────────────────────────────────────────────────────

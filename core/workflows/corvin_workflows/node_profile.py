@@ -1,6 +1,7 @@
 """The per-node measurement stream and its report (ADR-2308 decision 5, T-0329).
 
-One entry per spawn of an ``agent`` / ``fan_out`` node (per item for ``fan_out``), written to
+One entry per spawn of an ``agent`` / ``fan_out`` / ``route(mode: classify)`` node (per item for
+``fan_out``), written to
 ``<tenant_home>/learning/workflow_node_profile.YYYY-MM-DD.jsonl``. It is a derived measurement stream,
 NOT an audit chain and not a learning event: the decision is on the chain (``workflow.node_model_resolved``),
 the token parts are on the span (``engine.span.end``); the two are joined by ``span_id``. ``cost_usd`` comes

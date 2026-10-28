@@ -45,7 +45,7 @@ _EXPECT_STATES = ("complete", "failed")
 _ACCEPTANCE_KEYS = {"inputs", "stub_responses", "expect"}
 _EXPECT_KEYS = {"state", "nodes_reached", "final_contains"}
 
-SIGNAL_NAMES = ("validator", "reachability", "acceptance", "external_exposure", "repairs")
+SIGNAL_NAMES = ("validator", "reachability", "acceptance", "external_exposure", "repairs", "node_model")
 
 
 @dataclass(frozen=True)
@@ -313,6 +313,27 @@ def _exposure(doc: WorkflowDoc) -> Signal:
     )
 
 
+def _node_models(doc: WorkflowDoc) -> Signal:
+    """ADR-2308: how many model-calling nodes carry no ``model:``. Such a node runs on the path
+    default (the DAG engine's alias, or the CLI's own default on the console's legacy executor,
+    which can be the most expensive model). Informational: a missing model is a cost hint, never
+    a defect, so it never blocks "ready". Counts only, no node ids (ids are workflow text)."""
+    from .model_resolution import in_scope
+
+    scoped = [n for n in doc.graph if isinstance(n, dict) and in_scope(n)]
+    missing = sum(1 for n in scoped if not str(n.get("model") or "").strip())
+    if not scoped:
+        return Signal("node_model", "info", "no node calls a model", 0)
+    if not missing:
+        return Signal("node_model", "info", f"all {len(scoped)} model node(s) set 'model:'", 0)
+    return Signal(
+        "node_model",
+        "info",
+        f"{missing} of {len(scoped)} model node(s) have no 'model:' and run on the path default",
+        missing,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -362,6 +383,7 @@ def check_readiness(
                 else Signal("acceptance", "fail", "malformed acceptance case"),
                 Signal("external_exposure", "info", "not measured"),
                 repairs_signal,
+                Signal("node_model", "info", "not measured"),
             ],
             None,
         )
@@ -399,7 +421,7 @@ def check_readiness(
         for r in (run.nodes.values() if run is not None else ())
     )
     return finish(
-        [validator, reach, acc, _exposure(doc), repairs_signal],
+        [validator, reach, acc, _exposure(doc), repairs_signal, _node_models(doc)],
         run.state if run is not None else None,
         outcomes,
     )

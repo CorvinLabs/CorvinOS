@@ -55,8 +55,13 @@ classifier = "--max-turns" in sys.argv
 if not classifier and "-p" in sys.argv and "MARK-FAIL" in sys.argv[sys.argv.index("-p") + 1]:
     sys.stderr.write("simulated engine failure\\n")
     sys.exit(1)                                   # a node whose spawn fails
-reply = ({"violated_rule_id": "", "confidence": 0.0, "reason": "ok"} if classifier
-         else {"items": ["x", "y"], "ok": True})
+prompt = sys.argv[sys.argv.index("-p") + 1] if "-p" in sys.argv else ""
+if classifier:
+    reply = {"violated_rule_id": "", "confidence": 0.0, "reason": "ok"}
+elif "EXACTLY ONE of these classes" in prompt:      # a route(mode=classify) node
+    reply = {"class": "urgent"}
+else:
+    reply = {"items": ["x", "y"], "ok": True}
 envelope = {
     "type": "result", "subtype": "success", "is_error": False,
     "result": json.dumps(reply),
@@ -268,3 +273,76 @@ def test_a_stub_engine_run_is_unchanged_and_writes_nothing(tmp_path):
                     tenant_id="_default", workflow_id="wf-stub").run({})
     assert res.state == "complete"
     assert _events("workflow.node_model_resolved", before) == []  # a stub never spawns a model
+
+
+# ── route(mode=classify): the one route mode that calls a model (ADR-2308 amendment) ──────────
+
+ROUTE_WORKFLOW = """awp: "1.0.0"
+workflow:
+  name: node_model_route_e2e
+  description: A classify route with and without a model, and a condition route.
+orchestration:
+  engine: dag
+  graph:
+    - id: seed
+      type: agent
+      agent: a
+      instructions: "MARK-SEED"
+    - id: triage_pinned
+      type: route
+      mode: classify
+      agent: triager
+      instructions: "MARK-TRIAGE-PINNED"
+      depends_on: [seed]
+      input: seed.ok
+      classes: [urgent, routine]
+      model: sonnet
+    - id: triage_plain
+      type: route
+      mode: classify
+      agent: triager
+      instructions: "MARK-TRIAGE-PLAIN"
+      depends_on: [seed]
+      input: seed.ok
+      classes: [urgent, routine]
+    - id: gate
+      type: route
+      mode: condition
+      depends_on: [seed]
+      cases:
+        - id: matched
+          when: {selector: seed.ok, op: "==", value: true}
+        - id: other
+          when: default
+"""
+
+
+def test_a_classify_route_carries_its_model_into_the_argv_and_the_audit_event(cli_env, tmp_path):
+    from model_selector import tier_model
+    before = len(_chain())
+    res = _run(tmp_path, _doc(tmp_path, ROUTE_WORKFLOW))
+    assert res.state == "complete", getattr(res, "error", res)
+    calls = _argv(cli_env)
+    assert len(calls) == 3  # seed + two classify routes; the condition route never spawns
+    assert _model_of(_call_for(calls, "MARK-TRIAGE-PINNED")) == tier_model("sonnet")
+    assert _model_of(_call_for(calls, "MARK-TRIAGE-PLAIN")) == "haiku"  # the engine alias, unchanged
+    resolved = {d["node_id"]: d for d in _events("workflow.node_model_resolved", before)}
+    assert set(resolved) == {"seed", "triage_pinned", "triage_plain"}  # "gate" is never resolved
+    assert resolved["triage_pinned"]["source"] == "node"
+    assert resolved["triage_pinned"]["node_class"].startswith("route|")
+    assert (resolved["triage_plain"]["source"], resolved["triage_plain"]["model_id"]) == ("site_default", "")
+
+
+def test_a_condition_route_with_a_model_fails_validation(tmp_path):
+    bad = ROUTE_WORKFLOW.replace("    - id: gate\n      type: route\n      mode: condition\n",
+                                 "    - id: gate\n      type: route\n      mode: condition\n      model: haiku\n")
+    with pytest.raises(Exception) as ei:
+        validate(_doc(tmp_path, bad))
+    assert "never calls a model" in str(ei.value)
+
+
+def test_a_classify_route_with_an_unknown_model_fails_validation(tmp_path):
+    bad = ROUTE_WORKFLOW.replace("      model: sonnet\n", "      model: not-a-real-model-9\n")
+    with pytest.raises(Exception) as ei:
+        validate(_doc(tmp_path, bad))
+    assert "model_unknown" in str(ei.value)

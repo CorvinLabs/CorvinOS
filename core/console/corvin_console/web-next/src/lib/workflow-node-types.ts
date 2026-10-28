@@ -30,6 +30,9 @@ export const CODE_LANGUAGES = ["python3"] as const;
 export const MERGE_STRATEGIES = ["concat_list", "first_non_empty", "dict_union"] as const;
 export const ROUTE_MODES = ["condition", "classify"] as const;
 export const ROUTE_OPS = ["==", "!=", ">", ">=", "<", "<=", "contains", "in"] as const;
+/** ADR-2308: the tier names a node may name; a full registry model id is also accepted by the
+ * backend validator and is shown as-is when a node already carries one. */
+export const NODE_MODEL_TIERS = ["haiku", "sonnet", "opus"] as const;
 
 export function isSupportedNodeType(type: string): type is NodeTypeId {
   return (SUPPORTED_NODE_TYPES as readonly string[]).includes(type);
@@ -49,6 +52,15 @@ export interface FieldSpec {
 
 const AGENT_FIELD: FieldSpec = { path: "agent", label: "agent", kind: "text", required: true, hint: "engine agent name" };
 const INSTRUCTIONS_FIELD: FieldSpec = { path: "instructions", label: "instructions", kind: "textarea" };
+/** ADR-2308: only the node types that call a model carry it. Unset = the path default; an
+ * operator pin on the Models page overrides it. */
+const MODEL_FIELD: FieldSpec = {
+  path: "model",
+  label: "model",
+  kind: "select",
+  options: NODE_MODEL_TIERS,
+  hint: "unset = path default; an operator pin on the Models page overrides it",
+};
 const CHANNEL_FIELD: FieldSpec = { path: "channel", label: "channel", kind: "select", required: true, options: DELIVER_CHANNELS };
 const CHAT_ID_FIELD: FieldSpec = {
   path: "chat_id",
@@ -61,18 +73,20 @@ const CLASSIFY_FIELDS: FieldSpec[] = [
   AGENT_FIELD,
   { path: "classes", label: "classes", kind: "list", required: true, hint: "one class per line" },
   { path: "input", label: "input", kind: "text", required: true, hint: "selector, e.g. trigger.message" },
+  MODEL_FIELD,
 ];
 
 /** Inspector fields for a supported node type, in display order. */
 export function fieldsFor(spec: Record<string, unknown>): FieldSpec[] {
   switch (spec.type) {
     case "agent":
-      return [AGENT_FIELD, INSTRUCTIONS_FIELD];
+      return [AGENT_FIELD, INSTRUCTIONS_FIELD, MODEL_FIELD];
     case "fan_out":
       return [
         AGENT_FIELD,
         { path: "items_from", label: "items_from", kind: "text", required: true, hint: "state field, e.g. node.items" },
         INSTRUCTIONS_FIELD,
+        MODEL_FIELD,
       ];
     case "delegation_loop":
       return [
@@ -378,7 +392,8 @@ export function switchRouteMode(spec: Record<string, unknown>, mode: (typeof ROU
     const { cases: _cases, ...rest } = base;
     return { agent: "assistant", classes: ["yes", "no"], input: "input.text", ...rest };
   }
-  const { agent: _agent, classes: _classes, input: _input, ...rest } = base;
+  // A condition route never calls a model, and the backend rejects a model on one (ADR-2308).
+  const { agent: _agent, classes: _classes, input: _input, model: _model, ...rest } = base;
   return {
     ...rest,
     cases: [

@@ -161,6 +161,10 @@ function FieldRow({
         >
           {!field.required && <option value="">(default)</option>}
           {field.required && typeof raw !== "string" && <option value="">Select…</option>}
+          {/* A saved value outside the offered options (e.g. a full model id) still shows. */}
+          {typeof raw === "string" && raw !== "" && !(field.options ?? []).includes(raw) && (
+            <option value={raw}>{raw}</option>
+          )}
           {(field.options ?? []).map((o) => (
             <option key={o} value={o}>{o}</option>
           ))}

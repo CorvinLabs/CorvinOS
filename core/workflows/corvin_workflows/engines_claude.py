@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Optional
@@ -46,6 +47,7 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
 
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+_NODE_USAGE_CAP = 512  # a long-lived engine (MCP server) must not grow without a reader
 _DEFAULT_MODEL = "haiku"  # cheapest tier — this engine is for structural E2E proof, not quality
 _DEFAULT_TIMEOUT_S = 60
 _DENIED_TOOLS = "Bash Edit Write Read Glob Grep WebSearch WebFetch Task NotebookEdit"
@@ -293,6 +295,31 @@ class ClaudeCliEngine:
     # take it from CORVIN_TENANT_ID; the console passes the authenticated session's tenant.
     tenant_id: str | None = None
     history: list[EngineCall] = field(default_factory=list)
+    # ADR-2308: what the CLI reported per node (model, token total), read once by the console's
+    # run recorder for the node_completed event. Keyed by node id; one engine per console run.
+    _node_usage: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False, compare=False)
+    _usage_lock: Any = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def _note_usage(self, meta: dict[str, Any]) -> None:
+        node_id = str(meta.get("node_id") or "")
+        usage = meta.get("usage") or {}
+        if not node_id or not usage:
+            return
+        tokens = sum(int(usage.get(k) or 0) for k in (
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"))
+        with self._usage_lock:
+            acc = self._node_usage.setdefault(node_id, {"tokens": 0, "model_id": ""})
+            acc["tokens"] += tokens
+            if usage.get("model_id"):
+                acc["model_id"] = str(usage["model_id"])
+            while len(self._node_usage) > _NODE_USAGE_CAP:
+                self._node_usage.pop(next(iter(self._node_usage)))
+
+    def take_node_usage(self, node_id: str) -> dict[str, Any]:
+        """The reported model and the summed tokens of every spawn of *node_id* (all items of a
+        fan_out), removed on read. ``{}`` when the node never reached the CLI."""
+        with self._usage_lock:
+            return self._node_usage.pop(str(node_id), {})
 
     def __post_init__(self) -> None:
         if shutil.which("claude") is None:
@@ -348,6 +375,7 @@ class ClaudeCliEngine:
             )
         text, usage, reported, cost, is_error = _split_envelope(proc.stdout)
         _span_end(tenant, meta, span_id, reported, usage, "error" if is_error else "ok", t0, cost)
+        self._note_usage(meta)
         if is_error:
             raise ClaudeEngineError(
                 f"claude call for agent={call.agent!r} reported an error: {text.strip()[-2000:]}"

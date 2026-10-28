@@ -155,6 +155,7 @@ class RunRecorder:
         self._node_types = node_types
         self._audit = audit
         self._t0: dict[str, float] = {}
+        self._engine: Any = None
 
     # -- low level -----------------------------------------------------------------
     def emit(self, event: dict[str, Any]) -> None:
@@ -173,6 +174,22 @@ class RunRecorder:
         meta["heartbeat_at"] = time.time()
         self._write_meta(meta)
 
+    def bind_engine(self, engine: Any) -> None:
+        """ADR-2308: the engine that reports each node's model and tokens (``take_node_usage``).
+        An engine without it (stub, synthetic, null) leaves the event as it always was."""
+        self._engine = engine
+
+    def _node_usage(self, node_id: str) -> dict[str, Any]:
+        take = getattr(self._engine, "take_node_usage", None)
+        if not callable(take):
+            return {}
+        try:
+            usage = take(node_id)
+        except Exception:  # noqa: BLE001 - a usage read never decides a node's event
+            _log.warning("node usage not read", exc_info=True)
+            return {}
+        return usage if isinstance(usage, dict) else {}
+
     # -- runner hooks --------------------------------------------------------------
     def audit_sink(self, rec: dict[str, Any]) -> None:
         if rec.get("event") == "node.started":
@@ -189,12 +206,17 @@ class RunRecorder:
     def observe(self, result: Any) -> None:
         nid = result.node_id
         elapsed = round(result.wall_s, 3)
+        usage = self._node_usage(nid)
         if result.status == "success":
             out = _render(result.output)
-            self.emit({
+            event = {
                 "type": "node_completed", "node_id": nid, "node_type": result.node_type,
-                "elapsed_s": elapsed, "tokens": 0, "output_preview": out[:200], "output": out,
-            })
+                "elapsed_s": elapsed, "tokens": int(usage.get("tokens") or 0),
+                "output_preview": out[:200], "output": out,
+            }
+            if usage.get("model_id"):
+                event["model_id"] = usage["model_id"]  # the model the CLI REPORTED
+            self.emit(event)
         elif result.status == "failed":
             self.emit({
                 "type": "node_failed", "node_id": nid, "node_type": result.node_type,
@@ -283,6 +305,7 @@ def run_first_pass(
 
     try:
         engine = ENGINE_FACTORY(recorder.tenant_id, graph)
+        recorder.bind_engine(engine)
         doc = load_workflow(snapshot_path)
         runner = DAGRunner(
             doc, engine=engine, audit_sink=recorder.audit_sink, tenant_id=recorder.tenant_id,
@@ -308,6 +331,7 @@ def run_resume(
 
     try:
         engine = ENGINE_FACTORY(recorder.tenant_id, graph)
+        recorder.bind_engine(engine)
         recorder.update_meta(status="running", awaiting=None)
         try:
             result = resume_workflow(

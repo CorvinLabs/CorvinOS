@@ -99,6 +99,8 @@ export interface WorkflowRunEvent {
   ts: number;
   node_id?: string;
   tokens?: number;
+  /** ADR-2308: the model the CLI REPORTED for this node (absent for nodes that call no model). */
+  model_id?: string;
   elapsed_s?: number;
   error?: string;
   message?: string;

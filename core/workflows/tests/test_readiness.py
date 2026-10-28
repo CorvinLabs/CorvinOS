@@ -58,7 +58,7 @@ def _simple(extra_nodes: list[dict] | None = None) -> str:
 def test_a_all_node_types_with_acceptance_is_ready():
     r = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=0)
     assert r.ready and r.synthetic and r.run_state == "complete"
-    assert [s.status for s in r.signals] == ["pass", "pass", "pass", "info", "pass"]
+    assert [s.status for s in r.signals] == ["pass", "pass", "pass", "info", "pass", "info"]
 
 
 def test_b_dead_branch_fails_validator_and_does_not_run():
@@ -177,3 +177,36 @@ def test_report_carries_per_node_outcomes_in_execution_order():
     assert by["research"] == "success" and by["low_path"] == "skipped" and by["high_path"] == "success"
     assert [n.node_id for n in r.nodes][0] == "research"
     assert r.as_dict()["nodes"][0]["node_id"] == "research"
+
+
+# ── node_model (ADR-2308): a cost hint, never a blocker ──────────────────────────────────────────
+
+def test_node_model_counts_model_nodes_without_a_model_and_never_blocks():
+    text = _simple([
+        {"id": "b", "type": "agent", "agent": "w", "depends_on": ["a"], "model": "haiku"},
+        {"id": "c", "type": "route", "mode": "condition", "depends_on": ["a"],
+         "cases": [{"id": "x", "when": {"selector": "a.ok", "op": "==", "value": True}},
+                   {"id": "y", "when": "default"}]},
+    ])
+    r = check_readiness(text, acceptance=None, repairs=0)
+    s = _sig(r, "node_model")
+    # "a" has no model, "b" has one, the condition route never calls a model and is not counted
+    assert (s.status, s.value) == ("info", 1)
+    assert "1 of 2 model node(s)" in s.detail
+    assert "a" not in s.detail.split() and "b" not in s.detail.split()   # counts only, no node ids
+
+
+def test_node_model_reports_all_set_when_every_model_node_has_one():
+    text = yaml.safe_dump({
+        "awp": "1.0.0",
+        "workflow": {"name": "wf_ready", "description": "d"},
+        "orchestration": {"engine": "dag", "graph": [
+            {"id": "a", "type": "agent", "agent": "worker", "depends_on": [], "model": "sonnet"}]},
+    })
+    s = _sig(check_readiness(text, acceptance=None, repairs=0), "node_model")
+    assert (s.status, s.value) == ("info", 0) and "all 1 model node(s)" in s.detail
+
+
+def test_node_model_is_not_measured_when_the_validator_fails():
+    r = check_readiness("::: not [yaml", acceptance=None, repairs=0)
+    assert _sig(r, "node_model").status == "info" and _sig(r, "node_model").detail == "not measured"

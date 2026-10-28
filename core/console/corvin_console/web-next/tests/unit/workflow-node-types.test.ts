@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  NODE_MODEL_TIERS,
   NODE_PALETTE,
   SUPPORTED_NODE_TYPES,
+  fieldsFor,
   buildRouteCases,
   missingRequiredFields,
   nextNodeId,
@@ -51,5 +53,31 @@ describe("workflow node types", () => {
     expect(parseConditionValue("==", "12")).toBe(12);
     expect(parseConditionValue("==", "true")).toBe(true);
     expect(parseConditionValue("in", "a, b")).toEqual(["a", "b"]);
+  });
+});
+
+describe("node model field (ADR-2308)", () => {
+  const paths = (spec: Record<string, unknown>) => fieldsFor(spec).map((f) => f.path);
+
+  it("is offered exactly on the node types that call a model", () => {
+    expect(paths({ type: "agent" })).toContain("model");
+    expect(paths({ type: "fan_out" })).toContain("model");
+    expect(paths({ type: "route", mode: "classify" })).toContain("model");
+    expect(paths({ type: "route", mode: "condition" })).not.toContain("model");
+    for (const t of ["delegation_loop", "deliver", "code", "merge", "answer", "ask_human", "approval", "peer_agent"]) {
+      expect(paths({ type: t }), t).not.toContain("model");
+    }
+  });
+
+  it("is optional and offers the three tier names", () => {
+    const f = fieldsFor({ type: "agent" }).find((x) => x.path === "model")!;
+    expect(f.required).toBeFalsy();
+    expect([...(f.options ?? [])]).toEqual([...NODE_MODEL_TIERS]);
+  });
+
+  it("is dropped when a classify route becomes a condition route", () => {
+    const cls = switchRouteMode({ type: "route", id: "r", mode: "classify", model: "sonnet" }, "classify");
+    expect(cls.model).toBe("sonnet");
+    expect(switchRouteMode(cls, "condition").model).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@ export const SIGNAL_LABELS: Record<string, string> = {
   acceptance: "Acceptance case",
   external_exposure: "Not exercised",
   repairs: "Designer repairs",
+  node_model: "Node models",
 };
 
 export const STATUS_LABELS: Record<ReadinessStatus, string> = {

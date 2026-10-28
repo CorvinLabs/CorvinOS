@@ -283,3 +283,9 @@ def test_dag_route_node_value_reaches_the_argv_and_the_tokens_are_in_the_stream(
         resolved = {d["node_id"]: d for d in _chain_events(tid, "workflow.node_model_resolved")}
         assert resolved["with_model"]["source"] == "node" and resolved["plain"]["source"] == "site_default"
         assert all(d["wid"] == "dag" and d["rid"] for d in resolved.values())
+        # The run stream the browser reads: each model node carries the REPORTED model and its
+        # token total; the deterministic merge node carries neither.
+        done = {e["node_id"]: e for e in events if e.get("type") == "node_completed"}
+        for nid in ("with_model", "plain"):
+            assert done[nid]["model_id"] == REPORTED and done[nid]["tokens"] == 138, done[nid]
+        assert done["join"]["tokens"] == 0 and "model_id" not in done["join"]

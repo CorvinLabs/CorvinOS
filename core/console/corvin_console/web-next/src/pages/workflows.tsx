@@ -3924,6 +3924,16 @@ function EventRow({ evt, csrf }: { evt: WorkflowRunEvent; csrf?: string }) {
         {evt.elapsed_s != null && (
           <span className="shrink-0 text-muted-foreground">{evt.elapsed_s}s</span>
         )}
+        {evt.type === "node_completed" && evt.model_id && (
+          <span
+            className="shrink-0 rounded bg-muted px-1.5 font-mono text-[10px] text-muted-foreground"
+            data-testid="run-event-model"
+            title="Model reported by the CLI for this node"
+          >
+            {evt.model_id}
+            {evt.tokens ? ` · ${evt.tokens.toLocaleString("en-US")} tok` : ""}
+          </span>
+        )}
         {/* Preview — hidden when expanded */}
         {!expanded && evt.output_preview && (
           <span className="min-w-0 flex-1 truncate italic text-muted-foreground/60">

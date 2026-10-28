@@ -1,7 +1,7 @@
 """Which model a workflow node runs on (ADR-2308).
 
 Pure functions over injectable readers. Nothing here spawns anything; the engines call
-:func:`resolve_node_model` and :func:`escalation_target` and own the argv.
+:func:`resolve_node_model` (via :func:`stamp_call` / :func:`describe`) and own the argv.
 
 Precedence, first source with a value wins (ADR-2308 decision 1):
 
@@ -11,7 +11,8 @@ Precedence, first source with a value wins (ADR-2308 decision 1):
 4. site default: the ``CORVIN_HELPER_MODEL_WORKFLOW_NODE`` variable, else the path default
    (an empty model id means "keep the argv this path had before")
 
-Only node types in :data:`SCOPE_TYPES` are resolved; every other type is returned untouched.
+Only node types in :data:`SCOPE_TYPES` are resolved (``route`` only in ``mode: classify``, the
+one route mode that calls a model); every other type is returned untouched.
 No model-id literal lives here: tiers are looked up by name through the injected readers.
 """
 from __future__ import annotations
@@ -25,7 +26,7 @@ from typing import Any, Optional
 _log = logging.getLogger("corvin_workflows.model_resolution")
 
 TIER_NAMES = ("haiku", "sonnet", "opus")
-SCOPE_TYPES = frozenset({"agent", "fan_out"})
+SCOPE_TYPES = frozenset({"agent", "fan_out", "route"})
 PATHS = ("legacy", "dag")
 WORKER_ROLE = "worker_model"
 ENV_SITE = "workflow_node"
@@ -33,10 +34,6 @@ ENV_SITE = "workflow_node"
 # ``node_class`` context buckets, in characters of the assembled prompt.
 _CTX_SMALL = 8_000
 _CTX_LARGE = 32_000
-
-# Escalation never follows these failures (a second spawn would repeat a side effect or
-# cannot help): ADR-2308 decision 2.
-_NO_ESCALATION = frozenset({"spawn_refused", "missing_cli", "model_unknown", "timeout", "bad_envelope"})
 
 _TOOL_KEYS = ("tools", "forge_tools", "skills")
 
@@ -123,6 +120,15 @@ def _node_type(node: dict[str, Any]) -> str:
     return str(node.get("type", "agent"))
 
 
+def _scoped(node: dict[str, Any]) -> bool:
+    """In scope: a type in :data:`SCOPE_TYPES`; a ``route`` node only when it classifies
+    (``mode: condition`` is deterministic and never spawns)."""
+    ntype = _node_type(node)
+    if ntype not in SCOPE_TYPES:
+        return False
+    return ntype != "route" or node.get("mode") == "classify"
+
+
 def gate_key(node: dict[str, Any]) -> str:
     """The coarse gate key ``wf:<type>`` (ADR-2308 decision 4)."""
     return f"wf:{_node_type(node)}"
@@ -199,7 +205,7 @@ def _recommendation(node, tenant_id, path, table, env, deps) -> Optional[Resolut
 def resolve_node_model(node: dict[str, Any], tenant_id: str, path: str,
                        table: Optional[dict[str, Any]] = None, *, deps: Any = None) -> Resolution:
     """Resolve the model for one node. Raises :class:`ModelUnknown` for an invalid node value."""
-    if _node_type(node) not in SCOPE_TYPES:
+    if not _scoped(node):
         return Resolution("", "site_default", "none")
     deps = deps or _default_deps()
     pin = deps.pin(tenant_id)
@@ -236,7 +242,7 @@ def validate_node_model(value: Any, deps: Any = None) -> None:
 
 def in_scope(node: dict[str, Any]) -> bool:
     """Only these node types carry a model (ADR-2308 scope); every other type is left alone."""
-    return _node_type(node) in SCOPE_TYPES
+    return _scoped(node)
 
 
 def describe(node: dict[str, Any], tenant_id: str, path: str, wid: str, rid: str,
@@ -300,18 +306,3 @@ def emit_node_model_resolved(*, tenant_id: str, wid: str, rid: str, node_id: str
         _se.write_event(_fp.tenant_audit_chain(tenant_id), "workflow.node_model_resolved", details=details)
     except Exception as exc:  # noqa: BLE001
         _log.error("[workflow-engine] node_model_resolved audit write failed (%s)", type(exc).__name__)
-
-
-def escalation_target(resolution: Resolution, node: dict[str, Any], failure: str,
-                      deps: Any = None) -> Optional[str]:
-    """The one tier above a level-3 model after ``node_failed``, else ``None`` (decision 2)."""
-    if resolution.source != "recommendation" or failure != "node_failed":
-        return None  # every other failure kind (see _NO_ESCALATION) lands here too
-    if _has_tools(node):
-        return None
-    deps = deps or _default_deps()
-    cur = deps.rank(resolution.model_id)
-    if cur <= 0:
-        return None
-    higher = [(deps.rank(m), m) for m in (deps.tier(n) for n in TIER_NAMES) if deps.rank(m) > cur]
-    return min(higher)[1] if higher else None

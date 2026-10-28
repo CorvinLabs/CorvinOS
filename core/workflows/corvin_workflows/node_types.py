@@ -857,6 +857,9 @@ def _validate_route(node: dict[str, Any]) -> None:
                 f"route(mode=condition) requires exactly one case with when: 'default' "
                 f"as the guaranteed fallback branch, found {default_count}"
             )
+        if node.get("model") not in (None, ""):
+            # ADR-2308: a condition route never calls a model; a model here would read as if it did.
+            raise ValueError("route(mode=condition) never calls a model; remove 'model'")
     else:  # classify
         agent = node.get("agent")
         if not isinstance(agent, str) or not agent:
@@ -867,6 +870,7 @@ def _validate_route(node: dict[str, Any]) -> None:
         input_sel = node.get("input")
         if not isinstance(input_sel, str) or not input_sel:
             raise ValueError("route(mode=classify) requires a non-empty 'input' selector")
+        _validate_node_model(node)
 
 
 def _apply_op(op: str, actual: Any, expected: Any) -> bool:
@@ -926,6 +930,7 @@ def _execute_route_classify(*, node, engine, state, inputs, audit) -> dict[str, 
         iteration=0,
         metadata={"node_id": node["id"], "node_type": "route", "mode": "classify", "classes": classes},
     )
+    _stamp_model(call, node, engine, state)
     audit("node.engine_call", node_id=node["id"], agent=call.agent, iteration=0)
     decision = engine.spawn(call)
     chosen = decision.get("class")
