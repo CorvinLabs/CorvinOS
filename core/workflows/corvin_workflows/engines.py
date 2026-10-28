@@ -28,6 +28,9 @@ class EngineCall:
     state: dict[str, Any] = field(default_factory=dict)
     iteration: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
+    # ADR-2308: the model the resolver picked for this node. Empty keeps the argv the engine
+    # always had; an engine that does not take a per-call model simply ignores the field.
+    model: str = ""
 
 
 class WorkerEngine(Protocol):

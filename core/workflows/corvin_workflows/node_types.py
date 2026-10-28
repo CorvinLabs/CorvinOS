@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from typing import Any, Callable
 
@@ -49,10 +50,31 @@ _MAX_DELEGATION_WORKERS = 200
 # ---------------------------------------------------------------------------
 
 
+def _validate_node_model(node: dict[str, Any]) -> None:
+    """ADR-2308: a ``model`` field is checked when the document is validated (HTTP 422 in the
+    console), not first when the node runs."""
+    from .model_resolution import validate_node_model
+
+    validate_node_model(node.get("model"))
+
+
+def _stamp_model(call, node, engine, state, item_index=None) -> None:
+    """ADR-2308: resolve the node's model and stamp it on the call. An invalid node value raises
+    (the node fails with ``model_unknown``); every other fault leaves the call untouched."""
+    if not getattr(engine, "accepts_node_model", False):
+        return  # a stub or a foreign engine takes no per-call model: nothing to resolve, nothing imported
+
+    from .model_resolution import stamp_call
+
+    tenant = getattr(engine, "tenant_id", None) or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    stamp_call(call, node, state, tenant, "dag", item_index)
+
+
 def _validate_agent(node: dict[str, Any]) -> None:
     agent = node.get("agent")
     if not isinstance(agent, str) or not agent:
         raise ValueError("agent node requires non-empty 'agent' field")
+    _validate_node_model(node)
 
 
 def _execute_agent(*, node, engine, state, inputs, audit) -> dict[str, Any]:
@@ -67,6 +89,7 @@ def _execute_agent(*, node, engine, state, inputs, audit) -> dict[str, Any]:
         iteration=0,
         metadata={"node_id": node["id"], "node_type": "agent"},
     )
+    _stamp_model(call, node, engine, state)
     audit("node.engine_call", node_id=node["id"], agent=call.agent, iteration=0)
     return engine.spawn(call)
 
@@ -83,6 +106,7 @@ def _validate_fan_out(node: dict[str, Any]) -> None:
     items_from = node.get("items_from")
     if not isinstance(items_from, str) or not items_from:
         raise ValueError("fan_out node requires 'items_from' (state field name)")
+    _validate_node_model(node)
 
 
 def _execute_fan_out(*, node, engine, state, inputs, audit) -> dict[str, Any]:
@@ -121,6 +145,7 @@ def _execute_fan_out(*, node, engine, state, inputs, audit) -> dict[str, Any]:
             iteration=i,
             metadata={"node_id": node["id"], "node_type": "fan_out", "item_index": i},
         )
+        _stamp_model(call, node, engine, state, item_index=i)
         audit("node.engine_call", node_id=node["id"], agent=call.agent, iteration=i)
         results.append(engine.spawn(call))
     return {"items": results, "count": len(results)}

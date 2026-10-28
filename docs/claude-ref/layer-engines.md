@@ -3529,6 +3529,42 @@ original event every cycle.
 
 ---
 
+## Per-node model for workflow nodes (ADR-2308, 2026-10-28)
+
+**Status: partial.** Built: the resolver (`core/workflows/corvin_workflows/model_resolution.py`) and
+the DAG-engine path (`ClaudeCliEngine`). Not built: the console's legacy path (`_run_node_claude`),
+the gate table (level 3) and the oracle source. ADR-2308 is `proposed`.
+
+**Scope.** Node types `agent` and `fan_out` (per item) on `ClaudeCliEngine` — every caller of it:
+the console DAG route, `corvin-workflows` (CLI and scheduler) and the orchestration MCP server.
+Excluded: `delegation_loop`, `deliver`, `ask_human`, `peer_agent` and every other type; the AWP
+walker (no caller); ACS workflows (their own order in `acs_runtime._resolve_worker_model`). An engine
+that takes no per-call model (`accepts_node_model`, e.g. `StubEngine`) is not resolved at all.
+
+**Precedence — the first source with a value wins:**
+
+| # | Source | Reads |
+|---|---|---|
+| 1 | operator pin | `console_selection.pinned_model("worker_model")` (provisional slot; also reaches ACS workflows) |
+| 2 | node value `model:` | `haiku`/`sonnet`/`opus` or a registry id; anything else is **rejected** (the validator raises `WorkflowInvalid`, which the console answers with HTTP 400 on save and as a "Validation failed" stream error on run; `reason_code=model_unknown`), never replaced |
+| 3 | gate recommendation | **off** — no gate table exists; runs only for `tools=n` nodes with `gate_status=adopt` |
+| 4 | site default | `CORVIN_HELPER_MODEL_WORKFLOW_NODE` via `helper_model.env_only_helper_model`, else the path default (the engine's alias `haiku`) |
+
+A node with no value, no pin and no variable runs exactly as before: `--model haiku`. What changed
+for every spawn: `--output-format json` (the envelope's `result` is parsed; a reply that is not an
+envelope falls back to the plain text), an `engine.span.*` pair on the model the CLI **reported**
+with the four-way token split, and a `workflow.node_model_resolved` audit event (ids and closed
+enums only; `span_id` joins it to the span; `item_index` for `fan_out`).
+
+**Must NOT do:** put a node value above the pin · replace an unknown model instead of rejecting it ·
+resolve for an engine that takes no per-call model · put a model-id literal in the resolver (the three
+tier names live in `TIER_NAMES`) · escalate above level 3 or after a gate refusal.
+
+→ ADR: `corvin_decisions/decisions/ADR-2308-*.md` · plan `PLAN-0967` · tests
+`core/workflows/tests/test_node_model_precedence.py`, `test_node_model_engine_e2e.py`.
+
+---
+
 ## Counting epoch for the usage + cost panels (ADR-0760, 2026-09-15)
 
 > **Since 2026-09-18 (ADR-0885)** the window is shown and moved ONLY in the Models console header (`/app/models`, every tab); `/app/model-cost-optimizer` redirects to its Usage & Cost tab. See "Models console" below.

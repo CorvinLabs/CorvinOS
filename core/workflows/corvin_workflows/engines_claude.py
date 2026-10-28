@@ -13,7 +13,8 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any
+from time import perf_counter
+from typing import Any, Optional
 
 from .engines import EngineCall
 
@@ -156,6 +157,97 @@ def _extract_json(text: str) -> dict[str, Any]:
     raise ClaudeEngineError(f"could not parse a JSON object from claude output: {text[:500]!r}")
 
 
+def _split_envelope(stdout: str) -> tuple[str, dict[str, Any], str, Optional[float], bool]:
+    """The CLI's ``--output-format json`` envelope as ``(text, usage, reported_model, cost_usd,
+    is_error)``. Fail-soft: anything that is not an envelope is the plain reply text, with no
+    usage and an unknown (empty) model, never a guess."""
+    try:
+        env = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return stdout, {}, "", None, False
+    if not isinstance(env, dict) or "result" not in env:
+        return stdout, {}, "", None, False
+    text = env["result"] if isinstance(env["result"], str) else ""
+    usage = env["usage"] if isinstance(env.get("usage"), dict) else {}
+    reported = ""
+    per_model = env.get("modelUsage")
+    if isinstance(per_model, dict) and per_model:
+        def _out(item: tuple[str, Any]) -> int:
+            v = item[1].get("outputTokens", 0) if isinstance(item[1], dict) else 0
+            return v if isinstance(v, int) and not isinstance(v, bool) else 0
+        reported = str(max(per_model.items(), key=_out)[0])
+    cost = env.get("total_cost_usd")
+    cost_usd = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+    return text, usage, reported, cost_usd, bool(env.get("is_error"))
+
+
+def _usage_split(usage: dict[str, Any]) -> dict[str, int]:
+    """The four billed token counts, through the ONE shared normaliser (ADR-0759)."""
+    try:
+        import engine_span as _es  # type: ignore[import-not-found]
+        return _es.usage_split(usage)
+    except Exception:  # noqa: BLE001 - never let a measurement helper fail a node
+        return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0}
+
+
+def _span_writer(tenant: str):
+    def _write(event_type: str, *, details: dict[str, Any], severity: str = "INFO", **_routing: Any) -> None:
+        import forge.paths as _fp  # type: ignore[import-not-found]
+        import forge.security_events as _se  # type: ignore[import-not-found]
+        _se.write_event(_fp.tenant_audit_chain(tenant), event_type, details=details, severity=severity)
+    return _write
+
+
+def _span_ids(meta: dict[str, Any]) -> dict[str, str]:
+    item = meta.get("item_index")
+    node_id = str(meta.get("node_id", ""))
+    return {"run_id": str(meta.get("run_id", "")),
+            "turn_id": f"{node_id}#{item}" if item is not None else node_id}
+
+
+def _span_start(tenant: str, meta: dict[str, Any], requested_model: str) -> str:
+    """Open an ``engine.span`` for this spawn; returns its id ('' when the span cannot be written).
+    Measurement only: a failing write is logged and the spawn proceeds."""
+    try:
+        import engine_span as _es  # type: ignore[import-not-found]
+        span_id = _es.new_span_id()
+        _es.emit_start(_span_writer(tenant), span_id=span_id, role="worker", engine_id=_ENGINE_ID,
+                       model_id=requested_model, tenant_id=tenant, **_span_ids(meta))
+        return span_id
+    except Exception as exc:  # noqa: BLE001
+        _log.error("[workflow-engine] engine.span.start not written (%s)", type(exc).__name__)
+        return ""
+
+
+def _span_end(tenant: str, meta: dict[str, Any], span_id: str, reported_model: str,
+              usage: dict[str, Any], status: str, t0: float) -> None:
+    """Close the span on the model the CLI REPORTED, never the one requested (ADR-0759)."""
+    if not span_id:
+        return
+    try:
+        import engine_span as _es  # type: ignore[import-not-found]
+        _es.emit_end(_span_writer(tenant), span_id=span_id, role="worker", engine_id=_ENGINE_ID,
+                     model_id=reported_model, status=status,
+                     duration_ms=int((perf_counter() - t0) * 1000), tenant_id=tenant,
+                     **_span_ids(meta), **_es.usage_split(usage))
+    except Exception as exc:  # noqa: BLE001
+        _log.error("[workflow-engine] engine.span.end not written (%s)", type(exc).__name__)
+
+
+def _emit_resolution(tenant: str, call: EngineCall, prompt: str, span_id: str) -> None:
+    """ADR-2308: write ``workflow.node_model_resolved`` now that the prompt (hence ``ctx``) exists."""
+    meta = call.metadata
+    resolution = meta.get("model_resolution")
+    if resolution is None:
+        return
+    from . import model_resolution as _mr
+    _mr.emit_node_model_resolved(
+        tenant_id=tenant, wid=str(meta.get("workflow_id", "")), rid=str(meta.get("run_id", "")),
+        node_id=str(meta.get("node_id", "")),
+        node_class=_mr.node_class(meta.get("class_view") or {}, len(prompt)),
+        resolution=resolution, span_id=span_id, item_index=meta.get("item_index"))
+
+
 def _build_prompt(call: EngineCall) -> str:
     parts = [call.instructions.strip()]
     if call.inputs:
@@ -175,6 +267,10 @@ def _build_prompt(call: EngineCall) -> str:
 @dataclass
 class ClaudeCliEngine:
     """Production WorkerEngine: one `claude -p` subprocess per spawn()."""
+
+    # ADR-2308: this engine takes a model per call (EngineCall.model); the runner resolves one
+    # for it. Not annotated, so it is a plain class attribute and not a dataclass field.
+    accepts_node_model = True
 
     name: str = "claude-cli"
     model: str = _DEFAULT_MODEL
@@ -208,22 +304,40 @@ class ClaudeCliEngine:
         # step's instructions and upstream node output. POSITIONAL argv, so the
         # sentinel also keeps a `-`-leading payload from becoming a CLI flag.
         # Reply contract unaffected: `_extract_json` parses stdout.
+        # ADR-2308: a model resolved for this node wins; otherwise the engine's own model (the
+        # alias it always used) stays, so a node without a model is unchanged.
+        model = call.model or self.model
+        meta = call.metadata
+        span_id = _span_start(tenant, meta, model)
+        _emit_resolution(tenant, call, prompt, span_id)
         cmd = [
             "claude", "-p", _guard_prompt_head(prompt),
-            "--model", self.model,
+            "--model", model,
+            "--output-format", "json",
             "--disallowedTools", _DENIED_TOOLS,
         ]
+        t0 = perf_counter()
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=self.timeout_s,
             )
         except subprocess.TimeoutExpired as e:
+            _span_end(tenant, meta, span_id, "", {}, "error", t0)
             raise ClaudeEngineError(
                 f"claude call for agent={call.agent!r} timed out after {self.timeout_s}s"
             ) from e
         if proc.returncode != 0:
+            _span_end(tenant, meta, span_id, "", {}, "error", t0)
             raise ClaudeEngineError(
                 f"claude call for agent={call.agent!r} exited {proc.returncode}: "
                 f"{proc.stderr.strip()[-2000:]}"
             )
-        return _extract_json(proc.stdout)
+        text, usage, reported, cost, is_error = _split_envelope(proc.stdout)
+        _span_end(tenant, meta, span_id, reported, usage, "error" if is_error else "ok", t0)
+        meta["usage"] = {"model_id": reported, "cost_usd": cost, **_usage_split(usage)}
+        meta["span_id"] = span_id
+        if is_error:
+            raise ClaudeEngineError(
+                f"claude call for agent={call.agent!r} reported an error: {text.strip()[-2000:]}"
+            )
+        return _extract_json(text)

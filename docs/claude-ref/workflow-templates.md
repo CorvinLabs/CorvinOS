@@ -27,3 +27,11 @@ whose ids the server did not know; "Use" opened an empty dialog and wrote two `s
 nothing read.
 
 The four templates are `agent`/`delegation_loop` graphs, i.e. every run of one spawns the engine.
+
+## Node field `model` (ADR-2308)
+
+`agent` and `fan_out` nodes accept an optional `model:` — `haiku`, `sonnet`, `opus` or a registry model
+id. It is checked when the document is validated (an unknown value is rejected with
+`model_unknown`; the console answers HTTP 400 on save), not first when the node runs. Omit it and the node keeps the model the
+engine always used. An operator pin on the console's `worker_model` slot outranks the field. Full
+order, scope and audit event: [layer-engines.md](layer-engines.md) § Per-node model for workflow nodes.

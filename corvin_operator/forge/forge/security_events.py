@@ -166,6 +166,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # WFB-R1-09 - a DAG-engine (corvin_workflows ClaudeCliEngine) spawn refused by the pre-spawn
     # gates (L44 / L34 / L35 / capability). Metadata only: no prompt text, no refusal wording.
     "workflow.spawn_refused":       "WARNING",
+    "workflow.node_model_resolved": "INFO",
     # ADR-2275 - workflow readiness gate (console/corvin_console/audit.py::workflow_readiness_*,
     # workflow_design_repaired). Scalars only: no YAML text, no user text, no node ids.
     "workflow.readiness_checked":   "INFO",
@@ -3549,6 +3550,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
                                                "method"}),
     "workflow.attachment_refused": frozenset({"tenant_id", "wid", "att_id", "reason_code", "sid_fingerprint"}),
     "workflow.spawn_refused": frozenset({"tenant_id", "engine_id", "reason_code"}),
+    # ADR-2308: which model a workflow node resolved to and from where. Ids and closed enums only -
+    # NEVER a prompt, an agent name or free text (node_class is type|tools|ctx-bucket|contract).
+    "workflow.node_model_resolved": frozenset({
+        "tenant_id", "wid", "rid", "node_id", "node_class", "model_id", "source", "gate_status",
+        "escalated", "span_id", "item_index", "shadow_model_id",
+    }),
     "workflow.readiness_checked": frozenset({
         "tenant_id", "wid", "ready", "failing", "unmeasured", "elapsed_ms", "synthetic", "sid_fingerprint",
     }),

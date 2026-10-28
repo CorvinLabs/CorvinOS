@@ -7,11 +7,30 @@ real ``console_selection`` / ``helper_model`` modules.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 from corvin_workflows import model_resolution as mr
+
+_SHARED = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared")
+
+
+@pytest.fixture(autouse=True)
+def _leave_no_trace():
+    """The default-wiring tests import modules from ``bridges/shared`` and the bootstrap puts that
+    directory on ``sys.path``. Other tests (the peer gate) resolve names differently once those
+    are loaded, so undo all of it after every test."""
+    before_mods, saved_path = set(sys.modules), list(sys.path)
+    mr._ensure_shared_on_path()  # the same bootstrap production code uses, for the tests that import by name
+    yield
+    sys.path[:] = saved_path
+    mr._DEPS = None
+    for name in set(sys.modules) - before_mods:
+        if (getattr(sys.modules.get(name), "__file__", None) or "").startswith(_SHARED):
+            sys.modules.pop(name, None)
+
 
 # Concrete ids used only inside the test; the resolver itself must hold none.
 OPUS, SONNET, HAIKU = "opus-X", "sonnet-X", "haiku-X"
