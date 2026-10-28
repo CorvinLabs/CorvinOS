@@ -344,6 +344,24 @@ class ClassGateTests(unittest.TestCase):
         self.assertFalse(c["class_gate"]["evaluated"])
         self.assertTrue(all(st["adjusted_decision"] == "EXPLORATORY" for k, st in c["strata"].items() if k.startswith("category:")))
 
+    def test_an_underpowered_category_cannot_be_adopted_after_holm(self):
+        rules = {"x": {"a": (0, 40), "b": (0, 40), "c": (0, 40)}}
+        uncapped = self.analyze(rules, per_cat=24, cap=False)["comparisons"]["x"]["strata"]
+        capped = self.analyze(rules, per_cat=24, cap=True)["comparisons"]["x"]["strata"]
+        for k in ("category:a", "category:b", "category:c"):
+            self.assertEqual(uncapped[k]["adjusted_decision"], "ADOPT", "control: the data alone adopt")
+            self.assertFalse(uncapped[k]["class_capped_underpowered"])
+            self.assertTrue(capped[k]["power"]["underpowered"])
+            self.assertTrue(capped[k]["class_capped_underpowered"])
+            self.assertEqual(capped[k]["adjusted_decision"], "INCONCLUSIVE")
+            self.assertTrue(capped[k]["holm_non_inferior"], "the report still shows what Holm said")
+
+    def test_a_capped_category_never_hides_a_reject(self):
+        rules = {"x": {"a": (0, 40), "b": (0, 40), "c": (12, 40)}}
+        c = self.analyze(rules, per_cat=24, cap=True)["comparisons"]["x"]
+        self.assertEqual(c["strata"]["category:c"]["adjusted_decision"], "REJECT")
+        self.assertFalse(c["strata"]["category:c"]["class_capped_underpowered"])
+
     def test_control_arm_reads_the_baseline_noise(self):
         same = self.analyze({"rt": {"a": (0, 100), "b": (0, 100), "c": (0, 100)}}, roles={"rt": "retest"}, per_cat=24)
         self.assertTrue(same["comparisons"]["rt"]["sanity"]["identical_policy_non_inferior"])

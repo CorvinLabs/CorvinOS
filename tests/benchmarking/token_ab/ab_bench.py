@@ -405,9 +405,13 @@ def holm_reject(pvals, alpha):
     return out
 
 
-def apply_class_gate(c, delta, alpha, min_tasks):
+def apply_class_gate(c, delta, alpha, min_tasks, cap_underpowered=True):
     """ADR-2306 decisions 5: Holm over the per-category non-inferiority tests, a worst-class guard, and the rule that a
-    category with fewer than `min_tasks` tasks is exploratory and never yields ADOPT. Mutates and returns `c`."""
+    category with fewer than `min_tasks` tasks is exploratory and never yields ADOPT. Mutates and returns `c`.
+
+    ``cap_underpowered`` applies the same cap as ``compare`` to each category: a category whose task count is below what
+    the power formula asks for cannot be ADOPT after Holm either (found 2026-10-27: a 12-task category read "ADOPT after
+    Holm" while the power formula needed 27). The Holm flag itself is kept, so the report still shows what the test said."""
     cats = {k: s for k, s in c["strata"].items() if k.startswith("category:")}
     family = {k: s["p_noninferior"] for k, s in cats.items() if not s["exploratory"]}
     flags = holm_reject(family, alpha) if family else {}
@@ -417,6 +421,9 @@ def apply_class_gate(c, delta, alpha, min_tasks):
             continue
         s["holm_non_inferior"] = flags[k]
         s["adjusted_decision"] = ("ADOPT" if flags[k] and s["saves"] else "REJECT" if (s["inferior"] or s["costs_more"]) else "INCONCLUSIVE")
+        s["class_capped_underpowered"] = bool(cap_underpowered and s["adjusted_decision"] == "ADOPT" and s["power"]["underpowered"])
+        if s["class_capped_underpowered"]:
+            s["adjusted_decision"] = "INCONCLUSIVE"
     c["decision_before_class_gate"] = c["decision"]
     if not family:
         c["class_gate"] = {"evaluated": False, "reason": "no category has enough tasks (all exploratory)", "guard_triggered": False}
@@ -499,7 +506,8 @@ def analyze(run_dir, boot=None):
                 s = run_cmp(a, sub, f"{kind}:{val}")
                 s["exploratory"] = len(sub) < cfg["min_stratum_tasks"]
                 c["strata"][f"{kind}:{val}"] = s
-        apply_class_gate(c, cfg["delta"], cfg["alpha"], cfg["min_stratum_tasks"])
+        apply_class_gate(c, cfg["delta"], cfg["alpha"], cfg["min_stratum_tasks"],
+                         cap_underpowered=cfg.get("cap_underpowered", True))
         c["role"] = man.get("roles", {}).get(a, "")
         if c["role"] == "retest":
             # control arm: the same policy as the baseline. If it is NOT non-inferior at delta, delta is below the noise.
