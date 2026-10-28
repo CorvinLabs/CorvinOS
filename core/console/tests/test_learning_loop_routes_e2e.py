@@ -45,8 +45,14 @@ for _p in [
 
 
 def _reset_modules():
+    # ``forge`` is deliberately NOT purged (same rule as tests/learning/console_client.py):
+    # a purge gives the console a second ``forge.security_events`` while every audit test in
+    # the process keeps the copy it imported at collection time, and the two copies cache
+    # different anchor keys, so a later audit test's fresh chain fails verify_chain with
+    # mac_tampered (review c120 r2_s1-12: tests/security/test_audit_phase2_events.py, 3 tests,
+    # after tests/learning/test_feedback_gate_c120_e2e.py imported this sandbox).
     for key in list(sys.modules):
-        if any(key.startswith(p) for p in ("corvin_console", "corvin_gateway", "forge")):
+        if any(key.startswith(p) for p in ("corvin_console", "corvin_gateway")):
             del sys.modules[key]
 
 

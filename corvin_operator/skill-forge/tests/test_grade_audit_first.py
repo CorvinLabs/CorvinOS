@@ -28,6 +28,18 @@ for _p in (str(REPO_ROOT / "corvin_operator" / "skill-forge"),
 NAME = "assistant.audit_first_demo"
 
 
+def _isolate_anchor_key_cache(monkeypatch) -> None:
+    """The writer caches the anchor key per process; this test points the env at
+    its own key file, so the cache must be emptied for the test and restored
+    after it (monkeypatch) — otherwise an earlier test's key MACs this chain, or
+    this test's key leaks into a later one (review c120 r2_s1-12)."""
+    for mod in [m for n, m in list(sys.modules.items())
+                if n.endswith("security_events") and hasattr(m, "_ANCHOR_KEY_LOADED")]:
+        monkeypatch.setattr(mod, "_ANCHOR_KEY", None)
+        monkeypatch.setattr(mod, "_ANCHOR_KEY_LOADED", False)
+        monkeypatch.setattr(mod, "_ANCHOR_KEY_REFUSED", None)
+
+
 @pytest.fixture()
 def srv_env(tmp_path, monkeypatch):
     home = tmp_path / "corvin_home"
@@ -37,6 +49,7 @@ def srv_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_PLUGIN_SLOT_DIR", str(tmp_path / "slot"))
     monkeypatch.setenv("CORVIN_PROJECT_ROOT", "")
     monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "anchor.key"))
+    _isolate_anchor_key_cache(monkeypatch)
     monkeypatch.delenv("CORVIN_CALLER_PERSONA", raising=False)
     from skill_forge.multi_registry import MultiSkillRegistry
     reg = MultiSkillRegistry(tenant_id="_default")

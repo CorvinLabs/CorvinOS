@@ -86,6 +86,14 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.delenv("FORGE_ROOT", raising=False)
     monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "anchor.key"))
+    # The writer caches the anchor key per process: empty that cache for this test's key
+    # file and restore it afterwards, in every loaded copy of the writer, so an earlier
+    # test's key never MACs this chain and this key never leaks out (review c120 r2_s1-12).
+    for _mod in [m for n, m in list(sys.modules.items())
+                 if n.endswith("security_events") and hasattr(m, "_ANCHOR_KEY_LOADED")]:
+        monkeypatch.setattr(_mod, "_ANCHOR_KEY", None)
+        monkeypatch.setattr(_mod, "_ANCHOR_KEY_LOADED", False)
+        monkeypatch.setattr(_mod, "_ANCHOR_KEY_REFUSED", None)
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     monkeypatch.setenv("CORVIN_PROJECT_ROOT", str(proj))
     monkeypatch.setenv("CORVIN_OS_ENGINE", "claude_code")
