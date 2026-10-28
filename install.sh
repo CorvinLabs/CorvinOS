@@ -326,7 +326,9 @@ _uv_install() {
 _uv_install_healing() {
     _uv_install && return 0
     printf '  %s install failed — removing the tool environment and retrying\n' "$(_yellow '↻')"
-    uv tool uninstall "$PKG" >/dev/null 2>&1 || rm -rf "$(uv tool dir 2>/dev/null)/$PKG"
+    # An empty `uv tool dir` would make the path "/$PKG": guard the directory before the rm.
+    _uv_dir="$(uv tool dir 2>/dev/null)"
+    uv tool uninstall "$PKG" >/dev/null 2>&1 || { [ -n "$_uv_dir" ] && rm -rf "${_uv_dir:?}/$PKG"; }
     _uv_install && return 0
     printf '  %s retrying once more with a clean uv cache\n' "$(_yellow '↻')"
     uv cache clean "$PKG" >/dev/null 2>&1 || true
@@ -335,7 +337,8 @@ _uv_install_healing() {
 _await "Installing CorvinOS from $EDITABLE" _uv_install_healing \
     || die "uv tool install failed — details: $INSTALL_LOG"
 uv tool update-shell >/dev/null 2>&1 || true
-export PATH="$(uv tool dir --bin 2>/dev/null || echo "$HOME/.local/bin"):$PATH"
+_uv_bin="$(uv tool dir --bin 2>/dev/null || echo "$HOME/.local/bin")"
+export PATH="$_uv_bin:$PATH"
 
 command -v corvinos-serve >/dev/null 2>&1 \
     || die "install succeeded but 'corvinos-serve' is not on PATH — open a new terminal and retry"
