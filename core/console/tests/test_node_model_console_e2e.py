@@ -190,6 +190,13 @@ def test_legacy_path_writes_spans_and_resolution_events_only_for_in_scope_nodes(
         assert len(ends) == len(_calls(fake_cli)) and all(d["model_id"] == REPORTED for d in ends)
         assert all((d["input_tokens"], d["output_tokens"], d["cache_read_tokens"], d["cache_write_tokens"])
                    == (11, 7, 100, 20) for d in ends)
+        # the profile holds one entry per in-scope spawn (not the excluded delegation_loop), joined by span_id
+        from corvin_workflows import node_profile
+        span_ids = {d["span_id"]: d for d in ends}
+        profile = [r for r in node_profile.read_entries(tid) if r["span_id"] in span_ids]
+        assert len(profile) == 4, profile                       # with_model, plain, fan x 2
+        assert all(r["input_tokens"] + r["cache_read_tokens"] > 0 and r["signal"] == "proxy" for r in profile)
+        assert sorted(r["item_index"] for r in profile if r["node_class"].startswith("fan_out")) == [0, 1]
         resolved = _chain_events(tid, "workflow.node_model_resolved")
         by_node: dict[str, list[dict]] = {}
         for d in resolved:

@@ -61,6 +61,18 @@ def add_parser(subparsers) -> None:
         help="Emit the verdict as JSON instead of a human-readable report.",
     )
 
+    wl = tde_sub.add_parser(
+        "workflow-loss",
+        help="Cost and error rate per workflow node class and model, from the per-node profile "
+             "(ADR-2308). Prints JSON. Production entries are proxy signals, so no loss value is computed.",
+    )
+    wl.add_argument("--tenant", default="_default", help="Tenant whose profile is read (default: _default).")
+    wl.add_argument(
+        "--min-runs", type=int, default=None,
+        help="Runs per (node class, model) below which a row is reported as underpowered "
+             "(default: the module's MIN_RUNS).",
+    )
+
 
 def _load_tde_modules():
     """Put the orchestration tree on sys.path and import the gate + recorder.
@@ -202,8 +214,26 @@ def _cmd_gate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_workflow_loss(args: argparse.Namespace) -> int:
+    """ADR-2308 decision 5: read the per-node profile and print the report as JSON (read-only)."""
+    for sub in (("core", "workflows"), ("corvin_operator", "forge"), ("corvin_operator", "bridges", "shared")):
+        path = _REPO.joinpath(*sub)
+        if path.is_dir() and str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+    try:
+        from corvin_workflows import node_profile  # noqa: PLC0415
+    except ImportError as exc:
+        print(f"corvin tde workflow-loss: the workflow package is not available ({exc})", file=sys.stderr)
+        return 1
+    kwargs = {} if args.min_runs is None else {"min_runs": args.min_runs}
+    print(json.dumps(node_profile.loss_report(args.tenant, **kwargs), indent=2))
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     if args.tde_cmd == "gate":
         return _cmd_gate(args)
+    if args.tde_cmd == "workflow-loss":
+        return _cmd_workflow_loss(args)
     # No subcommand — argparse prints help via the caller.
     return 2

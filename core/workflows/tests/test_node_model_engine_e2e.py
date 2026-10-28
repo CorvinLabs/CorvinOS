@@ -232,6 +232,24 @@ def test_an_envelope_that_reports_an_error_is_flagged():
     assert split_envelope('{"result": "boom", "is_error": true}')[4] is True
 
 
+def test_profile_entries_join_the_span_by_span_id_with_equal_tokens_and_no_text(cli_env, tmp_path):
+    from corvin_workflows import node_profile
+    before = len(_chain())
+    _run(tmp_path)
+    ends = {d["span_id"]: d for d in _events("engine.span.end", before)}
+    mine = [r for r in node_profile.read_entries("_default") if r["span_id"] in ends]
+    assert len(mine) == 4                                        # with_model, plain, fan x 2
+    for r in mine:
+        d = ends[r["span_id"]]
+        assert (r["input_tokens"], r["output_tokens"], r["cache_read_tokens"], r["cache_write_tokens"]) == (
+            d["input_tokens"], d["output_tokens"], d["cache_read_tokens"], d["cache_write_tokens"])
+        assert r["model_id"] == d["model_id"] == REPORTED
+        assert r["signal"] == "proxy" and r["status"] == "ok" and r["cost_usd"] == 0.0123 and r["rid"]
+    assert sorted(r["item_index"] for r in mine if r["node_class"].startswith("fan_out")) == [0, 1]
+    assert "MARK-" not in json.dumps(mine)                       # never a prompt, never an instruction
+    assert node_profile.gate_eligible(mine) == []                # a proxy entry never reaches a gate
+
+
 def test_a_failed_node_is_spawned_exactly_once_and_the_span_ends_in_error(cli_env, tmp_path):
     failing = WORKFLOW.replace("MARK-PLAIN", "MARK-FAIL")
     before = len(_chain())

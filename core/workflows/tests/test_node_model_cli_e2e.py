@@ -97,3 +97,18 @@ def test_cli_run_passes_the_node_model_and_writes_the_resolution_event(tmp_path)
     resolved = [r["details"] for r in rows if r.get("event_type") == "workflow.node_model_resolved"
                 and r["details"].get("node_id") in ("with_model", "plain")]
     assert {d["node_id"]: d["source"] for d in resolved} == {"with_model": "node", "plain": "site_default"}
+
+    # T-0329: the profile those two spawns wrote is read by `corvin tde workflow-loss`, a real subprocess
+    # against the same sandboxed CORVIN_HOME. Production entries are proxies, so the report has no loss.
+    launcher_env = dict(env)
+    launcher_env["PYTHONPATH"] = os.pathsep.join([str(REPO / "ops" / "launcher"), env["PYTHONPATH"]])
+    rep = subprocess.run([sys.executable, "-m", "corvin", "tde", "workflow-loss", "--tenant", "_default"],
+                         capture_output=True, text=True, env=launcher_env, cwd=str(tmp_path), timeout=120)
+    assert rep.returncode == 0, rep.stderr[-1500:]
+    report = json.loads(rep.stdout)
+    assert report["status"] in ("underpowered", "ok") and report["loss"] is None
+    assert report["entries"] >= 2
+    classes = {row["node_class"] for row in report["classes"]}
+    assert "agent|n|<8k|json" in classes and all(c.endswith("|json") for c in classes)
+    assert {row["model_id"] for row in report["classes"]} >= {REPORTED}
+    assert all(row["underpowered"] for row in report["classes"] if row["runs"] < report["min_runs"])

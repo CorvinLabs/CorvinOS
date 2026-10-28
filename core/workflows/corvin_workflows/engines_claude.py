@@ -220,23 +220,28 @@ def _span_start(tenant: str, meta: dict[str, Any], requested_model: str) -> str:
 
 
 def _span_end(tenant: str, meta: dict[str, Any], span_id: str, reported_model: str,
-              usage: dict[str, Any], status: str, t0: float) -> None:
-    """Close the span on the model the CLI REPORTED, never the one requested (ADR-0759)."""
-    if not span_id:
-        return
+              usage: dict[str, Any], status: str, t0: float, cost_usd: Optional[float] = None) -> None:
+    """Close the span on the model the CLI REPORTED, never the one requested (ADR-0759), and write the
+    node's profile entry. ``meta`` receives ``usage`` and ``span_id`` so callers read one source."""
+    meta["usage"] = {"model_id": reported_model, "cost_usd": cost_usd, **_usage_split(usage)}
+    meta["span_id"] = span_id
     try:
-        import engine_span as _es  # type: ignore[import-not-found]
-        _es.emit_end(_span_writer(tenant), span_id=span_id, role="worker", engine_id=_ENGINE_ID,
-                     model_id=reported_model, status=status,
-                     duration_ms=int((perf_counter() - t0) * 1000), tenant_id=tenant,
-                     **_span_ids(meta), **_es.usage_split(usage))
+        if span_id:
+            import engine_span as _es  # type: ignore[import-not-found]
+            _es.emit_end(_span_writer(tenant), span_id=span_id, role="worker", engine_id=_ENGINE_ID,
+                         model_id=reported_model, status=status,
+                         duration_ms=int((perf_counter() - t0) * 1000), tenant_id=tenant,
+                         **_span_ids(meta), **_es.usage_split(usage))
     except Exception as exc:  # noqa: BLE001
         _log.error("[workflow-engine] engine.span.end not written (%s)", type(exc).__name__)
+    from . import node_profile as _np
+    _np.record(tenant, meta, int(meta.get("prompt_len", 0) or 0), status)
 
 
 def _emit_resolution(tenant: str, meta: dict[str, Any], prompt: str, span_id: str) -> None:
     """ADR-2308: write ``workflow.node_model_resolved`` now that the prompt (hence ``ctx``) exists.
     ``meta`` is what ``model_resolution.describe`` returned; empty means nothing was resolved."""
+    meta["prompt_len"] = len(prompt)   # the profile entry's context bucket is measured on this prompt
     resolution = meta.get("model_resolution")
     if resolution is None:
         return
@@ -342,9 +347,7 @@ class ClaudeCliEngine:
                 f"{proc.stderr.strip()[-2000:]}"
             )
         text, usage, reported, cost, is_error = _split_envelope(proc.stdout)
-        _span_end(tenant, meta, span_id, reported, usage, "error" if is_error else "ok", t0)
-        meta["usage"] = {"model_id": reported, "cost_usd": cost, **_usage_split(usage)}
-        meta["span_id"] = span_id
+        _span_end(tenant, meta, span_id, reported, usage, "error" if is_error else "ok", t0, cost)
         if is_error:
             raise ClaudeEngineError(
                 f"claude call for agent={call.agent!r} reported an error: {text.strip()[-2000:]}"

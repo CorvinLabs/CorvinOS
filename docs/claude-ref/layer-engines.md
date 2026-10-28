@@ -3569,7 +3569,22 @@ envelope falls back to the plain text), an `engine.span.*` pair on the model the
 with the four-way token split, and a `workflow.node_model_resolved` audit event (ids and closed
 enums only; `span_id` joins it to the span; `item_index` for `fan_out`).
 
+**The per-node profile (T-0329).** Every spawn of an in-scope node (per item for `fan_out`) appends one
+line to `<tenant_home>/learning/workflow_node_profile.YYYY-MM-DD.jsonl`: `ts`, `rid`, `span_id`,
+`item_index` (fan_out), `node_class` (`type|tools|ctx-bucket|json`), the model the CLI reported, the four
+billed token parts, `cost_usd`, `ok`/`error` and `signal: proxy`. Closed fields only — an id outside
+`[A-Za-z0-9._:-]` (a path, an address, a sentence) is blanked, and there is no prompt, agent name or node
+id. Daily segments, appended with `O_APPEND|O_NOFOLLOW` under a lock; retention (90 days) deletes whole
+segments from the real today and never rewrites a line. It is a measurement stream, **not** an audit chain,
+and it cannot be rebuilt from the chain and the spans (`cost_usd` is in neither). It is `proxy`: a spawn that
+did not fail says nothing about whether the answer was right, so `node_profile.gate_eligible()` returns
+nothing for it by construction — no model-switch gate may read it.
+`corvin tde workflow-loss [--tenant T] [--min-runs N]` prints cost, error rate and token means per
+`(node class, model)` as JSON with `status` `no_data` / `underpowered` / `ok` (default 30 runs per row) and
+`loss: null`: a loss needs the offline oracle (ADR-2307), which production does not have.
+
 **Must NOT do:** put a node value above the pin · replace an unknown model instead of rejecting it ·
+write a prompt, agent name or any free text into the profile · let a gate read a `proxy` entry ·
 resolve for an engine that takes no per-call model · put a model-id literal in the resolver (the three
 tier names live in `TIER_NAMES`) · escalate above level 3 or after a gate refusal.
 

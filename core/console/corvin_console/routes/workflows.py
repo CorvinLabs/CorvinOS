@@ -602,9 +602,8 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
             if _ec is None:
                 return result.stdout.strip()
             text, usage, reported, cost, is_error = _ec.split_envelope(result.stdout)
-            _ec.span_end(tenant, meta, span_id, reported, usage, "error" if is_error else "ok", t0)
-            meta["usage"] = {"model_id": reported, "cost_usd": cost, **_ec.usage_split(usage)}
-            meta["span_id"] = span_id
+            # span_end also sets meta['usage'] / meta['span_id'] and writes the node's profile entry
+            _ec.span_end(tenant, meta, span_id, reported, usage, "error" if is_error else "ok", t0, cost)
             if is_error:
                 raise NodeExecutionError("Worker engine reported an error")
             return text.strip()
