@@ -194,7 +194,7 @@ def test_a_cli_that_cannot_start_closes_the_span_it_opened(cli_log, monkeypatch)
     monkeypatch.setattr(ec.subprocess, "run", cannot_start)
     before = len(_chain())
     res = _run(_doc([{"id": "n", "type": "agent", "agent": "a", "instructions": "x"}]), engine)
-    assert res.state == "failed" and "could not be started" in (res.nodes["n"].error or "")
+    assert res.state == "failed" and "argument limit (E2BIG)" in (res.nodes["n"].error or "")
     new = _chain()[before:]
     starts = [r for r in new if r.get("event_type") == "engine.span.start"]
     ends = [r for r in new if r.get("event_type") == "engine.span.end"]

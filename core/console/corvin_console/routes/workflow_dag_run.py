@@ -46,17 +46,16 @@ def needs_dag_engine(graph: list[Any]) -> bool:
     return any(isinstance(n, dict) and str(n.get("type", "agent")) in DAG_ONLY_TYPES for n in graph)
 
 
-_MODEL_CALLING_TYPES = frozenset({"agent", "fan_out", "route", "delegation_loop"})
-
-
-def _with_usage(event: dict[str, Any], usage: dict[str, Any], result: Any) -> dict[str, Any]:
+def _with_usage(event: dict[str, Any], usage: dict[str, Any], result: Any,
+                calls_engine: bool = False) -> dict[str, Any]:
     """ADR-2308: the model the CLI REPORTED and, when the runner retried the node, how many
     attempts the token total covers (it is the sum over all of them)."""
     if usage.get("model_id"):
         event["model_id"] = usage["model_id"]
     attempts = int(getattr(result, "attempts", 1) or 1)
-    # only for a node that calls the CLI: the badge says the tokens cover these attempts
-    if attempts > 1 and getattr(result, "node_type", "") in _MODEL_CALLING_TYPES:
+    # only for a node that calls the CLI (node_requires_engine, decided per node spec): the badge
+    # says the tokens cover these attempts
+    if attempts > 1 and calls_engine:
         event["attempts"] = attempts
     return event
 
@@ -157,6 +156,7 @@ class RunRecorder:
         node_types: dict[str, str],
         audit: Callable[[dict[str, Any]], None] | None = None,
         alive: Callable[[], bool] = lambda: True,
+        engine_nodes: frozenset[str] = frozenset(),
     ) -> None:
         # `alive` is False once the run record was deleted: a worker still finishing its
         # current node must not resurrect the log or the meta of a deleted run.
@@ -168,6 +168,7 @@ class RunRecorder:
         self._read_meta = read_meta
         self._write_meta = write_meta
         self._node_types = node_types
+        self._engine_nodes = frozenset(engine_nodes)  # ids of the nodes that call the CLI
         self._audit = audit
         self._t0: dict[str, float] = {}
 
@@ -212,7 +213,7 @@ class RunRecorder:
                 "elapsed_s": elapsed, "tokens": int(usage.get("tokens") or 0),
                 "output_preview": out[:200], "output": out,
             }
-            self.emit(_with_usage(event, usage, result))
+            self.emit(_with_usage(event, usage, result, nid in self._engine_nodes))
         elif result.status == "failed":
             event = {
                 "type": "node_failed", "node_id": nid, "node_type": result.node_type,
@@ -220,7 +221,7 @@ class RunRecorder:
             }
             if usage.get("tokens"):
                 event["tokens"] = int(usage["tokens"])  # a failed node's spend is spend too
-            self.emit(_with_usage(event, usage, result))
+            self.emit(_with_usage(event, usage, result, nid in self._engine_nodes))
         else:
             self.emit({"type": "node_skipped", "node_id": nid, "node_type": result.node_type})
 

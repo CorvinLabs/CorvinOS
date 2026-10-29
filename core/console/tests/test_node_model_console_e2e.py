@@ -393,3 +393,37 @@ orchestration:
         failed = [e for e in events if e.get("type") == "node_failed" and e.get("node_id") == "boom"]
         assert failed, events[-3:]
         assert not {"attempts", "tokens", "model_id"} & set(failed[0]), failed[0]
+
+
+def test_a_retried_condition_route_carries_no_attempts_but_a_retried_model_node_does(tmp_path, fake_cli):
+    """Review round 4: `attempts` is decided per node spec (node_requires_engine), so a condition
+    route that raised and was retried names none; a model node that was retried still does."""
+    wf = """awp: "1.0.0"
+workflow:
+  name: dagroute
+  description: A condition route that raises on compare, retried.
+orchestration:
+  engine: dag
+  graph:
+    - id: seed
+      type: code
+      language: python3
+      source: "def main(**kwargs):\\n    return {'x': 'text'}\\n"
+      outputs: [x]
+    - id: gate
+      type: route
+      mode: condition
+      depends_on: [seed]
+      retry: {max_retries: 1}
+      cases:
+        - id: big
+          when: {selector: seed.x, op: ">", value: 1}
+        - id: other
+          when: default
+"""
+    with _sandbox(tmp_path) as (client, home, tid):
+        _make(tid, "dagroute", wf)
+        events = _run(client, "dagroute")
+        failed = [e for e in events if e.get("type") == "node_failed" and e.get("node_id") == "gate"]
+        assert failed, events[-3:]
+        assert "attempts" not in failed[0], failed[0]

@@ -399,7 +399,11 @@ class ClaudeCliEngine:
             # the CLI did not start: not found, not executable, or an argv over the kernel limit
             # (E2BIG with a large upstream state) - the span opened above ends here, in error
             _span_end(tenant, meta, span_id, "", {}, "error", t0)
-            raise ClaudeEngineError(f"the claude CLI could not be started ({type(e).__name__})") from e
+            import errno as _errno
+            code = _errno.errorcode.get(e.errno or 0, type(e).__name__)
+            why = ("the prompt is over the kernel's argument limit" if e.errno == _errno.E2BIG
+                   else "the claude CLI could not be started")
+            raise ClaudeEngineError(f"{why} ({code})") from e
         if proc.returncode != 0:
             _text, usage, reported, cost, _err = _split_envelope(proc.stdout or "")
             _span_end(tenant, meta, span_id, reported, usage, "error", t0, cost)

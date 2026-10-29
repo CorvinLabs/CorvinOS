@@ -3631,9 +3631,20 @@ def _make_run_recorder(
         read_meta=lambda: _read_json(meta_p) or {},
         write_meta=lambda m: _write_atomic(meta_p, m),
         node_types={str(n.get("id")): str(n.get("type", "agent")) for n in graph if isinstance(n, dict)},
+        engine_nodes=_engine_node_ids(graph),
         audit=_run_audit_sink(tenant_id, sid_fingerprint, wid, rid),
         alive=meta_p.exists,
     )
+
+
+def _engine_node_ids(graph: list[Any]) -> frozenset[str]:
+    """ADR-2308: the nodes that call the CLI, by the shared rule (``node_requires_engine``: a
+    condition route and the engine-free types do not; an operator type does)."""
+    try:
+        from corvin_workflows import node_requires_engine
+    except Exception:  # noqa: BLE001 - the badge then names no attempts, nothing else changes
+        return frozenset()
+    return frozenset(str(n.get("id")) for n in graph if isinstance(n, dict) and node_requires_engine(n))
 
 
 def _dag_snapshot_path(tenant_id: str, wid: str, rid: str) -> Path:
