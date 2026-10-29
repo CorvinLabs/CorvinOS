@@ -394,57 +394,67 @@ async def submit_dod_feedback(
         logger.exception("DoD feedback submission failed")
         raise HTTPException(status_code=500, detail="Feedback failed")
 
-    with _weight_lock(tenant_id):
-        persistence = WeightPersistence(tenant_id=tenant_id)
-        optimizer = DoD_WeightOptimizer.from_state(persistence.load_state())
+    from core.skills.os_skills.skill_adapter import (  # noqa: PLC0415
+        LearningFrozen, SkillConfigLockBusy,
+    )
+    from core.skills.os_skills.definition_of_done_verifier.weight_persistence import (  # noqa: PLC0415
+        ChangeNotRecorded,
+    )
+
+    step: Dict[str, Any] = {}
+
+    def _compute(state: Dict[str, Any]):
+        # Runs INSIDE the DoD skill's config flock (review r2_s2-P2): load, optimizer step,
+        # chain record and write are one step, so two concurrent ratings never compute from
+        # the same old weights (lost update) and the chained ``old_weights`` is always the
+        # state that was stored.
+        optimizer = DoD_WeightOptimizer.from_state(state)
         before_conf = dict(optimizer.confidence[task_type])
         result = optimizer.observe_feedback(task_type, FEEDBACK_DELTA[feedback], [check_name])
         changed = (result.new_weights != result.old_weights
                    or result.confidence != before_conf)
-        if changed:
-            # ADR-2304 learning brake. ``save_weights`` holds the DoD skill's config flock (the
-            # lock a freeze takes) across the brake check, the chain record and the file write:
-            # a frozen skill gets one refusal record and NO ``skill_config_updated``, and a
-            # freeze from the learning host cannot land between the check and the write (s2-2).
-            from core.skills.os_skills.skill_adapter import (  # noqa: PLC0415
-                LearningFrozen, SkillConfigLockBusy,
-            )
-            from core.skills.os_skills.definition_of_done_verifier.weight_persistence import (  # noqa: PLC0415
-                ChangeNotRecorded,
-            )
+        step.update(optimizer=optimizer, result=result, changed=changed)
+        if not changed:
+            return None
 
-            def _record() -> bool:
-                # Audit-first: no chain record -> nothing persisted. Metadata only: the task
-                # type, the two weight vectors and the per-weight confidence (numbers).
-                return emit_skill_config_updated_event(
-                    skill_id=_DOD_SKILL_ID,
-                    tenant_id=tenant_id,
-                    param_name=f"weights.{task_type}",
-                    old_value=None,
-                    new_value=None,
-                    reason="dod_feedback",
-                    details={
-                        "task_type": task_type,
-                        "old_weights": {k: round(v, 6) for k, v in result.old_weights.items()},
-                        "new_weights": {k: round(v, 6) for k, v in result.new_weights.items()},
-                        "confidence": {k: round(v, 6) for k, v in result.confidence.items()},
-                        "lom": f"{__name__}:submit_dod_feedback",
-                    },
-                )
+        def _record() -> bool:
+            # Audit-first: no chain record -> nothing persisted. Metadata only: the task
+            # type, the two weight vectors and the per-weight confidence (numbers).
+            return emit_skill_config_updated_event(
+                skill_id=_DOD_SKILL_ID,
+                tenant_id=tenant_id,
+                param_name=f"weights.{task_type}",
+                old_value=None,
+                new_value=None,
+                reason="dod_feedback",
+                details={
+                    "task_type": task_type,
+                    "old_weights": {k: round(v, 6) for k, v in result.old_weights.items()},
+                    "new_weights": {k: round(v, 6) for k, v in result.new_weights.items()},
+                    "confidence": {k: round(v, 6) for k, v in result.confidence.items()},
+                    "lom": f"{__name__}:submit_dod_feedback",
+                },
+            )
+        return optimizer.weights, optimizer.confidence, optimizer.sample_count, _record
 
-            try:
-                stored = persistence.save_weights(optimizer.weights, optimizer.confidence,
-                                                  optimizer.sample_count, record=_record)
-            except LearningFrozen as frozen:
-                raise HTTPException(status_code=409, detail={
-                    "error": "learning_frozen", "skill_id": _DOD_SKILL_ID, "reason": frozen.reason})
-            except SkillConfigLockBusy:
-                raise HTTPException(status_code=503, detail={"error": "lock_busy"}) from None
-            except ChangeNotRecorded:
-                logger.error("DoD weight change was not chained; not persisted")
-                raise HTTPException(status_code=500, detail="Weight change audit failed") from None
-            if not stored:
-                raise HTTPException(status_code=500, detail="Weight change could not be stored")
+    with _weight_lock(tenant_id):
+        # ADR-2304 learning brake. ``update`` holds the DoD skill's config flock (the lock a
+        # freeze takes) across load, step, brake check, chain record and file write: a frozen
+        # skill gets one refusal record and NO ``skill_config_updated``, and a freeze from the
+        # learning host cannot land between the check and the write (s2-2).
+        try:
+            stored = WeightPersistence(tenant_id=tenant_id).update(_compute)
+        except LearningFrozen as frozen:
+            raise HTTPException(status_code=409, detail={
+                "error": "learning_frozen", "skill_id": _DOD_SKILL_ID, "reason": frozen.reason})
+        except SkillConfigLockBusy:
+            raise HTTPException(status_code=503, detail={"error": "lock_busy"}) from None
+        except ChangeNotRecorded:
+            logger.error("DoD weight change was not chained; not persisted")
+            raise HTTPException(status_code=500, detail="Weight change audit failed") from None
+        if step.get("changed") and not stored:
+            raise HTTPException(status_code=500, detail="Weight change could not be stored")
+    optimizer, result, changed = step["optimizer"], step["result"], step["changed"]
 
     return {
         "accepted": True,

@@ -104,6 +104,29 @@ class WeightPersistence:
                 raise ChangeNotRecorded("the weight change was not chained; not stored")
             return self._write(weights, confidence, sample_count)
 
+    def update(self, compute: Callable[[Dict[str, Dict[str, Any]]], Optional[tuple]]) -> Optional[bool]:
+        """Load, compute and store as ONE step under the DoD skill's config flock.
+
+        ``compute(state)`` gets the state loaded INSIDE the lock and returns ``None`` (no
+        change: nothing checked, chained or written; returns None) or
+        ``(weights, confidence, sample_count, record)``. Then the brake check, ``record``
+        and the write run as in :meth:`save_weights`, still under the same lock. Loading
+        before the lock let two concurrent requests compute from the same old weights:
+        the second write lost the first, and its chained ``old_weights`` named a state that
+        was no longer stored (review r2_s2-P2). Same exceptions as :meth:`save_weights`.
+        """
+        from core.skills.os_skills.skill_adapter import brake_lock, refuse_if_frozen  # noqa: PLC0415
+
+        with brake_lock(DOD_SKILL_ID, self.tenant_id):
+            step = compute(self.load_state())
+            if step is None:
+                return None
+            weights, confidence, sample_count, record = step
+            refuse_if_frozen(DOD_SKILL_ID, self.tenant_id, target="dod_weights")
+            if record is not None and not record():
+                raise ChangeNotRecorded("the weight change was not chained; not stored")
+            return self._write(weights, confidence, sample_count)
+
     def _write(self, weights, confidence, sample_count) -> bool:
         data = {
             "version": "0.2.0",

@@ -198,3 +198,58 @@ def test_the_confidence_gate_is_strictly_above_one_half_and_survives_a_restart(t
     fresh = DoD_WeightOptimizer.from_state(WeightPersistence(storage_path=tmp_path / "w.json").load_state())
     assert fresh.recommend_next_weights("plugin") == pytest.approx(learned)
     assert fresh.sample_count["plugin"] == 6
+
+
+def test_two_concurrent_ratings_from_two_processes_never_lose_an_update(tmp_path, gate_clock,
+                                                                         monkeypatch):
+    """Review r2_s2-P2: the weights were loaded and the step computed BEFORE the DoD skill's
+    config flock; two writers both computed from the same old weights and the second write
+    lost the first. Two console processes share the flock but not the in-process
+    ``_weight_lock``, so each request gets its own lock here. The second "process" is a second
+    TestClient with its own event loop, sending its rating while the first request is inside
+    its weight load."""
+    import threading
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from corvin_console.app import router
+    from corvin_console.routes import dod_verifier_dashboard as dod
+    from core.skills.os_skills.definition_of_done_verifier.weight_persistence import (
+        WeightPersistence,
+    )
+
+    with console_client(tmp_path) as sb:
+        _verify(sb, "dod-race-1")
+        monkeypatch.setattr(dod, "_weight_lock", lambda tenant_id: threading.Lock())
+        app2 = FastAPI()
+        app2.include_router(router, prefix="/v1/console")
+        body = {"task_id": "dod-race-1", "check_name": "reproducibility", "feedback": "accurate"}
+        results: list = []
+
+        def second_process():
+            with TestClient(app2, raise_server_exceptions=False) as c2:
+                c2.cookies.update(sb.client.cookies)
+                results.append(c2.post(FEEDBACK, headers=sb.csrf_headers, json=body))
+        other = threading.Thread(target=second_process)
+        real_load = WeightPersistence.load_state
+        calls = [0]
+
+        def slow_load(self):
+            state = real_load(self)
+            calls[0] += 1
+            if calls[0] == 1:            # the first request is inside its load …
+                other.start()            # … when the other process's rating arrives
+                time.sleep(0.6)
+            return state
+        monkeypatch.setattr(WeightPersistence, "load_state", slow_load)
+        gate_clock[0] += 61.0
+        results.append(sb.client.post(FEEDBACK, headers=sb.csrf_headers, json=body))
+        other.join(30)
+        assert [r.status_code for r in results] == [200, 200], [r.text for r in results]
+        monkeypatch.setattr(WeightPersistence, "load_state", real_load)
+        stored = WeightPersistence(tenant_id=sb.tenant_id).load_state()
+        assert stored["confidence"]["feature"]["w_repro"] == pytest.approx(0.2), stored
+        assert stored["sample_count"]["feature"] == 2
+        olds = [_details(r)["old_weights"] for r in _config_updates(sb)]
+        assert len(olds) == 2 and olds[0] != olds[1]   # the second step started from the first
