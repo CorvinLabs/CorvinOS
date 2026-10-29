@@ -180,6 +180,27 @@ def test_model_unresolved_follows_the_retry_policy_and_model_unknown_does_not(cl
     assert res.state == "failed" and res.nodes["n"].attempts == 1
 
 
+def test_a_cli_that_cannot_start_closes_the_span_it_opened(cli_log, monkeypatch):
+    """Review round 3: only FileNotFoundError closed the span; a non-executable `claude` (or an argv
+    over the kernel limit, E2BIG) left `engine.span.start` without an end."""
+    from corvin_workflows import engines_claude as ec
+    engine = ec.ClaudeCliEngine(tenant_id="_default")       # constructed while `claude` is on PATH
+    real_run = ec.subprocess.run
+
+    def cannot_start(cmd, *a, **kw):
+        if cmd and cmd[0] == "claude" and "--max-turns" not in cmd:
+            raise OSError(7, "Argument list too long")        # E2BIG
+        return real_run(cmd, *a, **kw)
+    monkeypatch.setattr(ec.subprocess, "run", cannot_start)
+    before = len(_chain())
+    res = _run(_doc([{"id": "n", "type": "agent", "agent": "a", "instructions": "x"}]), engine)
+    assert res.state == "failed" and "could not be started" in (res.nodes["n"].error or "")
+    new = _chain()[before:]
+    starts = [r for r in new if r.get("event_type") == "engine.span.start"]
+    ends = [r for r in new if r.get("event_type") == "engine.span.end"]
+    assert len(starts) == len(ends) == 1 and ends[0]["details"]["status"] == "error"
+
+
 def test_readiness_names_the_site_default_when_it_is_set(monkeypatch):
     from corvin_workflows.readiness import check_readiness
     text = yaml.safe_dump({"awp": "1.0.0", "workflow": {"name": "wf", "description": "d"},

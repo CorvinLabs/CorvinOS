@@ -390,14 +390,16 @@ class ClaudeCliEngine:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=self.timeout_s,
             )
-        except FileNotFoundError as e:
-            _span_end(tenant, meta, span_id, "", {}, "error", t0)
-            raise ClaudeEngineError("the claude CLI was not found") from e
         except subprocess.TimeoutExpired as e:
             _span_end(tenant, meta, span_id, "", {}, "error", t0)
             raise ClaudeEngineError(
                 f"claude call for agent={call.agent!r} timed out after {self.timeout_s}s"
             ) from e
+        except OSError as e:
+            # the CLI did not start: not found, not executable, or an argv over the kernel limit
+            # (E2BIG with a large upstream state) - the span opened above ends here, in error
+            _span_end(tenant, meta, span_id, "", {}, "error", t0)
+            raise ClaudeEngineError(f"the claude CLI could not be started ({type(e).__name__})") from e
         if proc.returncode != 0:
             _text, usage, reported, cost, _err = _split_envelope(proc.stdout or "")
             _span_end(tenant, meta, span_id, reported, usage, "error", t0, cost)
