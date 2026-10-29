@@ -3664,6 +3664,16 @@ with `--disallowedTools "*"` like every other text-only call; pinned by
 
 Also fixed (2026-10-29, same suite):
 
+- **H-NODE-1** (high, the sibling of H-PL-1) — the console's own node executor (`routes/workflows.py::_run_node_claude`,
+  used for `agent`, `fan_out` and the manager and workers of a legacy `delegation_loop`) started `claude -p` with its
+  tools. A node whose text said "read <file> and copy it" read a host file into its output, which a later `deliver`
+  node could send on (live test `ad23_legacy_node_file_read`: control read, secret leaked). It now passes
+  `--disallowedTools "Bash Edit Write Read Glob Grep NotebookEdit Task"`, the host-access part of the DAG engine's own
+  list. Connector tools (`--mcp-config`) are untouched. **Left open on purpose, an operator decision:** `WebSearch` and
+  `WebFetch` stay allowed for these nodes (the DAG engine denies them), because dropping them changes what existing
+  workflows can do; a node that holds upstream data can still send it to a URL. Pinned by
+  `test_every_spawn_of_the_legacy_node_executor_denies_the_host_access_tools`.
+
 - **H-DL-1** — `ClaudeCliEngine._build_prompt` dropped every state key starting with `_`, so a `delegation_loop`
   manager never saw `_iterations` (what its workers returned) and got the same prompt each iteration, against the
   docstring of `_execute_delegation_loop`. Found live (two identical manager prompts). Now the MANAGER of a delegation

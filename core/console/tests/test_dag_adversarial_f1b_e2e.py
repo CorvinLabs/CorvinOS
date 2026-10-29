@@ -269,6 +269,37 @@ def test_a_console_pin_outranks_the_node_value_and_removing_it_restores_the_node
         assert_chain_intact(tid)
 
 
+# ── the console's own node executor runs without the host-access tools (AD-23) ──
+
+HOST_ACCESS_TOOLS = {"Bash", "Edit", "Write", "Read", "Glob", "Grep"}
+
+
+def test_every_spawn_of_the_legacy_node_executor_denies_the_host_access_tools(tmp_path, shim):
+    """Found live (AD-23): `_run_node_claude` started `claude -p` with its tools, so a node whose text said
+    'read <file> and copy it' read a host file into its output, which a later deliver node could send on. The
+    DAG engine always denied them; this executor (agent, fan_out and the manager and workers of a
+    delegation_loop) must too."""
+    graph = doc([
+        agent("plain"),
+        {"id": "fan", "type": "fan_out", "agent": "c", "depends_on": ["plain"], "items_from": "plain.output",
+         "instructions": "MARK-FAN"},
+        {"id": "loop", "type": "delegation_loop", "agent": "d", "depends_on": [], "instructions": "MARK-LOOP",
+         "config": {"manager": "m", "budget": {"max_loops": 1, "max_total_workers": 1}}},
+    ])
+    shim.set_rules([{"match": {"kind": "legacy_node", "prompt_regex": "MARK-PLAIN"}, "action": {"reply": "alpha\nbeta"}}])
+    with live_sandbox(tmp_path) as (client, home, tid):
+        _make(tid, "wf", graph)
+        rid, events = run_with_rid(client, "wf")
+        assert events[-1]["type"] == "run_completed", events[-3:]
+        rows = shim.rows("legacy_node")
+        assert len(rows) >= 4, "agent, two fan_out items and the loop's manager must all have spawned"
+        for row in rows:
+            argv = row["argv"]
+            assert "--disallowedTools" in argv, argv
+            denied = set(argv[argv.index("--disallowedTools") + 1].split())
+            assert HOST_ACCESS_TOOLS <= denied, (sorted(HOST_ACCESS_TOOLS - denied), argv)
+
+
 # ── cancel, concurrent runs, tenants (AD-40, AD-44, INV-R5, INV-S2) ──────────
 
 SLOW_CHAIN = doc([agent("slow"), agent("next1", ["slow"]), agent("next2", ["next1"]),

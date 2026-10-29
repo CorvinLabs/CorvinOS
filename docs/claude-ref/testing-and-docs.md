@@ -143,7 +143,14 @@ of the first run is fixed now, each first as a red test: H-PL-1 (the design-chat
 `--disallowedTools "*"`; the live run had shown it reading a host file and printing the content), H-DL-1 (a
 delegation-loop manager sees what its workers returned), H-GW-1 (the operator pin outranks the gateway router,
 ADR-2309), H-GW-2 (the router routes to the newest model of a family instead of fixed 4.x ids) and H-FO-1a/1b (`fan_out`
-reads workflow inputs and fails on a source that does not exist). See `layer-engines.md` § Adversarial suite findings.
+reads workflow inputs and fails on a source that does not exist). A second live test then found the sibling of H-PL-1:
+the console's own node executor ran `claude -p` with its tools and read a host file on request (H-NODE-1, fixed: it
+denies the host-access tools now). See `layer-engines.md` § Adversarial suite findings.
+
+**Known order dependence (not from this suite).** `core/console/tests/test_web_delegation_workflows_e2e.py` passes alone
+(12) and fails 9 with an "audit hash chain broken: mac_tampered" when any sandbox-based module runs before it in the
+same process; reproduced with the existing `test_node_model_console_e2e.py` and `test_workflow_resume_hardening.py` as
+well as with the modules of this suite. `coverage.yml` already calls the console directory order-dependent.
 
 **Must NOT do:** point a `deliver`/`ask_human`/`answer` node at the real outbox in a test (set `ADAPTER_OUTBOX`; without
 it `node_types._write_outbox` writes the live repo outbox) · replace `ENGINE_FACTORY` in a test of model selection (the

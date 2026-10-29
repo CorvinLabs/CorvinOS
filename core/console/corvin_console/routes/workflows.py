@@ -539,6 +539,12 @@ class NodeExecutionError(RuntimeError):
     nodes consuming the error text."""
 
 
+# The tools that touch the host (files, shell, sub-agents). The DAG engine's own list also names the two web
+# tools; here they are left alone on purpose, because dropping them would change what existing workflows can
+# do, which is a decision for the operator, not part of closing the file-read hole.
+_NODE_DENIED_TOOLS = "Bash Edit Write Read Glob Grep NotebookEdit Task"
+
+
 def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str = "",
                      meta: dict[str, Any] | None = None) -> str:
     """Execute a single workflow node via claude -p and return the text output.
@@ -573,6 +579,11 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
     if model:
         cmd += ["--model", model]
     cmd += ["--output-format", "json" if _ec is not None else "text"]
+    # A node reads data it did not write (a forwarded mail, an upstream answer). With its built-in tools a node
+    # whose text said "read <file> and copy it" read a host file into its output, and a later `deliver` node
+    # could send it on (live test ad23_legacy_node_file_read). The DAG engine always denied these; connector
+    # tools (`--mcp-config`) and the web tools stay as they were, they are what a node can be given on purpose.
+    cmd += ["--disallowedTools", _NODE_DENIED_TOOLS]
     tmp_path: str | None = None
 
     # Always write a config file when any tools are requested — this activates
