@@ -238,3 +238,34 @@ def test_a_row_that_does_not_act_leaves_the_node_on_the_site_default(gate_status
 def test_profile_ids_reject_a_trailing_newline(value):
     entry = node_profile.build_entry({"run_id": value, "usage": {"model_id": value}}, "agent|n|<8k|json\n", "ok")
     assert entry["rid"] == "" and entry["model_id"] == "" and entry["node_class"] == ""
+
+
+# ── review round 6 (2026-10-29) ─────────────────────────────────────────────
+
+def test_cli_resume_json_names_the_attempts_of_a_retried_model_node(cli_log, tmp_path):
+    """The resume output used a stub doc without a graph, so `attempts` vanished after a pause."""
+    import contextlib
+    import io
+
+    from corvin_workflows import cli
+    wf = tmp_path / "resume_r6.awp.yaml"
+    wf.write_text(yaml.safe_dump({"awp": "1.0.0", "workflow": {"name": "resume_r6", "description": "d"},
+                                  "orchestration": {"engine": "dag", "graph": [
+                                      {"id": "ask", "type": "ask_human", "depends_on": [], "channel": "discord",
+                                       "chat_id": "owner-chat", "prompt": "Go on?",
+                                       "expect": {"field": "ok", "type": "boolean"}},
+                                      {"id": "after", "type": "agent", "agent": "a", "depends_on": ["ask"],
+                                       "instructions": "MARK-ERRENV", "retry": {"max_retries": 1}}]}}))
+
+    def run_cli(argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = cli.main(argv)
+        return code, json.loads(buf.getvalue())
+
+    code, paused = run_cli(["run", str(wf), "--engine", "claude", "--format", "json"])
+    assert paused["state"] == "paused", paused
+    code, resumed = run_cli(["resume", paused["run_id"], "yes", "--engine", "claude", "--format", "json"])
+    assert resumed["state"] == "failed", resumed
+    assert resumed["nodes"]["after"]["attempts"] == 2, resumed["nodes"]["after"]
+    assert resumed["nodes"]["after"]["tokens"] == 30                 # two failed attempts, 15 each

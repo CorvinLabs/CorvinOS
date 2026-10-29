@@ -686,6 +686,16 @@ def _resume_workflow_cmd(run_id: str, reply: str, *, format_: str, engine_name: 
     from . import checkpoint as _checkpoint
     from .runner import PauseExpired, WorkflowChanged
 
+    # ADR-2308: the graph of the paused run, read before the resume claims the checkpoint, so the
+    # JSON output applies the same per-node rules as a fresh run (attempts for nodes that call the
+    # CLI). A checkpoint that cannot be read here is left for resume_workflow to report.
+    resumed_graph: list = []
+    try:
+        _ck = _checkpoint.load(run_id)
+        if _ck and _ck.get("workflow_path"):
+            resumed_graph = load_workflow(Path(_ck["workflow_path"])).graph
+    except Exception:  # noqa: BLE001 - output shaping only
+        resumed_graph = []
     try:
         result = resume_workflow(run_id, reply, engine=engine)
     except KeyError as e:
@@ -701,6 +711,7 @@ def _resume_workflow_cmd(run_id: str, reply: str, *, format_: str, engine_name: 
     # doc.name isn't available post-resume without reloading; result.workflow carries it.
     class _DocStub:
         name = result.workflow
+        graph = resumed_graph
     text, exit_code = _format_run_result(_DocStub(), result, result.inputs, format_=format_, engine=engine)
     print(text)
     return exit_code
