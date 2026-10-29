@@ -83,9 +83,8 @@ EVENTS = {
 
 #: ADR-2304: the anomalies that freeze the skill's learned-config writes once their record
 #: committed (learning host). The other three only report. Source of the decision: the
-#: operator's chat answers of 2026-10-26 to PLAN-0966's open questions (D1 "ja", D2 "okay");
-#: ADR-2304 itself is still ``proposed`` and does not record them yet (amendment pending in
-#: Corvin-Knowledge). A freeze is lifted only by a human (``POST /v1/console/learning/config/
+#: operator's chat answers of 2026-10-26 to PLAN-0966's open questions (D1 "ja", D2 "okay"),
+#: recorded in ADR-2304's amendment of 2026-10-27 (the ADR itself is still ``proposed``). A freeze is lifted only by a human (``POST /v1/console/learning/config/
 #: unfreeze``); it never triggers a rollback.
 FREEZES_LEARNING = frozenset({"skill.config_oscillation", "skill.confidence_regression"})
 

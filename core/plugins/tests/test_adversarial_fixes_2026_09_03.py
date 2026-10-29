@@ -390,6 +390,16 @@ class TestA5SoftRestartKeepsTheBootLayer(_Env):
 
 # ── A6 ────────────────────────────────────────────────────────────────────────
 
+# The registry refuses an execute() without a line of moral responsibility
+# (error_class lom_missing), so a probe without it read "not registered" and the
+# two tests below skipped forever (review c120 r2_s3-9).
+_A6_LOM = "core/plugins/tests/test_adversarial_fixes_2026_09_03.py:_a6_skill_enabled"
+
+
+def _a6_skill_enabled(skills) -> bool:
+    res = skills().execute("os.plugin_health_monitoring", {"tenant_id": "_default"}, lom=_A6_LOM)
+    return res.status == "success"
+
 
 class TestA6HealthMonitoringIsSharedBootWiring(_Env):
     def tearDown(self):
@@ -409,7 +419,7 @@ class TestA6HealthMonitoringIsSharedBootWiring(_Env):
             json.dumps({"flags": {"plugin_health_monitoring": True, "plugin_self_healing": True}}), encoding="utf-8"
         )
         bootstrap._boot_skills_registry()
-        if _skills().execute("os.plugin_health_monitoring", {"tenant_id": "_default"}).status != "success":
+        if not _a6_skill_enabled(_skills):
             self.skipTest("os.plugin_health_monitoring Skill not registered")
 
         async def run():
@@ -435,7 +445,7 @@ class TestA6HealthMonitoringIsSharedBootWiring(_Env):
             json.dumps({"flags": {"plugin_health_monitoring": True}}), encoding="utf-8"
         )
         bootstrap._boot_skills_registry()
-        if _skills().execute("os.plugin_health_monitoring", {"tenant_id": "_default"}).status != "success":
+        if not _a6_skill_enabled(_skills):
             self.skipTest("os.plugin_health_monitoring Skill not registered")
 
         async def run():
