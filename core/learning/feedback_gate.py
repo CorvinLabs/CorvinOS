@@ -33,11 +33,17 @@ decision, reason; read by the anomaly monitor) AND to a per-subject index
 file, Layer 3 over the (subject, source) file, each reading a bounded tail —
 so junk on other subjects, or another producer's flood, cannot push a
 subject's or a producer's history out of view. All files are append-only;
-the audit chain stays the record of truth. ``all.jsonl`` is written first
-(the throttle counts it); a torn tail line is skipped and never swallows the
-next record. If a ledger append fails after ``learning.feedback_accepted``
-committed, ``learning.feedback_not_stored`` (ids and enums only) is chained and
-the feedback is refused (``ledger_write_failed``).
+the audit chain stays the record of truth. ``decisions.jsonl`` is written
+FIRST, the per-subject index and the producer file only after it took the line
+(review c120 r3_s1-6); a torn tail line is skipped and never swallows the next
+record, and a failed or short write to a per-subject file is cut back to its
+previous size. If a ledger append fails after ``learning.feedback_accepted``
+committed, ``learning.feedback_not_stored`` (ids and enums only) is chained,
+the feedback is refused (``ledger_write_failed``) and a ``void`` line naming
+the entry's id is appended to every file that already took the "accepted"
+line — readers drop the voided entry, so the throttle, the producer's trust
+and the anomaly monitor never count refused feedback as accepted (best
+effort: a void that cannot be written either leaves the accepted line).
 
 **Atomicity.** read → decide → append runs under an exclusive file lock on
 the subject (``subjects/<h>/.lock``; ``fcntl.flock`` / ``msvcrt.locking``),
@@ -129,16 +135,28 @@ def _tail_lines(path: Path, n: int) -> list[str]:
     return lines[-n:] if n > 0 else []
 
 
+#: Decision value of a line that cancels an earlier entry (``voids``: its id).
+DECISION_VOID = "void"
+
+
 def _parse(lines: list[str]) -> list[dict]:
+    """Parsed decisions; torn lines skipped, voided entries and the void lines
+    themselves dropped (review c120 r3_s1-6)."""
     out = []
+    voided: set[str] = set()
     for line in lines:
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(rec, dict):
-            out.append(rec)
-    return out
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("decision") == DECISION_VOID:
+            if isinstance(rec.get("voids"), str):
+                voided.add(rec["voids"])
+            continue
+        out.append(rec)
+    return [r for r in out if r.get("id") not in voided] if voided else out
 
 
 def _append_line(path: Path, line: bytes, *, exclusive: bool = False) -> None:
@@ -231,20 +249,43 @@ class DecisionLedger:
             fh.close()  # closing drops the flock / msvcrt lock
 
     def append(self, *, ts: float, subject: str, decision: str, reason: str,
-               source_key: str = "") -> None:
+               source_key: str = "", void_on_failure: bool = False) -> None:
+        """Append one decision to decisions.jsonl, then all.jsonl, then the
+        producer's file (review c120 r3_s1-6: the per-subject files only after
+        the tenant-wide ledger took the line). ``void_on_failure`` (an
+        "accepted" that a failure turns into a refusal): every file that took
+        the line gets a ``void`` line naming its id, then the error propagates.
+        """
+        import uuid  # noqa: PLC0415
         subject = canonical_subject(subject)
         src = source_key or source_key_of("", None)
-        line = (json.dumps({"ts": ts, "subject": subject, "source_key": src,
-                            "decision": decision, "reason": reason},
-                           separators=(",", ":")) + "\n").encode("utf-8")
+        entry_id = uuid.uuid4().hex[:16]
+        def _line(rec: dict) -> bytes:
+            return (json.dumps(rec, separators=(",", ":")) + "\n").encode("utf-8")
+        line = _line({"ts": ts, "subject": subject, "source_key": src,
+                      "decision": decision, "reason": reason, "id": entry_id})
         d = self._subject_dir(subject)
-        # all.jsonl FIRST: the throttle counts it, so a decision that reached no
-        # file never leaves a budget hole behind (review c120 r2_s1-9b). The two
-        # per-subject files are written under the subject lock (exclusive); the
-        # tenant-wide decisions.jsonl is shared by every subject.
-        _append_line(d / "all.jsonl", line, exclusive=True)
-        _append_line(d / f"{src}.jsonl", line, exclusive=True)
-        _append_line(self.path, line)
+        # The two per-subject files are written under the subject lock
+        # (exclusive: a failed write is cut back); the tenant-wide
+        # decisions.jsonl is shared by every subject.
+        targets = ((self.path, False), (d / "all.jsonl", True),
+                   (d / f"{src}.jsonl", True))
+        took: list[tuple[Path, bool]] = []
+        try:
+            for path, exclusive in targets:
+                _append_line(path, line, exclusive=exclusive)
+                took.append((path, exclusive))
+        except BaseException:
+            if void_on_failure:
+                void = _line({"ts": ts, "subject": subject, "source_key": src,
+                              "decision": DECISION_VOID, "reason": REASON_NOT_STORED,
+                              "voids": entry_id})
+                for path, exclusive in took:
+                    try:
+                        _append_line(path, void, exclusive=exclusive)
+                    except Exception:  # noqa: BLE001 — the original error wins
+                        pass
+            raise
 
 
 _ADMITTED_MAX = 1024
@@ -346,7 +387,7 @@ def admit(event: LearningEvent, store, *, now: Optional[float] = None,
                                            "executions_in_window": reality.executions_in_window})
         try:
             ledger.append(ts=now, subject=subject, decision="accepted", reason="valid",
-                          source_key=src)
+                          source_key=src, void_on_failure=True)
         except Exception as exc:
             # The chain says "accepted" but the gate's own ledger did not take it:
             # chain the compensation and refuse the feedback (review c120 r2_s1-9a).
