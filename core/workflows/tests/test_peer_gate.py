@@ -1,11 +1,20 @@
 """peer_gate (ADR-2276): the outbound gate of the peer_agent node and its audit helper.
 
-Real L44 / classifier / registry code runs; only the endpoint registry is a stand-in (an in-memory
+Real L44 / data-classification / registry code runs; only the endpoint registry is a stand-in (an in-memory
 object with the registry's ``load``), and the failure cases monkeypatch the gate module itself.
+
+L44 runs on its deterministic Tier-0 floor (``spawn_gates.check_l44_floor``: same policy, rules and audit
+machinery, no classifier spawn). The full ``check_l44`` asks a live Haiku adjudicator, and that verdict is not
+reproducible: measured 2026-10-30, the very same ``SECRET_TEXT`` came back ``escalate`` (rule ``no-offensive-cyber``,
+confidence 0.60 -> ``l44_refused``) in some processes and ``allow`` (``classifier_cleared`` 0.90) in others, so
+``test_secret_is_never_releasable...`` failed in about one run of six. The classifier path is covered by the
+opt-in ``live`` test at the bottom (``CLAUDE_LIVE_E2E=1``), which asserts only what must hold either way.
 """
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -32,6 +41,19 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_HOME", str(h))
     monkeypatch.setenv("CORVIN_TENANT_ID", TENANT)
     return h
+
+
+@pytest.fixture(autouse=True)
+def _l44_on_the_deterministic_floor(request, monkeypatch):
+    """Run the real L44 gate without its live classifier (see the module docstring)."""
+    if request.node.get_closest_marker("live"):
+        return
+    _shared = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared")
+    if _shared not in sys.path:
+        sys.path.insert(0, _shared)
+    import spawn_gates  # noqa: PLC0415
+
+    monkeypatch.setattr(spawn_gates, "check_l44", spawn_gates.check_l44_floor)
 
 
 class _Registry:
@@ -211,3 +233,23 @@ def test_strict_audit_failure_raises_and_lenient_one_reports_false(home, monkeyp
         peer_gate.audit_peer_event("workflow.peer_delegated", TENANT, strict=True, node_id="n")
     assert str(exc.value) == "audit_unavailable"
     assert peer_gate.audit_peer_event("workflow.peer_completed", TENANT, node_id="n") is False
+
+
+# --- live: the real L44 classifier ------------------------------------------------------------
+live = pytest.mark.skipif(
+    os.environ.get("CLAUDE_LIVE_E2E", "") != "1" or shutil.which("claude") is None,
+    reason="opt-in: CLAUDE_LIVE_E2E=1 and the claude CLI (calls the live L44 adjudicator, costs API credits)",
+)
+
+
+@live
+@pytest.mark.live
+def test_secret_is_never_released_whatever_the_live_l44_classifier_says(home):
+    """The adjudicator is not deterministic (one process escalates a secret-looking string, another clears it),
+    so this asserts only the invariant that must hold on both outcomes: the secret is NOT sent, and the
+    refusal is one of the two closed reasons - L44 first, otherwise the classification above PUBLIC."""
+    d = _evaluate(SECRET_TEXT)
+    assert d.allowed is False
+    assert d.reason_code in {"l44_refused", "classified_above_public"}
+    if d.reason_code == "classified_above_public":
+        assert d.data_class == "SECRET"
