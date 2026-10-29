@@ -577,7 +577,14 @@ def _claude_cli_available() -> bool:
     pinned = (os.environ.get("CORVIN_CLAUDE_BIN") or "").strip()
     if pinned:
         return os.path.isfile(pinned) and os.access(pinned, os.X_OK)
-    return shutil.which("claude") is not None
+    if shutil.which("claude") is not None:
+        return True
+    try:  # the same resolver the console chat spawns (known install dirs, nvm, Windows shims)
+        import helper_model  # type: ignore  # bridges/shared, same import as chat_runtime
+        cand = helper_model.resolve_claude_bin()
+        return os.path.isfile(cand) and os.access(cand, os.X_OK)
+    except Exception:  # noqa: BLE001 - best effort
+        return False
 
 
 _NO_CLAUDE_DETAIL = ("CorvinTV needs an internet connection and a running Claude Code (signed in) or an "
@@ -596,8 +603,11 @@ def _storyboard_backend(tenant_id: str, chat_key: str, task: str) -> tuple:
     Sonnet, not Opus: on the real storyboard prompt both produced fully valid,
     equally varied template choices, Sonnet in ~14 s for ~$0.03 vs ~17-42 s
     for ~$0.06 (measured 2026-10-08, ADR-2238 amendment)."""
-    api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if not api_key and not _claude_cli_available():
+    # The subscription CorvinOS itself runs on (the Claude Code login) comes first; an API key is only
+    # the fallback for a host that has no CLI.
+    use_cli = _claude_cli_available()
+    api_key = (not use_cli) and bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not api_key and not use_cli:
         raise HTTPException(status_code=503, detail=_NO_CLAUDE_DETAIL)
     try:
         from spawn_gates import check_l34, check_l35  # type: ignore  # path set up by _spawn_gates
