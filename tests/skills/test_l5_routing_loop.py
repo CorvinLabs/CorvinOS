@@ -1036,7 +1036,8 @@ def test_audit_events_are_registered_in_both_registries():
     import forge.security_events as se
 
     for event in ("routing.phase2_decision", "routing.phase2_refused",
-                  "routing.rollback_triggered", "routing.rollback_reset"):
+                  "routing.rollback_triggered", "routing.rollback_reset",
+                  "routing.rollback_reset_not_applied"):
         assert event in se.EVENT_SEVERITY
         assert event in se._EVENT_ALLOWLIST
 

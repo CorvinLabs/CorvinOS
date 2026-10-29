@@ -15,6 +15,7 @@ Endpoints:
   GET  /v1/console/learning/checkpoint — REAL Skill config versions (the rollback points)
   GET  /v1/console/learning/audit      — REAL ``learning.*`` records from the core hash chain
   POST /v1/console/learning/config/unfreeze?skill_id= — lift the ADR-2304 learning brake (CSRF, audited)
+  POST /v1/console/learning/routing/rollback/reset — clear the L5 Phase 2 rollback trip (CSRF, audited)
   POST /v1/console/learning/override   — 501 (no live meta loop to override)
   POST /v1/console/learning/rollback/{checkpoint_id} — 501 (use POST learning/config/rollback)
 
@@ -859,6 +860,57 @@ async def unfreeze_learning(
         target_id=skill_id,
     )
     return {"skill_id": skill_id, "frozen": False, "previous_reason": reason}
+
+
+@router.post("/learning/routing/rollback/reset")
+async def reset_routing_rollback(session = Depends(require_csrf)):
+    """Clear the tenant's L5 Phase 2 rollback trip (ADR-2092 G4) — the operator reset.
+
+    Once the routing rollback judge tripped (or a trip is pending), Phase 2 stays off
+    for the tenant on every surface until this is called. Tenant: the session's. 409
+    ``not_tripped`` when no trip is active. Audit-first through
+    ``rollback_detector.reset_rollback``: ``routing.rollback_reset`` commits before the
+    state changes (503 ``audit_not_committed``, still tripped); a state write that fails
+    afterwards chains ``routing.rollback_reset_not_applied`` (503 ``state_not_written``,
+    still tripped). Then a console ``learning.routing_rollback_reset`` record. The
+    reset restarts the bridge's console soak (readiness).
+    """
+    import asyncio  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    try:
+        from core.skills.os_skills.monitoring import rollback_detector  # noqa: PLC0415
+    except ImportError:
+        raise HTTPException(status_code=503, detail="routing monitor not wired (core.skills unavailable)")
+    from .. import audit as console_audit  # noqa: PLC0415
+
+    _shared = str(Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared")
+    if _shared not in sys.path:
+        sys.path.insert(0, _shared)
+    tenant_id = session.tenant_id
+
+    def _reset() -> None:
+        if not rollback_detector.rollback_active(tenant_id):
+            raise LookupError
+        rollback_detector.reset_rollback(
+            tenant_id, audit=rollback_detector._default_audit(tenant_id))
+
+    try:
+        await asyncio.to_thread(_reset)
+    except LookupError:
+        raise HTTPException(status_code=409, detail={"error": "not_tripped"}) from None
+    except rollback_detector.ResetNotApplied:
+        raise HTTPException(status_code=503, detail={"error": "state_not_written"}) from None
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail={"error": "audit_not_committed"}) from None
+    console_audit.action_performed(
+        tenant_id=tenant_id,
+        sid_fingerprint=session.sid_fingerprint,
+        action="learning.routing_rollback_reset",
+        target_kind="routing_rollback",
+        target_id=tenant_id,
+    )
+    return {"tenant_id": tenant_id, "tripped": False}
 
 
 @router.post("/learning/override")

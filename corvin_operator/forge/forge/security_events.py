@@ -171,6 +171,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "plugin_builder.scaffold": "INFO",
     "routing.rollback_triggered": "WARNING",
     "routing.rollback_reset":    "INFO",
+    # compensating record: the reset record committed, the state write failed (still tripped)
+    "routing.rollback_reset_not_applied": "WARNING",
     # ADR-2253 - one record when a forge run (skill/tool/plugin/layer) starts and one when it finishes.
     "forge_run.started":         "INFO",
     "forge_run.finished":        "INFO",
@@ -3560,6 +3562,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "tenant_id", "skill_n", "bundled_n", "skill_success_rate", "bundled_success_rate",
     }),
     "routing.rollback_reset": frozenset({"tenant_id"}),
+    "routing.rollback_reset_not_applied": frozenset({"tenant_id"}),
     # ADR-2253: closed enums, an opaque run id, a count and a flag. NEVER: the request, a file name, a message.
     "forge_run.started": frozenset({"tenant_id", "run_id", "run_kind"}),
     # ADR-2254: closed enums, an opaque id, counts and a hash prefix. NEVER: a file name or any cell value.

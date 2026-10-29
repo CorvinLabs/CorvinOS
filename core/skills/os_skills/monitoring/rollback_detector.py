@@ -339,11 +339,26 @@ def maybe_retry_pending(tenant_id: str, *, audit: Optional[AuditFn] = None,
         _run()
 
 
+class ResetNotApplied(RuntimeError):
+    """``routing.rollback_reset`` committed but the state could not be written: the
+    trip stays active and ``routing.rollback_reset_not_applied`` follows the record."""
+
+
 def reset_rollback(tenant_id: str, *, audit: Callable[[str, dict], bool]) -> None:
-    """Operator action: clear a trip. Audit-first: no committed record → no reset."""
+    """Operator action: clear a trip. Audit-first: no committed record → no reset
+    (``RuntimeError``). A state write that fails after the record committed chains
+    the compensating ``routing.rollback_reset_not_applied`` and raises
+    :class:`ResetNotApplied`; the rollback stays active."""
     if not audit("routing.rollback_reset", {"tenant_id": tenant_id}):
         raise RuntimeError("routing.rollback_reset did not commit — rollback stays active")
-    _write_state(tenant_id, {"tripped": False, "at": time.time()})
+    try:
+        _write_state(tenant_id, {"tripped": False, "at": time.time()})
+    except OSError as exc:
+        try:
+            audit("routing.rollback_reset_not_applied", {"tenant_id": tenant_id})
+        except Exception:  # noqa: BLE001
+            pass
+        raise ResetNotApplied("rollback state not written — rollback stays active") from exc
     _clear_pending(tenant_id)
     _invalidate_readiness()
 
