@@ -416,7 +416,7 @@ def test_failed_skill_grade_record_persists_nothing_and_chain_stays_green(env, e
     assert tripwire.audit_chain_intact().ok
 
 
-# ── decision: one organic follow-up grade per skill per channel per UTC day ─
+# ── decision: one organic follow-up grade per skill, channel and signal kind per 24 h ─
 
 def test_repeated_praise_grades_once_per_day(env) -> None:
     _grant_consent()

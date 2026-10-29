@@ -38,7 +38,7 @@ Gates (all fail-closed — no signal unless every one holds):
 5. only skills of the SESSION tenant's own scopes (``session`` / ``user``) are
    graded — never the shared repo ``project`` scope (``grade_from_user_followup``
    with an explicit ``tenant_id``);
-6. at most one organic follow-up grade per skill per UTC day from the console
+6. one organic follow-up grade per skill and signal kind per rolling 24 h (console)
    (dedupe channel ``"console"``; only a day-bound hash is stored, in the grade note).
 
 Privacy (data minimisation): the snapshot holds NO prompt text — only the

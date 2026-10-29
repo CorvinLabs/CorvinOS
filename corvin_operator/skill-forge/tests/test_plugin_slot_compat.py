@@ -43,9 +43,19 @@ def _restore_environ():
     the process environment afterwards so the sandbox the suite runs in
     (and the root conftest's isolation check) is left as it was found."""
     saved = dict(os.environ)
+    # _fresh_registry() re-imports skill_forge(.registry): put the session's module
+    # objects back afterwards. Left in place, the fresh copy made every later test's
+    # `from skill_forge import registry` patch a module that the already-imported
+    # MultiSkillRegistry no longer uses (review c120 G1: combined-run pollution).
+    saved_mods = {k: v for k, v in sys.modules.items()
+                  if k == "skill_forge" or k.startswith("skill_forge.")}
     yield
     os.environ.clear()
     os.environ.update(saved)
+    for k in [k for k in sys.modules if k == "skill_forge" or k.startswith("skill_forge.")]:
+        if k not in saved_mods:
+            del sys.modules[k]
+    sys.modules.update(saved_mods)
 
 
 def _clear_env() -> None:
