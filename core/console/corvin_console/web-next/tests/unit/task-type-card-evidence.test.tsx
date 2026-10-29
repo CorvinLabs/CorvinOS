@@ -28,8 +28,8 @@ vi.mock("@/lib/auth", () => ({
 import { TaskTypeCard } from "@/pages/models/components/engine-parts";
 import { MIN_SAMPLES_TO_RECOMMEND } from "@/pages/models/hooks/use-cost-derived";
 
-const cfg = (run_count: number) => ({
-  task_type: "COMPLEX" as const,
+const cfg = (run_count: number, task_type: "COMPLEX" | "corvinOS" = "COMPLEX") => ({
+  task_type,
   selected_model: "anthropic/claude-opus-5",
   provider: null,
   alternatives: [],
@@ -39,7 +39,7 @@ const cfg = (run_count: number) => ({
   classified_count: run_count,
 });
 
-function renderCard(run_count: number) {
+function renderCard(run_count: number, task_type: "COMPLEX" | "corvinOS" = "COMPLEX") {
   server.use(
     http.get("/v1/console/v1/engine/claude-models", () =>
       HttpResponse.json({ tenant_id: "_default", models: [], count: 0, sources: [], default_model_id: null })),
@@ -53,7 +53,7 @@ function renderCard(run_count: number) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <TaskTypeCard config={cfg(run_count)} totalClassified={40} saving={false} onSave={vi.fn()} />
+      <TaskTypeCard config={cfg(run_count, task_type)} totalClassified={40} saving={false} onSave={vi.fn()} />
     </QueryClientProvider>,
   );
 }
@@ -89,9 +89,16 @@ describe("TaskTypeCard — evidence bar matches the Learning tab", () => {
       const { container, unmount } = renderCard(n);
       expect((await screen.findAllByText(/no-error score \(proxy\)/i)).length).toBeGreaterThan(0);
       expect(container.textContent ?? "").toMatch(/no-error score \(proxy\)/i);
-      expect(container.textContent ?? "").not.toMatch(/confident|learned confidence/i);
+      expect(container.textContent ?? "").not.toMatch(/confiden/i);
       unmount();
     }
+  });
+
+  it("the CorvinOS (classifier) card does not call the score confidence either", async () => {
+    // review c120 r3_s3-6: the rule-based classifier row had "learn a confidence score from".
+    const { container } = renderCard(0, "corvinOS");
+    expect(await screen.findByText(/there is no\s+model choice here to learn a no-error score from/)).toBeTruthy();
+    expect(container.textContent ?? "").not.toMatch(/confiden/i);
   });
 
   it("still separates 'no samples at all' from 'too few samples'", async () => {

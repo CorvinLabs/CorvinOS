@@ -457,7 +457,7 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
             <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
             <div className="text-sm text-muted-foreground">
               Classification is rule-based (token/keyword heuristics) — there is no
-              model choice here to learn a confidence score from.
+              model choice here to learn a no-error score from.
             </div>
           </div>
         ) : config.run_count === 0 ? (

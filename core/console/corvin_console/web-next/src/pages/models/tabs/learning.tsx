@@ -74,7 +74,7 @@ export function LearningTab() {
     },
   });
 
-  // ── ONE reset: confidence store, then thresholds ──
+  // ── ONE reset: no-error score store, then thresholds ──
   const [resetStep, setResetStep] = useState<"idle" | "confirm" | "running" | "half" | "done">("idle");
   const [resetError, setResetError] = useState<string | null>(null);
   const runReset = async (thresholdOnly = false) => {
@@ -82,7 +82,7 @@ export function LearningTab() {
     try {
       if (!thresholdOnly) await postConfidenceReset(csrf);
     } catch {
-      setResetError("The confidence store could not be reset — nothing was changed.");
+      setResetError("The no-error score store could not be reset — nothing was changed.");
       setResetStep("idle"); return;
     }
     try {
@@ -90,7 +90,7 @@ export function LearningTab() {
     } catch {
       setResetError(thresholdOnly
         ? "Threshold reset failed again — the threshold store is unchanged."
-        : "Confidence store cleared; threshold reset failed — the threshold store is unchanged.");
+        : "No-error score store cleared; threshold reset failed — the threshold store is unchanged.");
       setResetStep("half"); invalidateLearning(); return;
     }
     setResetStep("done"); invalidateLearning();
@@ -140,8 +140,8 @@ export function LearningTab() {
           <p className="text-3xl font-bold tabular-nums">{analyticsQ.data ? fmtInt(analyticsQ.data.total_samples) : "—"}</p>
           <p className="text-xs text-muted-foreground mt-2">
             {analyticsQ.data && analyticsQ.data.total_samples === 0
-              ? "Nothing has fed the confidence learner yet. Shown, not hidden."
-              : "Samples the confidence learner accepted and chained."}
+              ? "Nothing has fed the no-error score (proxy) yet. Shown, not hidden."
+              : "Samples the no-error score (proxy) accepted and chained."}
           </p>
         </CardContent></Card>
         <Card><CardContent className="p-6">
@@ -318,7 +318,7 @@ export function LearningTab() {
             ) : resetStep === "confirm" ? (
               <>
                 <Button size="sm" variant="destructive" onClick={() => void runReset()}>
-                  Confirm: clear the confidence store and the learned thresholds
+                  Confirm: clear the no-error score store and the learned thresholds
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setResetStep("idle")}>Cancel</Button>
               </>
@@ -340,7 +340,7 @@ export function LearningTab() {
           <div className="text-xs text-muted-foreground space-y-0.5">
             <p>• <strong>Export:</strong> the learned thresholds as JSON, for backup.</p>
             <p>• <strong>Import:</strong> restore thresholds from such a backup.</p>
-            <p>• <strong>Reset learning:</strong> clears the confidence store (per-tier model confidence) and the learned thresholds — both, in that order. The audit chain and the counting window are untouched.</p>
+            <p>• <strong>Reset learning:</strong> clears the no-error score store (the per-tier no-error score, a proxy) and the learned thresholds — both, in that order. The audit chain and the counting window are untouched.</p>
           </div>
         </CardContent>
       </Card>

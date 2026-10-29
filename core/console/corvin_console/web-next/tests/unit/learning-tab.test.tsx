@@ -109,6 +109,21 @@ describe("Learning tab — feedback", () => {
   });
 });
 
+describe("Learning tab — the proxy score is never called confidence", () => {
+  it("renders no 'confidence' in its copy, empty store and confirm step included", async () => {
+    // review c120 r3_s3-6: the store's only inputs are no-error proxies (0.85 / 0.2).
+    server.use(
+      http.get("/v1/console/v1/engine/analytics", () => HttpResponse.json({ timestamp: "", tenant_id: "_default", total_samples: 0, models: [], top_model: null, top_confidence: null })),
+      ...baseHandlers(() => HttpResponse.json({}, { status: 500 })));
+    const { container } = renderTab();
+    await screen.findByText(/Nothing has fed the no-error score \(proxy\) yet/);
+    fireEvent.click(await screen.findByRole("button", { name: "Reset learning" }));
+    await screen.findByRole("button", { name: /Confirm: clear the no-error score store/ });
+    expect(container.textContent ?? "").toMatch(/clears the no-error score store/);
+    expect(container.textContent ?? "").not.toMatch(/confiden/i);
+  });
+});
+
 describe("Learning tab — ONE reset", () => {
   it("resets confidence store then thresholds, both with CSRF", async () => {
     const calls: string[] = [];
@@ -119,7 +134,7 @@ describe("Learning tab — ONE reset", () => {
     );
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Reset learning" }));
-    fireEvent.click(screen.getByRole("button", { name: /Confirm: clear the confidence store and the learned thresholds/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Confirm: clear the no-error score store and the learned thresholds/ }));
     await screen.findByText("Both stores cleared.");
     expect(calls).toEqual(["confidence:csrf-test", "thresholds:csrf-test"]);
   });
@@ -135,7 +150,7 @@ describe("Learning tab — ONE reset", () => {
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Reset learning" }));
     fireEvent.click(screen.getByRole("button", { name: /Confirm: clear/ }));
-    await screen.findByText(/Confidence store cleared; threshold reset failed — the threshold store is unchanged/);
+    await screen.findByText(/No-error score store cleared; threshold reset failed — the threshold store is unchanged/);
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     thresholdOk = true;
     fireEvent.click(screen.getByRole("button", { name: "Retry threshold reset" }));
@@ -153,7 +168,7 @@ describe("Learning tab — ONE reset", () => {
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Reset learning" }));
     fireEvent.click(screen.getByRole("button", { name: /Confirm: clear/ }));
-    await screen.findByText(/The confidence store could not be reset — nothing was changed/);
+    await screen.findByText(/The no-error score store could not be reset — nothing was changed/);
     expect(calls).toEqual(["confidence"]);
   });
 });
