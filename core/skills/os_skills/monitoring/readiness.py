@@ -31,18 +31,21 @@ WINDOW_S = 30 * 86400
 #: of the current unbroken dual_write run, (b) the last rollback trip and (c) the last
 #: rollback reset. The run is walked newest-first over the console decisions that
 #: CONSULTED the gate (ledger ``gate`` = ``verdict``; a line without ``gate`` reads as
-#: one) and it is broken by (1) any such decision recorded with phase ``shadow`` — the
-#: env switched back, a refusal, a not-ready verdict, a rollback — and (2) a gap of more
-#: than ``SOAK_MAX_GAP_S`` between two consecutive dual_write decisions, or between the
-#: newest one and now. Decisions that never consulted the gate count neither way:
-#: ``post_hoc`` (the engine had already run; pinned to shadow) and ``pending`` (no
-#: verdict existed yet — the readiness placeholder after a cold start, an invalidation
-#: or more than an hour without a verdict; the refresh it starts lands within the
-#: turn). The phase read is the EFFECTIVE one recorded per decision, not the requested
-#: ``CORVIN_ACP_PHASE``. Review r2_s2-3: shadow decisions between dual_write ones were
-#: ignored, so a console in shadow 96 % of a week completed the soak.
+#: one) or would have (``gate`` = ``pending``), and it is broken by (1) any such
+#: decision recorded with phase ``shadow`` — the env switched back, a refusal, a
+#: not-ready verdict, a rollback, and every ``pending`` decision: no verdict existed,
+#: so the turn was served shadow (review r3_s2-2: one dual_write burst a day kept the
+#: run alive while 96 % of the console's turns were pending shadow) — and (2) a gap of
+#: more than ``SOAK_MAX_GAP_S`` between two consecutive dual_write decisions, or
+#: between the newest one and now. In addition, at least ``SOAK_MIN_DUAL_WRITE_SHARE``
+#: of ALL console decisions since the soak start (``post_hoc`` ones included: pinned
+#: to shadow) must be dual_write, or there is no soak. The phase read is the EFFECTIVE
+#: one recorded per decision, not the requested ``CORVIN_ACP_PHASE``. Review r2_s2-3:
+#: shadow decisions between dual_write ones were ignored, so a console in shadow 96 %
+#: of a week completed the soak.
 CONSOLE_SOAK_S = 7 * 86400
 SOAK_MAX_GAP_S = 86400
+SOAK_MIN_DUAL_WRITE_SHARE = 0.95
 _CACHE_TTL_S = 300.0
 #: Stale-while-revalidate bound. A verdict older than ``_CACHE_TTL_S`` is refreshed,
 #: and until the refresh lands the last verdict is served, as long as it is younger
@@ -52,7 +55,11 @@ _CACHE_TTL_S = 300.0
 #: ``evaluating`` for every merely stale entry served shadow to every turn that came
 #: more than 300 s after the previous one (66 % of the live console's turns).
 _CACHE_MAX_STALE_S = 3600.0
-_cache: dict[tuple[str, str], tuple[float, "Readiness"]] = {}
+#: ``(monotonic time, verdict, rollback state stamp)`` per (tenant, surface). The stamp
+#: is ``rollback_detector.state_stamp`` when the verdict was computed: a trip or reset
+#: written by ANY process changes it, and a verdict under another stamp is treated as
+#: invalidated (review r3_s2-4: ``clear_cache`` is process-local).
+_cache: dict[tuple[str, str], tuple[float, "Readiness", tuple]] = {}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -83,10 +90,11 @@ def console_soak_start(records: list[dict], tenant_id: str, *,
     decision in the last ``SOAK_MAX_GAP_S`` or when the rollback history cannot be
     read (fail-closed).
     """
+    console = [r for r in records
+               if r.get("kind") == "decision" and r.get("surface") == "console"]
     consulted = sorted(
-        ((r["ts"], r.get("phase")) for r in records
-         if r.get("kind") == "decision" and r.get("surface") == "console"
-         and r.get("gate", "verdict") == "verdict"),
+        ((r["ts"], r.get("phase")) for r in console
+         if r.get("gate", "verdict") in ("verdict", "pending")),
         key=lambda x: x[0], reverse=True)
     start: Optional[float] = None
     prev = now
@@ -101,6 +109,10 @@ def console_soak_start(records: list[dict], tenant_id: str, *,
         return None
     if changed is not None:
         start = max(start, changed)
+    inside = [r for r in console if r["ts"] >= start]
+    dual = sum(1 for r in inside if r.get("phase") == "dual_write")
+    if not inside or dual / len(inside) < SOAK_MIN_DUAL_WRITE_SHARE:
+        return None
     return start
 
 
@@ -166,6 +178,13 @@ _EVALUATING = Readiness(False, EVALUATING_REASON, 0, None, 0)
 _generation = 0
 
 
+def _stamp(tenant_id: str) -> tuple:
+    try:
+        return rollback_detector.state_stamp(tenant_id)
+    except Exception:  # noqa: BLE001 — unknown: never equal to a stored stamp
+        return ("error", time.monotonic_ns())
+
+
 def _refresh(key: tuple[str, str]) -> None:
     with _lock:
         gen = _generation
@@ -173,15 +192,19 @@ def _refresh(key: tuple[str, str]) -> None:
         rollback_detector.maybe_retry_pending(key[0])
     except Exception:  # noqa: BLE001 — the marker keeps restricting either way
         pass
+    stamp = _stamp(key[0])
     try:
         result = evaluate(*key)
     except Exception:  # noqa: BLE001 — an unreadable ledger is simply "not ready"
         result = Readiness(False, "evaluation_failed", 0, None, 0)
+    changed = _stamp(key[0]) != stamp
     with _lock:
         if gen != _generation:
             return   # invalidated mid-flight: never store a pre-invalidation verdict
-        _cache[key] = (time.monotonic(), result)
         _refreshing.discard(key)
+        if changed:
+            return   # another process tripped/reset mid-flight: same rule
+        _cache[key] = (time.monotonic(), result, stamp)
 
 
 def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) -> Readiness:
@@ -193,15 +216,21 @@ def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) ->
     Stale-while-revalidate (review r2_s2-1): a verdict younger than ``_CACHE_TTL_S``
     is served as is; an older one is refreshed on a daemon thread and served until
     the refresh lands, up to ``_CACHE_MAX_STALE_S``. A missing verdict, one older
-    than that, and anything :func:`clear_cache` invalidated (every rollback trip or
-    reset) answer "not ready" (reason ``evaluating``) until a fresh one lands. The
-    rollback state is never read from here: ``effective_phase`` checks
-    ``rollback_active`` before it asks for a verdict.
+    than that, and anything invalidated — by :func:`clear_cache` in this process, or
+    by a rollback trip/reset written by ANY process (the rollback state's stamp —
+    generation, inode, mtime — differs from the one the verdict was computed under;
+    review r3_s2-4) — answer "not ready" (reason ``evaluating``) until a fresh one
+    lands. The only rollback read here is that stamp (one ``stat`` and a small
+    read); ``effective_phase`` checks ``rollback_active`` before it asks.
     """
     key = (tenant_id, surface)
+    stamp = _stamp(tenant_id)
     now = time.monotonic()
     with _lock:
         hit = _cache.get(key)
+        if hit is not None and hit[2] != stamp:
+            _cache.pop(key, None)   # tripped/reset by another process: invalidated
+            hit = None
         age = None if hit is None else now - hit[0]
         fresh = age is not None and age < _CACHE_TTL_S
         servable = age is not None and age < _CACHE_MAX_STALE_S
@@ -215,7 +244,8 @@ def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) ->
             _refresh(key)
         with _lock:
             hit = _cache.get(key)
-            if hit is not None and time.monotonic() - hit[0] < _CACHE_MAX_STALE_S:
+            if (hit is not None and hit[2] == stamp
+                    and time.monotonic() - hit[0] < _CACHE_MAX_STALE_S):
                 return hit[1]
             return _EVALUATING
     if start:

@@ -524,15 +524,15 @@ def test_a_turn_after_an_idle_gap_is_served_the_last_verdict(bridge, monkeypatch
     monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
     key = (TENANT, "bridge")
     with readiness._lock:
-        ts, verdict = readiness._cache[key]
-        readiness._cache[key] = (ts - 360.0, verdict)   # the next turn comes 6 min later
+        ts, verdict, st = readiness._cache[key]
+        readiness._cache[key] = (ts - 360.0, verdict, st)   # the next turn comes 6 min later
     _send(adapter, base, "Big Data?")
     assert acs == []
     row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
     assert (row["phase"], row["source"], row["gate"]) == ("dual_write", "skill", "verdict")
     with readiness._lock:
-        ts, verdict = readiness._cache[key]
-        readiness._cache[key] = (ts - readiness._CACHE_MAX_STALE_S - 1, verdict)
+        ts, verdict, st = readiness._cache[key]
+        readiness._cache[key] = (ts - readiness._CACHE_MAX_STALE_S - 1, verdict, st)
     _send(adapter, base, "Big Data?")                    # older than an hour: no verdict
     assert acs == ["Big Data?"]
     row = [r for r in _ledger() if r["surface"] == "bridge"][-1]

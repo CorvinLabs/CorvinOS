@@ -396,13 +396,13 @@ class TestReadiness:
         real = readiness.evaluate
         monkeypatch.setattr(readiness, "evaluate", lambda *a, **k: (gate.wait(5), real(*a, **k))[1])
         with readiness._lock:
-            ts, verdict = readiness._cache[key]
-            readiness._cache[key] = (ts - readiness._CACHE_TTL_S - 1, verdict)
+            ts, verdict, st = readiness._cache[key]
+            readiness._cache[key] = (ts - readiness._CACHE_TTL_S - 1, verdict, st)
         during = readiness.cached_evaluate(TENANT, "console")
         assert (during.ready, during.reason) == (True, "ready")
         with readiness._lock:
-            ts, verdict = readiness._cache[key]
-            readiness._cache[key] = (ts - readiness._CACHE_MAX_STALE_S, verdict)
+            ts, verdict, st = readiness._cache[key]
+            readiness._cache[key] = (ts - readiness._CACHE_MAX_STALE_S, verdict, st)
         too_old = readiness.cached_evaluate(TENANT, "console")
         gate.set()
         assert (too_old.ready, too_old.reason) == (False, "evaluating")
@@ -424,13 +424,50 @@ class TestReadiness:
         _backdated_console_decision(days=2, phase="shadow")
         assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
 
-    @pytest.mark.parametrize("gate", ["post_hoc", "pending"])
-    def test_a_decision_that_never_consulted_the_gate_counts_neither_way(self, gate):
+    def test_a_post_hoc_decision_does_not_break_the_run(self):
         _seed(470, surface="bridge")
         _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
         _console_dual_write_run(days=9)
-        _backdated_console_decision(days=2, phase="shadow", gate=gate)
+        _backdated_console_decision(days=2, phase="shadow", gate="post_hoc")
         assert readiness.evaluate(TENANT, "bridge").ready
+
+    def test_a_pending_decision_breaks_the_run(self):
+        """Review r3_s2-2: a pending turn was served shadow, so it is shadow for the soak."""
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _console_dual_write_run(days=9)
+        _backdated_console_decision(days=2, phase="shadow", gate="pending")
+        assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
+
+    def test_post_hoc_rows_above_five_percent_of_the_run_are_no_soak(self):
+        """The run must be >= 95 % dual_write over ALL console decisions inside it."""
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _console_dual_write_run(days=9)                       # 19 dual_write rows
+        assert readiness.evaluate(TENANT, "bridge").ready
+        for d in (1.0, 2.0):                                  # 2/21 = 9.5 % shadow
+            _backdated_console_decision(days=d, phase="shadow", gate="post_hoc")
+        assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
+
+    def test_the_reviews_pending_week_is_no_soak(self):
+        """The review's 8-day ledger: per day one pending turn, one verdict dual_write
+        turn two minutes later and 22 pending turns 65 min apart (95.8 % shadow).
+        Before the fix the soak was 8 days old and the bridge was ready."""
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        now = time.time()
+        served = {"shadow": 0, "dual_write": 0}
+        for day in range(8):
+            t0 = now - (8 - day) * 86400 + 60
+            rows = [(t0, "shadow", "pending"), (t0 + 120, "dual_write", "verdict")]
+            rows += [(t0 + 120 + (k + 1) * 3900, "shadow", "pending") for k in range(22)]
+            for ts, phase, gate in rows:
+                _ledger_decision(ts=ts, phase=phase, gate=gate)
+                served[phase] += 1
+        assert served == {"shadow": 184, "dual_write": 8}
+        records = routing_ledger.read_records(TENANT)
+        assert readiness.console_soak_start(records, TENANT, now=now) is None
+        assert readiness.evaluate(TENANT, "bridge").reason == "console_soak_incomplete"
 
     def test_a_refresh_in_flight_across_a_rollback_reset_is_discarded(self, monkeypatch):
         """A verdict computed before a rollback state change must not land after it
@@ -495,7 +532,11 @@ def _backdated_console_dual_write(*, days: float):
 
 
 def _backdated_console_decision(*, days: float, phase: str, gate: str | None = None):
-    rec = {"v": 1, "kind": "decision", "ts": time.time() - days * 86400,
+    _ledger_decision(ts=time.time() - days * 86400, phase=phase, gate=gate)
+
+
+def _ledger_decision(*, ts: float, phase: str, gate: str | None = None):
+    rec = {"v": 1, "kind": "decision", "ts": ts,
            "turn_id": routing_ledger.new_turn_id(), "surface": "console",
            "phase": phase, "bundled": "native", "skill": "native",
            "skill_conf": 0.9, "used": "native", "source": "bundled",
@@ -506,6 +547,157 @@ def _backdated_console_decision(*, days: float, phase: str, gate: str | None = N
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec) + "\n")
+
+
+# ── rollback trip order, generation, cross-process (review r3_s2-3/-4/-5) ───
+
+def _enospc_on(monkeypatch, filename: str) -> list[str]:
+    """Fail the atomic rename onto ``filename`` with ENOSPC (a real write fault)."""
+    import errno
+    import os as _os
+    real = _os.replace
+    hits: list[str] = []
+
+    def failing(src, dst, *a, **k):
+        if Path(dst).name == filename and "off" not in hits:
+            hits.append(filename)
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(src, dst, *a, **k)
+    monkeypatch.setattr(rollback_detector.os, "replace", failing)
+    return hits
+
+
+def _trailing_skill_ledger():
+    _seed(100, source="skill", ok=False)
+    _seed(100, source="bundled", ok=True)
+
+
+class ActiveAtCallSpy(AuditSpy):
+    """Records whether Phase 2 was already held off when the trip record was chained."""
+
+    def __init__(self, commit: bool = True):
+        super().__init__(commit)
+        self.active_at_call: list[bool] = []
+
+    def __call__(self, event_type, details):
+        self.active_at_call.append(rollback_detector.rollback_active(TENANT))
+        return super().__call__(event_type, details)
+
+
+def _state():
+    return json.loads(rollback_detector.state_path(TENANT).read_text())
+
+
+def _child_reset(home: str) -> None:
+    import os as _os
+    _os.environ["CORVIN_HOME"] = home
+    rollback_detector.reset_rollback(TENANT, audit=lambda et, d: True)
+
+
+def _child_trip_and_reset(home: str) -> None:
+    import os as _os
+    _os.environ["CORVIN_HOME"] = home
+    rollback_detector._write_state(TENANT, {"tripped": True, "at": time.time()})
+    rollback_detector.reset_rollback(TENANT, audit=lambda et, d: True)
+
+
+def _in_other_process(target, *args) -> None:
+    import multiprocessing
+    import os as _os
+    ctx = multiprocessing.get_context("fork")
+    p = ctx.Process(target=target, args=(_os.environ["CORVIN_HOME"], *args))
+    p.start()
+    p.join(20)
+    assert p.exitcode == 0
+
+
+needs_fork = pytest.mark.skipif(sys.platform == "win32", reason="fork start method")
+
+
+class TestRollbackTripOrder:
+    def test_phase2_is_held_off_before_the_trip_record_is_chained(self):
+        _trailing_skill_ledger()
+        spy = ActiveAtCallSpy()
+        assert rollback_detector.evaluate(TENANT, audit=spy) is True
+        assert spy.active_at_call == [True]
+        assert _state()["tripped"] is True and _state()["generation"] == 1
+        assert not rollback_detector.pending_path(TENANT).exists()
+
+    def test_enospc_on_the_marker_still_holds_this_process_and_trips(self, monkeypatch):
+        _trailing_skill_ledger()
+        hits = _enospc_on(monkeypatch, rollback_detector.PENDING_FILENAME)
+        spy = ActiveAtCallSpy()
+        assert rollback_detector.evaluate(TENANT, audit=spy) is True
+        assert hits and spy.active_at_call == [True]
+        assert _state()["tripped"] is True
+        assert rollback_detector.rollback_active(TENANT)
+
+    def test_enospc_on_the_audit_keeps_the_marker_and_no_state(self):
+        _trailing_skill_ledger()
+        assert rollback_detector.evaluate(TENANT, audit=AuditSpy(commit=False)) is True
+        assert rollback_detector.pending_path(TENANT).exists()
+        assert not rollback_detector.state_path(TENANT).exists()
+        rollback_detector.reset_for_tests()                      # restart
+        assert rollback_detector.rollback_active(TENANT)
+
+    def test_enospc_on_the_trip_state_keeps_the_marker_and_retries_without_a_second_record(
+            self, monkeypatch):
+        """Review r3_s2-3: the record committed, the state write failed, nothing held."""
+        _trailing_skill_ledger()
+        hits = _enospc_on(monkeypatch, rollback_detector.STATE_FILENAME)
+        spy = AuditSpy()
+        assert rollback_detector.evaluate(TENANT, audit=spy) is True     # no raise
+        assert hits and [c[0] for c in spy.calls] == ["routing.rollback_triggered"]
+        assert not rollback_detector.state_path(TENANT).exists()
+        assert rollback_detector.pending_path(TENANT).exists()
+        assert rollback_detector.rollback_active(TENANT)
+        rollback_detector.reset_for_tests()                              # even after a restart
+        assert rollback_detector.rollback_active(TENANT)
+        hits.append("off")                                               # disk freed
+        rollback_detector.maybe_retry_pending(TENANT, audit=spy, background=False)
+        assert [c[0] for c in spy.calls] == ["routing.rollback_triggered"]   # not re-chained
+        assert _state()["tripped"] is True and _state()["skill_n"] == 100
+        assert not rollback_detector.pending_path(TENANT).exists()
+
+    def test_every_authoritative_write_raises_the_generation(self):
+        assert rollback_detector.persisted_generation(TENANT) == 0
+        _trailing_skill_ledger()
+        rollback_detector.evaluate(TENANT, audit=AuditSpy())
+        rollback_detector.reset_rollback(TENANT, audit=AuditSpy())
+        assert _state() == {"tripped": False, "at": _state()["at"], "generation": 2}
+
+
+@needs_fork
+class TestRollbackAcrossProcesses:
+    def test_a_reset_by_another_process_drops_a_stale_pending_trip(self):
+        """Review r3_s2-5: the retry re-tripped over the operator's reset."""
+        _trailing_skill_ledger()
+        rollback_detector.evaluate(TENANT, audit=AuditSpy(commit=False))   # pending here
+        assert rollback_detector.rollback_active(TENANT)
+        _in_other_process(_child_reset)
+        assert not rollback_detector.pending_path(TENANT).exists()
+        assert rollback_detector.rollback_active(TENANT) is False
+        spy = AuditSpy()
+        rollback_detector.maybe_retry_pending(TENANT, audit=spy, background=False)
+        assert spy.calls == []
+        assert _state()["tripped"] is False
+
+    def test_a_cached_ready_verdict_dies_with_another_processs_reset(self, monkeypatch):
+        """Review r3_s2-4: the bridge kept serving a pre-reset 'ready' for up to 5 min."""
+        monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+        _seed(470, surface="bridge")
+        _seed(40, surface="bridge", bundled="acs", used="acs", skill="native")
+        _console_dual_write_run(days=9)
+
+        def decide():
+            d = dual_write.decide(tenant_id=TENANT, surface="bridge", skill_available=True)
+            return d.phase, d.reason
+        assert readiness.cached_evaluate(TENANT, "bridge", background=False).ready
+        assert decide() == ("dual_write", "ready")
+        _in_other_process(_child_trip_and_reset)
+        assert decide() == ("shadow", readiness.EVALUATING_REASON)
+        _await_verdict("bridge")
+        assert decide() == ("shadow", "console_soak_incomplete")
 
 
 # ── G3 clamp ────────────────────────────────────────────────────────────────
@@ -778,8 +970,8 @@ class TestRouteAndRecord:
                 age = {"fresh": 0.0, "stale": readiness._CACHE_TTL_S + 1,
                        "expired": readiness._CACHE_MAX_STALE_S + 1}[state]
                 with readiness._lock:
-                    ts, verdict = readiness._cache[key]
-                    readiness._cache[key] = (ts - age, verdict)
+                    ts, verdict, st = readiness._cache[key]
+                    readiness._cache[key] = (ts - age, verdict, st)
             feats = {"complexity": rnd.choice(["simple", "medium", "complex", "unknown"]),
                      "len_bucket": rnd.choice(["xs", "s", "m", "l", "xl"]),
                      "has_table": rnd.random() < .5, "has_code": rnd.random() < .5}
