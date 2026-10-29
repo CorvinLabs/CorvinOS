@@ -20,6 +20,7 @@
 
 'use strict';
 
+require('../shared/js/no-console-window'); // Windows: children must not open a visible console; load first
 const fs   = require('fs');
 const path = require('path');
 

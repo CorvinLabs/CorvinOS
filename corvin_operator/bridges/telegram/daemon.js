@@ -11,6 +11,7 @@
 //      /start when you write to it the first time.
 //   4. Run: node telegram_daemon.js  (or via systemd).
 
+require('../shared/js/no-console-window'); // Windows: children must not open a visible console; load first
 const fs = require('fs');
 const path = require('path');
 

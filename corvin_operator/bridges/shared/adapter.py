@@ -14075,6 +14075,14 @@ def _boot_acp_skills() -> list[str]:
 
 def main() -> int:
     try:
+        # The adapter runs hidden, so every child it spawns would open its own
+        # visible console on Windows unless this default is in place.
+        from corvin_core._wincompat import install_no_console_window  # noqa: PLC0415
+
+        install_no_console_window()
+    except Exception:  # noqa: BLE001 — corvin_core not importable: stdlib spawn defaults
+        pass
+    try:
         from unit_sweep import note_startup as _note_startup  # noqa: PLC0415
 
         _note_startup()                    # the sweep's service-main verdict is taken HERE, before any fork

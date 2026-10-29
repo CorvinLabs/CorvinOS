@@ -64,4 +64,68 @@ def install() -> None:
         sys.modules["resource"] = m
 
 
+# Windows: a console-subsystem child (cmd, node, claude.exe, python.exe, git ...)
+# started from a parent that has NO console gets a brand-new, VISIBLE console
+# window. Corvin's processes are console-less whenever they run hidden (VBS
+# launchers, Start-Process -WindowStyle Hidden, detached daemons), so every
+# one-shot spawn would flash a terminal. Per-call-site fixes kept missing sites,
+# so the default is set here, once, for every spawn. A parent that HAS a console
+# (the user's own terminal, or a hidden one) is left alone: its children share
+# that console and open no window, and interactive foreground commands keep
+# working.
+_CREATE_NO_WINDOW = 0x08000000
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_CONSOLE = 0x00000010
+_NO_WINDOW_MARK = "_corvin_no_window_default"
+
+
+def _parent_has_console() -> bool:
+    import ctypes  # noqa: PLC0415 — Windows-only path
+
+    try:
+        return bool(ctypes.windll.kernel32.GetConsoleWindow())
+    except Exception:  # noqa: BLE001 — cannot tell: assume none, add the flag
+        return False
+
+
+def _no_window_flags(flags: int) -> int:
+    if flags & _CREATE_NO_WINDOW:
+        return flags
+    if flags & (_DETACHED_PROCESS | _CREATE_NEW_CONSOLE):
+        # Both make Windows open a visible console for the child later on.
+        # CREATE_NO_WINDOW keeps the detachment without showing anything.
+        return (flags & ~(_DETACHED_PROCESS | _CREATE_NEW_CONSOLE)) | _CREATE_NO_WINDOW
+    if _parent_has_console():
+        return flags
+    return flags | _CREATE_NO_WINDOW
+
+
+def install_no_console_window() -> None:
+    """Make every ``subprocess.Popen`` on Windows open no visible console window.
+
+    Patches ``Popen.__init__`` so ``subprocess.run``/``call``/``check_output``,
+    ``shell=True`` and the asyncio subprocess transport all pass through it.
+    Idempotent. A positional ``creationflags`` argument is left untouched.
+    """
+    if not sys.platform.startswith("win"):
+        return
+    import subprocess  # noqa: PLC0415
+
+    original_init = subprocess.Popen.__init__
+    if getattr(original_init, _NO_WINDOW_MARK, False):
+        return
+    creationflags_position = 13  # Popen(args, bufsize, executable, stdin, stdout,
+    #   stderr, preexec_fn, close_fds, shell, cwd, env, universal_newlines,
+    #   startupinfo, creationflags, ...) — positional args[0] is the command
+
+    def __init__(self, *args, **kwargs):
+        if len(args) <= creationflags_position:
+            kwargs["creationflags"] = _no_window_flags(kwargs.get("creationflags") or 0)
+        original_init(self, *args, **kwargs)
+
+    setattr(__init__, _NO_WINDOW_MARK, True)
+    subprocess.Popen.__init__ = __init__
+
+
 install()
+install_no_console_window()

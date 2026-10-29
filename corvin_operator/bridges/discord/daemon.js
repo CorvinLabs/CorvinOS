@@ -22,6 +22,7 @@
 //     fresh app with the toggle off boots cleanly in token-only mode.
 //   - whitelist: empty = first sender becomes owner (DEV mode).
 
+require('../shared/js/no-console-window'); // Windows: children must not open a visible console; load first
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');

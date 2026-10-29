@@ -18,6 +18,7 @@
 //
 // Use an app-specific password (Gmail / iCloud / Outlook all support it).
 
+require('../shared/js/no-console-window'); // Windows: children must not open a visible console; load first
 const fs   = require('fs');
 const path = require('path');
 const crypto = require('crypto');
