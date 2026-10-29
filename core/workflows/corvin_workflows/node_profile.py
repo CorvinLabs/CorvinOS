@@ -74,12 +74,12 @@ def _safe_id(value: Any) -> str:
     """A closed id vocabulary. Anything else (an e-mail shape, a sentence, a path) becomes empty:
     this stream must never carry text a person wrote."""
     text = str(value or "")
-    return text if _SAFE_ID.match(text) else ""
+    return text if _SAFE_ID.fullmatch(text) else ""
 
 
 def _safe_model(value: Any) -> str:
     text = str(value or "")
-    return text if _SAFE_MODEL.match(text) else ""
+    return text if _SAFE_MODEL.fullmatch(text) else ""
 
 
 def _count(value: Any) -> int:
@@ -94,7 +94,7 @@ def build_entry(meta: dict[str, Any], node_class: str, status: str, *, now: Opti
         "ts": round(float(now if now is not None else time.time()), 3),
         "rid": _safe_id(meta.get("run_id")),
         "span_id": _safe_id(meta.get("span_id")),
-        "node_class": node_class if _SAFE_CLASS.match(node_class or "") else "",
+        "node_class": node_class if _SAFE_CLASS.fullmatch(node_class or "") else "",
         "model_id": _safe_model(usage.get("model_id")),
         # what was asked for (resolved): a failed spawn reports no model, and its error must still
         # count against the model it was meant to run on

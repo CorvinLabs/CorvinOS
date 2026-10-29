@@ -3555,7 +3555,8 @@ which the runner reads once per node into `NodeResult.usage` (`{model_id, tokens
 `fan_out` items and attempts); before 2026-10-28 that path wrote `tokens: 0` and no model. The
 console's run stream, `corvin-workflows run --format json` (`nodes.<id>.model_id/tokens/attempts`) and
 the MCP `workflow_run` / `workflow_resume` result (`nodes`) all read that one field. An engine
-without the method (stub, synthetic, null) reports nothing. A retried node's event carries
+without the method (stub, synthetic, null) reports nothing. A retried node that calls a model
+(`agent`, `fan_out`, `route`, `delegation_loop`) carries
 `attempts` (the tokens are summed over the attempts that reached the CLI; a timeout reports
 nothing), and `node_failed` carries the tokens and the reported model on both paths — the console's
 own executor included, also for a `fan_out` that failed part-way and for every `delegation_loop`
@@ -3612,7 +3613,7 @@ recommendation never acts on that path.
 |---|---|---|
 | 1 | operator pin | `console_selection.pinned_model("worker_model")` (provisional slot; also reaches ACS workflows) |
 | 2 | node value `model:` | `haiku`/`sonnet`/`opus` or a registry id; anything else is **rejected** (the validator raises `WorkflowInvalid`, which the console answers with HTTP 400 on save and as a "Validation failed" stream error on run; `reason_code=model_unknown`), never replaced |
-| 3 | gate recommendation | **off** — no gate table exists; runs only for `tools=n` nodes with `gate_status=adopt` |
+| 3 | gate recommendation | **off** — no gate table exists; runs only for `tools=n` nodes with `gate_status=adopt`; a `stale` or `rolled_back` row does not act and leaves the node on level 4 |
 | 4 | site default | `CORVIN_HELPER_MODEL_WORKFLOW_NODE` via `helper_model.env_only_helper_model`, else the path default (DAG engine: the alias `haiku`; console executor: no `--model`, the CLI's own default) |
 
 A node with no value, no pin and no variable runs exactly as before (see above). What changed

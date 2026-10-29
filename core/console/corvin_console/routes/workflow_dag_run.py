@@ -46,13 +46,17 @@ def needs_dag_engine(graph: list[Any]) -> bool:
     return any(isinstance(n, dict) and str(n.get("type", "agent")) in DAG_ONLY_TYPES for n in graph)
 
 
+_MODEL_CALLING_TYPES = frozenset({"agent", "fan_out", "route", "delegation_loop"})
+
+
 def _with_usage(event: dict[str, Any], usage: dict[str, Any], result: Any) -> dict[str, Any]:
     """ADR-2308: the model the CLI REPORTED and, when the runner retried the node, how many
     attempts the token total covers (it is the sum over all of them)."""
     if usage.get("model_id"):
         event["model_id"] = usage["model_id"]
     attempts = int(getattr(result, "attempts", 1) or 1)
-    if attempts > 1:
+    # only for a node that calls the CLI: the badge says the tokens cover these attempts
+    if attempts > 1 and getattr(result, "node_type", "") in _MODEL_CALLING_TYPES:
         event["attempts"] = attempts
     return event
 

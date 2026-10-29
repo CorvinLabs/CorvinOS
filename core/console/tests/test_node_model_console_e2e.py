@@ -362,3 +362,34 @@ def test_legacy_failed_agent_and_delegation_loop_report_their_spend(tmp_path, fa
         failed = [e for e in events if e.get("type") == "node_failed"]
         assert failed and failed[0]["node_id"] == "plain", failed
         assert failed[0]["tokens"] == 138 and failed[0]["model_id"] == REPORTED, failed[0]
+
+
+# ── review round 3 (2026-10-29) ─────────────────────────────────────────────
+
+def test_a_retried_node_that_calls_no_model_carries_no_usage_badge_fields(tmp_path, fake_cli):
+    wf = """awp: "1.0.0"
+workflow:
+  name: dagcode
+  description: A code node that fails twice, next to a merge (DAG engine).
+orchestration:
+  engine: dag
+  graph:
+    - id: boom
+      type: code
+      language: python3
+      source: "def main(**kwargs):\\n    raise ValueError('boom')\\n"
+      outputs: [x]
+      retry: {max_retries: 1}
+    - id: join
+      type: merge
+      depends_on: [boom]
+      strategy: concat_list
+      inputs: [boom.x]
+      output: report
+"""
+    with _sandbox(tmp_path) as (client, home, tid):
+        _make(tid, "dagcode", wf)
+        events = _run(client, "dagcode")
+        failed = [e for e in events if e.get("type") == "node_failed" and e.get("node_id") == "boom"]
+        assert failed, events[-3:]
+        assert not {"attempts", "tokens", "model_id"} & set(failed[0]), failed[0]

@@ -15,6 +15,10 @@ export function runUsageLabel(evt: Pick<WorkflowRunEvent, "model_id" | "tokens" 
 }
 
 export function runUsageTitle(evt: Pick<WorkflowRunEvent, "model_id" | "tokens" | "attempts">): string {
+  if (!evt.model_id && !evt.tokens) {
+    // nothing reached the CLI's answer: say only what is known
+    return evt.attempts && evt.attempts > 1 ? `${evt.attempts} attempts` : "";
+  }
   const lines = [
     evt.model_id ? "Model reported by the CLI for this node" : "The CLI reported no model for this node",
   ];

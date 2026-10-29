@@ -19,6 +19,11 @@ describe("run usage badge (ADR-2308)", () => {
     expect(runUsageLabel({ model_id: "m", attempts: 1 })).toBe("m");
   });
 
+  it("claims nothing about the CLI when nothing reached it", () => {
+    expect(runUsageTitle({ attempts: 2 })).toBe("2 attempts");
+    expect(runUsageTitle({})).toBe("");
+  });
+
   it("says the figure includes cache tokens", () => {
     expect(runUsageTitle({ model_id: "m", tokens: 5 })).toContain("cache read + cache write");
   });

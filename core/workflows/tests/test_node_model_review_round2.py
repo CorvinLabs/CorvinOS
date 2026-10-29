@@ -211,3 +211,30 @@ def test_readiness_names_the_site_default_when_it_is_set(monkeypatch):
     sig = next(s for s in check_readiness(text, acceptance=None, repairs=0, tenant_id="t").signals
                if s.name == "node_model")
     assert "site default" in sig.detail and "site-model-1" not in sig.detail
+
+
+# ── review round 3 (2026-10-29) ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("gate_status", ["stale", "rolled_back"])
+def test_a_row_that_does_not_act_leaves_the_node_on_the_site_default(gate_status):
+    class Deps:
+        def pin(self, tenant): return None
+        def env(self): return "site-model-1"
+        def tier(self, name): return {"haiku": "h-1", "sonnet": "s-1", "opus": "o-1"}[name]
+        def rank(self, m): return {"h-1": 1, "s-1": 2, "o-1": 3}.get(m, 0)
+        def registry_id(self, v): return v if v in ("h-1", "s-1", "o-1") else None
+        def current(self, m): return m
+        def legacy_default(self, tenant): return None
+        def autoselect_is_off(self): return False
+    row = {"model_id": "h-1", "tier": "haiku", "r": "h-1", "gate_status": gate_status}
+    if gate_status == "stale":
+        row["r"] = "h-1"
+        row["tier"] = "sonnet"          # the lineage moved on: tier_model("sonnet") != row model
+    res = _mr.resolve_node_model({"id": "n", "type": "agent"}, "t", "dag", {"wf:agent": row}, deps=Deps())
+    assert res.source == "site_default" and res.model_id == "site-model-1", res
+
+
+@pytest.mark.parametrize("value", ["claude-haiku-5-5\n", "run-1\n"])
+def test_profile_ids_reject_a_trailing_newline(value):
+    entry = node_profile.build_entry({"run_id": value, "usage": {"model_id": value}}, "agent|n|<8k|json\n", "ok")
+    assert entry["rid"] == "" and entry["model_id"] == "" and entry["node_class"] == ""

@@ -199,9 +199,10 @@ def _recommendation(node, tenant_id, path, table, env, deps) -> Optional[Resolut
         return None
     status = row.get("gate_status", "none")
     if status == "rolled_back":
-        return Resolution("", "site_default", "rolled_back")
+        # a row that does not act leaves the node on level 4: the site default, else the path default
+        return Resolution(env or "", "site_default", "rolled_back")
     if _is_stale(row, deps):
-        return Resolution("", "site_default", "stale")
+        return Resolution(env or "", "site_default", "stale")
     if status == "shadow":
         return Resolution(env or "", "recommendation_shadow", "shadow", row["model_id"])
     if status == "adopt" and not env and not deps.autoselect_is_off() \
