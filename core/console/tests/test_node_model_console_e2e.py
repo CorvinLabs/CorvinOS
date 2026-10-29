@@ -289,3 +289,57 @@ def test_dag_route_node_value_reaches_the_argv_and_the_tokens_are_in_the_stream(
         for nid in ("with_model", "plain"):
             assert done[nid]["model_id"] == REPORTED and done[nid]["tokens"] == 138, done[nid]
         assert done["join"]["tokens"] == 0 and "model_id" not in done["join"]
+
+
+# ── review round 1 (2026-10-29) ─────────────────────────────────────────────
+
+def _as_tenant(client, tenant: str) -> None:
+    """Switch the live client to a session of another tenant (the sandbox signs in `_default`)."""
+    from corvin_console import auth as _auth
+    from forge import paths as fp
+    for sub in ("global/auth", "global/forge", "global/console/sessions"):
+        (fp.tenant_home(tenant) / sub).mkdir(parents=True, exist_ok=True)
+    rec = _auth.create_session(tenant_id=tenant, token_fingerprint="test-fp-other")
+    client.cookies.set("corvin_console_sid", rec.sid)
+    client.headers.update({"X-CSRF-Token": _auth.derive_csrf_token(rec.csrf_secret, rec.sid)})
+
+
+def test_legacy_delegation_loop_spans_land_on_the_running_tenants_chain(tmp_path, fake_cli):
+    """A delegation_loop on the legacy executor wrote its manager/worker spans to `_default`'s
+    chain whatever tenant ran it. They must land on the running tenant's chain, with its ids."""
+    with _sandbox(tmp_path) as (client, home, _tid):
+        other = "acme"
+        _as_tenant(client, other)
+        _make(other, "legacy", LEGACY)
+        before_default = len(_chain_events("_default", "engine.span.end"))
+        events = _run(client, "legacy")
+        assert events[-1]["type"] == "run_completed", events[-3:]
+        ends = _chain_events(other, "engine.span.end")
+        assert len(ends) == len(_calls(fake_cli))              # every spawn, the loop's manager included
+        assert all(d["run_id"] for d in ends)                  # the loop's spans carry the run id too
+        assert len(_chain_events("_default", "engine.span.end")) == before_default   # nothing leaked
+
+
+def test_dag_failed_node_names_its_attempts_and_claims_no_model(tmp_path, fake_cli):
+    flaky = DAG.replace('      instructions: "MARK-PLAIN"\n',
+                        '      instructions: "MARK-FAIL"\n      retry: {max_retries: 1}\n')
+    with _sandbox(tmp_path) as (client, home, tid):
+        _make(tid, "dagfail", flaky)
+        events = _run(client, "dagfail")
+        failed = [e for e in events if e.get("type") == "node_failed" and e.get("node_id") == "plain"]
+        assert failed, events[-4:]
+        # the CLI exited non-zero twice: no envelope, so no model and no tokens are claimed; the
+        # two attempts are named so the operator does not read one call as the whole story
+        assert failed[0].get("attempts") == 2 and "model_id" not in failed[0], failed[0]
+        assert len([c for c in _calls(fake_cli) if "MARK-FAIL" in c["prompt"]]) == 2
+
+
+def test_a_model_on_a_delegation_loop_is_rejected_before_anything_spawns(tmp_path, fake_cli):
+    bad = LEGACY.replace("      config: {manager: assistant", "      model: opus\n      config: {manager: assistant")
+    assert bad != LEGACY
+    with _sandbox(tmp_path) as (client, home, tid):
+        _make(tid, "badloop", bad)
+        events = _run(client, "badloop")
+        assert events[-1]["type"] == "error" or events[-1].get("ok") is False, events[-1]
+        assert "take no 'model'" in json.dumps(events[-1]), events[-1]
+        assert not fake_cli.exists() or _calls(fake_cli) == []   # nothing was spawned

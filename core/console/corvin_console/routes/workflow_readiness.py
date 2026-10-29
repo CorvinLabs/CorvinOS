@@ -103,6 +103,7 @@ def _compute(tenant_id: str, wid: str, meta: dict[str, Any] | None, yaml_text: s
         acceptance=acceptance if isinstance(acceptance, dict) else None,
         repairs=repairs if isinstance(repairs, int) and not isinstance(repairs, bool) else 0,
         max_repairs=max_design_repairs(tenant_id),
+        tenant_id=tenant_id,
     )
 
 

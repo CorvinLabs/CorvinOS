@@ -3543,8 +3543,8 @@ nothing called it.
 that calls a model; ADR-2308 amendment 2026-10-28) on the two console paths — the console's own
 executor (any run without a DAG-only node type) and `ClaudeCliEngine` (the console DAG route,
 `corvin-workflows` CLI and scheduler, the orchestration MCP server). Excluded: `delegation_loop`,
-`deliver`, `ask_human`, `peer_agent`, `route` in `mode: condition` (it never spawns, and a `model:` on
-it is rejected by the validator) and every other type; the AWP walker (no caller); ACS workflows
+`deliver`, `ask_human`, `peer_agent`, `route` in `mode: condition` and every other type; the AWP
+walker (no caller); ACS workflows
 (their own order in `acs_runtime._resolve_worker_model`). An engine that takes no per-call model
 (`accepts_node_model`, e.g. `StubEngine`) is not resolved at all. Every spawn on both paths — also of
 an excluded type — now asks the CLI for `--output-format json`, writes an `engine.span` pair and
@@ -3553,13 +3553,36 @@ the class and the resolution event are limited to the types above. On the DAG en
 and the reported model reach `node_completed` through `ClaudeCliEngine.take_node_usage(node_id)`,
 which the console's run recorder reads once per node (summed over all `fan_out` items); before
 2026-10-28 that path wrote `tokens: 0` and no model. An engine without the method (stub, synthetic,
-null) leaves the event as it was.
+null) leaves the event as it was. A retried node's event carries `attempts` (the token total is the
+sum over all of them), and a failed node's `node_failed` carries the tokens it spent and the model
+the CLI reported, when it reported one.
+
+**A `model:` the node cannot honour is an error, never ignored.** The built-in types that never take
+a node model (`model_resolution.NO_MODEL_TYPES`: `delegation_loop`, `deliver`, `code`, `merge`,
+`answer`, `ask_human`, `approval`, `peer_agent`) and a `route` in `mode: condition` reject the field at
+validation; a type registered by a plugin keeps its own fields. At run time a value the registry no
+longer knows fails the node with `model_unknown`, and a resolver that cannot run fails a node that
+names a model with `model_unresolved` — both are final (never retried) and their message carries no
+node value, because it lands in `node.failed` on the chain. A node with no `model:` keeps its old
+spawn when the resolver cannot run. Every spawn path resolves: the MCP server's `workflow_resume`
+engine declares `accepts_node_model` like the fresh-run engine (until 2026-10-29 a resumed node ran
+on the engine alias).
+
+**Spans are the running tenant's, always.** The legacy executor writes a span only with a tenant in
+its `meta` — never a `_default` fallback — and the `delegation_loop` manager and workers pass the
+run's tenant, workflow, node and run ids (until 2026-10-29 they wrote onto `_default`'s chain). A
+span that was opened is closed exactly once, in error on every path that did not get the CLI's
+answer; on the DAG engine the prompt guard runs before the span opens, so a refused payload leaves
+no open span and no resolution event.
 
 **Console.** The node inspector offers `model` (unset, `haiku`, `sonnet`, `opus`; a saved registry id
 is shown as-is) on `agent`, `fan_out` and classify routes, and switching a route to `condition` drops
-it. A run's event list shows the reported model and the token total next to each completed node. The
-readiness report carries an `info` signal `node_model` ("N of M model node(s) have no `model:`"):
-counts only, no node ids, and it never blocks "ready" — a missing model is a cost hint, not a defect.
+it. A run's event list shows the reported model and the token total (input + output + cache, summed
+over attempts; `src/lib/run-usage.ts`) next to each completed or failed node. The readiness report
+carries an `info` signal `node_model`: "N of M model node(s) have no `model:` and run on the path
+default", or — when the tenant has a `worker_model` pin — that the pin sets every model node.
+Counts only, no node ids or model ids, and it never blocks "ready": a missing model is a cost hint,
+not a defect.
 
 **What an unset node runs on.** On the DAG engine: the alias `haiku`. On the console's own executor
 there is no `--model` at all, so the node runs on **the CLI's own default**, which Corvin does not set
@@ -3602,7 +3625,9 @@ nothing for it by construction — no model-switch gate may read it.
 write a prompt, agent name or any free text into the profile · let a gate read a `proxy` entry ·
 resolve for an engine that takes no per-call model · put a model-id literal in the resolver (the three
 tier names live in `TIER_NAMES`) · escalate above level 3 or after a gate refusal · add a retry or
-escalation path before level 3 exists (it was removed as unreachable).
+escalation path before level 3 exists (it was removed as unreachable) · accept a `model:` on a type
+that does not honour it · run a node that names a model on the path default because the resolver
+failed · write a span without the running tenant · put a node value into a failure message.
 
 → ADR: `corvin_decisions/decisions/ADR-2308-*.md` · plan `PLAN-0967` · tests
 `core/workflows/tests/test_node_model_precedence.py`, `test_node_model_engine_e2e.py`.

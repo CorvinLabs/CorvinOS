@@ -91,5 +91,49 @@ class TestMcpWorkflowRunNodeModel(TestOrchestrationServerBase):
             self.assertEqual(c[c.index("--output-format") + 1], "json")
 
 
+    def test_workflow_resume_resolves_the_node_model_of_the_resumed_node(self):
+        """Review 2026-10-29: the MCP resume used an engine without `accepts_node_model`, so a node
+        reached after a pause ran on the engine alias and wrote no resolution event."""
+        from unittest import mock
+
+        from model_selector import tier_model
+
+        (self.home / "tenants" / "_default" / "workflows" / "mcp_resume_model.awp.yaml").write_text("""
+awp: "1.0.0"
+workflow:
+  name: mcp_resume_model
+  description: Pauses for a human, then runs a node that names a model.
+orchestration:
+  engine: dag
+  graph:
+    - id: confirm
+      type: ask_human
+      depends_on: []
+      channel: discord
+      chat_id: "owner-chat"
+      prompt: "Go on?"
+      expect: {field: confirmed, type: boolean}
+    - id: after
+      type: agent
+      agent: a
+      depends_on: [confirm]
+      instructions: "Do the thing after the pause."
+      model: opus
+""", encoding="utf-8")
+        first = _drive(self._server(), [_call("workflow_run", {"workflow_id": "mcp_resume_model", "inputs": {}})])
+        paused = json.loads(first[0]["result"]["content"][0]["text"])
+        self.assertEqual(paused["status"], "paused", paused)
+        self.assertFalse(self.log.exists() and [l for l in self.log.read_text().splitlines()
+                                                 if "--max-turns" not in l])
+        with mock.patch.dict(os.environ, {"CORVIN_CHANNEL_ID": "discord:owner-chat"}):
+            resumed = _drive(self._server(), [_call("workflow_resume", {"run_id": paused["run_id"], "reply": "yes"})])
+        payload = json.loads(resumed[0]["result"]["content"][0]["text"])
+        self.assertFalse(resumed[0]["result"]["isError"], payload)
+        self.assertEqual(payload["status"], "complete", payload)
+        nodes = [c for c in (json.loads(line)["argv"] for line in self.log.read_text().splitlines() if line.strip())
+                 if "--max-turns" not in c]
+        self.assertEqual([c[c.index("--model") + 1] for c in nodes], [tier_model("opus")])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

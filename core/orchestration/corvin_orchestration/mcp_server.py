@@ -223,13 +223,18 @@ class _LazyClaudeEngine:
     behind an engine_unavailable envelope."""
 
     name = "claude"
+    # ADR-2308: the real engine honours EngineCall.model, so the runner must resolve the node's
+    # model (pin, node value, site default) for a resumed run exactly as for a fresh one. Without
+    # this marker a resumed node silently ran on the engine alias and wrote no resolution event.
+    accepts_node_model = True
 
-    def __init__(self) -> None:
+    def __init__(self, tenant_id: str | None = None) -> None:
         self._engine: Any = None
+        self.tenant_id = tenant_id
 
     def spawn(self, call):  # noqa: ANN001, ANN201
         if self._engine is None:
-            self._engine = _ClaudeCliEngine()
+            self._engine = _ClaudeCliEngine(tenant_id=self.tenant_id)
         return self._engine.spawn(call)
 
 
@@ -1052,7 +1057,7 @@ class OrchestrationServer:
         engine: Any = _NULL_ENGINE
         if needs_engine:
             try:
-                engine = _ClaudeCliEngine()
+                engine = _ClaudeCliEngine(tenant_id=tenant_id)
             except _ClaudeEngineError as exc:
                 self._respond(msgid, self._text_result(
                     {"status": "engine_unavailable", "error": str(exc)}, is_error=True,
@@ -1167,7 +1172,7 @@ class OrchestrationServer:
                     # Lazy: an unknown run_id (or a resume whose remaining nodes
                     # never spawn an agent) must not require the `claude` CLI —
                     # construction is deferred to the first real agent spawn.
-                    engine=_LazyClaudeEngine(),
+                    engine=_LazyClaudeEngine(tenant_id=tenant_id),
                     tenant_id=tenant_id,
                     # WF-A3: this tool is chat-reachable by design (ADR-0190 —
                     # any persona participant with this MCP server exposed can

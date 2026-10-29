@@ -39,9 +39,17 @@ _TOOL_KEYS = ("tools", "forge_tools", "skills")
 
 
 class ModelUnknown(ValueError):
-    """A node value the registry does not know. Raised, never swallowed or replaced."""
+    """A node value the registry does not know. Raised, never swallowed or replaced. The message
+    is fixed: it reaches ``node.failed`` on the audit chain, which never carries a node value."""
 
     reason_code = "model_unknown"
+
+
+class ModelUnresolved(ModelUnknown):
+    """The node names a model but the resolver could not run (a reader fault). Fail the node:
+    running it without ``--model`` would silently pick the path default instead."""
+
+    reason_code = "model_unresolved"
 
 
 @dataclass(frozen=True)
@@ -161,7 +169,7 @@ def _node_value(value: str, deps: Any) -> str:
         return deps.tier(value)
     rid = deps.registry_id(value)
     if not rid:
-        raise ModelUnknown(f"unknown node model {value!r}")
+        raise ModelUnknown("unknown node model (model_unknown)")
     return deps.current(rid)
 
 
@@ -221,6 +229,14 @@ def resolve_node_model(node: dict[str, Any], tenant_id: str, path: str,
     return Resolution(env or "", "site_default", "none")
 
 
+def operator_pin(tenant_id: str) -> str:
+    """The operator's ``worker_model`` pin for *tenant_id*, normalised, or ``""``. Never raises."""
+    try:
+        return str(_default_deps().pin(tenant_id) or "")
+    except Exception:  # noqa: BLE001 - a hint, never a failure
+        return ""
+
+
 def class_view(node: dict[str, Any]) -> dict[str, Any]:
     """The few node facts ``node_class`` reads, and nothing else (no instructions, no agent name),
     so it can travel on ``EngineCall.metadata`` without carrying the node."""
@@ -236,8 +252,17 @@ def validate_node_model(value: Any, deps: Any = None) -> None:
         raise ValueError("model must be a string")
     try:
         _node_value(value.strip(), deps or _default_deps())
-    except ModelUnknown as exc:
-        raise ValueError(f"{exc} ({ModelUnknown.reason_code})") from None
+    except ModelUnknown:
+        # save time: the operator's own editor gets the value back; nothing here is audited
+        raise ValueError(f"unknown node model {value.strip()!r} ({ModelUnknown.reason_code})") from None
+
+
+# Built-in node types that never call a model: a ``model:`` on one would read as if it did, and is
+# rejected at validation. ``delegation_loop`` calls a model, but its manager picks the workers, so
+# there is no node-level model to honour (ADR-2308 scope). Types registered by a plugin are not
+# listed: their fields are theirs.
+NO_MODEL_TYPES = frozenset({"delegation_loop", "deliver", "code", "merge", "answer", "ask_human",
+                            "approval", "peer_agent"})
 
 
 def in_scope(node: dict[str, Any]) -> bool:
@@ -251,9 +276,11 @@ def describe(node: dict[str, Any], tenant_id: str, path: str, wid: str, rid: str
 
     Returns ``(model_id, meta)``: ``model_id`` is what to pass as ``--model`` (empty keeps the
     argv this path always had), ``meta`` is what the spawner needs to write the audit event once
-    the prompt exists (the context bucket needs its length). An out-of-scope node, or a reader
-    fault, returns ``("", {})``: the spawn is exactly what it was before. An invalid node value
-    writes its event here (there is no prompt and no span) and raises :class:`ModelUnknown`."""
+    the prompt exists (the context bucket needs its length). An out-of-scope node returns
+    ``("", {})``: the spawn is exactly what it was before; so does a reader fault on a node that
+    asked for no model. An invalid node value, or a reader fault on a node that names one, writes
+    its event here (there is no prompt and no span) and raises :class:`ModelUnknown` /
+    :class:`ModelUnresolved` - never a silent run on the path default."""
     if not in_scope(node):
         return "", {}
     try:
@@ -264,7 +291,17 @@ def describe(node: dict[str, Any], tenant_id: str, path: str, wid: str, rid: str
             node_class=node_class(node, None), resolution=Resolution("", "node", "none"),
             item_index=item_index)
         raise
-    except Exception as exc:  # noqa: BLE001 - a reader fault must leave the node exactly as it was
+    except Exception as exc:  # noqa: BLE001
+        if str(node.get("model") or "").strip():
+            # the node asked for a model; running it on the path default instead would be a silent
+            # substitution (and on the legacy path the most expensive one)
+            _log.error("[workflow-engine] node model not resolved (%s); node fails", type(exc).__name__)
+            emit_node_model_resolved(
+                tenant_id=tenant_id, wid=wid, rid=rid, node_id=str(node.get("id", "")),
+                node_class=node_class(node, None), resolution=Resolution("", "node", "none"),
+                item_index=item_index)
+            raise ModelUnresolved("node model could not be resolved (model_unresolved)") from None
+        # nothing configured on the node: it keeps the spawn it always had
         _log.warning("[workflow-engine] node model not resolved (%s); node unchanged", type(exc).__name__)
         return "", {}
     meta: dict[str, Any] = {

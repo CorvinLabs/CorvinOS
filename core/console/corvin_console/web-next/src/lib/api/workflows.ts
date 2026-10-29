@@ -101,6 +101,8 @@ export interface WorkflowRunEvent {
   tokens?: number;
   /** ADR-2308: the model the CLI REPORTED for this node (absent for nodes that call no model). */
   model_id?: string;
+  /** ADR-2308: attempts the token total covers, present only when the node was retried. */
+  attempts?: number;
   elapsed_s?: number;
   error?: string;
   message?: string;

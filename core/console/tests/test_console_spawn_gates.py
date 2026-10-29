@@ -141,7 +141,7 @@ class ConsoleSpawnGatesE2E(unittest.TestCase):
 
         called = {"hit": False}
 
-        def _no_spawn(prompt, mcp_config=None):
+        def _no_spawn(prompt, mcp_config=None, **_kw):
             called["hit"] = True
             raise AssertionError("claude spawned despite a DENY verdict")
 
@@ -170,7 +170,7 @@ class ConsoleSpawnGatesE2E(unittest.TestCase):
 
         reached = {"hit": False}
 
-        def _stub_spawn(prompt, mcp_config=None):
+        def _stub_spawn(prompt, mcp_config=None, **_kw):
             reached["hit"] = True
             # Return a COMPLETE decision so the loop terminates immediately.
             return '{"decision": "COMPLETE", "result": "done"}'
@@ -198,7 +198,7 @@ class ConsoleSpawnGatesE2E(unittest.TestCase):
 
         called = {"hit": False}
 
-        def _no_spawn(prompt, mcp_config=None):
+        def _no_spawn(prompt, mcp_config=None, **_kw):
             called["hit"] = True
             raise AssertionError("claude spawned despite a Tier-0-floor block")
 

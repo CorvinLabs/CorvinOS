@@ -192,6 +192,14 @@ def _is_spawn_refusal(exc: BaseException) -> bool:
     return isinstance(exc, SpawnRefusedError)
 
 
+def _is_final_failure(exc: BaseException) -> bool:
+    """A failure a retry cannot change: a gate refusal (WF-20) or a node model that is unknown or
+    cannot be resolved (ADR-2308) - retrying only repeats the failure and its audit records."""
+    if _is_spawn_refusal(exc):
+        return True
+    return getattr(exc, "reason_code", None) in ("model_unknown", "model_unresolved")
+
+
 def _share_output(node_spec: dict[str, Any], output: dict[str, Any]) -> dict[str, Any]:
     """Apply the YAML `share_output: [field1, field2]` projection.
 
@@ -412,7 +420,7 @@ class DAGRunner:
                         )
                         # WF-20: a spawn the pre-spawn gates refused is final; asking
                         # again only repeats the refusal (and its audit record).
-                        if _is_spawn_refusal(e):
+                        if _is_final_failure(e):
                             break
                         if attempts <= max_retries:
                             if interval_s > 0:

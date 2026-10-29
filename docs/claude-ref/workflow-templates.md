@@ -34,7 +34,8 @@ The four templates are `agent`/`delegation_loop` graphs, i.e. every run of one s
 `opus` or a registry model
 id. It is checked when the document is validated (an unknown value is rejected with
 `model_unknown`; the console answers HTTP 400 on save), not first when the node runs. Omit it and the node keeps the model the
-engine always used. A `route` in `mode: condition` never calls a model; a `model:` on it is rejected.
+engine always used. Every other built-in type (and a `route` in `mode: condition`) rejects a
+`model:`: a `delegation_loop` calls a model, but its manager picks the workers.
 The console's node inspector edits the field, and the readiness report counts model nodes without it
 (info only). An operator pin on the console's `worker_model` slot outranks the field. Full
 order, scope and audit event: [layer-engines.md](layer-engines.md) § Per-node model for workflow nodes.

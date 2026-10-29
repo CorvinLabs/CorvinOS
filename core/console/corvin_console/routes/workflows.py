@@ -559,11 +559,16 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
     ``workflow.node_model_resolved`` event. ``meta`` is filled with ``usage`` and ``span_id``.
     """
     meta = meta if meta is not None else {}
-    tenant = str(meta.get("tenant_id") or "_default")
+    # A span is written on the tenant's OWN chain or not at all: a missing tenant never falls
+    # back to `_default` (that put one tenant's worker spend on another tenant's chain).
+    tenant = str(meta.get("tenant_id") or "")
     try:  # the shared envelope/span helpers; without them this executor keeps its old text mode
         from corvin_workflows import engines_claude as _ec
     except Exception:  # noqa: BLE001
         _ec = None
+    spans = _ec is not None and bool(tenant)
+    if _ec is not None and not tenant:
+        _log.warning("[workflow-engine] node spawn without a tenant: no engine span is written")
     cmd = ["claude", "-p"]
     if model:
         cmd += ["--model", model]
@@ -582,10 +587,20 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
             tmp_path = None
 
     span_id, t0 = "", time.perf_counter()
+    span_open = False
+
+    def _close(reported: str = "", usage: dict | None = None, status: str = "error",
+               cost: float | None = None) -> None:
+        nonlocal span_open
+        if span_open:
+            span_open = False
+            _ec.span_end(tenant, meta, span_id, reported, usage or {}, status, t0, cost)
+
     try:
         guarded = _guard_prompt_head(prompt)
-        if _ec is not None:
+        if spans:
             span_id = _ec.span_start(tenant, meta, model)
+            span_open = True
             _ec.emit_resolution(tenant, meta, prompt, span_id)
         result = subprocess.run(
             cmd,
@@ -602,25 +617,25 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
             if _ec is None:
                 return result.stdout.strip()
             text, usage, reported, cost, is_error = _ec.split_envelope(result.stdout)
-            # span_end also sets meta['usage'] / meta['span_id'] and writes the node's profile entry
-            _ec.span_end(tenant, meta, span_id, reported, usage, "error" if is_error else "ok", t0, cost)
+            if spans:
+                # span_end also sets meta['usage'] / meta['span_id'] and writes the node's profile entry
+                _close(reported, usage, "error" if is_error else "ok", cost)
             if is_error:
                 raise NodeExecutionError("Worker engine reported an error")
             return text.strip()
-        if _ec is not None:
-            _ec.span_end(tenant, meta, span_id, "", {}, "error", t0)
         raise NodeExecutionError(f"Worker engine ended with exit code {result.returncode}")
     except FileNotFoundError:
         raise NodeExecutionError("Worker engine unavailable: the claude CLI was not found") from None
     except subprocess.TimeoutExpired:
-        if _ec is not None:
-            _ec.span_end(tenant, meta, span_id, "", {}, "error", t0)
         raise NodeExecutionError("Worker engine timed out after 180 s") from None
     except NodeExecutionError:
         raise
     except Exception as exc:
         raise NodeExecutionError(f"Worker engine failed ({type(exc).__name__})") from exc
     finally:
+        # every path that opened a span and did not close it with the CLI's answer ends it in error
+        if spans:
+            _close()
         if tmp_path:
             try:
                 os.unlink(tmp_path)
@@ -642,12 +657,16 @@ def _spawn_node(node: dict[str, Any], prompt: str, mcp_config: dict | None, tena
         from corvin_workflows import model_resolution as _mr
     except Exception:  # noqa: BLE001
         _mr = None
+        if str(node.get("model") or "").strip():
+            # the node asked for a model and nothing here can honour it: fail, never run it on
+            # the CLI's own (possibly far more expensive) default
+            raise NodeExecutionError("node model could not be resolved (model_unresolved)") from None
     if _mr is not None:
         try:
             model, extra = _mr.describe(node, tenant_id, "legacy", wid, rid, item_index)
             meta.update(extra)
         except _mr.ModelUnknown as exc:
-            raise NodeExecutionError(f"{exc} (model_unknown)") from None
+            raise NodeExecutionError(str(exc)) from None
     if item_index is not None:
         meta["item_index"] = item_index
     return _run_node_claude(prompt, mcp_config, model=model, meta=meta), meta
@@ -709,6 +728,7 @@ def _run_delegation_loop_node(
     tenant_id: str = "_default",
     node_id: str = "delegation_loop",
     wid: str = "",
+    rid: str = "",
 ) -> str:
     """Execute a delegation_loop node: manager issues DELEGATE/COMPLETE decisions.
 
@@ -774,7 +794,10 @@ If the task is complete:
         )
         if _mgr_refusal is not None:
             raise NodeExecutionError(_mgr_refusal)
-        manager_raw = _run_node_claude(manager_prompt, mcp_config)
+        # outside the ADR-2308 scope (the manager picks the workers): no model is resolved, but
+        # the span lands on THIS tenant's chain with this run's ids
+        manager_raw = _run_node_claude(manager_prompt, mcp_config, meta={
+            "tenant_id": tenant_id, "workflow_id": wid, "node_id": node_id, "run_id": rid})
 
         # Parse manager JSON
         decision_json: dict[str, Any] = {}
@@ -825,7 +848,8 @@ Context:
                 )
                 if _wkr_refusal is not None:
                     raise NodeExecutionError(_wkr_refusal)
-                worker_out = _run_node_claude(worker_prompt, mcp_config)
+                worker_out = _run_node_claude(worker_prompt, mcp_config, meta={
+                    "tenant_id": tenant_id, "workflow_id": wid, "node_id": node_id, "run_id": rid})
                 worker_results.append({"instructions": worker_instructions, "output": worker_out})
                 workers_spawned += 1
 
@@ -3903,7 +3927,7 @@ async def _stream_run(
                 try:
                     output_text = await loop.run_in_executor(
                         None, _run_delegation_loop_node, node, state,
-                        mcp_cfg or None, tenant_id, node_id, wid
+                        mcp_cfg or None, tenant_id, node_id, wid, rid
                     )
                     elapsed = round(time.time() - t0, 2)
                     state[node_id] = {"output": output_text}

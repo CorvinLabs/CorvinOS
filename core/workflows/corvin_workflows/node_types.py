@@ -1229,6 +1229,12 @@ def validate_common_fields(node: dict[str, Any]) -> None:
     share = node.get("share_output")
     if share is not None and (not isinstance(share, list) or not all(isinstance(x, str) for x in share)):
         raise ValueError("'share_output' must be a list of field names")
+    from .model_resolution import NO_MODEL_TYPES
+
+    if node.get("type") in NO_MODEL_TYPES and node.get("model") not in (None, ""):
+        # ADR-2308: accepted-and-ignored would let an operator believe the node runs on that model
+        raise ValueError(f"{node.get('type')} nodes take no 'model' (only agent, fan_out and "
+                         f"route in mode classify do); remove 'model'")
 
 
 _ENGINE_FREE_TYPES = frozenset({"code", "merge", "answer", "ask_human", "approval", "deliver", "peer_agent"})

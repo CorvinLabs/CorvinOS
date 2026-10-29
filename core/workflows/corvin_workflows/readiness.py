@@ -313,23 +313,28 @@ def _exposure(doc: WorkflowDoc) -> Signal:
     )
 
 
-def _node_models(doc: WorkflowDoc) -> Signal:
+def _node_models(doc: WorkflowDoc, tenant_id: str | None = None) -> Signal:
     """ADR-2308: how many model-calling nodes carry no ``model:``. Such a node runs on the path
     default (the DAG engine's alias, or the CLI's own default on the console's legacy executor,
     which can be the most expensive model). Informational: a missing model is a cost hint, never
     a defect, so it never blocks "ready". Counts only, no node ids (ids are workflow text)."""
-    from .model_resolution import in_scope
+    from .model_resolution import in_scope, operator_pin
 
     scoped = [n for n in doc.graph if isinstance(n, dict) and in_scope(n)]
     missing = sum(1 for n in scoped if not str(n.get("model") or "").strip())
     if not scoped:
         return Signal("node_model", "info", "no node calls a model", 0)
+    if tenant_id and operator_pin(tenant_id):
+        # the pin outranks every node value (ADR-2308 decision 1): saying otherwise would mislead
+        return Signal("node_model", "info",
+                      f"an operator pin on the Models page sets the model of all {len(scoped)} model node(s)", 0)
     if not missing:
         return Signal("node_model", "info", f"all {len(scoped)} model node(s) set 'model:'", 0)
     return Signal(
         "node_model",
         "info",
-        f"{missing} of {len(scoped)} model node(s) have no 'model:' and run on the path default",
+        f"{missing} of {len(scoped)} model node(s) have no 'model:' and run on the path default "
+        f"(DAG engine: haiku; console executor: the CLI's own default)",
         missing,
     )
 
@@ -346,6 +351,7 @@ def check_readiness(
     repairs: int,
     max_repairs: int = DEFAULT_MAX_REPAIRS,
     wall_limit_s: float = 10.0,
+    tenant_id: str | None = None,
 ) -> ReadinessReport:
     t0 = time.perf_counter()
 
@@ -421,7 +427,7 @@ def check_readiness(
         for r in (run.nodes.values() if run is not None else ())
     )
     return finish(
-        [validator, reach, acc, _exposure(doc), repairs_signal, _node_models(doc)],
+        [validator, reach, acc, _exposure(doc), repairs_signal, _node_models(doc, tenant_id)],
         run.state if run is not None else None,
         outcomes,
     )

@@ -9,6 +9,7 @@
  */
 import * as React from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { runUsageLabel, runUsageTitle } from "@/lib/run-usage";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCCCEvents } from "../lib/ccc-bus";
 import {
@@ -3924,16 +3925,15 @@ function EventRow({ evt, csrf }: { evt: WorkflowRunEvent; csrf?: string }) {
         {evt.elapsed_s != null && (
           <span className="shrink-0 text-muted-foreground">{evt.elapsed_s}s</span>
         )}
-        {evt.type === "node_completed" && evt.model_id && (
+        {(evt.type === "node_completed" || evt.type === "node_failed") && (evt.model_id || evt.tokens) ? (
           <span
             className="shrink-0 rounded bg-muted px-1.5 font-mono text-[10px] text-muted-foreground"
             data-testid="run-event-model"
-            title="Model reported by the CLI for this node"
+            title={runUsageTitle(evt)}
           >
-            {evt.model_id}
-            {evt.tokens ? ` · ${evt.tokens.toLocaleString("en-US")} tok` : ""}
+            {runUsageLabel(evt)}
           </span>
-        )}
+        ) : null}
         {/* Preview — hidden when expanded */}
         {!expanded && evt.output_preview && (
           <span className="min-w-0 flex-1 truncate italic text-muted-foreground/60">

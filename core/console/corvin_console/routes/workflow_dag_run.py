@@ -46,6 +46,17 @@ def needs_dag_engine(graph: list[Any]) -> bool:
     return any(isinstance(n, dict) and str(n.get("type", "agent")) in DAG_ONLY_TYPES for n in graph)
 
 
+def _with_usage(event: dict[str, Any], usage: dict[str, Any], result: Any) -> dict[str, Any]:
+    """ADR-2308: the model the CLI REPORTED and, when the runner retried the node, how many
+    attempts the token total covers (it is the sum over all of them)."""
+    if usage.get("model_id"):
+        event["model_id"] = usage["model_id"]
+    attempts = int(getattr(result, "attempts", 1) or 1)
+    if attempts > 1:
+        event["attempts"] = attempts
+    return event
+
+
 class _NullEngine:
     """Engine for a graph with no engine-requiring node. spawn() is unreachable; if a node
     classification is ever wrong, fail loudly instead of returning an empty result."""
@@ -214,14 +225,15 @@ class RunRecorder:
                 "elapsed_s": elapsed, "tokens": int(usage.get("tokens") or 0),
                 "output_preview": out[:200], "output": out,
             }
-            if usage.get("model_id"):
-                event["model_id"] = usage["model_id"]  # the model the CLI REPORTED
-            self.emit(event)
+            self.emit(_with_usage(event, usage, result))
         elif result.status == "failed":
-            self.emit({
+            event = {
                 "type": "node_failed", "node_id": nid, "node_type": result.node_type,
                 "error": result.error or "failed", "elapsed_s": elapsed,
-            })
+            }
+            if usage.get("tokens"):
+                event["tokens"] = int(usage["tokens"])  # a failed node's spend is spend too
+            self.emit(_with_usage(event, usage, result))
         else:
             self.emit({"type": "node_skipped", "node_id": nid, "node_type": result.node_type})
 

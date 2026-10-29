@@ -349,19 +349,24 @@ class ClaudeCliEngine:
         # alias it always used) stays, so a node without a model is unchanged.
         model = call.model or self.model
         meta = call.metadata
-        span_id = _span_start(tenant, meta, model)
-        _emit_resolution(tenant, meta, prompt, span_id)
+        # the guard can refuse (it raises): build the argv first, so a refused payload leaves no
+        # open span and no resolution event naming a spawn that never happened
         cmd = [
             "claude", "-p", _guard_prompt_head(prompt),
             "--model", model,
             "--output-format", "json",
             "--disallowedTools", _DENIED_TOOLS,
         ]
+        span_id = _span_start(tenant, meta, model)
+        _emit_resolution(tenant, meta, prompt, span_id)
         t0 = perf_counter()
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=self.timeout_s,
             )
+        except FileNotFoundError as e:
+            _span_end(tenant, meta, span_id, "", {}, "error", t0)
+            raise ClaudeEngineError("the claude CLI was not found") from e
         except subprocess.TimeoutExpired as e:
             _span_end(tenant, meta, span_id, "", {}, "error", t0)
             raise ClaudeEngineError(
