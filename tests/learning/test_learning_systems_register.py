@@ -20,9 +20,12 @@ not ``none``) never has a ``target``; ``consumer`` is ``none`` or a resolving
 ``path:line:needle``; ``validity`` is numbers or ``unmeasured``. Form only, not truth.
 """
 
+import io
 import json
+import keyword
 import os
 import re
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -74,26 +77,142 @@ def _lines(target: Path) -> list[str]:
     return _FILE_CACHE[target]
 
 
-def _ref_violation(ref: str) -> str | None:
+MIN_NEEDLE_CHARS = 4   # a needle of a letter or two matches everywhere (review c120 r2_s3-2)
+_SKIP_TOKENS = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
+                tokenize.DEDENT, tokenize.ENCODING, tokenize.ENDMARKER}
+_PY_TOKEN_CACHE: dict[Path, list[tuple[str, int, int]]] = {}
+
+
+def _py_code_tokens(target: Path) -> list[tuple[str, int, int]]:
+    """(text, line, logical-line index) of every code token of a Python file. Comments,
+    blank lines and the bodies of strings are not code: a name inside a comment or a
+    docstring is part of a COMMENT/STRING token and never becomes a NAME token here."""
+    if target not in _PY_TOKEN_CACHE:
+        out, logical = [], 0
+        with open(target, encoding="utf-8", errors="replace") as fh:
+            for tok in tokenize.generate_tokens(fh.readline):
+                if tok.type == tokenize.NEWLINE:
+                    logical += 1
+                if tok.type in _SKIP_TOKENS:
+                    continue
+                out.append((tok.string, tok.start[0], logical))
+        _PY_TOKEN_CACHE[target] = out
+    return _PY_TOKEN_CACHE[target]
+
+
+def _needle_tokens(needle: str) -> list[tuple[int, str]]:
+    """Tokens of a needle such as ``optimizer.get_stats``, ``admit(`` or
+    ``_run(repo, "guidance"`` (an unclosed bracket is fine: the tokens before it count)."""
+    toks: list[tuple[int, str]] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(needle).readline):
+            if tok.type not in _SKIP_TOKENS:
+                toks.append((tok.type, tok.string))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
+    return toks
+
+
+def _is_call_import_or_registration(toks: list[tuple[str, int, int]], i: int, k: int) -> bool:
+    """The needle tokens ``toks[i:i+k]`` are an import, a call (``needle(`` or
+    ``needle.attr(``), or an argument of a call (``include_router(needle.router)``,
+    ``register(..., needle)``) - not a bare assignment, a definition or a dangling name."""
+    logical = toks[i][2]
+    line_toks = [t for t in toks if t[2] == logical]
+    if line_toks and line_toks[0][0] in ("import", "from"):
+        return True
+    if i and toks[i - 1][0] in ("def", "class"):
+        # a definition counts only as a decorator registration (``@router.get(...)``)
+        prev = [t for t in toks[:i] if t[2] == logical - 1]
+        return bool(prev) and prev[0][0] == "@"
+    j = i + k
+    if any(toks[x][0] == "(" and toks[x - 1][0].isidentifier()
+           and not keyword.iskeyword(toks[x - 1][0]) for x in range(i + 1, j)):
+        return True   # the needle itself spells the call: ``admit(``, ``_run(repo, "guidance"``
+    while j + 1 < len(toks) and toks[j][0] == "." and toks[j + 1][0].isidentifier():
+        j += 2
+    if j < len(toks) and toks[j][0] == "(":
+        return True
+    depth = 0   # inside the parentheses of a call?
+    for back in range(i - 1, -1, -1):
+        text = toks[back][0]
+        if toks[back][2] != logical:
+            break
+        if text in (")", "]", "}"):
+            depth += 1
+        elif text in ("(", "[", "{"):
+            if depth == 0:
+                if text != "(" or back == 0:
+                    return False
+                before = toks[back - 1][0]
+                return (before.isidentifier() and not keyword.iskeyword(before)) or before in (")", "]")
+            depth -= 1
+    return False
+
+
+_JS_COMMENT = re.compile(r"(^|\s)//.*$")
+
+
+def _js_violation(lines: list[str], line: int, needle: str, kind: str) -> bool:
+    """True when no code line in the window carries ``needle`` as a whole identifier
+    (for a caller: imported, called or rendered as ``<Needle``)."""
+    word = re.compile(r"(?<![\w$])" + re.escape(needle) + r"(?![\w$])")
+    for text in lines[max(0, line - 1 - NEEDLE_WINDOW): line + NEEDLE_WINDOW]:
+        code = _JS_COMMENT.sub("", text)
+        if code.lstrip().startswith(("*", "/*")) or not word.search(code):
+            continue
+        if kind != "caller" or re.search(r"\bimport\b", code) or re.search(
+                r"<" + re.escape(needle) + r"\b|" + re.escape(needle) + r"\s*\(", code):
+            return False
+    return True
+
+
+def _ref_violation(ref: str, kind: str = "caller", root: Path = REPO) -> str | None:
     """Why ``ref`` ("path:line:needle") does not point at its reference, or None.
 
-    The cited line, or one within NEEDLE_WINDOW lines of it, must contain the needle: a
-    reference that drifted onto a blank line, a comment or another router's include fails,
-    and so does one whose call was deleted while the file kept its length."""
+    The needle (at least MIN_NEEDLE_CHARS long, starting with an identifier) must occur as
+    CODE tokens - never inside a comment, a docstring or another string - on the cited line
+    or within NEEDLE_WINDOW lines of it. For a ``caller`` it must also be an import, a call
+    or an argument of a call (a registration). So a reference that drifted onto a blank
+    line or a comment fails, a call turned into a comment that still names it fails, a
+    deleted call whose name survives in a neighbouring subscript fails (review c120
+    r2_s3-2), and a reader (``kind`` consumer/reader) must at least read the name."""
     m = _REF.match(str(ref))
     if not m:
         return f"{ref!r} is not path:line:needle"
-    target = REPO / m["path"]
+    target = root / m["path"]
     if not target.is_file():
         return f"{m['path']} does not exist"
     lines, line, needle = _lines(target), int(m["line"]), m["needle"].strip()
     if not 1 <= line <= len(lines):
         return f"{m['path']}:{line} is past the end of the file ({len(lines)} lines)"
-    window = lines[max(0, line - 1 - NEEDLE_WINDOW): line + NEEDLE_WINDOW]
-    if not any(needle in text for text in window):
-        hits = [i + 1 for i, text in enumerate(lines) if needle in text][:5]
-        return (f"{m['path']}:{line} has no {needle!r} within {NEEDLE_WINDOW} lines "
-                f"(the needle is at lines {hits or 'nowhere'})")
+    if len(re.sub(r"\s", "", needle)) < MIN_NEEDLE_CHARS:
+        return f"{ref!r}: the needle {needle!r} is shorter than {MIN_NEEDLE_CHARS} characters"
+    if target.suffix != ".py":
+        if not re.fullmatch(r"[A-Za-z_$][\w$]*", needle):
+            return f"{ref!r}: a non-Python needle is one identifier"
+        if _js_violation(lines, line, needle, kind):
+            return (f"{m['path']}:{line} has no {needle!r} as code within {NEEDLE_WINDOW} lines"
+                    + (" (imported, called or rendered)" if kind == "caller" else ""))
+        return None
+    ntoks = _needle_tokens(needle)
+    if not ntoks or ntoks[0][0] != tokenize.NAME or keyword.iskeyword(ntoks[0][1]):
+        return f"{ref!r}: the needle must start with an identifier"
+    want = [s for _, s in ntoks]
+    try:
+        toks, k = _py_code_tokens(target), len(want)
+    except (tokenize.TokenError, IndentationError, SyntaxError) as exc:
+        return f"{m['path']} does not tokenize: {exc}"
+    starts = [i for i in range(len(toks) - k + 1)
+              if [t[0] for t in toks[i:i + k]] == want]
+    near = [i for i in starts if abs(toks[i][1] - line) <= NEEDLE_WINDOW]
+    if kind == "caller":
+        near = [i for i in near if _is_call_import_or_registration(toks, i, k)]
+    if not near:
+        hits = sorted({toks[i][1] for i in starts})[:5]
+        what = "a call, import or registration of" if kind == "caller" else "code naming"
+        return (f"{m['path']}:{line} has no {what} {needle!r} within {NEEDLE_WINDOW} lines "
+                f"(the needle is code at lines {hits or 'nowhere'})")
     return None
 
 
@@ -111,15 +230,120 @@ def test_ids_are_unique_and_states_valid():
         assert s.get("name"), f"{s['id']}: missing name"
 
 
-def test_live_systems_have_a_caller():
-    for s in _load():
-        if s["state"] == "A":
-            assert s.get("callers"), f"{s['id']} is A but lists no caller"
+def _contract_rows(s: dict) -> list[dict]:
+    c = s.get("signal_contract")
+    return [r for r in (c if isinstance(c, list) else [c] if c else []) if isinstance(r, dict)]
+
+
+def _state_violations(systems: list[dict]) -> list[str]:
+    """State A means a caller runs it AND something reads its output (review c120 r2_s3-3):
+    an A entry names a reader - a ``readers`` reference or a signal_contract whose consumer
+    is not ``none``. An entry promoted to A because of its contract (``promoted_from``)
+    keeps that contract."""
+    out = []
+    for s in systems:
+        if s["state"] != "A":
+            continue
+        if not s.get("callers"):
+            out.append(f"{s['id']} is A but lists no caller")
+        consumers = [r for r in _contract_rows(s) if str(r.get("consumer") or "none") != "none"]
+        if not s.get("readers") and not consumers:
+            out.append(f"{s['id']} is A but names no reader (readers, or a signal_contract consumer)")
+        if s.get("promoted_from") and not _contract_rows(s):
+            out.append(f"{s['id']} was promoted from {s['promoted_from']} and lost its signal_contract")
+    return out
+
+
+def test_live_systems_have_a_caller_and_a_reader():
+    systems = _load()
+    assert _state_violations(systems) == []
+
+
+def test_state_check_refuses_a_without_reader_and_a_dropped_contract():
+    """Negative controls on copies of the real register (the file is not touched)."""
+    import copy
+
+    systems = _load()
+    promoted = {s["id"] for s in systems if s.get("promoted_from")}
+    assert {"L08", "L19"} <= promoted, "positive control: L08 and L19 record their promotion"
+    for sys_id in sorted(promoted):
+        broken = copy.deepcopy(systems)
+        next(s for s in broken if s["id"] == sys_id).pop("signal_contract")
+        assert f"{sys_id} was promoted from B and lost its signal_contract" in _state_violations(broken)
+    broken = copy.deepcopy(systems)
+    l13 = next(s for s in broken if s["id"] == "L13")
+    assert l13["state"] == "B" and _contract_rows(l13)[0]["consumer"] == "none", "positive control"
+    l13["state"] = "A"
+    assert "L13 is A but names no reader (readers, or a signal_contract consumer)" in _state_violations(broken)
+    broken = copy.deepcopy(systems)
+    l06 = next(s for s in broken if s["id"] == "L06")
+    assert l06.get("readers"), "positive control: L06 names its reader"
+    l06.pop("readers")
+    assert any(v.startswith("L06 is A but names no reader") for v in _state_violations(broken))
 
 
 @pytest.mark.parametrize(("sys_id", "ref"), _callers())
 def test_caller_exists_at_recorded_line(sys_id, ref):
     assert _ref_violation(ref) is None, f"{sys_id}: {_ref_violation(ref)}"
+
+
+def _readers() -> list[tuple[str, str]]:
+    return [(system["id"], ref) for system in _load() for ref in system.get("readers", [])]
+
+
+@pytest.mark.parametrize(("sys_id", "ref"), _readers())
+def test_reader_exists_at_recorded_line(sys_id, ref):
+    why = _ref_violation(ref, kind="reader")
+    assert why is None, f"{sys_id}: {why}"
+
+
+def _mutated_copy(tmp_path: Path, rel: str, old: str, new: str) -> Path:
+    """A copy of ``rel`` under ``tmp_path`` with ``old`` replaced by ``new`` (once)."""
+    src = (REPO / rel).read_text(encoding="utf-8")
+    assert src.count(old) == 1, f"positive control: {old!r} occurs once in {rel}"
+    dst = tmp_path / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(src.replace(old, new), encoding="utf-8")
+    return tmp_path
+
+
+def _ref_of(sys_id: str, needle: str, key: str = "callers") -> str:
+    return next(r for r in next(s for s in _load() if s["id"] == sys_id).get(key, [])
+                if r.endswith(":" + needle))
+
+
+@pytest.mark.parametrize(("sys_id", "needle", "key", "rel", "old", "new"), [
+    # (a) the L05 reader turned into a comment that still names it
+    ("L05", "_learned_threshold", "callers", "core/skills/os_skills/delegation_router.py",
+     "    threshold = _learned_threshold(tenant_id)\n",
+     "    threshold = None  # _learned_threshold(tenant_id) removed\n"),
+    # (b) the L19 scheduler start removed, its name left in a comment
+    ("L19", "_auto.start_scheduler", "callers", "core/console/corvin_console/routes/autonomous_forge_routes.py",
+     "    _auto.start_scheduler(_tenant_roots)\n", "    pass  # _auto.start_scheduler(_tenant_roots)\n"),
+    # (c) the L15 guidance call deleted; "guidance" survives in out["guidance"] one line below
+    ("L15", '_run(repo, "guidance", "run"', "callers", "core/console/corvin_console/kb_projection.py",
+     '        rc, g = _run(repo, "guidance", "run", actor="kb-guidance")\n', "        rc, g = 0, {}\n"),
+    # a reader moved into a docstring-like string
+    ("L06", "spec.n_grades", "readers", "corvin_operator/bridges/shared/skill_inject.py",
+     "                if spec.n_grades < 1 or spec.mean_score <= 0:\n                    continue\n",
+     '                if "spec.n_grades < 1":\n                    continue\n'),
+])
+def test_ref_check_fails_when_the_call_is_gone(tmp_path, sys_id, needle, key, rel, old, new):
+    """Review c120 r2_s3-2 mutants, on copies (the tree is not touched): each must turn red,
+    and the unmutated copy must stay green (positive control)."""
+    ref = _ref_of(sys_id, needle, key)
+    kind = "caller" if key == "callers" else "reader"
+    clean = _mutated_copy(tmp_path / "clean", rel, old, old)
+    assert _ref_violation(ref, kind=kind, root=clean) is None, "positive control"
+    mutant = _mutated_copy(tmp_path / "mutant", rel, old, new)
+    assert "has no" in (_ref_violation(ref, kind=kind, root=mutant) or ""), f"{sys_id}: mutant passed"
+
+
+def test_ref_check_refuses_short_and_non_identifier_needles():
+    ref = _ref_of("L05", "_learned_threshold")
+    path, line = ref.split(":")[:2]
+    assert "shorter than" in (_ref_violation(f"{path}:{line}:t") or "")
+    assert "start with an identifier" in (_ref_violation(f'{path}:{line}:"threshold"') or "")
 
 
 def test_caller_check_fails_on_a_shifted_line_and_a_wrong_needle():
@@ -197,7 +421,7 @@ def _contract_violations(systems: list[dict]) -> list[str]:
                                f"but its target is {target!r}")
             consumer = str(e.get("consumer") or "")
             if consumer != "none":
-                why = _ref_violation(consumer)
+                why = _ref_violation(consumer, kind="consumer")
                 if why is not None:
                     out.append(f"{where}: consumer does not resolve: {why}")
             elif target != "none":

@@ -15,7 +15,9 @@ mechanisms; **which system is live is stated only by the register**.
 ## The register (ADR-2281) — single statement of state
 
 `core/learning/learning_systems.yaml` lists every learning system with its production
-callers (`path:line:needle`, every line re-read 2026-10-27), its tests and its state: **A** live and read ·
+callers (`path:line:needle`, every line re-read 2026-10-29 on the integrated tree), the code that
+reads its output (`readers`, same form), its tests and its state: **A** live and read — a caller runs it
+AND a reader is named (`readers`, or a `signal_contract` consumer that is not `none`) ·
 **B** live but shadow / no reader yet, with an `intake` naming when its output may act ·
 **D** dead, retired by the named decision (ADR-2282) until its last module is deleted. Nothing
 here, in CLAUDE.md or elsewhere may call a system "wired", "live" or "complete" unless its
@@ -23,7 +25,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 
 | Check | File | Fails on |
 |---|---|---|
-| Register | `tests/learning/test_learning_systems_register.py` | a caller (or contract `consumer`) whose file does not exist or whose needle — the called function or imported module — is not within 3 lines of the cited line (a reference that drifted onto a blank line, a comment or another router's include fails; a register copy with a shifted line is the negative control), a missing test file, an A without caller, a B without `intake`, a B without a valid `signal_contract` (ADR-2303, below), a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
+| Register | `tests/learning/test_learning_systems_register.py` | a caller, reader or contract `consumer` whose file does not exist or whose needle (≥ 4 characters, starting with an identifier: the called function, `module.attr`, `call(arg, "literal"`) is not CODE within 3 lines of the cited line — the file is tokenized, so a needle inside a comment, a docstring or another string does not count, and a caller must be an import, a call, an argument of a call or a decorated definition. Negative controls on copies: a shifted line, a needle swap, the L05 reader and the L19 scheduler start turned into comments, the L15 guidance call deleted while `out["guidance"]` stays one line below, the needle `t` (review c120 r2_s3-2). Also a missing test file, an A without caller or without a reader, an entry with `promoted_from` (L08, L19) that lost its contract, a B without `intake`, a B without a valid `signal_contract` (ADR-2303, below), a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
 | Reachability ratchet | `scripts/learning_reachability.py` + `scripts/learning_reachability_baseline.json`, `tests/learning/test_learning_reachability_ratchet.py` | a NEW unreachable module in the learning scopes (same graph as `zero_caller_sweep`), and a STALE baseline entry (module reachable again or deleted). Shrink-only |
 | Call-site pins | `tests/learning/test_learning_call_site_pins.py` | L06 injection gate / follow-up grade and L10 distill scheduling / injection through `adapter.process_one`; L14 `emit_*_confidence` through `POST /v1/console/forge-bundles/import`. Each was shown red with its call site cut |
 
@@ -43,7 +45,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | L11 | Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter) | B |
 | L12 | Routing ledger and rollback judge | B |
 | L13 | Flow-guard learning route | B |
-| L14 | Layer Forge learning integration (emit_*_confidence / *_outcome) | A |
+| L14 | Layer Forge learning integration (emit_*_confidence / *_outcome) | B |
 | L15 | KB learning (kb guidance run, guidance skills) | A |
 | L16 | Compute search strategies (grid, random, bayes) and HAC attribution | A |
 | L17 | Learning and maturity panels (report health, not learning) | A |

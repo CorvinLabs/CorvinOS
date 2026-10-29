@@ -11,10 +11,19 @@
 #      register in the same change that deletes its last module.
 #
 # `callers` lists production call sites as "path:line:needle"; every line was
-# re-read on 2026-10-27 (review c120, s5_completeness-3) and points at the call,
-# import or registration itself. `needle` is a token of that reference (the
-# called function, the imported module); the register test requires it within
-# 3 lines of `line`, so a reference that drifts or whose call is deleted fails.
+# re-read on 2026-10-29 against the integrated tree (review c120 r2_s3-1) and
+# points at the call, import or registration itself. `needle` is the code of
+# that reference (the called function, `module.attr`, `call(arg, "literal"`),
+# at least 4 characters and starting with an identifier; the register test
+# requires it as CODE tokens - never in a comment, docstring or other string -
+# within 3 lines of `line`, and for a caller as an import, a call, an argument
+# of a call or a decorated definition (r2_s3-2). So a reference that drifts, a
+# call turned into a comment and a deleted call whose name survives nearby fail.
+# `readers` lists, the same way, the code that reads a system's output (a
+# decision, a prompt, an operator-facing number). An A entry names a reader:
+# `readers`, or a signal_contract whose consumer is not `none` (r2_s3-3).
+# `promoted_from` marks an entry promoted to A because of its contract; the
+# test keeps that contract required.
 # `tests` lists the test files that exercise the system.
 # tests/learning/test_learning_systems_register.py checks well-formedness and
 # the needles, not truth: that a caller really runs is the job of the tests
@@ -54,6 +63,9 @@ systems:
       - core/gateway/corvin_gateway/app.py:547:_lh.start
       - core/console/corvin_console/app.py:895:learning_host.start
       - core/console/corvin_console/standalone.py:369:learning_host
+    readers:
+      # the daemon state (weights, queue, cooldowns) on the console's learning dashboard
+      - core/console/corvin_console/routes/learning_dashboard.py:105:learning_host.read_state_summary
     tests:
       - core/background/test_learning_host.py
       - core/console/tests/test_datahub_learning_loop_e2e.py
@@ -64,6 +76,9 @@ systems:
     state: A
     callers:
       - core/background/learning_host.py:298:anomaly_monitor.scan
+    readers:
+      # an anomaly in FREEZES_LEARNING freezes the learned config (ADR-2304 learning brake)
+      - core/background/learning_host.py:327:self._freeze
     tests:
       - tests/learning/test_anomaly_monitor.py
       # ADR-2304: two anomalies freeze - SkillAdapter configs on oscillation of their versions or
@@ -77,6 +92,9 @@ systems:
     state: A
     callers:
       - core/console/corvin_core/task_manager.py:485:emit_task_outcome
+    readers:
+      # the optimizer epoch of POST /v1/console/learning/feedback reads the tenant's last 10 outcomes
+      - core/console/corvin_console/routes/method_discovery_api.py:406:recent_outcomes
     tests:
       - core/learning/tests/test_outcome_sink.py
       - core/console/tests/test_task_manager_outcome_sink.py
@@ -88,6 +106,9 @@ systems:
     callers:
       - core/learning/event_store.py:149:admit(
       - core/console/corvin_console/routes/stream4_skill_feedback.py:174:admit(
+    readers:
+      # the verdict decides the write: a refused signal raises FeedbackRejected and nothing is stored
+      - core/learning/event_store.py:149:admit(
     tests:
       - core/learning/tests/test_operator_feedback.py
       - core/console/tests/test_learning_loop_routes_e2e.py
@@ -129,7 +150,7 @@ systems:
         proxy_of: routing correctness of the router's de-escalation advice
         writes: confidence_threshold
         validity: unmeasured
-        consumer: corvin_operator/bridges/shared/delegation_policy.py:235:confidence_threshold
+        consumer: corvin_operator/bridges/shared/delegation_policy.py:235:output.get("confidence_threshold"
         target: none
         guard: task success of the turns routed to native
         control: >-
@@ -145,7 +166,7 @@ systems:
         proxy_of: routing correctness of the router's de-escalation advice
         writes: confidence_threshold
         validity: unmeasured
-        consumer: corvin_operator/bridges/shared/delegation_policy.py:235:confidence_threshold
+        consumer: corvin_operator/bridges/shared/delegation_policy.py:235:output.get("confidence_threshold"
         target: none
         guard: task success of the turns routed to native
         control: >-
@@ -165,12 +186,14 @@ systems:
     state: A
     callers:
       - corvin_operator/bridges/shared/adapter.py:3330:collect_active_skills
-      - corvin_operator/bridges/shared/skill_inject.py:670:n_grades
-      - corvin_operator/bridges/shared/adapter.py:12721:grade_from_user_followup
-      - corvin_operator/bridges/shared/adapter.py:13363:auto_grade_from_output
+      - corvin_operator/bridges/shared/adapter.py:12792:grade_from_user_followup
+      - corvin_operator/bridges/shared/adapter.py:13434:auto_grade_from_output
       - corvin_operator/skill-forge/skill_forge/mcp_server.py:490:promote
       - core/console/corvin_console/routes/chat.py:772:grade_followup
-      - core/console/corvin_console/chat_runtime.py:8552:record_turn_skills
+      - core/console/corvin_console/chat_runtime.py:8639:record_turn_skills
+    readers:
+      # the injection gate: a skill with no grade or a mean score <= 0 is not injected
+      - corvin_operator/bridges/shared/skill_inject.py:696:spec.n_grades
     tests:
       - corvin_operator/skill-forge/tests/test_grading.py
       - corvin_operator/bridges/shared/test_adapter_skill_inject.py
@@ -182,15 +205,15 @@ systems:
     name: CEL turn grades
     state: B
     callers:
-      - core/console/corvin_console/chat_runtime.py:8363:_cel_record_outcome
-      - core/console/corvin_console/chat_runtime.py:9081:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:8414:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:9168:_cel_record_outcome
     tests:
       - corvin_operator/context_engineering/tests/test_grades_adr0285.py
     intake: >-
       Advisory only. The native console path records success=True for every
-      turn that reaches its end (chat_runtime.py:9081), so the grade means "turn
+      turn that reaches its end (chat_runtime.py:9168), so the grade means "turn
       completed", not "the stage helped"; the delegated (ACS/TDE) branch records
-      the run's own result (ok or bounded stop, chat_runtime.py:8363). Behind the
+      the run's own result (ok or bounded stop, chat_runtime.py:8414). Behind the
       outcome_feedback_loop flag (default off). An automatic grade never makes a
       stage default-eligible, only an operator grade does. It may steer stage
       selection only with a measured outcome source (T-0128 was cancelled for want
@@ -211,9 +234,9 @@ systems:
     name: Model selector learner (descriptive only, shown on the Models page)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:5382:shadow_classify_task
-      - corvin_operator/bridges/shared/adapter.py:6830:report_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:6869:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:5398:shadow_classify_task
+      - corvin_operator/bridges/shared/adapter.py:6888:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:6927:report_turn_outcome
       - core/console/corvin_core/task_manager.py:676:_update_model_selection_confidence
       # reader: GET /v1/console/v1/engine/config -> the Models page task cards
       - core/console/corvin_console/routes/engine_api.py:667:optimizer.get_stats
@@ -225,6 +248,8 @@ systems:
     # Models page shows it on each task card. The number is a proxy, so the page labels it
     # "no-error score (proxy)", never "confidence". Model selection never reads it; it may influence
     # selection only with a real quality signal (IDEA-0002) and a decision naming that consumer.
+    # promoted_from: the register test requires the contract (and its consumer) to stay.
+    promoted_from: B
     signal_contract:
       signal: >-
         bridge turn: 0.85 when it ended without an error, 0.2 with one
@@ -244,7 +269,10 @@ systems:
     state: A
     callers:
       - core/console/corvin_console/routes/settings.py:687:savings_meter.read
-      - corvin_operator/bridges/shared/savings_cap.py:224:core.learning.savings_meter
+      - corvin_operator/bridges/shared/savings_cap.py:224:_core_module("core.learning.savings_meter"
+    readers:
+      # the Free-tier cap decision reads the measured saving
+      - corvin_operator/bridges/shared/savings_cap.py:225:meter.read
     tests:
       - corvin_operator/bridges/shared/test_savings_cap.py
       - corvin_operator/bridges/shared/test_savings_cap_wiring.py
@@ -254,7 +282,9 @@ systems:
     name: User model distillation (L28, opt-in per chat)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:13487:_user_model_distill_async
+      - corvin_operator/bridges/shared/adapter.py:13558:_user_model_distill_async
+    readers:
+      # the distilled model is loaded into the prompt of the opted-in chat
       - corvin_operator/bridges/shared/adapter.py:3649:_user_model.load
     tests:
       - corvin_operator/bridges/shared/test_user_model.py
@@ -326,10 +356,10 @@ systems:
     name: Routing ledger and rollback judge
     state: B
     callers:
-      - core/console/corvin_console/chat_runtime.py:4552:route_and_record
-      - core/console/corvin_console/chat_runtime.py:4574:record_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:9583:route_and_record
-      - corvin_operator/bridges/shared/adapter.py:9627:record_turn_outcome
+      - core/console/corvin_console/chat_runtime.py:4574:route_and_record
+      - core/console/corvin_console/chat_runtime.py:4612:record_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:9644:route_and_record
+      - corvin_operator/bridges/shared/adapter.py:9698:record_turn_outcome
     tests:
       - core/console/tests/test_l5_routing_loop_console_e2e.py
       - tests/e2e/test_l5_routing_loop_bridge_e2e.py
@@ -347,7 +377,7 @@ systems:
       proxy_of: none
       # ADR-2092 gates: G1 samples + join rate, G4 the continuous console soak (days)
       validity: {min_joined_decisions: 500, min_join_rate: 0.95, min_console_soak_days: 7}
-      consumer: core/skills/os_skills/monitoring/dual_write.py:77:readiness.cached_evaluate
+      consumer: core/skills/os_skills/monitoring/dual_write.py:112:readiness.cached_evaluate
       # the join learns no parameter: it gates Phase 2 (readiness) and trips the rollback judge
       target: none
       guard: task success of the turns routed to native
@@ -367,7 +397,9 @@ systems:
     callers:
       - core/console/corvin_console/routes/flow_guard.py:51:learning_integration
       - core/console/corvin_console/app.py:266:flow_guard_route
-    tests: []
+    tests:
+      # the real POST /v1/console/flow/feedback and GET /flow/policy routes over HTTP
+      - tests/learning/test_adr_2283_flow_guard_feedback_e2e.py
     intake: >-
       No automatic feedback source exists (T-0169 cancelled); the only input is an
       operator's POST /v1/console/flow/feedback. Since ADR-2283 the route writes
@@ -392,7 +424,7 @@ systems:
 
   - id: L14
     name: Layer Forge learning integration (emit_*_confidence / *_outcome)
-    state: A
+    state: B
     callers:
       - core/forge_bundle/item_import.py:411:create_layer_definition
       - core/orchestration/layer_forge/orchestrator.py:136:emit_gate_confidence
@@ -400,12 +432,36 @@ systems:
       - core/orchestration/layer_forge/orchestrator.py:211:emit_review_confidence
     tests:
       - tests/learning/test_learning_call_site_pins.py
+    # B since 2026-10-29 (review c120 r2_s3-3): the events are emitted and stored, but nothing reads
+    # them - LayerForgeAnalytics._read_learning_events (core/orchestration/layer_forge/analytics.py)
+    # is a stub that returns [] ("TODO: implement actual event store query"). State A requires a
+    # reader; the generic learning status only counts events, it does not read a confidence.
+    intake: >-
+      None yet. The confidence_score / outcome_feedback events of Layer Forge
+      definitions are written audit-first to the learning event store and read by
+      nothing (the analytics read is a stub). They may inform a Layer Forge
+      decision only through a new decision that names the consumer and the gate.
+    signal_contract:
+      signal: >-
+        gate / enforcement / review verdicts of a Layer Forge definition as
+        confidence steps (PASS +0.1, FAIL -0.2, ...) and transition / rejection
+        outcomes
+      proxy_of: correctness of the layer definition
+      validity: unmeasured
+      consumer: none
+      target: none
+      guard: the quality gates stay fail-closed on FAIL/ERROR
+      control: written only; no reader
+      rollback: none
 
   - id: L15
     name: KB learning (kb guidance run, guidance skills)
     state: A
     callers:
-      - core/console/corvin_console/kb_projection.py:527:"guidance"
+      - core/console/corvin_console/kb_projection.py:527:_run(repo, "guidance", "run"
+    readers:
+      # the pending guidance is read and minted as a user-scope SkillForge skill (injected by L06)
+      - core/console/corvin_console/kb_projection.py:466:_run(repo, "guidance", "pending"
     tests:
       - core/console/tests/test_kb_projection_e2e.py
 
@@ -415,6 +471,9 @@ systems:
     callers:
       - core/compute/corvin_compute/worker.py:370:load_strategy
       - core/compute/corvin_compute/cli.py:247:HACEngine
+    readers:
+      # the search reads the strategy's next proposal from the history it learned
+      - core/compute/corvin_compute/driver.py:171:self.strategy.suggest_batch
     tests:
       - core/compute/tests/test_strategies.py
       - core/compute/tests/test_bayesian.py
@@ -425,6 +484,9 @@ systems:
     callers:
       - core/console/corvin_console/app.py:320:learning_analytics_route
       - core/console/corvin_console/app.py:333:api_vibe_maturity_route
+    readers:
+      - core/console/corvin_console/web-next/src/components/learning-loops-view.tsx:16:useLoops
+      - core/console/corvin_console/web-next/src/pages/vibe-engineering/components/MaturityDashboard.tsx:34:useLiveMaturityData
     tests:
       - tests/e2e/test_learning_loops_dashboard_e2e.py
       - core/console/tests/test_learning_loop_routes_e2e.py
@@ -436,6 +498,7 @@ systems:
       - core/console/corvin_console/app.py:401:video_learning_api_route
       - core/console/corvin_console/routes/video_learning_api.py:218:get_model_stats
       - core/console/corvin_console/routes/video_learning_api.py:259:select_model
+    readers:
       - core/console/corvin_console/web-next/src/pages/video-producer.tsx:309:LearningOverview
     tests:
       - core/console/tests/test_video_producer_routes_e2e.py
@@ -452,7 +515,7 @@ systems:
     callers:
       - core/console/corvin_console/app.py:289:autonomous_forge_route
       # the autopilot scheduler, started when the route module is imported (every 600 s, all tenants)
-      - core/console/corvin_console/routes/autonomous_forge_routes.py:419:start_scheduler
+      - core/console/corvin_console/routes/autonomous_forge_routes.py:419:_auto.start_scheduler
     tests:
       - core/console/tests/test_autonomous_forge_canary_e2e.py
     # A since 2026-10-27 (review c120, s5_completeness-2 contract check). The entry said "autopilot off by
@@ -462,7 +525,12 @@ systems:
     # fresh root. Each tick executes the canary gate (escalate a traffic step, mark ready, roll back) and
     # forks at most one skill whose organic follow-up grades show a loss. Promotion of a candidate stays
     # an operator decision (POST /approve). Whether the scheduler has acted on the live install is not
-    # verified (PLAN-0964).
+    # verified (PLAN-0964). The loss scan reads the USER scope only: the scheduler's roots are the
+    # tenant registries <corvin_home>/tenants/<tid>/skill-forge (autonomous_forge_routes._tenant_roots)
+    # and skills_overview reads registry_for(root).list(). A follow-up grade of a session- or
+    # project-scope skill is stored in that scope's registry and never reaches it: no loss signal,
+    # fork or canary is started for such a skill.
+    promoted_from: B
     signal_contract:
       signal: >-
         organic follow-up grades of a skill (approval 0.9 / rephrase 0.3 / rejection 0.1),
@@ -485,6 +553,9 @@ systems:
     callers:
       - core/console/corvin_console/routes/capabilities.py:677:_get_learning_loops
       - core/console/corvin_console/routes/marketplace_resolve.py:232:_declared_learning_loops
+    readers:
+      # the Learning Loops panel list (GET /v1/console/learning-loops/list)
+      - core/console/corvin_console/routes/learning_analytics.py:433:_get_learning_loops
     tests:
       - tests/learning/test_adr_0906_plugin_loop_declaration_e2e.py
     # Live proof 2026-10-26 (read-only against the live tenant): the enabled `video_producer` record is 1.7.1 and
