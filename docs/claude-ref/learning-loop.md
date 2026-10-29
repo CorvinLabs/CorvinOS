@@ -166,7 +166,7 @@ next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tena
 | Piece | File | Contract |
 |---|---|---|
 | L5 routing call site | `corvin_operator/bridges/shared/delegation_policy.py::route_and_record` (Skill via `_consult_router`), reached from `resolve_delegation_route` / `resolve_worker_engine` when the caller passes the turn (`sink`/`turn_id`) — a call without it is a pure query (`record=False`, the console engine guard): no row, no audit and no Skill execution in any phase (no `skill.executed`); in dual_write it applies the Skill's advice as a pure function (`delegation_router.advise_from_input`) and the same clamp, so it answers what the turn serves when the turn's `routing.phase2_decision` commits — a turn whose record fails to commit serves the bundled engine (audit-first), which the query cannot foresee | exactly ONE decision per turn per surface; runs AFTER the bundled rule + extension-point hook; degrades to the bundled engine on any failure; skips un-booted processes. The bridge boots the registry itself since 2026-09-28 (`adapter._boot_acp_skills`, ADR-2092 G0) — before that every bridge turn was skipped |
-| L5 routing ledger + gates | `core/skills/os_skills/monitoring/` — `routing_ledger` (decision/outcome rows, closed vocabulary, ADR-0297 `has_sensitive` gate on every string), `correctness_tracker` (observable success, skill- vs bundled-routed), `rollback_detector` (trip persisted only after `routing.rollback_triggered` committed — an uncommitted trip keeps Phase 2 off in that process and is retried; audited reset), `readiness` (≥500 judged decisions, join ≥0.95 over judged decisions, per-complexity proxy evidence; bridge additionally needs the continuous 7-day console soak), `dual_write` (phase gate + clamp) | see ADR-2092; Phase 2 activation is refused and audited once per process per reason (`routing.phase2_refused`) until every gate holds. The readiness cache's transient `evaluating` placeholder (first turn after a start, or while a stale verdict refreshes) runs shadow and is never audited as a refusal; a stale verdict — `ready` included — is never served while it refreshes, and a rollback trip/reset clears the cache (a refresh in flight across it is discarded) |
+| L5 routing ledger + gates | `core/skills/os_skills/monitoring/` — `routing_ledger` (decision/outcome rows, closed vocabulary, ADR-0297 `has_sensitive` gate on every string), `correctness_tracker` (observable success, skill- vs bundled-routed), `rollback_detector` (trip persisted only after `routing.rollback_triggered` committed; an uncommitted trip writes a restrictive-only pending marker `<tenant>/learning/routing/rollback_pending.json` that keeps Phase 2 off in every process and across restarts — an unreadable marker restricts too — and is retried by every phase decision and readiness refresh until the record commits, then the trip state is written before the marker is removed; audited reset clears it), `readiness` (≥500 judged decisions, join ≥0.95 over judged decisions, per-complexity proxy evidence; bridge additionally needs the continuous 7-day console soak), `dual_write` (phase gate + clamp) | see ADR-2092; Phase 2 activation is refused and audited once per process per reason (`routing.phase2_refused`) until every gate holds. Readiness is stale-while-revalidate: a verdict older than 300 s (`_CACHE_TTL_S`) is refreshed on a daemon thread and served until the refresh lands, up to 1 h (`_CACHE_MAX_STALE_S`). A missing verdict (first turn after a start), one older than 1 h, or one invalidated by a rollback trip/reset (cache cleared, generation bumped; a refresh in flight across it is discarded) answers the transient `evaluating` placeholder, which runs shadow, is recorded with `gate: pending` and is never audited as a refusal. `rollback_active` is checked before any verdict is read. On the 2026-10-27 ledger copy 15.2 % of console turns (56/369) and 8.0 % of bridge turns (86/1072) come more than 1 h after the previous turn on their surface and would still be served shadow in a cleared Phase 2 (at the former 300 s rule: 66.4 % / 60.5 %). The console computes the phase ONCE per turn (`delegation_policy.turn_phase_decision`) and carries it to the engine guard (`will_delegate`) and to `stream_turn(route_phase=...)`; `route_and_record` re-checks a carried decision only in the restrictive direction (a trip after the decision still turns it to shadow). Every decision row carries `gate: verdict | pending | post_hoc`. |
 | Outcome sink | `core/learning/outcome_sink.py` | `emit_task_outcome()` / `recent_outcomes()`; content-free; fail-soft; tenant from task metadata only |
 | Task chokepoint | `core/console/corvin_core/task_manager.py::TaskManager.record_event` | emits on `task.completed` / `task.failed`; `create_task(tenant_id=…)` at every production creation site (console chat, CCC chat router, both bridge sites). An omitted `tenant_id` defaults to `_default` (ADR-0007) — the task's audit record and its OUTCOME name that tenant, never the environment (`test_task_without_tenant_is_filed_under_the_default_tenant`) |
 | Audit-first store | `core/learning/event_store.py::EventStore.write_event` | core chain record (`learning.<event_type>`, content-free) FIRST via `event_persistence.core_audit_event`; no chain commit ⇒ no disk record (RuntimeError); disk record carries `audit_ref` |
@@ -397,7 +397,7 @@ on every `EventType.FEEDBACK` event BEFORE the audit-first write; a refusal rais
 |---|---|---|---|
 | 1 Throttle | `feedback_throttle.py` | ≤ 5 decisions / 60 s per subject (all producers), counted over that subject's own index `<tenant>/learning/feedback_gate/subjects/<sha256(subject)>/all.jsonl` (content-free; rejected attempts count; bounded tail read) — never an in-process deque, and never the tenant-wide tail, which junk on other subjects could flush | `learning.feedback_throttled` |
 | 2 Reality | `reality_check.py` | the skill ran (a `skill_executed` learning event of THIS tenant) within 24 h before the signal (+5 s skew); an optional `claimed_output_hash` must equal `execution_output_hash()` of one of those runs | `learning.feedback_rejected` (`subject_not_verifiable`, `no_corresponding_execution`) · `learning.feedback_reality_mismatch` |
-| 3 Trust | `adversarial_detector.py` | `trust_weight = max(0.1, 1 − rejected/total)` over the last 20 decisions on the subject BY THE SAME PRODUCER (`subjects/<h>/<source_key>.jsonl`), stamped into `signal.trust_weight`; < 0.3 → alert naming the producer's `source_key` | `learning.adversarial_feedback_detected` (ERROR) |
+| 3 Trust | `adversarial_detector.py` | `trust_weight = max(0.1, 1 − rejected/total)` over the last 20 JUDGED decisions on the subject BY THE SAME PRODUCER (`subjects/<h>/<source_key>.jsonl`; the producer's own `rate_limit_exceeded` refusals are not counted — `adversarial_detector.NOT_A_VERDICT` — they are the gate's budget, not a verdict on the signal), stamped into `signal.trust_weight`; < 0.3 → alert naming the producer's `source_key` | `learning.adversarial_feedback_detected` (ERROR) |
 
 **Subject, producer, atomicity (review c120).** The gate keys everything on one canonical subject
 (`feedback_gate.canonical_subject`: `skill:X` and `X` are both `X`, other forms stay raw), so two
@@ -409,6 +409,15 @@ append runs under an exclusive per-subject file lock (`subjects/<h>/.lock`, `fcn
 `msvcrt.locking`), and the clock is read under that lock, so parallel requests and processes
 (bridge + console) cannot exceed the window; a lock not obtained within 10 s refuses the feedback.
 `decisions.jsonl` is still appended (all subjects) for the anomaly monitor.
+The per-subject `all.jsonl` (the throttle index) is appended FIRST, then the producer file, both under
+the subject lock and cut back to their previous size if the write fails; `decisions.jsonl` (shared by
+all subjects) last. A torn tail line left by an earlier full disk gets a leading newline, so it stays its
+own unparseable line (skipped on read) and never swallows the next record. If any ledger append fails
+after `learning.feedback_accepted` committed, `learning.feedback_not_stored` (ids, `stage`,
+`error_type` — the exception CLASS, never its text) is chained and the feedback is refused
+(`ledger_write_failed`, HTTP 422): accepted minus not_stored equals what was stored. A refused-after-
+ledger-failure attempt that reached `all.jsonl` still counts against the throttle budget (the
+conservative direction). Proof: `tests/learning/test_feedback_gate_c120_r2_e2e.py`.
 
 Accepted → `learning.feedback_accepted` (with `trust_weight`). Consumers multiply by
 `adversarial_detector.weight_of(signal)` (1.0 for signals stored before the gate):
@@ -465,15 +474,23 @@ skill ids, timestamp) and is dropped on chat delete; the console therefore produ
 rejection signals only, never a rephrase signal. The registry writes its own hash-chained
 `skill.grade` record, AUDIT-FIRST: the record commits before the grade is persisted; if it cannot
 commit, nothing is persisted, the grade is not reported (no `skill.outcome_graded` /
-`console.action_performed`), and no unchained line is ever appended to the chain (the former raw
-`OSError` fallback is gone for hash-chained registries).
+`console.action_performed`), and no unchained line is appended to the chain: the registry never writes
+a raw line (the former `OSError` fallback is gone for hash-chained registries), and the core writer
+cuts its own partial append back under the chain lock when a write is short (full disk, file-size
+limit; POSIX — Windows keeps the text-mode writer). If persisting the grade fails AFTER its record
+committed, a compensating `skill.grade_not_persisted` record (run id + error class) is chained and the
+error propagates, so the chain nets "graded, not persisted" and a retry is one grade, not two. A failed
+`meta.json` copy after the manifest was saved is logged only: the grade is stored and reported.
 
-**Once per day (decision):** an organic follow-up grade is written at most once per skill per
-channel per UTC day, deduped at write time under the registry lock
-(`SkillRegistry.grade(dedupe_marker=...)` → `DuplicateGrade`; for an active canary candidate, by
-the `~dd=<marker>` suffix of the canary grade's run id). The marker is
-`sha256("followup-grade|<UTC day>|<channel>")[:16]`, stored as `dd=<marker>` in the grade note —
-never the channel id, and not linkable across days. Bridge channel = `<channel>:<chat_key>`;
+**Once per 24 h per signal kind (decision):** an organic follow-up grade is written at most once per
+skill per channel per signal KIND (approval / rejection / rephrase) in a rolling 24 h window, deduped
+at write time under the registry lock (`SkillRegistry.grade(dedupe_marker=..., dedupe_also=...,
+dedupe_window_s=86400)` → `DuplicateGrade`; for an active canary candidate, by the `~dd=<marker>`
+suffix and the timestamp of the canary grade). An earlier approval therefore never blocks a later
+rejection, and two praises at 23:59:59 and 00:00:01 UTC are one window. The marker is
+`sha256("followup-grade|<kind>|<UTC day>|<channel>")[:16]`, stored as `dd=<marker>` in the grade note —
+never the channel id, and not linkable across days; a new grade is refused when a grade carrying
+today's or yesterday's marker is younger than 24 h. Bridge channel = `<channel>:<chat_key>`;
 console channel = `"console"` for the whole tenant (a new chat opens no new allowance).
 
 **Console grading gates, in order** (`followup_grading.grade_followup`, all must hold, any failure
@@ -481,28 +498,38 @@ console channel = `"console"` for the whole tenant (a new chat opens no new allo
 (popped, so it is consumed even if a later gate fails) → an active `learning_feedback` consent → the
 previous turn's task `COMPLETED` → then inside `grade_from_user_followup`: the tenant switches
 `spec.web_chat.inject_skills` / `outcome_grading` not `false`, a detected signal, only `session` /
-`user` scope skills of the session tenant, once per day per skill (above).
+`user` scope skills of the session tenant, once per 24 h per skill and signal kind (above).
 
 **Detection rules** (precedence rejection > approval > rephrase, unchanged):
 
-* Both sides match TOKENS (word boundaries), never substrings: "nochmal" does not fire inside
-  "nochmals", "wrong" not inside "wrongful", "no, " not inside "Bruno, ".
-* A message containing `?`, or a token longer than `_OUTCOME_MAX_TOKEN_CHARS = 40` characters, carries
-  no approval or rejection signal.
-* Rejection: a phrase from `_OUTCOME_REJECTION_PHRASES`, or "nein"/"no"/"nope" followed by `,` `.` `!` or
-  the end; "nochmal" followed by a thank-you ("nochmal danke") is not a rejection. Only for messages of at
-  most `_OUTCOME_REJECTION_MAX_WORDS = 20` tokens. **A decision, not a measurement:** a correction is short
-  but may carry a one-clause reason; a longer message is a new request in which a criticism word is
-  incidental.
-* Approval: at most `_OUTCOME_APPROVAL_MAX_WORDS = 12` tokens (a decision, unchanged); no negator ANYWHERE
-  in the message (single tokens and the multi-word forms "alles andere als", "far from", "anything but",
-  "would not say", "not really", "nicht wirklich", …); no void cue (`_OUTCOME_APPROVAL_VOIDERS`: a new
-  request "bitte"/"jetzt"/"please"/"now", a contrast "aber"/"but"/"anders"/"else", a conditional
-  "wäre"/"would", a sarcasm marker "kaputt"/"broken"/"wasting", …); no double quote / guillemet (a quotation) and no eye-roll/anger emoji; then a phrase from
-  `_OUTCOME_APPROVAL_PHRASES`, or the whole message is one of `_OUTCOME_APPROVAL_EXACT` ("gut", "good",
-  "nice", "stimmt", "correct", "genau", "great", "richtig", "super", "top", "passt", …), which never count
-  inside a sentence. A voided praise is NO signal, not a rejection. A missed signal costs one grade; a
-  false one changes what gets injected.
+* The two sides are deliberately ASYMMETRIC: a false approval is an organic 0.9 that may lift a skill
+  over the promotion bar, so approval is conservative; a false rejection only lowers a grade (the safe
+  direction), so rejection is liberal.
+* Rejection (liberal): a token STARTING with a rejection stem (`_OUTCOME_REJECTION_STEMS`: "falsch" —
+  falsche/falsches/falschen/falsch_flag —, "inkorrekt", "wrong" — wrongly/wrongful —, "incorrect"); a
+  token phrase from `_OUTCOME_REJECTION_PHRASES` ("stimmt nicht", "klappt nicht", "immer noch nicht",
+  "try again", "still broken", "same error", …); or "nein"/"no"/"nope" followed by `,` `.` `!` or the
+  end. At any length, and a `?` does not cancel it. The only exception: "nochmal"/"nochmals"/"again"
+  next to a thank-you is the praise idiom ("nochmal danke", "danke nochmal", "thanks again").
+* Approval (conservative), all must hold: no `?`; no token over `_OUTCOME_MAX_TOKEN_CHARS = 40`; at
+  most `_OUTCOME_APPROVAL_MAX_WORDS = 12` tokens (a decision); no quotation (double quote / guillemet)
+  and no eye-roll / anger / laughing emoji; no sarcasm opener (`_OUTCOME_SARCASM_PHRASES`: "na toll",
+  "na prima", "ja toll", "oh great", "yeah right", "alles weg", …); no 'd contraction ("that'd", "it'd");
+  no negator anywhere (single tokens and multi-word forms "alles andere als", "far from", "would not
+  say", "not really", …) except inside a positive idiom (`_OUTCOME_POSITIVE_IDIOMS`: "nicht schlecht",
+  "not bad", "no more errors", "keine Fehler mehr"); no void cue (`_OUTCOME_APPROVAL_VOIDERS`: a new
+  request or contrast "bitte"/"jetzt"/"please"/"now"/"aber"/"but"/"again", a complaint word
+  "kaputt"/"broken"/"fehler", a conditional / irrealis "wäre"/"hätte"/"könnte"/"sollte"/"würde"/"would"/
+  "could"/"should", a concession or dismissal "trotzdem"/"dennoch"/"anyway"/"vergiss es"/"for trying") —
+  "jetzt"/"now" next to a success verb ("läuft jetzt", "works now") and "nochmal"/"again" next to a
+  thank-you are part of the praise; then a phrase from `_OUTCOME_APPROVAL_PHRASES` (now incl. "hat
+  geklappt", "funktioniert", "läuft", "passt so", "it works", "works like a charm"), or the whole message
+  is one of `_OUTCOME_APPROVAL_EXACT`, which never count inside a sentence. A voided praise is NO signal,
+  not a rejection.
+* Measured on the 73-message review table (origin/main → G1): real praise 26/32 → 29/32, real
+  rejection 21/24 → 24/24, complaints read as praise 12 → 0, praise read as rejection 2 → 0. A held-out
+  set written after the change: 26/28, 0 complaints read as praise. Known misses: "Cheers, that did it"
+  (no approval), "thanks, but that's not it" (no rejection).
 
 **Privacy:** the user's text is read, never stored — on the console not even the previous prompt is
 kept in memory. The grade note names only the signal, the previous run id and the day-bound dedupe
@@ -518,9 +545,14 @@ Proof: `corvin_operator/bridges/shared/test_outcome_praise_e2e.py` (phrase/negat
 real chat WebSocket: approval, rejection, negated/incidental praise, no consent, tenant opt-out, a
 skill the renderer dropped, `/debug-engine`, an error answer, a cancelled turn, another tenant's project-scope skill with a
 real repo-shaped project root, no prompt text in the snapshot, chat delete, a failing `skill.grade`
-writer with `verify_chain` and the ADR-0232 `audit_chain_intact` tripwire green, once-per-day dedupe),
+writer with `verify_chain` and the ADR-0232 `audit_chain_intact` tripwire green, 24 h per-kind dedupe),
 `corvin_operator/skill-forge/tests/test_grade_audit_first.py` (MCP `skill_grade` over the JSON-RPC loop
 with a failing writer: error response, nothing persisted, chain verifies).
+`test_outcome_praise_e2e.py` also covers the r2 table rows, a same-day rejection after an approval and
+the rolling 24 h window across UTC midnight through `adapter.process_one`;
+`test_followup_grading_ws_e2e.py` covers liberal rejection, sarcasm/conditional/concession, praise
+recall, approval-then-rejection, a failed save after the record (compensated, retry nets one grade) and
+a failed `meta.json` copy (grade still reported) over the real chat WebSocket.
 
 ## Registry hardening (2026-09-07 adversarial review F-K2/F-K3/F-K5/F-K6/F-K8)
 
@@ -541,26 +573,39 @@ with a failing writer: error response, nothing persisted, chain verifies).
   never over an explicit `/delegate`, and only after `routing.phase2_decision`
   committed to the chain (ADR-2092 G3/G4).
 * **An outcome has three kinds: `ok: true`, `ok: false`, NOT-JUDGED** (ADR-2092 G1 as
-  amended 2026-10-27, both surfaces). A turn that was cancelled (console client
-  disconnect / cancellation `rc == -1`, bridge `/cancel`), killed by a restart (the boot
-  reaper marks the console task `orphaned_on_restart` and records the routing turn named
-  by the task's `task.routing` event), or in which no engine ran (gate/budget/quota
+  amended 2026-10-27, both surfaces). A turn that was cancelled (console operator stop, or an `rc == -1` cut with no noted
+  reason; bridge `/cancel`), killed by a restart (a console host shutdown cut, noted
+  `shutdown`, and the boot reaper, which marks the console task `orphaned_on_restart`
+  and records the routing turn named by the task's `task.routing` event), or in which no
+  engine ran (gate/budget/quota
   refusal, debug engine, empty `/use-engine` directive) is recorded with `"ok": null`
   and `"excluded": "<cancelled|orphaned|no_engine>"` (closed set,
   `routing_ledger.EXCLUDED_REASONS`). It is counted and visible (`summarize()` →
   `not_judged`, `not_judged_by_reason`; `Readiness.not_judged`) but excluded from the
   join-rate numerator AND denominator, from every success rate and from the rollback
   judge. A bridge refusal is never a native success any more; a cancelled ACS run is
-  never an ACS failure. Old ledger lines (no `excluded` key, bool `ok`) still read as
+  never an ACS failure. A client disconnect does not cancel a console turn (the turn is
+  detached and finishes). The detached-turn watchdog (`detached_timeout`,
+  `_DETACHED_TURN_MAX_S` = 1800 s) is a JUDGED failure (`ok: false`) of the served engine
+  (`chat_runtime._cut_turn_outcome`): a hung engine reaches the rollback judge and every
+  success rate. On the bridge a turn the Skill routed (`route_source: skill`) onto an
+  engine that cannot run here (`engine_unavailable`, e.g. no claude CLI after a
+  de-escalation to native) is a JUDGED failure of that engine, not `no_engine`; the
+  bundled rule's own refused turns stay `no_engine`. Old ledger lines (no `excluded` key, bool `ok`) still read as
   judged. A bridge turn killed by a restart has no task reaper link and still counts as
   a missing outcome.
 * **The bridge soak (ADR-2092 G4) is continuous** (`readiness.console_soak_start`):
   the bridge may enter Phase 2 only when the console has been in dual_write for
-  `CONSOLE_SOAK_S` (7 days) since the LATER of (a) the first console decision of the
+  `CONSOLE_SOAK_S` (7 days) since the LATER of (a) the oldest console decision of the
   current unbroken dual_write run, (b) the last rollback trip and (c) the last rollback
-  reset. "Unbroken": no two consecutive console decisions recorded `phase: dual_write` —
-  and not the newest one and now — are more than `SOAK_MAX_GAP_S` (24 h) apart, so
-  console dual_write decisions must exist in the last 24 h. An unreadable rollback
+  reset. The run is walked newest-first over the console decisions that CONSULTED the
+  gate (`gate: verdict`; a line without `gate` reads as one) and is broken by (1) ANY
+  such decision recorded `phase: shadow` (env switched back, a refusal, a not-ready
+  verdict, a rollback) and (2) a gap of more than `SOAK_MAX_GAP_S` (24 h) between two
+  consecutive dual_write decisions or between the newest one and now. Decisions that
+  never got a verdict count neither way: `post_hoc` (the engine had already run) and
+  `pending` (the readiness placeholder: no verdict yet after a start or invalidation, or
+  none younger than 1 h). An unreadable rollback
   state is no soak (fail-closed). The phase read is the EFFECTIVE phase recorded per
   decision: `CORVIN_ACP_PHASE=phase2_dual_write` on a console whose own gates do not
   hold records `shadow` and starts no soak.
@@ -840,7 +885,7 @@ skill: its production `skill_executed` records carry `output = {score, passed}`,
 | Step | Where | Contract |
 |---|---|---|
 | Freeze | `LearningHost._check_anomalies` → `_freeze` → `skill_adapter.freeze_learning` → `SkillAdapter.freeze` | only AFTER the anomaly record committed; audit-first: `learning.frozen` (WARNING) on the tenant chain, then `OptimizerState.frozen/frozen_reason/frozen_since` persisted in `<tenant>/skills/<skill>_config.json` (`optimizer`). Not committed → nothing frozen, the anomaly entry has no `freeze` key and the next check retries. The new state is written to a temp file BEFORE the record and renamed after it: a temp-file failure records nothing; a rename failure after the record committed chains `learning.freeze_not_applied` (ERROR) and is retried. Done once per anomaly episode (`freeze: frozen` on the host's anomaly entry). Every retry counts `freeze_attempts` on the entry and the next `learning.frozen` carries `attempt` (so a retry never reads as a second, independent freeze). Only an id failing `valid_skill_id` - checked by the host itself - is `freeze: invalid_skill_id`, never retried; a config file that exists but does not parse (one malformed number is enough) is recorded once per episode as `learning.freeze_failed` (`cause: config_unreadable`) and retried until it parses |
-| Refuse | `SkillAdapter._apply_config_delta_locked`, `SkillAdapter._run_optimizer_epoch_locked`, `WeightPersistence.save_weights`, `dod_verifier_dashboard` feedback route | `LearningFrozen` raised, no config/weight change, not even an epoch tick; one `learning.freeze_refused_write` (`target: skill_config` or `dod_weights`). The refusal holds even if its record does not commit. The DoD weights are frozen under `os.definition_of_done_verifier` (`weight_persistence.DOD_SKILL_ID`); an unreadable brake file - including a malformed number - reads as frozen (`brake_state_unreadable`). A file without an `optimizer` block reads as never frozen (legitimate pre-2026-09-06 files; the brake always writes the block); an `optimizer` that is not an object is unreadable. `WeightPersistence.save_weights(record=...)` runs brake check, the caller's `skill_config_updated` and the write under the DoD skill's config flock (`skill_adapter.brake_lock`, the lock a freeze takes), so a freeze cannot land between check and write |
+| Refuse | `SkillAdapter._apply_config_delta_locked`, `SkillAdapter._run_optimizer_epoch_locked`, `WeightPersistence.save_weights`, `dod_verifier_dashboard` feedback route | `LearningFrozen` raised, no config/weight change, not even an epoch tick; one `learning.freeze_refused_write` (`target: skill_config` or `dod_weights`). The refusal holds even if its record does not commit. The DoD weights are frozen under `os.definition_of_done_verifier` (`weight_persistence.DOD_SKILL_ID`); an unreadable brake file - including a malformed number - reads as frozen (`brake_state_unreadable`). A file without an `optimizer` block reads as never frozen (legitimate pre-2026-09-06 files; the brake always writes the block); an `optimizer` that is not an object is unreadable. `WeightPersistence.save_weights(record=...)` runs brake check, the caller's `skill_config_updated` and the write under the DoD skill's config flock (`skill_adapter.brake_lock`, the lock a freeze takes), so a freeze cannot land between check and write. The DoD feedback route uses `WeightPersistence.update(compute)`, which also loads the stored weights and computes the optimizer step inside that flock: two concurrent ratings (two console processes) never step from the same old weights, and each chained `old_weights` is the state that was stored |
 | Surface | `POST learning/feedback` → hypotheses `optimizer_reason: learning_frozen` (feedback still recorded); `POST /feedback/skill` → `config_applied: false` with the note `config not updated: LearningFrozen`; `POST /api/dod/feedback` → 409 `{error: learning_frozen}`, no `skill_config_updated`; 503 `lock_busy` when the brake lock stays held | |
 | Lift | `POST /v1/console/learning/config/unfreeze?skill_id=` (`routes/learning.py`) | `require_csrf` (no CSRF → 403); tenant from the session only (a skill frozen in another tenant is 404 `not_frozen` here); audit-first `learning.unfrozen`, then state, then console `learning.config_unfreeze`. 503 `audit_not_committed` leaves it frozen. 503 `state_not_written` when the state could not be written (if `learning.unfrozen` had committed, `learning.unfreeze_not_applied` follows it; still frozen). 422 `skill_id_alias` (+ `canonical_skill_id`) for an id that names another skill's file (`os_delegation_router` for `os.delegation_router`): one canonical id per file, the stored id is never rewritten. 409 `brake_state_unreadable` for a file that does not parse. Never automatic, no time-out |
 
