@@ -1001,6 +1001,10 @@ async def chat_stream(
                     except Exception:  # noqa: BLE001
                         pass
                 if _engine_msg:
+                    # A cleared Phase 2 Skill route onto the unavailable engine is the
+                    # Skill's harm: record decision + judged failure, like the bridge.
+                    chat_runtime.record_unavailable_skill_route(
+                        sess, prompt, phase_decision=_route_phase)
                     await websocket.send_json({
                         "type": "error", "code": 503,
                         "message": _engine_msg,

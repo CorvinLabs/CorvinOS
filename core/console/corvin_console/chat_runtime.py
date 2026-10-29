@@ -2439,6 +2439,49 @@ def will_delegate(sess: "WebChatSession", prompt: str, *,
     ) != "native"
 
 
+def record_unavailable_skill_route(sess: "WebChatSession", prompt: str, *,
+                                   phase_decision: object | None) -> bool:
+    """The engine guard is about to refuse this turn (the OS engine is unavailable).
+    When the refusal is the Skill's doing — a cleared Phase 2 decision, a turn the
+    bundled rule would have delegated and the Skill de-escalated to ``native`` —
+    record it like the bridge does (review r3_s2-1): the decision (with its
+    ``routing.phase2_decision`` record) and a JUDGED ``ok: false`` outcome for the
+    engine the Skill chose, so readiness and the rollback judge see the harm. Before,
+    the console answered 503 and wrote no ledger row at all.
+
+    Returns True when it recorded. Any other refusal records nothing (as before).
+    A decision whose ``routing.phase2_decision`` record did not commit serves the
+    bundled engine (audit-first); the guard still refuses — it already said so — and
+    the outcome is recorded NOT-JUDGED ``no_engine``. Never raises."""
+    try:
+        import dataclasses as _dc  # noqa: PLC0415
+
+        if getattr(phase_decision, "phase", None) != "dual_write":
+            return False
+        shadow = _dc.replace(phase_decision, phase="shadow", reason="phase1_shadow")
+        if not will_delegate(sess, prompt, phase_decision=shadow):
+            return False          # the bundled rule itself stays native: not the Skill's
+        _pl = prompt.strip().lower()
+        force_delegate = (_pl == _DELEGATE_PREFIX or _pl.startswith(_DELEGATE_PREFIX + " "))
+        meta = _new_route_meta()
+        t0 = time.monotonic()
+        _worker_engine_target(
+            prompt, mode=_feature_flags.worker_engine_mode(sess.tenant_id),
+            force_delegate=force_delegate, tenant_id=sess.tenant_id, sink=meta,
+            phase_decision=phase_decision)
+        if "routed_engine" not in meta:
+            return False
+        if meta.get("route_source") == "skill":
+            _report_console_route_outcome(sess.tenant_id, meta, served=meta["routed_engine"],
+                                          ok=False, started=t0)
+        else:
+            _report_console_route_outcome(sess.tenant_id, meta, served=meta["routed_engine"],
+                                          ok=False, started=t0, excluded="no_engine")
+        return True
+    except Exception:  # noqa: BLE001 — the routing record never costs the turn
+        return False
+
+
 def turn_phase_decision(tenant_id: str) -> object | None:
     """The console turn's ONE L5 phase decision, taken before the engine guard and
     carried into the turn (review r2_s2-2). Pure: no audit, no ledger row."""

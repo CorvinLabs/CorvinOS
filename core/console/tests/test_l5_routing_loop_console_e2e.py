@@ -448,3 +448,63 @@ class ConsoleRoundTwoRoutingE2E(_StreamTurnE2EBase):
             asyncio.run(drive())
         (row,) = self._rows()
         self.assertEqual((row["outcome"]["ok"], row["outcome"].get("excluded")), (None, "cancelled"))
+
+
+    # ── review r3_s2-1: a cleared Phase 2 Skill route onto an unavailable OS engine. The
+    # console guard refused it with 503 and wrote no ledger row (the bridge records it
+    # since 36a450b75); driven through the REAL chat WebSocket route.
+
+    def _unavailable_engine_turn(self, phase: str, prompt: str = FANOUT):
+        from audit import audit_event
+        from core.skills.boot import boot_skills
+        from core.skills.os_skills.monitoring import readiness, routing_ledger
+
+        boot_skills(tenant_id=TENANT, wire_learning=False,
+                    audit_emit=lambda e, d: audit_event(e, details=d, tenant_id=TENANT))
+        _seed_console_ready()
+        os.environ["CORVIN_ACP_PHASE"] = phase
+        if phase == "phase2_dual_write":
+            self.assertTrue(readiness.cached_evaluate(TENANT, "console", background=False).ready)
+        self._pin_house_rules_allowed()
+        self._inject_license_ok()
+        self._inject_fake_acs()
+        spawn = self._no_spawn_guard()
+        before = len(routing_ledger.read_records(TENANT))
+        import delegation_policy as dp
+
+        with patch.object(self.cr, "_delegation_enabled", return_value=True), \
+             patch.object(self.cr._feature_flags, "worker_engine_mode", return_value="acs"), \
+             patch.object(self.cr, "get_engine_unavailable_message",
+                          return_value="The OS engine is not set up."), \
+             patch.object(dp, "routing_features",
+                          lambda p, tenant_id="_default": dict(SIMPLE_FEATS)):
+            wire = self._ws_turn(prompt)
+        return wire, routing_ledger.read_records(TENANT)[before:], spawn
+
+    def test_a_skill_route_onto_an_unavailable_engine_is_a_judged_failure(self) -> None:
+        wire, rows, spawn = self._unavailable_engine_turn("phase2_dual_write")
+        self.assertTrue(any(e.get("type") == "error" and e.get("code") == 503 for e in wire), wire)
+        self.assertFalse(spawn["hit"])
+        decs = [r for r in rows if r["kind"] == "decision"]
+        outs = [r for r in rows if r["kind"] == "outcome"]
+        self.assertEqual(len(decs), 1, rows)
+        self.assertEqual(len(outs), 1, rows)
+        dec, out = decs[0], outs[0]
+        self.assertEqual((dec["phase"], dec["bundled"], dec["used"], dec["source"], dec["gate"]),
+                         ("dual_write", "acs", "native", "skill", "verdict"))
+        self.assertEqual((out["turn_id"], out["used"], out["ok"], out.get("excluded")),
+                         (dec["turn_id"], "native", False, None))
+        self.assertEqual([e["details"]["turn_id"] for e in self._chain()
+                          if e["event_type"] == "routing.phase2_decision"], [dec["turn_id"]])
+
+    def test_control_the_same_turn_in_shadow_delegates_and_succeeds(self) -> None:
+        wire, rows, _ = self._unavailable_engine_turn("phase1_shadow")
+        self.assertFalse(any(e.get("type") == "error" for e in wire), wire)
+        self.assertEqual([(r["kind"], r["used"], r.get("ok")) for r in rows],
+                         [("decision", "acs", None), ("outcome", "acs", True)])
+
+    def test_a_refusal_the_bundled_rule_made_still_records_nothing(self) -> None:
+        """Not the Skill's doing: smalltalk stays native under the bundled rule."""
+        wire, rows, _ = self._unavailable_engine_turn("phase2_dual_write", prompt="hallo")
+        self.assertTrue(any(e.get("code") == 503 for e in wire), wire)
+        self.assertEqual(rows, [])
