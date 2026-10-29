@@ -1110,48 +1110,70 @@ def auto_grade_from_output(
 # The two sides are deliberately ASYMMETRIC (review c120 r2_s1-1..4, decided
 # design): a false APPROVAL is an organic 0.9 that may lift a skill over the
 # promotion bar, so approval is conservative; a false REJECTION only lowers a
-# grade (the safe direction), so rejection is liberal.
+# grade (the safe direction), so rejection is liberal — but not blind (review
+# c120 r3_s1-3: a false rejection is an organic 0.1 that uses up the day's slot).
 #
-# Rejection (liberal) — any of, anywhere in the message, at any length, with or
-# without a question mark:
+# Quoted text is a quotation, never a signal: spans in double quotes /
+# guillemets and in matching single quotes ('well done', ‘ok’) are removed
+# before either test (an apostrophe inside a word, "that's", is no quote).
+#
+# Rejection (liberal) — any of, at any length, with or without a question mark:
 #   * a token starting with a rejection stem (_OUTCOME_REJECTION_STEMS: "falsch"
-#     matches falsche/falsches/falschen, "inkorrekt", "wrong" matches wrongly,
-#     "incorrect");
+#     matches falsche/falsches/falschen, "wrong" matches wrongly, "inkorrekt",
+#     "incorrect") that is not a known compound (_OUTCOME_REJECTION_COMPOUNDS:
+#     Falschgeld, Falschparker, wrongdoing, wrongful, ...);
 #   * a token phrase from _OUTCOME_REJECTION_PHRASES ("stimmt nicht", "klappt
 #     nicht", "try again", "doesnt work", "still broken", ...);
-#   * "nein"/"no"/"nope" as a whole word followed by , . ! or ending the message.
-# The only exception: "nochmal"/"nochmals"/"again" next to a thank-you is the
-# praise idiom "nochmal(s) danke" / "danke nochmal" / "thanks again", not a retry
-# request (_OUTCOME_THANKS_TOKENS).
+#   * "nochmal"/"nochmals" when the message starts with it, has at most 4
+#     words, or it opens a clause or follows a contrast ("..., aber nochmal
+#     bitte") — never inside a longer request ("Kannst du das Diagramm nochmal
+#     in Blau rendern") and never next to a thank-you ("danke nochmal");
+#   * "nein"/"no"/"nope" followed by , . ! or the end, at the START of the
+#     message or right after a sentence break — not "item no. 7", and not the
+#     closing idioms "nein, danke", "nein, sonst nichts", "no, thanks",
+#     "no, that's all" (_OUTCOME_CLOSING_AFTER_NO).
 #
 # Approval (conservative) — only when ALL hold:
-#   * at most _OUTCOME_APPROVAL_MAX_WORDS (12) tokens, no token over 40 chars;
+#   * at most _OUTCOME_APPROVAL_MAX_WORDS (12) tokens, raised to
+#     _OUTCOME_APPROVAL_MAX_WORDS_THANKS (20) when a thank-you token is present;
+#     no token over 40 chars; emoji are not tokens;
 #   * no question mark anywhere ("is that correct?", "stimmt das?");
-#   * not a quotation (double quote / guillemet) and no eye-roll, anger or
-#     laughing emoji (_OUTCOME_SARCASM_EMOJI);
-#   * no sarcasm opener (_OUTCOME_SARCASM_PHRASES: "na toll", "na prima", "ja
-#     toll", "oh great", "yeah right", ...);
-#   * no conditional / irrealis ("hätte", "könnte", "sollte", "würde", "wäre",
-#     "would", "could", "should", and any 'd contraction: "that'd", "it'd");
-#   * no concession or dismissal ("trotzdem", "dennoch", "anyway", "regardless",
-#     "vergiss es", "mach's selbst", "for trying", ...);
+#   * not a quotation and no eye-roll, anger or thumbs-down emoji
+#     (_OUTCOME_SARCASM_EMOJI); laughing emoji (😂🤣) void it only without a
+#     thank-you ("Haha super, danke 😂" counts, "perfekt 😂😂" does not);
+#   * not a request (_looks_like_request): no imperative or question word at
+#     the start of the message or of a clause (teste, mach, schreib, prüf,
+#     make, write, test, check, please, explain, what, is, does, ...), no
+#     question word anywhere (wie, warum, ob, how, why, which, ...), no
+#     verb-first German question ("Klappt das auch mit Excel-Dateien");
+#   * no sarcasm opener (_OUTCOME_SARCASM_PHRASES: "na toll", "ja toll",
+#     "oh great", "yeah right", ...) and no negative continuation (the
+#     complaint words in _OUTCOME_APPROVAL_VOIDERS: "Great job breaking
+#     production", "super kaputt", "Thanks a lot for deleting my file");
+#   * no conditional / irrealis ("hätte", "könnte", "would", any 'd contraction);
+#   * no concession or dismissal ("trotzdem", "anyway", "for trying", ...);
 #   * no negator ANYWHERE (single tokens and _OUTCOME_NEGATOR_PHRASES), except
 #     inside a positive idiom (_OUTCOME_POSITIVE_IDIOMS: "nicht schlecht", "not
 #     bad", "no more errors", "keine fehler mehr");
 #   * no void cue (_OUTCOME_APPROVAL_VOIDERS: a new request, a contrast, a
-#     complaint word). "jetzt"/"now" next to a success verb ("läuft jetzt",
-#     "works now", "jetzt klappt") and "nochmal"/"again" next to a thank-you are
-#     part of the praise, not a new request;
-#   * a phrase from _OUTCOME_APPROVAL_PHRASES, or the WHOLE message is one of
-#     the generic words in _OUTCOME_APPROVAL_EXACT ("gut", "good", "nice", ...),
-#     which never count inside a sentence.
+#     complaint word). "jetzt"/"now" is part of the praise only next to a
+#     success verb AND with a thank-you ("läuft jetzt, danke") or in a whole
+#     reaction ("it works now"); "nochmal"/"again" next to a thank-you is the
+#     "thanks again" idiom;
+#   * and one of: a phrase from _OUTCOME_APPROVAL_PHRASES anywhere; a weak
+#     success word (_OUTCOME_WEAK_APPROVAL_PHRASES: "funktioniert", "klappt",
+#     "läuft", "works", "worked", "excellent", "brilliant") together with a
+#     thank-you; or a WHOLE reaction — every token is an approval phrase, a
+#     weak success word, a generic word (_OUTCOME_APPROVAL_EXACT_WORDS: "gut",
+#     "top", "passt", "richtig", ...) or a filler (_OUTCOME_FILLERS: es, das,
+#     so, ist, it, now, ...): "Top, passt!", "Richtig, so ist es.", "it works
+#     now". Generic words never count inside a longer sentence.
 #
-# _OUTCOME_APPROVAL_MAX_WORDS = 12 is a DECISION, not a measurement: a reaction
-# to the previous answer is short; a longer message is a new request or a
-# discussion in which a praise word is incidental ("…the great thing about
-# Postgres is…") and must not lift the previous turn. Rejection has no length
-# limit: a real correction often carries a long reason, and a false rejection
-# only lowers a grade.
+# The word limits are DECISIONS, not measurements: a reaction to the previous
+# answer is short; a longer message is a new request or a discussion in which a
+# praise word is incidental and must not lift the previous turn. A thank-you
+# makes a longer reaction plausible ("Wow, vielen vielen Dank, das ist wirklich
+# großartig geworden ..."). Rejection has no length limit.
 
 _OUTCOME_APPROVAL_PHRASES = (
     # German
@@ -1159,15 +1181,20 @@ _OUTCOME_APPROVAL_PHRASES = (
     "gut gemacht", "sehr gut", "super gemacht", "toll gemacht",
     "klasse gemacht", "prima", "toll", "spitze", "wunderbar", "hervorragend",
     "ausgezeichnet", "großartig", "grossartig", "genial", "klasse arbeit",
-    "gute arbeit", "hat geklappt", "klappt", "funktioniert", "läuft",
-    "passt so", "das passt",
+    "gute arbeit", "hat geklappt", "passt so", "das passt",
     # English
     "thanks", "thank you", "perfect", "exactly", "awesome",
     "spot on",
     "well done", "good job", "great job", "nice job", "nice work",
-    "good work", "great work", "excellent", "brilliant", "fantastic",
-    "nailed it", "love it", "looks good", "works now", "it works",
-    "works like a charm", "worked",
+    "good work", "great work", "fantastic",
+    "nailed it", "love it", "looks good",
+)
+#: Success words that are ordinary words in a request ("Teste ob es
+#: funktioniert", "Write an excellent cover letter"): they count only with a
+#: thank-you or as the whole reaction (review c120 r3_s1-1).
+_OUTCOME_WEAK_APPROVAL_PHRASES = (
+    "klappt", "funktioniert", "läuft", "works", "worked", "excellent",
+    "brilliant", "works like a charm",
 )
 
 #: Generic words: an approval only when they are the whole message.
@@ -1176,8 +1203,22 @@ _OUTCOME_APPROVAL_EXACT = frozenset({
     "richtig", "super", "top", "passt", "schön", "cool", "very good",
     "genau so", "ok super", "okay super",
 })
+#: The single tokens of a whole reaction made only of generic words.
+_OUTCOME_APPROVAL_EXACT_WORDS = frozenset({
+    "gut", "good", "nice", "stimmt", "correct", "genau", "great", "richtig",
+    "super", "top", "passt", "schön", "cool", "prima", "korrekt", "fine",
+})
+#: Tokens a whole reaction may carry around its praise ("Richtig, so ist es",
+#: "it works now", "Das passt jetzt"). None of them is a request on its own.
+_OUTCOME_FILLERS = frozenset({
+    "es", "das", "so", "ist", "ja", "jetzt", "endlich", "alles", "sehr",
+    "wirklich", "echt", "mega", "einfach", "wow", "haha", "hehe", "ok", "okay",
+    "it", "that", "this", "is", "now", "finally", "everything", "very",
+    "really", "yes", "yep", "yeah", "oh",
+})
 
 _OUTCOME_APPROVAL_MAX_WORDS = 12
+_OUTCOME_APPROVAL_MAX_WORDS_THANKS = 20
 _OUTCOME_MAX_TOKEN_CHARS = 40
 
 _OUTCOME_NEGATORS = frozenset({
@@ -1209,12 +1250,15 @@ _OUTCOME_APPROVAL_VOIDERS = frozenset({
     # a new request / contrast
     "bitte", "please", "jetzt", "now", "aber", "but", "doch",
     "however", "though", "although", "wieder", "again", "nochmal", "nochmals",
-    "anders", "anderes", "else",
-    # complaint words
+    "anders", "anderes", "else", "weiter", "next", "neue", "neues", "neuer",
+    "nächste", "nächsten", "new",
+    # complaint words / a negative continuation of the praise
     "kaputt", "broken", "waste", "wasting", "wasted", "verschwendet",
     "verschwendest", "schlecht", "bad", "worse", "worst", "schlimmer", "fehler",
     "error", "errors", "fail", "failed", "fails", "failing", "crash", "crashes",
     "crashed", "crasht", "abgestürzt", "useless", "nutzlos", "sinnlos", "pointless",
+    "breaking", "broke", "ruining", "ruined", "destroying", "destroyed",
+    "deleting", "zerstört", "zerschossen", "kaputtgemacht", "verloren", "lost",
     # conditional / irrealis
     "wäre", "wär", "wären", "wärst", "hätte", "hätten", "hättest", "könnte",
     "könnten", "könntest", "sollte", "sollten", "solltest", "würde", "würden",
@@ -1232,37 +1276,120 @@ _OUTCOME_SUCCESS_VERBS = frozenset({
 _OUTCOME_THANKS_TOKENS = frozenset({
     "danke", "dankeschön", "dank", "vielen", "thanks", "thank", "thx", "merci",
 })
+#: The tokens that make a message a thank-you (raise the word limit, allow a
+#: weak success word, allow laughing emoji).
+_OUTCOME_THANKS_ONLY = frozenset({
+    "danke", "dankeschön", "dank", "thanks", "thank", "thx", "merci",
+})
 #: Sarcasm openers: the praise word is the complaint.
 _OUTCOME_SARCASM_PHRASES = (
     ("na", "toll"), ("na", "prima"), ("na", "klasse"), ("na", "super"),
     ("na", "wunderbar"), ("na", "großartig"), ("na", "spitze"), ("na", "danke"),
-    ("ja", "toll"), ("ja", "prima"), ("ja", "klasse"), ("oh", "great"),
-    ("oh", "perfect"), ("oh", "wonderful"), ("oh", "fantastic"), ("yeah", "right"),
-    ("alles", "weg"), ("all", "gone"), ("everything", "gone"),
+    ("ja", "toll"), ("ja", "prima"), ("ja", "klasse"), ("ja", "super"),
+    ("oh", "great"), ("oh", "perfect"), ("oh", "wonderful"), ("oh", "fantastic"),
+    ("yeah", "right"), ("alles", "weg"), ("all", "gone"), ("everything", "gone"),
 )
 
-#: Rejection stems: any token STARTING with one of these is a rejection cue.
+#: Imperatives and question words: at the start of the message or of a clause
+#: they make it a request or a question, never an approval (r3_s1-1).
+_OUTCOME_REQUEST_STARTS = frozenset({
+    # German imperatives
+    "teste", "test", "mach", "mache", "machs", "schreib", "schreibe", "prüf",
+    "prüfe", "check", "checke", "erstell", "erstelle", "übersetz", "übersetze",
+    "ersetz", "ersetze", "nenn", "nenne", "gib", "zeig", "zeige", "find",
+    "finde", "such", "suche", "sag", "sage", "fass", "fasse", "erklär",
+    "erkläre", "schau", "guck", "lies", "lösch", "lösche", "füg", "füge",
+    "änder", "ändere", "bau", "baue", "implementiere", "validiere",
+    "korrigiere", "starte", "öffne", "schick", "schicke", "sende", "berechne",
+    "liste", "analysiere", "kannst", "kann", "wiederhole", "probier",
+    "probiere", "denk", "achte", "hilf", "lass", "nimm", "setz", "setze",
+    "entferne", "benenne", "rendere", "generiere", "formatiere", "sortiere",
+    "vergleiche", "beschreib", "beschreibe", "plane", "recherchiere", "führe",
+    "installiere", "aktualisiere", "behebe", "fixe", "schreibt", "macht",
+    # German question words at a clause start
+    "was",
+    # English imperatives
+    "make", "write", "please", "explain", "give", "show", "translate", "add",
+    "implement", "create", "fix", "run", "summarise", "summarize", "list",
+    "tell", "describe", "ensure", "verify", "try", "use", "update", "delete",
+    "remove", "rename", "build", "generate", "compare", "calculate", "compute",
+    "draft", "send", "open", "read", "look", "help", "let", "lets", "go",
+    "refactor", "review", "move", "change", "edit", "convert", "sort",
+    "format", "plan", "research", "analyse", "analyze", "search", "set", "put",
+    "replace", "install", "deploy", "debug", "clean", "print", "say", "name",
+    "provide", "prepare", "design", "define", "split", "merge", "work",
+    # English question / auxiliary starts
+    "what", "can", "will", "do", "does", "did", "is", "are", "were", "has",
+    "have", "had", "shall", "may",
+})
+#: Question words that make a message a question wherever they stand.
+_OUTCOME_QUESTION_WORDS = frozenset({
+    "wie", "warum", "wieso", "weshalb", "weswegen", "wo", "woher", "wohin",
+    "wann", "welche", "welcher", "welches", "welchen", "welchem", "ob", "wer",
+    "wen", "wem", "how", "why", "where", "when", "which", "who", "whom", "whose",
+})
+#: Leading tokens skipped when looking for a clause's first word ("und jetzt
+#: mach", "and then write").
+_OUTCOME_CLAUSE_LEAD = frozenset({
+    "und", "and", "dann", "then", "now", "jetzt", "nun", "bitte", "ok", "okay",
+    "also",
+})
+#: A German verb-first question: one of these verbs followed by a pronoun
+#: ("Klappt das auch mit Excel", "Läuft der Server noch", "Ist das gut").
+_OUTCOME_DE_QUESTION_VERBS = frozenset({
+    "klappt", "funktioniert", "läuft", "geht", "passt", "stimmt", "ist", "hat",
+    "war", "kann", "gibt", "sind", "hast", "bist", "wird",
+})
+_OUTCOME_DE_QUESTION_PRONOUNS = frozenset({
+    "das", "es", "der", "die", "er", "sie", "dies", "alles", "man", "du", "ihr",
+})
+
+#: Rejection stems: any token STARTING with one of these is a rejection cue,
+#: unless the token is one of the compounds below.
 _OUTCOME_REJECTION_STEMS = ("falsch", "wrong", "inkorrekt", "incorrect")
-#: Rejection cues as token sequences.
+#: Words that start with a rejection stem and are no verdict on the answer.
+_OUTCOME_REJECTION_COMPOUNDS = frozenset({
+    "falschgeld", "falschgeldes", "falschparker", "falschparkern",
+    "falschparkers", "falschaussage", "falschaussagen", "falschmeldung",
+    "falschmeldungen", "falschfahrer", "falschfahrern", "falschspieler",
+    "falschspielern", "wrongdoing", "wrongdoings", "wrongdoer", "wrongdoers",
+    "wrongful", "wrongfully",
+})
+#: Rejection cues as token sequences ("nochmal" is handled on its own).
 _OUTCOME_REJECTION_PHRASES = (
     # German
-    "passt nicht", "stimmt nicht", "nicht das was", "nochmal", "nochmals",
+    "passt nicht", "stimmt nicht", "nicht das was",
     "leider nicht", "hat nicht", "geht nicht", "funktioniert nicht",
     "klappt nicht", "immer noch nicht", "noch immer nicht", "läuft nicht",
     "gleiche fehler", "gleicher fehler", "selbe fehler", "derselbe fehler",
     # English
     "not what", "try again", "didnt work", "doesnt work", "did not work",
     "does not work", "still broken", "still not", "still doesnt", "same error",
+    "not correct", "not right", "not quite right", "isnt correct", "isnt right",
+    "nicht korrekt", "nicht richtig",
 )
+#: After "nein,"/"no," these openings are a polite close ("Nein, danke",
+#: "Nein, sonst nichts", "No, that's all"), not a rejection (r3_s1-3).
+_OUTCOME_CLOSING_AFTER_NO = (
+    ("danke",), ("dankeschön",), ("thanks",), ("thank",), ("thx",),
+    ("sonst", "nichts"), ("thats", "all"), ("that", "is", "all"),
+    ("worries",), ("problem",),
+)
+#: "nochmal" is a retry request right after one of these ("aber nochmal").
+_OUTCOME_RETRY_LEAD = frozenset({"aber", "but", "doch", "bitte", "please"})
 
 #: Double quotes and guillemets (apostrophes are contractions, not quotes).
 _OUTCOME_QUOTE_CHARS = frozenset('"“”„«»‹›‟〝〞＂`')
-#: Eye-roll / anger / thumbs-down / laughing next to praise reads as sarcasm.
-_OUTCOME_SARCASM_EMOJI = frozenset("🙄😒😑🤦😤😠😡🤬👎💩😂🤣🙃")
+#: Eye-roll / anger / thumbs-down next to praise reads as sarcasm.
+_OUTCOME_SARCASM_EMOJI = frozenset("🙄😒😑🤦😤😠😡🤬👎💩🙃")
+#: Laughing emoji: sarcasm only without a thank-you.
+_OUTCOME_LAUGH_EMOJI = frozenset("😂🤣")
 
 _TOKEN_RE = None  # compiled lazily (keeps import cost at zero)
 _NO_START_RE = None
 _CONTRACTED_D_RE = None
+_QUOTED_RE = None
+_CLAUSE_SPLIT_RE = None
 
 
 def _outcome_tokens(text: str) -> list[str]:
@@ -1273,6 +1400,22 @@ def _outcome_tokens(text: str) -> list[str]:
         _TOKEN_RE = re.compile(r"\w+")
     folded = text.lower().replace("’", "'").replace("'", "")
     return _TOKEN_RE.findall(folded)
+
+
+def _strip_quotations(text: str) -> tuple[str, bool]:
+    """Remove quoted spans; return (text without them, whether any was found).
+
+    Double quotes / guillemets of any pairing, and single quotes that open
+    after a non-word character and close before one ('well done', ‘ok’,
+    ‚gut‘) — an apostrophe inside a word ("that's", "geht's") is no quote."""
+    global _QUOTED_RE
+    if _QUOTED_RE is None:
+        _QUOTED_RE = re.compile(
+            r"[\"“”„«»‹›‟〝〞＂`][^\"“”„«»‹›‟〝〞＂`]*[\"“”„«»‹›‟〝〞＂`]"
+            r"|(?<!\w)['‘‚][^'‘’‚\n]+?['’‘](?!\w)")
+    stripped, n = _QUOTED_RE.subn(" ", text)
+    found = n > 0 or any(c in _OUTCOME_QUOTE_CHARS for c in stripped)
+    return stripped, found
 
 
 def _phrase_positions(tokens: list[str], phrase: tuple[str, ...]):
@@ -1315,20 +1458,67 @@ def _is_thanks_again(tokens: list[str], i: int) -> bool:
         tokens, i, _OUTCOME_THANKS_TOKENS)
 
 
+def _clauses(text: str) -> list[list[str]]:
+    """Token lists of the clauses of ``text`` (split at , . ; : ! newlines and
+    a free-standing dash)."""
+    global _CLAUSE_SPLIT_RE
+    if _CLAUSE_SPLIT_RE is None:
+        _CLAUSE_SPLIT_RE = re.compile(r"[,.;:!?\n]|\s[—–-]\s")
+    return [t for t in (_outcome_tokens(p) for p in _CLAUSE_SPLIT_RE.split(text)) if t]
+
+
+def _looks_like_request(text: str, tokens: list[str]) -> bool:
+    """A request or a question (r3_s1-1): never an approval."""
+    if any(t in _OUTCOME_QUESTION_WORDS for t in tokens):
+        return True
+    for i, clause in enumerate(_clauses(text)):
+        j = 0
+        while j < len(clause) - 1 and clause[j] in _OUTCOME_CLAUSE_LEAD:
+            j += 1
+        if clause[j] in _OUTCOME_REQUEST_STARTS:
+            return True
+        # Verb-first only as the very first word: "Jetzt funktioniert es" is a
+        # statement (verb second), "Funktioniert es" a question.
+        if (i == 0 and len(clause) > 1
+                and clause[0] in _OUTCOME_DE_QUESTION_VERBS
+                and clause[1] in _OUTCOME_DE_QUESTION_PRONOUNS):
+            return True
+    # "... und schreib noch einen Test": a clause opened by und/and/dann/then.
+    for k, t in enumerate(tokens[:-1]):
+        if t in ("und", "and", "dann", "then") and tokens[k + 1] in _OUTCOME_REQUEST_STARTS:
+            return True
+    return False
+
+
 def _is_rejection(text: str, tokens: list[str]) -> bool:
-    """Liberal rejection test (rule set above): stems, phrases, a bare "no"."""
+    """Liberal rejection test (rule set above)."""
     global _NO_START_RE
     if _NO_START_RE is None:
-        # "nein" / "no" / "nope" as a whole word followed by , . ! or the end.
-        _NO_START_RE = re.compile(r"(?<!\w)(?:nein|no|nope)(?:\s*[,.!]|\s*$)")
-    if _NO_START_RE.search(text):
+        # "nein" / "no" / "nope" opening the message or a sentence, followed by
+        # , . ! or the end.
+        _NO_START_RE = re.compile(
+            r"(?:^|[.!?;:\n])\s*(?:nein|no|nope)(?=\s*[,.!]|\s*$)")
+    for m in _NO_START_RE.finditer(text):
+        after = _outcome_tokens(text[m.end():])
+        if any(tuple(after[:len(p)]) == p for p in _OUTCOME_CLOSING_AFTER_NO):
+            continue  # "Nein, danke" / "No, that's all": a polite close
         return True
-    if any(t.startswith(_OUTCOME_REJECTION_STEMS) for t in tokens):
+    if any(t.startswith(_OUTCOME_REJECTION_STEMS)
+           and t not in _OUTCOME_REJECTION_COMPOUNDS for t in tokens):
         return True
     for phrase in _tokenised("rejection", _OUTCOME_REJECTION_PHRASES):
-        for start, _end in _phrase_positions(tokens, phrase):
-            if len(phrase) == 1 and _is_thanks_again(tokens, start):
-                continue
+        if _has_phrase(tokens, phrase):
+            return True
+    clause_starts = set()
+    pos = 0
+    for clause in _clauses(text):
+        clause_starts.add(pos)
+        pos += len(clause)
+    for i, t in enumerate(tokens):
+        if t not in ("nochmal", "nochmals") or _is_thanks_again(tokens, i):
+            continue
+        if (i == 0 or len(tokens) <= 4 or i in clause_starts
+                or tokens[i - 1] in _OUTCOME_RETRY_LEAD):
             return True
     return False
 
@@ -1341,24 +1531,49 @@ def _without_idioms(tokens: list[str]) -> list[str]:
     return [t for i, t in enumerate(tokens) if i not in drop]
 
 
-def _voids_approval(tokens: list[str]) -> bool:
+def _is_whole_reaction(tokens: list[str]) -> bool:
+    """Every token is praise, a weak success word, a generic word or a filler,
+    and at least one is not a filler ("Top, passt!", "it works now")."""
+    covered = [t in _OUTCOME_FILLERS for t in tokens]
+    praise = False
+    for key, phrases in (("approval", _OUTCOME_APPROVAL_PHRASES),
+                         ("weak", _OUTCOME_WEAK_APPROVAL_PHRASES)):
+        for p in _tokenised(key, phrases):
+            for start, end in _phrase_positions(tokens, p):
+                covered[start:end] = [True] * (end - start)
+                praise = True
+    for i, t in enumerate(tokens):
+        if t in _OUTCOME_APPROVAL_EXACT_WORDS:
+            covered[i] = True
+            praise = True
+    return praise and all(covered)
+
+
+def _voids_approval(tokens: list[str], *, thanks: bool, whole: bool) -> bool:
     for i, t in enumerate(tokens):
         if t not in _OUTCOME_APPROVAL_VOIDERS:
             continue
-        if t in ("jetzt", "now") and _next_to(tokens, i, _OUTCOME_SUCCESS_VERBS):
-            continue  # "läuft jetzt", "works now", "jetzt klappt"
+        if t in ("jetzt", "now") and (whole or (
+                thanks and _next_to(tokens, i, _OUTCOME_SUCCESS_VERBS))):
+            continue  # "läuft jetzt, danke", "it works now"
         if _is_thanks_again(tokens, i):
             continue  # "danke nochmal", "thanks again"
         return True
     return False
 
 
-def _is_approval(text: str, tokens: list[str]) -> bool:
+def _is_approval(text: str, tokens: list[str], *, quoted: bool = False) -> bool:
     """Conservative approval test (rule set above)."""
     global _CONTRACTED_D_RE
-    if len(tokens) > _OUTCOME_APPROVAL_MAX_WORDS:
+    thanks = any(t in _OUTCOME_THANKS_ONLY for t in tokens)
+    limit = _OUTCOME_APPROVAL_MAX_WORDS_THANKS if thanks else _OUTCOME_APPROVAL_MAX_WORDS
+    if len(tokens) > limit:
         return False
-    if any(c in _OUTCOME_QUOTE_CHARS or c in _OUTCOME_SARCASM_EMOJI for c in text):
+    if quoted:
+        return False
+    if any(c in _OUTCOME_SARCASM_EMOJI for c in text):
+        return False
+    if not thanks and any(c in _OUTCOME_LAUGH_EMOJI for c in text):
         return False
     if _CONTRACTED_D_RE is None:
         _CONTRACTED_D_RE = re.compile(r"\w['’]d\b")
@@ -1366,15 +1581,23 @@ def _is_approval(text: str, tokens: list[str]) -> bool:
         return False  # "that'd be perfect", "it'd be great"
     if any(_has_phrase(tokens, p) for p in _OUTCOME_SARCASM_PHRASES):
         return False
+    if _looks_like_request(text, tokens):
+        return False
     core = _without_idioms(tokens)
-    if _has_negator(core) or _voids_approval(core):
+    if _has_negator(core):
+        return False
+    whole = bool(core) and _is_whole_reaction(core)
+    if _voids_approval(core, thanks=thanks, whole=whole):
         return False
     if not core:
         return True  # the message is a positive idiom ("nicht schlecht!")
-    if " ".join(core) in _OUTCOME_APPROVAL_EXACT:
+    if whole or " ".join(core) in _OUTCOME_APPROVAL_EXACT:
         return True
-    return any(_has_phrase(core, p)
-               for p in _tokenised("approval", _OUTCOME_APPROVAL_PHRASES))
+    if any(_has_phrase(core, p)
+           for p in _tokenised("approval", _OUTCOME_APPROVAL_PHRASES)):
+        return True
+    return thanks and any(_has_phrase(core, p)
+                          for p in _tokenised("weak", _OUTCOME_WEAK_APPROVAL_PHRASES))
 
 
 _OUTCOME_APPROVAL_SCORE = 0.9
@@ -1401,12 +1624,14 @@ def detect_outcome_signal(
     text = user_text.lower().strip()
     if not text:
         return (None, 0.0)
-    tokens = _outcome_tokens(text)
-    if tokens and _is_rejection(text, tokens):
+    # A quotation is no signal in either direction (r3_s1-1/-3).
+    unquoted, quoted = _strip_quotations(text)
+    tokens = _outcome_tokens(unquoted)
+    if tokens and _is_rejection(unquoted, tokens):
         return ("rejection", _OUTCOME_REJECTION_SCORE)
     explicit = bool(tokens) and "?" not in text and not any(
         len(t) > _OUTCOME_MAX_TOKEN_CHARS for t in tokens)
-    if explicit and _is_approval(text, tokens):
+    if explicit and _is_approval(unquoted, tokens, quoted=quoted):
         return ("approval", _OUTCOME_APPROVAL_SCORE)
     if prev_user_text:
         import difflib
@@ -1434,10 +1659,12 @@ def grade_from_user_followup(
 
     ``tenant_id`` given (the console, which serves several tenants): only
     skills resolving to a tenant-owned scope (``session`` / ``user``) are
-    graded. ``dedupe_channel`` (default: ``channel_id``) keys the
-    once-per-skill-per-channel-per-signal-kind limit over a rolling 24 h window;
-    only a day-bound hash of it is stored (in the grade note), never the id
-    itself.
+    graded. ``dedupe_channel`` keys the once-per-skill-per-key-per-signal-kind
+    limit over a rolling 24 h window. Without it (the bridge) the key is the
+    chat (``channel_id``) for a session-scope skill and the tenant for a
+    user / project skill, which every chat of the tenant shares (review c120
+    r3_s1-4). Only a day-bound hash of the key is stored (in the grade note),
+    never the id itself.
 
     A grade whose audit record cannot be committed is not persisted (the
     registry is audit-first) and is not in the returned list.
@@ -1490,12 +1717,21 @@ def grade_from_user_followup(
     except Exception:  # noqa: BLE001
         return []
 
-    marker, marker_prev = _followup_dedupe_markers(
-        dedupe_channel if dedupe_channel is not None else channel_id, signal)
     graded: list[dict] = []
     for name in prev_skill_names:
         try:
-            if tenant_id and _scope_of(reg, name) not in _TENANT_OWNED_SCOPES:
+            scope = _scope_of(reg, name)
+            if dedupe_channel is not None:
+                dd_key = dedupe_channel
+            elif scope == "session":
+                dd_key = channel_id   # a session skill lives in this chat only
+            else:
+                # A user / project skill is shared by every chat of the tenant:
+                # one allowance per (skill, tenant), like the console — a
+                # second chat is no second allowance (review c120 r3_s1-4).
+                dd_key = f"tenant:{_learning_tenant(tenant_id)}"
+            marker, marker_prev = _followup_dedupe_markers(dd_key, signal)
+            if tenant_id and scope not in _TENANT_OWNED_SCOPES:
                 # A caller that names its tenant serves several (the console):
                 # project scope is the shared repo checkout and task scope the
                 # platform temp dir, neither belongs to this tenant. Grading
@@ -1507,7 +1743,7 @@ def grade_from_user_followup(
             # the one grade source that may lift a skill over the promotion
             # bar. Auto-grade (usage detection) and bootstrap seeds stay
             # non-organic and are clamped to AUTO_GRADE_CAP_MAX.
-            # At most ONE organic follow-up grade per skill per channel per
+            # At most ONE organic follow-up grade per skill per dedupe key per
             # signal kind in a rolling 24 h window (dedupe at write time):
             # repeating "gut gemacht" cannot farm, and an earlier approval never
             # blocks a later rejection (review c120 r2_s1-5/-11).

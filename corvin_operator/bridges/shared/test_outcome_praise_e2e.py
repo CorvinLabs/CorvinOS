@@ -77,7 +77,8 @@ TABLE = (
     ("super, das ist genau richtig, nochmal danke", "approval"),
     # review c120 r2_s1-1/-3: rejection is LIBERAL (a false one only lowers a grade):
     # stems, any length, a question mark does not cancel it
-    ("wrongful? great", "rejection"),
+    # (r3_s1-3: "wrongful" is a compound, no verdict -> no signal; "?" no approval)
+    ("wrongful? great", None), ("wrong? great", "rejection"),
     ("gut gemacht, aber nochmal bitte", "rejection"),
     ("Bitte benenne in der Tabelle die Spalte falsch_flag in is_false um und ergänze "
      "danach noch eine kurze Beschreibung im README für die anderen Entwickler falsch",
@@ -233,3 +234,106 @@ def test_process_one_dedupe_is_a_rolling_24h_window_not_the_utc_day(bridge, monk
     assert _turn(bridge, "mid-2", "Gut gemacht!") == []
     shift["to"] += 24 * 3600
     assert [float(g["score"]) for g in _turn(bridge, "mid-3", "Gut gemacht!")] == [0.9]
+
+
+# ── review c120 round 3 (r3_s1-1/-3/-4/-5): decided detector design ────────────
+
+#: Requests and questions that carry a success / praise word: never an approval
+#: (r3_s1-1, the 26 probes of the review plus the request rows of its table).
+R3_REQUESTS = (
+    "Wie funktioniert das genau", "Funktioniert das auch unter Windows",
+    "Klappt das mit Python 3.11", "Läuft das auf dem Raspberry Pi", "How does it work",
+    "Has it worked for you before", "I worked on the report yesterday, summarise it",
+    "Make sure it works on Windows", "Check that it works now", "Prüf ob es jetzt läuft",
+    "Teste ob es funktioniert", "Schau mal ob das klappt", "Ich will dass es funktioniert",
+    "Write an excellent cover letter", "Give me a brilliant name for my startup",
+    "Make it perfect", "What exactly is a monad", "Exactly how many rows are in the table",
+    "Is it exactly 42", "Mach es perfekt", "Nenne mir das perfekte Rezept",
+    "Was heißt 'danke' auf Japanisch", "Translate 'thank you' into French",
+    "Sag einfach 'super' zu ihm", "Perfect, now work on the tests",
+    "Danke, jetzt geht es weiter mit Kapitel 3",
+    "Wie funktioniert ein Dieselmotor", "Klappt das auch mit Excel-Dateien",
+    "Läuft der Server noch auf Port 8080", "Super, jetzt mach Teil zwei.",
+    "Explain how the excellent sorting algorithm timsort works",
+    "Ok, und wie funktioniert dann der Import", "Mach eine Liste der besten Restaurants, danke",
+    "Danke. Neue Aufgabe: fasse das PDF zusammen.",
+    # quotations (single and double quotes) and sarcastic continuations
+    "Was heißt 'well done' auf Spanisch", "Schreib 'Danke für Ihre Bestellung' in die Mail.",
+    "Great job breaking production.", "Thanks a lot for deleting my file.", "super kaputt",
+)
+
+R3_TABLE = (
+    # r3_s1-5: praise recall
+    ("Top, passt!", "approval"), ("Richtig, so ist es.", "approval"),
+    ("Haha super, danke 😂", "approval"), ("it works now", "approval"),
+    ("Wow, vielen vielen Dank, das ist wirklich großartig geworden und genau das was ich "
+     "gebraucht habe, perfekt!", "approval"),
+    ("Läuft jetzt, danke!", "approval"), ("Funktioniert, danke!", "approval"),
+    ("works now, thanks", "approval"), ("Vielen Dank, hat geklappt.", "approval"),
+    # bare weak words count only with a thank-you or as the whole message
+    ("excellent", "approval"), ("Klappt!", "approval"), ("perfekt 😂😂", None),
+    # r3_s1-3: innocent text with a rejection word
+    ("Schreib einen Artikel über Falschgeld in Europa.", None),
+    ("Was ist der Unterschied zwischen wrongful termination und layoff", None),
+    ("Summarise the report on corporate wrongdoing.", None),
+    ("Check item no. 7 in the list.", None), ("Was bedeutet das Wort Falschparker", None),
+    ("Kannst du das Diagramm nochmal in Blau rendern", None),
+    ("Mach das gleiche nochmal für die Datei b.csv", None),
+    ("Implement 'try again' button on the error page", None),
+    ("Is there a 'no' option in the dialog", None),
+    # closing idioms: no rejection; with praise no signal at all (decided design)
+    ("Nein, danke gerne nochmal für die tolle Hilfe!", None),
+    ("Perfekt! Nein, sonst nichts.", None), ("Super, danke! No, that's all for today.", None),
+    ("No worries", None), ("Nein, danke.", None),
+    # rejection recall kept
+    ("Nochmal bitte.", "rejection"), ("nochmal", "rejection"), ("Nope.", "rejection"),
+    ("Hmm. Nein, das ist es nicht.", "rejection"), ("Das ist falsch.", "rejection"),
+    ("That is not correct at all.", "rejection"), ("You got the dates wrong again.", "rejection"),
+    ("Okay. Nochmal mit anderen Farben", "rejection"),
+    ("Gut gemacht, aber nochmal bitte mit Legende", "rejection"),
+)
+
+
+@pytest.mark.parametrize("text", R3_REQUESTS)
+def test_r3_requests_and_quotes_are_never_approval(text: str) -> None:
+    assert skill_inject.detect_outcome_signal(text)[0] is None, text
+
+
+@pytest.mark.parametrize("text,want", R3_TABLE)
+def test_r3_signal_table(text: str, want: str | None) -> None:
+    assert skill_inject.detect_outcome_signal(text)[0] == want, text
+
+
+def _turn_in(bridge, chat: str, msg_id: str, text: str) -> list[dict]:
+    adapter, reg, inbox = bridge
+    adapter._record_last_turn_skills(chat_key=chat, run_id=f"prev-{msg_id}",
+                                     skill_names=[SKILL], user_text="schreib einen bericht")
+    n_pre = reg.get(SKILL).n_grades
+    p = inbox / f"{msg_id}.json"
+    p.write_text(json.dumps({"id": msg_id, "channel": "sandbox-outcome", "from": chat,
+                             "chat_id": chat, "text": text, "ts": time.time()}))
+    adapter.process_one(p, settings={"whitelist": [chat]})
+    return list(reg.get(SKILL).grades)[n_pre:]
+
+
+@pytest.mark.parametrize("text", ["Teste ob es funktioniert", "Make sure it works on Windows",
+                                  "Schreib einen Artikel über Falschgeld in Europa.",
+                                  "Perfekt! Nein, sonst nichts."])
+def test_process_one_request_or_innocent_text_writes_no_grade(bridge, text) -> None:
+    """r3_s1-1/-3 through the bridge: a request with a success word and innocent text
+    with a rejection stem write no organic grade."""
+    assert _turn(bridge, "r3-none", text) == []
+
+
+def test_process_one_recovered_praise_writes_an_approval_grade(bridge) -> None:   # r3_s1-5
+    assert [float(g["score"]) for g in _turn(bridge, "r3-top", "Top, passt!")] == [0.9]
+
+
+def test_process_one_user_skill_dedupe_spans_every_chat_of_the_tenant(bridge) -> None:
+    """r3_s1-4: a user-scope skill is shared by every chat, so a second chat is no
+    second allowance (the console's rule): (skill, tenant), not (skill, chat)."""
+    assert [float(g["score"]) for g in _turn_in(bridge, "chat-a", "dd-a", "Gut gemacht!")] == [0.9]
+    assert _turn_in(bridge, "chat-b", "dd-b", "Gut gemacht!") == []
+    assert _turn_in(bridge, "chat-c", "dd-c", "Danke!") == []
+    # the kind stays in the key: a rejection from another chat is still recorded
+    assert [float(g["score"]) for g in _turn_in(bridge, "chat-b", "dd-r", "Das ist falsch.")] == [0.1]
