@@ -563,6 +563,10 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
     synthetic = engine_name == "stub"
 
     if format_ == "json":
+        from .node_types import node_requires_engine
+
+        engine_nodes = {str(n.get("id")) for n in getattr(doc, "graph", []) or []
+                        if isinstance(n, dict) and node_requires_engine(n)}
         payload = {
             "workflow": result.workflow,
             "state": result.state,
@@ -583,7 +587,8 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
                     # ADR-2308: the model the CLI reported and the tokens of every spawn of the node
                     "model_id": (n.usage or {}).get("model_id", ""),
                     "tokens": int((n.usage or {}).get("tokens", 0) or 0),
-                    "attempts": n.attempts,
+                    # attempts of a node that calls the CLI (the rule the console stream uses)
+                    **({"attempts": n.attempts} if nid in engine_nodes else {}),
                 }
                 for nid, n in result.nodes.items()
             },

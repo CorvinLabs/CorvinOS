@@ -395,9 +395,10 @@ orchestration:
         assert not {"attempts", "tokens", "model_id"} & set(failed[0]), failed[0]
 
 
-def test_a_retried_condition_route_carries_no_attempts_but_a_retried_model_node_does(tmp_path, fake_cli):
+def test_a_retried_condition_route_carries_no_attempts(tmp_path, fake_cli):
     """Review round 4: `attempts` is decided per node spec (node_requires_engine), so a condition
-    route that raised and was retried names none; a model node that was retried still does."""
+    route that raised and WAS retried names none (a retried model node still does:
+    test_dag_failed_node_names_its_attempts_and_claims_no_model)."""
     wf = """awp: "1.0.0"
 workflow:
   name: dagroute
@@ -426,4 +427,7 @@ orchestration:
         events = _run(client, "dagroute")
         failed = [e for e in events if e.get("type") == "node_failed" and e.get("node_id") == "gate"]
         assert failed, events[-3:]
+        retries = [d for d in _chain_events(tid, "console.action_performed")
+                   if d.get("action") == "workflow.node.attempt_failed" and d.get("step_id") == "gate"]
+        assert len(retries) == 2, retries                  # it really was retried
         assert "attempts" not in failed[0], failed[0]

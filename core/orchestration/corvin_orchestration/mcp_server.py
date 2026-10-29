@@ -1229,8 +1229,7 @@ class OrchestrationServer:
             # ADR-2308: per node, the model the CLI reported and its tokens (summed over spawns)
             "nodes": {
                 nid: {"status": n.status, "model_id": (getattr(n, "usage", None) or {}).get("model_id", ""),
-                      "tokens": int((getattr(n, "usage", None) or {}).get("tokens", 0) or 0),
-                      "attempts": getattr(n, "attempts", 1)}
+                      "tokens": int((getattr(n, "usage", None) or {}).get("tokens", 0) or 0)}
                 for nid, n in result.nodes.items()
             },
         }

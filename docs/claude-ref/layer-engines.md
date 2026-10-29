@@ -3553,10 +3553,12 @@ the class and the resolution event are limited to the types above. On the DAG en
 and the reported model reach `node_completed` through `ClaudeCliEngine.take_node_usage(node_id)`,
 which the runner reads once per node into `NodeResult.usage` (`{model_id, tokens}`, summed over all
 `fan_out` items and attempts); before 2026-10-28 that path wrote `tokens: 0` and no model. The
-console's run stream, `corvin-workflows run --format json` (`nodes.<id>.model_id/tokens/attempts`) and
-the MCP `workflow_run` / `workflow_resume` result (`nodes`) all read that one field. An engine
-without the method (stub, synthetic, null) reports nothing. A retried node that calls a model
-(`agent`, `fan_out`, `route`, `delegation_loop`) carries
+console's run stream, `corvin-workflows run --format json` (`nodes.<id>.model_id/tokens`, plus
+`attempts` as below) and the MCP `workflow_run` / `workflow_resume` result (`nodes.<id>.status/
+model_id/tokens`) all read that one field. An engine
+without the method (stub, synthetic, null) reports nothing. A retried node that calls the CLI
+(`node_requires_engine`: not a `condition` route, not an engine-free type; a plugin-registered
+type does) carries — in the console stream and in the CLI JSON alike —
 `attempts` (the tokens are summed over the attempts that reached the CLI; a timeout reports
 nothing), and `node_failed` carries the tokens and the reported model on both paths — the console's
 own executor included, also for a `fan_out` that failed part-way and for every `delegation_loop`
