@@ -480,10 +480,10 @@ def test_failed_grade_save_is_compensated_and_a_retry_is_one_grade(env) -> None:
     real = sreg.SkillRegistry._save
     state = {"fail": True}
 
-    def bad_save(self, data):
+    def bad_save(self, data, **kw):
         if state["fail"] and any(len(v.get("grades") or []) > 1 for v in data.values()):
             raise OSError(errno.ENOSPC, "No space left on device")
-        return real(self, data)
+        return real(self, data, **kw)
     env.monkeypatch.setattr(sreg.SkillRegistry, "_save", bad_save)
     _grant_consent()
     _two_turns(env, "Gut gemacht!")
@@ -525,3 +525,61 @@ def test_meta_json_failure_after_a_saved_grade_still_reports_it(env) -> None:
     assert len(_graded_actions()) == 1                              # the grade is reported
     assert not [r for r in _chain_records("_default")
                 if r.get("event_type") == "skill.grade_not_persisted"]
+
+
+# ── review c120 r3_s1-2: the store of record is written LAST ─────────────────
+
+def _fail_write(env, predicate) -> None:
+    """Make the registry's REAL atomic writer fail with ENOSPC for the writes
+    ``predicate(path, text)`` selects (the temp file is removed, nothing renamed)."""
+    import errno  # noqa: PLC0415
+    from skill_forge import registry as sreg  # noqa: PLC0415
+    real = sreg.SkillRegistry._atomic_write_text
+
+    def bad(path, text):
+        if predicate(Path(path), text):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(path, text)
+    env.monkeypatch.setattr(sreg.SkillRegistry, "_atomic_write_text", staticmethod(bad))
+
+
+def _compensations() -> list[dict]:
+    return [r for r in _chain_records("_default")
+            if r.get("event_type") == "skill.grade_not_persisted"]
+
+
+def test_failed_resolver_manifest_write_keeps_the_grade_and_chains_no_compensation(env) -> None:
+    """Only the derived ADR-0420 resolver manifest write fails: the grade is stored
+    (the chain's skill.grade is true), no skill.grade_not_persisted, the grade is
+    reported."""
+    _fail_write(env, lambda p, t: p.name == "manifest.json" and '"n_grades": 2' in t)
+    _grant_consent()
+    _two_turns(env, "Gut gemacht!")
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
+    assert _compensations() == []
+    assert len(_graded_actions()) == 1                              # reported once
+    from forge.paths import tenant_audit_chain  # noqa: PLC0415
+    from forge.security_events import verify_chain  # noqa: PLC0415
+    assert verify_chain(Path(tenant_audit_chain("_default"))) == (True, [])
+
+
+def test_failed_final_store_write_chains_the_compensation_and_stores_nothing(env) -> None:
+    """The final write of the store of record fails: the record is compensated, no
+    grade (and so no dedupe marker) is on disk, the resolver manifest does not show
+    the unsaved grade, and a later praise is graded once."""
+    state = {"fail": True}
+    _fail_write(env, lambda p, t: state["fail"] and p.name == "skills_registry.json"
+                and "outcome (approval)" in t)
+    _grant_consent()
+    _two_turns(env, "Gut gemacht!")
+    assert [float(g["score"]) for g in _grades(env)] == [0.3], _grades(env)
+    comp = _compensations()
+    assert len(comp) == 1 and comp[0]["details"]["error_type"] == "OSError", comp
+    assert _graded_actions() == []
+    root = Path(env.reg._root_for("user"))
+    resolver = json.loads((root / "manifest.json").read_text())
+    entry = [s for s in resolver["skills"] if s["name"] == SKILL][0]
+    assert entry["metadata"]["n_grades"] == 1, entry                # not the unsaved generation
+    state["fail"] = False
+    _two_turns(env, "Gut gemacht!")                                 # no stale dedupe marker
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)

@@ -627,12 +627,43 @@ class SkillRegistry:
                 f"{self.manifest_path}: {e}"
             ) from e
 
-    def _save(self, data: dict[str, dict]) -> None:
-        self._atomic_write_text(
-            self.manifest_path, json.dumps(data, indent=2) + "\n"
-        )
-        # Same generation, second shape: the ADR-0420 resolver manifest.
-        self._write_resolver_manifest(data)
+    def _save(self, data: dict[str, dict], *,
+              derived_best_effort: bool = False) -> None:
+        """Write one generation: the derived resolver manifest FIRST, the store
+        of record (``skills_registry.json``) LAST (review c120 r3_s1-2).
+
+        So the final atomic rename is the one and only write that decides
+        whether the generation is stored: a failure before it leaves the store
+        of record untouched, a failure of it leaves the previous generation.
+        When the final write fails, the resolver manifest is re-derived from
+        the record on disk so it does not show the unsaved generation.
+
+        ``derived_best_effort`` (``grade()``, whose audit record is already
+        committed): a failed resolver write is logged and the store of record
+        is still written — the resolver manifest is derived and regenerated on
+        the next save, so the grade the chain announced really is stored.
+        """
+        try:
+            # Same generation, second shape: the ADR-0420 resolver manifest.
+            self._write_resolver_manifest(data)
+        except Exception as exc:  # noqa: BLE001
+            if not derived_best_effort:
+                raise
+            logging.getLogger(__name__).warning(
+                "resolver manifest %s not updated (%s); regenerated on the next save",
+                self.resolver_manifest_path, type(exc).__name__)
+        try:
+            self._atomic_write_text(
+                self.manifest_path, json.dumps(data, indent=2) + "\n"
+            )
+        except BaseException:
+            try:
+                self._write_resolver_manifest(self._load())
+            except Exception as exc:  # noqa: BLE001 — the original error wins
+                logging.getLogger(__name__).warning(
+                    "resolver manifest %s not re-derived (%s)",
+                    self.resolver_manifest_path, type(exc).__name__)
+            raise
 
     def _write_resolver_manifest(self, data: dict[str, dict]) -> None:
         """Emit ``manifest.json`` in the shape ``SkillCache`` expects.
@@ -1057,10 +1088,14 @@ class SkillRegistry:
             )
             data[name]["grades"] = grades
             try:
-                self._save(data)
+                # Store of record written LAST; a failed derived (resolver)
+                # write cannot fail a grade the chain already announced.
+                self._save(data, derived_best_effort=True)
             except BaseException as exc:
-                # The record says "graded" but nothing is stored: chain the
-                # compensation (ids + error class only), then fail.
+                # The final write of the store of record failed: the record
+                # says "graded" but nothing is stored (the previous generation
+                # is on disk, dedupe marker included). Chain the compensation
+                # (ids + error class only), then fail.
                 try:
                     self._audit("skill.grade_not_persisted", spec_now,
                                 extra={"run_id": run_id,
