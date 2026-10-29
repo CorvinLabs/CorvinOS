@@ -356,9 +356,17 @@ systems:
     name: Routing ledger and rollback judge
     state: B
     callers:
+      # decision record, one per turn: a turn that stays native is recorded by the triage
+      # (delegation_policy.resolve_delegation_route), a delegation-worthy one by
+      # resolve_worker_engine, a turn neither reached by the unrouted fallback
+      - core/console/corvin_console/chat_runtime.py:4237:resolve_delegation_route
+      - core/console/corvin_console/chat_runtime.py:4536:_shared_target
       - core/console/corvin_console/chat_runtime.py:4574:route_and_record
-      - core/console/corvin_console/chat_runtime.py:4612:record_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:9785:resolve_delegation_route
+      - corvin_operator/bridges/shared/adapter.py:9436:resolve_worker_engine
       - corvin_operator/bridges/shared/adapter.py:9644:route_and_record
+      # outcome record, joined to the decision by turn_id
+      - core/console/corvin_console/chat_runtime.py:4612:record_turn_outcome
       - corvin_operator/bridges/shared/adapter.py:9698:record_turn_outcome
     tests:
       - core/console/tests/test_l5_routing_loop_console_e2e.py

@@ -83,7 +83,10 @@ production gate reads it. L19 (A since 2026-10-27; the entry said "autopilot off
 `autonomous.autopilot_settings` defaults it ON and the route module starts its scheduler at import)
 reads organic follow-up grades (a proxy of skill output quality; loss = mean < 0.5 over ≥ 3 grades
 in 14 days) to fork a candidate and run its canary gate; promotion stays an operator decision,
-`target: none`. The other validity bounds are `unmeasured` until PLAN-0966 WP4 measures them. The contract checks form, not truth, and grants no permission to learn.
+`target: none`. The autopilot scans USER-scope skills only: its roots are the tenant registries
+`<corvin_home>/tenants/<tid>/skill-forge` (`autonomous_forge_routes._tenant_roots`) and
+`autonomous.skills_overview` reads `registry_for(root).list()`, so a grade of a session- or
+project-scope skill never yields a loss signal, fork or canary. The other validity bounds are `unmeasured` until PLAN-0966 WP4 measures them. The contract checks form, not truth, and grants no permission to learn.
 Proof of the proxy labels: `test_router_threshold_writers_are_registered_as_proxies` (with
 negative controls on register copies).
 
