@@ -471,7 +471,7 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
             <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-amber-700 dark:text-amber-300 space-y-1">
               <p>
-                No {PROXY_SCORE_LABEL} yet:{' '}
+                Not scored yet:{' '}
                 <span className="tabular-nums">
                   {fmtInt(config.classified_count)} of {fmtInt(totalClassified)}
                 </span>{' '}

@@ -97,7 +97,8 @@ describe("TaskTypeCard — evidence bar matches the Learning tab", () => {
   it("still separates 'no samples at all' from 'too few samples'", async () => {
     renderCard(0);
 
-    expect(await screen.findByText(/No no-error score \(proxy\) yet/)).toBeTruthy();
+    expect(await screen.findByText(/Not scored yet/)).toBeTruthy();
+    expect(screen.queryByText(/No no-error/)).toBeNull();
     expect(screen.queryByText(/Learning has started/)).toBeNull();
   });
 });

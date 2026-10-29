@@ -78,6 +78,19 @@ function renderTab(props: Partial<React.ComponentProps<typeof RoutingTab>> = {})
 afterEach(() => { cleanup(); claudeModels.data = CLAUDE_LIST; claudeModels.isError = false; });
 claudeModels.data = CLAUDE_LIST;
 
+describe("Routing tab — tier choices copy", () => {
+  it("never calls the per-tier proxy score confidence", async () => {
+    // review c120 r2_s3-4: the cards say "no-error score (proxy)"; the paragraph
+    // above them must not reintroduce "confidence".
+    server.use(...handlers("claude-sonnet-5", null, () => HttpResponse.json({})));
+    const { container } = renderTab();
+    await screen.findByTestId("card-SIMPLE");
+    const text = (container.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toMatch(/no-error score \(proxy\) on each card counts turns that ended without an error, not answer quality/);
+    expect(text).not.toMatch(/confiden/i);
+  });
+});
+
 describe("Routing tab — turn pins", () => {
   it("Save pins sends the FULL map with the changed role and the CSRF header", async () => {
     let put: { body: unknown; csrf: string | null } | null = null;

@@ -319,7 +319,8 @@ export function RoutingTab({
           The model used for each tier. A saved choice is always the one that runs: the default
           OS turn and the classifier use Simple / Medium / Complex, background workers use Simple
           when no worker pin is set, and CorvinOS' own helper steps use the CorvinOS row. A pin
-          above still wins. Confidence reflects real classified turns.
+          above still wins. The no-error score (proxy) on each card counts turns that ended
+          without an error, not answer quality.
         </p>
         {configQ.isLoading ? (
           <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
