@@ -5,6 +5,14 @@ These tests verify the IntelligentRouterBridge without requiring the full
 dispatcher/gateway stack, making them faster and more reliable for CI.
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+_repo = next(p for p in _Path(__file__).resolve().parents if (p / "corvin_operator").is_dir())
+_shared = str(_repo / "corvin_operator" / "bridges" / "shared")
+if _shared not in _sys.path:
+    _sys.path.insert(0, _shared)
+from model_selector import tier_model as _tier_model  # ADR-2090: a tier routes to the NEWEST id of its family
+_HAIKU, _SONNET, _OPUS = _tier_model("haiku"), _tier_model("sonnet"), _tier_model("opus")
 import sys
 from pathlib import Path
 
@@ -29,7 +37,7 @@ def test_route_with_intelligent_selection_simple():
         tenant_id="_default",
     )
 
-    assert decision.model == "claude-haiku-4-5", f"Expected Haiku, got {decision.model}"
+    assert decision.model == _HAIKU, f"Expected Haiku, got {decision.model}"
     assert decision.tier == "simple"
     print(f"✓ Simple task: {decision.model} (tier={decision.tier})")
 
@@ -57,7 +65,7 @@ def test_route_with_intelligent_selection_complex():
         tenant_id="_default",
     )
 
-    assert decision.model == "claude-opus-5", f"Expected Opus, got {decision.model}"
+    assert decision.model == _OPUS, f"Expected Opus, got {decision.model}"
     assert decision.tier == "complex"
     print(f"✓ Complex task: {decision.model} (tier={decision.tier})")
 
@@ -96,7 +104,7 @@ def test_get_model_for_task():
         tenant_id="_default",
     )
 
-    assert model == "claude-haiku-4-5", f"Expected Haiku, got {model}"
+    assert model == _HAIKU, f"Expected Haiku, got {model}"
     print(f"✓ get_model_for_task: {model}")
 
 
@@ -109,7 +117,7 @@ def test_intelligent_model_selection_function():
         tenant_id="_default",
     )
 
-    assert model == "claude-haiku-4-5", f"Expected Haiku, got {model}"
+    assert model == _HAIKU, f"Expected Haiku, got {model}"
     assert 0 <= confidence <= 1, f"Confidence should be 0-1, got {confidence}"
     assert isinstance(reasoning, str), f"Reasoning should be string, got {type(reasoning)}"
     print(f"✓ intelligent_model_selection: model={model}, confidence={confidence:.2f}")
@@ -120,7 +128,7 @@ def test_decision_immutability():
     from core.skills.os_skills.intelligent_router import RoutingDecision
 
     decision = RoutingDecision(
-        model="claude-haiku-4-5",
+        model=_HAIKU,
         engine="native",
         tier="simple",
         confidence=0.95,
@@ -133,7 +141,7 @@ def test_decision_immutability():
 
     # Frozen dataclass should prevent modification
     try:
-        decision.model = "claude-opus-5"
+        decision.model = _OPUS
         assert False, "Should not be able to modify frozen RoutingDecision"
     except (AttributeError, Exception):
         print("✓ RoutingDecision is immutable (frozen)")

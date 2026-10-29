@@ -52,6 +52,40 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# ADR-2090: an automatic tier routes to the NEWEST model of its family (`model_selector.tier_model`). The
+# router used to carry the 4.x ids of each family itself, so it kept serving them after the registry
+# moved to 5.5 (finding H-GW-2, adversarial DAG suite 2026-10-29). Prices,
+# latencies and output ratios are therefore keyed by FAMILY; the ids below are the last resort for the case
+# the model registry cannot be read, never the first choice.
+_FAMILIES = ("haiku", "sonnet", "opus")
+_FALLBACK_ID_BY_FAMILY = {
+    "haiku": "claude-haiku-4-5",
+    "sonnet": "claude-sonnet-5",
+    "opus": "claude-opus-5",
+}
+
+
+def _family_of(model: str) -> Optional[str]:
+    """``haiku`` / ``sonnet`` / ``opus`` for any id of that family (4.x, 5.5, dated snapshot), else ``None``
+    (an operator override naming some other model)."""
+    low = (model or "").lower()
+    for family in _FAMILIES:
+        if family in low:
+            return family
+    return None
+
+
+def _newest_model(family: str) -> str:
+    """The newest registered id of *family*; the fallback id only when the registry cannot be read."""
+    try:
+        from model_selector import tier_model  # corvin_operator/bridges/shared (ADR-2090)
+        resolved = tier_model(family)
+        if resolved:
+            return str(resolved)
+    except Exception:  # noqa: BLE001 - registry unavailable (stripped layout, unit sandbox)
+        logger.debug("tier_model(%s) unavailable; using the fallback id", family, exc_info=True)
+    return _FALLBACK_ID_BY_FAMILY[family]
+
 
 class ModelTier(Enum):
     """Model tier classification."""
@@ -70,7 +104,7 @@ class Engine(Enum):
 @dataclass(frozen=True)
 class RoutingDecision:
     """Immutable routing decision (audit-safe)."""
-    model: str              # "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"
+    model: str              # the newest registered id of the tier's family (tier_model), or an operator override
     engine: str             # "native", "acs", "tde"
     tier: str               # "simple", "medium", "complex"
     confidence: float       # 0.0-1.0
@@ -88,39 +122,50 @@ class RoutingDecision:
 class IntelligentRouter:
     """Deterministic, auditable model routing with cost/latency awareness."""
 
-    # Model mapping by tier (cost-optimized for SIMPLE, quality-optimized for COMPLEX)
-    MODEL_BY_TIER = {
-        ModelTier.SIMPLE: "claude-haiku-4-5",       # Fast, cheap, sufficient for simple tasks
-        ModelTier.MEDIUM: "claude-sonnet-5",        # Balanced cost/quality
-        ModelTier.COMPLEX: "claude-opus-5",         # Best reasoning for complex tasks
+    # Model family by tier (cost-optimized for SIMPLE, quality-optimized for COMPLEX). The id of the family
+    # is resolved per decision by `_model_for_tier` (newest registered model, ADR-2090).
+    FAMILY_BY_TIER = {
+        ModelTier.SIMPLE: "haiku",       # Fast, cheap, sufficient for simple tasks
+        ModelTier.MEDIUM: "sonnet",      # Balanced cost/quality
+        ModelTier.COMPLEX: "opus",       # Best reasoning for complex tasks
     }
 
-    # Cost estimates per 1M input tokens (USD, 2026 pricing)
+    # Cost estimates per 1M input tokens (USD, 2026 pricing), by model family
     COST_PER_1M_INPUT = {
-        "claude-haiku-4-5": 0.80,
-        "claude-sonnet-5": 3.00,
-        "claude-opus-5": 15.00,
+        "haiku": 0.80,
+        "sonnet": 3.00,
+        "opus": 15.00,
     }
 
-    # Cost estimates per 1M output tokens (USD, 2026 pricing)
+    # Cost estimates per 1M output tokens (USD, 2026 pricing), by model family
     COST_PER_1M_OUTPUT = {
-        "claude-haiku-4-5": 4.00,
-        "claude-sonnet-5": 15.00,
-        "claude-opus-5": 75.00,
+        "haiku": 4.00,
+        "sonnet": 15.00,
+        "opus": 75.00,
     }
 
-    # Latency estimates per model + engine (milliseconds)
+    # Latency estimates per model family + engine (milliseconds)
     LATENCY_BY_MODEL_ENGINE = {
-        ("claude-haiku-4-5", "native"): 200,      # Local Haiku: 200ms
-        ("claude-sonnet-5", "native"): 400,       # Local Sonnet: 400ms
-        ("claude-opus-5", "native"): 800,         # Local Opus: 800ms
-        ("claude-haiku-4-5", "acs"): 2000,        # Cloud Haiku: 2s
-        ("claude-sonnet-5", "acs"): 3000,         # Cloud Sonnet: 3s
-        ("claude-opus-5", "acs"): 5000,           # Cloud Opus: 5s
-        ("claude-haiku-4-5", "tde"): 10000,       # Delegated Haiku: 10s
-        ("claude-sonnet-5", "tde"): 15000,        # Delegated Sonnet: 15s
-        ("claude-opus-5", "tde"): 30000,          # Delegated Opus: 30s
+        ("haiku", "native"): 200,      # Local Haiku: 200ms
+        ("sonnet", "native"): 400,     # Local Sonnet: 400ms
+        ("opus", "native"): 800,       # Local Opus: 800ms
+        ("haiku", "acs"): 2000,        # Cloud Haiku: 2s
+        ("sonnet", "acs"): 3000,       # Cloud Sonnet: 3s
+        ("opus", "acs"): 5000,         # Cloud Opus: 5s
+        ("haiku", "tde"): 10000,       # Delegated Haiku: 10s
+        ("sonnet", "tde"): 15000,      # Delegated Sonnet: 15s
+        ("opus", "tde"): 30000,        # Delegated Opus: 30s
     }
+
+    @classmethod
+    def _model_for_tier(cls, tier: "ModelTier") -> str:
+        """The id this tier routes to now: the newest model of its family."""
+        return _newest_model(cls.FAMILY_BY_TIER[tier])
+
+    @classmethod
+    def _latency_ms(cls, model: str, engine: str, default: int = 5000) -> int:
+        """Latency estimate by the model's family (any id of the family, or an override, is priced alike)."""
+        return cls.LATENCY_BY_MODEL_ENGINE.get((_family_of(model), engine), default)
 
     # Maximum number of routing decisions to keep in memory
     # Beyond this, oldest decisions are discarded to prevent memory leaks
@@ -213,7 +258,7 @@ class IntelligentRouter:
                     f"degrading {tier.value} → simple"
                 )
                 tier = ModelTier.SIMPLE
-                model = self.MODEL_BY_TIER[tier]
+                model = self._model_for_tier(tier)
                 cost_estimate = self._estimate_cost(task_input, model)
                 confidence = max(0.5, confidence - 0.2)  # Lower confidence on degrade
                 # Check if even SIMPLE exceeds budget after downgrade
@@ -225,9 +270,7 @@ class IntelligentRouter:
                     confidence = 0.0
 
         # Step 7: Estimate latency
-        latency_ms = self.LATENCY_BY_MODEL_ENGINE.get(
-            (model, engine.value), 5000
-        )
+        latency_ms = self._latency_ms(model, engine.value)
 
         # Step 8: Build reasoning
         reasoning = self._build_reasoning(
@@ -380,9 +423,7 @@ class IntelligentRouter:
 
             # Rebuild decision with judge's assessment
             cost_estimate = self._estimate_cost(task_input, model)
-            latency_ms = self.LATENCY_BY_MODEL_ENGINE.get(
-                (model, engine.value), 5000
-            )
+            latency_ms = self._latency_ms(model, engine.value)
             reasoning = (
                 f"Phase 3 Judge Override: Complexity judge detected {judge_tier_str} "
                 f"(confidence {judge_confidence:.2f}) despite token-based estimate "
@@ -558,8 +599,8 @@ class IntelligentRouter:
                 )
                 return override["model"]
 
-        # No override → use tier-based default
-        return self.MODEL_BY_TIER[tier]
+        # No override → the newest model of the tier's family (ADR-2090)
+        return self._model_for_tier(tier)
 
     def _select_engine(
         self,
@@ -664,17 +705,18 @@ class IntelligentRouter:
 
         # Empirically calibrated output multiplier per model
         # Based on 2026-09 real-world CorvinOS turn analysis
-        output_multiplier_by_model = {
-            "claude-haiku-4-5": 1.1,      # Haiku: short responses
-            "claude-sonnet-5": 1.2,       # Sonnet: moderate responses
-            "claude-opus-5": 1.3,         # Opus: detailed reasoning + thinking
+        output_multiplier_by_family = {
+            "haiku": 1.1,      # Haiku: short responses
+            "sonnet": 1.2,     # Sonnet: moderate responses
+            "opus": 1.3,       # Opus: detailed reasoning + thinking
         }
-        multiplier = output_multiplier_by_model.get(model, 1.2)
+        family = _family_of(model)
+        multiplier = output_multiplier_by_family.get(family, 1.2)
         output_tokens = int(input_tokens * multiplier)
 
-        # Cost = (input_cost + output_cost) / 1M tokens
-        cost_per_1m_in = self.COST_PER_1M_INPUT.get(model, 15.0)
-        cost_per_1m_out = self.COST_PER_1M_OUTPUT.get(model, 75.0)
+        # Cost = (input_cost + output_cost) / 1M tokens; a model of no known family is priced as the dearest
+        cost_per_1m_in = self.COST_PER_1M_INPUT.get(family, 15.0)
+        cost_per_1m_out = self.COST_PER_1M_OUTPUT.get(family, 75.0)
 
         input_cost = (input_tokens / 1_000_000) * cost_per_1m_in
         output_cost = (output_tokens / 1_000_000) * cost_per_1m_out
@@ -804,10 +846,11 @@ class IntelligentRouter:
                 "medium": tiers.count("medium"),
                 "complex": tiers.count("complex"),
             },
+            # keyed by the id each family routes to NOW; counted by family, so decisions made before a lineage
+            # change still land on their family
             "model_distribution": {
-                "claude-haiku-4-5": models.count("claude-haiku-4-5"),
-                "claude-sonnet-5": models.count("claude-sonnet-5"),
-                "claude-opus-5": models.count("claude-opus-5"),
+                _newest_model(family): sum(1 for m in models if _family_of(m) == family)
+                for family in _FAMILIES
             },
             "engine_distribution": {
                 "native": engines.count("native"),

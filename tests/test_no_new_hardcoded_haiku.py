@@ -41,7 +41,7 @@ BASELINE: dict[str, int] = {
     "core/licensing/billing.py": 2,
     "core/models/model_selection_config.py": 3,
     "core/models/multi_model_router.py": 1,
-    "core/skills/os_skills/intelligent_router.py": 10,
+    "core/skills/os_skills/intelligent_router.py": 1,
     "core/skills/os_skills/intelligent_router_integration.py": 1,
     "core/skills/os_skills/model_selector.py": 6,
     "core/skills/os_skills/model_selector_variants.py": 3,

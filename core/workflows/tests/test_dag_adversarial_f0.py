@@ -242,23 +242,35 @@ def test_a_3000_node_chain_validates_and_runs_without_recursion():
 FAN_OUT_NODE = {"id": "f", "type": "fan_out", "agent": "c", "depends_on": [], "items_from": "mails", "instructions": "f"}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "H-FO-1a (open finding): fan_out resolves a bare `items_from` against the run STATE only. "
-    "code_exec._resolve_selector documents the same grammar for every selector - 'a bare name checks "
-    "workflow inputs first, then top-level state' - so `items_from: mails` with an input `mails` should "
-    "fan out over it. Today it silently finds nothing. A fix flips this to XPASS on purpose."))
 def test_fan_out_reads_a_bare_name_from_the_workflow_inputs_like_every_other_selector():
+    """H-FO-1a (fixed 2026-10-29): fan_out resolved a bare `items_from` against the run STATE only, while
+    code_exec._resolve_selector documents one grammar for every selector - 'a bare name checks workflow inputs
+    first, then top-level state' - so `items_from: mails` with an input `mails` silently found nothing."""
     res, eng = run([dict(FAN_OUT_NODE)], inputs={"mails": ["a", "b", "c"]})
     assert len(eng.history) == 3, f"{len(eng.history)} item(s) were processed"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "H-FO-1b (open finding): a fan_out whose `items_from` names nothing that exists runs ZERO items and the "
-    "run completes successfully - a typo is a silent no-op. A-01 closed the same class for selectors that "
-    "name a graph node; a name that is no node at all is still accepted by the validator and by the runner."))
-def test_fan_out_over_a_source_that_does_not_exist_fails_instead_of_succeeding_with_zero_items():
-    res, eng = run([dict(FAN_OUT_NODE, items_from="no_such_source")])
-    assert res.nodes["f"].status == "failed", (res.state, res.nodes["f"].status, res.nodes["f"].output)
+def test_a_workflow_input_wins_over_a_state_key_of_the_same_name_in_fan_out():
+    nodes = [agent("mails"), {**FAN_OUT_NODE, "depends_on": ["mails"]}]
+    res, eng = run(nodes, ScriptedEngine(script=lambda c: {"ok": 1}), inputs={"mails": ["only-this"]})
+    assert [c.inputs.get("item") for c in eng.history if c.metadata.get("node_type") == "fan_out"] == ["only-this"]
+
+
+def test_fan_out_follows_a_dotted_path_through_nested_outputs():
+    nodes = [agent("src"), {**FAN_OUT_NODE, "depends_on": ["src"], "items_from": "src.data.rows"}]
+    res, eng = run(nodes, ScriptedEngine(script=lambda c: {"data": {"rows": [1, 2]}} if c.agent == "src" else {"ok": 1}))
+    assert res.nodes["f"].output["count"] == 2
+
+
+@pytest.mark.parametrize("source", ["no_such_source", "src.no_such_field", "no_such_node.items"])
+def test_fan_out_over_a_source_that_does_not_exist_fails_instead_of_succeeding_with_zero_items(source):
+    """H-FO-1b (fixed 2026-10-29): a fan_out whose `items_from` names nothing that exists ran ZERO items and
+    the run completed successfully, so a typo was a silent no-op."""
+    nodes = [agent("src"), {**FAN_OUT_NODE, "depends_on": ["src"], "items_from": source}]
+    res, eng = run(nodes, ScriptedEngine(script=lambda c: {"items": [1]} if c.agent == "src" else {"ok": 1}))
+    assert res.nodes["f"].status == "failed", (source, res.state, res.nodes["f"].status)
+    assert "names no workflow input" in (res.nodes["f"].error or ""), res.nodes["f"].error
+    assert [c for c in eng.history if c.metadata.get("node_type") == "fan_out"] == [], "nothing was spawned"
 
 
 def test_fan_out_over_an_empty_list_that_exists_is_a_legitimate_zero_item_success():
@@ -558,17 +570,63 @@ def test_without_a_pin_the_router_still_chooses_by_prompt_weight(tmp_path, monke
     assert "haiku" in RunDispatcher._resolve_worker_model("_default", "claude_code", prompt="Say hello")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "H-GW-2 (open finding): core/skills/os_skills/intelligent_router.py hardcodes claude-haiku-4-5, "
-    "claude-sonnet-5 and claude-opus-5 while model_selector.tier_model() resolves the newest of each "
-    "family (5-5). ADR-2090 and CLAUDE.md: never hardcode an id where tier_model() exists."))
 def test_the_gateway_router_names_the_newest_model_of_the_family_it_picks(tmp_path, monkeypatch):
+    """H-GW-2 (fixed 2026-10-29): intelligent_router.py carried claude-haiku-4-5, claude-sonnet-5 and
+    claude-opus-5 while model_selector.tier_model() resolves the newest of each family (5-5). ADR-2090 and
+    CLAUDE.md: never hardcode an id where tier_model() exists."""
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     from core.gateway.corvin_gateway.dispatcher import RunDispatcher
     from model_selector import tier_model
     chosen = RunDispatcher._resolve_worker_model("_default", "claude_code", prompt="Say hello")
     assert chosen == tier_model("haiku"), chosen
+
+
+def test_every_tier_of_the_router_routes_to_the_newest_model_of_its_family():
+    from core.skills.os_skills.intelligent_router import IntelligentRouter, ModelTier
+    from model_selector import tier_model
+    router = IntelligentRouter()
+    assert [router._select_model(t, "_default") for t in (ModelTier.SIMPLE, ModelTier.MEDIUM, ModelTier.COMPLEX)] == [
+        tier_model("haiku"), tier_model("sonnet"), tier_model("opus")]
+
+
+def test_the_router_prices_and_times_a_model_by_its_family_not_by_one_exact_id():
+    """The tables used to be keyed by the 4.x ids, so the newest model fell through to the dearest default
+    (15 USD per 1M input) and a 5000 ms latency. Any id of a family is priced and timed as that family."""
+    from core.skills.os_skills.intelligent_router import IntelligentRouter
+    r = IntelligentRouter()
+    text = "word " * 400
+    assert r._estimate_cost(text, "claude-haiku-5-5") == r._estimate_cost(text, "claude-haiku-4-5")
+    assert r._estimate_cost(text, "claude-haiku-5-5") < r._estimate_cost(text, "claude-opus-5-5")
+    assert r._latency_ms("claude-haiku-5-5", "native") == 200 and r._latency_ms("claude-opus-5-5", "tde") == 30000
+    assert r._latency_ms("some-other-model", "native") == 5000, "an override of no known family keeps the default"
+    n = r._estimate_tokens(text)
+    unknown = n / 1e6 * 15.0 + int(n * 1.2) / 1e6 * 75.0          # the unchanged default for a model of no family
+    assert abs(r._estimate_cost(text, "some-other-model") - unknown) < 1e-12
+    assert r._estimate_cost(text, "some-other-model") > r._estimate_cost(text, "claude-sonnet-5-5")
+
+
+def test_an_operator_override_still_outranks_the_family_default():
+    from core.skills.os_skills.intelligent_router import IntelligentRouter, ModelTier
+    r = IntelligentRouter(overrides={"simple": {"provider": "anthropic", "model": "claude-sonnet-5-5"}})
+    assert r._select_model(ModelTier.SIMPLE, "_default") == "claude-sonnet-5-5"
+
+
+def test_the_router_falls_back_to_a_fixed_id_only_when_the_registry_cannot_be_read(monkeypatch):
+    import core.skills.os_skills.intelligent_router as ir
+    import model_selector
+    monkeypatch.setattr(model_selector, "tier_model", lambda family: (_ for _ in ()).throw(RuntimeError("no registry")))
+    assert ir._newest_model("haiku") == "claude-haiku-4-5"
+
+
+def test_the_router_statistics_count_by_family_under_the_ids_it_routes_to_now():
+    from core.skills.os_skills.intelligent_router import IntelligentRouter
+    from model_selector import tier_model
+    r = IntelligentRouter()
+    for p in ("Say hello", "Say hello", "Design a distributed analytics system with failover and cost controls. " * 80):
+        r.route_task(p)
+    dist = r.get_stats()["model_distribution"] if hasattr(r, "get_stats") else None
+    assert dist is not None and dist[tier_model("haiku")] == 2 and dist[tier_model("opus")] == 1, dist
 
 
 def test_the_gateway_router_orders_the_families_by_prompt_weight(tmp_path, monkeypatch):

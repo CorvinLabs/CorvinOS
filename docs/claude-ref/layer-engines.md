@@ -3676,12 +3676,24 @@ Also fixed (2026-10-29, same suite):
   Decision "pin vor router" (operator, 2026-10-29, ADR-2309, proposed): the pin first, when that model can run; a pin
   the process cannot verify passes through unchanged; a pin the catalog positively lacks falls through to the router.
 
-Open, each held as a `strict` xfail:
+- **H-GW-2** — `IntelligentRouter` carried `claude-haiku-4-5` / `claude-sonnet-5` / `claude-opus-5` itself, so the
+  gateway served 4.x after the registry moved to 5.5 (ADR-2090: no literal where `tier_model()` exists). Now the tier
+  maps to a FAMILY and `_model_for_tier` resolves the newest registered id per decision; prices, latencies and output
+  ratios are keyed by family (any id of a family is priced and timed alike, a model of no known family keeps the old
+  default); the fixed ids are the last resort only when the registry cannot be read. `get_stats()["model_distribution"]`
+  is keyed by the ids the families route to now. Operator overrides still win. The router's own tests were moved from
+  the 4.x literals to `tier_model()`. The haiku-literal ratchet baseline for the file went from 10 to 1.
+- **H-FO-1a/1b** — `fan_out` resolved a bare `items_from` against the run state only (an input `mails` was ignored)
+  and defaulted a missing source to an empty list (a typo ran zero items and the run succeeded). It now takes the one
+  selector grammar of `code_exec._resolve_selector` (bare name: workflow inputs first, then state; dotted paths walk
+  nested outputs) and fails with a named error when the source resolves to nothing. A source that exists and is an
+  empty list is still a legitimate zero-item fan-out. This applies to the DAG engine (CLI, MCP, scheduler); the
+  console's own legacy executor has a fan_out of its own that was not changed.
 
-| Id | Finding | Where |
-|---|---|---|
-| H-GW-2 | `IntelligentRouter` hardcodes `claude-haiku-4-5` / `claude-sonnet-5` / `claude-opus-5`; `tier_model()` resolves the newest of each family (ADR-2090). | `core/skills/os_skills/intelligent_router.py:93` |
-| H-FO-1 | `fan_out` resolves a bare `items_from` against the run state only, not the workflow inputs (the other selectors check inputs first); an unknown source runs zero items and the run succeeds. | `node_types.py::_execute_fan_out` |
+Nothing is open in this table now. Not examined: the legacy executor's delegation loop and fan_out. Still red and not
+part of this work, red before the change as well: `tests/test_no_new_hardcoded_haiku.py` (a literal grew in
+`a2a_usage.py`) and four older router/findings tests (`test_route_with_intelligent_selection_medium`,
+`test_e2e_routing_with_10_synthetic_tasks`, `test_keyword_exact_match`, `test_invalid_tenant_id_rejected`).
 
 Recorded as behaviour, not as defects (an operator decision): every earlier node's output is in a later node's prompt,
 not only its `depends_on` predecessors (H-DF-1; `share_output` is the limit); a manager's `inputs` override the

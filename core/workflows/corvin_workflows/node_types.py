@@ -112,13 +112,20 @@ def _validate_fan_out(node: dict[str, Any]) -> None:
 def _execute_fan_out(*, node, engine, state, inputs, audit) -> dict[str, Any]:
     from .engines import EngineCall
 
+    from .code_exec import _resolve_selector
+
     field = node["items_from"]
-    # items_from accepts "node_id.field" or just "field" (top-level state)
-    if "." in field:
-        nid, subfield = field.split(".", 1)
-        items = (state.get(nid) or {}).get(subfield, [])
-    else:
-        items = state.get(field, [])
+    # items_from takes the ONE selector grammar every other node uses: "node_id.field[.sub...]", or a bare name
+    # that is looked up in the workflow inputs first and then in the top-level state (finding H-FO-1a: it used to
+    # read the state only, so `items_from: mails` ignored an input `mails`).
+    items = _resolve_selector(field, state=state, inputs=inputs)
+    if items is None:
+        # H-FO-1b: it used to default to an empty list, so a typo ran zero items and the run counted as a
+        # success. A source that exists and is an empty list is still a legitimate zero-item fan-out.
+        raise ValueError(
+            f"fan_out: items_from {field!r} names no workflow input, node output or field that exists "
+            f"(check the spelling; an empty list is fine, a missing source is not)"
+        )
     if not isinstance(items, list):
         raise ValueError(f"fan_out: items_from {field!r} did not resolve to a list")
 

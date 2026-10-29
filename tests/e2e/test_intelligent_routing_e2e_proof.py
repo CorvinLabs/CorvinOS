@@ -11,6 +11,14 @@ This test runs 10 synthetic tasks through the complete routing pipeline
 and verifies that predictions match actual execution.
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+_repo = next(p for p in _Path(__file__).resolve().parents if (p / "corvin_operator").is_dir())
+_shared = str(_repo / "corvin_operator" / "bridges" / "shared")
+if _shared not in _sys.path:
+    _sys.path.insert(0, _shared)
+from model_selector import tier_model as _tier_model  # ADR-2090: a tier routes to the NEWEST id of its family
+_HAIKU, _SONNET, _OPUS = _tier_model("haiku"), _tier_model("sonnet"), _tier_model("opus")
 import sys
 from pathlib import Path
 
@@ -32,14 +40,14 @@ def create_synthetic_tasks():
             "name": "task_1_simple_math",
             "input": "What is 2+2?",
             "expected_tier": "simple",
-            "expected_model": "claude-haiku-4-5",
+            "expected_model": _HAIKU,
             "token_estimate": 15,
         },
         {
             "name": "task_2_simple_code",
             "input": "Write a hello world function in Python",
             "expected_tier": "simple",
-            "expected_model": "claude-haiku-4-5",
+            "expected_model": _HAIKU,
             "token_estimate": 80,
         },
         {
@@ -53,14 +61,14 @@ def fibonacci(n):
 
 What's the time complexity?""",
             "expected_tier": "medium",
-            "expected_model": "claude-sonnet-5",
+            "expected_model": _SONNET,
             "token_estimate": 750,
         },
         {
             "name": "task_4_medium_refactor",
             "input": "Refactor this codebase " * 50,
             "expected_tier": "medium",
-            "expected_model": "claude-sonnet-5",
+            "expected_model": _SONNET,
             "token_estimate": 1500,
         },
         {
@@ -74,42 +82,42 @@ What's the time complexity?""",
 
 Provide detailed design with trade-offs.""" * 10,
             "expected_tier": "complex",
-            "expected_model": "claude-opus-5",
+            "expected_model": _OPUS,
             "token_estimate": 3500,
         },
         {
             "name": "task_6_complex_reasoning",
             "input": "Complex reasoning problem: " * 200,
             "expected_tier": "complex",
-            "expected_model": "claude-opus-5",
+            "expected_model": _OPUS,
             "token_estimate": 4500,
         },
         {
             "name": "task_7_boundary_500",
             "input": "Boundary test at 500 tokens",
             "expected_tier": "medium",  # 500 is MEDIUM boundary
-            "expected_model": "claude-sonnet-5",
+            "expected_model": _SONNET,
             "token_estimate": 500,
         },
         {
             "name": "task_8_boundary_3000",
             "input": "Boundary test at 3000 tokens",
             "expected_tier": "complex",  # 3000 is COMPLEX boundary
-            "expected_model": "claude-opus-5",
+            "expected_model": _OPUS,
             "token_estimate": 3000,
         },
         {
             "name": "task_9_empty",
             "input": "",
             "expected_tier": "simple",
-            "expected_model": "claude-haiku-4-5",
+            "expected_model": _HAIKU,
             "token_estimate": 0,
         },
         {
             "name": "task_10_very_large",
             "input": "Very large task " * 500,
             "expected_tier": "complex",
-            "expected_model": "claude-opus-5",
+            "expected_model": _OPUS,
             "token_estimate": 8000,
         },
     ]
@@ -237,9 +245,9 @@ def test_e2e_routing_with_10_synthetic_tasks():
     print(f"  COMPLEX: {stats['tier_distribution']['complex']}")
 
     print("\nModel Distribution:")
-    print(f"  Haiku: {stats['model_distribution']['claude-haiku-4-5']}")
-    print(f"  Sonnet: {stats['model_distribution']['claude-sonnet-5']}")
-    print(f"  Opus: {stats['model_distribution']['claude-opus-5']}")
+    print(f"  Haiku: {stats['model_distribution'][_HAIKU]}")
+    print(f"  Sonnet: {stats['model_distribution'][_SONNET]}")
+    print(f"  Opus: {stats['model_distribution'][_OPUS]}")
 
     print(f"\nAverage Confidence: {stats['avg_confidence']:.2f}")
     print(f"Average Cost: ${stats['avg_cost_usd']:.4f}")
@@ -264,7 +272,7 @@ def test_integration_bridge():
     print("\n[Test 1: Get model via bridge]")
     model = IntelligentRouterBridge.get_model_for_task("simple task")
     print(f"  Model: {model}")
-    assert model in ("claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5")
+    assert model in (_HAIKU, _SONNET, _OPUS)
     print("  ✓ PASS")
 
     # Test 2: Get stats via bridge

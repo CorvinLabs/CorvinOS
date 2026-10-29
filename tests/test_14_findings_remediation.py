@@ -6,6 +6,14 @@ Tests validate that each finding is properly fixed and doesn't introduce
 new regressions. Tests are organized by finding number and priority.
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+_repo = next(p for p in _Path(__file__).resolve().parents if (p / "corvin_operator").is_dir())
+_shared = str(_repo / "corvin_operator" / "bridges" / "shared")
+if _shared not in _sys.path:
+    _sys.path.insert(0, _shared)
+from model_selector import tier_model as _tier_model  # ADR-2090: a tier routes to the NEWEST id of its family
+_HAIKU, _SONNET, _OPUS = _tier_model("haiku"), _tier_model("sonnet"), _tier_model("opus")
 import pytest
 import re
 import time
@@ -78,7 +86,7 @@ class TestFinding2_CostBudgetEnforcedOnAllTiers:
         large_task = "Analyze code " * 1000  # Very large task
 
         # Cost estimation: with 1.1x multiplier, this should be expensive
-        cost_estimate = router._estimate_cost(large_task, "claude-haiku-4-5")
+        cost_estimate = router._estimate_cost(large_task, _HAIKU)
 
         # When even SIMPLE exceeds budget, confidence should be 0.0 (error)
         decision = router.route_task(
@@ -106,7 +114,7 @@ class TestFinding2_CostBudgetEnforcedOnAllTiers:
         # If degraded to SIMPLE, verify the degradation logic ran
         # (actual degradation depends on cost estimates)
         assert decision is not None
-        assert decision.model in ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"]
+        assert decision.model in [_HAIKU, _SONNET, _OPUS]
 
 
 # ==============================================================================
@@ -324,7 +332,7 @@ class TestFinding8_FixedOutputMultiplier:
         task = "Write a function " * 50  # ~500 chars = ~100 tokens
 
         costs = {}
-        for model in ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"]:
+        for model in [_HAIKU, _SONNET, _OPUS]:
             cost = router._estimate_cost(task, model)
             costs[model] = cost
 
@@ -334,8 +342,8 @@ class TestFinding8_FixedOutputMultiplier:
             assert cost < 10, f"Cost for {model} should be < $10 for small task"
 
         # Haiku should be cheapest
-        assert costs["claude-haiku-4-5"] < costs["claude-sonnet-5"]
-        assert costs["claude-sonnet-5"] < costs["claude-opus-5"]
+        assert costs[_HAIKU] < costs[_SONNET]
+        assert costs[_SONNET] < costs[_OPUS]
 
 
 class TestFinding9_ModelAvailabilityValidation:
@@ -351,9 +359,9 @@ class TestFinding9_ModelAvailabilityValidation:
         from core.gateway.corvin_gateway.dispatcher import _model_is_available
 
         # Default models should be available or permissively fail
-        assert _model_is_available("claude-haiku-4-5") in [True, False]
-        assert _model_is_available("claude-sonnet-5") in [True, False]
-        assert _model_is_available("claude-opus-5") in [True, False]
+        assert _model_is_available(_HAIKU) in [True, False]
+        assert _model_is_available(_SONNET) in [True, False]
+        assert _model_is_available(_OPUS) in [True, False]
 
         # Empty string should be permissive
         assert _model_is_available("") is True
@@ -539,9 +547,9 @@ class TestIntegration:
             # Should return valid decision
             assert decision is not None
             assert decision.model in [
-                "claude-haiku-4-5",
-                "claude-sonnet-5",
-                "claude-opus-5",
+                _HAIKU,
+                _SONNET,
+                _OPUS,
             ]
             assert decision.confidence >= 0.0
             assert decision.confidence <= 1.0

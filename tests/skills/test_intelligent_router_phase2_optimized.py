@@ -11,6 +11,14 @@ Test Categories:
 4. Quality preservation (COMPLEX stays on Opus)
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+_repo = next(p for p in _Path(__file__).resolve().parents if (p / "corvin_operator").is_dir())
+_shared = str(_repo / "corvin_operator" / "bridges" / "shared")
+if _shared not in _sys.path:
+    _sys.path.insert(0, _shared)
+from model_selector import tier_model as _tier_model  # ADR-2090: a tier routes to the NEWEST id of its family
+_HAIKU, _SONNET, _OPUS = _tier_model("haiku"), _tier_model("sonnet"), _tier_model("opus")
 import pytest
 from core.skills.os_skills.intelligent_router import (
     IntelligentRouter, ModelTier, Engine, RoutingDecision
@@ -27,17 +35,17 @@ class TestPhase2Thresholds:
         # 25 tokens → SIMPLE → Haiku
         decision = router.route_task("What's 2+2?", token_count=25)
         assert decision.tier == "simple"
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
 
         # 30 tokens → MEDIUM (boundary)
         decision = router.route_task("Short task", token_count=30)
         assert decision.tier == "medium"
-        assert decision.model == "claude-sonnet-5"
+        assert decision.model == _SONNET
 
         # 50 tokens → MEDIUM (was SIMPLE in Phase 1)
         decision = router.route_task("a" * 200, token_count=50)
         assert decision.tier == "medium"
-        assert decision.model == "claude-sonnet-5"
+        assert decision.model == _SONNET
 
     def test_medium_threshold_tighter_than_phase1(self):
         """MEDIUM 30-150 (was 50-250): reduces COMPLEX threshold."""
@@ -46,12 +54,12 @@ class TestPhase2Thresholds:
         # 75 tokens → MEDIUM
         decision = router.route_task("a" * 300, token_count=75)
         assert decision.tier == "medium"
-        assert decision.model == "claude-sonnet-5"
+        assert decision.model == _SONNET
 
         # 150 tokens → COMPLEX (boundary, was MEDIUM in Phase 1)
         decision = router.route_task("a" * 600, token_count=150)
         assert decision.tier == "complex"
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
 
     def test_complex_threshold_lower_than_phase1(self):
         """COMPLEX >= 150 (was >= 250): more COMPLEX tasks use Opus."""
@@ -60,17 +68,17 @@ class TestPhase2Thresholds:
         # 150 tokens → COMPLEX → Opus (was MEDIUM in Phase 1)
         decision = router.route_task("a" * 600, token_count=150)
         assert decision.tier == "complex"
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
 
         # 200 tokens → COMPLEX → Opus
         decision = router.route_task("a" * 800, token_count=200)
         assert decision.tier == "complex"
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
 
         # 500 tokens → COMPLEX → Opus (strongly)
         decision = router.route_task("a" * 2000, token_count=500)
         assert decision.tier == "complex"
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
         assert decision.confidence == 0.95
 
 
@@ -138,7 +146,7 @@ class TestPhase2QualityPreservation:
         for token_count in [150, 200, 300, 500, 1000]:
             decision = router.route_task("a" * (token_count * 4), token_count=token_count)
             assert decision.tier == "complex", f"Failed at {token_count} tokens"
-            assert decision.model == "claude-opus-5", f"Failed at {token_count} tokens"
+            assert decision.model == _OPUS, f"Failed at {token_count} tokens"
 
     def test_complex_latency_degradation_fix(self):
         """Phase 1 showed COMPLEX latency -21.7%; Phase 2 should improve by using Opus."""
@@ -147,7 +155,7 @@ class TestPhase2QualityPreservation:
         # COMPLEX task at 150 tokens (boundary from Phase 1: was MEDIUM, now COMPLEX)
         decision = router.route_task("a" * 600, token_count=150)
         assert decision.tier == "complex"
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
 
         # OPUS on native engine has 800ms latency (better than Sonnet degradation)
         assert decision.latency_estimate_ms == 800
@@ -164,17 +172,17 @@ class TestPhase2QualityPreservation:
         # SIMPLE: most aggressive (Haiku)
         simple_task = "What is 2+2?"
         decision = router.route_task(simple_task, token_count=10)
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
 
         # MEDIUM: moderate (Sonnet)
         medium_task = "a" * 200
         decision = router.route_task(medium_task, token_count=75)
-        assert decision.model == "claude-sonnet-5"
+        assert decision.model == _SONNET
 
         # COMPLEX: quality-focused (Opus)
         complex_task = "a" * 600
         decision = router.route_task(complex_task, token_count=150)
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
 
 
 class TestPhase2ConfidenceScores:
@@ -276,7 +284,7 @@ class TestPhase2EdgeCases:
 
         decision = router.route_task("", token_count=0)
         assert decision.tier == "simple"
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
 
     def test_very_large_token_count(self):
         """Handle very large token counts (should be COMPLEX)."""
@@ -284,7 +292,7 @@ class TestPhase2EdgeCases:
 
         decision = router.route_task("a" * 10000, token_count=2500)
         assert decision.tier == "complex"
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
 
 
 if __name__ == "__main__":

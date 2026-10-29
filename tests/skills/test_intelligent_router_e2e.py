@@ -10,6 +10,14 @@ Validates deterministic, auditable model routing across all phases:
 6. Edge cases: malformed inputs, boundary conditions
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+_repo = next(p for p in _Path(__file__).resolve().parents if (p / "corvin_operator").is_dir())
+_shared = str(_repo / "corvin_operator" / "bridges" / "shared")
+if _shared not in _sys.path:
+    _sys.path.insert(0, _shared)
+from model_selector import tier_model as _tier_model  # ADR-2090: a tier routes to the NEWEST id of its family
+_HAIKU, _SONNET, _OPUS = _tier_model("haiku"), _tier_model("sonnet"), _tier_model("opus")
 import pytest
 import json
 import re
@@ -38,7 +46,7 @@ class TestReachability:
         task = "Write a hello world function in Python"  # ~100 tokens
         decision = router.route_task(task)
 
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
         assert decision.tier == "simple"
         assert decision.confidence >= 0.80
 
@@ -56,7 +64,7 @@ class TestReachability:
         """  # ~300 tokens, triggers MEDIUM (token count in range)
 
         decision = router.route_task(task, token_count=100)  # Explicitly set to medium range
-        assert decision.model == "claude-sonnet-5"
+        assert decision.model == _SONNET
         assert decision.tier == "medium"
 
     def test_complex_always_routes_opus(self):
@@ -65,7 +73,7 @@ class TestReachability:
         task = "Large complex task" * 200  # Simulate 4000+ tokens
         decision = router.route_task(task, token_count=250)
 
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
         assert decision.tier == "complex"
         assert decision.confidence >= 0.90
 
@@ -85,9 +93,9 @@ class TestReachability:
             models_reached.add(decision.model)
 
         # All 3 models must be reachable
-        assert "claude-haiku-4-5" in models_reached
-        assert "claude-sonnet-5" in models_reached
-        assert "claude-opus-5" in models_reached
+        assert _HAIKU in models_reached
+        assert _SONNET in models_reached
+        assert _OPUS in models_reached
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,7 +112,7 @@ class TestHeuristicAccuracy:
         decision = router.route_task("task", token_count=20)
 
         assert decision.tier == "simple"
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
         assert decision.signal_strength == "weak"  # < 30 tokens: weak signal, may be keyword-bumped
 
     def test_medium_boundary_500_to_3000(self):
@@ -113,7 +121,7 @@ class TestHeuristicAccuracy:
         for tokens in [30, 60, 100, 149]:
             decision = router.route_task("task", token_count=tokens)
             assert decision.tier == "medium", f"Failed for tokens={tokens}"
-            assert decision.model == "claude-sonnet-5"
+            assert decision.model == _SONNET
 
     def test_complex_boundary_above_3000(self):
         """Token count >= 150 → COMPLEX."""
@@ -121,7 +129,7 @@ class TestHeuristicAccuracy:
         for tokens in [150, 300, 500]:
             decision = router.route_task("task", token_count=tokens)
             assert decision.tier == "complex", f"Failed for tokens={tokens}"
-            assert decision.model == "claude-opus-5"
+            assert decision.model == _OPUS
 
     def test_short_simple_task_haiku_native(self):
         """Short, simple task → Haiku, Native engine, <1000ms latency."""
@@ -129,7 +137,7 @@ class TestHeuristicAccuracy:
         task = "What is 2+2?"
         decision = router.route_task(task)
 
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
         assert decision.engine == "native"
         assert decision.latency_estimate_ms <= 500
 
@@ -139,7 +147,7 @@ class TestHeuristicAccuracy:
         task = "Review this code " * 50  # "Analyze/Debug/..." + > 80 chars would bump to COMPLEX
         decision = router.route_task(task, token_count=100)
 
-        assert decision.model == "claude-sonnet-5"
+        assert decision.model == _SONNET
         assert decision.tier == "medium"
 
     def test_long_complex_reasoning_opus(self):
@@ -148,7 +156,7 @@ class TestHeuristicAccuracy:
         task = "Design a complex system architecture " * 100
         decision = router.route_task(task, token_count=300)
 
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
         assert decision.tier == "complex"
 
     def test_latency_critical_forces_native(self):
@@ -167,7 +175,7 @@ class TestHeuristicAccuracy:
 
         # Should degrade to SIMPLE (cheaper)
         assert decision.tier == "simple"
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -181,37 +189,37 @@ class TestOperatorOverrides:
     def test_operator_override_takes_precedence(self):
         """Operator override for SIMPLE: Sonnet instead of Haiku."""
         overrides = {
-            "simple": {"model": "claude-sonnet-5"}
+            "simple": {"model": _SONNET}
         }
         router = IntelligentRouter(overrides=overrides)
         decision = router.route_task("task", token_count=10)
 
-        assert decision.model == "claude-sonnet-5"
+        assert decision.model == _SONNET
         assert decision.tier == "simple"  # Tier unchanged, only model
 
     def test_override_per_tier(self):
         """Different overrides per tier."""
         overrides = {
-            "simple": {"model": "claude-sonnet-5"},
-            "medium": {"model": "claude-opus-5"},
-            "complex": {"model": "claude-haiku-4-5"},  # Unusual but allowed
+            "simple": {"model": _SONNET},
+            "medium": {"model": _OPUS},
+            "complex": {"model": _HAIKU},  # Unusual but allowed
         }
         router = IntelligentRouter(overrides=overrides)
 
         # Test each tier
-        assert router.route_task("task", token_count=10).model == "claude-sonnet-5"
-        assert router.route_task("task", token_count=100).model == "claude-opus-5"
-        assert router.route_task("task", token_count=250).model == "claude-haiku-4-5"
+        assert router.route_task("task", token_count=10).model == _SONNET
+        assert router.route_task("task", token_count=100).model == _OPUS
+        assert router.route_task("task", token_count=250).model == _HAIKU
 
     def test_override_persists_across_calls(self):
         """Overrides remain stable across multiple routing decisions."""
-        overrides = {"simple": {"model": "claude-opus-5"}}
+        overrides = {"simple": {"model": _OPUS}}
         router = IntelligentRouter(overrides=overrides)
 
         # 10 calls with same override → all use Opus
         for _ in range(10):
             decision = router.route_task("task", token_count=10)
-            assert decision.model == "claude-opus-5"
+            assert decision.model == _OPUS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -251,7 +259,7 @@ class TestAuditTrail:
 
         # Attempt to modify should raise
         with pytest.raises(AttributeError):
-            decision.model = "claude-sonnet-5"
+            decision.model = _SONNET
 
     def test_decision_serializable(self):
         """RoutingDecision can be serialized to JSON (audit-safe)."""
@@ -307,7 +315,7 @@ class TestEdgeCases:
         router = IntelligentRouter()
         decision = router.route_task("")
 
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
         assert decision.tier == "simple"
 
     def test_very_small_token_count_haiku(self):
@@ -315,7 +323,7 @@ class TestEdgeCases:
         router = IntelligentRouter()
         decision = router.route_task("task", token_count=5)
 
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
         assert decision.tier == "simple"
 
     def test_tokens_exactly_at_boundary_500(self):
@@ -324,7 +332,7 @@ class TestEdgeCases:
         decision = router.route_task("task", token_count=30)
 
         assert decision.tier == "medium"
-        assert decision.model == "claude-sonnet-5"
+        assert decision.model == _SONNET
 
     def test_tokens_exactly_at_boundary_3000(self):
         """Token count exactly at boundary (150) → COMPLEX."""
@@ -332,7 +340,7 @@ class TestEdgeCases:
         decision = router.route_task("task", token_count=150)
 
         assert decision.tier == "complex"
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
 
     def test_negative_token_count_treated_as_zero(self):
         """Negative token count (error case) → safe default."""
@@ -340,7 +348,7 @@ class TestEdgeCases:
         # Should not crash; route as SIMPLE
         decision = router.route_task("task", token_count=-100)
 
-        assert decision.model == "claude-haiku-4-5"
+        assert decision.model == _HAIKU
 
     def test_very_large_token_count(self):
         """100K token task → COMPLEX."""
@@ -348,7 +356,7 @@ class TestEdgeCases:
         decision = router.route_task("task", token_count=100_000)
 
         assert decision.tier == "complex"
-        assert decision.model == "claude-opus-5"
+        assert decision.model == _OPUS
 
     def test_cost_estimate_reasonable(self):
         """Cost estimate is within expected range."""
@@ -480,9 +488,9 @@ class TestIntegration:
         # IntelligentRouter must return same vocabulary
         assert decision.tier in ("simple", "medium", "complex")
         assert decision.model in (
-            "claude-haiku-4-5",
-            "claude-sonnet-5",
-            "claude-opus-5",
+            _HAIKU,
+            _SONNET,
+            _OPUS,
         )
 
     def test_router_engine_selection_compatible(self):

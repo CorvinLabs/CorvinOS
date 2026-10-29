@@ -19,6 +19,14 @@ the two halves of each test — isolating the config wiring as the variable.
 """
 from __future__ import annotations
 
+import sys as _sys
+from pathlib import Path as _Path
+_repo = next(p for p in _Path(__file__).resolve().parents if (p / "corvin_operator").is_dir())
+_shared = str(_repo / "corvin_operator" / "bridges" / "shared")
+if _shared not in _sys.path:
+    _sys.path.insert(0, _shared)
+from model_selector import tier_model as _tier_model  # ADR-2090: a tier routes to the NEWEST id of its family
+_HAIKU, _SONNET, _OPUS = _tier_model("haiku"), _tier_model("sonnet"), _tier_model("opus")
 import os
 import sys
 import tempfile
@@ -116,7 +124,7 @@ class TestRoutingBehaviorFollowsConfig:
             )
             # Token-only heuristic: this short prompt stays SIMPLE/Haiku.
             assert decision.tier == "simple"
-            assert decision.model == "claude-haiku-4-5"
+            assert decision.model == _HAIKU
             assert "Judge" not in decision.reasoning
 
     def test_phase3_judge_enabled_applies_judge_override(self):
@@ -127,7 +135,7 @@ class TestRoutingBehaviorFollowsConfig:
             # ComplexityJudge overrides the token-only SIMPLE verdict to
             # COMPLEX/Opus for this "kurz aber komplex" prompt.
             assert decision.tier == "complex"
-            assert decision.model == "claude-opus-5"
+            assert decision.model == _OPUS
             assert "Judge" in decision.reasoning
 
     def test_phase3_judge_strategy_with_judge_disabled_falls_back(self):
@@ -138,7 +146,7 @@ class TestRoutingBehaviorFollowsConfig:
                 PROMPT, tenant_id=TENANT
             )
             assert decision.tier == "simple"
-            assert decision.model == "claude-haiku-4-5"
+            assert decision.model == _HAIKU
             assert "Judge" not in decision.reasoning
 
     def test_same_prompt_different_tenants_different_tiers(self):

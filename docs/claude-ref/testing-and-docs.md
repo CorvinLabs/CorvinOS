@@ -137,14 +137,13 @@ an F1 module shares ONE console (`dag_adv_console.module_console`) and each test
 directory and a reset Free-tier counter (`global/license`, 10 compute units a day). A test that counts chain events
 takes a before/after delta; a test that switches tenant or session uses `fresh_sandbox`.
 
-**Open findings are executable.** Each finding that needs an operator decision is a `strict` xfail with its reason:
-H-GW-2 (the router hardcodes `claude-haiku-4-5`, `claude-sonnet-5`, `claude-opus-5`) and H-FO-1a/1b (a bare
-`items_from` ignores workflow inputs; an unknown source runs zero items and succeeds). A fix flips the test to XPASS,
-which fails the suite on purpose: delete the marker in the same commit as the fix. Three findings were fixed with the
-suite, each first as a red test: H-PL-1 (the design-chat planner runs with `--disallowedTools "*"`; the live run had
-shown it reading a host file and printing the content), H-DL-1 (a delegation-loop manager now sees what its workers
-returned) and H-GW-1 (the operator pin outranks the gateway router, ADR-2309). See `layer-engines.md` § Adversarial
-suite findings.
+**Findings are executable.** A finding that needs an operator decision is kept as a `strict` xfail with its reason; a
+fix flips it to XPASS, which fails the suite on purpose: delete the marker in the same commit as the fix. Every finding
+of the first run is fixed now, each first as a red test: H-PL-1 (the design-chat planner runs with
+`--disallowedTools "*"`; the live run had shown it reading a host file and printing the content), H-DL-1 (a
+delegation-loop manager sees what its workers returned), H-GW-1 (the operator pin outranks the gateway router,
+ADR-2309), H-GW-2 (the router routes to the newest model of a family instead of fixed 4.x ids) and H-FO-1a/1b (`fan_out`
+reads workflow inputs and fails on a source that does not exist). See `layer-engines.md` § Adversarial suite findings.
 
 **Must NOT do:** point a `deliver`/`ask_human`/`answer` node at the real outbox in a test (set `ADAPTER_OUTBOX`; without
 it `node_types._write_outbox` writes the live repo outbox) · replace `ENGINE_FACTORY` in a test of model selection (the
