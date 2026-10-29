@@ -23,7 +23,7 @@ from core.skills.os_skills.intelligent_router import (
     IntelligentRouter,
     RoutingDecision,
 )
-from core.gateway.corvin_gateway.dispatcher import Dispatcher
+from core.gateway.corvin_gateway.dispatcher import RunDispatcher
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ class TestIntelligentRoutingIntegration:
         prompt = "Write a hello world function in Python"  # ~100 tokens → SIMPLE
 
         # Call _resolve_worker_model directly
-        model = Dispatcher._resolve_worker_model(
+        model = RunDispatcher._resolve_worker_model(
             tenant_id="_default",
             engine_id="native",
             prompt=prompt,
@@ -61,7 +61,7 @@ class TestIntelligentRoutingIntegration:
         The function is slow. What's the issue and how would you fix it?
         """
 
-        model = Dispatcher._resolve_worker_model(
+        model = RunDispatcher._resolve_worker_model(
             tenant_id="_default",
             engine_id="native",
             prompt=prompt,
@@ -96,7 +96,7 @@ class TestIntelligentRoutingIntegration:
 
         Provide detailed explanations for each design decision."""
 
-        model = Dispatcher._resolve_worker_model(
+        model = RunDispatcher._resolve_worker_model(
             tenant_id="_default",
             engine_id="native",
             prompt=complex_task,
@@ -108,7 +108,7 @@ class TestIntelligentRoutingIntegration:
 
     def test_resolve_worker_model_without_prompt_uses_operator_config(self):
         """No prompt provided → fallback to operator-configured model."""
-        model = Dispatcher._resolve_worker_model(
+        model = RunDispatcher._resolve_worker_model(
             tenant_id="_default",
             engine_id="native",
             prompt="",  # Empty prompt
@@ -127,7 +127,7 @@ class TestIntelligentRoutingIntegration:
             "core.skills.os_skills.intelligent_router_integration.IntelligentRouterBridge",
             side_effect=ImportError("Router not available"),
         ):
-            model = Dispatcher._resolve_worker_model(
+            model = RunDispatcher._resolve_worker_model(
                 tenant_id="_default",
                 engine_id="native",
                 prompt=prompt,
@@ -145,7 +145,7 @@ class TestIntelligentRoutingIntegration:
             "core.skills.os_skills.intelligent_router_integration.IntelligentRouterBridge.route_with_intelligent_selection",
             side_effect=RuntimeError("Router error"),
         ):
-            model = Dispatcher._resolve_worker_model(
+            model = RunDispatcher._resolve_worker_model(
                 tenant_id="_default",
                 engine_id="native",
                 prompt=prompt,
@@ -188,7 +188,7 @@ class TestModelDistribution:
         }
 
         for prompt, expected_tier in tasks:
-            model = Dispatcher._resolve_worker_model(
+            model = RunDispatcher._resolve_worker_model(
                 tenant_id="_default",
                 engine_id="native",
                 prompt=prompt,
@@ -219,7 +219,7 @@ class TestAuditTrailLogging:
         """Every routing decision should be logged."""
         prompt = "Write a hello world"
 
-        Dispatcher._resolve_worker_model(
+        RunDispatcher._resolve_worker_model(
             tenant_id="_default",
             engine_id="native",
             prompt=prompt,
@@ -236,7 +236,7 @@ class TestAuditTrailLogging:
         with patch(
             "core.gateway.corvin_gateway.dispatcher._security_events.audit_event"
         ) as mock_audit:
-            Dispatcher._resolve_worker_model(
+            RunDispatcher._resolve_worker_model(
                 tenant_id="_default",
                 engine_id="native",
                 prompt=prompt,
@@ -247,7 +247,7 @@ class TestAuditTrailLogging:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 4: Integration with Dispatcher._run_one
+# PHASE 4: Integration with RunDispatcher._run_one
 # Verify end-to-end dispatch with model routing
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -301,7 +301,7 @@ class TestRealWorldScenarios:
         Please suggest fixes and provide secure implementation.
         """
 
-        model = Dispatcher._resolve_worker_model(
+        model = RunDispatcher._resolve_worker_model(
             tenant_id="_default",
             engine_id="native",
             prompt=prompt,
@@ -317,7 +317,7 @@ class TestRealWorldScenarios:
         """Simple help → Haiku (cheap, fast)."""
         prompt = "How do I reverse a list in Python?"
 
-        model = Dispatcher._resolve_worker_model(
+        model = RunDispatcher._resolve_worker_model(
             tenant_id="_default",
             engine_id="native",
             prompt=prompt,
@@ -343,7 +343,7 @@ class TestRealWorldScenarios:
         Provide detailed architecture, tech stack recommendations, and trade-offs.
         """
 
-        model = Dispatcher._resolve_worker_model(
+        model = RunDispatcher._resolve_worker_model(
             tenant_id="_default",
             engine_id="native",
             prompt=prompt,
