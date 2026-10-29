@@ -50,7 +50,28 @@ except Exception:  # noqa: BLE001
         _espan = None  # type: ignore[assignment]
 
 
-def _emit_task_engine_span(kind, audit_path, *, task_id, status="ok", duration_ms=0):
+def _task_result_model_usage(result_frame):
+    """(model_id, four-way token split) from the worker's final ``result`` frame.
+
+    The model is the one the ENGINE reported (ADR-0759), via the shared
+    ``agents.attested_model`` (``modelUsage`` keys; the ``result`` frame has no
+    ``model`` field), and the split via the shared ``engine_span.usage_split``.
+    ``("", {})`` when the frame is missing or a helper is unavailable: an
+    unreported model stays unpriced and is not sent to the live ranking.
+    """
+    if not isinstance(result_frame, dict) or _espan is None:
+        return "", {}
+    try:
+        from types import SimpleNamespace  # noqa: PLC0415
+        from agents import attested_model  # type: ignore  # noqa: PLC0415
+        model_id = attested_model(SimpleNamespace(events=[SimpleNamespace(raw=result_frame)]))
+    except Exception:  # noqa: BLE001
+        model_id = ""
+    return model_id, _espan.usage_split(result_frame.get("usage"))
+
+
+def _emit_task_engine_span(kind, audit_path, *, task_id, status="ok", duration_ms=0,
+                           result_frame=None):
     """Best-effort engine.span.start/end for the task-daemon worker (role=worker)."""
     if _espan is None or not _AUDIT_AVAILABLE or _forge_write_event is None:
         return
@@ -62,11 +83,14 @@ def _emit_task_engine_span(kind, audit_path, *, task_id, status="ok", duration_m
                                    span_id=span_id, role="worker",
                                    engine_id="claude_code", run_id=task_id))
         else:
-            _forge_write_event(audit_path, _espan.ENGINE_SPAN_END,
-                               details=_espan.end_details(
-                                   span_id=span_id, role="worker",
-                                   engine_id="claude_code", run_id=task_id,
-                                   status=status, duration_ms=int(duration_ms)))
+            model_id, split = _task_result_model_usage(result_frame)
+            end = _espan.end_details(
+                span_id=span_id, role="worker",
+                engine_id="claude_code", model_id=model_id, run_id=task_id,
+                status=status, duration_ms=int(duration_ms), **split)
+            _forge_write_event(audit_path, _espan.ENGINE_SPAN_END, details=end)
+            # ADR-2286 — live model-usage signal from the same span details.
+            _espan.send_live_model_usage(end)
     except Exception:  # noqa: BLE001
         pass
 
@@ -670,6 +694,7 @@ class TaskWorkerPool:
                 # Stream output
                 event_count = 0
                 result_text = ""  # captured for the completion notification
+                result_frame = None  # final result frame: reported model + usage
                 async for line in self._stream_lines(proc.stdout):
                     try:
                         event = json.loads(line)
@@ -682,6 +707,8 @@ class TaskWorkerPool:
                         # Capture the final result text so the messenger
                         # notification carries the actual outcome, not just
                         # "completed in N ms" metadata.
+                        if event.get("type") == "result":
+                            result_frame = event
                         if (event.get("type") == "result"
                                 and isinstance(event.get("result"), str)):
                             result_text = event["result"]
@@ -706,7 +733,8 @@ class TaskWorkerPool:
                         state="completed", duration_ms=duration_ms, exit_code=0,
                     )
                     _emit_task_engine_span("end", audit_path, task_id=task.task_id,
-                                           status="ok", duration_ms=duration_ms)
+                                           status="ok", duration_ms=duration_ms,
+                                           result_frame=result_frame)
                     _snapshot_task_turn(
                         task, status="completed", exit_code=0, duration_ms=duration_ms,
                         event_count=event_count, result_text=result_text,
@@ -745,7 +773,8 @@ class TaskWorkerPool:
                         state=state, duration_ms=duration_ms, exit_code=rc,
                     )
                     _emit_task_engine_span("end", audit_path, task_id=task.task_id,
-                                           status="error", duration_ms=duration_ms)
+                                           status="error", duration_ms=duration_ms,
+                                           result_frame=result_frame)
                     _snapshot_task_turn(
                         task, status=state, exit_code=rc, duration_ms=duration_ms,
                         event_count=event_count, result_text=result_text,

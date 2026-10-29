@@ -1120,6 +1120,7 @@ def run_delegate(
         start_wall=start_wall,
         prompt=prompt,
         usage=spawn_result.usage,
+        reported_model=_attested_model_of(spawn_result),
     )
 
     return DelegateResult(
@@ -1154,8 +1155,14 @@ def _write_wdat_run_for_delegation(
     start_wall: float,
     prompt: str,
     usage: dict,
+    reported_model: str = "",
 ) -> None:
     """Write an ACS-compatible run directory + L16 audit events for a delegation run.
+
+    ``reported_model`` is the model the ENGINE reported (``agents.attested_model``).
+    The ``engine.span.end`` record — and the live model-usage signal sent from it
+    (ADR-2286) — carry only that, never the requested ``model`` or the engine
+    name, so a span without a reported model stays unpriced and unsent (ADR-0759).
 
     Best-effort — never raises. Called from run_delegate() after a successful
     spawn so the WDAT Audit panel in the console can render the delegation graph.
@@ -1300,12 +1307,16 @@ def _write_wdat_run_for_delegation(
                                  span_id=_span_id, role="worker",
                                  engine_id=engine, model_id=model_id or "",
                                  run_id=run_id))
-            _sec.write_event(audit_path, _espan.ENGINE_SPAN_END,
-                             details=_espan.end_details(
-                                 span_id=_span_id, role="worker",
-                                 engine_id=engine, model_id=model_id or "",
-                                 run_id=run_id, status="ok",
-                                 duration_ms=duration_ms, tokens_used=tokens_used))
+            _end = _espan.end_details(
+                span_id=_span_id, role="worker",
+                engine_id=engine, model_id=reported_model or "",
+                run_id=run_id, status="ok",
+                duration_ms=duration_ms, tokens_used=tokens_used,
+                input_tokens=tokens_in, output_tokens=tokens_out,
+                cache_read_tokens=cache_read, cache_write_tokens=cache_write)
+            _sec.write_event(audit_path, _espan.ENGINE_SPAN_END, details=_end)
+            # ADR-2286 — live model-usage signal from the same span details.
+            _espan.send_live_model_usage(_end)
         except Exception as exc:  # noqa: BLE001
             _log.error("ACS delegation engine span not written: %s", exc)
     except Exception as exc:  # noqa: BLE001 — audit is observability, never enforcement
@@ -1791,6 +1802,15 @@ def _save_worker_session_delegate(
             )
     except Exception:  # noqa: BLE001
         pass
+
+
+def _attested_model_of(spawn_result: Any) -> str:
+    """The engine-reported model of a delegated run, ``""`` when none (ADR-0759)."""
+    try:
+        from agents import attested_model  # type: ignore  # noqa: PLC0415
+        return attested_model(spawn_result)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _extract_session_id_delegate(spawn_result: Any) -> str | None:

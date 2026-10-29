@@ -2722,20 +2722,24 @@ async def _dispatch_workers(
                 ctx.root_budget.tool_calls_used += _trace_count
             # ADR-0171 — engine-span end (ok), API-attested engine/model.
             if _espan is not None:
-                _write_audit(ctx.tenant_id, _espan.ENGINE_SPAN_END,
-                             _espan.end_details(
-                                 span_id=_worker_span_id, role="worker",
-                                 engine_id=attestation.get("engine_id", _engine_id),
-                                 model_id=attestation.get("reported_model", ""),
-                                 parent_span_id=f"spn-{ctx.run_id}-mgr",
-                                 run_id=ctx.run_id, status="ok",
-                                 duration_ms=int((time.monotonic() - _spawn_start) * 1000),
-                                 tokens_used=tok,
-                                 tool_call_count=_trace_count,
-                                 trace_available=_trace_count > 0,
-                                 # ADR-0759 — the four billed counts, normalised by
-                                 # the one shared helper (CLI key spellings accepted).
-                                 **_espan.usage_split(attestation)))
+                _worker_end = _espan.end_details(
+                    span_id=_worker_span_id, role="worker",
+                    engine_id=attestation.get("engine_id", _engine_id),
+                    model_id=attestation.get("reported_model", ""),
+                    parent_span_id=f"spn-{ctx.run_id}-mgr",
+                    run_id=ctx.run_id, status="ok",
+                    duration_ms=int((time.monotonic() - _spawn_start) * 1000),
+                    tokens_used=tok,
+                    tool_call_count=_trace_count,
+                    trace_available=_trace_count > 0,
+                    # ADR-0759 — the four billed counts, normalised by
+                    # the one shared helper (CLI key spellings accepted).
+                    **_espan.usage_split(attestation))
+                _write_audit(ctx.tenant_id, _espan.ENGINE_SPAN_END, _worker_end)
+                # ADR-2286 — live model-usage signal, engine-REPORTED model only.
+                # The error/cancel spans above carry no reported model and the
+                # manager span carries the CONFIGURED one, so neither is sent.
+                _espan.send_live_model_usage(_worker_end)
 
             wr = _parse_worker_output(text, wid)
 

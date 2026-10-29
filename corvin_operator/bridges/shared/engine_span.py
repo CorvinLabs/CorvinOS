@@ -163,16 +163,27 @@ def emit_end(audit_event_fn, **kw: Any) -> None:
     details = end_details(**_split(kw)[0])
     audit_event_fn(ENGINE_SPAN_END, details=details,
                    severity="INFO", **_split(kw)[1])
-    _live_model_usage(details)
+    send_live_model_usage(details)
 
 
-def _live_model_usage(details: dict[str, Any]) -> None:
-    """Fail-soft hand-off to the live stats sender; never touches the audit write."""
+def send_live_model_usage(details: dict[str, Any]) -> None:
+    """Fail-soft hand-off to the live stats sender (ADR-2286); never touches the audit write.
+
+    Public for the writers that put an ``end_details()`` dict on their own chain
+    instead of going through ``emit_end`` (gateway dispatcher, ACS worker, ACS
+    delegation, task worker pool): each calls this right after its audit write,
+    so every path that closes a span with a reported model is counted. Pass the
+    SAME dict that was audited. A span without a reported model is dropped by
+    the sender, so error-path spans (``model_id=""``) cost nothing.
+    """
     try:
         import model_usage_live  # type: ignore  # noqa: PLC0415
         model_usage_live.send_span_end(details)
     except Exception:  # noqa: BLE001
         pass
+
+
+_live_model_usage = send_live_model_usage  # pre-2026-10-29 name
 
 
 _WRITER_KEYS = frozenset({"tenant_id", "channel", "chat_key"})

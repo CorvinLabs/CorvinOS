@@ -339,13 +339,16 @@ class RunDispatcher:
                                              engine_id=engine_id,
                                              model_id=model_id, run_id=run_id))
         else:
+            end = _espan.end_details(span_id=span_id, role="worker",
+                                     engine_id=engine_id,
+                                     model_id=model_id, run_id=run_id,
+                                     status=status, duration_ms=int(duration_ms),
+                                     **self._usage_split(usage))
             self._audit_policy(
                 _espan.ENGINE_SPAN_END, tenant_id=tenant_id, severity="INFO",
-                details=_espan.end_details(span_id=span_id, role="worker",
-                                           engine_id=engine_id,
-                                           model_id=model_id, run_id=run_id,
-                                           status=status, duration_ms=int(duration_ms),
-                                           **self._usage_split(usage)))
+                details=end)
+            # ADR-2286 — live model-usage signal from the same span details.
+            _espan.send_live_model_usage(end)
 
     @staticmethod
     def _pinned_worker_model(tenant_id: str, engine_id: str) -> str:
