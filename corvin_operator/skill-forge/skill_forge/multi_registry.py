@@ -226,6 +226,7 @@ class MultiSkillRegistry:
     def grade(
         self, name: str, run_id: str, score: float, *, notes: str = "",
         organic: bool = False, dedupe_marker: str | None = None,
+        dedupe_also: tuple[str, ...] = (), dedupe_window_s: float | None = None,
     ) -> SkillSpec:
         """Grade ``name`` in the scope that resolves it (audit-first, see
         :meth:`SkillRegistry.grade`)."""
@@ -234,7 +235,9 @@ class MultiSkillRegistry:
             raise KeyError(name)
         if dedupe_marker is not None:
             return self._registry(scope).grade(name, run_id, score, notes=notes,
-                                               organic=organic, dedupe_marker=dedupe_marker)
+                                               organic=organic, dedupe_marker=dedupe_marker,
+                                               dedupe_also=dedupe_also,
+                                               dedupe_window_s=dedupe_window_s)
         return self._registry(scope).grade(name, run_id, score, notes=notes, organic=organic)
 
     # -- promotion --------------------------------------------------------

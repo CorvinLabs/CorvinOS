@@ -26,6 +26,7 @@ except ImportError:  # Windows — POSIX advisory locks unavailable; degrade to 
     )
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -982,6 +983,7 @@ class SkillRegistry:
     def grade(
         self, name: str, run_id: str, score: float, *, notes: str = "",
         organic: bool = False, dedupe_marker: str | None = None,
+        dedupe_also: tuple[str, ...] = (), dedupe_window_s: float | None = None,
     ) -> SkillSpec:
         """Append a grade to a skill's history. Score in [0.0, 1.0].
 
@@ -996,13 +998,24 @@ class SkillRegistry:
         BEFORE the grade is persisted. If the chain write fails (any
         exception, including ``OSError``) nothing is persisted and the
         exception propagates — a learning write never exists without its
-        record, and a failed write never leaves an unchained line in the chain.
+        record, and the registry never appends an unchained line itself (the
+        core writer truncates its own partial append on a failed write).
+
+        If persisting the grade fails AFTER its record committed, a
+        compensating ``skill.grade_not_persisted`` record (run id + error class)
+        is chained and the error propagates: the chain then reads "graded, not
+        persisted", so a retry is one grade, not two (review c120 r2_s1-10).
+        The manifest is the store of record; a failure writing the
+        human-readable ``meta.json`` copy afterwards is logged and does not
+        turn a persisted grade into a reported failure.
 
         ``dedupe_marker``: when given and an existing grade's ``notes`` already
-        carry the token ``dd=<marker>``, nothing is written or audited and
+        carry the token ``dd=<marker>`` (or ``dd=<m>`` for any ``m`` in
+        ``dedupe_also``) — and, with ``dedupe_window_s``, that grade is younger
+        than the window — nothing is written or audited and
         :class:`DuplicateGrade` is raised. The check and the write share the
-        registry lock, so two concurrent writers cannot both pass it. The
-        marker is appended to ``notes`` of the new grade.
+        registry lock, so two concurrent writers cannot both pass it. Only
+        ``dedupe_marker`` is appended to ``notes`` of the new grade.
         """
         if not (0.0 <= score <= 1.0):
             raise ValueError(f"score must be in [0,1], got {score!r}")
@@ -1019,34 +1032,61 @@ class SkillRegistry:
             if name not in data:
                 raise KeyError(name)
             grades = list(data[name].get("grades") or [])
-            if marker_tok and any(
-                marker_tok in str((g or {}).get("notes", "")).split() for g in grades
-            ):
-                raise DuplicateGrade(name)
+            now = time.time()
+            if marker_tok:
+                toks = {marker_tok, *(f"dd={m}" for m in dedupe_also if m)}
+                floor = (now - float(dedupe_window_s)) if dedupe_window_s else None
+                for g in grades:
+                    g = g or {}
+                    if not toks.intersection(str(g.get("notes", "")).split()):
+                        continue
+                    if floor is None or float(g.get("ts") or 0.0) >= floor:
+                        raise DuplicateGrade(name)
             grades.append(asdict(Grade(
-                run_id=run_id, score=float(score), ts=time.time(), notes=notes
+                run_id=run_id, score=float(score), ts=now, notes=notes
             )))
             # The record first (raises on any failure, nothing persisted yet).
             # sha/scope/type are unchanged by a grade, so the spec built from
             # the CURRENT entry describes the post-grade state exactly.
+            spec_now = SkillSpec.from_dict(data[name])
             self._audit(
-                "skill.grade", SkillSpec.from_dict(data[name]),
+                "skill.grade", spec_now,
                 extra={"run_id": run_id, "score": float(score),
                        "organic": bool(organic), "capped": capped},
                 required=True,
             )
             data[name]["grades"] = grades
-            self._save(data)
+            try:
+                self._save(data)
+            except BaseException as exc:
+                # The record says "graded" but nothing is stored: chain the
+                # compensation (ids + error class only), then fail.
+                try:
+                    self._audit("skill.grade_not_persisted", spec_now,
+                                extra={"run_id": run_id,
+                                       "error_type": type(exc).__name__[:64]},
+                                required=True)
+                except Exception:  # noqa: BLE001 — the original error wins
+                    logging.getLogger(__name__).critical(
+                                  "skill.grade_not_persisted could not be chained "
+                                  "for run %s", str(run_id)[:64])
+                raise
 
-            # Persist into meta.json too so it stays human-readable
+            # Persist into meta.json too so it stays human-readable. The grade
+            # is already stored (manifest = store of record): a failure here
+            # must not report it as not written.
             skill_dir = self.root / self.SKILLS_DIR / name
             meta_path = skill_dir / "meta.json"
-            if meta_path.exists():
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                meta["grades"] = grades
-                self._atomic_write_text(
-                    meta_path, json.dumps(meta, indent=2) + "\n"
-                )
+            try:
+                if meta_path.exists():
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    meta["grades"] = grades
+                    self._atomic_write_text(
+                        meta_path, json.dumps(meta, indent=2) + "\n"
+                    )
+            except (OSError, ValueError) as exc:
+                logging.getLogger(__name__).warning("meta.json copy of the grades of %s not updated (%s)",
+                             name, type(exc).__name__)
 
             return SkillSpec.from_dict(data[name])
 

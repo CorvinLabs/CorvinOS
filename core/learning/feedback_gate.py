@@ -33,7 +33,11 @@ decision, reason; read by the anomaly monitor) AND to a per-subject index
 file, Layer 3 over the (subject, source) file, each reading a bounded tail —
 so junk on other subjects, or another producer's flood, cannot push a
 subject's or a producer's history out of view. All files are append-only;
-the audit chain stays the record of truth.
+the audit chain stays the record of truth. ``all.jsonl`` is written first
+(the throttle counts it); a torn tail line is skipped and never swallows the
+next record. If a ledger append fails after ``learning.feedback_accepted``
+committed, ``learning.feedback_not_stored`` (ids and enums only) is chained and
+the feedback is refused (``ledger_write_failed``).
 
 **Atomicity.** read → decide → append runs under an exclusive file lock on
 the subject (``subjects/<h>/.lock``; ``fcntl.flock`` / ``msvcrt.locking``),
@@ -71,6 +75,8 @@ EV_REJECTED = "learning.feedback_rejected"
 EV_MISMATCH = "learning.feedback_reality_mismatch"
 EV_ADVERSARIAL = "learning.adversarial_feedback_detected"
 EV_ACCEPTED = "learning.feedback_accepted"
+EV_NOT_STORED = "learning.feedback_not_stored"
+REASON_NOT_STORED = "ledger_write_failed"
 
 
 class FeedbackRejected(ValueError):
@@ -135,12 +141,37 @@ def _parse(lines: list[str]) -> list[dict]:
     return out
 
 
-def _append_line(path: Path, line: bytes) -> None:
+def _append_line(path: Path, line: bytes, *, exclusive: bool = False) -> None:
+    """Append one record line (O_APPEND; concurrent writers interleave whole lines).
+
+    A file whose tail is a torn line (a writer that died on a full disk) gets a
+    newline first, so the torn bytes stay their own unparseable line and never
+    swallow this record (review c120 r2_s1-9c). ``exclusive``: the caller holds
+    the lock that serialises every writer of this file (the per-subject index),
+    so a failed or short write is cut back to the previous size — the file never
+    keeps half a record."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    # One O_APPEND write per record: concurrent writers interleave whole lines.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        os.write(fd, line)
+        start = os.fstat(fd).st_size
+        if start > 0:
+            os.lseek(fd, start - 1, os.SEEK_SET)  # O_APPEND: writes still go to the end
+            if os.read(fd, 1) != b"\n":
+                line = b"\n" + line
+        try:
+            view = memoryview(line)
+            while view:
+                n = os.write(fd, view)
+                if n <= 0:
+                    raise OSError("feedback ledger append wrote 0 bytes")
+                view = view[n:]
+        except BaseException:
+            if exclusive:
+                try:
+                    os.ftruncate(fd, start)
+                except OSError:
+                    pass
+            raise
     finally:
         os.close(fd)
 
@@ -207,8 +238,12 @@ class DecisionLedger:
                             "decision": decision, "reason": reason},
                            separators=(",", ":")) + "\n").encode("utf-8")
         d = self._subject_dir(subject)
-        _append_line(d / f"{src}.jsonl", line)
-        _append_line(d / "all.jsonl", line)
+        # all.jsonl FIRST: the throttle counts it, so a decision that reached no
+        # file never leaves a budget hole behind (review c120 r2_s1-9b). The two
+        # per-subject files are written under the subject lock (exclusive); the
+        # tenant-wide decisions.jsonl is shared by every subject.
+        _append_line(d / "all.jsonl", line, exclusive=True)
+        _append_line(d / f"{src}.jsonl", line, exclusive=True)
         _append_line(self.path, line)
 
 
@@ -307,9 +342,20 @@ def admit(event: LearningEvent, store, *, now: Optional[float] = None,
                                             "rejection_count": trust.rejection_count,
                                             "accepted_count": trust.accepted_count,
                                             "reason": "review_feedback_source"})
-        _audit(EV_ACCEPTED, tenant, {**base, "trust_weight": trust.trust_weight,
-                                     "executions_in_window": reality.executions_in_window})
-        ledger.append(ts=now, subject=subject, decision="accepted", reason="valid", source_key=src)
+        ref = _audit(EV_ACCEPTED, tenant, {**base, "trust_weight": trust.trust_weight,
+                                           "executions_in_window": reality.executions_in_window})
+        try:
+            ledger.append(ts=now, subject=subject, decision="accepted", reason="valid",
+                          source_key=src)
+        except Exception as exc:
+            # The chain says "accepted" but the gate's own ledger did not take it:
+            # chain the compensation and refuse the feedback (review c120 r2_s1-9a).
+            try:
+                _audit(EV_NOT_STORED, tenant, {**base, "audit_ref": ref, "stage": "ledger",
+                                               "error_type": type(exc).__name__[:64]})
+            except Exception:  # noqa: BLE001 — the refusal below still happens
+                pass
+            raise FeedbackRejected(REASON_NOT_STORED, ref) from exc
     _remember_admitted(event.event_id, trust.trust_weight)
     signal = dict(event.signal or {})
     signal.pop(SOURCE_SIGNAL_KEY, None)

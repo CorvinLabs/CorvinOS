@@ -1,7 +1,8 @@
 """ADR-0534 Layer 3 — trust weight of a feedback SOURCE on a subject.
 
 ``trust_weight = max(FLOOR, 1 - rejected / total)`` over the last ``WINDOW``
-gate decisions on the subject BY THE SAME PRODUCER: the gate passes the
+judged gate decisions (throttle refusals excluded, ``NOT_A_VERDICT``) on the
+subject BY THE SAME PRODUCER: the gate passes the
 (subject, source) history (``DecisionLedger.source_history``), so one faulty or
 hostile producer lowers only its own weight, never an honest producer's on the
 same skill, and the alert names that producer (``source_key``). The floor is 0.1, not 0: a source that was
@@ -35,8 +36,17 @@ class TrustAssessment:
         return self.trust_weight < ALERT_BELOW
 
 
+#: Decisions that say nothing about whether the producer's signal was RIGHT: a
+#: rate-limit refusal is the gate's own budget, not a verdict on the feedback
+#: (review c120 r2_s1-8: an honest operator rating in bursts ended at weight 0.5).
+NOT_A_VERDICT = frozenset({"rate_limit_exceeded"})
+
+
 def assess(decisions: list[dict], *, subject: str, window: int = WINDOW) -> TrustAssessment:
-    mine = [d for d in decisions if d.get("subject") == subject][-window:]
+    """Weight over the producer's last ``window`` JUDGED decisions on ``subject``
+    (accepted, or rejected by Layer 2); throttle refusals are not counted."""
+    mine = [d for d in decisions if d.get("subject") == subject
+            and d.get("reason") not in NOT_A_VERDICT][-window:]
     accepted = sum(1 for d in mine if d.get("decision") == "accepted")
     rejected = len(mine) - accepted
     if not mine:

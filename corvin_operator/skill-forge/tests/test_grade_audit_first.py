@@ -103,6 +103,41 @@ def test_failed_record_persists_nothing_and_the_caller_sees_it(srv_env, monkeypa
     assert _grade_records(srv_env, "run-fail") == []
 
 
+@pytest.mark.skipif(not hasattr(__import__("os"), "fork"), reason="POSIX fork + RLIMIT_FSIZE")
+def test_short_chain_write_on_a_full_disk_leaves_no_torn_line(srv_env):
+    """Review c120 r2_s1-6: a REAL short write (a child whose file-size limit sits 60
+    bytes above the chain, the failure mode of a full disk) grades through the MCP
+    loop. The core writer cuts its own partial append back: the chain is byte-for-
+    byte unchanged, still verifies, and the next record after it verifies too."""
+    import os
+    import resource
+    import signal
+    from forge.security_events import verify_chain
+    chain = _chain(srv_env)
+    before = chain.read_bytes()
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child
+        os.close(r)
+        try:
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            lim = len(before) + 60
+            resource.setrlimit(resource.RLIMIT_FSIZE, (lim, lim))
+            resp = _serve_grade("run-full")
+            os.write(w, b"error" if "error" in resp else b"ok")
+        finally:
+            os._exit(0)
+    os.close(w)
+    os.waitpid(pid, 0)
+    assert os.read(r, 100) == b"error"                             # the caller sees it
+    os.close(r)
+    assert chain.read_bytes() == before                            # no torn bytes left
+    assert verify_chain(chain) == (True, [])
+    assert all(g["run_id"] != "run-full" for g in srv_env.get(NAME).grades)
+    assert _serve_grade("run-after")["result"]["structuredContent"]["data"]["ok"] is True
+    assert verify_chain(chain) == (True, [])
+
+
 def test_working_writer_persists_grade_with_its_record(srv_env):
     resp = _serve_grade("run-ok")
     assert resp["result"]["structuredContent"]["data"]["ok"] is True, resp

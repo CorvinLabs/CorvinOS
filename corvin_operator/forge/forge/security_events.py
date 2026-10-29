@@ -1390,6 +1390,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "learning.feedback.user_provided":  "INFO",
     # ADR-0534 feedback trust gate (core/learning/feedback_gate.py)
     "learning.feedback_accepted":             "INFO",
+    # compensates a feedback_accepted whose ledger append failed (review c120 r2_s1-9)
+    "learning.feedback_not_stored":           "WARNING",
     "learning.feedback_throttled":            "WARNING",
     "learning.feedback_rejected":             "WARNING",
     "learning.feedback_reality_mismatch":     "WARNING",
@@ -1523,6 +1525,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "skill.bootstrap_grade_failed": "WARNING",
     "skill.delete": "INFO",
     "skill.grade": "INFO",
+    # compensates a skill.grade whose persistence failed (review c120 r2_s1-10)
+    "skill.grade_not_persisted": "WARNING",
     "skill.promote": "INFO",
     "skill.scope_denied": "WARNING",
     "tde.bench_snapshot": "INFO",
@@ -5038,6 +5042,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "learning.feedback.user_provided": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     # ADR-0534 feedback trust gate — ids, counts, closed-enum reasons only.
     "learning.feedback_accepted": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "trust_weight", "executions_in_window"}),
+    "learning.feedback_not_stored": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "stage", "error_type"}),
     "learning.feedback_throttled": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "signals_in_window", "max_allowed", "window_sec"}),
     "learning.feedback_rejected": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "executions_in_window"}),
     "learning.feedback_reality_mismatch": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "executions_in_window"}),
@@ -5330,6 +5335,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "skill.bootstrap_grade_failed": frozenset({"scope", "error"}),
     "skill.delete": frozenset({"caller_persona", "capped", "force", "from_scope", "mean_score", "n_grades", "organic", "persona", "reason", "run_id", "scope", "score", "sha", "to_scope", "type"}),
     "skill.grade": frozenset({"caller_persona", "capped", "force", "from_scope", "mean_score", "n_grades", "organic", "persona", "reason", "run_id", "scope", "score", "sha", "to_scope", "type"}),
+    "skill.grade_not_persisted": frozenset({"caller_persona", "persona", "run_id", "scope", "sha", "type", "error_type"}),
     "skill.promote": frozenset({"caller_persona", "capped", "force", "from_scope", "mean_score", "n_grades", "organic", "persona", "reason", "run_id", "scope", "score", "sha", "to_scope", "type"}),
     "skill.scope_denied": frozenset({"caller_persona", "operation", "reason", "requested_scope"}),
     "tde.bench_snapshot": frozenset({"batch_count", "step_count"}),
@@ -6163,6 +6169,36 @@ def _refuse_live_chain_from_test(path: Path) -> None:
         )
 
 
+def _append_record_or_truncate(fd: int, data: bytes) -> None:
+    """Append ``data`` to the chain file behind ``fd`` (opened O_APPEND, the
+    caller holds the exclusive chain lock) and fsync it — all or nothing.
+
+    A short write (full disk, file-size limit) used to leave a torn line that
+    no later write could repair: the next record is written behind it, the
+    fragment stays unparseable forever and only a seam record seals it (review
+    c120 r2_s1-6). On ANY failure before the fsync returned, the file is cut
+    back to its size before this append — under the same lock, so no other
+    writer's bytes can be behind ours — and the error propagates unchanged.
+    """
+    start = os.fstat(fd).st_size
+    try:
+        view = memoryview(data)
+        while view:
+            n = os.write(fd, view)
+            if n <= 0:
+                raise OSError(errno.EIO, "audit append wrote 0 bytes")
+            view = view[n:]
+        os.fsync(fd)
+    except BaseException:
+        try:
+            if os.fstat(fd).st_size > start:
+                os.ftruncate(fd, start)
+                os.fsync(fd)
+        except OSError:
+            pass  # the original error is what the caller must see
+        raise
+
+
 def write_event(
     path: Path,
     event_type: str,
@@ -6553,9 +6589,16 @@ def write_event(
                     # hold the exclusive lock, so an unterminated tail is a dead
                     # writer's. Start on a fresh line; the torn bytes stay untouched.
                     _lead = "\n" if _tail_unterminated(path) else ""
-                    fh.write(_lead + json.dumps(rec, allow_nan=False) + "\n")
-                    fh.flush()
-                    os.fsync(fh.fileno())
+                    _line = _lead + json.dumps(rec, allow_nan=False) + "\n"
+                    if os.name == "nt":
+                        # Windows keeps the text-mode writer it always had
+                        # (CRT newline handling); the truncate-on-failure
+                        # append below is POSIX-only and untested there.
+                        fh.write(_line)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    else:
+                        _append_record_or_truncate(fh.fileno(), _line.encode("utf-8"))
                     if hash_chain:
                         # F-A12: the tail now lives out-of-tree too.
                         _record_chain_tail(path, rec["hash"], genesis=_genesis or rec["hash"])
