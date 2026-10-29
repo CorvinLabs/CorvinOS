@@ -1696,7 +1696,7 @@ Skill Execution Loop:
   3. User gives feedback (→ FeedbackEvent)
   4. Optimizer reads {FeedbackEvent, SkillExecutedEvent}
   5. Adjusts Skill config (e.g., router thresholds, context window, retry strategy)
-  6. Next invocation uses tuned config
+  6. Next invocation uses tuned config (register state B: acted on only in the gated Phase 2)
   7. Dashboard shows confidence score, convergence rate
 ```
 

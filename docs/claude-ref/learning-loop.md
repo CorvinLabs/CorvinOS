@@ -25,7 +25,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 
 | Check | File | Fails on |
 |---|---|---|
-| Register | `tests/learning/test_learning_systems_register.py` | a caller, reader or contract `consumer` whose file does not exist or whose needle (≥ 4 characters, starting with an identifier: the called function, `module.attr`, `call(arg, "literal"`) is not CODE within 3 lines of the cited line — the file is tokenized, so a needle inside a comment, a docstring or another string does not count, and a caller must be an import, a call, an argument of a call or a decorated definition. Negative controls on copies: a shifted line, a needle swap, the L05 reader and the L19 scheduler start turned into comments, the L15 guidance call deleted while `out["guidance"]` stays one line below, the needle `t` (review c120 r2_s3-2). Also a missing test file, an A without caller or without a reader, an entry with `promoted_from` (L08, L19) that lost its contract, a B without `intake`, a B without a valid `signal_contract` (ADR-2303, below), a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
+| Register | `tests/learning/test_learning_systems_register.py` | a caller, reader or contract `consumer` whose file does not exist or whose needle (≥ 4 characters, starting with an identifier: the called function, `module.attr`, `call(arg, "literal"`) is not CODE in the statement of the cited line and at most 1 line from it — the file is tokenized, so a needle inside a comment, a docstring or another string does not count. A caller must be the statement's call, an argument of a call (a registration) or a decorated definition; an import NEVER counts, and a call nested in another call's arguments counts only on its own line. A reader or consumer must USE the value: called, tested in `if`/`while`/`return`/`for`, passed to a call that is not a route registration, or assigned to a name read later (review c120 r3_s3-1..3). Negative controls on copies: every ref shifted by ±2 and ±3 lines, three needles swapped to a REAL neighbouring call (`register_live_turn`, `meta.get`, `monitoring_route`), five calls deleted while their import survives 1-3 lines above, an import line cited as caller, the L06 injection gate replaced by a dead tuple, the L12 readiness gate bypassed with the name left as a bare expression, the L19 router registration named as a reader, the L05 reader and the L19 scheduler start turned into comments, the L15 guidance call deleted while `out["guidance"]` stays one line below, a needle that exists nowhere, the needle `t`. Also a missing test file, an A without caller or without a reader, an A that still states an `intake` or whose recorded readiness (`measured`) is not ready on every surface (so promoting L05 or L12 fails while the ADR-2092 gates do not hold), an entry with `promoted_from` (L08, L19) that lost its contract, a B without `intake`, a B without a valid `signal_contract` (ADR-2303, below; `proxy_of`, `target`, `consumer` must be strings — YAML `no`/`false` loads as a bool and fails), a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
 | Reachability ratchet | `scripts/learning_reachability.py` + `scripts/learning_reachability_baseline.json`, `tests/learning/test_learning_reachability_ratchet.py` | a NEW unreachable module in the learning scopes (same graph as `zero_caller_sweep`), and a STALE baseline entry (module reachable again or deleted). Shrink-only |
 | Call-site pins | `tests/learning/test_learning_call_site_pins.py` | L06 injection gate / follow-up grade and L10 distill scheduling / injection through `adapter.process_one`; L14 `emit_*_confidence` through `POST /v1/console/forge-bundles/import`. Each was shown red with its call site cut |
 
@@ -72,10 +72,11 @@ epoch test of `POST /v1/console/learning/feedback` (the tenant's last 10 task ou
 tenant-wide, not attributed to the router; ADR-2305). Their consumer is the gated Phase 2 path
 (`delegation_policy.py`, `confidence_threshold`), which reads nothing in shadow; before the
 threshold may act it needs a signal that is not a proxy (ADR-2305 Part 2) — a decision, not this
-register. Only L12 names validity numbers (the ADR-2092 gates: 500 judged decisions, join rate 0.95,
+register. Only L12 and L19 name validity numbers. L12: the ADR-2092 gates (500 judged decisions, join rate 0.95,
 7-day console soak): its signal — the routing ledger joined to the OUTCOME — is not a proxy but
 learns no parameter; its consumer is the readiness gate (`dual_write.py`,
-`readiness.cached_evaluate`). L07 (`turn completed`, proxy of output quality), L08 (0.85 / 0.2 and
+`readiness.cached_evaluate`). L19: the ADR-2094 loss rule (`min_outcomes: 3`, `window_days: 14` —
+`autonomous.py` `LOSS_MIN_OUTCOMES` / `LOSS_WINDOW_S`: at least 3 grades in 14 days). L07 (`turn completed`, proxy of output quality), L08 (0.85 / 0.2 and
 0.95 / 0.3, proxy of answer quality, consumer the Models page) are proxies with `target: none`; L11
 learns nothing (`target: none`). L13's only input is an operator's flow feedback, which may only
 add or raise a DENY rule of the route's own in-memory FlowGuard (audit-first since ADR-2283) — no
@@ -335,6 +336,10 @@ of them.
 | `action_performed` — `learning.feedback_received:*`, `skill_config_updated:hypothesis_accepted`, `skill_config_updated:rollback`, `learning.config_rollback`, `learning.preference_confirmed` | console tenant chain | `method_discovery_api.py` |
 | `skill.feedback` | core (metadata only: data_class / destination_engine identifiers, closed `result` / `feedback_type` / `rule_effect`, the DENY rule's real `confidence_before`, `event_id`, `audit_ref`; never `reasoning`) | console `POST /flow/feedback` → flow-guard `LearningIntegration.record_feedback`, audit-first via the STRICT `CoreAuditBackend` (ADR-2283) |
 | `skill.approval.requested` / `.granted` / `.denied` / `.revoked` | core (metadata only: ids, metric name, confidence, closed codes, `operator_ref` = sha256 prefix, `audit_ref`; never a reason text or raw operator id) | L5 k=2 `OperatorApprovalGate` via the gateway's STRICT `CoreAuditBackend` (ADR-2283) |
+| `skill.grade` / `skill.grade_not_persisted` (WARNING; run id, scope, `error_type` = exception class) | core | `SkillRegistry.grade` audit-first; the compensation only when the FINAL write of the store of record fails (review c120 r3_s1-2) |
+| `learning.feedback_accepted` / `learning.feedback_not_stored` (WARNING; ids, `source_key`, `stage`, `error_type`) | core | `feedback_gate.admit`; the compensation when a ledger append fails after the accept committed — the ledger then carries `void` lines for the same id (r3_s1-6) |
+| `routing.phase2_decision` / `routing.phase2_refused` | core | `delegation_policy` (a Skill-changed route is served only after its decision commits; refusals once per process per reason) |
+| `routing.rollback_triggered` (WARNING) / `routing.rollback_reset` / `routing.rollback_reset_not_applied` (WARNING; `tenant_id` only) | core | `rollback_detector.evaluate` (after the pending marker, before the trip state) · `reset_rollback` from `POST /v1/console/learning/routing/rollback/reset` (audit-first; `_not_applied` compensates a state write that failed after the reset committed, review c120 r3_s2) |
 
 **Strict core-chain backend (ADR-2283).** `CoreAuditBackend(tenant_id, strict=True)`
 (`core/skills/skill_registry_phase1.py`) is the fail-closed dict backend for learning paths
@@ -415,15 +420,22 @@ append runs under an exclusive per-subject file lock (`subjects/<h>/.lock`, `fcn
 `msvcrt.locking`), and the clock is read under that lock, so parallel requests and processes
 (bridge + console) cannot exceed the window; a lock not obtained within 10 s refuses the feedback.
 `decisions.jsonl` is still appended (all subjects) for the anomaly monitor.
-The per-subject `all.jsonl` (the throttle index) is appended FIRST, then the producer file, both under
-the subject lock and cut back to their previous size if the write fails; `decisions.jsonl` (shared by
-all subjects) last. A torn tail line left by an earlier full disk gets a leading newline, so it stays its
+Write order (review c120 r3_s1-6): `decisions.jsonl` (shared by all subjects) FIRST, then the
+per-subject `all.jsonl` (the throttle index), then the producer file `<source_key>.jsonl` — each only
+after the previous append succeeded, all under the subject lock, and a short write is cut back to the
+file's previous size. Every line carries a random 16-hex `id`. When a later append of an `accepted`
+decision fails, every file that already took the line gets a void record `{"decision": "void",
+"voids": <id>, "reason": "ledger_write_failed"}` (ids and enums only, never text); the readers drop
+voided entries and void lines, so the throttle, the producer's trust weight and the anomaly monitor's
+tail never count feedback that was refused. Best effort: if the void write fails too, the accepted line
+stays. A torn tail line left by an earlier full disk gets a leading newline, so it stays its
 own unparseable line (skipped on read) and never swallows the next record. If any ledger append fails
 after `learning.feedback_accepted` committed, `learning.feedback_not_stored` (ids, `stage`,
 `error_type` — the exception CLASS, never its text) is chained and the feedback is refused
-(`ledger_write_failed`, HTTP 422): accepted minus not_stored equals what was stored. A refused-after-
-ledger-failure attempt that reached `all.jsonl` still counts against the throttle budget (the
-conservative direction). Proof: `tests/learning/test_feedback_gate_c120_r2_e2e.py`.
+(`ledger_write_failed`, HTTP 422): accepted minus not_stored equals what was stored. Proof:
+`tests/learning/test_feedback_gate_c120_r2_e2e.py`, `tests/learning/test_feedback_gate_c120_r3_e2e.py`
+(three refused posts leave the subject, producer and tail histories empty; a REAL short write — half
+the record, then ENOSPC — to the throttle index or the producer file is cut back and voided).
 
 Accepted → `learning.feedback_accepted` (with `trust_weight`). Consumers multiply by
 `adversarial_detector.weight_of(signal)` (1.0 for signals stored before the gate):
@@ -485,7 +497,13 @@ a raw line (the former `OSError` fallback is gone for hash-chained registries), 
 cuts its own partial append back under the chain lock when a write is short (full disk, file-size
 limit; POSIX — Windows keeps the text-mode writer). If persisting the grade fails AFTER its record
 committed, a compensating `skill.grade_not_persisted` record (run id + error class) is chained and the
-error propagates, so the chain nets "graded, not persisted" and a retry is one grade, not two. A failed
+error propagates, so the chain nets "graded, not persisted" and a retry is one grade, not two. Write
+order (`SkillRegistry._save`, review c120 r3_s1-2): the DERIVED resolver manifest first, the store of
+record `skills_registry.json` LAST (the final atomic rename) — so "persisted" means exactly "the final
+rename landed". A failed resolver write inside `grade()` is logged and the grade is still stored, with
+no compensation (`derived_best_effort`); only a failure of the final write chains
+`skill.grade_not_persisted`, and then the resolver manifest is re-derived from the record on disk. The
+dedupe marker lives in the grade note, so it is stored only together with the grade. A failed
 `meta.json` copy after the manifest was saved is logged only: the grade is stored and reported.
 
 **Once per 24 h per signal kind (decision):** an organic follow-up grade is written at most once per
@@ -496,8 +514,11 @@ suffix and the timestamp of the canary grade). An earlier approval therefore nev
 rejection, and two praises at 23:59:59 and 00:00:01 UTC are one window. The marker is
 `sha256("followup-grade|<kind>|<UTC day>|<channel>")[:16]`, stored as `dd=<marker>` in the grade note —
 never the channel id, and not linkable across days; a new grade is refused when a grade carrying
-today's or yesterday's marker is younger than 24 h. Bridge channel = `<channel>:<chat_key>`;
-console channel = `"console"` for the whole tenant (a new chat opens no new allowance).
+today's or yesterday's marker is younger than 24 h. Bridge key: `<channel>:<chat_key>` for a
+`session`-scope skill, but `tenant:<tenant>` for a `user`/`project`-scope skill — that skill is shared by
+every chat of the tenant, so praise from three chats is one approval, like the console (review c120
+r3_s1-4; a rejection from another chat is still its own kind). Console channel = `"console"` for the
+whole tenant (a new chat opens no new allowance).
 
 **Console grading gates, in order** (`followup_grading.grade_followup`, all must hold, any failure
 = no signal and nothing written): a session tenant → a snapshot for this chat younger than 30 min
@@ -511,31 +532,57 @@ previous turn's task `COMPLETED` → then inside `grade_from_user_followup`: the
 * The two sides are deliberately ASYMMETRIC: a false approval is an organic 0.9 that may lift a skill
   over the promotion bar, so approval is conservative; a false rejection only lowers a grade (the safe
   direction), so rejection is liberal.
+* Quotation (review c120 r3_s1-1/-3): single- and double-quoted spans (`_strip_quotations`, also
+  guillemets and typographic quotes) are removed before BOTH tests, and a message that carried a quote
+  is never an approval: quoted praise ("'super'", "he said "great"") and a quoted "try again" / "no"
+  are no signal.
 * Rejection (liberal): a token STARTING with a rejection stem (`_OUTCOME_REJECTION_STEMS`: "falsch" —
-  falsche/falsches/falschen/falsch_flag —, "inkorrekt", "wrong" — wrongly/wrongful —, "incorrect"); a
-  token phrase from `_OUTCOME_REJECTION_PHRASES` ("stimmt nicht", "klappt nicht", "immer noch nicht",
-  "try again", "still broken", "same error", …); or "nein"/"no"/"nope" followed by `,` `.` `!` or the
-  end. At any length, and a `?` does not cancel it. The only exception: "nochmal"/"nochmals"/"again"
-  next to a thank-you is the praise idiom ("nochmal danke", "danke nochmal", "thanks again").
-* Approval (conservative), all must hold: no `?`; no token over `_OUTCOME_MAX_TOKEN_CHARS = 40`; at
-  most `_OUTCOME_APPROVAL_MAX_WORDS = 12` tokens (a decision); no quotation (double quote / guillemet)
-  and no eye-roll / anger / laughing emoji; no sarcasm opener (`_OUTCOME_SARCASM_PHRASES`: "na toll",
-  "na prima", "ja toll", "oh great", "yeah right", "alles weg", …); no 'd contraction ("that'd", "it'd");
-  no negator anywhere (single tokens and multi-word forms "alles andere als", "far from", "would not
-  say", "not really", …) except inside a positive idiom (`_OUTCOME_POSITIVE_IDIOMS`: "nicht schlecht",
-  "not bad", "no more errors", "keine Fehler mehr"); no void cue (`_OUTCOME_APPROVAL_VOIDERS`: a new
-  request or contrast "bitte"/"jetzt"/"please"/"now"/"aber"/"but"/"again", a complaint word
-  "kaputt"/"broken"/"fehler", a conditional / irrealis "wäre"/"hätte"/"könnte"/"sollte"/"würde"/"would"/
-  "could"/"should", a concession or dismissal "trotzdem"/"dennoch"/"anyway"/"vergiss es"/"for trying") —
-  "jetzt"/"now" next to a success verb ("läuft jetzt", "works now") and "nochmal"/"again" next to a
-  thank-you are part of the praise; then a phrase from `_OUTCOME_APPROVAL_PHRASES` (now incl. "hat
-  geklappt", "funktioniert", "läuft", "passt so", "it works", "works like a charm"), or the whole message
-  is one of `_OUTCOME_APPROVAL_EXACT`, which never count inside a sentence. A voided praise is NO signal,
-  not a rejection.
-* Measured on the 73-message review table (origin/main → G1): real praise 26/32 → 29/32, real
-  rejection 21/24 → 24/24, complaints read as praise 12 → 0, praise read as rejection 2 → 0. A held-out
-  set written after the change: 26/28, 0 complaints read as praise. Known misses: "Cheers, that did it"
-  (no approval), "thanks, but that's not it" (no rejection).
+  falsche/falsches/falschen —, "inkorrekt", "wrong" — wrongly —, "incorrect") that is not a known
+  compound or idiom (`_OUTCOME_REJECTION_COMPOUNDS`: Falschgeld, Falschparker, Falschaussage,
+  Falschmeldung, wrongdoing, wrongful, …); a token phrase from `_OUTCOME_REJECTION_PHRASES` ("stimmt
+  nicht", "klappt nicht", "immer noch nicht", "not correct", "nicht richtig", "try again", "still
+  broken", "same error", …); "nein"/"no"/"nope" followed by `,` `.` `!` or the end, ONLY at the start of
+  the message or right after a sentence break — never "item no. 7" — and not before a closing idiom
+  (`_OUTCOME_CLOSING_AFTER_NO`: "nein, danke", "nein, sonst nichts", "no, thanks", "no, that's all",
+  "no worries", "no problem"); "nochmal"/"nochmals" only when the message starts with it, has at most 4
+  words, it opens a clause, or it follows aber/but/doch/bitte/please ("gut gemacht, aber nochmal bitte")
+  — never inside a longer request ("Kannst du das Diagramm nochmal in Blau rendern") and never next to a
+  thank-you ("danke nochmal", "thanks again" is the praise idiom). At any length, and a `?` does not
+  cancel it. A praise token together with a closing idiom ("Perfekt! Nein, sonst nichts.") is no
+  signal either way (decision).
+* Approval (conservative), all must hold: no `?`; not a request (`_looks_like_request`: an imperative
+  or question word at the start of the message or of a clause — teste/mach/schreib/prüf/make sure/
+  write/test/check/please/what/is/does, … (`_OUTCOME_REQUEST_STARTS`) —, a question word anywhere —
+  wie/warum/ob/how/why/which, … —, or a German verb-first question "Klappt das auch mit Excel?"): "Teste
+  ob es funktioniert" and "Make sure it works on Windows" are never approval; no token over
+  `_OUTCOME_MAX_TOKEN_CHARS = 40`; at most `_OUTCOME_APPROVAL_MAX_WORDS = 12` tokens, raised to
+  `_OUTCOME_APPROVAL_MAX_WORDS_THANKS = 20` when the message carries a thank-you token
+  (`_OUTCOME_THANKS_ONLY`: danke, dankeschön, dank, thanks, thank, thx, merci) — both decisions; emoji
+  are not tokens; no eye-roll / anger / thumbs-down emoji, and laughing emoji (😂🤣) void it only
+  without a thank-you ("Haha super, danke 😂" counts); no sarcasm opener (`_OUTCOME_SARCASM_PHRASES`:
+  "na toll", "ja toll", "oh great", "yeah right", "alles weg", …) and no negative continuation after
+  the praise ("Great job breaking production", "super kaputt", "Thanks a lot for deleting my file" —
+  the complaint words in `_OUTCOME_APPROVAL_VOIDERS`, sarcasm by continuation); no 'd contraction; no
+  negator anywhere (single tokens and multi-word forms "alles andere als", "far from", "not really",
+  …) except inside a positive idiom (`_OUTCOME_POSITIVE_IDIOMS`: "nicht schlecht", "not bad", "no more
+  errors", "keine Fehler mehr"); no void cue (`_OUTCOME_APPROVAL_VOIDERS`: a new request or contrast
+  "bitte"/"jetzt"/"weiter"/"neue"/"next"/"please"/"now"/"aber"/"but", a complaint word, a conditional /
+  irrealis, a concession or dismissal). "jetzt"/"now" is part of the praise only next to a success verb
+  AND with a thank-you ("läuft jetzt, danke") or in a whole reaction ("it works now"). Then ONE of: a
+  phrase from `_OUTCOME_APPROVAL_PHRASES` anywhere ("gut gemacht", "hat geklappt", "passt so", "well
+  done", …); a weak success word (`_OUTCOME_WEAK_APPROVAL_PHRASES`: "funktioniert", "klappt", "läuft",
+  "works", "worked", "excellent", "brilliant", "works like a charm") ONLY together with a thank-you —
+  "Ich will dass es funktioniert" is no approval; or a WHOLE reaction — every token an approval phrase,
+  a weak success word, a generic word (`_OUTCOME_APPROVAL_EXACT_WORDS`: gut, top, passt, richtig, …) or
+  a filler (`_OUTCOME_FILLERS`: es, das, so, ist, it, now, …): "Top, passt!", "Richtig, so ist es.".
+  Generic words never count inside a longer sentence. A voided praise is NO signal, not a rejection.
+* Measured on the 109-message review table in 9 classes (review c120 r3_s1, base → tree): approval
+  recall 0.90 → 0.95, precision 0.60 → 1.00 (false approvals 23 → 0: requests containing a praise word
+  5/12 → 12/12 correct, sarcasm 2/10 → 10/10, quoted praise 1/5 → 5/5); rejection recall 0.63 → 0.90,
+  precision 0.58 → 0.93 (innocent text read as rejection 14 → 2). Known residue: "Validiere das
+  Formular, falsche Eingaben sollen rot werden." and "Write a unit test for incorrect password
+  handling." still read as rejection (a real inflected stem; rejection stays liberal on purpose), and
+  the two closing-idiom rows are no signal by decision.
 
 **Privacy:** the user's text is read, never stored — on the console not even the previous prompt is
 kept in memory. The grade note names only the signal, the previous run id and the day-bound dedupe
@@ -592,7 +639,7 @@ a failed `meta.json` copy (grade still reported) over the real chat WebSocket.
   judge. A bridge refusal is never a native success any more; a cancelled ACS run is
   never an ACS failure. A client disconnect does not cancel a console turn (the turn is
   detached and finishes). The detached-turn watchdog (`detached_timeout`,
-  `_DETACHED_TURN_MAX_S` = 1800 s) is a JUDGED failure (`ok: false`) of the served engine
+  `routes/chat.py::_DETACHED_TURN_MAX_S_DEFAULT` = 1800 s, overridable by the env `CORVIN_DETACHED_TURN_MAX_S`, minimum 60 s) is a JUDGED failure (`ok: false`) of the served engine
   (`chat_runtime._cut_turn_outcome`): a hung engine reaches the rollback judge and every
   success rate. On the bridge a turn the Skill routed (`route_source: skill`) onto an
   engine that cannot run here (`engine_unavailable`, e.g. no claude CLI after a
