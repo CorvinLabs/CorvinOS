@@ -102,6 +102,55 @@ invisible for as long as it did because the E2E awaited `s.click(...)` with no
 to catch and takes CI with it; give every E2E step an explicit timeout so a
 regression fails loudly and names the step.
 
+## Adversarial DAG E2E (planning, delegation, model per node — 2026-10-29)
+
+Plan and reasoning: `claude-playground/dag-e2e-adversarial-plan-2026-10-29/PLAN.md`. The suite attacks the
+whole chain task text → LLM planner (design chat) → DAG → validation → per-node model → manager/worker →
+audit, through the real entry points (WebSocket, HTTP, SSE stream, CLI subprocess), in a sandboxed
+`CORVIN_HOME`. It never touches the live install.
+
+| Tier | Files | LLM | In CI |
+|---|---|---|---|
+| F0 | `core/workflows/tests/test_dag_adversarial_f0.py` | none | yes |
+| F1 | `core/console/tests/test_dag_adversarial_f1_e2e.py`, `…f1b…`, `…f1c…` (+ `dag_adv_shim.py`, `dag_adv_console.py`) | only the ANSWER is given, by a recording `claude` shim | yes |
+| L2/L3 | `core/console/tests/test_dag_adversarial_live_e2e.py` | real `claude` | no — opt-in, costs money |
+
+**The shim (oracle O1).** `dag_adv_shim.py` writes a script named `claude` first on `PATH`. The product spawns it
+exactly as it spawns the real CLI; nothing inside the product is replaced. It records the ORIGINAL argv, the prompt
+and the answer envelope of every call (kinds `gate`, `planner`, `legacy_node`, `dag_node`) and either answers from a
+rules file (`canned`, with `sequence` entries for "first call this, second call that") or forwards to the real CLI
+(`passthrough`, with `--max-budget-usd` added AFTER the original argv was recorded, never touching `--model`). A
+model test passes only when three sources agree: O1 the argv, O2 the product's own span and resolution events, O3
+the model the CLI says answered.
+
+**Live tier.** `CLAUDE_LIVE_E2E=1 CORVIN_LIVE_BUDGET_USD=<n> [CORVIN_LIVE_REPORT_DIR=<dir>]
+.venv/bin/python -m pytest -q -o addopts="" -p no:cacheprovider core/console/tests/test_dag_adversarial_live_e2e.py -s`.
+The suite skips once 80 % of the budget is spent; every call is capped at 2 USD. The pre-spawn gates' classifier calls
+are answered locally (each would be a paid call and they are not the subject). Planner turns run with
+`ANTHROPIC_MODEL=haiku`. `claude` has no seed or temperature flag, so reproducibility comes from the recorded
+envelopes (`calls.jsonl`) and from repeating a case, not from fixing a seed. **Measured 2026-10-29** (one node call
+carries about 90 000 context tokens): Haiku 0.017, Sonnet 0.33, Opus 0.66 USD per call. The text-mode planner call
+returns no envelope, so its cost is not measured.
+
+**Shared console.** Importing the console app costs about 4 s, and CI bounds `core/console/tests/` to 20 minutes, so
+an F1 module shares ONE console (`dag_adv_console.module_console`) and each test starts from a wiped workflow
+directory and a reset Free-tier counter (`global/license`, 10 compute units a day). A test that counts chain events
+takes a before/after delta; a test that switches tenant or session uses `fresh_sandbox`.
+
+**Open findings are executable.** Each finding that needs an operator decision is a `strict` xfail with its reason:
+H-GW-1 (the gateway's prompt router outranks the operator pin), H-GW-2 (the router hardcodes `claude-haiku-4-5`,
+`claude-sonnet-5`, `claude-opus-5`), H-FO-1a/1b (a bare `items_from` ignores workflow inputs; an unknown source runs
+zero items and succeeds), H-DL-1 (a real manager never sees what its workers returned: `_build_prompt` drops the
+`_iterations` key). A fix flips the test to XPASS, which fails the suite on purpose: delete the marker in the same
+commit as the fix. One finding was fixed together with the suite: H-PL-1, the design-chat planner now runs with
+`--disallowedTools "*"` (the live run had shown it reading a host file and printing the content).
+
+**Must NOT do:** point a `deliver`/`ask_human`/`answer` node at the real outbox in a test (set `ADAPTER_OUTBOX`; without
+it `node_types._write_outbox` writes the live repo outbox) · replace `ENGINE_FACTORY` in a test of model selection (the
+timeout test only shortens `timeout_s` of the real engine class) · trust the product's own audit as the only oracle ·
+turn a hard invariant into a band to make a test green · remove an xfail marker without the fix · run the live tier
+without a budget.
+
 ## Docs + Diagram Sync (load-bearing)
 
 **Every feature change** — code, config, behavior, API, protocol, CLI, error message —

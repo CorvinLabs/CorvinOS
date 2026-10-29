@@ -4707,7 +4707,11 @@ def _run_claude_for_design(prompt: str) -> str:
     """Call claude -p with the full prompt via stdin to avoid arg-length limits."""
     try:
         result = subprocess.run(
-            ["claude", "-p", "--output-format", "text"],
+            # The planner only writes text. Without this flag `claude -p` kept its tools: a task that said
+            # "read <file> and copy it into the description" made it read a host file and print the
+            # content into the chat reply (live test ad21_file_read). Same tool-less form as every other
+            # text-only call (TDE workers, the summariser, the skill creator, the output judge).
+            ["claude", "-p", "--output-format", "text", "--disallowedTools", "*"],
             # R4: the design-chat prompt is the operator's live conversation.
             # Reply contract unaffected: stdout is returned verbatim.
             input=_guard_prompt_head(prompt),

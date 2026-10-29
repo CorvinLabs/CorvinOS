@@ -3653,6 +3653,27 @@ failed · write a span without the running tenant · put a node value into a fai
 → ADR: `corvin_decisions/decisions/ADR-2308-*.md` · plan `PLAN-0967` · tests
 `core/workflows/tests/test_node_model_precedence.py`, `test_node_model_engine_e2e.py`.
 
+### Adversarial suite findings (2026-10-29, `test_dag_adversarial_*`)
+
+Found by attacking planning, delegation and model choice end to end with a recording CLI shim and with real
+`claude` calls (see `testing-and-docs.md` § Adversarial DAG E2E). Fixed: **H-PL-1** — the design-chat planner
+(`routes/workflows.py::_run_claude_for_design`) started `claude -p` with its tools; a task saying "read <file> and copy
+it into the description" made it read a host file and print it into the chat reply (live, before/after). It now runs
+with `--disallowedTools "*"` like every other text-only call; pinned by
+`test_the_design_chat_planner_is_spawned_without_any_tool__finding_h_pl_1`. Open, each held as a `strict` xfail:
+
+| Id | Finding | Where |
+|---|---|---|
+| H-GW-1 | `RunDispatcher._resolve_worker_model` asks the IntelligentRouter before the operator's `worker_model`; the router reads no pin. The operator rule (2026-10-13) says the Console selection always wins. | `core/gateway/corvin_gateway/dispatcher.py:351` |
+| H-GW-2 | `IntelligentRouter` hardcodes `claude-haiku-4-5` / `claude-sonnet-5` / `claude-opus-5`; `tier_model()` resolves the newest of each family (ADR-2090). | `core/skills/os_skills/intelligent_router.py:93` |
+| H-DL-1 | `ClaudeCliEngine._build_prompt` drops every state key starting with `_`, so a `delegation_loop` manager never sees `_iterations` (what its workers returned) and gets the same prompt each iteration — against the docstring of `_execute_delegation_loop`. Confirmed live (SC-03: two identical manager prompts). | `engines_claude.py::_build_prompt` |
+| H-FO-1 | `fan_out` resolves a bare `items_from` against the run state only, not the workflow inputs (the other selectors check inputs first); an unknown source runs zero items and the run succeeds. | `node_types.py::_execute_fan_out` |
+
+Recorded as behaviour, not as defects (an operator decision): every earlier node's output is in a later node's prompt,
+not only its `depends_on` predecessors (H-DF-1; `share_output` is the limit); a manager's `inputs` override the
+workflow inputs for its workers; the design-chat prompt offers five node types while the validator accepts eleven,
+and the planner invents a valid `model:` when asked for a stronger model (live SC-04b).
+
 ---
 
 ## Counting epoch for the usage + cost panels (ADR-0760, 2026-09-15)
