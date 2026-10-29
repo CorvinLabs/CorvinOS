@@ -106,18 +106,27 @@ def _drop_stale_pending(tenant_id: str) -> None:
     """Review r3_s2-5: a pending trip created under an OLDER generation than the
     persisted one was overtaken by another process's reset or trip — drop it here
     instead of re-chaining over an operator's reset. A marker without a generation,
-    or an unreadable state, keeps restricting."""
+    or an unreadable state, keeps restricting. A state written AFTER the pending trip
+    was created (its ``at`` is newer) counts as overtaking it too — that covers a
+    writer that records no generation."""
     current = persisted_generation(tenant_id)
     if current is None:
         return
+    changed_at, readable = last_change_ts(tenant_id)
+    if not readable:
+        return
+
+    def _stale(gen, created) -> bool:
+        if gen is not None and current > gen:
+            return True
+        return (changed_at is not None and isinstance(created, (int, float))
+                and not isinstance(created, bool) and changed_at > created)
     with _pending_lock:
         entry = _pending_trips.get(tenant_id)
-        if entry is not None and entry.get("generation") is not None \
-                and current > entry["generation"]:
+        if entry is not None and _stale(entry.get("generation"), entry.get("created")):
             _pending_trips.pop(tenant_id, None)
     status, data = _read_json(pending_path(tenant_id))
-    marker_gen = _gen_of(data) if status == "ok" else None
-    if marker_gen is not None and current > marker_gen:
+    if status == "ok" and _stale(_gen_of(data), data.get("created")):
         try:
             pending_path(tenant_id).unlink()
         except OSError:
@@ -140,7 +149,8 @@ def _pending_entry(tenant_id: str) -> Optional[dict]:
     details = data.get("details")
     return {"generation": _gen_of(data),
             "committed": data.get("committed") is True,
-            "details": details if isinstance(details, dict) else None}
+            "details": details if isinstance(details, dict) else None,
+            "created": data.get("created")}
 
 
 def _is_pending(tenant_id: str) -> bool:
@@ -277,7 +287,9 @@ def evaluate(tenant_id: str, *, audit: Optional[AuditFn] = None,
         }
     generation = (pending or {}).get("generation") if pending is not None \
         else persisted_generation(tenant_id)
-    entry = {"generation": generation, "committed": False, "details": details}
+    created = (pending or {}).get("created")
+    entry = {"generation": generation, "committed": False, "details": details,
+             "created": created if isinstance(created, (int, float)) else time.time()}
     if pending is None:
         _hold_pending(tenant_id, entry)            # step 1: restrictive first
     committed = False

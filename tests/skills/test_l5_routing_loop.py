@@ -682,6 +682,29 @@ class TestRollbackAcrossProcesses:
         assert spy.calls == []
         assert _state()["tripped"] is False
 
+    def test_a_later_reset_without_a_generation_also_drops_the_pending_trip(self):
+        """The review's probe shape: the other process's state carries no generation."""
+        _trailing_skill_ledger()
+        rollback_detector.evaluate(TENANT, audit=AuditSpy(commit=False))
+        time.sleep(0.01)
+        path = rollback_detector.state_path(TENANT)
+        tmp = path.with_name(path.name + ".other.tmp")
+        tmp.write_text(json.dumps({"tripped": False, "at": time.time()}))
+        tmp.replace(path)
+        rollback_detector.pending_path(TENANT).unlink()
+        assert rollback_detector.rollback_active(TENANT) is False
+        spy = AuditSpy()
+        rollback_detector.maybe_retry_pending(TENANT, audit=spy, background=False)
+        assert spy.calls == [] and _state()["tripped"] is False
+
+    def test_a_reset_older_than_the_pending_trip_does_not_drop_it(self):
+        path = rollback_detector.state_path(TENANT)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"tripped": False, "at": time.time() - 60}))
+        _trailing_skill_ledger()
+        rollback_detector.evaluate(TENANT, audit=AuditSpy(commit=False))
+        assert rollback_detector.rollback_active(TENANT)
+
     def test_a_cached_ready_verdict_dies_with_another_processs_reset(self, monkeypatch):
         """Review r3_s2-4: the bridge kept serving a pre-reset 'ready' for up to 5 min."""
         monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
