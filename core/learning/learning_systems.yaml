@@ -11,19 +11,25 @@
 #      register in the same change that deletes its last module.
 #
 # `callers` lists production call sites as "path:line:needle"; every line was
-# re-read on 2026-10-29 against the integrated tree (review c120 r2_s3-1) and
-# points at the call, import or registration itself. `needle` is the code of
-# that reference (the called function, `module.attr`, `call(arg, "literal"`),
-# at least 4 characters and starting with an identifier; the register test
-# requires it as CODE tokens - never in a comment, docstring or other string -
-# within 3 lines of `line`, and for a caller as an import, a call, an argument
-# of a call or a decorated definition (r2_s3-2). So a reference that drifts, a
-# call turned into a comment and a deleted call whose name survives nearby fail.
-# `readers` lists, the same way, the code that reads a system's output (a
-# decision, a prompt, an operator-facing number). An A entry names a reader:
-# `readers`, or a signal_contract whose consumer is not `none` (r2_s3-3).
-# `promoted_from` marks an entry promoted to A because of its contract; the
-# test keeps that contract required.
+# re-read on 2026-10-29 against the integrated tree (review c120 r3_s3) and
+# points at the call or registration itself, never at an import. `needle` is
+# the code of that reference (the called function, `module.attr`,
+# `call(arg, "literal"`), at least 4 characters and starting with an
+# identifier; the register test requires it as CODE tokens - never in a
+# comment, docstring or other string - in the statement of `line` and at most
+# 1 line from it, and for a caller as the statement's call, an argument of a
+# call or a decorated definition (an import never counts, r3_s3-1). So a
+# reference that drifts by 2 lines, a call turned into a comment, a deleted
+# call whose import survives and a needle re-pointed at a neighbouring call fail.
+# `readers` (and a contract `consumer`) name, the same way, the code that USES a
+# system's output (a decision, a prompt, an operator-facing number): it is
+# called, tested in if/while/return/for, passed to a call that is not a route
+# registration, or assigned to a name read later (r3_s3-3). An A entry names a
+# reader: `readers`, or a signal_contract whose consumer is not `none`
+# (r2_s3-3); it states no open `intake`, and a recorded readiness `measured`
+# must be ready on every surface (so L05/L12 cannot be promoted while the
+# ADR-2092 gates do not hold). `promoted_from` marks an entry promoted to A
+# because of its contract; the test keeps that contract required.
 # `tests` lists the test files that exercise the system.
 # tests/learning/test_learning_systems_register.py checks well-formedness and
 # the needles, not truth: that a caller really runs is the job of the tests
@@ -33,7 +39,8 @@
 # Required on every B entry, optional on A. A system with several independent
 # signals (L11) carries a list, one contract per skill (`skill`). Keys:
 #   signal    what is measured
-#   proxy_of  what it stands in for, or `none` when it is the outcome itself;
+#   proxy_of  what it stands in for, or `none` when it is the outcome itself (a
+#             string: proxy_of, target and consumer are never a YAML bool/null);
 #             a proxy (proxy_of != none) has `target: none` - it may guard, never
 #             be optimised for (Goodhart)
 #   validity  the sample floor and join/age bounds as numbers where a decision
@@ -62,7 +69,7 @@ systems:
     callers:
       - core/gateway/corvin_gateway/app.py:547:_lh.start
       - core/console/corvin_console/app.py:895:learning_host.start
-      - core/console/corvin_console/standalone.py:369:learning_host
+      - core/console/corvin_console/standalone.py:370:_lh.start
     readers:
       # the daemon state (weights, queue, cooldowns) on the console's learning dashboard
       - core/console/corvin_console/routes/learning_dashboard.py:105:learning_host.read_state_summary
@@ -190,7 +197,7 @@ systems:
       - corvin_operator/bridges/shared/adapter.py:13434:auto_grade_from_output
       - corvin_operator/skill-forge/skill_forge/mcp_server.py:490:promote
       - core/console/corvin_console/routes/chat.py:772:grade_followup
-      - core/console/corvin_console/chat_runtime.py:8639:record_turn_skills
+      - core/console/corvin_console/chat_runtime.py:8682:record_turn_skills
     readers:
       # the injection gate: a skill with no grade or a mean score <= 0 is not injected
       - corvin_operator/bridges/shared/skill_inject.py:696:spec.n_grades
@@ -205,15 +212,15 @@ systems:
     name: CEL turn grades
     state: B
     callers:
-      - core/console/corvin_console/chat_runtime.py:8414:_cel_record_outcome
-      - core/console/corvin_console/chat_runtime.py:9168:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:8457:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:9211:_cel_record_outcome
     tests:
       - corvin_operator/context_engineering/tests/test_grades_adr0285.py
     intake: >-
       Advisory only. The native console path records success=True for every
-      turn that reaches its end (chat_runtime.py:9168), so the grade means "turn
+      turn that reaches its end (chat_runtime.py:9211), so the grade means "turn
       completed", not "the stage helped"; the delegated (ACS/TDE) branch records
-      the run's own result (ok or bounded stop, chat_runtime.py:8414). Behind the
+      the run's own result (ok or bounded stop, chat_runtime.py:8457). Behind the
       outcome_feedback_loop flag (default off). An automatic grade never makes a
       stage default-eligible, only an operator grade does. It may steer stage
       selection only with a measured outcome source (T-0128 was cancelled for want
@@ -298,9 +305,9 @@ systems:
     name: Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter)
     state: B
     callers:
-      - corvin_operator/bridges/shared/adapter.py:3222:workflow_optimizer_wrapper
-      - corvin_operator/bridges/shared/spawn_gates.py:348:flow_guard_skill
-      - corvin_operator/bridges/shared/auth_elevation.py:216:security_orchestrator_skill
+      - corvin_operator/bridges/shared/adapter.py:3226:_wo_shadow
+      - corvin_operator/bridges/shared/spawn_gates.py:350:_fg_shadow
+      - corvin_operator/bridges/shared/auth_elevation.py:220:_so_shadow
       - corvin_operator/context_engineering/stages/l10_adapter.py:138:adapt_context_l10
     tests:
       - tests/skills/test_workflow_optimizer_skill_shadow_e2e.py
@@ -359,15 +366,20 @@ systems:
       # decision record, one per turn: a turn that stays native is recorded by the triage
       # (delegation_policy.resolve_delegation_route), a delegation-worthy one by
       # resolve_worker_engine, a turn neither reached by the unrouted fallback
-      - core/console/corvin_console/chat_runtime.py:4237:resolve_delegation_route
-      - core/console/corvin_console/chat_runtime.py:4536:_shared_target
-      - core/console/corvin_console/chat_runtime.py:4574:route_and_record
+      - core/console/corvin_console/chat_runtime.py:4280:resolve_delegation_route
+      - core/console/corvin_console/chat_runtime.py:4579:_shared_target
+      - core/console/corvin_console/chat_runtime.py:4617:route_and_record
       - corvin_operator/bridges/shared/adapter.py:9785:resolve_delegation_route
       - corvin_operator/bridges/shared/adapter.py:9436:resolve_worker_engine
       - corvin_operator/bridges/shared/adapter.py:9644:route_and_record
       # outcome record, joined to the decision by turn_id
-      - core/console/corvin_console/chat_runtime.py:4612:record_turn_outcome
+      - core/console/corvin_console/chat_runtime.py:4655:record_turn_outcome
       - corvin_operator/bridges/shared/adapter.py:9698:record_turn_outcome
+      # console engine guard: a cleared Phase 2 Skill route onto an unavailable engine
+      # records its decision and a judged ok:false outcome (the bridge does the same)
+      - core/console/corvin_console/routes/chat.py:1006:record_unavailable_skill_route
+      # operator reset of a tripped rollback judge (POST .../learning/routing/rollback/reset)
+      - core/console/corvin_console/routes/learning.py:895:rollback_detector.reset_rollback
     tests:
       - core/console/tests/test_l5_routing_loop_console_e2e.py
       - tests/e2e/test_l5_routing_loop_bridge_e2e.py
@@ -403,7 +415,7 @@ systems:
     name: Flow-guard learning route
     state: B
     callers:
-      - core/console/corvin_console/routes/flow_guard.py:51:learning_integration
+      - core/console/corvin_console/routes/flow_guard.py:100:LearningIntegration
       - core/console/corvin_console/app.py:266:flow_guard_route
     tests:
       # the real POST /v1/console/flow/feedback and GET /flow/policy routes over HTTP
@@ -478,7 +490,7 @@ systems:
     state: A
     callers:
       - core/compute/corvin_compute/worker.py:370:load_strategy
-      - core/compute/corvin_compute/cli.py:247:HACEngine
+      - core/compute/corvin_compute/cli.py:253:HACEngine
     readers:
       # the search reads the strategy's next proposal from the history it learned
       - core/compute/corvin_compute/driver.py:171:self.strategy.suggest_batch
