@@ -425,3 +425,103 @@ def test_repeated_praise_grades_once_per_day(env) -> None:
     assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
     note = str(_grades(env)[-1]["notes"])
     assert "dd=" in note and "console" not in note                  # a hash, never the id
+
+
+# ── review c120 round 2: detector asymmetry and dedupe by signal kind ────────
+
+@pytest.mark.parametrize("follow_up", [
+    "Danke für die falsche Antwort",                   # r2_s1-1: inflected stem + thanks
+    "wrongly formatted, thanks",
+    "Falsch. Warum hast du die Datei gelöscht?",       # r2_s1-3: "?" does not cancel
+    "Nein, falsch: der Fehler kommt aus src/core/learning/feedback_gate.py und nicht aus "
+    "dem Adapter, das hatte ich doch schon zweimal geschrieben",   # > 20 tokens
+])
+def test_console_rejection_is_liberal(env, follow_up) -> None:
+    _grant_consent()
+    _two_turns(env, follow_up)
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.1], _grades(env)
+
+
+@pytest.mark.parametrize("follow_up", [
+    "Na toll.", "Das hätte toll werden können", "that'd be perfect", "dennoch danke",
+    "thanks anyway",                                   # r2_s1-2
+])
+def test_console_sarcasm_conditional_concession_write_no_grade(env, follow_up) -> None:
+    _grant_consent()
+    _two_turns(env, follow_up)
+    assert len(_grades(env)) == 1, _grades(env)
+
+
+@pytest.mark.parametrize("follow_up", [
+    "läuft jetzt, danke!", "Thanks again!", "nicht schlecht, danke!", "danke nochmal!",
+])
+def test_console_praise_recall(env, follow_up) -> None:                     # r2_s1-4
+    _grant_consent()
+    _two_turns(env, follow_up)
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
+
+
+def test_console_same_day_rejection_after_approval_is_recorded(env) -> None:  # r2_s1-5
+    _grant_consent()
+    _turns(env, ["write me a short report", "Gut gemacht!", "Das ist falsch.", "falsch"])
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9, 0.1], _grades(env)
+
+
+# ── review c120 r2_s1-10: persistence failures after the record committed ────
+
+def _graded_actions(tenant: str = "_default") -> list[dict]:
+    return [r for r in _chain_records(tenant) if str((r.get("details") or {}).get("action", ""))
+            .startswith("skill.outcome_graded")]
+
+
+def test_failed_grade_save_is_compensated_and_a_retry_is_one_grade(env) -> None:
+    import errno  # noqa: PLC0415
+    from skill_forge import registry as sreg  # noqa: PLC0415
+    real = sreg.SkillRegistry._save
+    state = {"fail": True}
+
+    def bad_save(self, data):
+        if state["fail"] and any(len(v.get("grades") or []) > 1 for v in data.values()):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(self, data)
+    env.monkeypatch.setattr(sreg.SkillRegistry, "_save", bad_save)
+    _grant_consent()
+    _two_turns(env, "Gut gemacht!")
+    assert len(_grades(env)) == 1, _grades(env)                     # nothing persisted
+    recs = _chain_records("_default")
+    graded = [r for r in recs if r.get("event_type") == "skill.grade"]
+    comp = [r for r in recs if r.get("event_type") == "skill.grade_not_persisted"]
+    assert len(comp) == 1, comp
+    assert comp[0]["details"]["run_id"] == graded[-1]["details"]["run_id"]
+    assert comp[0]["details"]["error_type"] == "OSError"
+    assert "No space" not in json.dumps(comp[0]["details"])
+    assert _graded_actions() == []                                  # not reported
+    state["fail"] = False
+    _two_turns(env, "Gut gemacht!")                                 # the disk has room again
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
+    recs = _chain_records("_default")
+    n_grade = sum(1 for r in recs if r.get("event_type") == "skill.grade"
+                  and r["details"].get("run_id") != "seed")
+    n_comp = sum(1 for r in recs if r.get("event_type") == "skill.grade_not_persisted")
+    assert n_grade - n_comp == 1                                     # the chain nets one grade
+    from forge.paths import tenant_audit_chain  # noqa: PLC0415
+    from forge.security_events import verify_chain  # noqa: PLC0415
+    assert verify_chain(Path(tenant_audit_chain("_default"))) == (True, [])
+
+
+def test_meta_json_failure_after_a_saved_grade_still_reports_it(env) -> None:
+    import errno  # noqa: PLC0415
+    from skill_forge import registry as sreg  # noqa: PLC0415
+    real = sreg.SkillRegistry._atomic_write_text
+
+    def bad(path, text):
+        if Path(path).name == "meta.json" and "outcome (approval)" in text:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(path, text)
+    env.monkeypatch.setattr(sreg.SkillRegistry, "_atomic_write_text", staticmethod(bad))
+    _grant_consent()
+    _two_turns(env, "Gut gemacht!")
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
+    assert len(_graded_actions()) == 1                              # the grade is reported
+    assert not [r for r in _chain_records("_default")
+                if r.get("event_type") == "skill.grade_not_persisted"]

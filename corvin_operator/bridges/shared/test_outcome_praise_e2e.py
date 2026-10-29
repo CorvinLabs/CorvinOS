@@ -74,11 +74,31 @@ TABLE = (
     ("genau das wollte ich nicht", None),
     # review c120 s1-9: rejection on word boundaries only
     ("nochmals danke!", "approval"), ("Bruno, perfekt danke", "approval"),
-    ("super, das ist genau richtig, nochmal danke", "approval"), ("wrongful? great", None),
+    ("super, das ist genau richtig, nochmal danke", "approval"),
+    # review c120 r2_s1-1/-3: rejection is LIBERAL (a false one only lowers a grade):
+    # stems, any length, a question mark does not cancel it
+    ("wrongful? great", "rejection"),
     ("gut gemacht, aber nochmal bitte", "rejection"),
-    # rejection length limit (_OUTCOME_REJECTION_MAX_WORDS = 20)
     ("Bitte benenne in der Tabelle die Spalte falsch_flag in is_false um und ergänze "
-     "danach noch eine kurze Beschreibung im README für die anderen Entwickler falsch", None),
+     "danach noch eine kurze Beschreibung im README für die anderen Entwickler falsch",
+     "rejection"),
+    ("Danke für die falsche Antwort", "rejection"), ("das war inkorrekt, danke", "rejection"),
+    ("wrongly formatted, thanks", "rejection"), ("Das ist die falsche Datei", "rejection"),
+    ("Falsch. Warum hast du die Datei gelöscht?", "rejection"),
+    ("Why is this wrong again?", "rejection"), ("funktioniert immer noch nicht", "rejection"),
+    ("Nein, falsch: der Fehler kommt aus src/core/learning/feedback_gate.py und nicht aus "
+     "dem Adapter, das hatte ich doch schon zweimal geschrieben", "rejection"),
+    # review c120 r2_s1-2: sarcasm, conditionals, concessions never approve
+    ("Na toll.", None), ("Na prima.", None), ("Toll, alles weg", None),
+    ("Das hätte toll werden können", None), ("hätte perfekt sein sollen", None),
+    ("that'd be perfect", None), ("dennoch danke", None), ("thanks anyway", None),
+    ("trotzdem danke", None), ("Danke für den Versuch", None), ("perfekt 😂😂", None),
+    # review c120 r2_s1-4: praise recall
+    ("läuft jetzt, danke!", "approval"), ("Jetzt funktioniert es, danke!", "approval"),
+    ("Thanks, that works now", "approval"), ("it works now", "approval"),
+    ("Thanks again!", "approval"), ("danke nochmal!", "approval"),
+    ("Vielen Dank nochmal, super Arbeit", "approval"), ("nicht schlecht, danke!", "approval"),
+    ("Thanks, no more errors", "approval"), ("Super, das hat geklappt", "approval"),
     # review c120 s1-10: generic words, questions, requests, sarcasm, quotes, long tokens
     ("is that correct?", None), ("stimmt das?", None), ("richtig?", None),
     ("was ist genau der unterschied?", None), ("stimmt", "approval"), ("correct", "approval"),
@@ -187,6 +207,29 @@ def test_process_one_repeated_praise_grades_once_per_channel_per_day(bridge) -> 
     assert [float(g["score"]) for g in first] == [0.9], first
     assert _turn(bridge, "praise-d2", "Gut gemacht!") == []
     assert _turn(bridge, "praise-d3", "Danke!") == []
-    assert _turn(bridge, "praise-d4", "Nein, das ist falsch.") == []   # any signal, once a day
     note = str(first[0].get("notes", ""))
     assert "dd=" in note and "sandbox-outcome" not in note and "outcome-praise-chat" not in note
+
+
+def test_process_one_earlier_approval_never_blocks_a_later_rejection(bridge) -> None:
+    """Review c120 r2_s1-5: the dedupe key carries the signal KIND. A same-day
+    rejection after an approval is recorded (once); a second one is deduped."""
+    assert [float(g["score"]) for g in _turn(bridge, "kind-a", "Gut gemacht!")] == [0.9]
+    assert [float(g["score"]) for g in _turn(bridge, "kind-r", "Nein, das ist falsch.")] == [0.1]
+    assert _turn(bridge, "kind-r2", "falsch") == []
+    assert _turn(bridge, "kind-a2", "Danke!") == []
+
+
+def test_process_one_dedupe_is_a_rolling_24h_window_not_the_utc_day(bridge, monkeypatch) -> None:
+    """Review c120 r2_s1-11: two praises two seconds apart across UTC midnight are one
+    window; a praise 24 h + 1 s later is a new one."""
+    import calendar  # noqa: PLC0415
+    real = time.time
+    start = real()
+    shift = {"to": calendar.timegm((2026, 10, 28, 23, 59, 59, 0, 0, 0))}
+    monkeypatch.setattr(time, "time", lambda: shift["to"] + (real() - start))
+    assert [float(g["score"]) for g in _turn(bridge, "mid-1", "Gut gemacht!")] == [0.9]
+    shift["to"] += 2.0
+    assert _turn(bridge, "mid-2", "Gut gemacht!") == []
+    shift["to"] += 24 * 3600
+    assert [float(g["score"]) for g in _turn(bridge, "mid-3", "Gut gemacht!")] == [0.9]

@@ -278,45 +278,71 @@ def _duplicate_grade_error() -> type:
         return _Never
 
 
-def _followup_dedupe_marker(channel: str | None, *, now: float | None = None) -> str:
-    """16-hex marker for (channel, UTC day). The day is inside the hash, so two
-    days' markers of one channel cannot be linked; the id itself is never stored."""
+#: Rolling dedupe window of the organic follow-up grade (review c120 r2_s1-11).
+FOLLOWUP_DEDUPE_WINDOW_S = 24 * 3600
+
+
+def _followup_dedupe_marker(channel: str | None, kind: str = "",
+                            *, now: float | None = None) -> str:
+    """16-hex marker for (signal kind, channel, UTC day). The day is inside the
+    hash, so two days' markers of one channel cannot be linked; the id itself is
+    never stored. The KIND is inside too: an approval never dedupes a rejection
+    (review c120 r2_s1-5)."""
     import hashlib  # noqa: PLC0415
     import time as _time  # noqa: PLC0415
     day = _time.strftime("%Y-%m-%d", _time.gmtime(_time.time() if now is None else now))
-    raw = f"followup-grade|{day}|{channel or ''}".encode("utf-8")
+    raw = f"followup-grade|{kind}|{day}|{channel or ''}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _followup_dedupe_markers(channel: str | None, kind: str,
+                             *, now: float | None = None) -> tuple[str, str]:
+    """(today's marker, yesterday's marker). A grade carrying either one and
+    younger than FOLLOWUP_DEDUPE_WINDOW_S blocks a new one: a rolling 24 h
+    window, not the calendar day (23:59:59 and 00:00:01 are one window)."""
+    import time as _time  # noqa: PLC0415
+    t = _time.time() if now is None else now
+    return (_followup_dedupe_marker(channel, kind, now=t),
+            _followup_dedupe_marker(channel, kind, now=t - FOLLOWUP_DEDUPE_WINDOW_S))
 
 
 def _grade_with_canary(reg: Any, *, name: str, channel_id: str | None,
                        run_id: str, score: float, notes: str, kind: str,
-                       organic: bool = False, dedupe_marker: str | None = None) -> Any:
+                       organic: bool = False, dedupe_marker: str | None = None,
+                       dedupe_also: tuple[str, ...] = (),
+                       dedupe_window_s: float | None = None) -> Any:
     """Grade ``name`` for the turn ``run_id``.
 
     No active canary (or the chat was served the live body): the registry
     grade, exactly as before — plus a ``live`` tally on the canary. Served the
     candidate: the grade goes to the canary only.
 
-    ``dedupe_marker``: returns None (nothing written) when a grade with the
-    same marker exists — in the registry's grade notes, or for the canary
-    candidate in its grade run ids (``<run>~dd=<marker>``).
+    ``dedupe_marker``: returns None (nothing written) when a grade carrying
+    that marker or one of ``dedupe_also`` exists (younger than
+    ``dedupe_window_s`` when given) — in the registry's grade notes, or for the
+    canary candidate in its grade run ids (``<run>~dd=<marker>``).
     """
+    import time as _time  # noqa: PLC0415
     scope = _scope_of(reg, name)
     can = _canary_for(reg, scope) if scope else None
     variant = can.served_variant(name, channel_id) if can is not None else None
     if variant == "candidate":
         if dedupe_marker:
-            tag = f"~dd={dedupe_marker}"
+            tags = tuple(f"~dd={m}" for m in (dedupe_marker, *dedupe_also))
+            floor = (_time.time() - dedupe_window_s) if dedupe_window_s else None
             state = can.active(name) or {}
-            if any(str(g.get("run_id", "")).endswith(tag) for g in state.get("grades") or []):
+            if any(str(g.get("run_id", "")).endswith(tags)
+                   and (floor is None or float(g.get("ts") or 0.0) >= floor)
+                   for g in state.get("grades") or []):
                 return None
-            run_id = f"{str(run_id)[:40]}{tag}"
+            run_id = f"{str(run_id)[:40]}~dd={dedupe_marker}"
         return can.record_grade(name, variant="candidate", score=score,
                                 run_id=run_id, kind=kind)
     if dedupe_marker:
         try:
             res = reg.grade(name, run_id, float(score), notes=notes, organic=organic,
-                            dedupe_marker=dedupe_marker)
+                            dedupe_marker=dedupe_marker, dedupe_also=dedupe_also,
+                            dedupe_window_s=dedupe_window_s)
         except _duplicate_grade_error():
             return None
     else:
@@ -1081,50 +1107,51 @@ def auto_grade_from_output(
 # Precedence: rejection > approval > rephrase. Picks the most-conservative
 # signal so "thanks but actually wrong" lands as rejection.
 #
-# Both approval and rejection are matched on WORD boundaries (token
-# sequences), never as raw substrings: "top" must not fire inside "stopp" /
-# "laptop", "great" not inside "greater", "nochmal" not inside "nochmals",
-# "wrong" not inside "wrongful", "no, " not inside "Bruno, ".
+# The two sides are deliberately ASYMMETRIC (review c120 r2_s1-1..4, decided
+# design): a false APPROVAL is an organic 0.9 that may lift a skill over the
+# promotion bar, so approval is conservative; a false REJECTION only lowers a
+# grade (the safe direction), so rejection is liberal.
 #
-# An approval grade is ORGANIC (see grade_from_user_followup) and may lift a
-# skill over the promotion bar; a rejection demotes. A missed signal costs one
-# absent grade; a false one changes what gets injected. So both sides are
-# conservative (review c120 s1-8/9/10, decided rule set):
+# Rejection (liberal) — any of, anywhere in the message, at any length, with or
+# without a question mark:
+#   * a token starting with a rejection stem (_OUTCOME_REJECTION_STEMS: "falsch"
+#     matches falsche/falsches/falschen, "inkorrekt", "wrong" matches wrongly,
+#     "incorrect");
+#   * a token phrase from _OUTCOME_REJECTION_PHRASES ("stimmt nicht", "klappt
+#     nicht", "try again", "doesnt work", "still broken", ...);
+#   * "nein"/"no"/"nope" as a whole word followed by , . ! or ending the message.
+# The only exception: "nochmal"/"nochmals"/"again" next to a thank-you is the
+# praise idiom "nochmal(s) danke" / "danke nochmal" / "thanks again", not a retry
+# request (_OUTCOME_THANKS_TOKENS).
 #
-# Approval only when ALL hold:
-#   * at most _OUTCOME_APPROVAL_MAX_WORDS (12) tokens;
+# Approval (conservative) — only when ALL hold:
+#   * at most _OUTCOME_APPROVAL_MAX_WORDS (12) tokens, no token over 40 chars;
 #   * no question mark anywhere ("is that correct?", "stimmt das?");
-#   * no negator ANYWHERE in the message (single tokens and the multi-word
-#     forms in _OUTCOME_NEGATOR_PHRASES: "alles andere als", "far from",
-#     "would not say", "not really", ...). Voids the approval; it does NOT
-#     become a rejection;
-#   * no rejection cue and no void cue (_OUTCOME_APPROVAL_VOIDERS: a new request
-#     — "bitte", "jetzt", "please", "now" — contrast — "aber", "but",
-#     "anders", "else" — a conditional — "wäre", "would" — or
-#     sarcasm markers — "kaputt", "broken", "wasting");
-#   * not a quotation (any double-quote or guillemet character: quoting
-#     someone else's praise is not the user's praise) and carries no
-#     eye-roll / anger emoji (_OUTCOME_SARCASM_EMOJI);
-#   * no token longer than _OUTCOME_MAX_TOKEN_CHARS (40) characters;
+#   * not a quotation (double quote / guillemet) and no eye-roll, anger or
+#     laughing emoji (_OUTCOME_SARCASM_EMOJI);
+#   * no sarcasm opener (_OUTCOME_SARCASM_PHRASES: "na toll", "na prima", "ja
+#     toll", "oh great", "yeah right", ...);
+#   * no conditional / irrealis ("hätte", "könnte", "sollte", "würde", "wäre",
+#     "would", "could", "should", and any 'd contraction: "that'd", "it'd");
+#   * no concession or dismissal ("trotzdem", "dennoch", "anyway", "regardless",
+#     "vergiss es", "mach's selbst", "for trying", ...);
+#   * no negator ANYWHERE (single tokens and _OUTCOME_NEGATOR_PHRASES), except
+#     inside a positive idiom (_OUTCOME_POSITIVE_IDIOMS: "nicht schlecht", "not
+#     bad", "no more errors", "keine fehler mehr");
+#   * no void cue (_OUTCOME_APPROVAL_VOIDERS: a new request, a contrast, a
+#     complaint word). "jetzt"/"now" next to a success verb ("läuft jetzt",
+#     "works now", "jetzt klappt") and "nochmal"/"again" next to a thank-you are
+#     part of the praise, not a new request;
 #   * a phrase from _OUTCOME_APPROVAL_PHRASES, or the WHOLE message is one of
-#     the generic words in _OUTCOME_APPROVAL_EXACT ("gut", "good", "nice",
-#     "stimmt", "correct", "genau", "great", ...), which never count inside a
-#     sentence.
+#     the generic words in _OUTCOME_APPROVAL_EXACT ("gut", "good", "nice", ...),
+#     which never count inside a sentence.
 #
-# Rejection: a token phrase from _OUTCOME_REJECTION_PHRASES, or "nein"/"no"/
-# "nope" directly followed by , . ! or ending the message; "nochmal" followed
-# by a thank-you ("nochmal danke") is praise, not a retry request. Only in
-# messages of at most _OUTCOME_REJECTION_MAX_WORDS tokens, no question mark,
-# no token over 40 characters.
-#
-# _OUTCOME_APPROVAL_MAX_WORDS = 12 and _OUTCOME_REJECTION_MAX_WORDS = 20 are
-# DECISIONS, not measurements: a reaction to the previous answer is short. A
-# longer message is a new request or a discussion in which a praise or
-# criticism word is incidental ("…the great thing about Postgres is…",
-# "…die Spalte falsch_flag umbenennen…") and must not grade the previous turn.
-# The rejection limit is a little looser than the approval one because a real
-# correction often carries a short reason ("nein, das ist falsch, die Datei
-# heißt config.yaml und nicht settings.yaml").
+# _OUTCOME_APPROVAL_MAX_WORDS = 12 is a DECISION, not a measurement: a reaction
+# to the previous answer is short; a longer message is a new request or a
+# discussion in which a praise word is incidental ("…the great thing about
+# Postgres is…") and must not lift the previous turn. Rejection has no length
+# limit: a real correction often carries a long reason, and a false rejection
+# only lowers a grade.
 
 _OUTCOME_APPROVAL_PHRASES = (
     # German
@@ -1132,13 +1159,15 @@ _OUTCOME_APPROVAL_PHRASES = (
     "gut gemacht", "sehr gut", "super gemacht", "toll gemacht",
     "klasse gemacht", "prima", "toll", "spitze", "wunderbar", "hervorragend",
     "ausgezeichnet", "großartig", "grossartig", "genial", "klasse arbeit",
-    "gute arbeit",
+    "gute arbeit", "hat geklappt", "klappt", "funktioniert", "läuft",
+    "passt so", "das passt",
     # English
     "thanks", "thank you", "perfect", "exactly", "awesome",
     "spot on",
     "well done", "good job", "great job", "nice job", "nice work",
     "good work", "great work", "excellent", "brilliant", "fantastic",
-    "nailed it", "love it", "looks good", "works now",
+    "nailed it", "love it", "looks good", "works now", "it works",
+    "works like a charm", "worked",
 )
 
 #: Generic words: an approval only when they are the whole message.
@@ -1149,7 +1178,6 @@ _OUTCOME_APPROVAL_EXACT = frozenset({
 })
 
 _OUTCOME_APPROVAL_MAX_WORDS = 12
-_OUTCOME_REJECTION_MAX_WORDS = 20
 _OUTCOME_MAX_TOKEN_CHARS = 40
 
 _OUTCOME_NEGATORS = frozenset({
@@ -1168,38 +1196,73 @@ _OUTCOME_NEGATOR_PHRASES = (
     ("would", "not", "say"), ("wouldnt", "say"), ("not", "really"),
     ("nicht", "wirklich"), ("geht", "so"), ("so", "lala"),
 )
+#: Litotes and "the error is gone": a negation that IS the praise. Their tokens
+#: are removed before the negator / voider test (never before the rejection test).
+_OUTCOME_POSITIVE_IDIOMS = (
+    ("nicht", "schlecht"), ("not", "bad"), ("no", "more", "errors"),
+    ("no", "more", "error"), ("keine", "fehler", "mehr"), ("kein", "fehler", "mehr"),
+)
 
 #: Tokens that void an approval without being a rejection themselves: a new
-#: request, a contrast, or a sarcasm marker next to the praise word.
+#: request, a contrast, a complaint word, a conditional, a concession.
 _OUTCOME_APPROVAL_VOIDERS = frozenset({
-    "bitte", "please", "jetzt", "now", "aber", "but", "doch", "trotzdem",
-    "however", "though", "although", "wieder", "again", "kaputt", "broken",
-    "anders", "anderes", "else", "wäre", "would",
-    "waste", "wasting", "wasted", "verschwendet", "verschwendest",
-    "schlecht", "bad", "worse", "worst", "schlimmer", "fehler", "error",
-    "fail", "failed", "fails", "failing", "crash", "crashes", "crashed",
-    "crasht", "abgestürzt", "useless", "nutzlos", "sinnlos", "pointless",
+    # a new request / contrast
+    "bitte", "please", "jetzt", "now", "aber", "but", "doch",
+    "however", "though", "although", "wieder", "again", "nochmal", "nochmals",
+    "anders", "anderes", "else",
+    # complaint words
+    "kaputt", "broken", "waste", "wasting", "wasted", "verschwendet",
+    "verschwendest", "schlecht", "bad", "worse", "worst", "schlimmer", "fehler",
+    "error", "errors", "fail", "failed", "fails", "failing", "crash", "crashes",
+    "crashed", "crasht", "abgestürzt", "useless", "nutzlos", "sinnlos", "pointless",
+    # conditional / irrealis
+    "wäre", "wär", "wären", "wärst", "hätte", "hätten", "hättest", "könnte",
+    "könnten", "könntest", "sollte", "sollten", "solltest", "würde", "würden",
+    "würdest", "would", "could", "should", "might",
+    # concession / dismissal
+    "trotzdem", "dennoch", "anyway", "anyways", "regardless", "nevertheless",
+    "nonetheless", "vergiss", "forget", "selbst", "myself", "versuch",
+    "versuchs", "trying", "egal", "whatever", "nevermind",
 })
+#: "jetzt"/"now" next to one of these is "works now", not a new request.
+_OUTCOME_SUCCESS_VERBS = frozenset({
+    "works", "work", "working", "worked", "läuft", "funktioniert", "klappt", "geht",
+})
+#: A thank-you token: "nochmal"/"again" next to one is the "thanks again" idiom.
+_OUTCOME_THANKS_TOKENS = frozenset({
+    "danke", "dankeschön", "dank", "vielen", "thanks", "thank", "thx", "merci",
+})
+#: Sarcasm openers: the praise word is the complaint.
+_OUTCOME_SARCASM_PHRASES = (
+    ("na", "toll"), ("na", "prima"), ("na", "klasse"), ("na", "super"),
+    ("na", "wunderbar"), ("na", "großartig"), ("na", "spitze"), ("na", "danke"),
+    ("ja", "toll"), ("ja", "prima"), ("ja", "klasse"), ("oh", "great"),
+    ("oh", "perfect"), ("oh", "wonderful"), ("oh", "fantastic"), ("yeah", "right"),
+    ("alles", "weg"), ("all", "gone"), ("everything", "gone"),
+)
 
+#: Rejection stems: any token STARTING with one of these is a rejection cue.
+_OUTCOME_REJECTION_STEMS = ("falsch", "wrong", "inkorrekt", "incorrect")
 #: Rejection cues as token sequences.
 _OUTCOME_REJECTION_PHRASES = (
     # German
-    "falsch", "passt nicht", "stimmt nicht", "nicht das was", "nochmal",
+    "passt nicht", "stimmt nicht", "nicht das was", "nochmal", "nochmals",
     "leider nicht", "hat nicht", "geht nicht", "funktioniert nicht",
+    "klappt nicht", "immer noch nicht", "noch immer nicht", "läuft nicht",
+    "gleiche fehler", "gleicher fehler", "selbe fehler", "derselbe fehler",
     # English
-    "wrong", "incorrect", "not what", "try again",
-    "didnt work", "doesnt work", "did not work", "does not work",
+    "not what", "try again", "didnt work", "doesnt work", "did not work",
+    "does not work", "still broken", "still not", "still doesnt", "same error",
 )
-#: "nochmal" followed by one of these is "thanks again", not a retry request.
-_OUTCOME_NOCHMAL_THANKS = frozenset({"danke", "dankeschön", "vielen", "thanks", "merci"})
 
 #: Double quotes and guillemets (apostrophes are contractions, not quotes).
 _OUTCOME_QUOTE_CHARS = frozenset('"“”„«»‹›‟〝〞＂`')
-#: Eye-roll / anger / thumbs-down next to praise is sarcasm, not praise.
-_OUTCOME_SARCASM_EMOJI = frozenset("🙄😒😑🤦😤😠😡🤬👎💩")
+#: Eye-roll / anger / thumbs-down / laughing next to praise reads as sarcasm.
+_OUTCOME_SARCASM_EMOJI = frozenset("🙄😒😑🤦😤😠😡🤬👎💩😂🤣🙃")
 
 _TOKEN_RE = None  # compiled lazily (keeps import cost at zero)
 _NO_START_RE = None
+_CONTRACTED_D_RE = None
 
 
 def _outcome_tokens(text: str) -> list[str]:
@@ -1240,35 +1303,77 @@ def _has_negator(tokens: list[str]) -> bool:
     return any(_has_phrase(tokens, p) for p in _OUTCOME_NEGATOR_PHRASES)
 
 
+def _next_to(tokens: list[str], i: int, vocab: frozenset) -> bool:
+    """True when the token before or after position ``i`` is in ``vocab`` (one
+    filler like "dir"/"you" between a thank-you and "nochmal" is allowed)."""
+    near = tokens[max(0, i - 2):i] + tokens[i + 1:i + 2]
+    return any(t in vocab for t in near)
+
+
+def _is_thanks_again(tokens: list[str], i: int) -> bool:
+    return tokens[i] in ("nochmal", "nochmals", "again") and _next_to(
+        tokens, i, _OUTCOME_THANKS_TOKENS)
+
+
 def _is_rejection(text: str, tokens: list[str]) -> bool:
+    """Liberal rejection test (rule set above): stems, phrases, a bare "no"."""
     global _NO_START_RE
-    if len(tokens) > _OUTCOME_REJECTION_MAX_WORDS:
-        return False
     if _NO_START_RE is None:
         # "nein" / "no" / "nope" as a whole word followed by , . ! or the end.
         _NO_START_RE = re.compile(r"(?<!\w)(?:nein|no|nope)(?:\s*[,.!]|\s*$)")
     if _NO_START_RE.search(text):
         return True
+    if any(t.startswith(_OUTCOME_REJECTION_STEMS) for t in tokens):
+        return True
     for phrase in _tokenised("rejection", _OUTCOME_REJECTION_PHRASES):
-        for start, end in _phrase_positions(tokens, phrase):
-            if phrase == ("nochmal",) and end < len(tokens) \
-                    and tokens[end] in _OUTCOME_NOCHMAL_THANKS:
+        for start, _end in _phrase_positions(tokens, phrase):
+            if len(phrase) == 1 and _is_thanks_again(tokens, start):
                 continue
             return True
     return False
 
 
+def _without_idioms(tokens: list[str]) -> list[str]:
+    drop: set[int] = set()
+    for idiom in _OUTCOME_POSITIVE_IDIOMS:
+        for start, end in _phrase_positions(tokens, idiom):
+            drop.update(range(start, end))
+    return [t for i, t in enumerate(tokens) if i not in drop]
+
+
+def _voids_approval(tokens: list[str]) -> bool:
+    for i, t in enumerate(tokens):
+        if t not in _OUTCOME_APPROVAL_VOIDERS:
+            continue
+        if t in ("jetzt", "now") and _next_to(tokens, i, _OUTCOME_SUCCESS_VERBS):
+            continue  # "läuft jetzt", "works now", "jetzt klappt"
+        if _is_thanks_again(tokens, i):
+            continue  # "danke nochmal", "thanks again"
+        return True
+    return False
+
+
 def _is_approval(text: str, tokens: list[str]) -> bool:
-    """Strict approval test (rule set above)."""
+    """Conservative approval test (rule set above)."""
+    global _CONTRACTED_D_RE
     if len(tokens) > _OUTCOME_APPROVAL_MAX_WORDS:
         return False
     if any(c in _OUTCOME_QUOTE_CHARS or c in _OUTCOME_SARCASM_EMOJI for c in text):
         return False
-    if _has_negator(tokens) or any(t in _OUTCOME_APPROVAL_VOIDERS for t in tokens):
+    if _CONTRACTED_D_RE is None:
+        _CONTRACTED_D_RE = re.compile(r"\w['’]d\b")
+    if _CONTRACTED_D_RE.search(text):
+        return False  # "that'd be perfect", "it'd be great"
+    if any(_has_phrase(tokens, p) for p in _OUTCOME_SARCASM_PHRASES):
         return False
-    if " ".join(tokens) in _OUTCOME_APPROVAL_EXACT:
+    core = _without_idioms(tokens)
+    if _has_negator(core) or _voids_approval(core):
+        return False
+    if not core:
+        return True  # the message is a positive idiom ("nicht schlecht!")
+    if " ".join(core) in _OUTCOME_APPROVAL_EXACT:
         return True
-    return any(_has_phrase(tokens, p)
+    return any(_has_phrase(core, p)
                for p in _tokenised("approval", _OUTCOME_APPROVAL_PHRASES))
 
 
@@ -1297,10 +1402,10 @@ def detect_outcome_signal(
     if not text:
         return (None, 0.0)
     tokens = _outcome_tokens(text)
+    if tokens and _is_rejection(text, tokens):
+        return ("rejection", _OUTCOME_REJECTION_SCORE)
     explicit = bool(tokens) and "?" not in text and not any(
         len(t) > _OUTCOME_MAX_TOKEN_CHARS for t in tokens)
-    if explicit and _is_rejection(text, tokens):
-        return ("rejection", _OUTCOME_REJECTION_SCORE)
     if explicit and _is_approval(text, tokens):
         return ("approval", _OUTCOME_APPROVAL_SCORE)
     if prev_user_text:
@@ -1330,8 +1435,9 @@ def grade_from_user_followup(
     ``tenant_id`` given (the console, which serves several tenants): only
     skills resolving to a tenant-owned scope (``session`` / ``user``) are
     graded. ``dedupe_channel`` (default: ``channel_id``) keys the
-    once-per-skill-per-channel-per-UTC-day limit; only a day-bound hash of it
-    is stored (in the grade note), never the id itself.
+    once-per-skill-per-channel-per-signal-kind limit over a rolling 24 h window;
+    only a day-bound hash of it is stored (in the grade note), never the id
+    itself.
 
     A grade whose audit record cannot be committed is not persisted (the
     registry is audit-first) and is not in the returned list.
@@ -1384,8 +1490,8 @@ def grade_from_user_followup(
     except Exception:  # noqa: BLE001
         return []
 
-    marker = _followup_dedupe_marker(dedupe_channel if dedupe_channel is not None
-                                     else channel_id)
+    marker, marker_prev = _followup_dedupe_markers(
+        dedupe_channel if dedupe_channel is not None else channel_id, signal)
     graded: list[dict] = []
     for name in prev_skill_names:
         try:
@@ -1401,16 +1507,19 @@ def grade_from_user_followup(
             # the one grade source that may lift a skill over the promotion
             # bar. Auto-grade (usage detection) and bootstrap seeds stay
             # non-organic and are clamped to AUTO_GRADE_CAP_MAX.
-            # At most ONE organic follow-up grade per skill per channel per UTC
-            # day (dedupe at write time): repeating "gut gemacht" cannot farm.
+            # At most ONE organic follow-up grade per skill per channel per
+            # signal kind in a rolling 24 h window (dedupe at write time):
+            # repeating "gut gemacht" cannot farm, and an earlier approval never
+            # blocks a later rejection (review c120 r2_s1-5/-11).
             res = _grade_with_canary(
                 reg, name=name, channel_id=channel_id, run_id=prev_run_id,
                 score=float(score), kind="outcome", organic=True,
                 notes=f"outcome ({signal}) prev_run={prev_run_id}",
-                dedupe_marker=marker,
+                dedupe_marker=marker, dedupe_also=(marker_prev,),
+                dedupe_window_s=FOLLOWUP_DEDUPE_WINDOW_S,
             )
             if res is None:
-                continue  # already graded from this channel today
+                continue  # same signal from this channel in the last 24 h
             graded.append({
                 "name": name, "signal": signal,
                 "score": float(score), "result": res,
