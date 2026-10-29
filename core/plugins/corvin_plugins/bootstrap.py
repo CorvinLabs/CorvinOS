@@ -767,6 +767,22 @@ def _marketplace_cache_dir() -> Path:
 #: for the index's metadata JSON when it has no local copy either.
 _MARKETPLACE_GITHUB_TARBALL = "https://api.github.com/repos/CorvinLabs/Corvin-Marketplace/tarball/main"
 
+#: Tried in order. The API endpoint answers 403/429 once an unauthenticated host
+#: has used its hourly quota (60 requests, shared by every process behind one
+#: NAT); codeload serves the same tree without that quota, so a rate limit on the
+#: first is not the end of the sync.
+_MARKETPLACE_TARBALL_URLS = (
+    _MARKETPLACE_GITHUB_TARBALL,
+    "https://codeload.github.com/CorvinLabs/Corvin-Marketplace/tar.gz/refs/heads/main",
+)
+
+#: After a failed sync, do not try again for this long. Without it every resolve
+#: call on an offline host blocked for the full download timeout, again and again.
+_MARKETPLACE_FAIL_BACKOFF_S = 10 * 60
+
+#: A tarball larger than this is refused (a runaway or hostile response).
+_MARKETPLACE_MAX_BYTES = 300 * 1024 * 1024
+
 #: Re-check GitHub at most this often once a sync has succeeded, so a
 #: nonexistent plugin id (typo, not-yet-published) does not re-download the
 #: whole repo on every resolve call — but an operator who just published a
@@ -832,6 +848,7 @@ def ensure_marketplace_source(*, force: bool = False) -> None:
         return
     cache_root = _marketplace_cache_dir()
     marker = cache_root.parent / ".synced_at"
+    failed = cache_root.parent / ".sync_failed_at"
     if not force and marker.is_file() and (cache_root / "plugins").is_dir():
         try:
             age = time.time() - float(marker.read_text().strip())
@@ -839,13 +856,28 @@ def ensure_marketplace_source(*, force: bool = False) -> None:
                 return
         except (OSError, ValueError):
             pass
+    if not force and failed.is_file():
+        try:
+            if time.time() - float(failed.read_text().strip()) < _MARKETPLACE_FAIL_BACKOFF_S:
+                return  # offline / rate-limited a moment ago: keep what the cache holds
+        except (OSError, ValueError):
+            pass
     try:
         _download_and_extract_marketplace(cache_root)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(str(time.time()))
+        failed.unlink(missing_ok=True)
         log.info("marketplace source synced from GitHub into %s", cache_root)
-    except Exception:  # noqa: BLE001 - best-effort fallback, not a hard dependency
-        log.warning("marketplace source auto-sync from GitHub failed", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - best-effort fallback, not a hard dependency
+        # The previous cache (if any) is untouched: the swap only happens after a
+        # complete, validated download. The log names the cause, not just the type.
+        log.warning("marketplace source auto-sync from GitHub failed (%s: %s); keeping the existing cache",
+                    type(exc).__name__, str(exc)[:200], exc_info=True)
+        try:
+            failed.parent.mkdir(parents=True, exist_ok=True)
+            failed.write_text(str(time.time()))
+        except OSError:
+            pass
 
 
 def _download_and_extract_marketplace(dest_root: Path) -> None:
@@ -858,16 +890,11 @@ def _download_and_extract_marketplace(dest_root: Path) -> None:
     import shutil
     import tarfile
     import tempfile
-    import urllib.request
 
-    req = urllib.request.Request(
-        _MARKETPLACE_GITHUB_TARBALL, headers={"User-Agent": "CorvinOS-marketplace-sync/1.0"}
-    )
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         tmp_path = Path(tmp.name)
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed https URL, not operator input
-            shutil.copyfileobj(resp, tmp)
     try:
+        _fetch_marketplace_tarball(tmp_path)
         with tarfile.open(tmp_path, "r:gz") as tf:
             for member in tf.getmembers():
                 if member.name.startswith("/") or ".." in member.name.split("/"):
@@ -883,15 +910,85 @@ def _download_and_extract_marketplace(dest_root: Path) -> None:
             # GitHub's tarball API nests everything under one "<owner>-<repo>-<sha>/"
             # directory; extract to a scratch dir first and flatten it into
             # dest_root so callers see dest_root AS the repo root.
-            with tempfile.TemporaryDirectory() as scratch:
+            # The scratch dir sits NEXT TO dest_root (same filesystem) so the final swap
+            # is a rename, never a copy: a crash mid-sync cannot leave half a cache.
+            dest_root.parent.mkdir(parents=True, exist_ok=True)
+            scratch = tempfile.mkdtemp(prefix=".sync-", dir=str(dest_root.parent))
+            try:
                 tf.extractall(scratch)
                 top = names[0].split("/")[0] if names else ""
                 extracted = Path(scratch) / top if top else Path(scratch)
-                if dest_root.exists():
-                    shutil.rmtree(dest_root)
-                shutil.move(str(extracted), str(dest_root))
+                # A truncated or wrong tarball must never replace a working cache.
+                if not (extracted / "plugins" / "buildin").is_dir():
+                    raise ValueError("marketplace tarball has no plugins/buildin tree")
+                _swap_directory(extracted, dest_root)
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _fetch_marketplace_tarball(target: Path) -> None:
+    """Download the marketplace tarball into *target*, trying each URL in turn.
+
+    Failure handling, per URL: a rate limit (403/429) or a 404 moves straight to the
+    next URL; a timeout, a connection error or a 5xx is retried once after a short
+    pause, then moves on. A body over ``_MARKETPLACE_MAX_BYTES`` is refused. Raises
+    ``OSError`` naming every URL's cause when all of them fail, so the log says
+    "offline" or "rate limited" instead of a bare exception type."""
+    import time
+    import urllib.error
+    import urllib.request
+
+    causes: list[str] = []
+    for url in _MARKETPLACE_TARBALL_URLS:
+        for attempt in (1, 2):
+            req = urllib.request.Request(url, headers={"User-Agent": "CorvinOS-marketplace-sync/1.0"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed https URL
+                    total = 0
+                    with open(target, "wb") as out:
+                        while True:
+                            chunk = resp.read(1024 * 256)
+                            if not chunk:
+                                break
+                            total += len(chunk)
+                            if total > _MARKETPLACE_MAX_BYTES:
+                                raise OSError("tarball exceeds the size limit")
+                            out.write(chunk)
+                return
+            except urllib.error.HTTPError as e:
+                causes.append(f"{url.split('/')[2]}: HTTP {e.code}")
+                if e.code < 500:  # rate limit / not found: another attempt at this URL cannot help
+                    break
+            except (urllib.error.URLError, OSError, TimeoutError) as e:
+                causes.append(f"{url.split('/')[2]}: {type(e).__name__}")
+            if attempt == 1:
+                time.sleep(1.0)
+    raise OSError("marketplace download failed (" + "; ".join(causes) + ")")
+
+
+def _swap_directory(new_dir: Path, dest_root: Path) -> None:
+    """Replace *dest_root* with *new_dir* by renames; the old tree is only deleted
+    after the new one is in place, and is put back if the second rename fails.
+    Two processes syncing at once are safe: the loser's rename fails, it restores
+    nothing it did not move, and the winner's tree stays."""
+    import os
+    import shutil
+    import time
+
+    old = None
+    if dest_root.exists():
+        old = dest_root.parent / f".old-{os.getpid()}-{int(time.time() * 1000)}"
+        os.replace(dest_root, old)
+    try:
+        os.replace(new_dir, dest_root)
+    except OSError:
+        if old is not None and not dest_root.exists():
+            os.replace(old, dest_root)  # put the previous cache back
+        raise
+    if old is not None:
+        shutil.rmtree(old, ignore_errors=True)
 
 
 def origin_for_plugin_dir(plugin_dir: Path) -> tuple[str, str]:

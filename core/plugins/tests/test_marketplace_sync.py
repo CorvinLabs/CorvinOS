@@ -126,6 +126,60 @@ class EnsureMarketplaceSourceTests(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", side_effect=OSError("offline")):
             bootstrap.ensure_marketplace_source()  # must not raise
 
+    def test_rate_limited_api_falls_back_to_codeload(self):
+        import urllib.error
+
+        tarball = _fake_marketplace_tarball("plugins/buildin/memory/foo/plugin.yaml")
+        calls = []
+
+        def fake(req, timeout=0):
+            calls.append(req.full_url)
+            if "api.github.com" in req.full_url:
+                raise urllib.error.HTTPError(req.full_url, 403, "rate limit exceeded", {}, None)
+            return _FakeResponse(tarball)
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake):
+            bootstrap.ensure_marketplace_source()
+        self.assertEqual(len(calls), 2)  # a 403 is not retried on the same URL
+        self.assertIn("codeload.github.com", calls[1])
+        self.assertTrue((bootstrap._marketplace_root() / "memory" / "foo" / "plugin.yaml").is_file())
+
+    def test_failed_sync_keeps_the_existing_cache_and_backs_off(self):
+        tarball = _fake_marketplace_tarball("plugins/buildin/memory/foo/plugin.yaml")
+        with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(tarball)):
+            bootstrap.ensure_marketplace_source()
+        kept = bootstrap._marketplace_root() / "memory" / "foo" / "plugin.yaml"
+        self.assertTrue(kept.is_file())
+        with mock.patch("time.sleep"), mock.patch("urllib.request.urlopen", side_effect=OSError("offline")) as uo:
+            bootstrap.ensure_marketplace_source(force=True)  # must not raise, must not drop the cache
+            first = uo.call_count
+            bootstrap.ensure_marketplace_source()  # inside the back-off: no new attempt
+            self.assertEqual(uo.call_count, first)
+        self.assertTrue(kept.is_file())
+        self.assertTrue((self.home / "marketplace-cache" / ".sync_failed_at").is_file())
+
+    def test_incomplete_tarball_never_replaces_a_working_cache(self):
+        good = _fake_marketplace_tarball("plugins/buildin/memory/foo/plugin.yaml")
+        with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(good)):
+            bootstrap.ensure_marketplace_source()
+        bad = _fake_marketplace_tarball("README.md")  # no plugins/buildin tree
+        with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(bad)):
+            bootstrap.ensure_marketplace_source(force=True)
+        self.assertTrue((bootstrap._marketplace_root() / "memory" / "foo" / "plugin.yaml").is_file())
+
+    def test_resync_replaces_the_cache_and_leaves_no_scratch_dirs(self):
+        v1 = _fake_marketplace_tarball("plugins/buildin/memory/foo/plugin.yaml")
+        v2 = _fake_marketplace_tarball("plugins/buildin/memory/bar/plugin.yaml")
+        with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(v1)):
+            bootstrap.ensure_marketplace_source()
+        with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(v2)):
+            bootstrap.ensure_marketplace_source(force=True)
+        root = bootstrap._marketplace_root()
+        self.assertTrue((root / "memory" / "bar" / "plugin.yaml").is_file())
+        self.assertFalse((root / "memory" / "foo").exists())
+        leftovers = [p.name for p in (self.home / "marketplace-cache").iterdir() if p.name.startswith((".sync-", ".old-"))]
+        self.assertEqual(leftovers, [])
+
     def test_rejects_path_traversal_in_tarball_member(self):
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
