@@ -51,8 +51,8 @@ _MAX_DELEGATION_WORKERS = 200
 
 
 def _validate_node_model(node: dict[str, Any]) -> None:
-    """ADR-2308: a ``model`` field is checked when the document is validated (HTTP 422 in the
-    console), not first when the node runs."""
+    """ADR-2308: a ``model`` field is checked when the document is validated (``WorkflowInvalid``;
+    the console answers HTTP 400 on save), not first when the node runs."""
     from .model_resolution import validate_node_model
 
     validate_node_model(node.get("model"))

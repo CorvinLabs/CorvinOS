@@ -1,7 +1,9 @@
 """Workflow readiness report: "ready" is measured, not claimed (ADR-2275).
 
-`check_readiness()` is pure: it takes the workflow YAML text, an optional stored
-acceptance case and the designer-repair count, and returns a `ReadinessReport`.
+`check_readiness()` takes the workflow YAML text, an optional stored acceptance case and the
+designer-repair count, and returns a `ReadinessReport`. It writes nothing; the only state it
+reads besides its arguments is the tenant's `worker_model` pin and the workflow-node site default,
+for the informational `node_model` hint (ADR-2308).
 It validates the draft (R1..R11), runs it ONCE through the real `DAGRunner` against a
 deterministic `StubEngine`, and evaluates the acceptance case on that run.
 
@@ -318,7 +320,7 @@ def _node_models(doc: WorkflowDoc, tenant_id: str | None = None) -> Signal:
     default (the DAG engine's alias, or the CLI's own default on the console's legacy executor,
     which can be the most expensive model). Informational: a missing model is a cost hint, never
     a defect, so it never blocks "ready". Counts only, no node ids (ids are workflow text)."""
-    from .model_resolution import in_scope, operator_pin
+    from .model_resolution import in_scope, operator_pin, site_default
 
     scoped = [n for n in doc.graph if isinstance(n, dict) and in_scope(n)]
     missing = sum(1 for n in scoped if not str(n.get("model") or "").strip())
@@ -330,11 +332,12 @@ def _node_models(doc: WorkflowDoc, tenant_id: str | None = None) -> Signal:
                       f"an operator pin on the Models page sets the model of all {len(scoped)} model node(s)", 0)
     if not missing:
         return Signal("node_model", "info", f"all {len(scoped)} model node(s) set 'model:'", 0)
+    where = ("the site default (CORVIN_HELPER_MODEL_WORKFLOW_NODE)" if site_default() else
+             "the path default (DAG engine: haiku; console executor: the CLI's own default)")
     return Signal(
         "node_model",
         "info",
-        f"{missing} of {len(scoped)} model node(s) have no 'model:' and run on the path default "
-        f"(DAG engine: haiku; console executor: the CLI's own default)",
+        f"{missing} of {len(scoped)} model node(s) have no 'model:' and run on {where}",
         missing,
     )
 

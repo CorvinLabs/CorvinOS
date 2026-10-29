@@ -40,6 +40,9 @@ GATE_SIGNALS = frozenset({"oracle", "oracle_shadow"})   # proxy is never one of 
 
 _TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")      # no "/" (a path), no "@" (an address), no space
+# a model id may carry a platform version (`claude-sonnet-5@20250929`) or a context suffix
+# (`claude-opus-5[1m]`) - the same grammar a2a_usage accepts; still no path, space or address shape
+_SAFE_MODEL = re.compile(r"^[A-Za-z0-9._:\-]{1,96}(@[0-9]{8})?(\[[0-9a-z]{1,8}\])?$")
 _SAFE_CLASS = re.compile(r"^[a-z_]{1,32}\|[tn]\|(<8k|8k-32k|>32k|)\|json$")
 _last_prune: dict[str, str] = {}
 
@@ -74,6 +77,11 @@ def _safe_id(value: Any) -> str:
     return text if _SAFE_ID.match(text) else ""
 
 
+def _safe_model(value: Any) -> str:
+    text = str(value or "")
+    return text if _SAFE_MODEL.match(text) else ""
+
+
 def _count(value: Any) -> int:
     return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else 0
 
@@ -87,7 +95,10 @@ def build_entry(meta: dict[str, Any], node_class: str, status: str, *, now: Opti
         "rid": _safe_id(meta.get("run_id")),
         "span_id": _safe_id(meta.get("span_id")),
         "node_class": node_class if _SAFE_CLASS.match(node_class or "") else "",
-        "model_id": _safe_id(usage.get("model_id")),
+        "model_id": _safe_model(usage.get("model_id")),
+        # what was asked for (resolved): a failed spawn reports no model, and its error must still
+        # count against the model it was meant to run on
+        "requested_model_id": _safe_model(meta.get("requested_model")),
         **{k: _count(usage.get(k)) for k in _TOKEN_FIELDS},
         "cost_usd": float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0 else None,
         "status": "ok" if status == "ok" else "error",
@@ -229,12 +240,15 @@ def gate_eligible(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def loss_report(tenant_id: str, *, min_runs: int = MIN_RUNS) -> dict[str, Any]:
-    """Cost and error rate per (node class, reported model). No loss value: the production stream has no
-    success signal (every entry is a proxy), so ``loss`` is ``None`` and says why."""
+    """Cost and error rate per (node class, model). The model is the one the CLI reported; a spawn that
+    failed before it reported one counts under the model that was requested, so a model's error rate
+    includes its failures. No loss value: the production stream has no success signal (every entry
+    is a proxy), so ``loss`` is ``None`` and says why."""
     entries = read_entries(tenant_id)
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for e in entries:
-        groups.setdefault((str(e.get("node_class", "")), str(e.get("model_id", ""))), []).append(e)
+        model = str(e.get("model_id") or e.get("requested_model_id") or "")
+        groups.setdefault((str(e.get("node_class", "")), model), []).append(e)
     rows = []
     for (cls, model), rs in sorted(groups.items()):
         costs = [r["cost_usd"] for r in rs if isinstance(r.get("cost_usd"), (int, float))]

@@ -237,6 +237,9 @@ class _LazyClaudeEngine:
             self._engine = _ClaudeCliEngine(tenant_id=self.tenant_id)
         return self._engine.spawn(call)
 
+    def take_node_usage(self, node_id):  # noqa: ANN001, ANN201
+        return self._engine.take_node_usage(node_id) if self._engine is not None else {}
+
 
 def _count_console_running(tenant_id: str) -> int:
     """Best-effort count of console-started runs currently 'running'
@@ -1223,6 +1226,13 @@ class OrchestrationServer:
             "paused_prompt": result.paused_prompt,
             "final_state": result.final_state,
             "node_count": len(result.nodes),
+            # ADR-2308: per node, the model the CLI reported and its tokens (summed over spawns)
+            "nodes": {
+                nid: {"status": n.status, "model_id": (getattr(n, "usage", None) or {}).get("model_id", ""),
+                      "tokens": int((getattr(n, "usage", None) or {}).get("tokens", 0) or 0),
+                      "attempts": getattr(n, "attempts", 1)}
+                for nid, n in result.nodes.items()
+            },
         }
         return self._text_result(envelope, is_error=(result.state == "failed"))
 

@@ -13,7 +13,9 @@ describe("run usage badge (ADR-2308)", () => {
 
   it("names the attempts a retried node's total covers", () => {
     expect(runUsageLabel({ model_id: "m", tokens: 10, attempts: 3 })).toBe("m · 10 tok · 3 attempts");
-    expect(runUsageTitle({ model_id: "m", tokens: 10, attempts: 3 })).toContain("Summed over 3 attempts");
+    expect(runUsageTitle({ model_id: "m", tokens: 10, attempts: 3 })).toContain("3 attempts");
+    expect(runUsageTitle({ model_id: "m", tokens: 10, attempts: 3 })).toContain("reached the CLI");
+    expect(runUsageLabel({ attempts: 2 })).toBe("2 attempts");
     expect(runUsageLabel({ model_id: "m", attempts: 1 })).toBe("m");
   });
 

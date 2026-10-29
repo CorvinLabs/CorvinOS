@@ -623,6 +623,9 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
             if is_error:
                 raise NodeExecutionError("Worker engine reported an error")
             return text.strip()
+        if spans:
+            _t, usage, reported, cost, _e = _ec.split_envelope(result.stdout or "")
+            _close(reported, usage, "error", cost)
         raise NodeExecutionError(f"Worker engine ended with exit code {result.returncode}")
     except FileNotFoundError:
         raise NodeExecutionError("Worker engine unavailable: the claude CLI was not found") from None
@@ -669,7 +672,31 @@ def _spawn_node(node: dict[str, Any], prompt: str, mcp_config: dict | None, tena
             raise NodeExecutionError(str(exc)) from None
     if item_index is not None:
         meta["item_index"] = item_index
-    return _run_node_claude(prompt, mcp_config, model=model, meta=meta), meta
+    try:
+        return _run_node_claude(prompt, mcp_config, model=model, meta=meta), meta
+    except NodeExecutionError as exc:
+        exc.spawn_meta = meta  # type: ignore[attr-defined]  # what this spawn spent, for node_failed
+        raise
+
+
+def _add_usage(stats: dict[str, Any] | None, meta: dict[str, Any] | None) -> None:
+    """Add one spawn's reported usage to a node's running totals (``tokens``, last ``model_id``)."""
+    if stats is None or not meta:
+        return
+    stats["tokens"] = stats.get("tokens", 0) + _node_tokens(meta)
+    reported = (meta.get("usage") or {}).get("model_id", "")
+    if reported:
+        stats["model_id"] = reported
+
+
+def _usage_fields(stats: dict[str, Any] | None) -> dict[str, Any]:
+    """ADR-2308: the run-stream fields for a node's spend; empty when nothing was reported."""
+    out: dict[str, Any] = {}
+    if stats and stats.get("tokens"):
+        out["tokens"] = int(stats["tokens"])
+    if stats and stats.get("model_id"):
+        out["model_id"] = stats["model_id"]
+    return out
 
 
 def _node_tokens(meta: dict[str, Any]) -> int:
@@ -729,8 +756,12 @@ def _run_delegation_loop_node(
     node_id: str = "delegation_loop",
     wid: str = "",
     rid: str = "",
+    stats: dict[str, Any] | None = None,
 ) -> str:
     """Execute a delegation_loop node: manager issues DELEGATE/COMPLETE decisions.
+
+    ``stats`` (optional) receives the summed ``tokens`` and the last reported ``model_id`` of
+    every manager and worker spawn (ADR-2308), also when the loop fails part-way.
 
     Round-4 finding #1: each manager + worker spawn is a distinct `claude -p`
     process driven by LLM-derived text, so each is gated fail-closed +
@@ -796,8 +827,12 @@ If the task is complete:
             raise NodeExecutionError(_mgr_refusal)
         # outside the ADR-2308 scope (the manager picks the workers): no model is resolved, but
         # the span lands on THIS tenant's chain with this run's ids
-        manager_raw = _run_node_claude(manager_prompt, mcp_config, meta={
-            "tenant_id": tenant_id, "workflow_id": wid, "node_id": node_id, "run_id": rid})
+        _mgr_meta: dict[str, Any] = {"tenant_id": tenant_id, "workflow_id": wid, "node_id": node_id,
+                                     "run_id": rid, "role": "manager"}
+        try:
+            manager_raw = _run_node_claude(manager_prompt, mcp_config, meta=_mgr_meta)
+        finally:
+            _add_usage(stats, _mgr_meta)
 
         # Parse manager JSON
         decision_json: dict[str, Any] = {}
@@ -848,8 +883,12 @@ Context:
                 )
                 if _wkr_refusal is not None:
                     raise NodeExecutionError(_wkr_refusal)
-                worker_out = _run_node_claude(worker_prompt, mcp_config, meta={
-                    "tenant_id": tenant_id, "workflow_id": wid, "node_id": node_id, "run_id": rid})
+                _wkr_meta: dict[str, Any] = {"tenant_id": tenant_id, "workflow_id": wid,
+                                             "node_id": node_id, "run_id": rid}
+                try:
+                    worker_out = _run_node_claude(worker_prompt, mcp_config, meta=_wkr_meta)
+                finally:
+                    _add_usage(stats, _wkr_meta)
                 worker_results.append({"instructions": worker_instructions, "output": worker_out})
                 workers_spawned += 1
 
@@ -930,11 +969,13 @@ def _run_fan_out_node(
         if _item_refusal is not None:
             results.append(f"• {item}:\n  {_item_refusal}")
             continue
-        out, spawn_meta = _spawn_node({**node, "id": node_id}, prompt, mcp_config, tenant_id, wid, rid,
-                                      item_index)
-        if stats is not None:
-            stats["tokens"] = stats.get("tokens", 0) + _node_tokens(spawn_meta)
-            stats["model_id"] = (spawn_meta.get("usage") or {}).get("model_id", "") or stats.get("model_id", "")
+        try:
+            out, spawn_meta = _spawn_node({**node, "id": node_id}, prompt, mcp_config, tenant_id, wid, rid,
+                                          item_index)
+        except NodeExecutionError as exc:
+            _add_usage(stats, getattr(exc, "spawn_meta", None))  # the items before it and this one
+            raise
+        _add_usage(stats, spawn_meta)
         results.append(f"• {item}:\n  {out.strip()}")
 
     return "\n\n".join(results)
@@ -3924,17 +3965,19 @@ async def _stream_run(
                     if skill_blocks:
                         state[f"__skills_{node_id}__"] = "\n\n".join(skill_blocks)
 
+                _loop_stats: dict[str, Any] = {}
                 try:
                     output_text = await loop.run_in_executor(
                         None, _run_delegation_loop_node, node, state,
-                        mcp_cfg or None, tenant_id, node_id, wid, rid
+                        mcp_cfg or None, tenant_id, node_id, wid, rid, _loop_stats
                     )
                     elapsed = round(time.time() - t0, 2)
                     state[node_id] = {"output": output_text}
                     yield _emit({"type": "node_completed", "node_id": node_id,
                                  "elapsed_s": elapsed, "tokens": 0,
                                  "output_preview": output_text[:200],
-                                 "output": output_text[:50_000], "ts": time.time()})
+                                 "output": output_text[:50_000], "ts": time.time(),
+                                 **_usage_fields(_loop_stats)})
                     # Scan output for media artifacts (ADR-0091 M2)
                     _media = _scan_output_for_media(output_text, node_id, tenant_id, wid, rid)
                     for _m in _media:
@@ -3943,7 +3986,8 @@ async def _stream_run(
                     elapsed = round(time.time() - t0, 2)
                     state[node_id] = {"error": str(exc)}
                     yield _emit({"type": "node_failed", "node_id": node_id,
-                                 "error": str(exc), "elapsed_s": elapsed, "ts": time.time()})
+                                 "error": str(exc), "elapsed_s": elapsed, "ts": time.time(),
+                                 **_usage_fields(_loop_stats)})
                     all_ok = False
                     break
                 continue
@@ -3952,8 +3996,8 @@ async def _stream_run(
             if node_type == "fan_out":
                 forge_tools = list(node.get("forge_tools") or [])
                 mcp_cfg = _build_mcp_with_forge(tenant_id, node_tools, forge_tools)
+                _fan_stats: dict[str, Any] = {}
                 try:
-                    _fan_stats: dict[str, Any] = {}
                     output_text = await loop.run_in_executor(
                         None, _run_fan_out_node, node, state,
                         mcp_cfg or None, tenant_id, node_id, wid, rid, _fan_stats
@@ -3973,7 +4017,8 @@ async def _stream_run(
                     elapsed = round(time.time() - t0, 2)
                     state[node_id] = {"error": str(exc)}
                     yield _emit({"type": "node_failed", "node_id": node_id,
-                                 "error": str(exc), "elapsed_s": elapsed, "ts": time.time()})
+                                 "error": str(exc), "elapsed_s": elapsed, "ts": time.time(),
+                                 **_usage_fields(_fan_stats)})
                     all_ok = False
                     break
                 continue
@@ -4070,8 +4115,11 @@ async def _stream_run(
             except Exception as node_exc:
                 elapsed = round(time.time() - t0, 2)
                 state[node_id] = {"error": str(node_exc)}
+                _failed_stats: dict[str, Any] = {}
+                _add_usage(_failed_stats, getattr(node_exc, "spawn_meta", None))
                 yield _emit({"type": "node_failed", "node_id": node_id,
-                              "error": str(node_exc), "elapsed_s": elapsed, "ts": time.time()})
+                              "error": str(node_exc), "elapsed_s": elapsed, "ts": time.time(),
+                              **_usage_fields(_failed_stats)})
                 all_ok = False
                 break  # stop on first failure; could make configurable
 

@@ -3925,7 +3925,8 @@ function EventRow({ evt, csrf }: { evt: WorkflowRunEvent; csrf?: string }) {
         {evt.elapsed_s != null && (
           <span className="shrink-0 text-muted-foreground">{evt.elapsed_s}s</span>
         )}
-        {(evt.type === "node_completed" || evt.type === "node_failed") && (evt.model_id || evt.tokens) ? (
+        {(evt.type === "node_completed" || evt.type === "node_failed") &&
+        (evt.model_id || evt.tokens || (evt.attempts ?? 1) > 1) ? (
           <span
             className="shrink-0 rounded bg-muted px-1.5 font-mono text-[10px] text-muted-foreground"
             data-testid="run-event-model"

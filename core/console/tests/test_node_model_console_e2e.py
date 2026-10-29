@@ -37,8 +37,9 @@ elif "COMPLETE" in prompt and "DELEGATE" in prompt:   # the legacy delegation ma
     reply = json.dumps({"decision": "COMPLETE", "result": "done"})
 else:                                           # the legacy executor takes plain text lines
     reply = "alpha\\nbeta"
+is_error = "--max-turns" not in argv and "MARK-ERRENV" in prompt   # a reply the CLI flags as an error
 print(json.dumps({
-    "type": "result", "subtype": "success", "is_error": False, "result": reply,
+    "type": "result", "subtype": "success", "is_error": is_error, "result": reply,
     "total_cost_usd": 0.0123,
     "usage": {"input_tokens": 11, "output_tokens": 7,
               "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20},
@@ -343,3 +344,21 @@ def test_a_model_on_a_delegation_loop_is_rejected_before_anything_spawns(tmp_pat
         assert events[-1]["type"] == "error" or events[-1].get("ok") is False, events[-1]
         assert "take no 'model'" in json.dumps(events[-1]), events[-1]
         assert not fake_cli.exists() or _calls(fake_cli) == []   # nothing was spawned
+
+
+# ── review round 2 (2026-10-29) ─────────────────────────────────────────────
+
+def test_legacy_failed_agent_and_delegation_loop_report_their_spend(tmp_path, fake_cli):
+    """The console's own executor dropped a failed node's tokens and wrote `tokens: 0` for every
+    delegation_loop. Both now carry the reported model and the summed tokens."""
+    failing = LEGACY.replace('instructions: "MARK-PLAIN"', 'instructions: "MARK-ERRENV"')
+    with _sandbox(tmp_path) as (client, home, tid):
+        _make(tid, "legacy_ok", LEGACY)
+        events = _run(client, "legacy_ok")
+        done = {e["node_id"]: e for e in events if e.get("type") == "node_completed"}
+        assert done["loop"]["tokens"] == 138 and done["loop"]["model_id"] == REPORTED, done["loop"]
+        _make(tid, "legacy_fail", failing)
+        events = _run(client, "legacy_fail")
+        failed = [e for e in events if e.get("type") == "node_failed"]
+        assert failed and failed[0]["node_id"] == "plain", failed
+        assert failed[0]["tokens"] == 138 and failed[0]["model_id"] == REPORTED, failed[0]

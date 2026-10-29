@@ -580,6 +580,10 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
                     "wall_ms": int(n.wall_s * 1000),
                     "output": n.output,
                     "error": n.error,
+                    # ADR-2308: the model the CLI reported and the tokens of every spawn of the node
+                    "model_id": (n.usage or {}).get("model_id", ""),
+                    "tokens": int((n.usage or {}).get("tokens", 0) or 0),
+                    "attempts": n.attempts,
                 }
                 for nid, n in result.nodes.items()
             },

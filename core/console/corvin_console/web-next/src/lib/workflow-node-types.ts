@@ -59,7 +59,7 @@ const MODEL_FIELD: FieldSpec = {
   label: "model",
   kind: "select",
   options: NODE_MODEL_TIERS,
-  hint: "unset = path default; an operator pin on the Models page overrides it",
+  hint: "unset = the site default (CORVIN_HELPER_MODEL_WORKFLOW_NODE) or the path default; an operator pin on the Models page overrides it",
 };
 const CHANNEL_FIELD: FieldSpec = { path: "channel", label: "channel", kind: "select", required: true, options: DELIVER_CHANNELS };
 const CHAT_ID_FIELD: FieldSpec = {

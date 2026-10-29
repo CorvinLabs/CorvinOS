@@ -200,6 +200,25 @@ def _span_writer(tenant: str):
     return _write
 
 
+def _span_role(meta: dict[str, Any]) -> str:
+    """The engine_span role of this spawn: a delegation_loop manager says so in its metadata;
+    every other node spawn is a worker."""
+    return "manager" if meta.get("role") == "manager" else "worker"
+
+
+def _requested_model_id(requested: str) -> str:
+    """The registry id a requested model stands for: a tier alias (the DAG engine's default
+    ``haiku``) is resolved through the model lineage, so the span start, a failed span and the
+    profile name the same model the CLI runs. Anything else passes through unchanged."""
+    if requested in ("haiku", "sonnet", "opus"):
+        try:
+            from .model_resolution import _default_deps
+            return str(_default_deps().tier(requested) or requested)
+        except Exception:  # noqa: BLE001 - measurement only
+            return requested
+    return requested
+
+
 def _span_ids(meta: dict[str, Any]) -> dict[str, str]:
     item = meta.get("item_index")
     node_id = str(meta.get("node_id", ""))
@@ -209,11 +228,15 @@ def _span_ids(meta: dict[str, Any]) -> dict[str, str]:
 
 def _span_start(tenant: str, meta: dict[str, Any], requested_model: str) -> str:
     """Open an ``engine.span`` for this spawn; returns its id ('' when the span cannot be written).
-    Measurement only: a failing write is logged and the spawn proceeds."""
+    Measurement only: a failing write is logged and the spawn proceeds. The requested model is
+    recorded resolved to its registry id (``meta['requested_model']``), so a span that ends with
+    no reported model is still counted under the model that was asked for, never under an alias."""
+    requested_model = _requested_model_id(requested_model)
+    meta["requested_model"] = requested_model
     try:
         import engine_span as _es  # type: ignore[import-not-found]
         span_id = _es.new_span_id()
-        _es.emit_start(_span_writer(tenant), span_id=span_id, role="worker", engine_id=_ENGINE_ID,
+        _es.emit_start(_span_writer(tenant), span_id=span_id, role=_span_role(meta), engine_id=_ENGINE_ID,
                        model_id=requested_model, tenant_id=tenant, **_span_ids(meta))
         return span_id
     except Exception as exc:  # noqa: BLE001
@@ -230,7 +253,7 @@ def _span_end(tenant: str, meta: dict[str, Any], span_id: str, reported_model: s
     try:
         if span_id:
             import engine_span as _es  # type: ignore[import-not-found]
-            _es.emit_end(_span_writer(tenant), span_id=span_id, role="worker", engine_id=_ENGINE_ID,
+            _es.emit_end(_span_writer(tenant), span_id=span_id, role=_span_role(meta), engine_id=_ENGINE_ID,
                          model_id=reported_model, status=status,
                          duration_ms=int((perf_counter() - t0) * 1000), tenant_id=tenant,
                          **_span_ids(meta), **_es.usage_split(usage))
@@ -349,6 +372,9 @@ class ClaudeCliEngine:
         # alias it always used) stays, so a node without a model is unchanged.
         model = call.model or self.model
         meta = call.metadata
+        # every span joins its run, also for nodes the resolver never described (delegation_loop)
+        meta.setdefault("run_id", str((call.state or {}).get("__run_id__", "")))
+        meta.setdefault("workflow_id", str((call.state or {}).get("__workflow__", "")))
         # the guard can refuse (it raises): build the argv first, so a refused payload leaves no
         # open span and no resolution event naming a spawn that never happened
         cmd = [
@@ -373,7 +399,9 @@ class ClaudeCliEngine:
                 f"claude call for agent={call.agent!r} timed out after {self.timeout_s}s"
             ) from e
         if proc.returncode != 0:
-            _span_end(tenant, meta, span_id, "", {}, "error", t0)
+            _text, usage, reported, cost, _err = _split_envelope(proc.stdout or "")
+            _span_end(tenant, meta, span_id, reported, usage, "error", t0, cost)
+            self._note_usage(meta)
             raise ClaudeEngineError(
                 f"claude call for agent={call.agent!r} exited {proc.returncode}: "
                 f"{proc.stderr.strip()[-2000:]}"

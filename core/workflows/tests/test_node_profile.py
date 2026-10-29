@@ -55,7 +55,7 @@ def at(d):
 
 def test_an_entry_holds_only_closed_fields_and_is_always_a_proxy():
     e = np.build_entry(meta(item_index=3), "agent|n|<8k|json", "ok", now=1.0)
-    assert set(e) == {"ts", "rid", "span_id", "node_class", "model_id", "input_tokens", "output_tokens",
+    assert set(e) == {"ts", "rid", "span_id", "node_class", "model_id", "requested_model_id", "input_tokens", "output_tokens",
                       "cache_read_tokens", "cache_write_tokens", "cost_usd", "status", "signal", "item_index"}
     assert (e["signal"], e["status"], e["item_index"]) == ("proxy", "ok", 3)
 

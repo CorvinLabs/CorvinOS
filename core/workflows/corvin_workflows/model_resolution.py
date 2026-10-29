@@ -237,6 +237,14 @@ def operator_pin(tenant_id: str) -> str:
         return ""
 
 
+def site_default() -> str:
+    """The ``CORVIN_HELPER_MODEL_WORKFLOW_NODE`` site default (precedence level 4), or ``""``."""
+    try:
+        return str(_default_deps().env() or "")
+    except Exception:  # noqa: BLE001 - a hint, never a failure
+        return ""
+
+
 def class_view(node: dict[str, Any]) -> dict[str, Any]:
     """The few node facts ``node_class`` reads, and nothing else (no instructions, no agent name),
     so it can travel on ``EngineCall.metadata`` without carrying the node."""
@@ -245,7 +253,8 @@ def class_view(node: dict[str, Any]) -> dict[str, Any]:
 
 def validate_node_model(value: Any, deps: Any = None) -> None:
     """Validate a ``model`` field at load time (ADR-2308 decision 1.2). ``ValueError`` on failure,
-    which the validator turns into HTTP 422. Absent or empty is valid."""
+    which the validator turns into ``WorkflowInvalid`` (the console answers HTTP 400 on save).
+    Absent or empty is valid."""
     if value in (None, ""):
         return
     if not isinstance(value, str):

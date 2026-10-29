@@ -30,6 +30,9 @@ class NodeResult:
     error: str | None = None
     status: str = "success"  # "success" | "failed" | "skipped"
     attempts: int = 1
+    # ADR-2308: what the CLI reported for this node, summed over its spawns (all fan_out items,
+    # all attempts): {"model_id": str, "tokens": int}. Empty when the engine reports nothing.
+    usage: dict[str, Any] = field(default_factory=dict)
 
     @property
     def wall_s(self) -> float:
@@ -193,11 +196,13 @@ def _is_spawn_refusal(exc: BaseException) -> bool:
 
 
 def _is_final_failure(exc: BaseException) -> bool:
-    """A failure a retry cannot change: a gate refusal (WF-20) or a node model that is unknown or
-    cannot be resolved (ADR-2308) - retrying only repeats the failure and its audit records."""
+    """A failure a retry cannot change: a gate refusal (WF-20) or a node model the registry does not
+    know (ADR-2308) - retrying only repeats the failure and its audit records. ``model_unresolved``
+    (the resolver could not run) is NOT final: a reader fault can be transient, so it follows the
+    node's retry policy."""
     if _is_spawn_refusal(exc):
         return True
-    return getattr(exc, "reason_code", None) in ("model_unknown", "model_unresolved")
+    return getattr(exc, "reason_code", None) == "model_unknown"
 
 
 def _share_output(node_spec: dict[str, Any], output: dict[str, Any]) -> dict[str, Any]:
@@ -271,6 +276,19 @@ class DAGRunner:
         self._audit_buffer.append(rec)
         if self._audit_sink is not None:
             self._audit_sink(rec)
+
+    def _take_usage(self, nid: str) -> dict[str, Any]:
+        """The engine's reported usage for *nid* (``ClaudeCliEngine.take_node_usage``), read once.
+        An engine without it (stub, synthetic, null) reports nothing."""
+        take = getattr(self.engine, "take_node_usage", None)
+        if not callable(take):
+            return {}
+        try:
+            usage = take(nid)
+        except Exception:  # noqa: BLE001 - measurement never decides a node's outcome
+            _log.warning("node usage not read for %r", nid, exc_info=True)
+            return {}
+        return dict(usage) if isinstance(usage, dict) else {}
 
     def _observe(self, result: "NodeResult") -> None:
         if self._observer is None:
@@ -439,6 +457,7 @@ class DAGRunner:
                         node_id=nid, node_type=ntype,
                         started_at=t0, finished_at=t1,
                         output={}, error=err_text, status="failed", attempts=attempts,
+                        usage=self._take_usage(nid),
                     )
                     self._observe(run.nodes[nid])
                     if error_strategy == "fail_branch":
@@ -482,7 +501,7 @@ class DAGRunner:
                 run.nodes[nid] = NodeResult(
                     node_id=nid, node_type=ntype,
                     started_at=t0, finished_at=t1,
-                    output=output, attempts=attempts,
+                    output=output, attempts=attempts, usage=self._take_usage(nid),
                 )
                 self._audit(
                     "node.completed", node_id=nid, node_type=ntype,

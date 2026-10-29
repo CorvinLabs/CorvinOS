@@ -3551,19 +3551,32 @@ an excluded type — now asks the CLI for `--output-format json`, writes an `eng
 reports real tokens in the run stream (`node_completed.tokens`, `model_id`); only the model choice,
 the class and the resolution event are limited to the types above. On the DAG engine the token total
 and the reported model reach `node_completed` through `ClaudeCliEngine.take_node_usage(node_id)`,
-which the console's run recorder reads once per node (summed over all `fan_out` items); before
-2026-10-28 that path wrote `tokens: 0` and no model. An engine without the method (stub, synthetic,
-null) leaves the event as it was. A retried node's event carries `attempts` (the token total is the
-sum over all of them), and a failed node's `node_failed` carries the tokens it spent and the model
-the CLI reported, when it reported one.
+which the runner reads once per node into `NodeResult.usage` (`{model_id, tokens}`, summed over all
+`fan_out` items and attempts); before 2026-10-28 that path wrote `tokens: 0` and no model. The
+console's run stream, `corvin-workflows run --format json` (`nodes.<id>.model_id/tokens/attempts`) and
+the MCP `workflow_run` / `workflow_resume` result (`nodes`) all read that one field. An engine
+without the method (stub, synthetic, null) reports nothing. A retried node's event carries
+`attempts` (the tokens are summed over the attempts that reached the CLI; a timeout reports
+nothing), and `node_failed` carries the tokens and the reported model on both paths — the console's
+own executor included, also for a `fan_out` that failed part-way and for every `delegation_loop`
+(manager and workers summed). A CLI that exits non-zero but still prints its envelope keeps its
+tokens on the span, the profile and the event.
+
+**Every span is attributable.** A span carries its run id on every spawn (also of types the
+resolver never describes), the role `manager` for a `delegation_loop` manager (`worker` otherwise),
+and starts on the REQUESTED model resolved to its registry id (the DAG engine's alias `haiku`
+becomes the lineage's Haiku), so a span that ends without a reported model is counted under the
+model that was asked for instead of a separate alias row. It still ends on the model the CLI
+reported; an unreported model stays `""` at the end.
 
 **A `model:` the node cannot honour is an error, never ignored.** The built-in types that never take
 a node model (`model_resolution.NO_MODEL_TYPES`: `delegation_loop`, `deliver`, `code`, `merge`,
 `answer`, `ask_human`, `approval`, `peer_agent`) and a `route` in `mode: condition` reject the field at
 validation; a type registered by a plugin keeps its own fields. At run time a value the registry no
-longer knows fails the node with `model_unknown`, and a resolver that cannot run fails a node that
-names a model with `model_unresolved` — both are final (never retried) and their message carries no
-node value, because it lands in `node.failed` on the chain. A node with no `model:` keeps its old
+longer knows fails the node with `model_unknown` (final, never retried), and a resolver that cannot
+run fails a node that names a model with `model_unresolved` (it follows the node's `retry:`, because a
+reader fault can be transient). Neither message carries the node value, because it lands in
+`node.failed` on the chain. A node with no `model:` keeps its old
 spawn when the resolver cannot run. Every spawn path resolves: the MCP server's `workflow_resume`
 engine declares `accepts_node_model` like the fresh-run engine (until 2026-10-29 a resumed node ran
 on the engine alias).
@@ -3580,7 +3593,8 @@ is shown as-is) on `agent`, `fan_out` and classify routes, and switching a route
 it. A run's event list shows the reported model and the token total (input + output + cache, summed
 over attempts; `src/lib/run-usage.ts`) next to each completed or failed node. The readiness report
 carries an `info` signal `node_model`: "N of M model node(s) have no `model:` and run on the path
-default", or — when the tenant has a `worker_model` pin — that the pin sets every model node.
+default" (or "on the site default" when `CORVIN_HELPER_MODEL_WORKFLOW_NODE` is set), or — when the
+tenant has a `worker_model` pin — that the pin sets every model node.
 Counts only, no node ids or model ids, and it never blocks "ready": a missing model is a cost hint,
 not a defect.
 
@@ -3609,16 +3623,20 @@ enums only; `span_id` joins it to the span; `item_index` for `fan_out`).
 
 **The per-node profile (T-0329).** Every spawn of an in-scope node (per item for `fan_out`) appends one
 line to `<tenant_home>/learning/workflow_node_profile.YYYY-MM-DD.jsonl`: `ts`, `rid`, `span_id`,
-`item_index` (fan_out), `node_class` (`type|tools|ctx-bucket|json`), the model the CLI reported, the four
-billed token parts, `cost_usd`, `ok`/`error` and `signal: proxy`. Closed fields only — an id outside
-`[A-Za-z0-9._:-]` (a path, an address, a sentence) is blanked, and there is no prompt, agent name or node
+`item_index` (fan_out), `node_class` (`type|tools|ctx-bucket|json`), the model the CLI reported, the
+requested model (`requested_model_id`, resolved), the four billed token parts, `cost_usd`, `ok`/`error`
+and `signal: proxy`. Closed fields only — an id outside `[A-Za-z0-9._:-]` (a path, an address, a
+sentence) is blanked; a model id may also carry a platform version or a context suffix
+(`claude-sonnet-5@20250929`, `claude-opus-5[1m]`), nothing else; there is no prompt, agent name or node
 id. Daily segments, appended with `O_APPEND|O_NOFOLLOW` under a lock; retention (90 days) deletes whole
 segments from the real today and never rewrites a line. It is a measurement stream, **not** an audit chain,
 and it cannot be rebuilt from the chain and the spans (`cost_usd` is in neither). It is `proxy`: a spawn that
 did not fail says nothing about whether the answer was right, so `node_profile.gate_eligible()` returns
 nothing for it by construction — no model-switch gate may read it.
 `corvin tde workflow-loss [--tenant T] [--min-runs N]` prints cost, error rate and token means per
-`(node class, model)` as JSON with `status` `no_data` / `underpowered` / `ok` (default 30 runs per row) and
+`(node class, model)` — the reported model, or the requested one for a spawn that failed before a model
+was reported, so a model's error rate includes its failures — as JSON with `status` `no_data` /
+`underpowered` / `ok` (default 30 runs per row) and
 `loss: null`: a loss needs the offline oracle (ADR-2307), which production does not have.
 
 **Must NOT do:** put a node value above the pin · replace an unknown model instead of rejecting it ·
