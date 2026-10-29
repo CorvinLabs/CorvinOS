@@ -348,17 +348,38 @@ class RunDispatcher:
                                            **self._usage_split(usage)))
 
     @staticmethod
+    def _pinned_worker_model(tenant_id: str, engine_id: str) -> str:
+        """The operator's ``spec.engine_models.<engine>.worker_model`` when it names a model that can run,
+        else ``""``. Silent on purpose: the caller falls through to routing and the engine default, and the
+        unavailable-pin warning is written once, in the fallback block of ``_resolve_worker_model``."""
+        try:
+            from engine_models import get_tenant_engine_model  # type: ignore[import]  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 - bridges subtree absent (unit sandbox)
+            return ""
+        try:
+            configured = get_tenant_engine_model(tenant_id, engine_id, "worker_model")
+            if not configured:
+                return ""
+            try:
+                # The Console persists a pin provider-qualified ("anthropic/claude-opus-5"); the CLI rejects that.
+                from model_selector import normalise_pin  # type: ignore[import]  # noqa: PLC0415
+                configured = normalise_pin(configured, engine_id) or configured
+            except Exception:  # noqa: BLE001 - normalisation is never fatal
+                pass
+            return configured if _model_is_available(configured) else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @staticmethod
     def _resolve_worker_model(tenant_id: str, engine_id: str, prompt: str = "") -> str:
-        """The worker model intelligently selected or operator-configured for ``engine_id``.
+        """The worker model for ``engine_id``: the operator's pin, else the prompt router, else the default.
 
-        Integration with IntelligentRouter (ADR-0867): if a prompt is provided,
-        uses intelligent routing to select Haiku/Sonnet/Opus based on task complexity.
-        Falls back to operator configuration if: (1) IntelligentRouter unavailable,
-        (2) no prompt provided, (3) any exception occurs, or (4) selected model is unavailable.
-
-        Smart fallback order:
-        1. Intelligent routing (if prompt provided AND router available)
-        2. Operator-configured model (spec.engine_models.<engine>.worker_model)
+        Order (decision 2026-10-29 "pin vor router"; before it the router came first and a pin only applied
+        when the router was unavailable or there was no prompt, against the operator rule of 2026-10-13 that
+        the model chosen on the Console Models page is the one that runs):
+        0. The operator's pin (spec.engine_models.<engine>.worker_model), when that model can run
+        1. Intelligent routing (if prompt provided AND router available): Haiku/Sonnet/Opus by task complexity
+        2. Operator-configured model again (reached only when the pin was unavailable: logged, then skipped)
         3. Engine registry default
         4. Fallback to Haiku if selected model is unavailable
         5. Empty string (let engine use its own default)
@@ -371,6 +392,11 @@ class RunDispatcher:
         Returns:
             Model ID string (e.g., "claude-haiku-4-5") or ""
         """
+        # An operator pin is an instruction, not a hint: the router never overrides it.
+        pinned = RunDispatcher._pinned_worker_model(tenant_id, engine_id)
+        if pinned:
+            return pinned
+
         selected_model = ""
 
         # Attempt intelligent routing if prompt is provided

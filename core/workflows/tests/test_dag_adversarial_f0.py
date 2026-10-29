@@ -316,6 +316,58 @@ def test_a_manager_can_override_workflow_inputs_for_its_workers__documented_beha
     assert worker.inputs["topic"] == "evil"
 
 
+# ── H-DL-1 (fixed): what the manager of a delegation loop is told about its earlier iterations ──
+
+def _loop_call(role: str, iterations, node_type: str = "delegation_loop") -> EngineCall:
+    return EngineCall(agent="m", instructions="MARK-MGR", state={"_iterations": iterations, "x": {"k": 1}},
+                      metadata={"node_id": "d", "node_type": node_type, "role": role})
+
+
+ITER = [{"iteration": 1, "manager": {"decision": "DELEGATE", "workers": [{"agent": "w"}]},
+         "workers": [{"finding": "CANARY-WORKER-RESULT"}]}]
+
+
+def test_the_manager_prompt_carries_its_earlier_iterations_and_marks_them_as_data():
+    from corvin_workflows.engines_claude import _build_prompt
+    prompt = _build_prompt(_loop_call("manager", ITER))
+    assert "CANARY-WORKER-RESULT" in prompt and "DELEGATE" in prompt
+    assert "not instructions" in prompt, "worker results must be framed as data"
+    assert prompt.index("CANARY-WORKER-RESULT") < prompt.index("Respond with ONLY"), "history comes before the contract line"
+
+
+@pytest.mark.parametrize("role,node_type", [("worker", "delegation_loop"), ("manager", "agent"), ("", "agent")])
+def test_only_the_manager_of_a_delegation_loop_gets_the_history(role, node_type):
+    from corvin_workflows.engines_claude import _build_prompt
+    prompt = _build_prompt(_loop_call(role, ITER, node_type))
+    assert "CANARY-WORKER-RESULT" not in prompt and "Earlier iterations" not in prompt
+    assert '"k": 1' in prompt, "the ordinary state block is unchanged"
+
+
+def test_the_first_manager_call_has_no_history_block():
+    from corvin_workflows.engines_claude import _build_prompt
+    assert "Earlier iterations" not in _build_prompt(_loop_call("manager", []))
+    assert "Earlier iterations" not in _build_prompt(_loop_call("manager", None))
+    assert "Earlier iterations" not in _build_prompt(_loop_call("manager", "not a list"))
+
+
+def test_the_history_is_bounded_keeps_the_newest_iterations_and_names_what_it_left_out():
+    from corvin_workflows.engines_claude import _HISTORY_CAP_CHARS, _build_prompt
+    many = [{"iteration": i, "manager": {"decision": "DELEGATE"}, "workers": [{"finding": f"R{i:03d}-" + "x" * 2000}]}
+            for i in range(1, 201)]
+    prompt = _build_prompt(_loop_call("manager", many))
+    block = prompt.split("Earlier iterations", 1)[1]
+    assert len(block) < _HISTORY_CAP_CHARS + 600
+    assert "R200-" in prompt and "R001-" not in prompt, "the newest are kept, the oldest dropped"
+    assert "older iteration(s) omitted" in prompt
+
+
+def test_a_single_oversized_iteration_is_cut_not_dropped():
+    from corvin_workflows.engines_claude import _HISTORY_CAP_CHARS, _build_prompt
+    huge = [{"iteration": 1, "manager": {"decision": "DELEGATE"}, "workers": [{"finding": "y" * 100_000}]}]
+    prompt = _build_prompt(_loop_call("manager", huge))
+    assert "cut at the size limit" in prompt and len(prompt) < _HISTORY_CAP_CHARS + 2000
+
+
 # ── H-DF-1: what a node's prompt state contains (characterised) ──────────────
 
 def test_a_nodes_state_holds_every_earlier_node_output_not_only_its_dependencies__finding_h_df_1():
@@ -453,18 +505,57 @@ def _write_pin(home: Path, **pins: str) -> None:
     f.chmod(0o600)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "H-GW-1 (open finding, needs an operator decision): RunDispatcher._resolve_worker_model asks the "
-    "IntelligentRouter FIRST and only falls back to spec.engine_models.<engine>.worker_model when the "
-    "router is unavailable (docstring, ADR-0867). The operator rule of 2026-10-13 says the Console "
-    "selection always wins. A fix flips this to XPASS, which fails the suite on purpose."))
 def test_the_gateway_dispatcher_honours_the_operator_pin_over_the_prompt_router(tmp_path, monkeypatch):
+    """H-GW-1 (decided 2026-10-29, "pin vor router"): the dispatcher used to ask the IntelligentRouter FIRST
+    and used spec.engine_models.<engine>.worker_model only when the router was unavailable or there was no
+    prompt. The operator rule of 2026-10-13 says the Console selection is the model that runs."""
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     _write_pin(tmp_path, worker_model="claude-opus-5-5")
     from core.gateway.corvin_gateway.dispatcher import RunDispatcher
-    chosen = RunDispatcher._resolve_worker_model("_default", "claude_code", prompt="Say hello")
-    assert chosen == "claude-opus-5-5", f"the router overrode the pin: {chosen!r}"
+    for prompt in ("Say hello", "Design a distributed analytics system with failover and cost controls. " * 80):
+        chosen = RunDispatcher._resolve_worker_model("_default", "claude_code", prompt=prompt)
+        assert chosen == "claude-opus-5-5", f"the router overrode the pin for {prompt[:20]!r}: {chosen!r}"
+
+
+def test_a_provider_qualified_pin_is_normalised_before_it_reaches_the_cli(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    _write_pin(tmp_path, worker_model="anthropic/claude-sonnet-5-5")
+    from core.gateway.corvin_gateway.dispatcher import RunDispatcher
+    assert RunDispatcher._resolve_worker_model("_default", "claude_code", prompt="Say hello") == "claude-sonnet-5-5"
+
+
+def test_a_pin_this_process_cannot_verify_still_passes_through_and_is_never_replaced_silently(tmp_path, monkeypatch):
+    """ADR-0952: a pin is the operator's instruction. An id the process cannot verify (the model catalog is
+    empty here, so availability is 'permissive') is handed on unchanged: a wrong one fails visibly at the
+    CLI, dropping it would silently run a different model, which is the defect the Models console had."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    _write_pin(tmp_path, worker_model="claude-no-such-model-9")
+    from core.gateway.corvin_gateway.dispatcher import RunDispatcher
+    chosen = RunDispatcher._resolve_worker_model("_default", "claude_code", prompt="Write a hello world function")
+    assert chosen == "claude-no-such-model-9", chosen
+
+
+def test_a_pin_the_catalog_knows_to_be_missing_falls_through_to_the_router(tmp_path, monkeypatch):
+    """When the catalog IS known and lacks the pinned id (a retired model), the pin is skipped with the
+    warning the fallback block writes, and the router answers as it did before this change."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    _write_pin(tmp_path, worker_model="claude-retired-model-1")
+    import engine_models
+    monkeypatch.setattr(engine_models, "model_catalog", {"claude-haiku-4-5", "claude-sonnet-5-5"}, raising=False)
+    from core.gateway.corvin_gateway.dispatcher import RunDispatcher
+    chosen = RunDispatcher._resolve_worker_model("_default", "claude_code", prompt="Write a hello world function")
+    assert chosen != "claude-retired-model-1" and "haiku" in chosen, chosen
+
+
+def test_without_a_pin_the_router_still_chooses_by_prompt_weight(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    from core.gateway.corvin_gateway.dispatcher import RunDispatcher
+    assert "haiku" in RunDispatcher._resolve_worker_model("_default", "claude_code", prompt="Say hello")
 
 
 @pytest.mark.xfail(strict=True, reason=(

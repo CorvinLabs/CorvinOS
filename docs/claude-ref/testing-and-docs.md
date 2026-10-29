@@ -138,12 +138,13 @@ directory and a reset Free-tier counter (`global/license`, 10 compute units a da
 takes a before/after delta; a test that switches tenant or session uses `fresh_sandbox`.
 
 **Open findings are executable.** Each finding that needs an operator decision is a `strict` xfail with its reason:
-H-GW-1 (the gateway's prompt router outranks the operator pin), H-GW-2 (the router hardcodes `claude-haiku-4-5`,
-`claude-sonnet-5`, `claude-opus-5`), H-FO-1a/1b (a bare `items_from` ignores workflow inputs; an unknown source runs
-zero items and succeeds), H-DL-1 (a real manager never sees what its workers returned: `_build_prompt` drops the
-`_iterations` key). A fix flips the test to XPASS, which fails the suite on purpose: delete the marker in the same
-commit as the fix. One finding was fixed together with the suite: H-PL-1, the design-chat planner now runs with
-`--disallowedTools "*"` (the live run had shown it reading a host file and printing the content).
+H-GW-2 (the router hardcodes `claude-haiku-4-5`, `claude-sonnet-5`, `claude-opus-5`) and H-FO-1a/1b (a bare
+`items_from` ignores workflow inputs; an unknown source runs zero items and succeeds). A fix flips the test to XPASS,
+which fails the suite on purpose: delete the marker in the same commit as the fix. Three findings were fixed with the
+suite, each first as a red test: H-PL-1 (the design-chat planner runs with `--disallowedTools "*"`; the live run had
+shown it reading a host file and printing the content), H-DL-1 (a delegation-loop manager now sees what its workers
+returned) and H-GW-1 (the operator pin outranks the gateway router, ADR-2309). See `layer-engines.md` § Adversarial
+suite findings.
 
 **Must NOT do:** point a `deliver`/`ask_human`/`answer` node at the real outbox in a test (set `ADAPTER_OUTBOX`; without
 it `node_types._write_outbox` writes the live repo outbox) · replace `ENGINE_FACTORY` in a test of model selection (the

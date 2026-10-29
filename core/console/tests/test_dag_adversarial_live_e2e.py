@@ -414,10 +414,13 @@ def test_sc03_a_real_manager_stays_inside_its_budget_and_its_workers_use_the_eng
     graph = doc([
         {"id": "d", "type": "delegation_loop", "agent": "a", "depends_on": [],
          "instructions": ('You are the manager of an incident review for the waterworks Quellbach: "water pressure in '
-                          'Quellbach-North is falling". Delegate exactly two checks to two workers. Reply ONLY with JSON '
+                          'Quellbach-North is falling". If the section "Earlier iterations of this loop" is NOT in this '
+                          'prompt, delegate exactly two checks to two workers and reply ONLY with JSON '
                           '{"decision": "DELEGATE", "workers": [{"agent": "w1", "instructions": "List two likely causes '
                           '(reply as JSON {\\"causes\\": [..]})"}, {"agent": "w2", "instructions": "Name two quick '
-                          'measurements (reply as JSON {\\"checks\\": [..]})"}]}.'),
+                          'measurements (reply as JSON {\\"checks\\": [..]})"}]}. If that section IS in this prompt, the '
+                          'workers have answered: reply ONLY with JSON {"decision": "COMPLETE", "result": '
+                          '{"summary": "<one sentence from the workers\' answers>"}}.'),
          "config": {"manager": "mgr", "budget": {"max_loops": 2, "max_total_workers": 3}}},
         merge("j", ["d"], ["d.terminal"]),
     ])
@@ -431,5 +434,15 @@ def test_sc03_a_real_manager_stays_inside_its_budget_and_its_workers_use_the_eng
         assert 1 <= len(managers) <= 2 and len(workers) <= 3, (len(managers), len(workers))
         assert {_model_of(r["argv"]) for r in rows} == {"haiku"}, [r["argv"] for r in rows]   # INV-M7
         assert {r["reported_model"] for r in rows} == {tier("haiku")}
-        _record("sc03_manager", managers=len(managers), workers=len(workers), same_prompt_each_iteration=(
-            len({r["prompt_sha256"] for r in managers}) == 1 and len(managers) > 1))
+        # H-DL-1 (fixed): a real manager's next prompt carries what it did and what its workers returned.
+        # Hard, whatever the model decides: the prompts of two iterations are never the same, and the second
+        # one holds the history block. Soft, recorded: whether this manager then chose COMPLETE.
+        if len(managers) > 1:
+            assert len({r["prompt_sha256"] for r in managers}) == len(managers), "the manager got the same prompt twice"
+            assert "Earlier iterations of this loop" in managers[1]["prompt"], managers[1]["prompt"][-600:]
+        done = {e["node_id"]: e for e in events if e.get("type") == "node_completed"}
+        completed = '"state": "complete"' in str(done.get("d", {}).get("output", ""))
+        _record("sc03_manager", managers=len(managers), workers=len(workers),
+                same_prompt_each_iteration=(len({r["prompt_sha256"] for r in managers}) == 1 and len(managers) > 1),
+                manager_chose_complete=completed, node_output=str(done.get("d", {}).get("output", ""))[:600],
+                second_manager_prompt_tail=managers[1]["prompt"][-700:] if len(managers) > 1 else "")

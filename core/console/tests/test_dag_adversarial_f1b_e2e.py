@@ -137,13 +137,11 @@ def test_a_lying_manager_never_crashes_the_run_and_never_picks_its_workers_model
         assert_chain_intact(tid)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "H-DL-1 (open finding): _execute_delegation_loop documents that the next manager call 'sees the full "
-    "history' (state['_iterations']), but ClaudeCliEngine._build_prompt drops every state key that starts "
-    "with '_', so a real manager never sees what its workers returned and gets the same prompt each "
-    "iteration. The StubEngine tests cannot see this: the stub reads call.state directly. A fix flips "
-    "this to XPASS, which fails the suite on purpose."))
 def test_a_real_manager_sees_what_its_workers_returned_on_its_next_call__finding_h_dl_1(tmp_path, shim):
+    """H-DL-1 (fixed 2026-10-29): _execute_delegation_loop documents that the next manager call 'sees the full
+    history' (state['_iterations']), but ClaudeCliEngine._build_prompt dropped every state key that starts with
+    '_', so a real manager never saw what its workers returned and got the same prompt each iteration. The
+    StubEngine tests cannot see this: the stub reads call.state directly, the real engine builds a prompt."""
     marker = "CANARY-WORKER-RESULT-7f3a"
     shim.set_rules([
         {"match": {"kind": "dag_node", "prompt_regex": "MARK-D"},

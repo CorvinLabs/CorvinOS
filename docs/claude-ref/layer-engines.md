@@ -3660,13 +3660,27 @@ Found by attacking planning, delegation and model choice end to end with a recor
 (`routes/workflows.py::_run_claude_for_design`) started `claude -p` with its tools; a task saying "read <file> and copy
 it into the description" made it read a host file and print it into the chat reply (live, before/after). It now runs
 with `--disallowedTools "*"` like every other text-only call; pinned by
-`test_the_design_chat_planner_is_spawned_without_any_tool__finding_h_pl_1`. Open, each held as a `strict` xfail:
+`test_the_design_chat_planner_is_spawned_without_any_tool__finding_h_pl_1`.
+
+Also fixed (2026-10-29, same suite):
+
+- **H-DL-1** — `ClaudeCliEngine._build_prompt` dropped every state key starting with `_`, so a `delegation_loop`
+  manager never saw `_iterations` (what its workers returned) and got the same prompt each iteration, against the
+  docstring of `_execute_delegation_loop`. Found live (two identical manager prompts). Now the MANAGER of a delegation
+  loop (not its workers, not any other node) gets an "Earlier iterations of this loop" block: newest iterations kept,
+  bounded to 24 000 characters, older ones named as omitted, worker results framed as data; the whole prompt still
+  passes the pre-spawn gates. Live proof: the manager completes in iteration 2 from its workers' answers. Tests:
+  `test_a_real_manager_sees_what_its_workers_returned_on_its_next_call__finding_h_dl_1` and the `_loop_call` unit tests.
+  The console's own legacy executor has a delegation loop of its own; it was not examined.
+- **H-GW-1** — `RunDispatcher._resolve_worker_model` asked the IntelligentRouter before the operator's `worker_model`.
+  Decision "pin vor router" (operator, 2026-10-29, ADR-2309, proposed): the pin first, when that model can run; a pin
+  the process cannot verify passes through unchanged; a pin the catalog positively lacks falls through to the router.
+
+Open, each held as a `strict` xfail:
 
 | Id | Finding | Where |
 |---|---|---|
-| H-GW-1 | `RunDispatcher._resolve_worker_model` asks the IntelligentRouter before the operator's `worker_model`; the router reads no pin. The operator rule (2026-10-13) says the Console selection always wins. | `core/gateway/corvin_gateway/dispatcher.py:351` |
 | H-GW-2 | `IntelligentRouter` hardcodes `claude-haiku-4-5` / `claude-sonnet-5` / `claude-opus-5`; `tier_model()` resolves the newest of each family (ADR-2090). | `core/skills/os_skills/intelligent_router.py:93` |
-| H-DL-1 | `ClaudeCliEngine._build_prompt` drops every state key starting with `_`, so a `delegation_loop` manager never sees `_iterations` (what its workers returned) and gets the same prompt each iteration — against the docstring of `_execute_delegation_loop`. Confirmed live (SC-03: two identical manager prompts). | `engines_claude.py::_build_prompt` |
 | H-FO-1 | `fan_out` resolves a bare `items_from` against the run state only, not the workflow inputs (the other selectors check inputs first); an unknown source runs zero items and the run succeeds. | `node_types.py::_execute_fan_out` |
 
 Recorded as behaviour, not as defects (an operator decision): every earlier node's output is in a later node's prompt,
