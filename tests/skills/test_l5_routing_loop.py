@@ -664,7 +664,11 @@ class TestRollbackTripOrder:
         _trailing_skill_ledger()
         rollback_detector.evaluate(TENANT, audit=AuditSpy())
         rollback_detector.reset_rollback(TENANT, audit=AuditSpy())
-        assert _state() == {"tripped": False, "at": _state()["at"], "generation": 2}
+        state = _state()
+        # Review c120 r6_s2-2: the reset carries the ledger position of its fresh window.
+        assert state == {"tripped": False, "at": state["at"], "generation": 2,
+                         "ledger_pos": state["ledger_pos"]}
+        assert state["ledger_pos"]["offset"] > 0
 
 
 @needs_fork
