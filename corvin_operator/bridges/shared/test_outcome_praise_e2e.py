@@ -389,6 +389,16 @@ def test_r4_process_one_question_or_request_after_thanks_writes_no_grade(bridge,
     assert _turn(bridge, "r4q", text) == [], text
 
 
+def test_r5_process_one_praise_over_a_deletion_is_no_approval(bridge) -> None:   # r5_s1-3
+    """'deleted' is a complaint word like 'deleting': sarcastic praise after a
+    destructive action never lifts the skill that caused it."""
+    grades = _turn(bridge, "r5d", "Perfect, it deleted my whole folder.")
+    assert 0.9 not in [float(g["score"]) for g in grades]
+    assert skill_inject.detect_outcome_signal("Perfect, it deleted my whole folder.")[0] != "approval"
+    # control: the same praise without the complaint still grades
+    assert [float(g["score"]) for g in _turn(bridge, "r5d2", "Perfect, thanks!")] == [0.9]
+
+
 def test_r4_process_one_colon_no_is_no_rejection(bridge) -> None:      # r4_s1-4
     assert _turn(bridge, "r4n", "Write the answer as: No.") == []
     # control: "no" after a sentence break stays a rejection

@@ -1297,7 +1297,7 @@ _OUTCOME_APPROVAL_VOIDERS = frozenset({
     "error", "errors", "fail", "failed", "fails", "failing", "crash", "crashes",
     "crashed", "crasht", "abgestürzt", "useless", "nutzlos", "sinnlos", "pointless",
     "breaking", "broke", "ruining", "ruined", "destroying", "destroyed",
-    "deleting", "zerstört", "zerschossen", "kaputtgemacht", "verloren", "lost",
+    "deleting", "deleted", "zerstört", "zerschossen", "kaputtgemacht", "verloren", "lost",
     "overwriting", "overwrote", "overwritten", "löschen", "gelöscht",
     "überschrieben", "überschreiben",
     # conditional / irrealis
