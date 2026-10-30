@@ -38,8 +38,9 @@ Gates (all fail-closed — no signal unless every one holds):
 5. only skills of the SESSION tenant's own scopes (``session`` / ``user``) are
    graded — never the shared repo ``project`` scope (``grade_from_user_followup``
    with an explicit ``tenant_id``);
-6. one organic follow-up grade per skill and signal kind per rolling 24 h (console)
-   (dedupe channel ``"console"``; only a day-bound hash is stored, in the grade note).
+6. one organic follow-up grade per skill and signal kind per rolling 24 h PER TENANT,
+   shared with the bridge (``skill_inject.followup_dedupe_key``: a praise in Discord
+   and one here are one allowance; only a day-bound hash is stored, in the grade note).
 
 Privacy (data minimisation): the snapshot holds NO prompt text — only the
 tenant, chat key, run id, skill ids and a timestamp, in memory. The console
@@ -66,11 +67,6 @@ _log = logging.getLogger(__name__)
 #: Same default as the bridge's ``adapter.OUTCOME_SNAPSHOT_TTL`` (30 min): a
 #: follow-up after that long is not a reaction to the previous answer.
 SNAPSHOT_TTL_S = 30 * 60
-
-#: Dedupe channel of every console follow-up grade. The console is one surface
-#: per tenant (the registry is tenant-scoped), so opening a new chat does not
-#: open a new allowance.
-DEDUPE_CHANNEL = "console"
 
 _snapshots: dict[tuple[str, str], dict[str, Any]] = {}
 _guard = threading.Lock()
@@ -226,7 +222,8 @@ async def grade_followup(rec: Any, chat_key: str, prompt: str) -> list[dict[str,
             prev_skill_names=list(snap["skills"]),
             prev_user_text=None,   # no prompt text kept → no rephrase signal on the console
             tenant_id=tenant_id,   # tenant-owned scopes only (never the shared project scope)
-            dedupe_channel=DEDUPE_CHANNEL,
+            # no dedupe_channel: the key is skill_inject.followup_dedupe_key, the
+            # same one the bridge uses (review c120 r4_s1-3)
         )
     except Exception:  # noqa: BLE001 — grading must never cost the user a turn
         _log.warning("console follow-up grading failed", exc_info=True)

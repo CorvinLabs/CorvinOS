@@ -295,6 +295,25 @@ def _followup_dedupe_marker(channel: str | None, kind: str = "",
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def followup_dedupe_key(scope: str | None, *, channel_id: str | None,
+                        tenant_id: str | None) -> str:
+    """THE dedupe key of an organic follow-up grade — one rule for every chat
+    surface (review c120 r4_s1-3).
+
+    * a ``session``-scope skill lives in one chat only: the chat
+      (``channel_id``) is the key;
+    * every other skill (``user`` / ``project``) is shared by every chat and
+      every surface of the tenant: ``tenant:<tenant>`` — praise in Discord and
+      in the console web chat within the window is ONE allowance, not two.
+
+    The bridge passes ``channel_id`` and no tenant (the env tenant is used);
+    the console passes no channel and its session's tenant. Both reach the
+    same key for the same tenant's user skill."""
+    if scope == "session" and channel_id:
+        return channel_id
+    return f"tenant:{_learning_tenant(tenant_id)}"
+
+
 def _followup_dedupe_markers(channel: str | None, kind: str,
                              *, now: float | None = None) -> tuple[str, str]:
     """(today's marker, yesterday's marker). A grade carrying either one and
@@ -1242,16 +1261,31 @@ _OUTCOME_NEGATOR_PHRASES = (
 _OUTCOME_POSITIVE_IDIOMS = (
     ("nicht", "schlecht"), ("not", "bad"), ("no", "more", "errors"),
     ("no", "more", "error"), ("keine", "fehler", "mehr"), ("kein", "fehler", "mehr"),
+    ("fehler", "ist", "weg"), ("fehler", "sind", "weg"), ("error", "is", "gone"),
+    ("errors", "are", "gone"), ("weiter", "so"), ("keep", "it", "up"),
 )
 
 #: Tokens that void an approval without being a rejection themselves: a new
-#: request, a contrast, a complaint word, a conditional, a concession.
+#: request, a contrast, a complaint word, a conditional, a concession, a
+#: thank-you for work not yet done ("danke im Voraus", "thanks in advance").
+#: "jetzt"/"now" are NOT here: "Much better now, thanks", "Danke, jetzt
+#: verstehe ich es" are praise; a new request after them is caught by the
+#: imperative at the clause start ("Great, now add tests") and a reversal by a
+#: complaint word or a negator ("Perfect, now nothing works") (review c120
+#: r4_s1-2). "weiter" stays ("jetzt geht es weiter mit Kapitel 3"); the idiom
+#: "weiter so" is removed before this test (_OUTCOME_POSITIVE_IDIOMS).
 _OUTCOME_APPROVAL_VOIDERS = frozenset({
     # a new request / contrast
-    "bitte", "please", "jetzt", "now", "aber", "but", "doch",
+    "bitte", "please", "aber", "but", "doch",
     "however", "though", "although", "wieder", "again", "nochmal", "nochmals",
     "anders", "anderes", "else", "weiter", "next", "neue", "neues", "neuer",
     "nächste", "nächsten", "new",
+    # thanks for work not yet done, or for something else ("danke für deine
+    # Hilfe gestern"), and a tag question ("Toll ist ein Adjektiv, oder")
+    "voraus", "vorab", "advance", "ahead", "schonmal", "gestern", "yesterday",
+    "übrigens", "btw", "oder",
+    # a reversal of the success ("Na super, jetzt ist der Server down")
+    "down", "leer", "empty", "slower", "langsamer", "weg", "gone",
     # complaint words / a negative continuation of the praise
     "kaputt", "broken", "waste", "wasting", "wasted", "verschwendet",
     "verschwendest", "schlecht", "bad", "worse", "worst", "schlimmer", "fehler",
@@ -1259,6 +1293,8 @@ _OUTCOME_APPROVAL_VOIDERS = frozenset({
     "crashed", "crasht", "abgestürzt", "useless", "nutzlos", "sinnlos", "pointless",
     "breaking", "broke", "ruining", "ruined", "destroying", "destroyed",
     "deleting", "zerstört", "zerschossen", "kaputtgemacht", "verloren", "lost",
+    "overwriting", "overwrote", "overwritten", "löschen", "gelöscht",
+    "überschrieben", "überschreiben",
     # conditional / irrealis
     "wäre", "wär", "wären", "wärst", "hätte", "hätten", "hättest", "könnte",
     "könnten", "könntest", "sollte", "sollten", "solltest", "würde", "würden",
@@ -1288,6 +1324,11 @@ _OUTCOME_SARCASM_PHRASES = (
     ("ja", "toll"), ("ja", "prima"), ("ja", "klasse"), ("ja", "super"),
     ("oh", "great"), ("oh", "perfect"), ("oh", "wonderful"), ("oh", "fantastic"),
     ("yeah", "right"), ("alles", "weg"), ("all", "gone"), ("everything", "gone"),
+    ("sherlock",), ("captain", "obvious"), ("einstein",),
+)
+#: Multi-word void cues: thanks for work not yet done ("Danke schon mal").
+_OUTCOME_VOID_PHRASES = (
+    ("schon", "mal"), ("ahead", "of", "time"),
 )
 
 #: Imperatives and question words: at the start of the message or of a clause
@@ -1306,8 +1347,6 @@ _OUTCOME_REQUEST_STARTS = frozenset({
     "entferne", "benenne", "rendere", "generiere", "formatiere", "sortiere",
     "vergleiche", "beschreib", "beschreibe", "plane", "recherchiere", "führe",
     "installiere", "aktualisiere", "behebe", "fixe", "schreibt", "macht",
-    # German question words at a clause start
-    "was",
     # English imperatives
     "make", "write", "please", "explain", "give", "show", "translate", "add",
     "implement", "create", "fix", "run", "summarise", "summarize", "list",
@@ -1319,15 +1358,74 @@ _OUTCOME_REQUEST_STARTS = frozenset({
     "replace", "install", "deploy", "debug", "clean", "print", "say", "name",
     "provide", "prepare", "design", "define", "split", "merge", "work",
     # English question / auxiliary starts
-    "what", "can", "will", "do", "does", "did", "is", "are", "were", "has",
+    "can", "will", "do", "does", "did", "is", "are", "were", "has",
     "have", "had", "shall", "may",
 })
-#: Question words that make a message a question wherever they stand.
+#: Tokens of the request list that are also nouns: followed by a predicate
+#: ("Test passed", "Plan looks good", "Liste ist perfekt") they are the subject
+#: of a success statement, not an imperative (review c120 r4_s1-2).
+_OUTCOME_NOUN_VERBS = frozenset({
+    "test", "check", "build", "plan", "review", "design", "update", "merge",
+    "change", "format", "liste", "list", "suche", "search", "name", "run",
+    "deploy", "print", "fix", "sort", "edit", "install", "draft", "work",
+    "set", "split", "move", "clean", "use", "help", "draft", "export",
+})
+#: A predicate after such a noun.
+_OUTCOME_PREDICATES = frozenset({
+    "is", "was", "are", "looks", "looked", "passed", "passes", "works",
+    "worked", "went", "goes", "ran", "runs", "seems", "succeeded", "compiles",
+    "compiled", "landed", "finished", "ist", "war", "sind", "läuft", "lief",
+    "sieht", "passt", "funktioniert", "klappt", "klappte", "ging", "geht",
+    "hat", "isses", "done", "fertig",
+})
+#: Question words. One makes a clause a question when it is followed by a verb
+#: or a noun ("Wie mache ich das", "how do I run it", "welche Version brauche
+#: ich"), NOT when it introduces an exclamation ("What a great answer", "Wie
+#: toll", "How nice") or a relative clause ("genau wie gewünscht", "exactly
+#: what I needed", "das, was ich brauchte") — review c120 r4_s1-2. "was" is
+#: German "what" only at a clause start (English "was" is a verb).
 _OUTCOME_QUESTION_WORDS = frozenset({
     "wie", "warum", "wieso", "weshalb", "weswegen", "wo", "woher", "wohin",
-    "wann", "welche", "welcher", "welches", "welchen", "welchem", "ob", "wer",
+    "wann", "welche", "welcher", "welches", "welchen", "welchem", "wer",
     "wen", "wem", "how", "why", "where", "when", "which", "who", "whom", "whose",
+    "what",
 })
+#: "ob" / "whether" make the message a question wherever they stand.
+_OUTCOME_QUESTION_ANYWHERE = frozenset({"ob", "whether"})
+#: A question word right after one of these opens a relative clause.
+_OUTCOME_RELATIVE_PREV = frozenset({
+    "genau", "so", "eben", "alles", "das", "exactly", "just", "everything",
+    "thats", "is", "ist", "that", "precisely",
+})
+#: After a question word these always ask ("how many", "wie lange").
+_OUTCOME_QUANTIFIERS = frozenset({
+    "many", "much", "long", "often", "far", "viele", "viel", "lange", "oft",
+    "weit", "groß", "big",
+})
+#: After a question word these open an exclamation or an embedded clause.
+_OUTCOME_EXCLAMATIVE_NEXT = frozenset({
+    "a", "an", "ein", "eine", "einen", "einer", "für", "fuer",
+    "ich", "i", "we", "wir", "es", "it", "man",
+    "toll", "schön", "cool", "nice", "great", "wonderful", "lovely",
+    "amazing", "awesome", "beautiful", "super", "klasse", "genial", "gut",
+    "good", "perfekt", "perfect", "fantastic", "wunderbar", "praktisch",
+    "elegant", "clean", "sauber", "neat", "brilliant", "excellent",
+})
+#: A present-tense need: with a subject pronoun before it, a new request
+#: ("Danke! Ich brauche noch einen Test", "Thanks! I also need a README") —
+#: unless a relative question word precedes the pronoun ("what I need").
+_OUTCOME_NEED_VERBS = frozenset({
+    "brauche", "bräuchte", "brauchen", "möchte", "möchten", "will", "need",
+    "want", "wants", "needs", "suche", "looking",
+})
+_OUTCOME_SUBJECTS = frozenset({"ich", "i", "wir", "we"})
+#: A German verb-first clause with "du"/"ihr"/"Sie" is a question or request.
+_OUTCOME_DE_V1_SUBJECTS = frozenset({"du", "ihr"})
+#: Elliptic follow-up requests ("Perfect, and the same for Postgres").
+_OUTCOME_ELLIPTIC_REQUESTS = (
+    ("and", "the", "same"), ("und", "das", "gleiche"), ("und", "dasselbe"),
+    ("any", "chance"), ("any", "idea"), ("any", "way"), ("any", "thoughts"),
+)
 #: Leading tokens skipped when looking for a clause's first word ("und jetzt
 #: mach", "and then write").
 _OUTCOME_CLAUSE_LEAD = frozenset({
@@ -1341,7 +1439,7 @@ _OUTCOME_DE_QUESTION_VERBS = frozenset({
     "war", "kann", "gibt", "sind", "hast", "bist", "wird",
 })
 _OUTCOME_DE_QUESTION_PRONOUNS = frozenset({
-    "das", "es", "der", "die", "er", "sie", "dies", "alles", "man", "du", "ihr",
+    "das", "es", "der", "die", "er", "sie", "dies", "man", "du", "ihr",
 })
 
 #: Rejection stems: any token STARTING with one of these is a rejection cue,
@@ -1366,6 +1464,7 @@ _OUTCOME_REJECTION_PHRASES = (
     "not what", "try again", "didnt work", "doesnt work", "did not work",
     "does not work", "still broken", "still not", "still doesnt", "same error",
     "not correct", "not right", "not quite right", "isnt correct", "isnt right",
+    "nicht ganz richtig", "nicht ganz korrekt",
     "nicht korrekt", "nicht richtig",
 )
 #: After "nein,"/"no," these openings are a polite close ("Nein, danke",
@@ -1408,14 +1507,50 @@ def _strip_quotations(text: str) -> tuple[str, bool]:
     Double quotes / guillemets of any pairing, and single quotes that open
     after a non-word character and close before one ('well done', ‘ok’,
     ‚gut‘) — an apostrophe inside a word ("that's", "geht's") is no quote."""
-    global _QUOTED_RE
+    global _QUOTED_RE, _CODE_RE
     if _QUOTED_RE is None:
+        _CODE_RE = re.compile(r"`[^`\n]*`")
         _QUOTED_RE = re.compile(
-            r"[\"“”„«»‹›‟〝〞＂`][^\"“”„«»‹›‟〝〞＂`]*[\"“”„«»‹›‟〝〞＂`]"
+            r"[\"“”„«»‹›‟〝〞＂][^\"“”„«»‹›‟〝〞＂]*[\"“”„«»‹›‟〝〞＂]"
             r"|(?<!\w)['‘‚][^'‘’‚\n]+?['’‘](?!\w)")
-    stripped, n = _QUOTED_RE.subn(" ", text)
-    found = n > 0 or any(c in _OUTCOME_QUOTE_CHARS for c in stripped)
+    # Inline code is code, not a quotation of the praise ("Thanks, `make
+    # build` works now") — review c120 r4_s1-2.
+    text = _CODE_RE.sub(" qcode ", text).replace("`", " ")
+    found = False
+
+    def _span(m: "re.Match[str]") -> str:
+        nonlocal found
+        inner = m.group(0)[1:-1]
+        if _is_name_span(inner):
+            return " qname "  # the "export" button, das Feld "email"
+        found = True
+        return " "
+
+    stripped = _QUOTED_RE.sub(_span, text)
+    found = found or any(c in _OUTCOME_QUOTE_CHARS for c in stripped)
     return stripped, found
+
+
+_CODE_RE = None
+_NAME_SPAN_MAX_TOKENS = 4
+
+
+def _is_name_span(inner: str) -> bool:
+    """A short quoted span that carries no signal word is a name (a field, a
+    button, a file), not a quotation: ``the "export" button``. A span with a
+    praise, thank-you, success or rejection word is a quotation and voids the
+    message (``Put "Thanks, great work" in the footer``)."""
+    toks = _outcome_tokens(inner)
+    if not toks or len(toks) > _NAME_SPAN_MAX_TOKENS:
+        return False
+    if any(t in _OUTCOME_THANKS_TOKENS or t in _OUTCOME_APPROVAL_EXACT_WORDS
+           or t in _OUTCOME_NEGATORS for t in toks):
+        return False
+    for key, phrases in (("approval", _OUTCOME_APPROVAL_PHRASES),
+                         ("weak", _OUTCOME_WEAK_APPROVAL_PHRASES)):
+        if any(_has_phrase(toks, p) for p in _tokenised(key, phrases)):
+            return False
+    return not _is_rejection(inner.lower(), toks)
 
 
 def _phrase_positions(tokens: list[str], phrase: tuple[str, ...]):
@@ -1467,26 +1602,93 @@ def _clauses(text: str) -> list[list[str]]:
     return [t for t in (_outcome_tokens(p) for p in _CLAUSE_SPLIT_RE.split(text)) if t]
 
 
+def _is_imperative_at(clause: list[str], j: int) -> bool:
+    """``clause[j]`` opens a request: an imperative or auxiliary from the
+    request list — unless it is a noun followed by a predicate ("Test passed",
+    "Plan looks good", "Liste ist perfekt")."""
+    t = clause[j]
+    if t not in _OUTCOME_REQUEST_STARTS:
+        return False
+    nxt = clause[j + 1] if j + 1 < len(clause) else None
+    if t in _OUTCOME_NOUN_VERBS and nxt in _OUTCOME_PREDICATES:
+        return False
+    if t in ("macht", "schreibt") and nxt in ("es", "das", "er", "sie"):
+        return False  # "jetzt macht es Sinn": a statement, verb second
+    return True
+
+
+def _is_question_word_at(tokens: list[str], k: int, *, clause_start: bool) -> bool:
+    """``tokens[k]`` is a question word that opens a question, not an
+    exclamation ("What a great answer", "Wie toll") or a relative clause
+    ("genau wie gewünscht", "exactly what I needed", "das, was ich brauchte",
+    "..., which is great")."""
+    t = tokens[k]
+    if t == "was" and not clause_start:
+        return False  # English "was", or a German relative "was" mid-clause
+    if t not in _OUTCOME_QUESTION_WORDS and t != "was":
+        return False
+    nxt = tokens[k + 1] if k + 1 < len(tokens) else None
+    if nxt in _OUTCOME_QUANTIFIERS:
+        return True  # "exactly how many rows", "wie lange dauert"
+    if k > 0 and tokens[k - 1] in _OUTCOME_RELATIVE_PREV:
+        return False
+    if nxt is None:
+        return False  # a bare trailing "how"/"wie" is no question here
+    if nxt in _OUTCOME_EXCLAMATIVE_NEXT:
+        return False
+    # "..., which is great": a relative clause carrying the praise.
+    if (nxt in ("is", "was", "ist", "war") and k + 2 < len(tokens)
+            and (tokens[k + 2] in _OUTCOME_APPROVAL_EXACT_WORDS
+                 or any(tokens[k + 2:k + 2 + len(p)] == list(p)
+                        for p in _tokenised("approval", _OUTCOME_APPROVAL_PHRASES)))):
+        return False
+    return True
+
+
 def _looks_like_request(text: str, tokens: list[str]) -> bool:
-    """A request or a question (r3_s1-1): never an approval."""
-    if any(t in _OUTCOME_QUESTION_WORDS for t in tokens):
+    """A request or a question (r3_s1-1, r4_s1-1): never an approval.
+
+    Every clause is checked: an imperative at its start, a question word that
+    opens a question, a German verb-first question ("Klappt das auch mit
+    Excel"), a verb-first clause with "du"/"ihr" ("Kannst du", "Weißt du").
+    Anywhere: "ob"/"whether", an elliptic follow-up ("and the same for X",
+    "any chance"), a present-tense need with a subject ("ich brauche noch",
+    "I also need") unless it is relative ("was ich brauche", "what I need")."""
+    if any(t in _OUTCOME_QUESTION_ANYWHERE for t in tokens):
         return True
-    for i, clause in enumerate(_clauses(text)):
+    if any(_has_phrase(tokens, p) for p in _OUTCOME_ELLIPTIC_REQUESTS):
+        return True
+    for clause in _clauses(text):
         j = 0
         while j < len(clause) - 1 and clause[j] in _OUTCOME_CLAUSE_LEAD:
             j += 1
-        if clause[j] in _OUTCOME_REQUEST_STARTS:
+        if _is_imperative_at(clause, j):
             return True
-        # Verb-first only as the very first word: "Jetzt funktioniert es" is a
-        # statement (verb second), "Funktioniert es" a question.
-        if (i == 0 and len(clause) > 1
-                and clause[0] in _OUTCOME_DE_QUESTION_VERBS
-                and clause[1] in _OUTCOME_DE_QUESTION_PRONOUNS):
+        # Verb-first: the clause's very first word ("Jetzt funktioniert es" is
+        # verb second, a statement; "Funktioniert es" a question).
+        if len(clause) > 1 and (
+                (clause[0] in _OUTCOME_DE_QUESTION_VERBS
+                 and clause[1] in _OUTCOME_DE_QUESTION_PRONOUNS)
+                or (clause[1] in _OUTCOME_DE_V1_SUBJECTS
+                    and clause[0] not in _OUTCOME_THANKS_TOKENS
+                    and clause[0] not in _OUTCOME_APPROVAL_EXACT_WORDS)):
             return True
+        for k in range(j, len(clause)):
+            if _is_question_word_at(clause, k, clause_start=(k == j)):
+                return True
     # "... und schreib noch einen Test": a clause opened by und/and/dann/then.
     for k, t in enumerate(tokens[:-1]):
-        if t in ("und", "and", "dann", "then") and tokens[k + 1] in _OUTCOME_REQUEST_STARTS:
+        if t in ("und", "and", "dann", "then") and _is_imperative_at(tokens, k + 1):
             return True
+    for k, t in enumerate(tokens):
+        if t not in _OUTCOME_NEED_VERBS:
+            continue
+        if k + 1 < len(tokens) and tokens[k + 1] in _OUTCOME_SUBJECTS:
+            return True  # "Für die Präsentation brauche ich eine Folie"
+        for p in range(max(0, k - 2), k):
+            if tokens[p] in _OUTCOME_SUBJECTS:
+                if p == 0 or tokens[p - 1] not in (_OUTCOME_QUESTION_WORDS | {"was"}):
+                    return True
     return False
 
 
@@ -1495,9 +1697,10 @@ def _is_rejection(text: str, tokens: list[str]) -> bool:
     global _NO_START_RE
     if _NO_START_RE is None:
         # "nein" / "no" / "nope" opening the message or a sentence, followed by
-        # , . ! or the end.
+        # , . ! or the end. A colon is no sentence break: "Write the answer
+        # as: No." quotes the word (review c120 r4_s1-4).
         _NO_START_RE = re.compile(
-            r"(?:^|[.!?;:\n])\s*(?:nein|no|nope)(?=\s*[,.!]|\s*$)")
+            r"(?:^|[.!?;\n])\s*(?:nein|no|nope)(?=\s*[,.!]|\s*$)")
     for m in _NO_START_RE.finditer(text):
         after = _outcome_tokens(text[m.end():])
         if any(tuple(after[:len(p)]) == p for p in _OUTCOME_CLOSING_AFTER_NO):
@@ -1553,9 +1756,8 @@ def _voids_approval(tokens: list[str], *, thanks: bool, whole: bool) -> bool:
     for i, t in enumerate(tokens):
         if t not in _OUTCOME_APPROVAL_VOIDERS:
             continue
-        if t in ("jetzt", "now") and (whole or (
-                thanks and _next_to(tokens, i, _OUTCOME_SUCCESS_VERBS))):
-            continue  # "läuft jetzt, danke", "it works now"
+        if t in ("wieder", "again") and _next_to(tokens, i, _OUTCOME_SUCCESS_VERBS):
+            continue  # "works again, thanks", "läuft wieder"
         if _is_thanks_again(tokens, i):
             continue  # "danke nochmal", "thanks again"
         return True
@@ -1580,6 +1782,8 @@ def _is_approval(text: str, tokens: list[str], *, quoted: bool = False) -> bool:
     if _CONTRACTED_D_RE.search(text):
         return False  # "that'd be perfect", "it'd be great"
     if any(_has_phrase(tokens, p) for p in _OUTCOME_SARCASM_PHRASES):
+        return False
+    if any(_has_phrase(tokens, p) for p in _OUTCOME_VOID_PHRASES):
         return False
     if _looks_like_request(text, tokens):
         return False
@@ -1659,12 +1863,13 @@ def grade_from_user_followup(
 
     ``tenant_id`` given (the console, which serves several tenants): only
     skills resolving to a tenant-owned scope (``session`` / ``user``) are
-    graded. ``dedupe_channel`` keys the once-per-skill-per-key-per-signal-kind
-    limit over a rolling 24 h window. Without it (the bridge) the key is the
-    chat (``channel_id``) for a session-scope skill and the tenant for a
-    user / project skill, which every chat of the tenant shares (review c120
-    r3_s1-4). Only a day-bound hash of the key is stored (in the grade note),
-    never the id itself.
+    graded. The once-per-skill-per-key-per-signal-kind limit over a rolling
+    24 h window is keyed by ``followup_dedupe_key`` — the chat for a
+    session-scope skill, the tenant for every other skill, the same on the
+    bridge and on the console (review c120 r3_s1-4, r4_s1-3). No production
+    caller passes ``dedupe_channel``; it overrides the key for tests that need
+    several allowances in one window. Only a day-bound hash of the key is
+    stored (in the grade note), never the id itself.
 
     A grade whose audit record cannot be committed is not persisted (the
     registry is audit-first) and is not in the returned list.
@@ -1721,15 +1926,9 @@ def grade_from_user_followup(
     for name in prev_skill_names:
         try:
             scope = _scope_of(reg, name)
-            if dedupe_channel is not None:
-                dd_key = dedupe_channel
-            elif scope == "session":
-                dd_key = channel_id   # a session skill lives in this chat only
-            else:
-                # A user / project skill is shared by every chat of the tenant:
-                # one allowance per (skill, tenant), like the console — a
-                # second chat is no second allowance (review c120 r3_s1-4).
-                dd_key = f"tenant:{_learning_tenant(tenant_id)}"
+            dd_key = (dedupe_channel if dedupe_channel is not None
+                      else followup_dedupe_key(scope, channel_id=channel_id,
+                                               tenant_id=tenant_id))
             marker, marker_prev = _followup_dedupe_markers(dd_key, signal)
             if tenant_id and scope not in _TENANT_OWNED_SCOPES:
                 # A caller that names its tenant serves several (the console):

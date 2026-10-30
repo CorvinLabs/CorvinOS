@@ -583,3 +583,77 @@ def test_failed_final_store_write_chains_the_compensation_and_stores_nothing(env
     state["fail"] = False
     _two_turns(env, "Gut gemacht!")                                 # no stale dedupe marker
     assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
+
+
+# ── review c120 round 4 (r4_s1-1/-2/-3) through the console WebSocket ─────────
+
+@pytest.mark.parametrize("follow_up", [
+    "Test passed, thanks!", "What a great answer, thanks!", "Danke, genau wie gewünscht!",
+    "Thanks, `make build` works now.", "Much better now, thanks!", "Klasse, weiter so!",
+])
+def test_r4_console_praise_classes_grade_approval(env, follow_up) -> None:
+    _grant_consent()
+    _two_turns(env, follow_up)
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
+
+
+@pytest.mark.parametrize("follow_up", [
+    # r4_s1-1: question / request after a thank-you, no '?'
+    "Danke! Klappt das auch mit Excel-Dateien", "Super, danke. Ist das auch threadsafe",
+    "Danke! Ich brauche noch einen Unit-Test für den Parser.",
+    "Thanks in advance, I need a summary of the attached PDF by tomorrow.",
+    # near-miss controls of the praise classes above
+    "Test the parser, thanks.", "Thanks, how do I run it in Docker",
+    "Put \"Thanks, great work\" in the footer.", "Great, now add error handling.",
+])
+def test_r4_console_question_request_and_controls_write_no_approval(env, follow_up) -> None:
+    _grant_consent()
+    _two_turns(env, follow_up)
+    assert 0.9 not in [float(g["score"]) for g in _grades(env)], _grades(env)
+
+
+def _bridge_turn(env, chat: str, msg_id: str, text: str) -> list[dict]:
+    """One follow-up through the REAL bridge turn (adapter.process_one) on the same
+    CORVIN_HOME and tenant as the console of this test."""
+    mp = env.monkeypatch
+    for d in ("inbox", "outbox", "processed", "sessions", "slot"):
+        (env.tmp / d).mkdir(exist_ok=True)
+    for k, v in {"ADAPTER_INBOX": env.tmp / "inbox", "ADAPTER_OUTBOX": env.tmp / "outbox",
+                 "ADAPTER_PROCESSED": env.tmp / "processed",
+                 "ADAPTER_SESSIONS": env.tmp / "sessions",
+                 "CORVIN_PLUGIN_SLOT_DIR": env.tmp / "slot", "ADAPTER_FAKE_CLAUDE": "1",
+                 "ADAPTER_FAKE_DELAY": "0.05", "ADAPTER_ROUTING_MODE": "off",
+                 "BRIDGE_PROGRESS_UPDATES": "0", "ADAPTER_DISABLE_VOICE": "1"}.items():
+        mp.setenv(k, str(v))
+    mp.delitem(sys.modules, "adapter", raising=False)   # re-read the ADAPTER_* env
+    import adapter  # type: ignore  # noqa: PLC0415
+    adapter._record_last_turn_skills(chat_key=chat, run_id=f"prev-{msg_id}",
+                                     skill_names=[SKILL], user_text="schreib einen bericht")
+    n_pre = len(_grades(env))
+    p = env.tmp / "inbox" / f"{msg_id}.json"
+    p.write_text(json.dumps({"id": msg_id, "channel": "sandbox-cross", "from": chat,
+                             "chat_id": chat, "text": text, "ts": __import__("time").time()}))
+    adapter.process_one(p, settings={"whitelist": [chat]})
+    return _grades(env)[n_pre:]
+
+
+def test_r4_praise_on_bridge_and_console_in_one_window_is_one_approval(env) -> None:
+    """r4_s1-3: one dedupe key per (user skill, tenant) on BOTH surfaces
+    (skill_inject.followup_dedupe_key): praise in a bridge chat, then in the console
+    web chat, within 24 h -> exactly one 0.9 grade."""
+    _grant_consent()
+    first = _bridge_turn(env, "cross-chat-a", "cross-1", "Danke, perfekt!")
+    assert [float(g["score"]) for g in first] == [0.9], first
+    _two_turns(env, "Gut gemacht!")
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
+    # the signal kind stays in the key: a rejection on the other surface is recorded
+    _two_turns(env, "Das ist falsch.")
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9, 0.1], _grades(env)
+
+
+def test_r4_praise_on_console_then_bridge_is_one_approval(env) -> None:
+    _grant_consent()
+    _two_turns(env, "Gut gemacht!")
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)
+    assert _bridge_turn(env, "cross-chat-b", "cross-2", "Danke, perfekt!") == []
+    assert [float(g["score"]) for g in _grades(env)] == [0.3, 0.9], _grades(env)

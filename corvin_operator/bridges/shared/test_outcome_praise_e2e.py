@@ -337,3 +337,59 @@ def test_process_one_user_skill_dedupe_spans_every_chat_of_the_tenant(bridge) ->
     assert _turn_in(bridge, "chat-c", "dd-c", "Danke!") == []
     # the kind stays in the key: a rejection from another chat is still recorded
     assert [float(g["score"]) for g in _turn_in(bridge, "chat-b", "dd-r", "Das ist falsch.")] == [0.1]
+
+
+# ── review c120 round 4 (r4_s1-1/-2/-4): through adapter.process_one ─────────
+# Each class: praise rows that must grade 0.9, and a near-miss control of the same
+# shape that must not grade. Tuned on /tmp/c120/fix/I1/table_tune.py; these rows
+# are not the holdout.
+
+R4_PRAISE = {
+    # an imperative-list noun as the subject of a success statement
+    "noun_start": ["Test passed, thanks!", "Plan looks good, thanks.", "Liste ist perfekt, danke."],
+    # exclamations and wie/was/how/what clauses inside praise
+    "qword": ["What a great answer, thanks!", "Danke, genau wie gewünscht!",
+              "Danke, das ist genau das, was ich brauchte."],
+    # code in backticks / a short quoted name inside praise
+    "code": ["Thanks, `make build` works now.",
+             "Thanks, the \"export\" button works perfectly now."],
+    # jetzt / now / weiter so do not cancel praise
+    "now": ["Much better now, thanks!", "Danke, jetzt verstehe ich es!", "Klasse, weiter so!"],
+}
+R4_CONTROL = {
+    "noun_start": ["Test the parser, thanks.", "Plan the release for Monday, danke."],
+    "qword": ["Danke! Wie mache ich das unter Windows", "Thanks, how do I run it in Docker"],
+    "code": ["Put \"Thanks, great work\" in the footer.", "Thanks, now run `make build` again."],
+    "now": ["Great, now add error handling.", "Perfect, now nothing works."],
+}
+#: r4_s1-1: a question or a new request after a thank-you, typed without '?'.
+R4_QUESTIONS = [
+    "Danke! Klappt das auch mit Excel-Dateien", "Perfekt. Funktioniert das auch unter Windows",
+    "Super, danke. Ist das auch threadsafe", "Danke. Läuft der Server noch auf Port 8080",
+    "Thanks in advance, I need a summary of the attached PDF by tomorrow.",
+    "Danke! Ich brauche noch einen Unit-Test für den Parser.",
+    "Vielen Dank im Voraus für deine Hilfe bei der Steuererklärung.",
+]
+R4_PRAISE_ROWS = [(c, t) for c, rows in R4_PRAISE.items() for t in rows]
+R4_CONTROL_ROWS = [(c, t) for c, rows in R4_CONTROL.items() for t in rows]
+
+
+@pytest.mark.parametrize("cls,text", R4_PRAISE_ROWS)
+def test_r4_process_one_praise_class_grades_approval(bridge, cls, text) -> None:
+    assert [float(g["score"]) for g in _turn(bridge, f"r4p-{cls}", text)] == [0.9], text
+
+
+@pytest.mark.parametrize("cls,text", R4_CONTROL_ROWS)
+def test_r4_process_one_near_miss_control_grades_no_approval(bridge, cls, text) -> None:
+    assert 0.9 not in [float(g["score"]) for g in _turn(bridge, f"r4c-{cls}", text)], text
+
+
+@pytest.mark.parametrize("text", R4_QUESTIONS)
+def test_r4_process_one_question_or_request_after_thanks_writes_no_grade(bridge, text) -> None:
+    assert _turn(bridge, "r4q", text) == [], text
+
+
+def test_r4_process_one_colon_no_is_no_rejection(bridge) -> None:      # r4_s1-4
+    assert _turn(bridge, "r4n", "Write the answer as: No.") == []
+    # control: "no" after a sentence break stays a rejection
+    assert [float(g["score"]) for g in _turn(bridge, "r4n2", "Hm. No, the other table.")] == [0.1]
