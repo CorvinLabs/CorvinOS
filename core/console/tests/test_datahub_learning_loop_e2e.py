@@ -46,12 +46,16 @@ class DataHubLearningLoopTest(unittest.TestCase):
             channel_id=None, profile={}, task_text="show me the order rows", tenant_id="_default")
 
     def _followup(self, text, channel_id=None):
-        # One organic follow-up grade per skill per channel per UTC day (review c120):
-        # a test that needs several reactions gives each its own channel.
+        # One organic follow-up grade per skill per signal kind per 24 h (review c120). For a
+        # user-scope skill such as this one the bridge keys that on the TENANT, not the chat
+        # (r3_s1-4), so three chats of one day give ONE grade. A test that needs several
+        # reactions gives each its own explicit dedupe key - each stands for a separate
+        # allowance (another day), not for another chat.
         from corvin_operator.bridges.shared import skill_inject
         return skill_inject.grade_from_user_followup(
             channel_id=channel_id, profile={}, user_text=text, prev_run_id="run-1",
-            prev_skill_names=[self.skill])
+            prev_skill_names=[self.skill],
+            dedupe_channel=f"allowance:{channel_id}" if channel_id else None)
 
     def test_producers_write_content_free_events_to_the_inbox(self):
         with _sandbox(self.tmp) as (client, csrf, _home, _):
