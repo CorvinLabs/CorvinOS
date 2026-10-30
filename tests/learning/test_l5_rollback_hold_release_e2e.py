@@ -190,6 +190,27 @@ def test_an_unreadable_marker_inside_the_lock_holds_without_a_zero_sample_trip(t
         assert _events(sb) == []
 
 
+def test_an_unreadable_marker_inside_the_lock_defers_even_a_trailing_trip(tmp_path):
+    """The run that cannot read the marker records nothing; the next one judges."""
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import dual_write, rollback_detector
+
+        dual_write.reset_for_tests()
+        _seed(sb.tenant_id, 120, source="skill", ok=False)
+        _seed(sb.tenant_id, 120, source="bundled", ok=True)
+        marker = rollback_detector.pending_path(sb.tenant_id)
+        marker.mkdir()
+        try:
+            assert rollback_detector.evaluate(
+                sb.tenant_id, audit=rollback_detector._default_audit(sb.tenant_id)) is True
+            assert _events(sb) == [], "the run that could not read the marker judged anyway"
+        finally:
+            marker.rmdir()
+        _skill_turn(sb.tenant_id, ok=False)
+        assert rollback_detector.rollback_active(sb.tenant_id)
+        assert _events(sb) == ["routing.rollback_triggered"]
+
+
 # ── r6_s2-3: the hold is written when the lock AND the marker are unreadable ─
 
 def test_lock_and_marker_unreadable_the_hold_is_written_and_reported(tmp_path):
