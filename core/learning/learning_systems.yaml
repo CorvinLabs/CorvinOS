@@ -385,7 +385,7 @@ systems:
       # records its decision and a judged ok:false outcome (the bridge does the same)
       - core/console/corvin_console/routes/chat.py:1006:record_unavailable_skill_route
       # operator reset of a tripped rollback judge (POST .../learning/routing/rollback/reset)
-      - core/console/corvin_console/routes/learning.py:895:rollback_detector.reset_rollback
+      - core/console/corvin_console/routes/learning.py:897:rollback_detector.reset_rollback
     tests:
       - core/console/tests/test_l5_routing_loop_console_e2e.py
       - tests/e2e/test_l5_routing_loop_bridge_e2e.py
