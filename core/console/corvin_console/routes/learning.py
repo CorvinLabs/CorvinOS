@@ -872,7 +872,9 @@ async def reset_routing_rollback(session = Depends(require_csrf)):
     ``rollback_detector.reset_rollback``: ``routing.rollback_reset`` commits before the
     state changes (503 ``audit_not_committed``, still tripped); a state write that fails
     afterwards chains ``routing.rollback_reset_not_applied`` (503 ``state_not_written``,
-    still tripped). Then a console ``learning.routing_rollback_reset`` record. The
+    still tripped); the per-tenant rollback lock cannot be taken → 503
+    ``lock_unavailable``, nothing written, still tripped. Then a console
+    ``learning.routing_rollback_reset`` record. The
     reset restarts the bridge's console soak (readiness).
     """
     import asyncio  # noqa: PLC0415
@@ -900,6 +902,8 @@ async def reset_routing_rollback(session = Depends(require_csrf)):
         await asyncio.to_thread(_reset)
     except LookupError:
         raise HTTPException(status_code=409, detail={"error": "not_tripped"}) from None
+    except rollback_detector.LockUnavailable:
+        raise HTTPException(status_code=503, detail={"error": "lock_unavailable"}) from None
     except rollback_detector.ResetNotApplied:
         raise HTTPException(status_code=503, detail={"error": "state_not_written"}) from None
     except RuntimeError:

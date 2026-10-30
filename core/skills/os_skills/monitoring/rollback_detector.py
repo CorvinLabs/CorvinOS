@@ -21,7 +21,15 @@ writes the trip state; it does not chain a second record. A reset is audit-first
 ``routing.rollback_reset`` commits before the state is written. A trip (steps 1-3) and
 a reset run under one per-tenant rollback lock (``rollback.lock``, ``flock``) and so
 never interleave in any process (review r4_s2-3); a trip or reset invalidates only its
-own tenant's readiness verdicts (review r4_s2-2).
+own tenant's readiness verdicts (review r4_s2-2). A lock that cannot be taken never
+reads as "not tripped" (review r5_s2-1): the judge holds the tenant tripped (pending
+entry + marker where writable) and chains ``routing.rollback_unverified``; the reset
+route answers 503 ``lock_unavailable``.
+
+A reset opens a fresh window (review r5_s2-2): the judge evaluates only ledger rows
+at or after the tenant's last trip/reset (the state's ``at``), so the pre-reset
+failures cannot re-trip the first Skill-served turn after a reset, and the minimum
+sample size per side must be met again on post-reset turns.
 
 Every authoritative state write carries a ``generation`` one higher than the one it
 replaces (review r3_s2-4/-5). Other processes compare it: the readiness cache drops a
@@ -190,6 +198,13 @@ def _invalidate_readiness(tenant_id: str) -> None:
 LOCK_FILENAME = "rollback.lock"
 
 
+class LockUnavailable(RuntimeError):
+    """The per-tenant rollback lock could not be taken (``rollback.lock`` or the
+    routing dir cannot be opened/created, or ``flock`` failed). The judge treats this
+    as "cannot judge safely" and holds Phase 2 off (review r5_s2-1); the reset route
+    answers 503 ``lock_unavailable``."""
+
+
 @contextlib.contextmanager
 def _rollback_lock(tenant_id: str) -> Iterator[None]:
     """The per-tenant rollback lock (review r4_s2-3): a trip (marker, record, state)
@@ -198,8 +213,11 @@ def _rollback_lock(tenant_id: str) -> Iterator[None]:
     its own descriptor, so two threads of one process exclude each other too. Where
     ``fcntl`` does not exist (Windows) ``msvcrt.locking`` on the first byte is used."""
     path = routing_ledger.routing_dir(tenant_id) / LOCK_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        raise LockUnavailable(tenant_id) from exc
     try:
         if _fcntl is not None:
             _fcntl.flock(fd, _fcntl.LOCK_EX)
@@ -212,6 +230,10 @@ def _rollback_lock(tenant_id: str) -> Iterator[None]:
                     break
                 except OSError:
                     continue
+    except OSError as exc:
+        os.close(fd)
+        raise LockUnavailable(tenant_id) from exc
+    try:
         yield
     finally:
         try:
@@ -307,9 +329,54 @@ def evaluate(tenant_id: str, *, audit: Optional[AuditFn] = None,
              since_ts: float = 0.0) -> bool:
     """Judge the ledger; trip (marker, record, state) when the Skill trails.
     Returns the active state. Runs under the per-tenant rollback lock: a reset can
-    never land between the trip's record and its state (review r4_s2-3)."""
-    with _rollback_lock(tenant_id):
+    never land between the trip's record and its state (review r4_s2-3).
+
+    Fail-closed on the lock (review r5_s2-1): when the lock cannot be taken the
+    tenant is held tripped (in-process pending entry, the pending marker if it can be
+    written) and ``routing.rollback_unverified`` is chained; it never answers "not
+    tripped" for want of a lock. The held trip is completed by the next judge or
+    retry that gets the lock; only an operator reset clears it."""
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(_rollback_lock(tenant_id))
+        except LockUnavailable:
+            return _hold_unverified(tenant_id, audit=audit)
         return _evaluate_locked(tenant_id, audit=audit, since_ts=since_ts)
+
+
+#: Tenants whose lock-unavailable hold has a committed ``routing.rollback_unverified``
+#: record in this process (one record per hold, not one per retry).
+_unverified_recorded: set[str] = set()
+
+
+def _hold_unverified(tenant_id: str, *, audit: Optional[AuditFn]) -> bool:
+    """The judge could not take the lock: hold Phase 2 off, chain the fact."""
+    if not rollback_active(tenant_id):
+        _hold_pending(tenant_id, {"generation": persisted_generation(tenant_id),
+                                  "committed": False, "details": None,
+                                  "created": time.time()})
+    with _pending_lock:
+        recorded = tenant_id in _unverified_recorded
+    if audit is not None and not recorded:
+        try:
+            ok = bool(audit("routing.rollback_unverified",
+                            {"tenant_id": tenant_id, "cause": "lock_unavailable"}))
+        except Exception:  # noqa: BLE001 — an audit that raises did not commit
+            ok = False
+        if ok:
+            with _pending_lock:
+                _unverified_recorded.add(tenant_id)
+    return True
+
+
+def _since_last_change(tenant_id: str, since_ts: float) -> float:
+    """Review r5_s2-2: the judge's window starts at the tenant's last trip/reset.
+
+    Reached only while no trip is active, so the state's ``at`` is the last RESET:
+    a reset opens a fresh window and the minimum sample size per side must be met
+    again on post-reset turns before the judge can trip."""
+    changed_at, _readable = last_change_ts(tenant_id)
+    return max(float(since_ts), changed_at) if changed_at is not None else float(since_ts)
 
 
 def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
@@ -328,7 +395,8 @@ def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
     if details is None:
         # NOT-JUDGED turns (cancelled, orphaned, no engine) never reach the judge.
         rows = routing_ledger.judged(
-            routing_ledger.join(routing_ledger.read_records(tenant_id, since_ts=since_ts)))
+            routing_ledger.join(routing_ledger.read_records(
+                tenant_id, since_ts=_since_last_change(tenant_id, since_ts))))
         metrics = correctness_tracker.compute_metrics(rows)
         # A pending trip is retried even if the window moved on: once tripped, only
         # an operator reset clears it.
@@ -378,6 +446,7 @@ def _clear_pending(tenant_id: str) -> None:
         return   # an undeletable marker keeps restricting: the safe direction
     with _pending_lock:
         _pending_trips.pop(tenant_id, None)
+        _unverified_recorded.discard(tenant_id)
 
 
 def maybe_retry_pending(tenant_id: str, *, audit: Optional[AuditFn] = None,
@@ -466,3 +535,4 @@ def reset_for_tests() -> None:
     with _pending_lock:
         _pending_trips.clear()
         _retry_last.clear()
+        _unverified_recorded.clear()
