@@ -514,11 +514,13 @@ suffix and the timestamp of the canary grade). An earlier approval therefore nev
 rejection, and two praises at 23:59:59 and 00:00:01 UTC are one window. The marker is
 `sha256("followup-grade|<kind>|<UTC day>|<channel>")[:16]`, stored as `dd=<marker>` in the grade note —
 never the channel id, and not linkable across days; a new grade is refused when a grade carrying
-today's or yesterday's marker is younger than 24 h. Bridge key: `<channel>:<chat_key>` for a
-`session`-scope skill, but `tenant:<tenant>` for a `user`/`project`-scope skill — that skill is shared by
-every chat of the tenant, so praise from three chats is one approval, like the console (review c120
-r3_s1-4; a rejection from another chat is still its own kind). Console channel = `"console"` for the
-whole tenant (a new chat opens no new allowance).
+today's or yesterday's marker is younger than 24 h. The key is ONE rule for both surfaces,
+`skill_inject.followup_dedupe_key(scope, channel_id=, tenant_id=)`: the chat (`<channel>:<chat_key>`)
+for a `session`-scope skill, `tenant:<tenant>` for every other skill — a `user`/`project` skill is shared
+by every chat and every surface of the tenant, so praise from three bridge chats AND the console web
+chat in one window is one approval (review c120 r3_s1-4, r4_s1-3; a rejection is still its own kind).
+The bridge passes its chat and the env tenant, the console no chat and its session's tenant; both
+reach the same key. No production caller passes `dedupe_channel` (a test-only override).
 
 **Console grading gates, in order** (`followup_grading.grade_followup`, all must hold, any failure
 = no signal and nothing written): a session tenant → a snapshot for this chat younger than 30 min
@@ -535,7 +537,10 @@ previous turn's task `COMPLETED` → then inside `grade_from_user_followup`: the
 * Quotation (review c120 r3_s1-1/-3): single- and double-quoted spans (`_strip_quotations`, also
   guillemets and typographic quotes) are removed before BOTH tests, and a message that carried a quote
   is never an approval: quoted praise ("'super'", "he said "great"") and a quoted "try again" / "no"
-  are no signal.
+  are no signal. Not a quotation (review c120 r4_s1-2): inline code in backticks ("Thanks, `make
+  build` works now") and a short quoted NAME — at most 4 tokens with no praise, thank-you, success,
+  negator or rejection word (`_is_name_span`: the "export" button, das Feld "email") — are replaced
+  by a neutral token and leave the praise around them intact.
 * Rejection (liberal): a token STARTING with a rejection stem (`_OUTCOME_REJECTION_STEMS`: "falsch" —
   falsche/falsches/falschen —, "inkorrekt", "wrong" — wrongly —, "incorrect") that is not a known
   compound or idiom (`_OUTCOME_REJECTION_COMPOUNDS`: Falschgeld, Falschparker, Falschaussage,
@@ -550,11 +555,20 @@ previous turn's task `COMPLETED` → then inside `grade_from_user_followup`: the
   thank-you ("danke nochmal", "thanks again" is the praise idiom). At any length, and a `?` does not
   cancel it. A praise token together with a closing idiom ("Perfekt! Nein, sonst nichts.") is no
   signal either way (decision).
-* Approval (conservative), all must hold: no `?`; not a request (`_looks_like_request`: an imperative
-  or question word at the start of the message or of a clause — teste/mach/schreib/prüf/make sure/
-  write/test/check/please/what/is/does, … (`_OUTCOME_REQUEST_STARTS`) —, a question word anywhere —
-  wie/warum/ob/how/why/which, … —, or a German verb-first question "Klappt das auch mit Excel?"): "Teste
-  ob es funktioniert" and "Make sure it works on Windows" are never approval; no token over
+* Approval (conservative), all must hold: no `?`; not a request or question, checked in EVERY clause
+  (`_looks_like_request`, review c120 r4_s1-1/-2): an imperative or auxiliary at the clause start —
+  teste/mach/schreib/prüf/make/write/test/check/please/is/does/can, … (`_OUTCOME_REQUEST_STARTS`) —
+  unless it is a noun followed by a predicate (`_OUTCOME_NOUN_VERBS` + `_OUTCOME_PREDICATES`: "Test
+  passed", "Plan looks good", "Liste ist perfekt" are statements); a question word
+  (wie/warum/wo/welche/how/why/which/what, "was" only at a clause start) followed by a verb or noun
+  ("Danke, wie mache ich das", "how do I run it", "how many rows") — but not one that opens an
+  exclamation or relative clause ("What a great answer", "Wie toll", "genau wie gewünscht", "exactly
+  what I needed", "…, which is great"); a German verb-first clause ("Danke! Klappt das auch mit
+  Excel-Dateien", "Ist das auch threadsafe") or a verb-first clause with du/ihr ("Weißt du …");
+  "ob"/"whether" anywhere; an elliptic follow-up ("and the same for Postgres", "any chance");
+  a present-tense need with a subject ("Danke! Ich brauche noch einen Test", "I also need", "brauche
+  ich") unless it is relative ("was ich brauche", "what I need"). "Teste ob es funktioniert" and "Make
+  sure it works on Windows" are never approval; no token over
   `_OUTCOME_MAX_TOKEN_CHARS = 40`; at most `_OUTCOME_APPROVAL_MAX_WORDS = 12` tokens, raised to
   `_OUTCOME_APPROVAL_MAX_WORDS_THANKS = 20` when the message carries a thank-you token
   (`_OUTCOME_THANKS_ONLY`: danke, dankeschön, dank, thanks, thank, thx, merci) — both decisions; emoji
@@ -565,10 +579,16 @@ previous turn's task `COMPLETED` → then inside `grade_from_user_followup`: the
   the complaint words in `_OUTCOME_APPROVAL_VOIDERS`, sarcasm by continuation); no 'd contraction; no
   negator anywhere (single tokens and multi-word forms "alles andere als", "far from", "not really",
   …) except inside a positive idiom (`_OUTCOME_POSITIVE_IDIOMS`: "nicht schlecht", "not bad", "no more
-  errors", "keine Fehler mehr"); no void cue (`_OUTCOME_APPROVAL_VOIDERS`: a new request or contrast
-  "bitte"/"jetzt"/"weiter"/"neue"/"next"/"please"/"now"/"aber"/"but", a complaint word, a conditional /
-  irrealis, a concession or dismissal). "jetzt"/"now" is part of the praise only next to a success verb
-  AND with a thank-you ("läuft jetzt, danke") or in a whole reaction ("it works now"). Then ONE of: a
+  errors", "keine Fehler mehr", "Fehler ist weg", "weiter so"); no void cue
+  (`_OUTCOME_APPROVAL_VOIDERS`: a new request or contrast "bitte"/"weiter"/"neue"/"next"/"please"/
+  "aber"/"but", a complaint or reversal word — "kaputt", "down", "leer", "slower", "overwriting",
+  "gelöscht" —, a conditional / irrealis, a concession or dismissal, a thank-you for work not yet done
+  or for something else — "im Voraus", "vorab", "in advance", "ahead of time", "schon mal",
+  "gestern", "übrigens" —, a tag question "oder"; `_OUTCOME_VOID_PHRASES`). "jetzt"/"now" do NOT void
+  praise ("Much better now, thanks", "Danke, jetzt verstehe ich es"): a new request after them is
+  caught by the imperative at the clause start ("Great, now add tests"), a reversal by a complaint word
+  or a negator ("Perfect, now nothing works"); "wieder"/"again" count next to a success verb ("works
+  again"). Then ONE of: a
   phrase from `_OUTCOME_APPROVAL_PHRASES` anywhere ("gut gemacht", "hat geklappt", "passt so", "well
   done", …); a weak success word (`_OUTCOME_WEAK_APPROVAL_PHRASES`: "funktioniert", "klappt", "läuft",
   "works", "worked", "excellent", "brilliant", "works like a charm") ONLY together with a thank-you —
@@ -576,13 +596,22 @@ previous turn's task `COMPLETED` → then inside `grade_from_user_followup`: the
   a weak success word, a generic word (`_OUTCOME_APPROVAL_EXACT_WORDS`: gut, top, passt, richtig, …) or
   a filler (`_OUTCOME_FILLERS`: es, das, so, ist, it, now, …): "Top, passt!", "Richtig, so ist es.".
   Generic words never count inside a longer sentence. A voided praise is NO signal, not a rejection.
-* Measured on the 109-message review table in 9 classes (review c120 r3_s1, base → tree): approval
-  recall 0.90 → 0.95, precision 0.60 → 1.00 (false approvals 23 → 0: requests containing a praise word
-  5/12 → 12/12 correct, sarcasm 2/10 → 10/10, quoted praise 1/5 → 5/5); rejection recall 0.63 → 0.90,
-  precision 0.58 → 0.93 (innocent text read as rejection 14 → 2). Known residue: "Validiere das
-  Formular, falsche Eingaben sollen rot werden." and "Write a unit test for incorrect password
-  handling." still read as rejection (a real inflected stem; rejection stays liberal on purpose), and
-  the two closing-idiom rows are no signal by decision.
+* Measured on a HOLDOUT table the rules were not tuned on (147 messages, 16 classes, DE+EN, written
+  for review c120 round 4 before the round-4 change and scored once after it; origin/main → this
+  tree): approval recall 0.95 → 0.98 (54 → 56 of 57), precision 0.50 → 0.97 (false approvals 53 → 2;
+  on the innocent, request and question rows 26 → 0); rejection recall 0.72 → 0.94 (13 → 17 of 18),
+  precision 1.00 → 1.00 (no false rejection on either). The numbers on the tuning table (the round-3
+  and round-4 review tables, 251 rows) are higher and are not the claim. The round-3 claim "precision
+  1.00, recall 0.95" was measured on its own tuning table and did not hold on a fresh one (recall
+  0.31, review c120 r4_s1). Known residue on the holdout: "Super, das ist genau das, was ich gesucht
+  habe!" is no approval ("super" is a generic word, which counts only as the whole reaction —
+  decision; origin/main approved it by substring); "Das stimmt so nicht." is no rejection (the phrase
+  "stimmt nicht" is not contiguous); "My manager wants a perfect slide deck by Monday." and "Die
+  Antwort an den Kunden soll mit Danke beginnen." are still false approvals (as on origin/main). On the
+  tuning table "Ich brauche ein Regex, das inkorrekte IBANs erkennt.", "Explain why my old code had
+  the same error message.", "Validiere das Formular, falsche Eingaben sollen rot werden." and "Write a
+  unit test for incorrect password handling." read as rejection (a real stem or phrase; rejection
+  stays liberal on purpose), and the closing-idiom rows are no signal by decision.
 
 **Privacy:** the user's text is read, never stored — on the console not even the previous prompt is
 kept in memory. The grade note names only the signal, the previous run id and the day-bound dedupe
@@ -605,7 +634,10 @@ with a failing writer: error response, nothing persisted, chain verifies).
 the rolling 24 h window across UTC midnight through `adapter.process_one`;
 `test_followup_grading_ws_e2e.py` covers liberal rejection, sarcasm/conditional/concession, praise
 recall, approval-then-rejection, a failed save after the record (compensated, retry nets one grade) and
-a failed `meta.json` copy (grade still reported) over the real chat WebSocket.
+a failed `meta.json` copy (grade still reported) over the real chat WebSocket. Round 4 (`-k r4` in
+both files): every fixed praise class with a near-miss control, questions/requests after a thank-you,
+"Write the answer as: No.", and a praise on the bridge (`adapter.process_one`) plus one in the console
+WebSocket in one window — exactly one 0.9 grade, in either order.
 
 ## Registry hardening (2026-09-07 adversarial review F-K2/F-K3/F-K5/F-K6/F-K8)
 

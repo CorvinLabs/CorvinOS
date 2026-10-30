@@ -1157,14 +1157,19 @@ def auto_grade_from_output(
 #     _OUTCOME_APPROVAL_MAX_WORDS_THANKS (20) when a thank-you token is present;
 #     no token over 40 chars; emoji are not tokens;
 #   * no question mark anywhere ("is that correct?", "stimmt das?");
-#   * not a quotation and no eye-roll, anger or thumbs-down emoji
+#   * not a quotation (inline `code` and a short quoted name without a signal
+#     word are no quotation, _is_name_span) and no eye-roll, anger or thumbs-down emoji
 #     (_OUTCOME_SARCASM_EMOJI); laughing emoji (😂🤣) void it only without a
 #     thank-you ("Haha super, danke 😂" counts, "perfekt 😂😂" does not);
-#   * not a request (_looks_like_request): no imperative or question word at
-#     the start of the message or of a clause (teste, mach, schreib, prüf,
-#     make, write, test, check, please, explain, what, is, does, ...), no
-#     question word anywhere (wie, warum, ob, how, why, which, ...), no
-#     verb-first German question ("Klappt das auch mit Excel-Dateien");
+#   * not a request or question, checked in EVERY clause (_looks_like_request):
+#     no imperative/auxiliary at a clause start (teste, mach, schreib, make,
+#     write, test, check, please, is, does, ...) unless it is a noun followed by
+#     a predicate ("Test passed", "Plan looks good"); no question word followed
+#     by a verb or noun ("wie mache ich", "how do I") — an exclamation or a
+#     relative clause ("What a great answer", "genau wie gewünscht") is fine;
+#     no verb-first question ("Klappt das auch mit Excel-Dateien"), no
+#     "ob"/"whether", no elliptic follow-up, no present-tense need with a
+#     subject ("Ich brauche noch", "I also need");
 #   * no sarcasm opener (_OUTCOME_SARCASM_PHRASES: "na toll", "ja toll",
 #     "oh great", "yeah right", ...) and no negative continuation (the
 #     complaint words in _OUTCOME_APPROVAL_VOIDERS: "Great job breaking
@@ -1174,11 +1179,11 @@ def auto_grade_from_output(
 #   * no negator ANYWHERE (single tokens and _OUTCOME_NEGATOR_PHRASES), except
 #     inside a positive idiom (_OUTCOME_POSITIVE_IDIOMS: "nicht schlecht", "not
 #     bad", "no more errors", "keine fehler mehr");
-#   * no void cue (_OUTCOME_APPROVAL_VOIDERS: a new request, a contrast, a
-#     complaint word). "jetzt"/"now" is part of the praise only next to a
-#     success verb AND with a thank-you ("läuft jetzt, danke") or in a whole
-#     reaction ("it works now"); "nochmal"/"again" next to a thank-you is the
-#     "thanks again" idiom;
+#   * no void cue (_OUTCOME_APPROVAL_VOIDERS / _OUTCOME_VOID_PHRASES: a new
+#     request, a contrast, a complaint or reversal word, thanks in advance or
+#     for something earlier). "jetzt"/"now" never void praise; "wieder"/"again"
+#     next to a success verb ("works again") and "nochmal"/"again" next to a
+#     thank-you ("thanks again") are praise;
 #   * and one of: a phrase from _OUTCOME_APPROVAL_PHRASES anywhere; a weak
 #     success word (_OUTCOME_WEAK_APPROVAL_PHRASES: "funktioniert", "klappt",
 #     "läuft", "works", "worked", "excellent", "brilliant") together with a
@@ -1368,7 +1373,7 @@ _OUTCOME_NOUN_VERBS = frozenset({
     "test", "check", "build", "plan", "review", "design", "update", "merge",
     "change", "format", "liste", "list", "suche", "search", "name", "run",
     "deploy", "print", "fix", "sort", "edit", "install", "draft", "work",
-    "set", "split", "move", "clean", "use", "help", "draft", "export",
+    "set", "split", "move", "clean", "use", "help", "export",
 })
 #: A predicate after such a noun.
 _OUTCOME_PREDICATES = frozenset({

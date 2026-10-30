@@ -200,7 +200,7 @@ systems:
       - core/console/corvin_console/chat_runtime.py:8682:record_turn_skills
     readers:
       # the injection gate: a skill with no grade or a mean score <= 0 is not injected
-      - corvin_operator/bridges/shared/skill_inject.py:696:spec.n_grades
+      - corvin_operator/bridges/shared/skill_inject.py:715:spec.n_grades
     tests:
       - corvin_operator/skill-forge/tests/test_grading.py
       - corvin_operator/bridges/shared/test_adapter_skill_inject.py
