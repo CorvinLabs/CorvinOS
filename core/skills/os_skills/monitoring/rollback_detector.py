@@ -22,14 +22,21 @@ writes the trip state; it does not chain a second record. A reset is audit-first
 a reset run under one per-tenant rollback lock (``rollback.lock``, ``flock``) and so
 never interleave in any process (review r4_s2-3); a trip or reset invalidates only its
 own tenant's readiness verdicts (review r4_s2-2). A lock that cannot be taken never
-reads as "not tripped" (review r5_s2-1): the judge holds the tenant tripped (pending
-entry + marker where writable) and chains ``routing.rollback_unverified``; the reset
-route answers 503 ``lock_unavailable``.
+reads as "not tripped" (review r5_s2-1): the judge holds the tenant (in-process
+entry always, the marker where none exists and the dir is writable) and chains
+``routing.rollback_unverified``; the reset route answers 503 ``lock_unavailable``.
+Such an UNVERIFIED hold is released automatically and audited (review c120 r6_s2-1):
+the next judge that gets the lock re-judges it, trips on a trailing window, and on a
+judgeable window that finds no trip chains ``routing.rollback_hold_released`` and only
+then removes the marker. A marker that cannot be read inside the lock holds without
+judging (never a trip over an unread window). A JUDGED trip still needs the operator.
 
-A reset opens a fresh window (review r5_s2-2): the judge evaluates only ledger rows
-at or after the tenant's last trip/reset (the state's ``at``), so the pre-reset
-failures cannot re-trip the first Skill-served turn after a reset, and the minimum
-sample size per side must be met again on post-reset turns.
+A reset opens a fresh window (reviews r5_s2-2, c120 r6_s2-2): the reset stores the
+ledger's position (inode + byte offset, ``ledger_pos``) and the judge evaluates only
+rows appended after it — a ledger position, not a wall-clock time, so a clock step
+cannot blind the judge. The pre-reset failures cannot re-trip the first Skill-served
+turn after a reset, and the minimum sample size per side must be met again on
+post-reset turns.
 
 Every authoritative state write carries a ``generation`` one higher than the one it
 replaces (review r3_s2-4/-5). Other processes compare it: the readiness cache drops a
@@ -65,6 +72,11 @@ AuditFn = Callable[[str, dict], bool]
 _pending_trips: dict[str, dict] = {}
 _pending_lock = threading.Lock()
 _retry_last: dict[str, float] = {}
+#: Why a tenant is held WITHOUT a judged trip (review c120 r6_s2-1). Such a hold is
+#: re-judged once the lock works and released (``routing.rollback_hold_released``)
+#: when a judgeable window finds no trip; a judged trip (``cause`` None, details from
+#: a judged window) is never released automatically.
+HOLD_CAUSES = frozenset({"lock_unavailable", "marker_unreadable"})
 
 
 def state_path(tenant_id: str) -> Path:
@@ -75,14 +87,17 @@ def pending_path(tenant_id: str) -> Path:
     return routing_ledger.routing_dir(tenant_id) / PENDING_FILENAME
 
 
-def _read_json(path: Path) -> tuple[str, Optional[dict]]:
-    """``("missing", None)`` | ``("ok", dict)`` | ``("bad", None)``."""
+def _read_json(path: Path, *, io_status: str = "bad") -> tuple[str, Optional[dict]]:
+    """``("missing", None)`` | ``("ok", dict)`` | ``("bad", None)``. A read that
+    fails with an ``OSError`` (EMFILE, EACCES, ...) reports ``io_status`` — "bad" for
+    every caller except the pending marker, which tells a transient read failure from
+    a torn file."""
     try:
         raw = path.read_text()
     except FileNotFoundError:
         return "missing", None
     except OSError:
-        return "bad", None
+        return io_status, None
     try:
         data = json.loads(raw)
     except ValueError:
@@ -158,16 +173,23 @@ def _pending_entry(tenant_id: str) -> Optional[dict]:
         entry = _pending_trips.get(tenant_id)
         if entry is not None:
             return dict(entry)
-    status, data = _read_json(pending_path(tenant_id))
+    status, data = _read_json(pending_path(tenant_id), io_status="io")
     if status == "missing":
         return None
+    if status == "io":
+        # Review c120 r6_s2-1: the marker exists in some form but cannot be read right
+        # now (EMFILE, EACCES): restrictive, and the judge holds without judging.
+        return {"generation": None, "committed": False, "details": None,
+                "cause": "marker_unreadable"}
     if status == "bad":
-        return {"generation": None, "committed": False, "details": None}
+        return {"generation": None, "committed": False, "details": None, "cause": None}
     details = data.get("details")
+    cause = data.get("cause")
     return {"generation": _gen_of(data),
             "committed": data.get("committed") is True,
             "details": details if isinstance(details, dict) else None,
-            "created": data.get("created")}
+            "created": data.get("created"),
+            "cause": cause if cause in HOLD_CAUSES else None}
 
 
 def _is_pending(tenant_id: str) -> bool:
@@ -313,6 +335,29 @@ def _hold_pending(tenant_id: str, entry: dict) -> None:
     _invalidate_readiness(tenant_id)
 
 
+def _create_marker_if_absent(tenant_id: str, entry: dict) -> bool:
+    """Write the pending marker for a hold only where NO marker exists: a fresh temp
+    file is hard-linked to the marker path (``FileExistsError`` when one exists), so a
+    judged trip's marker is never replaced by a hold. False when nothing was written
+    (a marker exists, or no descriptor / no writable dir — the in-process entry holds)."""
+    path = pending_path(tenant_id)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.hold.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"pending": True, "at": time.time(), **entry}, fh)
+        os.link(tmp, path)
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
 def _commit_trip_state(tenant_id: str, details: dict) -> bool:
     """Step 3: the authoritative trip, then the marker goes. A failing write keeps
     the marker (Phase 2 stays off) and is retried."""
@@ -334,8 +379,12 @@ def evaluate(tenant_id: str, *, audit: Optional[AuditFn] = None,
     Fail-closed on the lock (review r5_s2-1): when the lock cannot be taken the
     tenant is held tripped (in-process pending entry, the pending marker if it can be
     written) and ``routing.rollback_unverified`` is chained; it never answers "not
-    tripped" for want of a lock. The held trip is completed by the next judge or
-    retry that gets the lock; only an operator reset clears it."""
+    tripped" for want of a lock. The next judge or retry that gets the lock re-judges
+    the hold (review c120 r6_s2-1): a window that trips completes it as a real trip;
+    a judgeable window that finds no trip releases it, audited
+    (``routing.rollback_hold_released`` before the marker goes); too few samples →
+    still held. A judged trip is never released automatically: only an operator reset
+    clears it."""
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(_rollback_lock(tenant_id))
@@ -350,11 +399,24 @@ _unverified_recorded: set[str] = set()
 
 
 def _hold_unverified(tenant_id: str, *, audit: Optional[AuditFn]) -> bool:
-    """The judge could not take the lock: hold Phase 2 off, chain the fact."""
-    if not rollback_active(tenant_id):
-        _hold_pending(tenant_id, {"generation": persisted_generation(tenant_id),
-                                  "committed": False, "details": None,
-                                  "created": time.time()})
+    """The judge could not take the lock: hold Phase 2 off, chain the fact.
+
+    Review c120 r6_s2-3: the in-process entry is written whenever no readable trip
+    or pending trip already holds the tenant — also when the guard cannot read the
+    marker (EMFILE): process memory needs no descriptor. The marker is written only
+    where there is none yet (a judged marker is never overwritten by a hold)."""
+    with _pending_lock:
+        have_entry = tenant_id in _pending_trips
+    if not have_entry and not _state_says_tripped(tenant_id):
+        status, _ = _read_json(pending_path(tenant_id), io_status="io")
+        entry = {"generation": persisted_generation(tenant_id), "committed": False,
+                 "details": None, "created": time.time(), "cause": "lock_unavailable"}
+        if status != "ok":
+            with _pending_lock:
+                _pending_trips.setdefault(tenant_id, entry)
+            if status in ("missing", "io"):
+                _create_marker_if_absent(tenant_id, entry)
+            _invalidate_readiness(tenant_id)
     with _pending_lock:
         recorded = tenant_id in _unverified_recorded
     if audit is not None and not recorded:
@@ -369,14 +431,72 @@ def _hold_unverified(tenant_id: str, *, audit: Optional[AuditFn]) -> bool:
     return True
 
 
-def _since_last_change(tenant_id: str, since_ts: float) -> float:
-    """Review r5_s2-2: the judge's window starts at the tenant's last trip/reset.
+def _window_rows(tenant_id: str, since_ts: float) -> list[dict]:
+    """The judged rows of the judge's window (reviews c120 r5_s2-2, r6_s2-2).
 
-    Reached only while no trip is active, so the state's ``at`` is the last RESET:
-    a reset opens a fresh window and the minimum sample size per side must be met
-    again on post-reset turns before the judge can trip."""
-    changed_at, _readable = last_change_ts(tenant_id)
-    return max(float(since_ts), changed_at) if changed_at is not None else float(since_ts)
+    Reached only while no trip is active, so the state is the last RESET (or there is
+    none). A reset stores the ledger's POSITION (``ledger_pos``: inode + byte offset)
+    and the window is every row appended after it — never a comparison of two
+    wall-clock readings, so a clock step before or after the reset neither hides
+    post-reset rows nor admits pre-reset ones. The minimum sample size per side must
+    be met again on post-reset turns before the judge can trip. A state written before
+    positions existed (no ``ledger_pos``) still bounds the window by its ``at``.
+    NOT-JUDGED turns (cancelled, orphaned, no engine) never reach the judge."""
+    status, data = _read_json(state_path(tenant_id))
+    pos = (data or {}).get("ledger_pos") if status == "ok" else None
+    if routing_ledger.valid_position(pos):
+        records = routing_ledger.read_records(tenant_id, since_ts=float(since_ts),
+                                              since_pos=pos)
+    else:
+        changed_at, _readable = last_change_ts(tenant_id)
+        since = max(float(since_ts), changed_at) if changed_at is not None else float(since_ts)
+        records = routing_ledger.read_records(tenant_id, since_ts=since)
+    return routing_ledger.judged(routing_ledger.join(records))
+
+
+def _release_hold(tenant_id: str, pending: dict, metrics, *,
+                  audit: Optional[AuditFn]) -> bool:
+    """Review c120 r6_s2-1: an unverified hold (``cause`` in :data:`HOLD_CAUSES`, no
+    judged details) whose window is now judgeable and finds no trip is released —
+    audit-first: ``routing.rollback_hold_released`` commits BEFORE the marker and the
+    in-process entry go. No committed record (or no audit writer) → still held.
+    A judged trip's marker written meanwhile by another process is never removed here:
+    the hold yields to it. Returns the active state."""
+    status, data = _read_json(pending_path(tenant_id), io_status="io")
+    if status in ("io", "bad"):
+        return True                     # cannot see what the marker says: hold
+    if status == "ok" and (data.get("cause") not in HOLD_CAUSES
+                           or isinstance(data.get("details"), dict)):
+        with _pending_lock:             # a judged trip is pending: it wins
+            _pending_trips.pop(tenant_id, None)
+        return True
+    if audit is None:
+        return True
+    with _pending_lock:
+        owe_unverified = (tenant_id in _pending_trips
+                          and tenant_id not in _unverified_recorded)
+    if owe_unverified:
+        # This process held the tenant but could not chain the hold then (EMFILE):
+        # the chain names the hold before it names its release.
+        try:
+            if not audit("routing.rollback_unverified",
+                         {"tenant_id": tenant_id, "cause": pending.get("cause")}):
+                return True
+        except Exception:  # noqa: BLE001
+            return True
+        with _pending_lock:
+            _unverified_recorded.add(tenant_id)
+    try:
+        ok = bool(audit("routing.rollback_hold_released", {
+            "tenant_id": tenant_id, "cause": pending.get("cause"),
+            "skill_n": int(metrics.skill_n), "bundled_n": int(metrics.bundled_n)}))
+    except Exception:  # noqa: BLE001 — an audit that raises did not commit
+        ok = False
+    if not ok:
+        return True
+    _clear_pending(tenant_id)
+    _invalidate_readiness(tenant_id)
+    return rollback_active(tenant_id)
 
 
 def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
@@ -391,17 +511,27 @@ def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
     if pending is not None and pending["committed"] and pending["details"] is not None:
         # The record committed earlier; only the trip state is outstanding.
         return _commit_trip_state(tenant_id, pending["details"])
+    hold_cause = pending.get("cause") if pending is not None else None
+    if hold_cause == "marker_unreadable":
+        # Review c120 r6_s2-1 (EMFILE variant): the marker cannot be read inside the
+        # lock (only ever the marker itself: an in-process entry is read first). Hold
+        # — never a trip recorded over an unread window — and let the next run judge
+        # what the marker says.
+        return True
     details = pending["details"] if pending is not None else None
     if details is None:
-        # NOT-JUDGED turns (cancelled, orphaned, no engine) never reach the judge.
-        rows = routing_ledger.judged(
-            routing_ledger.join(routing_ledger.read_records(
-                tenant_id, since_ts=_since_last_change(tenant_id, since_ts))))
-        metrics = correctness_tracker.compute_metrics(rows)
-        # A pending trip is retried even if the window moved on: once tripped, only
-        # an operator reset clears it.
-        if pending is None and not correctness_tracker.should_rollback(metrics):
+        metrics = correctness_tracker.compute_metrics(_window_rows(tenant_id, since_ts))
+        tripping = correctness_tracker.should_rollback(metrics)
+        if pending is None and not tripping:
             return False
+        if pending is not None and hold_cause in HOLD_CAUSES and not tripping:
+            # An unverified hold, re-judged now that the lock works: released only on
+            # a judgeable window; too few samples on either side → still held.
+            if metrics.judgeable:
+                return _release_hold(tenant_id, pending, metrics, audit=audit)
+            return True
+        # A pending JUDGED trip (or a hold whose window now trips) is completed even
+        # if the window moved on: once tripped, only an operator reset clears it.
         details = {
             "tenant_id": tenant_id,
             "skill_n": metrics.skill_n,
@@ -517,10 +647,15 @@ def _reset_locked(tenant_id: str, *, audit: Callable[[str, dict], bool],
             _write_state(tenant_id, {"tripped": True, "at": time.time(), **pending["details"]})
         except OSError as exc:
             raise ResetNotApplied("trip state not written — rollback stays active") from exc
+    # Review c120 r6_s2-2: the fresh window starts at a ledger POSITION, taken under
+    # the lock before the record; without one the reset is refused (no record).
+    pos = routing_ledger.ledger_position(tenant_id)
+    if pos is None:
+        raise ResetNotApplied("ledger position not readable — rollback stays active")
     if not audit("routing.rollback_reset", {"tenant_id": tenant_id}):
         raise RuntimeError("routing.rollback_reset did not commit — rollback stays active")
     try:
-        _write_state(tenant_id, {"tripped": False, "at": time.time()})
+        _write_state(tenant_id, {"tripped": False, "at": time.time(), "ledger_pos": pos})
     except OSError as exc:
         try:
             audit("routing.rollback_reset_not_applied", {"tenant_id": tenant_id})

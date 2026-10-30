@@ -175,6 +175,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "routing.rollback_reset_not_applied": "WARNING",
     # the judge could not take the per-tenant rollback lock: tenant held tripped (fail-closed)
     "routing.rollback_unverified": "WARNING",
+    # an unverified hold released: the lock works again and a judged window found no trip
+    "routing.rollback_hold_released": "INFO",
     # ADR-2253 - one record when a forge run (skill/tool/plugin/layer) starts and one when it finishes.
     "forge_run.started":         "INFO",
     "forge_run.finished":        "INFO",
@@ -3567,6 +3569,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "routing.rollback_reset_not_applied": frozenset({"tenant_id"}),
     # cause: closed enum ("lock_unavailable")
     "routing.rollback_unverified": frozenset({"tenant_id", "cause"}),
+    # cause: closed enum ("lock_unavailable" | "marker_unreadable"); skill_n / bundled_n: counts
+    "routing.rollback_hold_released": frozenset({"tenant_id", "cause", "skill_n", "bundled_n"}),
     # ADR-2253: closed enums, an opaque run id, a count and a flag. NEVER: the request, a file name, a message.
     "forge_run.started": frozenset({"tenant_id", "run_id", "run_kind"}),
     # ADR-2254: closed enums, an opaque id, counts and a hash prefix. NEVER: a file name or any cell value.

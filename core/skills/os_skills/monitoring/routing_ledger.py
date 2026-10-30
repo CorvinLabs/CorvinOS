@@ -201,16 +201,60 @@ def record_outcome(
     return _append(tenant_id, rec)
 
 
-def read_records(tenant_id: str, *, since_ts: float = 0.0) -> list[dict]:
+def ledger_position(tenant_id: str) -> Optional[dict]:
+    """The ledger's current end as a POSITION, not a time (review c120 r6_s2-2):
+    ``{"ino": int | None, "offset": int}``. Read under a shared ``flock`` — every
+    append holds the exclusive one — so the offset is always a line boundary. A
+    missing ledger is ``{"ino": None, "offset": 0}``; ``None`` when it cannot be read."""
     path = ledger_path(tenant_id)
     try:
-        size = path.stat().st_size
+        fd = os.open(str(path), os.O_RDONLY)
+    except FileNotFoundError:
+        return {"ino": None, "offset": 0}
     except OSError:
-        return []
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        st = os.fstat(fd)
+        return {"ino": int(st.st_ino), "offset": int(st.st_size)}
+    except OSError:
+        return None
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def valid_position(pos: Any) -> bool:
+    if not isinstance(pos, dict):
+        return False
+    ino, off = pos.get("ino"), pos.get("offset")
+    if ino is not None and (isinstance(ino, bool) or not isinstance(ino, int)):
+        return False
+    return isinstance(off, int) and not isinstance(off, bool) and off >= 0
+
+
+def read_records(tenant_id: str, *, since_ts: float = 0.0,
+                 since_pos: Optional[dict] = None) -> list[dict]:
+    """Well-formed records with ``ts >= since_ts``; with ``since_pos`` (a
+    :func:`ledger_position`) only the records appended AFTER that position — the
+    ledger is append-only, so the position bounds a window independently of the wall
+    clock. A ledger that was replaced (other inode) or is shorter than the position
+    is read whole: the restrictive direction for the rollback judge."""
+    path = ledger_path(tenant_id)
+    start = 0
     try:
         with open(path, "rb") as fh:
-            if size > _READ_TAIL_BYTES:
-                fh.seek(size - _READ_TAIL_BYTES)
+            st = os.fstat(fh.fileno())
+            size = st.st_size
+            if valid_position(since_pos):
+                same_file = since_pos["ino"] is None or since_pos["ino"] == st.st_ino
+                if same_file and since_pos["offset"] <= size:
+                    start = since_pos["offset"]
+            begin = max(start, size - _READ_TAIL_BYTES)
+            fh.seek(begin)
+            if begin > start:
                 fh.readline()  # drop the partial first line
             raw = fh.read()
     except OSError:
