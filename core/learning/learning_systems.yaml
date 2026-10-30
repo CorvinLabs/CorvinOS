@@ -24,7 +24,13 @@
 # `readers` (and a contract `consumer`) name, the same way, the code that USES a
 # system's output (a decision, a prompt, an operator-facing number): it is
 # called, tested in if/while/return/for, passed to a call that is not a route
-# registration, or assigned to a name read later (r3_s3-3). An A entry names a
+# registration, or assigned to a plain name (not `_`, not `self.x`/`d[k]`)
+# that occurs later in the file - anywhere in it, not only in the same function
+# (r3_s3-3, r4_s3-4; the limits are listed in the register test's header).
+# Every caller, reader and consumer is production code: a ref into a test file
+# (tests/, test_*, *_test, conftest, *.test.*) fails (r4_s3-3). In a JS/TS/TSX
+# file comments (also JSX `{/* */}`) and string/template literals do not count
+# (r4_s3-2); a use there is `needle(` or `<Needle`. An A entry names a
 # reader: `readers`, or a signal_contract whose consumer is not `none`
 # (r2_s3-3); it states no open `intake`, and a recorded readiness `measured`
 # must be ready on every surface (so L05/L12 cannot be promoted while the
