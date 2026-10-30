@@ -6,7 +6,22 @@ that each recorded caller ("path:line:needle") still names its reference: the
 needle must be code in the statement of the recorded line, at most 1 line from it,
 and a caller must be a call or registration (an import never counts), a reader a
 use of the value (review c120 r3_s3-1..3). They do not check that a caller really
-runs: that is the job of the E2E tests named in `tests`.
+runs: that is the job of the E2E tests named in `tests`. Every ref must point into
+production code, never into a test file (r4_s3-3, ``_is_test_path``).
+
+Limits of the reader rule (review c120 r4_s3-4), stated rather than hidden - the check
+reads tokens, it does not evaluate code:
+- Python: ``target = ... needle ...`` counts when a plain-name target (not ``_``, not an
+  attribute or subscript store such as ``self._x = v``, not a parenthesised target) occurs
+  ANYWHERE later in the file - not "read later in the same function scope": a name reused
+  by another function satisfies it. A call, a deciding statement (``if``/``return``/...)
+  or a non-registration call argument counts without asking what happens to the result.
+- Code that never executes (``if False:``, an uncalled ``def`` or lambda, code after a
+  ``return``) passes; so does a needle inside an f-string replacement field's call.
+- JS/TS/TSX: comments (including JSX ``{/* */}``) and string/template literals are blanked
+  before matching (r4_s3-2), a template's ``${...}`` included; regex literals are not
+  recognised, and a quote that is JSX text blanks the rest of its line. ``<Needle`` also
+  matches a type argument (``Array<Needle>``). A use is ``needle(`` or ``<Needle``.
 
 Per state: every A has a caller; every B has a caller and an `intake` (the
 condition under which its output may act); every D names the decision that
@@ -216,27 +231,78 @@ def _is_used_read(toks: list[tuple[str, int, int]], i: int, k: int, line: int = 
     # ``target = ... needle ...``: the target must be read after this statement
     eq = [x for x in line if toks[x][0] == "=" and x < i and _enclosing_open(toks, x) is None]
     if eq:
-        targets = {toks[x][0] for x in line if x < eq[0] and toks[x][0].isidentifier()
-                   and not keyword.iskeyword(toks[x][0])}
+        # review c120 r4_s3-4: only plain names count as targets - not the base of an
+        # attribute or subscript store (``self._x = v`` passed because ``self`` recurs),
+        # not an attribute name, not the discard ``_``.
+        tgt = [x for x in line if x < eq[0]]
+        targets = {toks[x][0] for x in tgt if toks[x][0].isidentifier()
+                   and not keyword.iskeyword(toks[x][0]) and toks[x][0] != "_"
+                   and toks[x - 1][0] != "." and toks[x + 1][0] not in (".", "[")
+                   and _enclosing_open(toks, x) is None}
         later = {t[0] for t in toks[line[-1] + 1:]}
         return bool(targets & later)
     return False
 
 
-_JS_COMMENT = re.compile(r"(^|\s)//.*$")
+_JS_CODE_CACHE: dict[Path, list[str]] = {}
 
 
-def _js_violation(lines: list[str], line: int, needle: str, kind: str) -> bool:
+def _js_code_lines(text: str) -> list[str]:
+    """The lines of a JS/TS/TSX source with every comment and literal blanked out (review
+    c120 r4_s3-2): ``// ...``, ``/* ... */`` (so also a JSX comment ``{/* <X /> */}``), and
+    the bodies of '...', "..." and `...` literals (a template's ``${...}`` included) become
+    spaces; line breaks are kept, so line numbers do not move. A quote string ends at its
+    line's end (JS strings do not span lines), which bounds the damage of a quote that is
+    really JSX text (``<p>Don't</p>``) to the rest of that line. Regex literals are not
+    recognised."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+        elif c == "/" and text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+        elif c in "'\"`":
+            j = i + 1
+            while j < n and text[j] != c and (c == "`" or text[j] != "\n"):
+                j += 2 if text[j] == "\\" else 1
+            j = min(n, j + 1) if j < n and text[j] == c else j
+        else:
+            out.append(c)
+            i += 1
+            continue
+        out.append(re.sub(r"[^\n]", " ", text[i:j]))
+        i = j
+    return "".join(out).splitlines()
+
+
+def _js_violation(target: Path, line: int, needle: str, kind: str) -> bool:
     """True when no code line in the window calls ``needle`` (``needle(``) or renders it
-    (``<Needle``). An import line never counts (review c120 r3_s3-1), for any kind."""
+    (``<Needle``). An import line never counts (review c120 r3_s3-1), for any kind; a
+    comment, a JSX comment or a string/template literal never counts (r4_s3-2)."""
+    if target not in _JS_CODE_CACHE:
+        _JS_CODE_CACHE[target] = _js_code_lines(target.read_text(encoding="utf-8", errors="replace"))
+    lines = _JS_CODE_CACHE[target]
     use = re.compile(r"<" + re.escape(needle) + r"\b|(?<![\w$])" + re.escape(needle) + r"\s*\(")
-    for text in lines[max(0, line - 1 - NEEDLE_WINDOW): line + NEEDLE_WINDOW]:
-        code = _JS_COMMENT.sub("", text)
-        if code.lstrip().startswith(("*", "/*")) or re.match(r"\s*import\b", code):
+    for code in lines[max(0, line - 1 - NEEDLE_WINDOW): line + NEEDLE_WINDOW]:
+        if re.match(r"\s*import\b", code):
             continue
         if use.search(code):
             return False
     return True
+
+
+# review c120 r4_s3-3: callers, readers and consumers are PRODUCTION code - a test's call
+# proves nothing about the running system (the e2e-wiring-proof rule: "outside test files").
+_TEST_DIRS = {"tests", "test", "__tests__", "e2e-tests"}
+_TEST_FILE = re.compile(r"^(test_.*|.*_test|conftest|.*\.(test|spec))\.\w+$")
+
+
+def _is_test_path(rel: str) -> bool:
+    parts = Path(rel).parts
+    return any(p in _TEST_DIRS for p in parts[:-1]) or bool(_TEST_FILE.match(parts[-1]))
 
 
 def _ref_violation(ref: str, kind: str = "caller", root: Path = REPO) -> str | None:
@@ -254,6 +320,8 @@ def _ref_violation(ref: str, kind: str = "caller", root: Path = REPO) -> str | N
     m = _REF.match(str(ref))
     if not m:
         return f"{ref!r} is not path:line:needle"
+    if _is_test_path(m["path"]):
+        return f"{m['path']} is a test file: a {kind} must be production code"
     target = root / m["path"]
     if not target.is_file():
         return f"{m['path']} does not exist"
@@ -265,7 +333,7 @@ def _ref_violation(ref: str, kind: str = "caller", root: Path = REPO) -> str | N
     if target.suffix != ".py":
         if not re.fullmatch(r"[A-Za-z_$][\w$]*", needle):
             return f"{ref!r}: a non-Python needle is one identifier"
-        if _js_violation(lines, line, needle, kind):
+        if _js_violation(target, line, needle, kind):
             return (f"{m['path']}:{line} has no {needle!r} called or rendered within "
                     f"{NEEDLE_WINDOW} line(s)")
         return None
@@ -574,6 +642,90 @@ def test_a_route_registration_is_no_reader():
     l19.pop("promoted_from"), l19.pop("signal_contract")
     l19["readers"] = [reg]
     assert [r for r in l19["readers"] if _ref_violation(r, kind="reader") is not None] == [reg]
+
+
+L18_TSX = "core/console/corvin_console/web-next/src/pages/video-producer.tsx"
+L18_LINE = "      <LearningOverview jobId={job.id} csrf={csrf} />\n"
+
+
+@pytest.mark.parametrize("new", [
+    # review c120 r4_s3-2: the usual way to unrender a JSX element, and its relatives
+    "      {/* <LearningOverview jobId={job.id} csrf={csrf} /> */}\n",
+    "      {null /* <LearningOverview jobId={job.id} csrf={csrf} /> */}\n",
+    "      {'<LearningOverview jobId={job.id} />'}\n",
+    "      {\"LearningOverview(job)\"}\n",
+    "      {`${job.id} <LearningOverview />`}\n",
+    "      // <LearningOverview jobId={job.id} csrf={csrf} />\n",
+])
+def test_a_tsx_reader_inside_a_comment_or_literal_fails(tmp_path, new):
+    """On a COPY of the L18 reader's file (the tree is not touched)."""
+    ref = next(r for _, _, r in _all_refs() if r.startswith(L18_TSX + ":"))
+    clean = _mutated_copy(tmp_path / "clean", L18_TSX, L18_LINE, L18_LINE)
+    assert _ref_violation(ref, kind="reader", root=clean) is None, "positive control"
+    mutant = _mutated_copy(tmp_path / "mutant", L18_TSX, L18_LINE, new)
+    assert "has no" in (_ref_violation(ref, kind="reader", root=mutant) or ""), new
+
+
+def test_js_masking_keeps_code_after_a_literal_and_line_numbers():
+    src = ("const a = 'x // y'; useLoops();\n"
+           "/* one\n two */ render(<Panel />)\n"
+           "const t = `a\nb ${useLoops()}`; useMaturity()\n")
+    code = _js_code_lines(src)
+    assert len(code) == len(src.splitlines()), "line numbers do not move"
+    assert "useLoops()" in code[0] and "//" not in code[0] and "x" not in code[0]
+    assert "one" not in code[1] and "<Panel" in code[2] and "two" not in code[2]
+    assert "useLoops" not in code[4] and "useMaturity()" in code[4]
+
+
+@pytest.mark.parametrize(("path", "is_test"), [
+    ("tests/skills/test_l5_routing_loop.py", True),
+    ("core/console/tests/helpers.py", True),
+    ("core/plugins/corvin_plugins/test_util.py", True),
+    ("corvin_operator/bridges/shared/adapter_test.py", True),
+    ("core/console/conftest.py", True),
+    ("core/console/corvin_console/web-next/src/lib/x.test.tsx", True),
+    ("core/console/corvin_console/web-next/src/__tests__/x.tsx", True),
+    ("core/learning/outcome_sink.py", False),
+    ("core/console/corvin_console/web-next/src/pages/video-producer.tsx", False),
+    ("core/skills/os_skills/contest_rules.py", False),
+])
+def test_test_path_detection(path, is_test):
+    assert _is_test_path(path) is is_test
+
+
+def test_a_ref_into_a_test_file_never_proves_a_caller_or_reader():
+    """Review c120 r4_s3-3: an A entry kept live by a test's call. Copies only."""
+    import copy
+
+    test_ref = "tests/skills/test_l5_routing_loop.py:869:dp.route_and_record"
+    assert "route_and_record" in _lines(REPO / "tests/skills/test_l5_routing_loop.py")[868], (
+        "positive control: the cited test line really calls it")
+    for kind in ("caller", "reader", "consumer"):
+        assert "is a test file" in (_ref_violation(test_ref, kind=kind) or ""), kind
+    assert [r for _, _, r in _all_refs() if _is_test_path(_REF.match(r)["path"])] == [], (
+        "the register cites a test file")
+    broken = copy.deepcopy(_load())
+    l06 = next(s for s in broken if s["id"] == "L06")
+    assert l06["state"] == "A", "positive control"
+    l06["callers"] = l06["readers"] = [test_ref]
+    assert [r for r in l06["callers"] + l06["readers"] if _ref_violation(r) is None
+            or _ref_violation(r, kind="reader") is None] == []
+
+
+@pytest.mark.parametrize(("stmt", "used"), [
+    # review c120 r4_s3-4: only a plain name read later is a used read
+    ("    self._never_read = st.confidence_threshold\n    return self.other\n", False),
+    ("    _ = st.confidence_threshold\n    return _\n", False),
+    ("    cache[key] = st.confidence_threshold\n    return cache\n", False),
+    ("    limit = st.confidence_threshold\n    return limit\n", True),
+    ("    limit = st.confidence_threshold\n    return 0\n", False),
+])
+def test_an_assignment_reader_needs_a_plain_name_read_later(tmp_path, stmt, used):
+    f = tmp_path / "core" / "mod.py"
+    f.parent.mkdir(parents=True)
+    f.write_text("def f(st, cache, key):\n" + stmt, encoding="utf-8")
+    why = _ref_violation("core/mod.py:2:st.confidence_threshold", kind="reader", root=tmp_path)
+    assert (why is None) is used, why
 
 
 @pytest.mark.parametrize("sys_id", ["L05", "L12"])
