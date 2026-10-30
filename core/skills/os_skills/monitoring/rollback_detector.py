@@ -18,7 +18,10 @@ A failure at any step leaves the marker (Phase 2 stays off) and the trip is retr
 by the next phase decision of any turn (:func:`maybe_retry_pending`, throttled) and by
 the next readiness refresh. A retry after a committed record (step 3 failed) only
 writes the trip state; it does not chain a second record. A reset is audit-first too:
-``routing.rollback_reset`` commits before the state is written.
+``routing.rollback_reset`` commits before the state is written. A trip (steps 1-3) and
+a reset run under one per-tenant rollback lock (``rollback.lock``, ``flock``) and so
+never interleave in any process (review r4_s2-3); a trip or reset invalidates only its
+own tenant's readiness verdicts (review r4_s2-2).
 
 Every authoritative state write carries a ``generation`` one higher than the one it
 replaces (review r3_s2-4/-5). Other processes compare it: the readiness cache drops a
@@ -28,12 +31,18 @@ another process came after it and wins.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover — Windows
+    _fcntl = None
 
 from core.skills.os_skills.monitoring import correctness_tracker, routing_ledger
 
@@ -168,13 +177,53 @@ def _default_audit(tenant_id: str) -> AuditFn:
     return _emit
 
 
-def _invalidate_readiness() -> None:
+def _invalidate_readiness(tenant_id: str) -> None:
+    """Drop only ``tenant_id``'s cached readiness verdicts (review r4_s2-2)."""
     try:
         from core.skills.os_skills.monitoring import readiness  # noqa: PLC0415 — cycle
 
-        readiness.clear_cache()
+        readiness.clear_cache(tenant_id)
     except Exception:  # noqa: BLE001
         pass
+
+
+LOCK_FILENAME = "rollback.lock"
+
+
+@contextlib.contextmanager
+def _rollback_lock(tenant_id: str) -> Iterator[None]:
+    """The per-tenant rollback lock (review r4_s2-3): a trip (marker, record, state)
+    and a reset (re-read, record, state) never interleave, in one process or across
+    processes. ``flock`` on a lock file in the tenant's routing dir — each holder opens
+    its own descriptor, so two threads of one process exclude each other too. Where
+    ``fcntl`` does not exist (Windows) ``msvcrt.locking`` on the first byte is used."""
+    path = routing_ledger.routing_dir(tenant_id) / LOCK_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
+        else:  # pragma: no cover — Windows
+            import msvcrt  # noqa: PLC0415
+
+            while True:
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+        yield
+    finally:
+        try:
+            if _fcntl is not None:
+                _fcntl.flock(fd, _fcntl.LOCK_UN)
+            else:  # pragma: no cover — Windows
+                import msvcrt  # noqa: PLC0415
+
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(fd)
 
 
 def last_change_ts(tenant_id: str) -> tuple[Optional[float], bool]:
@@ -227,7 +276,7 @@ def _write_state(tenant_id: str, data: dict, *, path: Optional[Path] = None) -> 
         except OSError:
             pass
         raise
-    _invalidate_readiness()
+    _invalidate_readiness(tenant_id)
 
 
 def _hold_pending(tenant_id: str, entry: dict) -> None:
@@ -239,7 +288,7 @@ def _hold_pending(tenant_id: str, entry: dict) -> None:
                      path=pending_path(tenant_id))
     except OSError:
         pass   # the in-process pending trip still holds this process
-    _invalidate_readiness()
+    _invalidate_readiness(tenant_id)
 
 
 def _commit_trip_state(tenant_id: str, details: dict) -> bool:
@@ -250,14 +299,21 @@ def _commit_trip_state(tenant_id: str, details: dict) -> bool:
     except OSError:
         return True
     _clear_pending(tenant_id)
-    _invalidate_readiness()
+    _invalidate_readiness(tenant_id)
     return True
 
 
 def evaluate(tenant_id: str, *, audit: Optional[AuditFn] = None,
              since_ts: float = 0.0) -> bool:
     """Judge the ledger; trip (marker, record, state) when the Skill trails.
-    Returns the active state."""
+    Returns the active state. Runs under the per-tenant rollback lock: a reset can
+    never land between the trip's record and its state (review r4_s2-3)."""
+    with _rollback_lock(tenant_id):
+        return _evaluate_locked(tenant_id, audit=audit, since_ts=since_ts)
+
+
+def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
+                     since_ts: float) -> bool:
     pending = _pending_entry(tenant_id)
     if pending is None and rollback_active(tenant_id):
         return True
@@ -352,15 +408,46 @@ def maybe_retry_pending(tenant_id: str, *, audit: Optional[AuditFn] = None,
 
 
 class ResetNotApplied(RuntimeError):
-    """``routing.rollback_reset`` committed but the state could not be written: the
-    trip stays active and ``routing.rollback_reset_not_applied`` follows the record."""
+    """The reset's state could not be written: the trip stays active. Either
+    ``routing.rollback_reset`` committed and ``routing.rollback_reset_not_applied``
+    follows it, or the outstanding trip state could not be written first and no reset
+    record was chained."""
 
 
-def reset_rollback(tenant_id: str, *, audit: Callable[[str, dict], bool]) -> None:
+class NotTripped(LookupError):
+    """``reset_rollback(require_active=True)``: no trip is active (read under the lock)."""
+
+
+def reset_rollback(tenant_id: str, *, audit: Callable[[str, dict], bool],
+                   require_active: bool = False) -> None:
     """Operator action: clear a trip. Audit-first: no committed record → no reset
     (``RuntimeError``). A state write that fails after the record committed chains
     the compensating ``routing.rollback_reset_not_applied`` and raises
-    :class:`ResetNotApplied`; the rollback stays active."""
+    :class:`ResetNotApplied`; the rollback stays active.
+
+    Review r4_s2-3: runs under the same per-tenant rollback lock as a trip, so it
+    never lands between a trip's record and its state. Under the lock it re-reads the
+    persisted state: ``require_active`` raises :class:`NotTripped` when no trip is
+    active; a trip whose record committed but whose state is not on disk yet (its
+    state write failed) gets that state written FIRST, so the persisted sequence
+    follows the chain (trip, then reset). If that write fails the reset is refused
+    with :class:`ResetNotApplied` before its record — the chain's last word stays the
+    trip, which is still active."""
+    with _rollback_lock(tenant_id):
+        _reset_locked(tenant_id, audit=audit, require_active=require_active)
+
+
+def _reset_locked(tenant_id: str, *, audit: Callable[[str, dict], bool],
+                  require_active: bool) -> None:
+    if require_active and not rollback_active(tenant_id):
+        raise NotTripped(tenant_id)
+    pending = _pending_entry(tenant_id)
+    if (pending is not None and pending["committed"] and pending["details"] is not None
+            and not _state_says_tripped(tenant_id)):
+        try:
+            _write_state(tenant_id, {"tripped": True, "at": time.time(), **pending["details"]})
+        except OSError as exc:
+            raise ResetNotApplied("trip state not written — rollback stays active") from exc
     if not audit("routing.rollback_reset", {"tenant_id": tenant_id}):
         raise RuntimeError("routing.rollback_reset did not commit — rollback stays active")
     try:
@@ -372,7 +459,7 @@ def reset_rollback(tenant_id: str, *, audit: Callable[[str, dict], bool]) -> Non
             pass
         raise ResetNotApplied("rollback state not written — rollback stays active") from exc
     _clear_pending(tenant_id)
-    _invalidate_readiness()
+    _invalidate_readiness(tenant_id)
 
 
 def reset_for_tests() -> None:

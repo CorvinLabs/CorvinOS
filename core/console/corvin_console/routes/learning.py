@@ -890,10 +890,11 @@ async def reset_routing_rollback(session = Depends(require_csrf)):
     tenant_id = session.tenant_id
 
     def _reset() -> None:
-        if not rollback_detector.rollback_active(tenant_id):
-            raise LookupError
+        # The not-tripped check is made under the per-tenant rollback lock, inside
+        # reset_rollback (review r4_s2-3): a check out here raced a concurrent trip.
         rollback_detector.reset_rollback(
-            tenant_id, audit=rollback_detector._default_audit(tenant_id))
+            tenant_id, audit=rollback_detector._default_audit(tenant_id),
+            require_active=True)
 
     try:
         await asyncio.to_thread(_reset)

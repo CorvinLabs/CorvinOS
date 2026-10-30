@@ -50,7 +50,8 @@ _CACHE_TTL_S = 300.0
 #: Stale-while-revalidate bound. A verdict older than ``_CACHE_TTL_S`` is refreshed,
 #: and until the refresh lands the last verdict is served, as long as it is younger
 #: than this. Older, missing, or invalidated by :func:`clear_cache` (a rollback trip or
-#: reset bumps the generation and empties the cache) -> the ``evaluating`` placeholder,
+#: reset of a tenant bumps THAT tenant's generation and drops only its verdicts) -> the
+#: ``evaluating`` placeholder,
 #: which ``dual_write.effective_phase`` serves as shadow. Review r2_s2-1: answering
 #: ``evaluating`` for every merely stale entry served shadow to every turn that came
 #: more than 300 s after the previous one (66 % of the live console's turns).
@@ -175,7 +176,12 @@ _EVALUATING = Readiness(False, EVALUATING_REASON, 0, None, 0)
 
 #: Bumped by :func:`clear_cache`. A refresh that started before an invalidation (a
 #: rollback trip/reset) computed its verdict on the old state and is discarded.
+#: ``_generation`` is the whole-cache one (``clear_cache()``), ``_tenant_generation``
+#: the per-tenant one (``clear_cache(tenant_id)``): a trip or reset of tenant X
+#: invalidates only X's verdicts (review r4_s2-2: a global clear served every other
+#: tenant's next console turn as ``pending`` shadow and restarted its bridge soak).
 _generation = 0
+_tenant_generation: dict[str, int] = {}
 
 
 def _stamp(tenant_id: str) -> tuple:
@@ -187,7 +193,7 @@ def _stamp(tenant_id: str) -> tuple:
 
 def _refresh(key: tuple[str, str]) -> None:
     with _lock:
-        gen = _generation
+        gen = (_generation, _tenant_generation.get(key[0], 0))
     try:
         rollback_detector.maybe_retry_pending(key[0])
     except Exception:  # noqa: BLE001 — the marker keeps restricting either way
@@ -199,7 +205,7 @@ def _refresh(key: tuple[str, str]) -> None:
         result = Readiness(False, "evaluation_failed", 0, None, 0)
     changed = _stamp(key[0]) != stamp
     with _lock:
-        if gen != _generation:
+        if gen != (_generation, _tenant_generation.get(key[0], 0)):
             return   # invalidated mid-flight: never store a pre-invalidation verdict
         _refreshing.discard(key)
         if changed:
@@ -254,9 +260,18 @@ def cached_evaluate(tenant_id: str, surface: str, *, background: bool = True) ->
     return hit[1] if servable else _EVALUATING
 
 
-def clear_cache() -> None:
+def clear_cache(tenant_id: Optional[str] = None) -> None:
+    """Invalidate cached verdicts: only ``tenant_id``'s (every surface) when given —
+    what a rollback trip or reset does — else the whole cache (tests)."""
     global _generation
     with _lock:
-        _generation += 1
-        _cache.clear()
-        _refreshing.clear()
+        if tenant_id is None:
+            _generation += 1
+            _cache.clear()
+            _refreshing.clear()
+            return
+        _tenant_generation[tenant_id] = _tenant_generation.get(tenant_id, 0) + 1
+        for key in [k for k in _cache if k[0] == tenant_id]:
+            _cache.pop(key, None)
+        for key in [k for k in _refreshing if k[0] == tenant_id]:
+            _refreshing.discard(key)
