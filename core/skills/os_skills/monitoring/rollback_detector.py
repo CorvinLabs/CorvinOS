@@ -26,7 +26,9 @@ reads as "not tripped" (review r5_s2-1): the judge holds the tenant (in-process
 entry always, the marker where none exists and the dir is writable) and chains
 ``routing.rollback_unverified``; the reset route answers 503 ``lock_unavailable``.
 Such an UNVERIFIED hold is released automatically and audited (review c120 r6_s2-1):
-the next judge that gets the lock re-judges it, trips on a trailing window, and on a
+the next judge that gets the lock re-judges it, trips on a trailing window (the hold
+is replaced by the judged trip — entry and marker — before the record is chained, so
+a record that fails to commit leaves a judged trip, review c120 r7), and on a
 judgeable window that finds no trip chains ``routing.rollback_hold_released`` and only
 then removes the marker. A marker that cannot be read inside the lock holds without
 judging (never a trip over an unread window). A JUDGED trip still needs the operator.
@@ -544,8 +546,12 @@ def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
     created = (pending or {}).get("created")
     entry = {"generation": generation, "committed": False, "details": details,
              "created": created if isinstance(created, (int, float)) else time.time()}
-    if pending is None:
-        _hold_pending(tenant_id, entry)            # step 1: restrictive first
+    if pending is None or pending["details"] is None:
+        # Step 1: restrictive first. A hold (or a torn marker) judged trailing just now
+        # is REPLACED — in-process entry and marker — by the judged trip BEFORE its
+        # record is chained (review c120 r7, J1): a record that fails to commit must
+        # leave a judged trip, which no later window can release, not the hold.
+        _hold_pending(tenant_id, entry)
     committed = False
     if audit is not None:
         try:

@@ -158,6 +158,57 @@ def test_a_hold_whose_window_trails_becomes_a_real_trip(tmp_path):
         assert _events(sb) == ["routing.rollback_unverified", "routing.rollback_triggered"]
 
 
+def test_a_hold_whose_trip_record_fails_stays_a_judged_trip(tmp_path, monkeypatch):
+    """Review c120 r7 (J1): a hold re-judged on a trailing window becomes a JUDGED trip
+    BEFORE its record is chained. When ``routing.rollback_triggered`` does not commit,
+    the marker and the in-process entry carry the judged details, so a window that
+    recovers afterwards never releases the tenant — only the operator reset does."""
+    with console_client(tmp_path) as sb:
+        import delegation_policy
+        from core.skills.os_skills.monitoring import dual_write, rollback_detector
+
+        dual_write.reset_for_tests()
+        _seed(sb.tenant_id, 120, source="skill", ok=False)
+        _seed(sb.tenant_id, 120, source="bundled", ok=True)
+        _break_lock(sb)
+        try:
+            _skill_turn(sb.tenant_id, ok=False)       # the hold
+        finally:
+            _fix_lock(sb)
+        assert _events(sb) == ["routing.rollback_unverified"]
+
+        real_audit = delegation_policy._audit
+
+        def _trip_fails(et, d, *, tenant_id):
+            if et == "routing.rollback_triggered":
+                return False                          # the record does not commit
+            return real_audit(et, d, tenant_id=tenant_id)
+        monkeypatch.setattr(delegation_policy, "_audit", _trip_fails)
+        _skill_turn(sb.tenant_id, ok=False)           # the window trails: judged now
+        monkeypatch.setattr(delegation_policy, "_audit", real_audit)
+        assert rollback_detector.rollback_active(sb.tenant_id)
+        marker = json.loads(rollback_detector.pending_path(sb.tenant_id).read_text())
+        entry = dict(rollback_detector._pending_trips[sb.tenant_id])
+
+        _seed(sb.tenant_id, 300, source="skill", ok=True)    # the window recovers
+        _seed(sb.tenant_id, 300, source="bundled", ok=False)
+        _skill_turn(sb.tenant_id, ok=True)
+        assert rollback_detector.rollback_active(sb.tenant_id), \
+            "a trip the judge saw was released without an operator reset"
+        assert _named(sb, "routing.rollback_hold_released") == []
+        # the failed record left a JUDGED trip behind, on disk and in process
+        assert marker.get("cause") is None, marker
+        assert isinstance(marker.get("details"), dict) and marker["details"]["skill_n"] == 122
+        assert entry.get("cause") is None and isinstance(entry.get("details"), dict)
+        # the retry completed the JUDGED trip with the details it was judged on
+        assert _events(sb) == ["routing.rollback_unverified", "routing.rollback_triggered"]
+        rec = _named(sb, "routing.rollback_triggered")[0]
+        assert (rec.get("details") or {}).get("skill_n") == 122
+        state = json.loads(rollback_detector.state_path(sb.tenant_id).read_text())
+        assert state["tripped"] is True
+        _verify_chain(sb)
+
+
 def test_a_judged_trip_is_never_released_automatically(tmp_path):
     with console_client(tmp_path) as sb:
         from core.skills.os_skills.monitoring import rollback_detector
