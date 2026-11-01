@@ -39,17 +39,22 @@
 
 ---
 
-## 🎥 Video — CorvinOS on YouTube
+## 🎥 Video — Vom Funken zum Fundament: zwei Fragen, eine Serie
 
-The preview below plays right here on GitHub; click it to jump straight into the CorvinOS video series "From Spark to Foundation" on YouTube.
+Die Serie beginnt mit zwei Fragen:
+
+1. **Wie lässt sich die Entscheidungsfindung gegenüber nativen Frontier-Modellen verbessern?**
+2. **Ist es überhaupt noch nötig, die Intelligenz des Modells zu steigern?**
+
+Beantwortet werden beide in Folge 7. Die Vorschau spielt direkt hier auf GitHub; ein Klick darauf öffnet die komplette Serie auf YouTube.
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">
-    <img src="docs/media/corvinos-console-tour-teaser.gif" alt="Video: CorvinOS on YouTube (animated preview, plays inline; click to open the video series)" width="720"/>
+    <img src="docs/media/corvintv-e1s1-preview.de.gif" alt="Vorschau: Vom Funken zum Fundament, Folge 1 mit den zwei Leitfragen der Serie, beantwortet in Folge 7 (Klick öffnet die Serie auf YouTube)" width="720"/>
   </a><br/>
 </p>
 
-All episodes on YouTube: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">watch the series</a>
+Alle Folgen auf YouTube: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">zur Serie</a>
 
 ---
 
