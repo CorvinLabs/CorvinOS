@@ -39,22 +39,22 @@
 
 ---
 
-## 🎥 Video — Vom Funken zum Fundament: zwei Fragen, eine Serie
+## 🎥 Video — From Spark to Foundation: two questions, one series
 
-Die Serie beginnt mit zwei Fragen:
+The series opens with two questions:
 
-1. **Wie lässt sich die Entscheidungsfindung gegenüber nativen Frontier-Modellen verbessern?**
-2. **Ist es überhaupt noch nötig, die Intelligenz des Modells zu steigern?**
+1. **How can decision-making be improved compared with native frontier models?**
+2. **Is it even still necessary to increase the model's intelligence?**
 
-Beantwortet werden beide in Folge 7. Die Vorschau spielt direkt hier auf GitHub; ein Klick darauf öffnet die komplette Serie auf YouTube.
+Both are answered in episode 7. The preview plays right here on GitHub; click it to open the full series on YouTube.
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">
-    <img src="docs/media/corvintv-e1s1-preview.de.gif" alt="Vorschau: Vom Funken zum Fundament, Folge 1 mit den zwei Leitfragen der Serie, beantwortet in Folge 7 (Klick öffnet die Serie auf YouTube)" width="720"/>
+    <img src="docs/media/corvintv-e1s1-preview.de.gif" alt="Preview: From Spark to Foundation, episode 1 with the series' two guiding questions, answered in episode 7 (click to open the series on YouTube)" width="720"/>
   </a><br/>
 </p>
 
-Alle Folgen auf YouTube: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">zur Serie</a>
+All episodes on YouTube: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">watch the series</a>
 
 ---
 
