@@ -50,7 +50,7 @@ Both are answered in episode 7. The preview plays right here on GitHub; click it
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">
-    <img src="docs/media/corvintv-e1s1-preview.de.gif" alt="Preview: From Spark to Foundation, episode 1 with the series' two guiding questions, answered in episode 7 (click to open the series on YouTube)" width="720"/>
+    <img src="docs/media/corvintv-e1s1-preview.en.gif" alt="Preview: From Spark to Foundation, episode 1 with the series' two guiding questions, answered in episode 7 (click to open the series on YouTube)" width="720"/>
   </a><br/>
 </p>
 
