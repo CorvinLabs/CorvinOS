@@ -697,8 +697,8 @@ def test_a_ref_into_a_test_file_never_proves_a_caller_or_reader():
     """Review c120 r4_s3-3: an A entry kept live by a test's call. Copies only."""
     import copy
 
-    test_ref = "tests/skills/test_l5_routing_loop.py:869:dp.route_and_record"
-    assert "route_and_record" in _lines(REPO / "tests/skills/test_l5_routing_loop.py")[868], (
+    test_ref = "tests/skills/test_l5_routing_loop.py:873:dp.route_and_record"
+    assert "route_and_record" in _lines(REPO / "tests/skills/test_l5_routing_loop.py")[872], (
         "positive control: the cited test line really calls it")
     for kind in ("caller", "reader", "consumer"):
         assert "is a test file" in (_ref_violation(test_ref, kind=kind) or ""), kind
