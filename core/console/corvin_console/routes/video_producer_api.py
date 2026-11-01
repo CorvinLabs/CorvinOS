@@ -377,6 +377,8 @@ _SCENE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_TASK_CHARS = 4000
 _MAX_SOURCE_CHARS = 20_000
 _MAX_SOURCES = 4
+_MAX_DESIGNS = 12
+_MAX_DESIGN_CHARS = 8_000_000
 _MAX_SOURCES_TOTAL = 40_000
 _MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 _SCENE_NARRATION_CHARS = 600
@@ -432,6 +434,11 @@ class SourceItem(BaseModel):
     text: str = Field(..., min_length=1, max_length=_MAX_SOURCE_CHARS)
 
 
+class DesignItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=40, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$")
+    svg: str = Field(..., min_length=1, max_length=_MAX_DESIGN_CHARS)
+
+
 class CreateJobRequest(BaseModel):
     task: str = Field(..., max_length=_MAX_TASK_CHARS)
     # Revision: a change request against a produced video of this tenant. The original stays.
@@ -440,6 +447,12 @@ class CreateJobRequest(BaseModel):
     sources: List[SourceItem] = Field(default_factory=list, max_length=_MAX_SOURCES)
     # PLAN-0945: absent = the tenant's default style (else built-in); "corvin" = built-in; else one of THIS tenant's styles.
     style_id: Optional[str] = Field(None, max_length=32)
+    # CorvinTV cinematic mode: a film of continuous animated acts instead of slides. Absent/"slides" = unchanged.
+    mode: Literal["slides", "cinematic"] = "slides"
+    cinematic_minutes: Optional[int] = Field(None, ge=1, le=30)
+    cinematic_langs: Optional[List[str]] = Field(None, max_length=2)
+    # The user's own designs (Penpot SVG exports) the film may show; the plugin sanitises each one on import.
+    designs: List[DesignItem] = Field(default_factory=list, max_length=_MAX_DESIGNS)
 
 
 class JobResponse(BaseModel):
@@ -1484,6 +1497,8 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     if not shown:
         raise HTTPException(status_code=400, detail="Task cannot be empty")
     base_job = None
+    if req.mode == "cinematic" and req.base_job_id:  # a revision brief edits a slide storyboard; a film starts from a fresh brief
+        raise HTTPException(status_code=409, detail="A cinematic film cannot be a revision; describe the change in a new brief")
     if req.base_job_id:
         _check_job_id(req.base_job_id)
     task = shown
@@ -1573,6 +1588,14 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     }
     if web_style is not None:
         config["web_style"] = web_style
+    if req.mode == "cinematic":
+        config["mode"] = "cinematic"
+        if req.cinematic_minutes:
+            config["cinematic_minutes"] = req.cinematic_minutes
+        if req.cinematic_langs:
+            config["cinematic_langs"] = req.cinematic_langs
+        if req.designs:
+            config["cinematic_designs"] = {d.name: d.svg for d in req.designs}
     if base_job is not None:
         # revision_locality (ADR-2247, information): the job compares its storyboard with the base video's
         config["revision_base_narrations"] = [str(getattr(sc, "narration_text", "") or "")
@@ -1601,7 +1624,7 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     await asyncio.to_thread(_lifecycle_audit, rec.tenant_id, "video_producer.job_started", {
         "job_id": job_id, "runner": _JOB_RUNNER, "tts_engine": settings["tts_engine"],
         "storyboard_backend": backend, "is_revision": bool(req.base_job_id),
-        "grounded": grounding_pack is not None, "styled": web_style is not None,
+        "grounded": grounding_pack is not None, "styled": web_style is not None, "mode": req.mode,
         "max_duration_minutes": settings["max_duration_minutes"]})
     _watch_job_execution(rec.tenant_id, job_id, config["storage_base"])
     return {"job_id": job_id, "status": "pending", "created_at": job.created_at.isoformat()}

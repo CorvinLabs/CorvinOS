@@ -225,6 +225,35 @@ describe("Video Producer studio", () => {
     expect(posted[0].body.sources).toEqual([{ name: "notes.md", text: "text of notes.md" }]);
   });
 
+  it("a cinematic film takes Penpot SVG files as designs (not as a style) and posts mode, length and designs", async () => {
+    server.use(...handlers());
+    renderIt();
+    const attach = (await screen.findByTestId("attach-input")) as HTMLInputElement;
+    expect(screen.queryByTestId("film-minutes")).toBeNull();
+    fireEvent.click(await screen.findByTestId("film-toggle"));
+    fireEvent.change(await screen.findByTestId("film-minutes"), { target: { value: "6" } });
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>';
+    fireEvent.change(attach, { target: { files: [new File([svg], "Home Screen.svg", { type: "image/svg+xml" })] } });
+    await waitFor(() => expect(screen.getAllByTestId("design-chip")).toHaveLength(1));
+    expect(screen.getByTestId("design-chip").textContent).toMatch(/Home-Screen/);
+    expect(screen.queryByTestId("deck-offer")).toBeNull();
+    fireEvent.change(screen.getByTestId("task-input"), { target: { value: "Show how the app works" } });
+    fireEvent.click(screen.getByTestId("start-production"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].body).toMatchObject({ mode: "cinematic", cinematic_minutes: 6, designs: [{ name: "Home-Screen", svg }] });
+    // the designs are consumed by the job; a slide video afterwards carries none of it
+    await waitFor(() => expect(screen.queryByTestId("design-chip")).toBeNull());
+  });
+
+  it("without the film switch an attached SVG is still offered as a style", async () => {
+    server.use(...handlers());
+    renderIt();
+    const attach = (await screen.findByTestId("attach-input")) as HTMLInputElement;
+    fireEvent.change(attach, { target: { files: [new File(["<svg/>"], "board.svg", { type: "image/svg+xml" })] } });
+    await waitFor(() => expect(screen.getByTestId("deck-offer")).toBeTruthy());
+    expect(screen.queryByTestId("design-chip")).toBeNull();
+  });
+
   it("fullscreen: the button and the F key put the stage into fullscreen; F while typing does not", async () => {
     server.use(...handlers());
     const req = vi.fn().mockResolvedValue(undefined);

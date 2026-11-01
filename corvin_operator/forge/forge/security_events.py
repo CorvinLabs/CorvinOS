@@ -4879,7 +4879,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "video_producer.style_applied": frozenset({"tenant_id", "job_id", "style_id"}),
     "video_producer.job_started": frozenset({
         "tenant_id", "job_id", "runner", "tts_engine", "storyboard_backend", "is_revision", "grounded",
-        "styled", "max_duration_minutes",
+        "styled", "max_duration_minutes", "mode",
     }),
     "video_producer.job_completed": _VP_JOB_END_FIELDS,
     "video_producer.job_failed": _VP_JOB_END_FIELDS,

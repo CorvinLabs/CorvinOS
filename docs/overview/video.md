@@ -31,6 +31,10 @@
 - **Measurable output.** Each job reports per-step progress and ffprobe quality metrics; feedback on a single scene is recorded in the audit chain before it is stored.
 - **A plugin you can take out.** It ships through the Corvin Marketplace; uninstall it and the sidebar entry is gone.
 
+## Cinematic films (plugin 1.8.0)
+
+Besides the slide video the plugin makes a **cinematic film**: a few long animated shots with a moving camera, narrated beat by beat, where every visual event happens on the word that causes it (the look of the *From Spark to Foundation* series). In the Video panel switch **Cinematic film** on and pick the length (2 to 10 minutes); through the API send `mode: "cinematic"` with `cinematic_minutes`, optionally `cinematic_langs` (at most two; each language gets its own MP4, identical in picture and length) and `designs`: Penpot SVG exports the film may show (`{name, svg}`, at most 12). A film runs through the same gates as a slide video (L44, L34, L35, TTS egress) and the same storyboard route (Claude only), is a new video and cannot be revised in place, and its `video_producer.job_started` audit record carries `mode`. How it works, what makes the result look good, the safety of designs and the limits: the plugin's `docs/CINEMATIC.md`.
+
 ## How it works
 
 1. **Task.** You submit a text task in the Video panel or with `POST /v1/console/video/jobs`. The job runs in the background; the request returns a `job_id` immediately.

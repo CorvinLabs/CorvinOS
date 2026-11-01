@@ -36,6 +36,7 @@ import { useAuth } from "@/lib/auth";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { extractVideoSources, MAX_VIDEO_SOURCES, VIDEO_SOURCE_ACCEPT, type VideoSource } from "@/lib/api/video-sources";
 import { BUILTIN_STYLE_ID, STYLE_DECK_ACCEPT, isDeckFile, type StyleList } from "@/lib/api/video-styles";
+import { DEFAULT_FILM_MINUTES, FILM_MINUTES, MAX_DESIGN_CHARS, MAX_FILM_DESIGNS, designName, jobBody, type FilmDesign } from "@/lib/api/video-film";
 import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-styles";
 import { ProductionSignals } from "@/components/video-quality-report";
 import { AssetsTab, CanvasTab, CaptureDialog, CodeTab } from "@/components/video-expressive";
@@ -411,6 +412,9 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deck, setDeck] = useState<File | null>(null);
+  const [film, setFilm] = useState(false);
+  const [filmMinutes, setFilmMinutes] = useState<number>(DEFAULT_FILM_MINUTES);
+  const [designs, setDesigns] = useState<FilmDesign[]>([]);
   const [captureFor, setCaptureFor] = useState<string | null>(null);
   const [dismissedUrl, setDismissedUrl] = useState<string | null>(null);
   const [capturedFor, setCapturedFor] = useState<Record<string, { id: string; host: string }>>({});
@@ -428,9 +432,9 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
   const create = useMutation({
     mutationFn: () => api<{ job_id: string }>(`${BASE}/jobs`, {
       method: "POST", csrf,
-      body: { task: text.trim(), base_job_id: revising ? selected!.id : undefined, style_id: pickedStyle ?? undefined, sources: sources.map(({ name, text: t }) => ({ name, text: t })) },
+      body: jobBody({ task: text.trim(), baseJobId: revising ? selected!.id : undefined, styleId: pickedStyle, sources, film, filmMinutes, designs }),
     }),
-    onSuccess: (r) => { setText(""); setSources([]); setError(null); setMode("new"); onCreated(r.job_id); void qc.invalidateQueries({ queryKey: ["video"] }); },
+    onSuccess: (r) => { setText(""); setSources([]); setDesigns([]); setError(null); setMode("new"); onCreated(r.job_id); void qc.invalidateQueries({ queryKey: ["video"] }); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "The production could not be started."),
   });
   const busy = create.isPending || uploading;
@@ -438,6 +442,19 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
 
   const attach = async (files: File[]) => {
     // A PowerPoint file is never source material: it is offered as a style and never reaches text extraction.
+    // In film mode a Penpot SVG is a design the film shows, not a style: read it here, the plugin sanitises it on import.
+    if (film && !revising) {
+      const svgs = files.filter((f) => /\.svg$/i.test(f.name));
+      files = files.filter((f) => !/\.svg$/i.test(f.name));
+      if (designs.length + svgs.length > MAX_FILM_DESIGNS) { setError(`At most ${MAX_FILM_DESIGNS} designs per film.`); return; }
+      const added: FilmDesign[] = [];
+      for (const f of svgs) {
+        const svg = await f.text();
+        if (svg.length > MAX_DESIGN_CHARS) { setError(`${f.name} is larger than 8 MB.`); return; }
+        added.push({ name: designName(f.name, [...designs, ...added].map((d) => d.name)), svg });
+      }
+      if (added.length > 0) setDesigns((cur) => [...cur, ...added]);
+    }
     const decks = files.filter((f) => isDeckFile(f.name));
     files = files.filter((f) => !isDeckFile(f.name));
     if (decks.length > 0) setDeck(decks[0]);
@@ -460,6 +477,15 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
           className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 max-w-[28rem] ${revising ? "bg-accent/15 font-medium text-foreground" : "text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground"}`}>
           <Pencil className="w-3 h-3 shrink-0" /><span className="truncate">Revise{canRevise ? `: ${selected!.task}` : ""}</span>
         </button>
+        <button type="button" role="switch" aria-checked={film && !revising} disabled={revising} onClick={() => setFilm((v) => !v)} data-testid="film-toggle"
+          title={revising ? "A revision is a slide video" : "A film of continuous animated scenes instead of slides; attach Penpot SVG designs to show them"}
+          className={`px-2.5 py-1 rounded-md ${film && !revising ? "bg-accent/15 font-medium text-foreground" : "text-muted-foreground hover:text-foreground disabled:opacity-40"}`}>Cinematic film</button>
+        {film && !revising && (
+          <select value={filmMinutes} onChange={(e) => setFilmMinutes(Number(e.target.value))} aria-label="Film length" data-testid="film-minutes"
+            className="rounded-md border border-border bg-background px-1.5 py-0.5 text-xs">
+            {FILM_MINUTES.map((m) => <option key={m} value={m}>{m} min</option>)}
+          </select>
+        )}
         <span className="ml-auto" />
         <StyleChip list={styles} picked={pickedStyle} onPick={onPickStyle} onImport={onImportStyle} importDisabledReason={importBlocked}
           label={pickedStyle ? (pickedStyle === BUILTIN_STYLE_ID ? styles?.builtin.name ?? "CorvinOS" : styles?.styles.find((s) => s.id === pickedStyle)?.name ?? "CorvinOS")
@@ -500,6 +526,17 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
             return { ...m, [captureFor]: { id: a.id, host } };
           })}
           onDeleted={(id) => setCapturedFor((m) => Object.fromEntries(Object.entries(m).filter(([, v]) => v.id !== id)))} />
+      )}
+      {film && !revising && designs.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5" data-testid="designs">
+          {designs.map((d) => (
+            <li key={d.name} data-testid="design-chip" className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-2 py-0.5 text-xs">
+              <Paperclip className="w-3 h-3" /><span className="max-w-[14rem] truncate">{d.name}</span>
+              <span className="text-muted-foreground">design</span>
+              <button type="button" aria-label={`Remove design ${d.name}`} onClick={() => setDesigns((c) => c.filter((x) => x.name !== d.name))}><X className="w-3 h-3" /></button>
+            </li>
+          ))}
+        </ul>
       )}
       {sources.length > 0 && (
         <ul className="flex flex-wrap gap-1.5" data-testid="sources">
