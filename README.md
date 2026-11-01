@@ -39,17 +39,17 @@
 
 ---
 
-## 🎥 Video — The console, page by page
+## 🎥 Video — CorvinOS on YouTube
 
-A 30-minute tour of the CorvinOS operator console: chat, dashboard, learnings, tasks and every other page, one at a time. The preview below plays right here on GitHub; click it to watch the full video on YouTube.
+The preview below plays right here on GitHub; click it to jump straight into the CorvinOS video series "From Spark to Foundation" on YouTube.
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=TYdzwz6MX70" target="_blank" rel="noopener">
-    <img src="docs/media/corvinos-console-tour-teaser.gif" alt="Video: CorvinOS console tour (animated preview, plays inline; click to watch on YouTube)" width="720"/>
+  <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">
+    <img src="docs/media/corvinos-console-tour-teaser.gif" alt="Video: CorvinOS on YouTube (animated preview, plays inline; click to open the video series)" width="720"/>
   </a><br/>
 </p>
 
-Further video on YouTube: <a href="https://www.youtube.com/watch?v=TYdzwz6MX70" target="_blank" rel="noopener">watch here</a>
+All episodes on YouTube: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">watch the series</a>
 
 ---
 
