@@ -525,7 +525,7 @@ systems:
       - core/console/corvin_console/routes/video_learning_api.py:218:get_model_stats
       - core/console/corvin_console/routes/video_learning_api.py:259:select_model
     readers:
-      - core/console/corvin_console/web-next/src/pages/video-producer.tsx:309:LearningOverview
+      - core/console/corvin_console/web-next/src/pages/video-producer.tsx:310:LearningOverview
     tests:
       - core/console/tests/test_video_producer_routes_e2e.py
       - core/console/corvin_console/web-next/tests/unit/video-producer-page.test.tsx
