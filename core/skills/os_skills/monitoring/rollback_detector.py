@@ -139,28 +139,27 @@ def state_stamp(tenant_id: str) -> tuple:
 def _drop_stale_pending(tenant_id: str) -> None:
     """Review r3_s2-5: a pending trip created under an OLDER generation than the
     persisted one was overtaken by another process's reset or trip — drop it here
-    instead of re-chaining over an operator's reset. A marker without a generation,
-    or an unreadable state, keeps restricting. A state written AFTER the pending trip
-    was created (its ``at`` is newer) counts as overtaking it too — that covers a
-    writer that records no generation."""
+    instead of re-chaining over an operator's reset.
+
+    Staleness is decided by GENERATIONS ONLY (review c120 r7b-1): every pending entry
+    and marker carries the generation of the state it was created under, and only a
+    persisted generation strictly NEWER than the entry's drops it. No wall-clock
+    reading is compared — a reset taken while the clock was ahead used to erase every
+    later hold and every judged-but-unrecorded trip. A marker without a generation, a
+    state without one (it reads as generation 0) or an unreadable state keeps
+    restricting."""
     current = persisted_generation(tenant_id)
     if current is None:
         return
-    changed_at, readable = last_change_ts(tenant_id)
-    if not readable:
-        return
 
-    def _stale(gen, created) -> bool:
-        if gen is not None and current > gen:
-            return True
-        return (changed_at is not None and isinstance(created, (int, float))
-                and not isinstance(created, bool) and changed_at > created)
+    def _stale(gen) -> bool:
+        return gen is not None and current > gen
     with _pending_lock:
         entry = _pending_trips.get(tenant_id)
-        if entry is not None and _stale(entry.get("generation"), entry.get("created")):
+        if entry is not None and _stale(entry.get("generation")):
             _pending_trips.pop(tenant_id, None)
     status, data = _read_json(pending_path(tenant_id))
-    if status == "ok" and _stale(_gen_of(data), data.get("created")):
+    if status == "ok" and _stale(_gen_of(data)):
         try:
             pending_path(tenant_id).unlink()
         except OSError:
