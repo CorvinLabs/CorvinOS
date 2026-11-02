@@ -8,6 +8,8 @@ r7b-2/-3: the post-reset window was an inode number + byte offset; a re-created 
 position now carries device + inode + a fingerprint of the bytes before the offset,
 and any mismatch reads the ledger whole.
 r7b-4: an EMPTY/torn marker recorded a trip over 0 samples; it is now a hold.
+r7b-5: the reset route answered 200 ``tripped: false`` while a marker it could not
+remove still held the tenant; it now answers 503 ``marker_not_removed``, no record.
 
 Entry points as production calls them: ``delegation_policy.record_turn_outcome``
 (starts the judge thread for a Skill-served turn), ``dual_write.decide`` (the phase
@@ -332,3 +334,48 @@ def test_both_marker_writers_fsync_before_the_rename(tmp_path, monkeypatch):
             f"the judged marker was renamed without an fsync: {synced}"
         assert _tmps(state), f"the trip state was renamed without an fsync: {synced}"
         assert json.loads(rollback_detector.state_path(sb.tenant_id).read_text())["tripped"]
+
+
+# ── r7b-5: never 200 "not tripped" while still held ──────────────────────────
+
+def test_reset_with_an_unremovable_marker_is_503_and_writes_no_record(tmp_path):
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        _seed(sb.tenant_id, 120, source="skill", ok=True)
+        _seed(sb.tenant_id, 120, source="bundled", ok=True)
+        m = rollback_detector.pending_path(sb.tenant_id)
+        m.mkdir()                                     # unreadable AND unremovable
+        try:
+            assert rollback_detector.rollback_active(sb.tenant_id)
+            r = sb.client.post(RESET, headers=sb.csrf_headers)
+            assert r.status_code == 503, r.text
+            assert r.json()["detail"] == {"error": "marker_not_removed"}
+            assert _named(sb, "routing.rollback_reset") == []
+            assert not rollback_detector.state_path(sb.tenant_id).exists()
+            assert rollback_detector.rollback_active(sb.tenant_id)
+        finally:
+            m.rmdir()
+
+
+def test_a_marker_that_survives_the_reset_answers_503_and_chains_not_applied(
+        tmp_path, monkeypatch):
+    """The belt behind the pre-check: should the marker still hold the tenant AFTER
+    the reset's record and state (the pre-check passed, the unlink then failed), the
+    route still never answers 200 — the chain names the reset not applied."""
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        _trip(sb)
+        m = rollback_detector.pending_path(sb.tenant_id)
+        m.mkdir()                                     # unremovable by unlink()
+        monkeypatch.setattr(rollback_detector, "_marker_removable", lambda _t: True)
+        try:
+            r = sb.client.post(RESET, headers=sb.csrf_headers)
+            assert r.status_code == 503, r.text
+            assert r.json()["detail"] == {"error": "marker_not_removed"}
+            assert _events(sb) == ["routing.rollback_triggered", "routing.rollback_reset",
+                                   "routing.rollback_reset_not_applied"]
+            assert rollback_detector.rollback_active(sb.tenant_id)
+        finally:
+            m.rmdir()

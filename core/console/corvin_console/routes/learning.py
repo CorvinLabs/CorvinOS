@@ -873,7 +873,10 @@ async def reset_routing_rollback(session = Depends(require_csrf)):
     state changes (503 ``audit_not_committed``, still tripped); a state write that fails
     afterwards chains ``routing.rollback_reset_not_applied`` (503 ``state_not_written``,
     still tripped); the per-tenant rollback lock cannot be taken → 503
-    ``lock_unavailable``, nothing written, still tripped. Then a console
+    ``lock_unavailable``, nothing written, still tripped; a pending marker that cannot
+    be removed → 503 ``marker_not_removed``, no record, still held (and if the tenant
+    is still held after the state write, ``routing.rollback_reset_not_applied`` follows
+    the record and the answer is the same 503 — never 200 while held). Then a console
     ``learning.routing_rollback_reset`` record. The
     reset restarts the bridge's console soak (readiness).
     """
@@ -904,8 +907,9 @@ async def reset_routing_rollback(session = Depends(require_csrf)):
         raise HTTPException(status_code=409, detail={"error": "not_tripped"}) from None
     except rollback_detector.LockUnavailable:
         raise HTTPException(status_code=503, detail={"error": "lock_unavailable"}) from None
-    except rollback_detector.ResetNotApplied:
-        raise HTTPException(status_code=503, detail={"error": "state_not_written"}) from None
+    except rollback_detector.ResetNotApplied as exc:
+        cause = getattr(exc, "cause", "state_not_written")
+        raise HTTPException(status_code=503, detail={"error": cause}) from None
     except RuntimeError:
         raise HTTPException(status_code=503, detail={"error": "audit_not_committed"}) from None
     console_audit.action_performed(

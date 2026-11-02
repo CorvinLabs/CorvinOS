@@ -635,10 +635,34 @@ def maybe_retry_pending(tenant_id: str, *, audit: Optional[AuditFn] = None,
 
 
 class ResetNotApplied(RuntimeError):
-    """The reset's state could not be written: the trip stays active. Either
-    ``routing.rollback_reset`` committed and ``routing.rollback_reset_not_applied``
-    follows it, or the outstanding trip state could not be written first and no reset
-    record was chained."""
+    """The reset did not take effect: the trip stays active. ``cause`` names why —
+    ``state_not_written`` (the reset's state write failed after its record:
+    ``routing.rollback_reset_not_applied`` follows the record; or the outstanding trip
+    state could not be written first, or the ledger position could not be read, and
+    no reset record was chained) or ``marker_not_removed`` (the pending marker cannot
+    be removed, so the tenant would stay held: refused before the record, review c120
+    r7b-5)."""
+
+    def __init__(self, message: str, *, cause: str = "state_not_written") -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
+def _marker_removable(tenant_id: str) -> bool:
+    """Whether the pending marker (if any) can be unlinked: it is not a directory and
+    its directory is writable. Checked before the reset's record (review c120 r7b-5)."""
+    import stat as _stat  # noqa: PLC0415
+
+    path = pending_path(tenant_id)
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if _stat.S_ISDIR(st.st_mode):
+        return False
+    return os.access(path.parent, os.W_OK | os.X_OK)
 
 
 class NotTripped(LookupError):
@@ -680,6 +704,11 @@ def _reset_locked(tenant_id: str, *, audit: Callable[[str, dict], bool],
     pos = routing_ledger.ledger_position(tenant_id)
     if pos is None:
         raise ResetNotApplied("ledger position not readable — rollback stays active")
+    # Review c120 r7b-5: a marker that cannot be removed keeps the tenant held after
+    # the reset; refuse before the record instead of answering "not tripped".
+    if not _marker_removable(tenant_id):
+        raise ResetNotApplied("pending marker cannot be removed — rollback stays active",
+                              cause="marker_not_removed")
     if not audit("routing.rollback_reset", {"tenant_id": tenant_id}):
         raise RuntimeError("routing.rollback_reset did not commit — rollback stays active")
     try:
@@ -692,6 +721,16 @@ def _reset_locked(tenant_id: str, *, audit: Callable[[str, dict], bool],
         raise ResetNotApplied("rollback state not written — rollback stays active") from exc
     _clear_pending(tenant_id)
     _invalidate_readiness(tenant_id)
+    if rollback_active(tenant_id):
+        # Something still holds the tenant (the unlink failed despite the check, or a
+        # hold landed meanwhile): the chain names that the reset did not take effect,
+        # and the route answers 503 instead of "not tripped".
+        try:
+            audit("routing.rollback_reset_not_applied", {"tenant_id": tenant_id})
+        except Exception:  # noqa: BLE001
+            pass
+        raise ResetNotApplied("tenant still held after the reset — rollback stays active",
+                              cause="marker_not_removed")
 
 
 def reset_for_tests() -> None:
