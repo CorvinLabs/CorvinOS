@@ -686,8 +686,13 @@ class TestRollbackAcrossProcesses:
         assert spy.calls == []
         assert _state()["tripped"] is False
 
-    def test_a_later_reset_without_a_generation_also_drops_the_pending_trip(self):
-        """The review's probe shape: the other process's state carries no generation."""
+    def test_a_later_state_without_a_generation_does_not_drop_the_pending_trip(self):
+        """Review c120 r7b-1: staleness is decided by generations only. A state without
+        a generation — no production writer leaves one, every state write goes through
+        ``_write_state`` — reads as generation 0 and overtakes nothing, however late its
+        ``at``: the judged-but-unrecorded trip stays pending and its retry records it.
+        (Until r7b-1 a later ``at`` dropped the trip; that wall-clock rule also let a
+        reset under a clock step erase every later hold.)"""
         _trailing_skill_ledger()
         rollback_detector.evaluate(TENANT, audit=AuditSpy(commit=False))
         time.sleep(0.01)
@@ -696,10 +701,11 @@ class TestRollbackAcrossProcesses:
         tmp.write_text(json.dumps({"tripped": False, "at": time.time()}))
         tmp.replace(path)
         rollback_detector.pending_path(TENANT).unlink()
-        assert rollback_detector.rollback_active(TENANT) is False
+        assert rollback_detector.rollback_active(TENANT) is True
         spy = AuditSpy()
         rollback_detector.maybe_retry_pending(TENANT, audit=spy, background=False)
-        assert spy.calls == [] and _state()["tripped"] is False
+        assert [c[0] for c in spy.calls] == ["routing.rollback_triggered"]
+        assert _state()["tripped"] is True
 
     def test_a_reset_older_than_the_pending_trip_does_not_drop_it(self):
         path = rollback_detector.state_path(TENANT)
