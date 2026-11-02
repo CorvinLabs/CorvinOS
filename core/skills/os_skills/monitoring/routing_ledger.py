@@ -25,6 +25,7 @@ Writes are best-effort: a ledger failure returns ``False`` and never costs the t
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import time
@@ -201,38 +202,85 @@ def record_outcome(
     return _append(tenant_id, rec)
 
 
+#: Bytes before a position whose hash identifies the ledger content at that position.
+_FP_BYTES = 256
+
+
+def _fingerprint(fh, offset: int) -> str:
+    """sha256 of the (up to) :data:`_FP_BYTES` bytes that END at ``offset``."""
+    begin = max(0, offset - _FP_BYTES)
+    fh.seek(begin)
+    return hashlib.sha256(fh.read(offset - begin)).hexdigest()
+
+
 def ledger_position(tenant_id: str) -> Optional[dict]:
     """The ledger's current end as a POSITION, not a time (review c120 r6_s2-2):
-    ``{"ino": int | None, "offset": int}``. Read under a shared ``flock`` — every
-    append holds the exclusive one — so the offset is always a line boundary. A
-    missing ledger is ``{"ino": None, "offset": 0}``; ``None`` when it cannot be read."""
+    ``{"dev": int | None, "ino": int | None, "offset": int, "fp": str}`` — ``fp`` is the
+    sha256 of the last :data:`_FP_BYTES` bytes before ``offset`` (review c120
+    r7b-2/-3: an inode number alone is reused by a deleted and re-created ledger, and
+    an in-place truncation keeps it). Read under a shared ``flock`` — every append
+    holds the exclusive one — so the offset is always a line boundary. A missing
+    ledger is ``{"dev": None, "ino": None, "offset": 0, "fp": <hash of no bytes>}``;
+    ``None`` when it cannot be read."""
     path = ledger_path(tenant_id)
     try:
-        fd = os.open(str(path), os.O_RDONLY)
+        fh = open(path, "rb")
     except FileNotFoundError:
-        return {"ino": None, "offset": 0}
+        return {"dev": None, "ino": None, "offset": 0,
+                "fp": hashlib.sha256(b"").hexdigest()}
     except OSError:
         return None
-    try:
-        fcntl.flock(fd, fcntl.LOCK_SH)
-        st = os.fstat(fd)
-        return {"ino": int(st.st_ino), "offset": int(st.st_size)}
-    except OSError:
-        return None
-    finally:
+    with fh:
+        fd = fh.fileno()
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            fcntl.flock(fd, fcntl.LOCK_SH)
+        except OSError:
+            return None
+        try:
+            st = os.fstat(fd)
+            size = int(st.st_size)
+            return {"dev": int(st.st_dev), "ino": int(st.st_ino), "offset": size,
+                    "fp": _fingerprint(fh, size)}
+        except OSError:
+            return None
         finally:
-            os.close(fd)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+
+
+def _opt_int(v: Any) -> bool:
+    return v is None or (isinstance(v, int) and not isinstance(v, bool))
 
 
 def valid_position(pos: Any) -> bool:
     if not isinstance(pos, dict):
         return False
-    ino, off = pos.get("ino"), pos.get("offset")
-    if ino is not None and (isinstance(ino, bool) or not isinstance(ino, int)):
+    if not _opt_int(pos.get("ino")) or not _opt_int(pos.get("dev")):
         return False
+    fp = pos.get("fp")
+    if fp is not None and not isinstance(fp, str):
+        return False
+    off = pos.get("offset")
     return isinstance(off, int) and not isinstance(off, bool) and off >= 0
+
+
+def _position_holds(fh, st, pos: dict) -> bool:
+    """Whether ``pos`` still names this file's content: same device and inode, the
+    file at least as long as the offset, and the bytes before the offset unchanged
+    (fingerprint). A position without a fingerprint cannot be verified (unless it
+    points at byte 0). Any mismatch → False: the caller reads the ledger whole."""
+    off = pos["offset"]
+    if off == 0:
+        return True
+    if pos.get("ino") is None or pos["ino"] != st.st_ino:
+        return False
+    if pos.get("dev") is not None and pos["dev"] != st.st_dev:
+        return False
+    if off > st.st_size or not isinstance(pos.get("fp"), str):
+        return False
+    return _fingerprint(fh, off) == pos["fp"]
 
 
 def read_records(tenant_id: str, *, since_ts: float = 0.0,
@@ -240,18 +288,20 @@ def read_records(tenant_id: str, *, since_ts: float = 0.0,
     """Well-formed records with ``ts >= since_ts``; with ``since_pos`` (a
     :func:`ledger_position`) only the records appended AFTER that position — the
     ledger is append-only, so the position bounds a window independently of the wall
-    clock. A ledger that was replaced (other inode) or is shorter than the position
-    is read whole: the restrictive direction for the rollback judge."""
+    clock. The position is trusted only while it still names the same content (same
+    device + inode, file not shorter, the fingerprint of the bytes before the offset
+    unchanged); a ledger that was replaced, re-created (even under a reused inode
+    number) or truncated — also one that regrew past the offset — is read WHOLE, no
+    row skipped: the restrictive direction for the rollback judge (review c120
+    r7b-2/-3)."""
     path = ledger_path(tenant_id)
     start = 0
     try:
         with open(path, "rb") as fh:
             st = os.fstat(fh.fileno())
             size = st.st_size
-            if valid_position(since_pos):
-                same_file = since_pos["ino"] is None or since_pos["ino"] == st.st_ino
-                if same_file and since_pos["offset"] <= size:
-                    start = since_pos["offset"]
+            if valid_position(since_pos) and _position_holds(fh, st, since_pos):
+                start = since_pos["offset"]
             begin = max(start, size - _READ_TAIL_BYTES)
             fh.seek(begin)
             if begin > start:

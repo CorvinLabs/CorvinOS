@@ -3,6 +3,10 @@
 r7b-1: a pending entry (lock-failure hold, judged-but-unrecorded trip) was dropped as
 "stale" by a WALL-CLOCK comparison (the reset state's ``at`` vs the entry's
 ``created``); staleness is now decided by generations only.
+r7b-2/-3: the post-reset window was an inode number + byte offset; a re-created ledger
+(reused inode) or one truncated in place and regrown hid the post-reset turns. The
+position now carries device + inode + a fingerprint of the bytes before the offset,
+and any mismatch reads the ledger whole.
 
 Entry points as production calls them: ``delegation_policy.record_turn_outcome``
 (starts the judge thread for a Skill-served turn), ``dual_write.decide`` (the phase
@@ -162,3 +166,79 @@ def test_a_newer_persisted_generation_still_drops_a_stale_in_process_entry(
         _skill_turn(sb.tenant_id, ok=True)
         assert _named(sb, "routing.rollback_triggered") == []
         assert _events(sb) == ["routing.rollback_reset"]
+
+
+# ── r7b-2/-3: the ledger position names content, not an inode number ─────────
+
+def _assert_post_reset_failures_trip(sb) -> None:
+    from core.skills.os_skills.monitoring import rollback_detector
+
+    assert rollback_detector.rollback_active(sb.tenant_id), \
+        "151 failing Skill turns after the reset did not trip (window blinded)"
+    assert _events(sb) == ["routing.rollback_triggered", "routing.rollback_reset",
+                           "routing.rollback_triggered"]
+    state = json.loads(rollback_detector.state_path(sb.tenant_id).read_text())
+    assert state["tripped"] is True and state["skill_n"] == 151
+
+
+def _post_reset_failures(sb) -> None:
+    _seed(sb.tenant_id, 150, source="skill", ok=False)
+    _seed(sb.tenant_id, 150, source="bundled", ok=True)
+    _skill_turn(sb.tenant_id, ok=False)
+
+
+def test_a_recreated_ledger_with_a_reused_inode_is_read_whole(tmp_path):
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector, routing_ledger
+
+        _trip(sb)
+        r = sb.client.post(RESET, headers=sb.csrf_headers)
+        assert r.status_code == 200, r.text
+        led = routing_ledger.ledger_path(sb.tenant_id)
+        led.unlink()                                  # the operator frees disk space
+        _seed(sb.tenant_id, 150, source="skill", ok=False)
+        _seed(sb.tenant_id, 150, source="bundled", ok=True)
+        # Simulate inode-number reuse deterministically: the stored position names the
+        # NEW file's device and inode (the filesystem here reuses it on its own too).
+        st = os.stat(led)
+        sp = rollback_detector.state_path(sb.tenant_id)
+        state = json.loads(sp.read_text())
+        assert state["ledger_pos"]["offset"] < st.st_size
+        state["ledger_pos"]["ino"] = st.st_ino
+        state["ledger_pos"]["dev"] = st.st_dev
+        tmp = sp.with_name(sp.name + ".sim.tmp")
+        tmp.write_text(json.dumps(state))
+        tmp.replace(sp)
+        _skill_turn(sb.tenant_id, ok=False)
+        _assert_post_reset_failures_trip(sb)
+        _verify_chain(sb)
+
+
+def test_a_ledger_truncated_in_place_and_regrown_is_read_whole(tmp_path):
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector, routing_ledger
+
+        _trip(sb)
+        r = sb.client.post(RESET, headers=sb.csrf_headers)
+        assert r.status_code == 200, r.text
+        pos = json.loads(rollback_detector.state_path(sb.tenant_id).read_text())["ledger_pos"]
+        assert set(pos) == {"dev", "ino", "offset", "fp"}
+        led = routing_ledger.ledger_path(sb.tenant_id)
+        ino = os.stat(led).st_ino
+        os.truncate(led, 0)                           # copytruncate / `: > file`
+        _post_reset_failures(sb)
+        assert os.stat(led).st_ino == ino and os.stat(led).st_size > pos["offset"]
+        _assert_post_reset_failures_trip(sb)
+
+
+def test_an_untouched_ledger_still_keeps_the_pre_reset_rows_out(tmp_path):
+    """The fingerprint matches on an append-only ledger: the window starts at the reset."""
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        _trip(sb)
+        r = sb.client.post(RESET, headers=sb.csrf_headers)
+        assert r.status_code == 200, r.text
+        _skill_turn(sb.tenant_id, ok=False)
+        assert not rollback_detector.rollback_active(sb.tenant_id)
+        assert _events(sb) == ["routing.rollback_triggered", "routing.rollback_reset"]

@@ -34,9 +34,11 @@ then removes the marker. A marker that cannot be read inside the lock holds with
 judging (never a trip over an unread window). A JUDGED trip still needs the operator.
 
 A reset opens a fresh window (reviews r5_s2-2, c120 r6_s2-2): the reset stores the
-ledger's position (inode + byte offset, ``ledger_pos``) and the judge evaluates only
-rows appended after it — a ledger position, not a wall-clock time, so a clock step
-cannot blind the judge. The pre-reset failures cannot re-trip the first Skill-served
+ledger's position (device + inode + byte offset + a fingerprint of the bytes before
+the offset, ``ledger_pos``) and the judge evaluates only rows appended after it — a
+ledger position, not a wall-clock time, so a clock step cannot blind the judge. A
+ledger that no longer matches the position (re-created, also under a reused inode
+number, or truncated and regrown) is read whole (review c120 r7b-2/-3). The pre-reset failures cannot re-trip the first Skill-served
 turn after a reset, and the minimum sample size per side must be met again on
 post-reset turns.
 
@@ -436,10 +438,13 @@ def _window_rows(tenant_id: str, since_ts: float) -> list[dict]:
     """The judged rows of the judge's window (reviews c120 r5_s2-2, r6_s2-2).
 
     Reached only while no trip is active, so the state is the last RESET (or there is
-    none). A reset stores the ledger's POSITION (``ledger_pos``: inode + byte offset)
-    and the window is every row appended after it — never a comparison of two
-    wall-clock readings, so a clock step before or after the reset neither hides
-    post-reset rows nor admits pre-reset ones. The minimum sample size per side must
+    none). A reset stores the ledger's POSITION (``ledger_pos``: device + inode + byte
+    offset + a fingerprint of the bytes before the offset) and the window is every row
+    appended after it — never a comparison of two wall-clock readings, so a clock step
+    before or after the reset neither hides post-reset rows nor admits pre-reset ones.
+    A ledger that no longer matches the position (replaced, re-created under a reused
+    inode number, truncated — also truncated and regrown past the offset) is read
+    WHOLE, no row skipped (review c120 r7b-2/-3). The minimum sample size per side must
     be met again on post-reset turns before the judge can trip. A state written before
     positions existed (no ``ledger_pos``) still bounds the window by its ``at``.
     NOT-JUDGED turns (cancelled, orphaned, no engine) never reach the judge."""
