@@ -10,6 +10,8 @@ and any mismatch reads the ledger whole.
 r7b-4: an EMPTY/torn marker recorded a trip over 0 samples; it is now a hold.
 r7b-5: the reset route answered 200 ``tripped: false`` while a marker it could not
 remove still held the tenant; it now answers 503 ``marker_not_removed``, no record.
+r7b-6: a process holding the tenant in-process re-judged over another process's
+committed judged marker and chained a second ``routing.rollback_triggered``.
 
 Entry points as production calls them: ``delegation_policy.record_turn_outcome``
 (starts the judge thread for a Skill-served turn), ``dual_write.decide`` (the phase
@@ -379,3 +381,66 @@ def test_a_marker_that_survives_the_reset_answers_503_and_chains_not_applied(
             assert rollback_detector.rollback_active(sb.tenant_id)
         finally:
             m.rmdir()
+
+
+# ── r7b-6: one trip, one record, across two processes ────────────────────────
+
+#: Process P2, run as its own interpreter: no in-process entry; it judges the trailing
+#: window, its record commits, its trip-state write fails (ENOSPC) — so the marker it
+#: leaves says committed.
+_CHILD = r"""
+import sys
+from core.skills.os_skills.monitoring import rollback_detector
+
+tenant = sys.argv[1]
+real_ws = rollback_detector._write_state
+
+
+def _ws(tenant_id, data, *, path=None):
+    if path is None and data.get("tripped") is True:
+        raise OSError(28, "No space left on device")
+    return real_ws(tenant_id, data, path=path)
+
+
+rollback_detector._write_state = _ws
+rollback_detector.evaluate(tenant, audit=rollback_detector._default_audit(tenant))
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes (read-only lock file)")
+def test_a_hold_does_not_rechain_a_trip_another_process_committed(tmp_path):
+    """P2 is a SEPARATE interpreter, as the bridge and the console are in production.
+    A ``multiprocessing`` ``fork`` of this multi-threaded test process copied the audit
+    writer's in-process ``_write_lock`` in whatever state another thread held it, and
+    the child deadlocked inside its own ``routing.rollback_triggered`` write while
+    holding ``rollback.lock`` (measured: /proc/locks named the child as the flock
+    holder, its traceback stood in ``security_events.write_event``)."""
+    import subprocess
+
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        _seed(sb.tenant_id, 120, source="skill", ok=False)
+        _seed(sb.tenant_id, 120, source="bundled", ok=True)
+        lock = _lock(sb)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text("")
+        os.chmod(lock, 0o400)
+        try:
+            _skill_turn(sb.tenant_id, ok=False)       # P1 (this process): in-process hold
+        finally:
+            os.chmod(lock, 0o600)
+        assert rollback_detector._pending_trips[sb.tenant_id]["cause"] == "lock_unavailable"
+        child = subprocess.run([sys.executable, "-c", _CHILD, sb.tenant_id],
+                               env=dict(os.environ), capture_output=True, text=True,
+                               timeout=120)
+        assert child.returncode == 0, child.stderr[-4000:]
+        marker = json.loads(rollback_detector.pending_path(sb.tenant_id).read_text())
+        assert marker["committed"] is True and marker.get("cause") is None
+        assert len(_named(sb, "routing.rollback_triggered")) == 1
+        _skill_turn(sb.tenant_id, ok=False)           # P1 gets the lock and judges
+        assert len(_named(sb, "routing.rollback_triggered")) == 1, \
+            "one trip, two trip records"
+        state = json.loads(rollback_detector.state_path(sb.tenant_id).read_text())
+        assert state["tripped"] is True and state["skill_n"] == marker["details"]["skill_n"]
+        assert not rollback_detector.pending_path(sb.tenant_id).exists()

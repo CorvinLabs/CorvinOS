@@ -523,6 +523,18 @@ def _release_hold(tenant_id: str, pending: dict, metrics, *,
 def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
                      since_ts: float) -> bool:
     pending = _pending_entry(tenant_id)
+    if pending is not None and pending.get("cause") in HOLD_CAUSES \
+            and pending.get("details") is None:
+        # Review c120 r7b-6: this process's in-process HOLD is read first, but another
+        # process may have judged the trip meanwhile (its record committed, its state
+        # write failed: a judged marker). Re-read the committed marker under the lock;
+        # a judged one wins over the hold, so its record is never chained twice.
+        marker = _marker_entry(tenant_id)
+        if marker is not None and marker.get("cause") is None \
+                and marker.get("details") is not None:
+            with _pending_lock:
+                _pending_trips.pop(tenant_id, None)
+            pending = marker
     if pending is None and rollback_active(tenant_id):
         return True
     if pending is not None and _state_says_tripped(tenant_id):
