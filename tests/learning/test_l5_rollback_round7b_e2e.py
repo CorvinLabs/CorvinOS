@@ -158,7 +158,8 @@ def test_a_newer_persisted_generation_still_drops_a_stale_in_process_entry(
         _seed(sb.tenant_id, 150, source="bundled", ok=True)
         real_audit = delegation_policy._audit
         monkeypatch.setattr(delegation_policy, "_audit", lambda et, d, *, tenant_id: (
-            False if et == "routing.rollback_triggered" else real_audit(et, d, tenant_id=tenant_id)))
+            False if et == "routing.rollback_triggered"
+            else real_audit(et, d, tenant_id=tenant_id)))
         _skill_turn(sb.tenant_id, ok=False)
         monkeypatch.setattr(delegation_policy, "_audit", real_audit)
         entry = dict(rollback_detector._pending_trips[sb.tenant_id])

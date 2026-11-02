@@ -38,9 +38,9 @@ ledger's position (device + inode + byte offset + a fingerprint of the bytes bef
 the offset, ``ledger_pos``) and the judge evaluates only rows appended after it — a
 ledger position, not a wall-clock time, so a clock step cannot blind the judge. A
 ledger that no longer matches the position (re-created, also under a reused inode
-number, or truncated and regrown) is read whole (review c120 r7b-2/-3). The pre-reset failures cannot re-trip the first Skill-served
-turn after a reset, and the minimum sample size per side must be met again on
-post-reset turns.
+number, or truncated and regrown) is read whole (review c120 r7b-2/-3). The pre-reset
+failures cannot re-trip the first Skill-served turn after a reset, and the minimum
+sample size per side must be met again on post-reset turns.
 
 Every authoritative state write carries a ``generation`` one higher than the one it
 replaces (review r3_s2-4/-5). Other processes compare it: the readiness cache drops a
