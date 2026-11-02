@@ -151,9 +151,9 @@ def test_resolve_never_reroutes_to_a_us_cloud_or_unknown_locality(tenant):
         spawn_gates._l34_cache.clear()
         cfg = tenant.home / "tenants" / "acme" / "global" / "tenant.corvin.yaml"
         tenant()
-        raw = yaml.safe_load(cfg.read_text())
+        raw = yaml.safe_load(cfg.read_text(encoding="utf-8"))
         raw["spec"]["data_classification"]["provider_compliance"][0]["locality"] = locality
-        cfg.write_text(yaml.safe_dump(raw))
+        cfg.write_text(yaml.safe_dump(raw), encoding="utf-8")
         cfg.chmod(0o600)
         spawn_gates._l34_cache.clear()
         got = spawn_gates.resolve_l34_route("claude_code", "acme", prompt=MAIL, persona="assistant",
@@ -172,9 +172,9 @@ def test_a_pinned_provider_does_not_decide_a_sensitive_turn(tenant):
                                         channel="web", chat_key="c", switchable=True)
     assert got.rerouted and got.provider == "acme_llm"
     cfg = tenant.home / "tenants" / "acme" / "global" / "tenant.corvin.yaml"
-    raw = yaml.safe_load(cfg.read_text())
+    raw = yaml.safe_load(cfg.read_text(encoding="utf-8"))
     raw["spec"]["data_classification"]["sensitive_route"]["enabled"] = False
-    cfg.write_text(yaml.safe_dump(raw))
+    cfg.write_text(yaml.safe_dump(raw), encoding="utf-8")
     cfg.chmod(0o600)
     spawn_gates._l34_cache.clear()
     off = spawn_gates.resolve_l34_route("claude_code", "acme", prompt=MAIL, persona="assistant",

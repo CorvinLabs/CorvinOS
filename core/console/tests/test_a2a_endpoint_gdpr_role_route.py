@@ -23,7 +23,7 @@ def _write_endpoint(d: Path, eid: str, **extra) -> Path:
     cfg = {"endpoint_id": eid, "url": "https://peer.example.com/v1/a2a/receive", "hmac_key": "a" * 64,
            "recv_key": "b" * 64, "instance_id": "iid-" + eid, "enabled": True, "label": "Peer " + eid, **extra}
     p = d / f"{eid}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
     return p
 
@@ -63,7 +63,7 @@ class EndpointGdprRoleRouteTest(unittest.TestCase):
             self.assertEqual((rows["peer-f"]["organisation"], rows["peer-f"]["gdpr_role"]),
                              ("Acme Analytics GmbH", "processor"))
             self.assertEqual(rows["peer-a"]["gdpr_role"], "unset")
-            cfg = json.loads((self.eps / "peer-f.json").read_text())
+            cfg = json.loads((self.eps / "peer-f.json").read_text(encoding="utf-8"))
             self.assertEqual((cfg["organisation"], cfg["gdpr_role"]), ("Acme Analytics GmbH", "processor"))
             self.assertEqual(cfg["hmac_key"], "a" * 64)
             self.assertTrue(cfg["_friendship"])
@@ -89,11 +89,11 @@ class EndpointGdprRoleRouteTest(unittest.TestCase):
             client.cookies.clear()
             r = client.put(f"{_EP}/peer-a/gdpr-role", json=body, headers={"X-CSRF-Token": csrf})
             self.assertIn(r.status_code, (401, 403), r.text)
-            self.assertNotIn("gdpr_role", json.loads((self.eps / "peer-a.json").read_text()))
+            self.assertNotIn("gdpr_role", json.loads((self.eps / "peer-a.json").read_text(encoding="utf-8")))
 
     def test_invalid_values_are_refused_with_422_and_change_nothing(self):
         path = _write_endpoint(self.eps, "peer-a")
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         with _sandbox(self.tmp) as (client, csrf, home, _):
             h = {"X-CSRF-Token": csrf}
             for body in (
@@ -108,7 +108,7 @@ class EndpointGdprRoleRouteTest(unittest.TestCase):
             ):
                 r = client.put(f"{_EP}/peer-a/gdpr-role", json=body, headers=h)
                 self.assertEqual(r.status_code, 422, (body, r.text))
-            self.assertEqual(path.read_text(), before)
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
             self.assertEqual([e for e in _audit_events(home) if e.get("event_type") == "federation.endpoint_role_set"],
                              [])
 

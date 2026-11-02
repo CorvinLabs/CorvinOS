@@ -56,7 +56,7 @@ def test_no_duplicate_manifest_variants_loaded():
         ["grep", "-r", "--include=*.py", "-E",
          "from core.skills.phase1_manifest|from core.skills.skill_validator|from core.skills.os_skills_registry",
          "core", "corvin_operator"],
-        capture_output=True, text=True, cwd="/home/shumway/projects/CorvinOS"
+        capture_output=True, text=True, cwd="/home/shumway/projects/CorvinOS", encoding="utf-8", errors="replace"
     )
     # Should be zero matches (dead imports)
     assert result.returncode != 0 or not result.stdout.strip(), \

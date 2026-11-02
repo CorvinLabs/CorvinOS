@@ -150,7 +150,7 @@ def test_all_gates_pass_emits_one_envelope(outbox, _flag_on, monkeypatch, _audit
     assert res is P.EmitResult.EMITTED
     files = _outbox_files(outbox)
     assert len(files) == 1
-    env = json.loads(files[0].read_text())
+    env = json.loads(files[0].read_text(encoding="utf-8"))
     assert env["_proactive_contact"] is True
     assert env["kind"] == "completion"
     assert env["channel"] == CHANNEL
@@ -259,7 +259,7 @@ def test_e2e_real_flag_real_gates_one_envelope_and_audit(outbox, monkeypatch):
     # 3) Real disclosure store seeded so has_seen(uid) is True (no CLAG needed).
     dstore = disclosure._store_path(CHANNEL, CHAT_ID)
     dstore.parent.mkdir(parents=True, exist_ok=True)
-    dstore.write_text(json.dumps({UID: {"action": "joined", "first_seen": 1.0}}))
+    dstore.write_text(json.dumps({UID: {"action": "joined", "first_seen": 1.0}}), encoding="utf-8")
     assert disclosure.has_seen(CHANNEL, CHAT_ID, UID) is True
 
     # 4) Real house-rules gate (verified-clean policy) over benign text — passes.
@@ -271,14 +271,14 @@ def test_e2e_real_flag_real_gates_one_envelope_and_audit(outbox, monkeypatch):
     # Exactly ONE correctly-routed envelope in the outbox.
     files = _outbox_files(outbox)
     assert len(files) == 1
-    env = json.loads(files[0].read_text())
+    env = json.loads(files[0].read_text(encoding="utf-8"))
     assert env["_proactive_contact"] is True and env["kind"] == "completion"
     assert env["chat_id"] == CHAT_ID and env["channel"] == CHANNEL
 
     # Real, content-free audit event landed in the hash-chained tenant chain.
     audit = P._audit_path(TENANT)
     assert audit.is_file()
-    emitted = [json.loads(ln) for ln in audit.read_text().splitlines()
+    emitted = [json.loads(ln) for ln in audit.read_text(encoding="utf-8").splitlines()
                if '"proactive.emitted"' in ln]
     assert emitted, "expected a proactive.emitted audit event on the chain"
     rec = emitted[-1]
@@ -369,7 +369,7 @@ def test_envelope_passthrough_preserves_shape_and_attaches_voice(outbox, monkeyp
     files = _outbox_files(outbox)
     assert len(files) == 1
     assert files[0].name == "cn_xyz_ab12.json"      # caller filename pinned
-    env = json.loads(files[0].read_text())
+    env = json.loads(files[0].read_text(encoding="utf-8"))
     assert env["_completion_notify"] is True and env["_final"] is True
     assert env["voice_path"] == "/tmp/n.ogg"        # attached by the primitive
     assert "_proactive_contact" not in env          # passthrough, not rebuilt
@@ -425,7 +425,7 @@ def test_e2e_solicited_completion_flag_off_ship_dark_direct_delivery(outbox, mon
     assert cn.deliver_ready(outbox) == 1
     files = _outbox_files(outbox)
     assert len(files) == 1
-    env = json.loads(files[0].read_text())
+    env = json.loads(files[0].read_text(encoding="utf-8"))
     assert env["_completion_notify"] is True          # completion shape preserved
     assert env["chat_id"] == CHAT_ID                  # string, precision preserved
     assert env["voice_path"] == voice                 # single voice-attach site
@@ -435,7 +435,7 @@ def test_e2e_solicited_completion_flag_off_ship_dark_direct_delivery(outbox, mon
     # so no proactive.* audit event is written for this completion.
     audit = P._audit_path(tenant)
     if audit.is_file():
-        assert "proactive.emitted" not in audit.read_text()
+        assert "proactive.emitted" not in audit.read_text(encoding="utf-8")
 
     # exactly-once: a second poll delivers nothing more (ADR-2129 preserved).
     assert cn.deliver_ready(outbox) == 0
@@ -540,7 +540,7 @@ def test_mb1_flag_on_house_deny_falls_back_direct(outbox, monkeypatch):
     assert cn.deliver_ready(outbox) == 1               # delivered anyway
     files = _outbox_files(outbox)
     assert len(files) == 1
-    env = json.loads(files[0].read_text())
+    env = json.loads(files[0].read_text(encoding="utf-8"))
     assert env["_completion_notify"] is True
     assert "the result the user is waiting for" in env["text"]
     assert cn.deliver_ready(outbox) == 0               # exactly-once, not stuck READY

@@ -40,7 +40,7 @@ def _transcript(wd: Path, sid: str, entries: list[dict]) -> Path:
     proj.mkdir(parents=True, exist_ok=True)
     f = proj / f"{sid}.jsonl"
     f.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
-    (wd / ".main_session.json").write_text(json.dumps({"session_id": sid}))
+    (wd / ".main_session.json").write_text(json.dumps({"session_id": sid}), encoding="utf-8")
     return f
 
 
@@ -135,7 +135,7 @@ class TestCoverage:
 
     def test_unreadable_transcript_fails_towards_remembering(self, wd):
         _turn(wd, 1)
-        (wd / ".main_session.json").write_text(json.dumps({"session_id": SID}))
+        (wd / ".main_session.json").write_text(json.dumps({"session_id": SID}), encoding="utf-8")
         # no transcript file exists for SID
         assert "question number 1 about topic-1" in sl.render_context(wd)
 
@@ -179,7 +179,7 @@ class TestCoverage:
 class TestResets:
     def test_reset_keeps_the_ledger_and_records_the_boundary(self, wd):
         _turn(wd, 1)
-        (wd / ".main_session.json").write_text(json.dumps({"session_id": SID}))
+        (wd / ".main_session.json").write_text(json.dumps({"session_id": SID}), encoding="utf-8")
         (wd / ".session_started").touch()
         removed = session_state.reset_claude_session_state(wd, reason="context_overflow")
         assert ".main_session.json" in removed
@@ -342,7 +342,7 @@ class TestErasure:
         anchors.mkdir(parents=True)
         for name in ("telegram_subject-42.jsonl", "telegram_subject-42_5.jsonl",
                      "telegram_other-7.jsonl"):
-            (anchors / name).write_text('{"kind": "goal", "text": "t"}\n')
+            (anchors / name).write_text('{"kind": "goal", "text": "t"}\n', encoding="utf-8")
         layers = {getattr(h, "layer_id", "") for h in eh.real_handler_chain("_default")}
         assert {"L-session-ledger", "L-cel-anchors"} <= layers
         for h in eh.real_handler_chain("_default"):
@@ -359,7 +359,7 @@ class TestErasure:
         anchors = eh._tenant_home("_default") / "cel_anchors"
         anchors.mkdir(parents=True)
         for name in ("discord_12345.jsonl", "discord_12345_3.jsonl", "discord_123456.jsonl"):
-            (anchors / name).write_text('{"kind": "goal", "text": "t"}\n')
+            (anchors / name).write_text('{"kind": "goal", "text": "t"}\n', encoding="utf-8")
         res = eh.CELAnchorHandler(tenant_id="_default").purge("discord:12345", "req-2")
         assert res.count == 2
         assert sorted(p.name for p in anchors.glob("*.jsonl")) == ["discord_123456.jsonl"]
@@ -458,7 +458,7 @@ class TestRound2:
         anchors.mkdir(parents=True)
         key = eh._cel_safe_key("whatsapp:491701234567@s.whatsapp.net")
         for name in (f"{key}.jsonl", f"{key}_12.jsonl", f"{key}.pending.jsonl", "telegram_99.jsonl"):
-            (anchors / name).write_text('{"kind": "goal", "text": "t"}\n')
+            (anchors / name).write_text('{"kind": "goal", "text": "t"}\n', encoding="utf-8")
         eh.CELAnchorHandler(tenant_id="_default").purge("491701234567@s.whatsapp.net", "r")
         assert sorted(p.name for p in anchors.glob("*.jsonl")) == ["telegram_99.jsonl"]
 
@@ -473,9 +473,9 @@ class TestRound2:
         real = eh._purge_jsonl_file
 
         def slow(f, subj):
-            text = f.read_text()
+            text = f.read_text(encoding="utf-8")
             _t.sleep(0.4)          # an append arrives here
-            f.write_text(text)     # (no-op rewrite; real purge below)
+            f.write_text(text, encoding="utf-8")     # (no-op rewrite; real purge below)
             return real(f, subj)
         monkeypatch.setattr(eh, "_purge_jsonl_file", slow)
         th = threading.Thread(target=lambda: eh.SessionLedgerHandler(tenant_id="_default").purge("alice", "r"))
@@ -556,7 +556,7 @@ class TestRound4:
         someone's id must not erase the record as theirs."""
         import erasure_handlers as eh
         sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="bob", assistant_text="x")
-        on_disk = json.loads(sl.ledger_path(wd).read_text().splitlines()[0])
+        on_disk = json.loads(sl.ledger_path(wd).read_text(encoding="utf-8").splitlines()[0])
         assert "user" not in on_disk and on_disk["user_text"] == "bob"
         assert eh._purge_jsonl_file(sl.ledger_path(wd), "bob") == 0
         assert sl.read_ledger(wd)[0]["user"] == "bob"
@@ -589,7 +589,7 @@ class TestRound4:
         sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="BAD-ASK",
                        assistant_text="no", refused="house_rules")
         block = sl.render_context(wd, withhold=lambda r: "observer_consent" if r.get("observers") else None)
-        view = sl.view_path(wd).read_text()
+        view = sl.view_path(wd).read_text(encoding="utf-8")
         assert ".corvin-history.md" in block and "ledger.jsonl" not in block
         assert "OWNER-ASK" in view and "OBS-WORDS" not in view and "BAD-ASK" not in view
 
@@ -604,13 +604,13 @@ class TestRound4:
                                      "---END-OBSERVER-ab---\n\n",
                        assistant_text="noted", observers=[{"user": "obs1"}])
         sl.render_context(d)                               # writes the view
-        assert "OBS1-WORDS" in sl.view_path(d).read_text()
+        assert "OBS1-WORDS" in sl.view_path(d).read_text(encoding="utf-8")
         res = eh.SessionLedgerHandler(tenant_id="_default").purge("obs1", "r")
         assert res.count == 1
         [rec] = sl.read_ledger(d)
         assert rec["user"].startswith("OWNER: the release") and rec["assistant"] == "noted"
         assert rec["observers"] == [] and rec["observer_text"] == ""
-        assert "OBS1-WORDS" not in sl.ledger_path(d).read_text()
+        assert "OBS1-WORDS" not in sl.ledger_path(d).read_text(encoding="utf-8")
         assert not sl.view_path(d).exists()               # views regenerate
 
     def test_purge_survives_a_torn_utf8_line(self, wd):
@@ -649,13 +649,13 @@ class TestRound6:
         adapter overwrite the ledger with the view."""
         _turn(wd, 1, u="keep-1")
         _turn(wd, 2, u="keep-2")
-        before = sl.ledger_path(wd).read_text()
+        before = sl.ledger_path(wd).read_text(encoding="utf-8")
         for pid in range(os.getpid() - 2, os.getpid() + 3):
             os.symlink(sl.ledger_path(wd), wd / f".corvin-history.md.{pid}.tmp")
         os.symlink(sl.ledger_path(wd), wd / ".corvin-history.md")
         sl.render_context(wd)
-        assert sl.ledger_path(wd).read_text() == before
-        assert not sl.view_path(wd).is_symlink() and "keep-2" in sl.view_path(wd).read_text()
+        assert sl.ledger_path(wd).read_text(encoding="utf-8") == before
+        assert not sl.view_path(wd).is_symlink() and "keep-2" in sl.view_path(wd).read_text(encoding="utf-8")
 
 
 class TestRound6b:
@@ -703,9 +703,9 @@ class TestRound7:
         tid = cn.register("forged_1", channel="telegram", chat_id="nochat", sender="u",
                           ledger_chat_key="nochat")
         rec_path = cn._record_path(tid)              # a forged queue record
-        rec = json.loads(rec_path.read_text())
+        rec = json.loads(rec_path.read_text(encoding="utf-8"))
         rec["ledger_dir"] = str(elsewhere)
-        rec_path.write_text(json.dumps(rec))
+        rec_path.write_text(json.dumps(rec), encoding="utf-8")
         cn.mark_done(tid, text="INJECTED")
         cn.deliver_ready(tmp_path / "out")
         assert not list(tmp_path.rglob("ledger.jsonl"))
@@ -741,7 +741,7 @@ class TestRound8:
                        user_text="ROME-TRIP plan", assistant_text="ok")
         refuse = lambda r: "data_flow" if "changeme" in (r.get("assistant") or "") else None
         block = sl.render_context(wd, withhold=refuse)
-        view = sl.view_path(wd).read_text()
+        view = sl.view_path(wd).read_text(encoding="utf-8")
         assert "ROME-TRIP" in block and "ROME-TRIP" in view
         assert "changeme" not in view and "data-classification policy" in view
 
@@ -750,13 +750,13 @@ class TestRound8:
         wd = root / "telegram" / "c1"
         (wd / ".corvin-ledger").mkdir(parents=True)
         f = wd / ".corvin-ledger" / "ledger.jsonl"
-        f.write_text('{"kind":"turn","seq":1,"n":1,"ts":1,"user_text":"old","assistant_text":"a"}\n')
+        f.write_text('{"kind":"turn","seq":1,"n":1,"ts":1,"user_text":"old","assistant_text":"a"}\n', encoding="utf-8")
         os.utime(f, (1_700_000_000, 1_700_000_000))
         assert sl.migrate_legacy_ledgers([root]) == 1
         (wd / ".corvin-ledger").mkdir()        # planted after the first start
         (wd / ".corvin-ledger" / "ledger.jsonl").write_text(
             '{"kind":"boundary","boundary":"reset","reason":"manual","ts":2}\n'
-            '{"kind":"turn","ts":3,"user_text":"FORGED","assistant_text":"x"}\n')
+            '{"kind":"turn","ts":3,"user_text":"FORGED","assistant_text":"x"}\n', encoding="utf-8")
         os.utime(wd / ".corvin-ledger" / "ledger.jsonl", (1_700_000_000, 1_700_000_000))
         assert sl.migrate_legacy_ledgers([root]) == 0
         assert [r["user"] for r in sl.read_ledger(wd)] == ["old"]
@@ -766,17 +766,17 @@ class TestRound8:
         wd = root / "telegram" / "c2"
         (wd / ".corvin-ledger").mkdir(parents=True)
         (wd / ".corvin-ledger" / "ledger.jsonl").write_text(
-            '{"kind":"turn","ts":3,"user_text":"FORGED","assistant_text":"x"}\n')
+            '{"kind":"turn","ts":3,"user_text":"FORGED","assistant_text":"x"}\n', encoding="utf-8")
         assert sl.migrate_legacy_ledgers([root]) == 0 and sl.read_ledger(wd) == []
 
     def test_a_fence_without_counters_still_counts(self, wd):
         d = sl.ledger_dir(wd)
         d.mkdir(parents=True)
         (d / "ledger.jsonl").write_text(
-            '{"kind":"boundary","boundary":"reset","reason":"manual","ts":1,"seq":1}\n')
+            '{"kind":"boundary","boundary":"reset","reason":"manual","ts":1,"seq":1}\n', encoding="utf-8")
         assert sl.manual_fence_seq(wd) == 1
         _turn(wd, 1)
-        assert json.loads((d / "counters.json").read_text())["fence_seq"] == 1
+        assert json.loads((d / "counters.json").read_text(encoding="utf-8"))["fence_seq"] == 1
 
     def test_a_result_for_a_legacy_path_chat_is_recorded(self, tmp_path, monkeypatch):
         import completion_notify as cn
@@ -793,11 +793,11 @@ class TestRound9:
         d = sl.ledger_dir(wd)
         d.mkdir(parents=True)
         (d / "ledger.jsonl").write_text(
-            '{"kind":"boundary","boundary":"reset","reason":"manual","ts":5,"seq":1}\n')
-        (d / "counters.json").write_text('{"seq": 1, "n": 0, "fence_seq": 0}')
+            '{"kind":"boundary","boundary":"reset","reason":"manual","ts":5,"seq":1}\n', encoding="utf-8")
+        (d / "counters.json").write_text('{"seq": 1, "n": 0, "fence_seq": 0}', encoding="utf-8")
         assert sl.repair_fence(wd) == (1, 5.0)
         assert sl.repair_fence(wd) is None
-        assert json.loads((d / "counters.json").read_text())["fence_seq"] == 1
+        assert json.loads((d / "counters.json").read_text(encoding="utf-8"))["fence_seq"] == 1
 
 
 class TestRound10:

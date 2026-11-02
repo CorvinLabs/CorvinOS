@@ -111,7 +111,7 @@ def test_run_workspace_layout():
         # 1. manifest written before exec
         mpath = run_dir / "run_manifest.json"
         t("run_manifest.json present", mpath.exists())
-        manifest = json.loads(mpath.read_text())
+        manifest = json.loads(mpath.read_text(encoding="utf-8"))
         t("manifest.run_id matches", manifest.get("run_id") == run_id)
         t("manifest.tool = synth_sales", manifest.get("tool") == "synth_sales")
         t("manifest.tool_sha set", bool(manifest.get("tool_sha")))
@@ -127,7 +127,7 @@ def test_run_workspace_layout():
         # 2. completion written after exec
         cpath = run_dir / "run_completion.json"
         t("run_completion.json present", cpath.exists())
-        completion = json.loads(cpath.read_text())
+        completion = json.loads(cpath.read_text(encoding="utf-8"))
         t("completion.status = ok", completion.get("status") == "ok")
         t("completion.exit_code = 0", completion.get("exit_code") == 0)
         t("completion.duration_s > 0",
@@ -143,7 +143,7 @@ def test_run_workspace_layout():
         # 3. stdout.json — now wrapped in the AWP envelope by the runner
         spath = run_dir / "stdout.json"
         t("stdout.json present", spath.exists())
-        envelope = json.loads(spath.read_text())
+        envelope = json.loads(spath.read_text(encoding="utf-8"))
         t("stdout envelope has ok=true", envelope.get("ok") is True)
         t("stdout envelope has status=200", envelope.get("status") == 200)
         t("stdout envelope error is null", envelope.get("error") is None)
@@ -155,7 +155,7 @@ def test_run_workspace_layout():
         # 4. RUN_SUMMARY.md (≤ 1 KB-ish, human-readable)
         rspath = run_dir / "RUN_SUMMARY.md"
         t("RUN_SUMMARY.md present", rspath.exists())
-        body = rspath.read_text()
+        body = rspath.read_text(encoding="utf-8")
         t("RUN_SUMMARY mentions tool name", "synth_sales" in body)
         t("RUN_SUMMARY mentions sandbox",
           "bwrap" in body or "rlimits" in body)
@@ -167,7 +167,7 @@ def test_run_workspace_layout():
         adir = run_dir / "artifacts"
         sales_csv = adir / "sales.csv"
         t("sales.csv exists in artifacts/", sales_csv.exists())
-        with sales_csv.open() as fh:
+        with sales_csv.open(encoding="utf-8") as fh:
             rows = list(csv.DictReader(fh))
         t("CSV has 250 rows", len(rows) == 250)
         t("CSV columns are id,group,amount",
@@ -241,7 +241,7 @@ def test_failed_run_still_persists_manifest():
         t("manifest still present", (run_dir / "run_manifest.json").exists())
         t("completion present with status=error",
           (run_dir / "run_completion.json").exists() and
-          json.loads((run_dir / "run_completion.json").read_text()).get(
+          json.loads((run_dir / "run_completion.json").read_text(encoding="utf-8")).get(
               "status") == "error")
 
 

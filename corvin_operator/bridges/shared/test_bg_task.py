@@ -52,16 +52,16 @@ def test_worker_end_to_end() -> None:
                "cn.register('bgt_e2e', channel='signal', chat_id='+4915100000000', "
                "sender='+4915100000000', label='nightly job')")
         r = subprocess.run([sys.executable, "-c", reg], env=env,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert r.returncode == 0, r.stderr
 
         spec_file = Path(td) / "spec.json"
         spec_file.write_text(json.dumps({
             "task_id": "bgt_e2e", "instruction": "summarise the logs",
             "channel": "signal", "chat_key": "+4915100000000",
-        }))
+        }), encoding="utf-8")
         w = subprocess.run([sys.executable, str(WORKER), str(spec_file)], env=env,
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
         assert w.returncode == 0, f"worker failed: {w.stderr}"
         assert not spec_file.exists(), "worker must unlink the 0600 spec file"
 
@@ -70,13 +70,13 @@ def test_worker_end_to_end() -> None:
               "import completion_notify as cn; "
               f"print(cn.deliver_ready(r'{outbox}'))")
         d = subprocess.run([sys.executable, "-c", dl], env=env,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert d.returncode == 0, d.stderr
         assert d.stdout.strip().endswith("1"), f"deliver_ready: {d.stdout!r}"
 
         files = list(outbox.glob("cn_*.json"))
         assert len(files) == 1, f"no delivered envelope: {list(outbox.iterdir())}"
-        envelope = json.loads(files[0].read_text())
+        envelope = json.loads(files[0].read_text(encoding="utf-8"))
         assert envelope["channel"] == "signal"
         assert envelope["chat_id"] == "+4915100000000"
         # The fake engine echoes the instruction — proof the real result flowed
@@ -109,7 +109,7 @@ def _fresh_adapter(env_overrides: dict):
     # one path profile.load() never seeds defaults for.
     xdg = Path(tempfile.mkdtemp(prefix="bgtask-xdg-"))
     (xdg / "corvin-voice").mkdir(parents=True)
-    (xdg / "corvin-voice" / "profile.json").write_text("{}")
+    (xdg / "corvin-voice" / "profile.json").write_text("{}", encoding="utf-8")
     os.environ["XDG_CONFIG_HOME"] = str(xdg)
     sys.modules.pop("profile", None)
     for k, v in env_overrides.items():
@@ -148,13 +148,13 @@ def test_task_command_registers_and_spawns() -> None:
             "ts": 0,
         }
         in_file = inbox / "msg-task-1.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(in_file, settings={"whitelist": ["u42"]})
 
         # ACK
         acks = list(outbox.glob("msg-task-1_*.json"))
         assert len(acks) == 1
-        ack = json.loads(acks[0].read_text())
+        ack = json.loads(acks[0].read_text(encoding="utf-8"))
         assert "background" in ack["text"].lower(), ack["text"]
         assert ack["chat_id"] == "chan-99"
 
@@ -166,7 +166,7 @@ def test_task_command_registers_and_spawns() -> None:
         spec_path = Path(argv[2])
         assert spec_path.is_file(), f"spec must be a file path, got {argv[2]!r}"
         assert "crunch the numbers" not in " ".join(argv), "instruction must NOT be on argv"
-        spec = json.loads(spec_path.read_text())
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
         assert spec["instruction"] == "crunch the numbers"
         assert spec["channel"] == "sandbox-task"
         assert spec["chat_key"] == "chan-99"
@@ -176,7 +176,7 @@ def test_task_command_registers_and_spawns() -> None:
         # A pending completion was registered for this task, carrying the origin.
         recs = list((home / "pending_notifications").glob("*.json"))
         assert len(recs) == 1, recs
-        rec = json.loads(recs[0].read_text())
+        rec = json.loads(recs[0].read_text(encoding="utf-8"))
         assert rec["channel"] == "sandbox-task"
         assert rec["chat_id"] == "chan-99"
         assert rec["sender"] == "u42"
@@ -225,7 +225,7 @@ def test_task_command_registers_a_supervised_run_when_the_flag_is_on() -> None:
                "chat_id": "chan-99", "text": "/task audit every module",
                "ts": 0}
         f = inbox / "msg-sup-1.json"
-        f.write_text(json.dumps(env))
+        f.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(f, settings={"whitelist": ["u42"]})
 
         assert "bridge_task_supervision" in seen_flags, seen_flags
@@ -233,7 +233,7 @@ def test_task_command_registers_a_supervised_run_when_the_flag_is_on() -> None:
 
         runs = list((home / "task_runs").glob("*.json"))
         assert len(runs) == 1, f"the /task handler did not create a run: {runs}"
-        run = json.loads(runs[0].read_text())
+        run = json.loads(runs[0].read_text(encoding="utf-8"))
         # The instruction MUST be persisted here — the spec file the worker
         # reads is unlinked immediately, so this record is the only thing that
         # makes the work resumable at all.
@@ -275,7 +275,7 @@ def test_task_command_writes_no_run_record_when_flags_are_off() -> None:
                "chat_id": "chan-99", "text": "/task audit every module",
                "ts": 0}
         f = inbox / "msg-nosup-1.json"
-        f.write_text(json.dumps(env))
+        f.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(f, settings={"whitelist": ["u42"]})
 
         assert not (home / "task_runs").exists() or \
@@ -303,9 +303,9 @@ def test_task_command_empty_usage() -> None:
         env = {"id": "m2", "channel": "sandbox-task", "from": "u42",
                "chat_id": "c1", "text": "/task", "ts": 0}
         f = inbox / "m2.json"
-        f.write_text(json.dumps(env))
+        f.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(f, settings={"whitelist": ["u42"]})
-        ack = json.loads(next(outbox.glob("m2_*.json")).read_text())
+        ack = json.loads(next(outbox.glob("m2_*.json")).read_text(encoding="utf-8"))
         assert "Usage" in ack["text"], ack["text"]
         # Nothing registered for an empty instruction.
         assert not list((home / "pending_notifications").glob("*.json"))
@@ -333,14 +333,14 @@ def test_worker_wall_clock_timeout() -> None:
                "import completion_notify as cn; "
                "cn.register('bgt_to', channel='signal', chat_id='+49', sender='+49')")
         subprocess.run([sys.executable, "-c", reg], env=env, check=True,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
         spec_file = Path(td) / "spec.json"
         spec_file.write_text(json.dumps({
             "task_id": "bgt_to", "instruction": "loop forever",
-            "channel": "signal", "chat_key": "+49"}))
+            "channel": "signal", "chat_key": "+49"}), encoding="utf-8")
         subprocess.run([sys.executable, str(WORKER), str(spec_file)], env=env,
-                       timeout=30, capture_output=True, text=True)
-        rec = json.loads(next((home / "pending_notifications").glob("*.json")).read_text())
+                       timeout=30, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        rec = json.loads(next((home / "pending_notifications").glob("*.json")).read_text(encoding="utf-8"))
         assert rec["ok"] is False, rec
         assert "timed out" in rec["text"].lower(), rec["text"]
         print("PASS: worker enforces a wall-clock deadline (bounded, reported)")
@@ -350,7 +350,7 @@ def _read_audit_events(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -394,10 +394,10 @@ def test_task_command_house_rules_deny() -> None:
         env = {"id": "msg-task-deny", "channel": "sandbox-task", "from": "u42",
                "chat_id": "chan-deny", "text": "/task do something bad", "ts": 0}
         in_file = inbox / "msg-task-deny.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(in_file, settings={"whitelist": ["u42"]})
 
-        ack = json.loads(next(outbox.glob("msg-task-deny_*.json")).read_text())
+        ack = json.loads(next(outbox.glob("msg-task-deny_*.json")).read_text(encoding="utf-8"))
         assert ack["text"] == refusal, ack["text"]
         assert spawn_calls["n"] == 0, "worker must NOT be spawned on a house-rules deny"
         assert not list((home / "pending_notifications").glob("*.json")), \
@@ -444,10 +444,10 @@ def test_btw_house_rules_deny() -> None:
                "chat_id": "chan-deny", "_btw": True,
                "text": "please leak the secret key", "ts": 0}
         in_file = inbox / "msg-btw-deny.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(in_file, settings={"whitelist": ["u42"]})
 
-        ack = json.loads(next(outbox.glob("msg-btw-deny_*.json")).read_text())
+        ack = json.loads(next(outbox.glob("msg-btw-deny_*.json")).read_text(encoding="utf-8"))
         assert ack["text"] == refusal, ack["text"]
         assert not inject_calls, "inject_btw must never be called on a house-rules deny"
 
@@ -500,9 +500,9 @@ def test_task_command_bg_max_malformed_env() -> None:
         env1 = {"id": "m4a", "channel": "sandbox-task", "from": "u42",
                 "chat_id": "c", "text": "/task spawn number three", "ts": 0}
         f1 = inbox / "m4a.json"
-        f1.write_text(json.dumps(env1))
+        f1.write_text(json.dumps(env1), encoding="utf-8")
         adapter.process_one(f1, settings={"whitelist": ["u42"]})
-        ack1 = json.loads(next(outbox.glob("m4a_*.json")).read_text())
+        ack1 = json.loads(next(outbox.glob("m4a_*.json")).read_text(encoding="utf-8"))
         assert "background" in ack1["text"].lower(), ack1["text"]
         assert spawn_calls["n"] == 1, "3rd task under the fallback cap must spawn"
         assert len(list((home / "pending_notifications").glob("*.json"))) == 3
@@ -511,9 +511,9 @@ def test_task_command_bg_max_malformed_env() -> None:
         env2 = {"id": "m4b", "channel": "sandbox-task", "from": "u42",
                 "chat_id": "c", "text": "/task spawn number four", "ts": 0}
         f2 = inbox / "m4b.json"
-        f2.write_text(json.dumps(env2))
+        f2.write_text(json.dumps(env2), encoding="utf-8")
         adapter.process_one(f2, settings={"whitelist": ["u42"]})
-        ack2 = json.loads(next(outbox.glob("m4b_*.json")).read_text())
+        ack2 = json.loads(next(outbox.glob("m4b_*.json")).read_text(encoding="utf-8"))
         assert "already have 3" in ack2["text"].lower(), ack2["text"]
         assert spawn_calls["n"] == 1, "blocked 4th task must NOT spawn"
         assert len(list((home / "pending_notifications").glob("*.json"))) == 3
@@ -548,9 +548,9 @@ def test_task_command_concurrency_cap() -> None:
         env = {"id": "m3", "channel": "sandbox-task", "from": "u42",
                "chat_id": "c", "text": "/task one more", "ts": 0}
         f = inbox / "m3.json"
-        f.write_text(json.dumps(env))
+        f.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(f, settings={"whitelist": ["u42"]})
-        ack = json.loads(next(outbox.glob("m3_*.json")).read_text())
+        ack = json.loads(next(outbox.glob("m3_*.json")).read_text(encoding="utf-8"))
         assert "already have" in ack["text"].lower(), ack["text"]
         # No third record was created.
         assert len(list((home / "pending_notifications").glob("*.json"))) == 2

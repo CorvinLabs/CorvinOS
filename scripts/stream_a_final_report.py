@@ -207,7 +207,7 @@ class StreamAValidator:
         app_file = self.codebase_root / "core/console/corvin_console/app.py"
         if not app_file.exists():
             return False
-        content = app_file.read_text()
+        content = app_file.read_text(encoding="utf-8")
         return router_name in content
 
     def _check_app_includes_endpoint(self, endpoint_path: str) -> bool:
@@ -215,7 +215,7 @@ class StreamAValidator:
         app_file = self.codebase_root / "core/console/corvin_console/app.py"
         if not app_file.exists():
             return False
-        content = app_file.read_text()
+        content = app_file.read_text(encoding="utf-8")
         return endpoint_path in content
 
     def _check_method_exists(self, file_path: str, method_name: str) -> bool:
@@ -223,7 +223,7 @@ class StreamAValidator:
         path = self.codebase_root / file_path
         if not path.exists():
             return False
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
         return f"def {method_name}" in content
 
     def _check_tests_exist(self, pattern: str) -> bool:
@@ -304,13 +304,13 @@ class StreamAValidator:
     def save_report(self):
         """Save final report to file."""
         report_file = Path("stream_a_session3_final_report.json")
-        report_file.write_text(json.dumps(self.results, indent=2))
+        report_file.write_text(json.dumps(self.results, indent=2), encoding="utf-8")
         print(f"\nReport saved: {report_file}")
 
         # Also save markdown version
         md_report = self._generate_markdown_report()
         md_file = Path("STREAM_A_SESSION3_FINAL_REPORT.md")
-        md_file.write_text(md_report)
+        md_file.write_text(md_report, encoding="utf-8")
         print(f"Markdown report: {md_file}")
 
     def _generate_markdown_report(self) -> str:

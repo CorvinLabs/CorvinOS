@@ -29,7 +29,7 @@ def test_download_model_retries_onnx_on_windows():
             if "onnx.json" in url:
                 # JSON always succeeds
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(json.dumps({}))
+                dest.write_text(json.dumps({}), encoding="utf-8")
                 return True
             # ONNX fails once, succeeds on retry
             if call_count["fetch"] == 1:
@@ -93,7 +93,7 @@ def test_download_model_skips_existing():
             # JSON only
             if "json" in url:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(json.dumps({}))
+                dest.write_text(json.dumps({}), encoding="utf-8")
                 return True
             return False
 

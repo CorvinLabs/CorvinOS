@@ -29,7 +29,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.src = self.tmp / "data" / "rows.json"
         self.src.parent.mkdir(parents=True)
-        self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2}]))
+        self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2}]), encoding="utf-8")
 
     def _create(self, client, csrf):
         r = client.post(f"{_BASE}/create", headers={"X-CSRF-Token": csrf}, json={
@@ -109,7 +109,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
 
             # the source changes, then the queued regeneration runs (batch window elapsed)
             self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2},
-                                            {"name": "c", "score": 3}]))
+                                            {"name": "c", "score": 3}]), encoding="utf-8")
             again.daemon.regeneration_scheduler.batch_window_seconds = 0.0
             work = _run(again.tick(now=10**12))      # far in the future: the source check is due
             self.assertGreaterEqual(work, 1)
@@ -128,7 +128,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
             # audit-first: intent then outcome on the tenant chain, and the chain still verifies
             from core.paths.tenant import tenant_audit_chain
             chain = tenant_audit_chain("_default")     # audit_sink writes THE tenant chain
-            recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+            recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
             regen = [r["details"]["stage"] for r in recs if r.get("event_type") == "learning.regeneration"]
             self.assertEqual(regen, ["applying", "finished"])
             from corvin_operator.forge.forge import security_events as se
@@ -138,7 +138,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
         with _sandbox(self.tmp) as (client, csrf, _home, _):
             aid = self._create(client, csrf)
             from core.skills.os_skills.datahub_unified import regenerate
-            self.src.write_text(json.dumps([{"note": "key AKIAIOSFODNN7EXAMPLE secret_access=" + "x" * 30}]))
+            self.src.write_text(json.dumps([{"note": "key AKIAIOSFODNN7EXAMPLE secret_access=" + "x" * 30}]), encoding="utf-8")
             out = regenerate.regenerate_skill("_default", self.skill, reason="source_changed")
             self.assertEqual(out.outcome, "refused", out)
             art = next(a for a in regenerate.live_skill_artifacts("_default") if a["artifact_id"] == aid)
@@ -181,7 +181,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
             aid = self._create(client, csrf)
             other = Path(home) / "tenants" / "acme" / "global" / "acme_private.json"
             other.parent.mkdir(parents=True, exist_ok=True)
-            other.write_text(json.dumps([{"name": "x"}] * 3))
+            other.write_text(json.dumps([{"name": "x"}] * 3), encoding="utf-8")
             self.src.unlink()
             self.src.symlink_to(other)
             from core.skills.os_skills.datahub_unified import regenerate
@@ -195,13 +195,13 @@ class DataHubLearningLoopTest(unittest.TestCase):
         """Review DH-11: refused/failed/no_artifact paths wrote no record."""
         with _sandbox(self.tmp) as (client, csrf, home, _):
             self._create(client, csrf)
-            self.src.write_text("[]")
+            self.src.write_text("[]", encoding="utf-8")
             from core.skills.os_skills.datahub_unified import regenerate
             from core.paths.tenant import tenant_audit_chain
             self.assertEqual(regenerate.regenerate_skill("_default", self.skill).outcome, "refused")
             self.assertEqual(regenerate.regenerate_skill("_default", "assistant.datahub_ffff").outcome,
                              "no_artifact")
-            recs = [json.loads(l) for l in tenant_audit_chain("_default").read_text().splitlines() if l.strip()]
+            recs = [json.loads(l) for l in tenant_audit_chain("_default").read_text(encoding="utf-8").splitlines() if l.strip()]
             outcomes = [r["details"]["outcome"] for r in recs if r.get("event_type") == "learning.regeneration"]
             self.assertEqual(outcomes, ["refused", "no_artifact"])
 
@@ -212,7 +212,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
         with _sandbox(self.tmp) as (client, csrf, home, _):
             self._create(client, csrf)
             from core.skills.os_skills.datahub_unified import regenerate
-            (regenerate._artifacts_dir("_default") / "broken.json").write_text("{not json")
+            (regenerate._artifacts_dir("_default") / "broken.json").write_text("{not json", encoding="utf-8")
             with self.assertRaises(regenerate.ArtifactStoreUnreadable):
                 regenerate.live_skill_artifacts("_default")
             self.assertEqual(regenerate.regenerate_skill("_default", self.skill).outcome, "failed")
@@ -223,7 +223,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
             self._create(client, csrf)
             other = Path(home) / "tenants" / "acme" / "global" / "acme_private.json"
             other.parent.mkdir(parents=True, exist_ok=True)
-            other.write_text(json.dumps([{"name": "secret-ish"}] * 5))
+            other.write_text(json.dumps([{"name": "secret-ish"}] * 5), encoding="utf-8")
             self.src.unlink()
             try:
                 import os
@@ -238,7 +238,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
         """R2-DH-4: hash and ingestion read the same bytes (one snapshot)."""
         with _sandbox(self.tmp) as (client, csrf, home, _):
             aid = self._create(client, csrf)
-            self.src.write_text(json.dumps([{"name": n, "score": i} for i, n in enumerate("abcde")]))
+            self.src.write_text(json.dumps([{"name": n, "score": i} for i, n in enumerate("abcde")]), encoding="utf-8")
             import hashlib
             want = hashlib.sha256(self.src.read_bytes()).hexdigest()
             from core.skills.os_skills.datahub_unified import regenerate
@@ -257,7 +257,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
             reg = regenerate._registry("_default")
             reg._registry(SCOPE).set_grades(self.skill, [{"score": 0.4, "notes": "seed"}])
             body_before = reg.get_body(self.skill)
-            self.src.write_text(json.dumps([{"name": "z", "score": 9}] * 3))
+            self.src.write_text(json.dumps([{"name": "z", "score": 9}] * 3), encoding="utf-8")
             from skill_forge.registry import SkillRegistry
             real = SkillRegistry.set_grades
 
@@ -287,7 +287,7 @@ class DataHubLearningLoopTest(unittest.TestCase):
                                 if a["artifact_id"] == aid))
             planted["artifact_id"] = "ab" * 16
             (regenerate._artifacts_dir("_default") / f"{planted['artifact_id']}.json").write_text(
-                json.dumps(planted))
+                json.dumps(planted), encoding="utf-8")
             ids = [a["artifact_id"] for a in regenerate.live_skill_artifacts("_default")]
             self.assertEqual(ids, [aid])
 

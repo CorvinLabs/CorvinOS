@@ -152,7 +152,7 @@ class TestChainReadHelpers(unittest.TestCase):
             "details": block,
         })
         path = Path(tmpdir) / "audit.jsonl"
-        path.write_text(line + "\n")
+        path.write_text(line + "\n", encoding="utf-8")
         return path, expected_hash
 
     def test_get_genesis_block_returns_block(self):
@@ -178,14 +178,14 @@ class TestChainReadHelpers(unittest.TestCase):
         import nbac
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "audit.jsonl"
-            path.write_text("")
+            path.write_text("", encoding="utf-8")
             self.assertIsNone(nbac.get_genesis_block(path))
 
     def test_get_genesis_block_no_genesis_event(self):
         import nbac
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "audit.jsonl"
-            path.write_text(json.dumps({"event_type": "A2A.envelope_received", "hash": "abc"}) + "\n")
+            path.write_text(json.dumps({"event_type": "A2A.envelope_received", "hash": "abc"}) + "\n", encoding="utf-8")
             self.assertIsNone(nbac.get_genesis_block(path))
 
 
@@ -444,7 +444,7 @@ def _write_origin_file(tmpdir: Path, origin_id: str, hmac_key: str,
     if nbac_strict:
         cfg["nbac_strict"] = True
     origin_file = origins_dir / f"{origin_id}.json"
-    origin_file.write_text(json.dumps(cfg))
+    origin_file.write_text(json.dumps(cfg), encoding="utf-8")
     origin_file.chmod(0o600)
     return origin_file
 
@@ -570,7 +570,7 @@ class TestVoiceAuditGenesisCheck(unittest.TestCase):
             "details": block,
         }
         chain_path = tmpdir / f"audit_{instance_id}.jsonl"
-        chain_path.write_text(json.dumps(entry) + "\n")
+        chain_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
         return chain_path
 
     def test_same_network_id_passes(self):
@@ -603,7 +603,7 @@ class TestVoiceAuditGenesisCheck(unittest.TestCase):
             path_no_genesis = tmpdir / "audit_no_genesis.jsonl"
             path_no_genesis.write_text(
                 json.dumps({"event_type": "A2A.envelope_received",
-                            "hash": "x" * 64}) + "\n"
+                            "hash": "x" * 64}) + "\n", encoding="utf-8"
             )
             with patch("nbac.load_network_pubkey", return_value=self._pub):
                 ok, msg = voice_audit._nbac_cross_genesis_check(path_a, path_no_genesis)

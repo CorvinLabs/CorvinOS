@@ -103,7 +103,7 @@ def _tenant_home(tmp_path: Path, spec: str):
         home = tmp_path / ".corvin"
         cfg = home / "tenants" / "_default" / "global"
         cfg.mkdir(parents=True)
-        (cfg / "tenant.corvin.yaml").write_text(spec)
+        (cfg / "tenant.corvin.yaml").write_text(spec, encoding="utf-8")
         previous = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = str(home)
         EM.load_providers(force_reload=True)
@@ -385,7 +385,7 @@ class TestTheDecisionIsAuditable:
         assert MS.classify_os_model(COMPLEX_PROMPT, tenant_id="_default") == MS.top_model()
 
         assert chain.exists(), "no audit record was written at all"
-        rows = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        rows = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
         classified = [r for r in rows if r.get("event_type") == "os_model.classified"]
         assert classified, "the routing decision left no os_model.classified record"
         details = classified[-1].get("details") or {}
@@ -405,7 +405,7 @@ class TestTheDecisionIsAuditable:
         monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
         assert MS.classify_os_model(KEYWORD_ONLY_COMPLEX, tenant_id="_default") is None
 
-        rows = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        rows = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
         classified = [r for r in rows if r.get("event_type") == "os_model.classified"]
         assert classified
         assert (classified[-1]["details"]["outcome"]).startswith("abstain")
@@ -415,7 +415,7 @@ class TestTheDecisionIsAuditable:
         chain = tmp_path / "audit.jsonl"
         monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
         MS.classify_os_model(COMPLEX_PROMPT, tenant_id="_default")
-        assert "Analyse the delegation path" not in chain.read_text()
+        assert "Analyse the delegation path" not in chain.read_text(encoding="utf-8")
 
 
 # ── 7. the pin tiers normalise what they return ──────────────────────

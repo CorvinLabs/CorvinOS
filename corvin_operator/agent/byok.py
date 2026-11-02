@@ -117,7 +117,7 @@ def _vault_set(key_name: str, value: str, *, vault_dir: Path | None = None) -> N
         item_path = vault_subdir / f"{key_name}.json"
         payload = json.dumps({"name": key_name, "kind": "api_key", "value": value})
         tmp = item_path.with_suffix(".json.tmp")
-        tmp.write_text(payload)
+        tmp.write_text(payload, encoding="utf-8")
         try:
             tmp.chmod(0o600)
         except OSError:
@@ -129,14 +129,14 @@ def _vault_set(key_name: str, value: str, *, vault_dir: Path | None = None) -> N
         # Keep index alongside vault files.
         index_file = vault_subdir / "INDEX.json"
         try:
-            existing = json.loads(index_file.read_text()) if index_file.exists() else []
+            existing = json.loads(index_file.read_text(encoding="utf-8")) if index_file.exists() else []
         except (json.JSONDecodeError, OSError):
             existing = []
         existing = [e for e in existing if e.get("name") != key_name]
         existing.append({"name": key_name, "kind": "api_key", "tags": ["byok"],
                          "encrypted": False, "auto_unlock": True})
         existing.sort(key=lambda e: e.get("name", ""))
-        index_file.write_text(json.dumps(existing, indent=2))
+        index_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
         try:
             index_file.chmod(0o600)
         except OSError:
@@ -264,12 +264,12 @@ def delete_byok_secret(
             vault_removed = True
         if index_file.exists():
             try:
-                existing = json.loads(index_file.read_text())
+                existing = json.loads(index_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 existing = []
             kept = [e for e in existing if e.get("name") != key_name]
             if len(kept) != len(existing):
-                index_file.write_text(json.dumps(kept, indent=2))
+                index_file.write_text(json.dumps(kept, indent=2), encoding="utf-8")
                 vault_removed = True
     else:
         here = Path(__file__).resolve()

@@ -356,7 +356,7 @@ class TestHardcodedValueElimination:
     def test_no_hardcoded_tenant_id_in_plugin_manager(self):
         """Verify plugin_manager.py has no hardcoded tenant_id."""
         manager_path = Path(__file__).parent.parent / "control_plane" / "plugin_manager.py"
-        content = manager_path.read_text()
+        content = manager_path.read_text(encoding="utf-8")
 
         # Should not have hardcoded tenant_id="default"
         assert 'tenant_id="default"' not in content
@@ -368,7 +368,7 @@ class TestHardcodedValueElimination:
         wrapper_path = (
             Path(__file__).parent.parent / "chat_learning_wrapper.py"
         )
-        content = wrapper_path.read_text()
+        content = wrapper_path.read_text(encoding="utf-8")
 
         # Should not have hardcoded tenant_id="default" as parameter default
         assert "def __init__(self, tenant_id: str = \"default\")" not in content
@@ -379,7 +379,7 @@ class TestHardcodedValueElimination:
         voice_path = (
             Path(__file__).parent.parent / "voice_summary_orchestration.py"
         )
-        content = voice_path.read_text()
+        content = voice_path.read_text(encoding="utf-8")
 
         # Should not have hardcoded tenant_id="default" in dataclass
         assert 'tenant_id: str = "default"' not in content

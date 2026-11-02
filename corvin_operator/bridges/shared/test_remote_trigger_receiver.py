@@ -67,7 +67,7 @@ def _origin_config(hmac_key=HMAC_KEY, recv_key=RECV_KEY, enabled=True, max_ttl_s
 def _write_origin(tmpdir: Path, origin_id: str = ORIGIN_ID, config: dict | None = None) -> Path:
     cfg = config or _origin_config()
     path = tmpdir / f"{origin_id}.json"
-    path.write_text(json.dumps(cfg))
+    path.write_text(json.dumps(cfg), encoding="utf-8")
     path.chmod(0o600)
     return path
 
@@ -222,7 +222,7 @@ class TestOriginRegistry(unittest.TestCase):
         cfg1 = registry.load(ORIGIN_ID)
         # Modify file
         new_cfg = _origin_config(max_ttl_s=999)
-        path.write_text(json.dumps(new_cfg))
+        path.write_text(json.dumps(new_cfg), encoding="utf-8")
         path.chmod(0o600)
         cfg2 = registry.load(ORIGIN_ID)
         self.assertEqual(cfg1["max_ttl_s"], 300)
@@ -1093,7 +1093,7 @@ class TestIBCGates(unittest.TestCase):
             "spawn_worker": False, "require_ibc": require_ibc,
         }
         p = tmp / "ibc-test.json"
-        p.write_text(json.dumps(cfg)); p.chmod(0o600)
+        p.write_text(json.dumps(cfg), encoding="utf-8"); p.chmod(0o600)
         return tmp
 
     def _signed_envelope(self, origins_dir: Path, extra: dict | None = None) -> dict:
@@ -1413,7 +1413,7 @@ class TestCILint(unittest.TestCase):
 
     def test_no_import_anthropic_in_receiver(self):
         import ast
-        src = (Path(__file__).resolve().parent / "remote_trigger_receiver.py").read_text()
+        src = (Path(__file__).resolve().parent / "remote_trigger_receiver.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):

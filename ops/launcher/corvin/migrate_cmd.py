@@ -212,7 +212,7 @@ def cmd_migrate_to_tenant_native(args: argparse.Namespace) -> int:
         # Show audit trail info
         audit_file = tenant_global / "forge" / "audit.jsonl" if tenant_global.exists() else None
         if audit_file and audit_file.exists():
-            lines = audit_file.read_text().strip().split('\n')
+            lines = audit_file.read_text(encoding="utf-8").strip().split('\n')
             print(f"\nAudit trail: {len(lines)} events recorded")
             print(f"  Location: {audit_file}")
 
@@ -402,7 +402,7 @@ def cmd_tenant_data_report(args: argparse.Namespace) -> int:
     # Output JSON for machine parsing
     json_path = corvin_home / ".tenant-data-report.json"
     try:
-        json_path.write_text(json.dumps(report, indent=2))
+        json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(f"\n✓ JSON report written to: {json_path}")
     except OSError as e:
         print(f"\n⚠ Failed to write JSON report: {e}")

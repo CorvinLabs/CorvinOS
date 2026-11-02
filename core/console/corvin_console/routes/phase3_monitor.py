@@ -90,7 +90,7 @@ def _read_audit_trail_metrics(hours: int = 24) -> dict[str, Any]:
     }
 
     try:
-        with open(audit_path, "r") as f:
+        with open(audit_path, "r", encoding="utf-8") as f:
             for line in f:
                 try:
                     event = json.loads(line.strip())

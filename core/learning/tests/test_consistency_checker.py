@@ -104,7 +104,7 @@ class TestNewestFirstSelection:
 
 class TestOneBadLineDoesNotBlindTheQuery:
     def _corrupt(self, store: EventStore, date: str, line: str) -> None:
-        with open(store.events_dir / f"{date}.jsonl", "a") as fh:
+        with open(store.events_dir / f"{date}.jsonl", "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
     def test_unknown_event_type_is_skipped_not_raised(self, store):

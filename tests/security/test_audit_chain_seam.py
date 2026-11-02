@@ -78,12 +78,12 @@ def test_seam_never_mutates_either_chain(se, tmp_path):
     _seed(se, sibling, 4)
     _seed(se, canonical, 1)
     before = sibling.read_bytes()
-    can_lines_before = len(canonical.read_text().splitlines())
+    can_lines_before = len(canonical.read_text(encoding="utf-8").splitlines())
 
     se.record_chain_supersession(canonical, sibling)
 
     assert sibling.read_bytes() == before, "a seam must never append to the superseded chain"
-    assert len(canonical.read_text().splitlines()) == can_lines_before + 1
+    assert len(canonical.read_text(encoding="utf-8").splitlines()) == can_lines_before + 1
     ok, problems = se.verify_chain(canonical)
     assert ok, problems
 

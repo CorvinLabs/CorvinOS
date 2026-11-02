@@ -40,7 +40,7 @@ def _marker_function() -> str:
 
 
 # Line numbers derived from the file itself, so an edit above cannot rot them.
-_SRC = Path(__file__).read_text().split("\n")
+_SRC = Path(__file__).read_text(encoding="utf-8").split("\n")
 _BODY_LINE = next(i + 1 for i, l in enumerate(_SRC) if 'payload = "bound-line"' in l)
 _BLANK_LINE = _BODY_LINE + 1  # the blank line inside _marker_function
 _OUTSIDE_LINE = next(i + 1 for i, l in enumerate(_SRC) if l.startswith("_EMPTY_SHA256"))
@@ -50,7 +50,7 @@ def _chain() -> list[dict]:
     path = Path(os.environ["VOICE_AUDIT_PATH"])
     if not path.exists():
         return []
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 @pytest.fixture
@@ -107,7 +107,7 @@ class TestLineFormResolvesTheFunction:
 
         from core.skills import os_skills_integration as mod
 
-        src = Path(inspect.getsourcefile(mod)).read_text()
+        src = Path(inspect.getsourcefile(mod)).read_text(encoding="utf-8")
         tree = ast.parse(src)
         call_lines = [
             n.lineno
@@ -160,12 +160,12 @@ class TestHashIsMemoised:
         # must produce a new hash rather than a stale one).
         target = Path("core/skills/tests") / "_lom_cache_probe.py"
         try:
-            target.write_text("def probe():\n    return 1\n")
+            target.write_text("def probe():\n    return 1\n", encoding="utf-8")
             lom = "core/skills/tests/_lom_cache_probe.py:probe"
             before = SkillsRegistry._compute_lom_hash(lom)
             assert before is not None
             time.sleep(0.01)
-            target.write_text("def probe():\n    return 2\n")
+            target.write_text("def probe():\n    return 2\n", encoding="utf-8")
             after = SkillsRegistry._compute_lom_hash(lom)
             assert after is not None and after != before
         finally:

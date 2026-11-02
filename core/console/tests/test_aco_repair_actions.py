@@ -83,7 +83,7 @@ def test_removes_stale_lock_keeps_fresh(tmp_path):
     (home / "global").mkdir(parents=True)
     stale = home / "global" / "old.lock"
     fresh = home / "global" / "new.lock"
-    stale.write_text("x"); fresh.write_text("y")
+    stale.write_text("x", encoding="utf-8"); fresh.write_text("y", encoding="utf-8")
     old_t = time.time() - 25200  # 7 h ago (> 6h TTL)
     os.utime(stale, (old_t, old_t))
     RA.run_local_repairs(_ctx(home, now=time.time()))
@@ -97,7 +97,7 @@ def test_removes_old_orphan_tmp(tmp_path):
     home = tmp_path
     (home / "d").mkdir()
     tmp = home / "d" / "partial.tmp"
-    tmp.write_text("half")
+    tmp.write_text("half", encoding="utf-8")
     old = time.time() - 200000  # > 24 h
     os.utime(tmp, (old, old))
     RA.run_local_repairs(_ctx(home, now=time.time()))
@@ -111,7 +111,7 @@ def test_tightens_loose_secret_file(tmp_path):
     home = tmp_path
     (home / "config").mkdir()
     sec = home / "config" / "service.env"
-    sec.write_text("KEY=v")
+    sec.write_text("KEY=v", encoding="utf-8")
     sec.chmod(0o644)  # too open
     RA.run_local_repairs(_ctx(home))
     assert (sec.stat().st_mode & 0o777) == 0o600
@@ -141,7 +141,7 @@ def test_rollback_when_fault_persists(tmp_path, monkeypatch):
 def test_kill_switch_disables_all(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_ACO_L5_OFF", "1")
     (home := tmp_path / "global").mkdir(parents=True)
-    stale = home / "x.lock"; stale.write_text("x")
+    stale = home / "x.lock"; stale.write_text("x", encoding="utf-8")
     os.utime(stale, (time.time() - 25200,) * 2)
     assert RA.run_local_repairs(_ctx(tmp_path, now=time.time())) == []
     assert stale.exists()  # nothing touched
@@ -170,7 +170,7 @@ def test_risky_actions_gated(tmp_path, monkeypatch):
 def test_dry_run_is_read_only(tmp_path):
     home = tmp_path
     (home / "g").mkdir()
-    stale = home / "g" / "z.lock"; stale.write_text("x")
+    stale = home / "g" / "z.lock"; stale.write_text("x", encoding="utf-8")
     os.utime(stale, (time.time() - 25200,) * 2)
     out = RA.run_local_repairs(_ctx(home, now=time.time()), dry_run=True)
     assert any(o.status == "would_apply" for o in out)
@@ -219,13 +219,13 @@ def test_corrupt_config_reset_risky(tmp_path, monkeypatch):
     good.write_text('{"a":1}', encoding="utf-8")
     # risky OFF → untouched
     RA.run_local_repairs(_ctx(home))
-    assert bad.read_text().startswith("{ this")
+    assert bad.read_text(encoding="utf-8").startswith("{ this")
     # risky ON → backed up + reset; valid config untouched
     monkeypatch.setenv("CORVIN_ACO_L5_RISKY", "1")
     RA.run_local_repairs(_ctx(home))
-    assert bad.read_text() == "{}\n"
+    assert bad.read_text(encoding="utf-8") == "{}\n"
     assert (home / "c" / "engine.config.json.corrupt").exists()
-    assert good.read_text() == '{"a":1}'
+    assert good.read_text(encoding="utf-8") == '{"a":1}'
 
 
 def test_corrupt_config_reset_never_touches_forbidden(tmp_path, monkeypatch):
@@ -236,7 +236,7 @@ def test_corrupt_config_reset_never_touches_forbidden(tmp_path, monkeypatch):
     audit = home / "g" / "audit.jsonl"
     audit.write_text("not-json-hash-chain", encoding="utf-8")
     RA.run_local_repairs(_ctx(home))
-    assert audit.read_text() == "not-json-hash-chain"
+    assert audit.read_text(encoding="utf-8") == "not-json-hash-chain"
 
 
 def test_stale_running_task_reset(tmp_path, monkeypatch):
@@ -250,8 +250,8 @@ def test_stale_running_task_reset(tmp_path, monkeypatch):
     live.write_text(f'{{"status":"running","pid":{os.getpid()}}}', encoding="utf-8")
     RA.run_local_repairs(_ctx(home))
     import json as _j
-    assert _j.loads(dead.read_text())["status"] == "failed"      # dead pid → failed
-    assert _j.loads(live.read_text())["status"] == "running"     # live pid → untouched
+    assert _j.loads(dead.read_text(encoding="utf-8"))["status"] == "failed"      # dead pid → failed
+    assert _j.loads(live.read_text(encoding="utf-8"))["status"] == "running"     # live pid → untouched
 
 
 # ── VoiceTtsPinnedProviderReset ───────────────────────────────────────────────
@@ -270,7 +270,7 @@ def test_voice_tts_pinned_provider_reset_clears_unusable_provider(tmp_path, monk
 
     class _FakeProfileModule:
         def load(self, force=False):
-            return _j.loads(profile_path.read_text())
+            return _j.loads(profile_path.read_text(encoding="utf-8"))
         def save(self, data):
             profile_path.write_text(_j.dumps(data), encoding="utf-8")
         def set_value(self, key, value):
@@ -311,12 +311,12 @@ def test_voice_tts_pinned_provider_reset_clears_unusable_provider(tmp_path, monk
 
     n = action.apply(ctx, faults)
     assert n == 1
-    saved = _j.loads(profile_path.read_text())
+    saved = _j.loads(profile_path.read_text(encoding="utf-8"))
     assert saved.get("tts_provider") is None, "tts_provider should be cleared"
 
     # undo restores the previous value
     action.undo(ctx)
-    restored = _j.loads(profile_path.read_text())
+    restored = _j.loads(profile_path.read_text(encoding="utf-8"))
     assert restored.get("tts_provider") == "openai"
 
 
@@ -335,7 +335,7 @@ def test_voice_tts_pinned_provider_reset_ignores_auto(tmp_path, monkeypatch):
 
         class _FakeMod:
             def load(self):
-                return _j.loads(profile_path.read_text())
+                return _j.loads(profile_path.read_text(encoding="utf-8"))
             def save(self, d):
                 profile_path.write_text(_j.dumps(d), encoding="utf-8")
 
@@ -354,7 +354,7 @@ def test_voice_tts_pinned_provider_reset_skips_usable_provider(tmp_path, monkeyp
 
     class _FakeMod:
         def load(self):
-            return _j.loads(profile_path.read_text())
+            return _j.loads(profile_path.read_text(encoding="utf-8"))
 
     action = RA.VoiceTtsPinnedProviderReset()
     monkeypatch.setattr(action, "_load_profile_module", lambda ctx: _FakeMod())
@@ -367,7 +367,7 @@ def test_voice_tts_pinned_provider_reset_skips_usable_provider(tmp_path, monkeyp
 
 # ── stale_lock: flock guard (2026-07-24, CorvinLogs review) ───────────────────
 
-@pytest.mark.skipif(os.name == "nt", reason="flock is POSIX-only")
+# Runs on Windows too: corvin_core/_wincompat provides a real LockFileEx flock.
 def test_stale_lock_sweep_skips_currently_held_flock(tmp_path):
     """flock does not update mtime — an old-looking lock file may be HELD right
     now (e.g. quota.py's _save_store). Sweeping it would break mutual exclusion:
@@ -378,8 +378,8 @@ def test_stale_lock_sweep_skips_currently_held_flock(tmp_path):
     (home / "global").mkdir(parents=True)
     held = home / "global" / "held.lock"
     residue = home / "global" / "residue.lock"
-    held.write_text("")          # no pid content — the common flock pattern
-    residue.write_text("")
+    held.write_text("", encoding="utf-8")          # no pid content — the common flock pattern
+    residue.write_text("", encoding="utf-8")
     old_t = time.time() - 25200  # 7 h (> 6 h TTL) for both
     os.utime(held, (old_t, old_t))
     os.utime(residue, (old_t, old_t))

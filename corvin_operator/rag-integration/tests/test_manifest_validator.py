@@ -228,7 +228,7 @@ spec:
       type: object
   classification:
     data_type: INTERNAL
-"""
+""", encoding="utf-8"
         )
 
         result = validator.validate_file(yaml_file)
@@ -237,7 +237,7 @@ spec:
     def test_validate_json_file(self, validator, tmp_path, valid_manifest):
         """Validate JSON file."""
         json_file = tmp_path / "test.json"
-        json_file.write_text(json.dumps(valid_manifest))
+        json_file.write_text(json.dumps(valid_manifest), encoding="utf-8")
 
         result = validator.validate_file(json_file)
         assert result.valid is True
@@ -251,7 +251,7 @@ spec:
     def test_invalid_file_format(self, validator, tmp_path):
         """Unsupported file format fails."""
         bad_file = tmp_path / "test.xml"
-        bad_file.write_text("<xml/>")
+        bad_file.write_text("<xml/>", encoding="utf-8")
 
         result = validator.validate_file(bad_file)
         assert result.valid is False

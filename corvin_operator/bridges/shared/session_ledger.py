@@ -63,7 +63,10 @@ Audit (content-free, ``audit.audit_event``):
 """
 from __future__ import annotations
 
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows without the corvin_core/forge shim: real LockFileEx flock
+    from _compat_fcntl import fcntl  # type: ignore[no-redef]
 import hashlib
 import json
 import os
@@ -236,8 +239,18 @@ def _merge_into(store: Path, legacy_file: Path) -> None:
                 if (r.get("kind") == "boundary" and r.get("boundary") == "reset"
                         and r.get("reason") in _manual_reasons()):
                     fence = i
-            _replace_atomically(path, "".join(json.dumps(r, ensure_ascii=False) + "\n"
-                                              for r in merged))
+            merged_text = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in merged)
+            if os.name == "nt":
+                # Windows cannot os.replace a file we hold open (WinError 5):
+                # rewrite it through the locked handle instead.
+                lock_fh.flush()
+                lock_fh.seek(0)
+                lock_fh.truncate()
+                lock_fh.write(merged_text)
+                lock_fh.flush()
+                os.fsync(lock_fh.fileno())
+            else:
+                _replace_atomically(path, merged_text)
             _replace_atomically(store / _HWM_FILE, json.dumps(
                 {"seq": len(merged), "n": n, "fence_seq": fence}))
         finally:

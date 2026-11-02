@@ -80,7 +80,7 @@ class ProfileLoadNonDictCoercionTests(unittest.TestCase):
 
     def _write_raw(self, text: str) -> None:
         self.prof.PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self.prof.PROFILE_FILE.write_text(text)
+        self.prof.PROFILE_FILE.write_text(text, encoding="utf-8")
         # Force a fresh disk read regardless of mtime granularity.
         self.prof._cache = None
         self.prof._cache_mtime = 0.0
@@ -129,12 +129,12 @@ class LangCliMalformedProfileTests(unittest.TestCase):
     def _run(self, *args):
         r = subprocess.run(
             ["python3", str(LANG_CLI), *args],
-            capture_output=True, text=True, env=self.env,
+            capture_output=True, text=True, env=self.env, encoding="utf-8", errors="replace",
         )
         return r
 
     def _write_raw(self, text: str) -> None:
-        self.profile_file.write_text(text)
+        self.profile_file.write_text(text, encoding="utf-8")
 
     def _assert_clean_json_ok(self, r: subprocess.CompletedProcess) -> dict:
         self.assertEqual(
@@ -201,7 +201,7 @@ class LangCliMalformedProfileTests(unittest.TestCase):
         self.assertEqual(payload["code"], "de")
         # The malformed file must have been replaced by a proper object,
         # not left as-is or merged incorrectly.
-        on_disk = json.loads(self.profile_file.read_text())
+        on_disk = json.loads(self.profile_file.read_text(encoding="utf-8"))
         self.assertIsInstance(on_disk, dict)
         self.assertEqual(on_disk.get("display_language"), "de")
 

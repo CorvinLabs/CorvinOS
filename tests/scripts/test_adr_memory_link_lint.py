@@ -40,7 +40,7 @@ def dirs(tmp_path: Path):
 def _run(mem: Path, adr: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(_LINT), "--memory-dir", str(mem), "--adr-dir", str(adr), *extra],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
 
 
 def _note(mem: Path, name: str, body: str) -> None:
@@ -153,6 +153,6 @@ def test_json_report(dirs):
 
 def test_missing_directory_exits_two(tmp_path):
     r = subprocess.run([sys.executable, str(_LINT), "--memory-dir", str(tmp_path / "nope"),
-                        "--adr-dir", str(tmp_path)], capture_output=True, text=True, timeout=60)
+                        "--adr-dir", str(tmp_path)], capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
     assert r.returncode == 2
     assert "memory directory not found" in r.stderr

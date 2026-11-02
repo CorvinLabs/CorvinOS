@@ -44,7 +44,7 @@ def _write_genesis_chain(path: Path, n: int = 2) -> None:
     """Write a clean genesis hash chain (prev_hash starts at "") using the
     canonical algorithm verify_chain expects, so verify_audit() passes."""
     prev = ""
-    with path.open("w") as fh:
+    with path.open("w", encoding="utf-8") as fh:
         for i in range(n):
             rec = {"ts": 1_700_000_000.0 + i, "event_type": f"e{i}",
                    "severity": "INFO", "run_id": "", "tool": "t",
@@ -71,7 +71,7 @@ def tree():
     seg_name = "audit.2026-07-01T120000Z.jsonl"
     seg = root / seg_name
     seg.write_text('{"ts": 1.0, "event_type": "sealed", "prev_hash": "", '
-                   '"hash": "aaaaaaaaaaaaaaaa"}\n')
+                   '"hash": "aaaaaaaaaaaaaaaa"}\n', encoding="utf-8")
     seg_sha = S._sha256_file(seg)
 
     # A minimal valid manifest recording that segment. last_hash="" keeps the
@@ -81,7 +81,7 @@ def tree():
     manifest.write_text(json.dumps({
         "segment": seg_name, "on_disk": seg_name,
         "sha256": seg_sha, "first_prev_hash": "", "last_hash": "",
-    }) + "\n")
+    }) + "\n", encoding="utf-8")
     return V, S, root, live, seg
 
 
@@ -118,7 +118,7 @@ def test_verify_all_swapped_sealed_segment_is_nonzero(tree, capsys):
     assert V.main(["--path", str(root), "verify", "--all"]) == 0   # sanity
     capsys.readouterr()
 
-    with seg.open("a") as fh:
+    with seg.open("a", encoding="utf-8") as fh:
         fh.write('{"ts": 9.0, "event_type": "forged"}\n')
 
     rc = V.main(["--path", str(root), "verify", "--all"])

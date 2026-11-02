@@ -474,7 +474,7 @@ def _load_rate_store(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError, ValueError):
         return {}

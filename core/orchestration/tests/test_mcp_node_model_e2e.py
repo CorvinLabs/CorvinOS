@@ -54,7 +54,7 @@ class TestMcpWorkflowRunNodeModel(TestOrchestrationServerBase):
         bindir = self.home / "bin"
         bindir.mkdir()
         claude = bindir / "claude"
-        claude.write_text(FAKE_CLAUDE)
+        claude.write_text(FAKE_CLAUDE, encoding="utf-8")
         claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
         self.log = self.home / "calls.jsonl"
         self._saved = {k: os.environ.get(k) for k in
@@ -82,7 +82,7 @@ class TestMcpWorkflowRunNodeModel(TestOrchestrationServerBase):
         self.assertFalse(resp[0]["result"]["isError"], payload)
         self.assertEqual(payload["status"], "complete", payload)
 
-        calls = [json.loads(line)["argv"] for line in self.log.read_text().splitlines() if line.strip()]
+        calls = [json.loads(line)["argv"] for line in self.log.read_text(encoding="utf-8").splitlines() if line.strip()]
         nodes = [c for c in calls if "--max-turns" not in c]
         self.assertEqual(len(nodes), 2, nodes)
         models = sorted(c[c.index("--model") + 1] for c in nodes)
@@ -123,14 +123,14 @@ orchestration:
         first = _drive(self._server(), [_call("workflow_run", {"workflow_id": "mcp_resume_model", "inputs": {}})])
         paused = json.loads(first[0]["result"]["content"][0]["text"])
         self.assertEqual(paused["status"], "paused", paused)
-        self.assertFalse(self.log.exists() and [l for l in self.log.read_text().splitlines()
+        self.assertFalse(self.log.exists() and [l for l in self.log.read_text(encoding="utf-8").splitlines()
                                                  if "--max-turns" not in l])
         with mock.patch.dict(os.environ, {"CORVIN_CHANNEL_ID": "discord:owner-chat"}):
             resumed = _drive(self._server(), [_call("workflow_resume", {"run_id": paused["run_id"], "reply": "yes"})])
         payload = json.loads(resumed[0]["result"]["content"][0]["text"])
         self.assertFalse(resumed[0]["result"]["isError"], payload)
         self.assertEqual(payload["status"], "complete", payload)
-        nodes = [c for c in (json.loads(line)["argv"] for line in self.log.read_text().splitlines() if line.strip())
+        nodes = [c for c in (json.loads(line)["argv"] for line in self.log.read_text(encoding="utf-8").splitlines() if line.strip())
                  if "--max-turns" not in c]
         self.assertEqual([c[c.index("--model") + 1] for c in nodes], [tier_model("opus")])
 

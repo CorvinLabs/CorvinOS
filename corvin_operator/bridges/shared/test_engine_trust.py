@@ -51,7 +51,7 @@ def _iso(offset_days: int = 0) -> str:
 def _write_yaml(path: Path, body: dict[str, Any]) -> None:
     import yaml as _y
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_y.safe_dump(body, sort_keys=False))
+    path.write_text(_y.safe_dump(body, sort_keys=False), encoding="utf-8")
 
 
 def _good_manifest(engine_id: str, *, tier: str = "high",
@@ -381,7 +381,7 @@ def section_audit_emission() -> None:
             ev = et.emit_violation_event(v, audit_path=audit)
             t("tier-violation emits trust_tier_violated",
               ev == "engine.trust_tier_violated", detail=str(ev))
-            chain = [json.loads(line) for line in audit.read_text().splitlines() if line]
+            chain = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines() if line]
             t("audit chain has one entry", len(chain) == 1)
             ev_rec = chain[0]
             t("event details have engine_id", "engine_id" in ev_rec["details"])

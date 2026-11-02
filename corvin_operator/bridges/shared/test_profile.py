@@ -127,9 +127,9 @@ class CacheTests(unittest.TestCase):
         prof.load()
         # Bypass set_value and write directly so mtime changes but cache
         # would otherwise be stale until force=True.
-        data = json.loads(prof.PROFILE_FILE.read_text())
+        data = json.loads(prof.PROFILE_FILE.read_text(encoding="utf-8"))
         data["name"] = "second"
-        prof.PROFILE_FILE.write_text(json.dumps(data))
+        prof.PROFILE_FILE.write_text(json.dumps(data), encoding="utf-8")
         # Bump mtime.
         os.utime(prof.PROFILE_FILE, None)
         # Without force, mtime change still re-reads.
@@ -144,7 +144,7 @@ class CacheTests(unittest.TestCase):
         # Path.read_text calls across three back-to-back load()s with the
         # file left untouched in between.
         prof.PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        prof.PROFILE_FILE.write_text("{not json")
+        prof.PROFILE_FILE.write_text("{not json", encoding="utf-8")
         # Reset the in-memory cache so the corrupt file is the first thing
         # load() sees (setUp's prof.reset() already did this, but be explicit
         # about the precondition here).

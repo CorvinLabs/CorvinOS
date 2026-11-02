@@ -126,7 +126,7 @@ def test_checkpoint_appends_atomically():
 
         # Check log has 3 lines
         path = _checkpoint_path(session_dir)
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             lines = [line.strip() for line in f if line.strip()]
         assert len(lines) == 3
 

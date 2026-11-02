@@ -45,7 +45,7 @@ def _chain(event_type: str) -> list[dict]:
     chain = fp.tenant_audit_chain("_default")
     if not chain.exists():
         return []
-    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in recs if r.get("event_type") == event_type]
 
 
@@ -179,9 +179,9 @@ class TestMasterStateRestart:
         m1.base_orch._daily_latency_p99 = [100.0] * 7
         m1.base_orch.state.baseline_latency_p99_ms = 100.0
         assert m1._save_state()
-        data = json.loads(m1.STATE_FILE.read_text())
+        data = json.loads(m1.STATE_FILE.read_text(encoding="utf-8"))
         data["daily_latency_p99"] = [1.0] * 7
-        m1.STATE_FILE.write_text(json.dumps(data))
+        m1.STATE_FILE.write_text(json.dumps(data), encoding="utf-8")
         m2 = MasterRolloutOrchestrator(state_dir=tmp_path)
         assert m2.base_orch._daily_latency_p99 == []
         assert m2.state.base_state.baseline_latency_p99_ms is None

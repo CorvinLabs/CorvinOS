@@ -63,13 +63,13 @@ class BootstrapTests(unittest.TestCase):
             # mutate the real plugin's `.venv`.
             sandbox = Path(td)
             (sandbox / "bootstrap.sh").write_text(
-                (PLUGIN_ROOT / "bootstrap.sh").read_text()
+                (PLUGIN_ROOT / "bootstrap.sh").read_text(encoding="utf-8"), encoding="utf-8"
             )
             (sandbox / "requirements.txt").write_text(
-                (PLUGIN_ROOT / "requirements.txt").read_text()
+                (PLUGIN_ROOT / "requirements.txt").read_text(encoding="utf-8"), encoding="utf-8"
             )
             (sandbox / "requirements-minimal.txt").write_text(
-                (PLUGIN_ROOT / "requirements-minimal.txt").read_text()
+                (PLUGIN_ROOT / "requirements-minimal.txt").read_text(encoding="utf-8"), encoding="utf-8"
             )
             (sandbox / "bootstrap.sh").chmod(0o755)
 

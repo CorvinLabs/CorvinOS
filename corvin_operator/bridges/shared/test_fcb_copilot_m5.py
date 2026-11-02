@@ -276,7 +276,7 @@ class TestToolResultInjectorTier2:
         # Verify JSONL was written
         btw_queue_path = tmp_path / "btw_queue.jsonl"
         assert btw_queue_path.exists()
-        content = btw_queue_path.read_text()
+        content = btw_queue_path.read_text(encoding="utf-8")
         entry = json.loads(content.strip())
         assert entry["tool_name"] == "Read"
         assert entry["status"] == "success"
@@ -296,7 +296,7 @@ class TestToolResultInjectorTier2:
         injector.inject_result(large_result, tool_name="Read", session_dir=session_dir)
 
         btw_queue_path = tmp_path / "btw_queue.jsonl"
-        entry = json.loads(btw_queue_path.read_text().strip())
+        entry = json.loads(btw_queue_path.read_text(encoding="utf-8").strip())
         assert entry["truncated"] is True
         assert "[...truncated...]" in entry["content"]
         assert len(entry["content"].encode()) <= 4 * 1024 + 100  # Some overhead for marker
@@ -314,7 +314,7 @@ class TestToolResultInjectorTier2:
         injector.inject_result(text, tool_name="Read", session_dir=session_dir)
 
         btw_queue_path = tmp_path / "btw_queue.jsonl"
-        entry = json.loads(btw_queue_path.read_text().strip())
+        entry = json.loads(btw_queue_path.read_text(encoding="utf-8").strip())
         # Should truncate at a sentence boundary (ending with . or [..truncated..])
         assert entry["truncated"] is True
 
@@ -329,7 +329,7 @@ class TestToolResultInjectorTier2:
         injector.inject_result("test result", tool_name="Read", session_dir=session_dir, status="success")
 
         btw_queue_path = tmp_path / "btw_queue.jsonl"
-        entry = json.loads(btw_queue_path.read_text().strip())
+        entry = json.loads(btw_queue_path.read_text(encoding="utf-8").strip())
 
         required_fields = {"type", "tool_name", "timestamp", "status", "result_size_bytes", "truncated", "content"}
         assert set(entry.keys()) >= required_fields
@@ -418,7 +418,7 @@ class TestCopilotMCPIntegrationTier2:
         assert result is not None
         assert "Error" in result or "error" in result
         btw_queue_path = tmp_path / "btw_queue.jsonl"
-        entry = json.loads(btw_queue_path.read_text().strip())
+        entry = json.loads(btw_queue_path.read_text(encoding="utf-8").strip())
         assert entry["status"] == "error"
 
 
@@ -468,7 +468,7 @@ class TestCopilotToolCallE2E:
         # Step 4: Verify result queued to btw_queue
         btw_queue_path = tmp_path / "btw_queue.jsonl"
         assert btw_queue_path.exists()
-        queued_entry = json.loads(btw_queue_path.read_text().strip())
+        queued_entry = json.loads(btw_queue_path.read_text(encoding="utf-8").strip())
         assert queued_entry["tool_name"] == "Read"
         assert queued_entry["type"] == "tool_result"
         assert "**Tool Result:** [Read]" in queued_entry["content"]
@@ -490,7 +490,7 @@ class TestCopilotToolCallE2E:
 
         # Turn 2: Read the queued result (simulating next spawn)
         btw_queue_path = tmp_path / "btw_queue.jsonl"
-        queued_lines = btw_queue_path.read_text().strip().split("\n")
+        queued_lines = btw_queue_path.read_text(encoding="utf-8").strip().split("\n")
         assert len(queued_lines) >= 1
 
         queued_entry = json.loads(queued_lines[0])
@@ -529,7 +529,7 @@ class TestCopilotToolCallE2E:
 
         # Verify only the first tool was queued
         btw_queue_path = tmp_path / "btw_queue.jsonl"
-        queued_entry = json.loads(btw_queue_path.read_text().strip())
+        queued_entry = json.loads(btw_queue_path.read_text(encoding="utf-8").strip())
         assert queued_entry["tool_name"] == "Read"
 
     def test_e2e_tool_call_with_large_result_truncation(self, tmp_path):
@@ -555,7 +555,7 @@ class TestCopilotToolCallE2E:
 
         # Verify truncation
         btw_queue_path = tmp_path / "btw_queue.jsonl"
-        queued_entry = json.loads(btw_queue_path.read_text().strip())
+        queued_entry = json.loads(btw_queue_path.read_text(encoding="utf-8").strip())
         assert queued_entry["truncated"] is True
         assert "[...truncated...]" in queued_entry["content"]
         # Content should be reasonable size

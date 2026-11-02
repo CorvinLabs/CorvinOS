@@ -99,7 +99,7 @@ class _SFMCPClient:
         self.proc = subprocess.Popen(
             [sys.executable, "-c", _MEMBER_TIER_SERVER_BOOT],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, bufsize=1, env=env,
+            stderr=subprocess.PIPE, text=True, bufsize=1, env=env, encoding="utf-8", errors="replace",
         )
         self._next_id = 0
         self._buffered: list[dict] = []
@@ -172,7 +172,7 @@ def _audit_events(corvin_home: Path) -> list[dict]:
     for p in paths:
         if not p.exists():
             continue
-        for line in p.read_text().splitlines():
+        for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue

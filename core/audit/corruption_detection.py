@@ -109,7 +109,7 @@ class QueueIntegrityMonitor:
             return report
 
         try:
-            with open(self.queue_file, "r") as f:
+            with open(self.queue_file, "r", encoding="utf-8") as f:
                 file_lines = f.readlines()
         except IOError as e:
             logger.error(
@@ -345,7 +345,7 @@ class QueueIntegrityMonitor:
             if not self.queue_file.exists():
                 return False
 
-            with open(self.queue_file, "r") as f:
+            with open(self.queue_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             repaired_lines = []
@@ -374,7 +374,7 @@ class QueueIntegrityMonitor:
 
             # Write repaired file atomically (temp + rename)
             temp_file = self.queue_file.with_suffix(".jsonl.tmp")
-            with open(temp_file, "w") as f:
+            with open(temp_file, "w", encoding="utf-8") as f:
                 f.writelines(repaired_lines)
 
             # Atomic rename
@@ -421,7 +421,7 @@ class QueueIntegrityMonitor:
             return records
 
         try:
-            with open(self.queue_file, "r") as f:
+            with open(self.queue_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             for line in lines[-count:]:

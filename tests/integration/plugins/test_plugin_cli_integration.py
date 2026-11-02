@@ -42,7 +42,7 @@ class TestPluginCLICommands:
         plugin_dir.mkdir(parents=True)
 
         import json
-        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Verify installed
         assert (plugin_dir / "manifest.json").exists()
@@ -56,7 +56,7 @@ class TestPluginCLICommands:
         plugin_dir = registry_path / "uninstall-test"
         plugin_dir.mkdir(parents=True)
         import json
-        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Uninstall
         import shutil
@@ -131,7 +131,7 @@ class TestPluginCLIErrorHandling:
         plugin_dir = registry_path / "already-installed"
         plugin_dir.mkdir(parents=True)
         import json
-        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Try to install again
         if plugin_dir.exists():

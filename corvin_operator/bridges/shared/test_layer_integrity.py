@@ -56,7 +56,7 @@ def _build_synthetic_root(tmp: Path) -> None:
     for i, rel in enumerate(li.MANDATORY_LAYER_FILES.values()):
         p = tmp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(f"# synthetic layer file {i}\n")
+        p.write_text(f"# synthetic layer file {i}\n", encoding="utf-8")
 
 
 def test_aggregate_consistency_real_repo() -> None:
@@ -96,7 +96,7 @@ def test_full_sign_verify_roundtrip() -> None:
         mp = li.manifest_path(root)
         mp.parent.mkdir(parents=True, exist_ok=True)
         import json
-        mp.write_text(json.dumps(manifest, sort_keys=True, indent=2))
+        mp.write_text(json.dumps(manifest, sort_keys=True, indent=2), encoding="utf-8")
 
         # 1. clean state -> VERIFIED
         res = li.verify_integrity(root=root)
@@ -105,7 +105,7 @@ def test_full_sign_verify_roundtrip() -> None:
 
         # 2. tamper a layer file -> MISMATCH (CRITICAL)
         victim = root / next(iter(li.MANDATORY_LAYER_FILES.values()))
-        victim.write_text("# TAMPERED\n")
+        victim.write_text("# TAMPERED\n", encoding="utf-8")
         res2 = li.verify_integrity(root=root)
         t("tampered layer -> MISMATCH", res2.status == li.IntegrityStatus.MISMATCH)
         t("MISMATCH is critical", res2.is_critical)
@@ -114,7 +114,7 @@ def test_full_sign_verify_roundtrip() -> None:
         # restore the layer, corrupt the signature -> MANIFEST_INVALID (CRITICAL)
         _build_synthetic_root(root)
         bad = {**manifest, "manifest_sig": "AAAA" + sig[4:]}
-        mp.write_text(json.dumps(bad, sort_keys=True, indent=2))
+        mp.write_text(json.dumps(bad, sort_keys=True, indent=2), encoding="utf-8")
         res3 = li.verify_integrity(root=root)
         t("corrupt signature -> MANIFEST_INVALID",
           res3.status == li.IntegrityStatus.MANIFEST_INVALID)

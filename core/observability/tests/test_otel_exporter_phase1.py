@@ -75,7 +75,7 @@ class TestOTELExporter:
             assert fallback_file.exists()
 
             # Verify JSON content
-            with open(fallback_file) as f:
+            with open(fallback_file, encoding="utf-8") as f:
                 record = json.loads(f.readline())
                 assert record["tenant_id"] == "acme-corp"
                 assert record["instance_id"] == "uuid-1"
@@ -110,7 +110,7 @@ class TestOTELExporter:
 
             assert success is False  # Will fallback (no OTEL)
             fallback_file = Path(tmpdir) / "heartbeat-acme-corp-uuid-1.jsonl"
-            with open(fallback_file) as f:
+            with open(fallback_file, encoding="utf-8") as f:
                 record = json.loads(f.readline())
                 assert record["geo"] is None
 

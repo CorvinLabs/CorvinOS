@@ -457,7 +457,7 @@ class NoSdkImportContractTests(unittest.TestCase):
 
     def test_no_anthropic_or_openai_import(self) -> None:
         src = Path(__file__).parent / "model_selector.py"
-        tree = ast.parse(src.read_text())
+        tree = ast.parse(src.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = (

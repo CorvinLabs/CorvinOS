@@ -185,7 +185,7 @@ def test_cache_file_lives_under_workspace_cache():
         files = list(cache_dir.glob("*.json"))
         t("exactly one cache file written", len(files) == 1,
           detail=f"got {[f.name for f in files]}")
-        record = json.loads(files[0].read_text())
+        record = json.loads(files[0].read_text(encoding="utf-8"))
         t("record has python_tag",
           isinstance(record.get("python_tag"), str))
         t("record has run_id pointing to a real run",

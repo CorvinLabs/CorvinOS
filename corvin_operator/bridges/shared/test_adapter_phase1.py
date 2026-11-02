@@ -67,7 +67,7 @@ def test_poison_quarantine() -> None:
         msg = {"id": "poisontest_01", "channel": "telegram",
                "from": "user-1", "chat_id": 42, "text": "hi"}
         inbox_path = Path(adapter.INBOX) / "poisontest_01.json"
-        inbox_path.write_text(json.dumps(msg))
+        inbox_path.write_text(json.dumps(msg), encoding="utf-8")
 
         adapter.submit_inbox_item(inbox_path, {})
         adapter._executor.shutdown(wait=True)
@@ -84,7 +84,7 @@ def test_poison_quarantine() -> None:
         err = poison_dir / "poisontest_01.json.err"
         assert moved.exists(), f"poison file not at expected path: {moved}"
         assert err.exists(), f"err sidecar not written: {err}"
-        err_text = err.read_text()
+        err_text = err.read_text(encoding="utf-8")
         assert "simulated explosion" in err_text, \
             f"traceback didn't capture the original exception: {err_text[:200]}"
         print(f"PASS: poison file moved to {moved.relative_to(tmp)}")
@@ -128,7 +128,7 @@ def test_process_one_non_dict_top_level_json() -> None:
             ("list", "[1, 2, 3]"),
         ):
             inbox_path = Path(adapter.INBOX) / f"nondict_{label}.json"
-            inbox_path.write_text(payload)
+            inbox_path.write_text(payload, encoding="utf-8")
             # Must not raise — the non-dict shape is handled inside process_one().
             adapter.process_one(inbox_path, {})
             assert not inbox_path.exists(), (
@@ -137,13 +137,13 @@ def test_process_one_non_dict_top_level_json() -> None:
             assert (poison_dir / inbox_path.name).exists(), (
                 f"process_one({label!r}): file not moved to processed/poison/"
             )
-            assert (poison_dir / inbox_path.name).read_text() == payload, (
+            assert (poison_dir / inbox_path.name).read_text(encoding="utf-8") == payload, (
                 f"process_one({label!r}): quarantined bytes must be kept verbatim"
             )
             print(f"PASS: process_one({label}) quarantined → poison/{inbox_path.name}")
 
         events = []
-        for line in audit_jsonl.read_text().splitlines():
+        for line in audit_jsonl.read_text(encoding="utf-8").splitlines():
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError:
@@ -207,7 +207,7 @@ def test_submit_inbox_item_non_dict_json_is_quarantined() -> None:
 
         payload = json.dumps([1, 2, 3])
         inbox_path = Path(adapter.INBOX) / "poisonpill_01.json"
-        inbox_path.write_text(payload)
+        inbox_path.write_text(payload, encoding="utf-8")
 
         # Must not raise — the non-dict shape is handled inside process_one().
         adapter.submit_inbox_item(inbox_path, {})
@@ -232,14 +232,14 @@ def test_submit_inbox_item_non_dict_json_is_quarantined() -> None:
             f"envelope not moved to {poison_dir} — quarantine must create the "
             f"directory itself (parents=True) and keep the bytes"
         )
-        assert quarantined.read_text() == payload, (
+        assert quarantined.read_text(encoding="utf-8") == payload, (
             "quarantined bytes must be kept verbatim for the operator"
         )
         print(f"PASS: envelope quarantined → poison/{quarantined.name}, bytes intact")
 
         audit_jsonl = Path(os.environ["VOICE_AUDIT_PATH"])
         events = []
-        for line in audit_jsonl.read_text().splitlines():
+        for line in audit_jsonl.read_text(encoding="utf-8").splitlines():
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError:
@@ -285,7 +285,7 @@ def test_env_parser() -> None:
             "QUOTED_SINGLE='single-quoted'\n"
             "  WITH_LEADING_WS=padded\n"
             "WITH_SPACES_AROUND_EQ = spaced\n"
-            "export EXPORTED_KEY=exported-val\n"
+            "export EXPORTED_KEY=exported-val\n", encoding="utf-8"
         )
         cases = [
             ("OPENAI_API_KEY",       "plain-value"),

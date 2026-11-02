@@ -16,7 +16,7 @@ import mid_turn_heartbeat as mth  # noqa: E402
 
 
 def _envs(outbox: Path) -> list:
-    return [json.loads(p.read_text()) for p in sorted(outbox.glob("*.json"))]
+    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(outbox.glob("*.json"))]
 
 
 def _texts(outbox: Path) -> list:
@@ -246,7 +246,7 @@ def test_module_has_reentrant_lock():
 # ── E2E wiring reachability: real adapter surfaces call the hooks ────────────
 
 def test_adapter_wires_heartbeat_on_live_paths():
-    src = (Path(__file__).resolve().parent / "adapter.py").read_text()
+    src = (Path(__file__).resolve().parent / "adapter.py").read_text(encoding="utf-8")
     assert '_bg_flag("bridge_mid_turn_task_notify")' in src, "reply hook must gate on the flag"
     assert ".parse_markers(" in src and ".parse_steps(" in src and ".parse_done(" in src, (
         "reply hook must parse start/step/done markers")
@@ -283,7 +283,7 @@ def test_default_state_dir_is_under_corvin_home_and_markers_are_private(tmp_path
 def test_streaming_path_live_scans_bgstep():
     """The synchronous streaming path must live-scan the token stream for steps
     and fold the current step into the alive heartbeat."""
-    src = (Path(__file__).resolve().parent / "adapter.py").read_text()
+    src = (Path(__file__).resolve().parent / "adapter.py").read_text(encoding="utf-8")
     assert ".scan_new_steps(" in src, "streaming path must live-scan the token buffer"
     assert "_current_bgstep" in src, "alive heartbeat must fold in the current step"
 
@@ -294,7 +294,7 @@ def test_emission_side_wired_into_system_prompt():
     transport E2E needs a live bridge + model, so this is a source-grep
     (infeasibility exception), same as the other adapter-wiring checks above.
     """
-    src = (Path(__file__).resolve().parent / "adapter.py").read_text()
+    src = (Path(__file__).resolve().parent / "adapter.py").read_text(encoding="utf-8")
     assert "_bg_marker_block" in src, "system prompt must build a marker-protocol block"
     # It teaches the exact markers the reply hook parses/strips.
     assert "⟦bgtask:" in src and "⟦bgstep:" in src and "⟦bgdone:" in src, (
@@ -314,9 +314,9 @@ def test_sweep_removes_expired_and_corrupt_but_not_fresh(tmp_path):
     # age the "old" one past MAX_AGE
     import json as _j
     p_old = mth._marker_path(state, "sess", "old")
-    d = _j.loads(p_old.read_text()); d["started_at"] = time.time() - 5000; p_old.write_text(_j.dumps(d))
+    d = _j.loads(p_old.read_text(encoding="utf-8")); d["started_at"] = time.time() - 5000; p_old.write_text(_j.dumps(d), encoding="utf-8")
     # a corrupt file
-    corrupt = mth._dir(state) / "sess__deadbeef00.json"; corrupt.write_text("{not json")
+    corrupt = mth._dir(state) / "sess__deadbeef00.json"; corrupt.write_text("{not json", encoding="utf-8")
     removed = mth.sweep(state)
     assert removed == 2                      # old + corrupt
     assert mth.active_count(state) == 1      # fresh survives

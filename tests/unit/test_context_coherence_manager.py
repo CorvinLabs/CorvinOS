@@ -108,14 +108,14 @@ class TestContextCoherenceManager:
 
         # Manually age the coherence
         latest_path = manager._coherence_base / "task_1" / "latest.json"
-        with open(latest_path) as f:
+        with open(latest_path, encoding="utf-8") as f:
             data = json.load(f)
 
         # Set created_at to 30 hours ago
         old_time = (datetime.utcnow() - timedelta(hours=30)).isoformat()
         data["created_at"] = old_time
 
-        with open(latest_path, "w") as f:
+        with open(latest_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
         # Load should still work but log warning about age

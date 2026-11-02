@@ -29,7 +29,7 @@ from forge.security_events import verify_chain  # noqa: E402
 chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
 ok, problems = verify_chain(chain)
 events = []
-lines = chain.read_text().splitlines() if chain.exists() else []
+lines = chain.read_text(encoding="utf-8").splitlines() if chain.exists() else []
 for n, line in enumerate(lines[since:], start=since):
     try:
         rec = json.loads(line)

@@ -219,7 +219,7 @@ def approve_checkpoint(
         # Read step_id from pause sentinel before approving (EU AI Act Art. 14 traceability)
         try:
             pause_path = cp_dir / f"{run_id}.checkpoint"
-            step_id = json.loads(pause_path.read_text()).get("step_id")
+            step_id = json.loads(pause_path.read_text(encoding="utf-8")).get("step_id")
         except Exception:
             step_id = None
         store.approve(run_id)

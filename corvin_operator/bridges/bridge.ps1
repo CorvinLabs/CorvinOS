@@ -40,7 +40,7 @@
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# ── Python / venv resolution ──────────────────────────────────────────────────
+# -- Python / venv resolution --------------------------------------------------
 
 # True when `openai` actually imports in $PyPath -- venv existence alone is
 # not enough (a stale/partial venv passes Test-Path and still fails on the
@@ -116,13 +116,13 @@ function Install-BridgeNpmModules {
     } finally { Pop-Location }
 }
 
-# ── Corvin home ───────────────────────────────────────────────────────────────
+# -- Corvin home ---------------------------------------------------------------
 
 if (-not $env:CORVIN_HOME) {
     $env:CORVIN_HOME = Join-Path $env:USERPROFILE ".corvin"
 }
 
-# ── Subcommand dispatch ───────────────────────────────────────────────────────
+# -- Subcommand dispatch -------------------------------------------------------
 
 $Subcommand = if ($args.Count -gt 0) { $args[0] } else { "up" }
 $Bridge     = if ($args.Count -gt 1) { $args[1] } else { "discord" }
@@ -151,6 +151,11 @@ function Start-BridgeAdapter {
                "$repo\corvin_operator\bridges\shared", "$repo\core\plugins") | Where-Object { Test-Path $_ }
     if ($env:PYTHONPATH) { $paths += $env:PYTHONPATH }
     $env:PYTHONPATH = $paths -join ";"
+    # Python UTF-8 mode for every Python process started from here (and their
+    # children): stdout/stderr are redirected to log files, which Python would
+    # otherwise encode in the ANSI code page (cp1252) -- the first emoji or
+    # non-Latin-1 character raises UnicodeEncodeError and kills the process.
+    if (-not $env:PYTHONUTF8) { $env:PYTHONUTF8 = "1" }
     $logDir = Join-Path $env:CORVIN_HOME "logs"
     $null = New-Item -ItemType Directory -Force -Path $logDir
     $log = Join-Path $logDir "adapter.log"
@@ -212,6 +217,10 @@ switch ($Subcommand) {
             $LogDir = Join-Path $env:CORVIN_HOME "logs"
             $null = New-Item -ItemType Directory -Force -Path $LogDir
             $LogFile = Join-Path $LogDir "$Bridge-daemon.log"
+            # The daemon's slash commands shell out to Python CLIs; hand it the
+            # interpreter resolved above (python_bin.js would otherwise take
+            # a bare `python3` from PATH that lacks CorvinOS' packages).
+            if (-not $env:CORVIN_PYTHON) { $env:CORVIN_PYTHON = $Python }
             Write-Host "  Launching Node.js daemon: $BridgeScript" -ForegroundColor DarkGray
             Write-Host "  Running in the background -- closing this window will NOT stop it." -ForegroundColor DarkGray
             Write-Host "  Output: $LogFile" -ForegroundColor DarkGray
@@ -278,9 +287,13 @@ else:
 
     "down" {
         Write-Host "Stopping CorvinOS bridge processes..." -ForegroundColor Cyan
-        Get-Process | Where-Object { $_.ProcessName -match "node" } | ForEach-Object {
-            try { Stop-Process -Id $_.Id -Force; Write-Host "  Stopped: $($_.Id)" } catch {}
-        }
+        # Only OUR bridge daemons (node.exe running <bridge>\daemon.js), never
+        # every node.exe on the box -- that also killed the user's editors,
+        # dev servers and MCP servers.
+        Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match '[\\/]bridges[\\/][^\\/"]+[\\/]daemon\.js' } | ForEach-Object {
+                try { Stop-Process -Id $_.ProcessId -Force; Write-Host "  Stopped: $($_.ProcessId)" } catch {}
+            }
         Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -match 'shared\\adapter\.py|"adapter\.py"' } | ForEach-Object {
                 try { Stop-Process -Id $_.ProcessId -Force; Write-Host "  Stopped adapter: $($_.ProcessId)" } catch {}
@@ -311,7 +324,7 @@ else:
         Write-Host "  Console started in background. Check http://localhost:8765" -ForegroundColor Green
     }
 
-    # ── autostart (Windows equivalent of `bridge.sh up`'s systemd Restart=always) ──
+    # -- autostart (Windows equivalent of `bridge.sh up`'s systemd Restart=always) --
     # Linux's corvin-webui.service (+ the bridge units enabled by `bridge.sh up`)
     # survive crashes and reboots unattended. Windows has no default persistent
     # background-service story, so a Windows instance silently goes dark (and
@@ -371,7 +384,9 @@ else:
             $VbsPath = Join-Path $VbsDir "$TaskName.vbs"
             $VbsEscapedArgs = $ArgString.Replace('"', '""')
             $VbsContent = "CreateObject(""WScript.Shell"").Run ""powershell.exe $VbsEscapedArgs"", 0, False"
-            Set-Content -Path $VbsPath -Value $VbsContent -Encoding ASCII
+            # Unicode (UTF-16 LE + BOM): ASCII turns a non-ASCII profile path
+            # into '?', and wscript.exe reads a BOM-less .vbs as ANSI.
+            Set-Content -Path $VbsPath -Value $VbsContent -Encoding Unicode
 
             $Action   = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$VbsPath`""
             $Trigger  = New-ScheduledTaskTrigger -AtLogOn

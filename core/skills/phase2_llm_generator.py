@@ -28,8 +28,8 @@ class SkillLLMGenerator:
         """Generate execute() implementation via Claude API."""
 
         # Read skeleton
-        skill_py = (skeleton_path / "src" / "skill.py").read_text()
-        manifest_data = json.loads((skeleton_path / "skill.json").read_text())
+        skill_py = (skeleton_path / "src" / "skill.py").read_text(encoding="utf-8")
+        manifest_data = json.loads((skeleton_path / "skill.json").read_text(encoding="utf-8"))
 
         prompt = f"""
 You are generating production-ready Python code for a CorvinOS Skill (ADR-0532-0535).
@@ -82,7 +82,7 @@ Replace the TODO comment entirely.
 
     async def generate_tests(self, skill_path: Path) -> str:
         """Generate test suite."""
-        skill_code = (skill_path / "src" / "skill.py").read_text()
+        skill_code = (skill_path / "src" / "skill.py").read_text(encoding="utf-8")
 
         prompt = f"""Generate pytest tests for this Skill. Requirements: unit tests, edge cases,
         adversarial tests, coverage >85%.
@@ -105,7 +105,7 @@ Include imports, fixtures, and all test classes."""
 
     async def generate_docs(self, skill_path: Path) -> str:
         """Generate documentation."""
-        skill_code = (skill_path / "src" / "skill.py").read_text()
+        skill_code = (skill_path / "src" / "skill.py").read_text(encoding="utf-8")
 
         prompt = f"""Generate Markdown documentation (README.md, API.md, EXAMPLES.md).
 
@@ -126,8 +126,8 @@ Generate ALL documentation files (use markdown headers for each file)."""
 
     async def enhance_manifest(self, skill_path: Path) -> Dict[str, Any]:
         """Complete manifest skeleton with generated metadata."""
-        skill_code = (skill_path / "src" / "skill.py").read_text()
-        manifest = json.loads((skill_path / "skill.json").read_text())
+        skill_code = (skill_path / "src" / "skill.py").read_text(encoding="utf-8")
+        manifest = json.loads((skill_path / "skill.json").read_text(encoding="utf-8"))
 
         prompt = f"""Complete the CorvinOS Skill Manifest (ADR-0533).
 
@@ -168,12 +168,12 @@ async def generate_skill_complete(
     # 1. Generate code
     print("Generating code...")
     code = await generator.generate_code(skeleton_path, user_prompt)
-    (skeleton_path / "src" / "skill.py").write_text(code)
+    (skeleton_path / "src" / "skill.py").write_text(code, encoding="utf-8")
 
     # 2. Generate tests
     print("Generating tests...")
     tests = await generator.generate_tests(skeleton_path)
-    (skeleton_path / "tests" / "test_skill.py").write_text(tests)
+    (skeleton_path / "tests" / "test_skill.py").write_text(tests, encoding="utf-8")
 
     # 3. Generate docs
     print("Generating docs...")
@@ -183,7 +183,7 @@ async def generate_skill_complete(
     # 4. Enhance manifest
     print("Enhancing manifest...")
     enhanced = await generator.enhance_manifest(skeleton_path)
-    (skeleton_path / "skill.json").write_text(json.dumps(enhanced, indent=2))
+    (skeleton_path / "skill.json").write_text(json.dumps(enhanced, indent=2), encoding="utf-8")
 
     print("✓ Phase 2 complete")
 

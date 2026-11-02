@@ -77,7 +77,7 @@ class PackageRegistry:
             return
 
         try:
-            with open(self.registry_path, "r") as f:
+            with open(self.registry_path, "r", encoding="utf-8") as f:
                 registry_data = json.load(f)
                 packages = registry_data.get("packages", {})
                 for pkg_id, pkg_data in packages.items():
@@ -99,7 +99,7 @@ class PackageRegistry:
 
         temp_path = self.registry_path.with_suffix(".tmp")
         try:
-            with open(temp_path, "w") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(registry_data, f, indent=2)
             temp_path.replace(self.registry_path)
         except Exception as e:
@@ -161,7 +161,7 @@ class PackageRegistry:
             return {}
 
         try:
-            with open(registry_path, "r") as f:
+            with open(registry_path, "r", encoding="utf-8") as f:
                 registry_data = json.load(f)
                 packages = registry_data.get("packages", {})
                 return {
@@ -195,7 +195,7 @@ class PackageRegistry:
 
         temp_path = registry_path.with_suffix(".tmp")
         try:
-            with open(temp_path, "w") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(registry_data, f, indent=2)
             temp_path.replace(registry_path)
         except Exception as e:

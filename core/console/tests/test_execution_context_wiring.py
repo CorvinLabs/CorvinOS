@@ -75,7 +75,7 @@ class TestExecutionContextPersistence:
         assert turns_path.exists()
 
         # Read and parse the line
-        with turns_path.open("r") as f:
+        with turns_path.open("r", encoding="utf-8") as f:
             line = f.read().strip()
 
         data = json.loads(line)
@@ -97,7 +97,7 @@ class TestExecutionContextPersistence:
         # Verify file was written
         assert turns_path.exists()
 
-        with turns_path.open("r") as f:
+        with turns_path.open("r", encoding="utf-8") as f:
             line = f.read().strip()
 
         data = json.loads(line)
@@ -135,7 +135,7 @@ class TestExecutionContextPersistence:
         }
 
         turns_path.parent.mkdir(parents=True, exist_ok=True)
-        with turns_path.open("w") as f:
+        with turns_path.open("w", encoding="utf-8") as f:
             f.write(json.dumps(turn1) + "\n")
             f.write(json.dumps(turn2) + "\n")
 
@@ -370,7 +370,7 @@ class TestExecutionContextBackwardCompatibility:
         }
 
         turns_path.parent.mkdir(parents=True, exist_ok=True)
-        with turns_path.open("w") as f:
+        with turns_path.open("w", encoding="utf-8") as f:
             f.write(json.dumps(legacy_turn) + "\n")
 
         with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path):
@@ -408,7 +408,7 @@ class TestExecutionContextBackwardCompatibility:
         }
 
         turns_path.parent.mkdir(parents=True, exist_ok=True)
-        with turns_path.open("w") as f:
+        with turns_path.open("w", encoding="utf-8") as f:
             f.write(json.dumps(legacy_turn) + "\n")
             f.write(json.dumps(new_turn) + "\n")
 

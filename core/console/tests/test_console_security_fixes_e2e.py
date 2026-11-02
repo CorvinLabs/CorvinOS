@@ -94,7 +94,7 @@ class TestGithubRoutesE02:
         assert r.status_code == 200 and r.json()["connected"] is True, r.text
         cfg = sb.home / "tenants" / TENANT / "github-config.json"
         assert cfg.exists(), "config must live under CORVIN_HOME/tenants/<tid>, not Path.home()"
-        data = json.loads(cfg.read_text())
+        data = json.loads(cfg.read_text(encoding="utf-8"))
         assert "token" not in data and data["token_hash"]  # never the token itself
         assert "github.verify" in _actions(sb)
         # audit details never carry the URL or token

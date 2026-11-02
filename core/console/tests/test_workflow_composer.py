@@ -94,7 +94,7 @@ def audit_records(tenant_id: str) -> list[dict]:
     chain = _fp.tenant_home(tenant_id) / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    return [json.loads(x) for x in chain.read_text().splitlines() if x.strip()]
+    return [json.loads(x) for x in chain.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
 _TWO_STEP = """awp: "1.0.0"
@@ -164,7 +164,7 @@ def test_ws_commands_answer_without_spawn_and_stay_out_of_the_transcript(tmp_pat
             assert "Unknown command /nonsense" in ws.receive_json()["content"]
 
         # Command lines never reach the design transcript (only the opening line is there).
-        chat = [json.loads(x) for x in (wf_dir / "wf1.chat.jsonl").read_text().splitlines() if x.strip()]
+        chat = [json.loads(x) for x in (wf_dir / "wf1.chat.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
         assert all(m["role"] == "assistant" for m in chat) and len(chat) == 1
 
         cmd_events = [r for r in audit_records(tid)
@@ -217,7 +217,7 @@ def test_upload_stores_under_tenant_home_hides_paths_and_audits_without_the_name
         assert "/" not in att["name"] and att["size"] == 8
         stored = _att_dir(tid, "wf1") / att["id"]
         assert (stored / "data" / att["name"]).read_bytes() == b"a,b\n1,2\n"
-        assert json.loads((stored / "meta.json").read_text())["sha256"]
+        assert json.loads((stored / "meta.json").read_text(encoding="utf-8"))["sha256"]
         ev = [x for x in audit_records(tid) if x.get("event_type", x.get("event")) == "workflow.attachment_uploaded"
               or x.get("type") == "workflow.attachment_uploaded"]
         assert ev, "upload must be audited with its own event"
@@ -354,7 +354,7 @@ def test_gate_refused_line_is_stored_as_hash_and_never_replayed(tmp_path, monkey
                 f = ws.receive_json()
                 if f["type"] == "message" and f["role"] == "assistant":
                     break
-        raw = (wf_dir / "wf1.chat.jsonl").read_text()
+        raw = (wf_dir / "wf1.chat.jsonl").read_text(encoding="utf-8")
         assert "FORBIDDEN-MARKER" not in raw
         line = next(json.loads(x) for x in raw.splitlines() if '"refused"' in x)
         assert len(line["user_sha256"]) == 64 and line["user_len"] == len("please FORBIDDEN-MARKER now")
@@ -385,7 +385,7 @@ def test_run_snapshots_attachments_and_refuses_a_changed_one(tmp_path):
         r = c.post("/v1/console/workflows/wf1/runs", json={"inputs": {}, "dry_run": False})
         assert r.status_code == 200, r.text
         rid = r.headers["X-Run-Id"]
-        run_meta = json.loads((wf_dir / "wf1" / "runs" / f"{rid}.meta.json").read_text())
+        run_meta = json.loads((wf_dir / "wf1" / "runs" / f"{rid}.meta.json").read_text(encoding="utf-8"))
         assert run_meta["attachments"][0]["id"] == att["id"]
         snap = wf_dir / "wf1" / "runs" / rid / "attachments" / att["id"] / "data" / att["name"]
         assert snap.read_bytes() == b"x,y\n1,2\n"
@@ -394,7 +394,7 @@ def test_run_snapshots_attachments_and_refuses_a_changed_one(tmp_path):
         (_att_dir(tid, "wf1") / att["id"] / "data" / att["name"]).write_bytes(b"changed")
         r2 = c.post("/v1/console/workflows/wf1/runs", json={"inputs": {}, "dry_run": False})
         assert "Attachment check failed" in r2.text
-        meta2 = json.loads((wf_dir / "wf1" / "runs" / f"{r2.headers['X-Run-Id']}.meta.json").read_text())
+        meta2 = json.loads((wf_dir / "wf1" / "runs" / f"{r2.headers['X-Run-Id']}.meta.json").read_text(encoding="utf-8"))
         assert meta2["status"] == "failed" and meta2["error"] == "attachment changed"
 
 
@@ -403,7 +403,7 @@ def test_resume_reply_passes_the_spawn_gate_and_a_refusal_leaves_the_run_paused(
         from forge import paths as _fp
         wf_dir = _fp.tenant_home(tid) / "workflows"
         wf_dir.mkdir(parents=True, exist_ok=True)
-        (wf_dir / "wf1.meta.json").write_text(json.dumps({"id": "wf1", "phase": "ready"}))
+        (wf_dir / "wf1.meta.json").write_text(json.dumps({"id": "wf1", "phase": "ready"}), encoding="utf-8")
         yaml_p = wf_dir / "wf1.awp.yaml"
         yaml_p.write_text('''awp: "1.1.0"
 workflow:
@@ -422,7 +422,7 @@ orchestration:
       expect:
         field: confirmed
         type: boolean
-''')
+''', encoding="utf-8")
         from corvin_workflows import DAGRunner, StubEngine
         from corvin_workflows.storage import load_workflow
         res = DAGRunner(load_workflow(str(yaml_p)), engine=StubEngine(), tenant_id=tid).run(inputs={})
@@ -452,8 +452,8 @@ def test_art17_erasure_removes_the_subjects_attachment_files_and_run_snapshots_o
         a.post("/v1/console/workflows/wf1/runs", json={"inputs": {}, "dry_run": False})  # snapshots both
 
         root = _att_dir(tid, "wf1")
-        meta_a = json.loads((root / att_a["id"] / "meta.json").read_text())
-        meta_b = json.loads((root / att_b["id"] / "meta.json").read_text())
+        meta_a = json.loads((root / att_a["id"] / "meta.json").read_text(encoding="utf-8"))
+        meta_b = json.loads((root / att_b["id"] / "meta.json").read_text(encoding="utf-8"))
         assert meta_a["uploaded_by"] != meta_b["uploaded_by"]
         assert meta_a["uploaded_by_subject"] == "tok-subject" and meta_a["uploaded_by"] != "tok-subject"
         assert meta_b["uploaded_by_subject"] == "tok-other"
@@ -487,8 +487,8 @@ def test_art17_erasure_by_durable_key_reaches_uploads_from_an_earlier_login(tmp_
         att3 = _upload(other, "wf1",
                        [("files", ("three.txt", b"someone else", "text/plain"))]).json()["attachments"][0]
         root = _att_dir(tid, "wf1")
-        m1 = json.loads((root / att1["id"] / "meta.json").read_text())
-        m2 = json.loads((root / att2["id"] / "meta.json").read_text())
+        m1 = json.loads((root / att1["id"] / "meta.json").read_text(encoding="utf-8"))
+        m2 = json.loads((root / att2["id"] / "meta.json").read_text(encoding="utf-8"))
         assert m1["uploaded_by"] != m2["uploaded_by"]
 
         from erasure_handlers import WorkflowChatHandler
@@ -515,7 +515,7 @@ def test_art17_erasure_reports_an_unremovable_attachment_dir_and_still_purges_th
         att2 = _upload(a, "wf1", [("files", ("two.txt", b"free", "text/plain"))]).json()["attachments"][0]
         chat = wf_dir / "wf1.chat.jsonl"
         chat.write_text(json.dumps({"role": "user", "content": "mine", "speaker": "tok-subject"}) + "\n"
-                        + json.dumps({"role": "user", "content": "theirs", "speaker": "tok-other"}) + "\n")
+                        + json.dumps({"role": "user", "content": "theirs", "speaker": "tok-other"}) + "\n", encoding="utf-8")
         root = _att_dir(tid, "wf1")
         locked = root / att1["id"] / "data"
         locked.chmod(0o500)  # its file cannot be unlinked
@@ -530,7 +530,7 @@ def test_art17_erasure_reports_an_unremovable_attachment_dir_and_still_purges_th
         assert not (root / att2["id"]).exists()
         assert (locked / "one.txt").exists()
         assert (root / att1["id"] / "meta.json").exists()  # the record stays attributable for a retry
-        assert [json.loads(x)["speaker"] for x in chat.read_text().splitlines()] == ["tok-other"]
+        assert [json.loads(x)["speaker"] for x in chat.read_text(encoding="utf-8").splitlines()] == ["tok-other"]
 
 
 # ── Snapshot by hard link (T-0238 / WFE-13) ─────────────────────────────────
@@ -556,7 +556,7 @@ def test_run_snapshot_is_a_hard_link_that_outlives_the_store_attachment(tmp_path
         snap = snap_dir / "data" / att["name"]
         # one inode under two names: the snapshot costs no disk
         assert snap.stat().st_ino == store.stat().st_ino and store.stat().st_nlink == 2
-        meta = json.loads((snap_dir / "meta.json").read_text())
+        meta = json.loads((snap_dir / "meta.json").read_text(encoding="utf-8"))
         ev = [x for x in audit_records(tid) if "workflow.attachment_snapshot" in json.dumps(x)]
         assert ev and json.dumps(ev[-1]).count('"link"') == 1
         # the store attachment goes: the run keeps its bytes, still hash-valid
@@ -607,7 +607,7 @@ def test_attachment_cap_holds_under_concurrent_uploads(tmp_path):
         root.mkdir(parents=True)
         for i in range(_wc.MAX_ATTACHMENTS_PER_WORKFLOW - 1):
             (root / f"{i:016x}" / "data").mkdir(parents=True)
-            (root / f"{i:016x}" / "meta.json").write_text("{}")
+            (root / f"{i:016x}" / "meta.json").write_text("{}", encoding="utf-8")
         big = b"z" * (1024 * 1024 + 1024)  # past starlette's 1 MiB spool: the parser yields to the loop
 
         async def _race():

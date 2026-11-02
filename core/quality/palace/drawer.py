@@ -169,7 +169,7 @@ class DrawerManager:
         # Read existing
         existing = {}
         if index_file.exists():
-            for line in index_file.read_text().strip().split('\n'):
+            for line in index_file.read_text(encoding="utf-8").strip().split('\n'):
                 if line:
                     entry = json.loads(line)
                     existing[entry['id']] = entry
@@ -187,7 +187,7 @@ class DrawerManager:
         }
 
         # Write back (append-only semantics)
-        with open(index_file, 'w') as f:
+        with open(index_file, 'w', encoding="utf-8") as f:
             for entry in existing.values():
                 f.write(json.dumps(entry) + '\n')
 
@@ -200,7 +200,7 @@ class DrawerManager:
         results = []
         query_lower = query.lower()
 
-        for line in index_file.read_text().strip().split('\n'):
+        for line in index_file.read_text(encoding="utf-8").strip().split('\n'):
             if not line:
                 continue
             entry = json.loads(line)

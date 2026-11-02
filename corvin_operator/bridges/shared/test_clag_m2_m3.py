@@ -72,11 +72,11 @@ def test_consent_clag_gate_raises_on_broken_chain():
     try:
         _seed_chain(p, 5)
         # Corrupt the last line
-        lines = p.read_text().splitlines()
+        lines = p.read_text(encoding="utf-8").splitlines()
         last = json.loads(lines[-1])
         last["hash"] = "0000000000000000"
         lines[-1] = json.dumps(last)
-        p.write_text("\n".join(lines) + "\n")
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         with patch.object(_consent, "_audit_path", return_value=p):
             with pytest.raises(ChainIntegrityFailure):
                 _consent._clag_gate("L16.consent_gate")
@@ -111,7 +111,7 @@ def test_is_granted_proceeds_when_clag_not_importable():
         store = consent_dir / "discord__chat1.json"
         store.write_text(json.dumps({
             "uid_durable": {"mode": "durable", "granted_at": time.time()}
-        }))
+        }), encoding="utf-8")
 
         def _noop_gate(_layer_id):
             pass  # simulates ImportError path in _clag_gate

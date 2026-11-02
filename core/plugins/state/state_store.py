@@ -65,7 +65,7 @@ class StateStore:
             # Step 2: Load from disk
             if state_path.exists():
                 try:
-                    with open(state_path, "r") as f:
+                    with open(state_path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         self.states[plugin_id] = data
                         return data
@@ -105,7 +105,7 @@ class StateStore:
             # Step 3: Append to WAL file
             wal_path = self._get_wal_path(plugin_id)
             try:
-                with open(wal_path, "a") as f:
+                with open(wal_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps({
                         "op": "set",
                         "key": key,
@@ -136,7 +136,7 @@ class StateStore:
             try:
                 # Write to temp file first (atomic)
                 temp_path = state_path.with_suffix(".tmp")
-                with open(temp_path, "w") as f:
+                with open(temp_path, "w", encoding="utf-8") as f:
                     json.dump(self.states[plugin_id], f, default=str)
 
                 # Atomic rename (cross-platform handling)
@@ -161,7 +161,7 @@ class StateStore:
         state = {}
 
         try:
-            with open(wal_path, "r") as f:
+            with open(wal_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

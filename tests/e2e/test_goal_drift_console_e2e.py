@@ -98,7 +98,7 @@ def _run_driver(tmp_path: Path, flags: dict, port: int) -> list[dict]:
     # child is long gone. poll() does a non-blocking WNOHANG check in a
     # loop instead, which does not depend on catching SIGCHLD at all.
     log_path = tmp_path / "driver.log"
-    with open(log_path, "w") as log_fh:
+    with open(log_path, "w", encoding="utf-8") as log_fh:
         proc = subprocess.Popen(
             [sys.executable, str(_DRIVER), str(home), str(port), json.dumps(flags), str(result_path)],
             env=env, cwd=str(Path(__file__).resolve().parents[2]),
@@ -121,7 +121,7 @@ def _run_driver(tmp_path: Path, flags: dict, port: int) -> list[dict]:
     assert result_path.is_file(), (
         f"driver produced no result (rc={rc}); see {log_path}"
     )
-    return json.loads(result_path.read_text())["alerts"]
+    return json.loads(result_path.read_text(encoding="utf-8"))["alerts"]
 
 
 def test_goal_drift_alert_on_real_console_turn(tmp_path):

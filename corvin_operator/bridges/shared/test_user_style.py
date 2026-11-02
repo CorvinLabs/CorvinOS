@@ -336,7 +336,7 @@ class PromoteTests(_Base):
         self.assertEqual(live[0].state, "live")
         self.assertIsNotNone(live[0].live_started_at)
 
-        style_md = us._style_md_path(corvin_home=self.corvin).read_text()
+        style_md = us._style_md_path(corvin_home=self.corvin).read_text(encoding="utf-8")
         self.assertIn("skill_P", style_md)
         self.assertIn("Auto-learned user style", style_md)
 
@@ -612,7 +612,7 @@ def _read_jsonl(p: Path) -> list[dict]:
     out: list[dict] = []
     if not p.exists():
         return out
-    with p.open("r") as fh:
+    with p.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:

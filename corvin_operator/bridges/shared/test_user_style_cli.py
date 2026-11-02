@@ -29,7 +29,7 @@ _FORGE_TOP = _HERE.parent.parent / "forge"
 def _run(args: list[str], home: Path, *, expect_ok: bool = True) -> dict:
     """Run the CLI, return parsed stdout (JSON) + exit code."""
     cmd = [sys.executable, str(_USER_STYLE), "--corvin-home", str(home)] + args
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
     if expect_ok and r.returncode != 0:
         raise AssertionError(
             f"unexpected exit={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}"
@@ -110,7 +110,7 @@ class SweepTests(_Base):
 
         # Audit event must be present
         events = []
-        with self.audit.open() as fh:
+        with self.audit.open(encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:

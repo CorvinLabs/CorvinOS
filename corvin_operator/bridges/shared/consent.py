@@ -352,7 +352,7 @@ def _load_store(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
         data = json.loads(raw)
         return data if isinstance(data, dict) else {}
     except json.JSONDecodeError as exc:
@@ -391,7 +391,7 @@ def _locked_update(path: Path, update_fn):
         data, expired = _prune(_load_store(path))
         fn_result = update_fn(data)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, path)
         return expired, fn_result
     finally:
@@ -410,7 +410,7 @@ def _save_store(path: Path, data: dict[str, dict]) -> None:
         _acquire_exclusive(fd, "consent store", timeout=LOCK_TIMEOUT_SECONDS)
         locked = True
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, path)
     finally:
         if locked:

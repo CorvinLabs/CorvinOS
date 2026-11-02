@@ -170,7 +170,7 @@ class V2VerificationSuite:
         page_path = "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/pages/task-graph.tsx"
 
         try:
-            with open(component_path, 'r') as f:
+            with open(component_path, 'r', encoding="utf-8") as f:
                 v2_code = f.read()
                 has_v2_marker = 'TaskGraphVisualizerV2' in v2_code
                 self.log("V2 File Exists", has_v2_marker,
@@ -181,7 +181,7 @@ class V2VerificationSuite:
                 self.log("Canvas Rendering", has_canvas_render,
                         "V2 uses canvas for performance")
 
-            with open(page_path, 'r') as f:
+            with open(page_path, 'r', encoding="utf-8") as f:
                 page_code = f.read()
                 imports_v2 = 'TaskGraphVisualizerV2' in page_code
                 self.log("Page Imports V2", imports_v2,

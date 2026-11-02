@@ -107,7 +107,7 @@ try:
     assert phase4_file.exists(), f"Phase 4 file should exist: {phase4_file}"
 
     # Test 2: Has required components
-    content = phase4_file.read_text()
+    content = phase4_file.read_text(encoding="utf-8")
     assert "LearnedClassifier" in content, "Should have LearnedClassifier class"
     assert "train(" in content, "Should have train method"
     assert "predict(" in content, "Should have predict method"

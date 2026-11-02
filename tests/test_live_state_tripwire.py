@@ -60,11 +60,11 @@ def _sandbox_paths(root: Path) -> "dict[str, Path]":
 
 def _build(root: Path) -> None:
     (root / "repo_corvin").mkdir(parents=True)
-    (root / "repo_corvin" / "audit.jsonl").write_text("{}")
+    (root / "repo_corvin" / "audit.jsonl").write_text("{}", encoding="utf-8")
     (root / "repo_corvin" / "sessions").mkdir()
     (root / "voice_config").mkdir()
     (root / "systemd_user").mkdir()
-    (root / "systemd_user" / "corvin-webui.service").write_text("x")
+    (root / "systemd_user" / "corvin-webui.service").write_text("x", encoding="utf-8")
     (root / "plugin_cache").mkdir()
 
 
@@ -130,7 +130,7 @@ def test_an_added_file_is_not_a_violation(tmp_path: Path) -> None:
     paths = _sandbox_paths(tmp_path)
 
     before = root_conftest._protected_state(paths)
-    (tmp_path / "repo_corvin" / "fresh.jsonl").write_text("{}")
+    (tmp_path / "repo_corvin" / "fresh.jsonl").write_text("{}", encoding="utf-8")
     after = root_conftest._protected_state(paths)
 
     assert before is not None and after is not None

@@ -150,7 +150,7 @@ class RegisterTests(unittest.TestCase):
             # Force cap below the size of the source.
             cfg_path = artifacts._config_path("_default")
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
-            cfg_path.write_text(json.dumps({"max_artifact_size_bytes": 5}))
+            cfg_path.write_text(json.dumps({"max_artifact_size_bytes": 5}), encoding="utf-8")
             src = sbx.make_source("big.bin", b"toolarge-content")
             with self.assertRaises(artifacts.ArtifactError):
                 artifacts.register(source_path=src,
@@ -326,7 +326,7 @@ class LockTests(unittest.TestCase):
             sbx.session_root.mkdir(parents=True, exist_ok=True)
             lock_path = artifacts._lock_path(sbx.session_root)
             # Hold an external lock, then attempt to acquire with 50 ms budget.
-            with lock_path.open("a+") as fh:
+            with lock_path.open("a+", encoding="utf-8") as fh:
                 import fcntl as _f
                 _f.flock(fh.fileno(), _f.LOCK_EX)
                 with self.assertRaises(artifacts.ManifestLockTimeout):
@@ -350,7 +350,7 @@ class ConfigTests(unittest.TestCase):
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
             cfg_path.write_text(json.dumps(
                 {"description_language": "de",
-                 "max_artifact_size_bytes": 1024}))
+                 "max_artifact_size_bytes": 1024}), encoding="utf-8")
             cfg = artifacts.load_config()
             self.assertEqual(cfg["description_language"], "de")
             self.assertEqual(cfg["max_artifact_size_bytes"], 1024)

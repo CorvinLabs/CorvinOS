@@ -39,7 +39,7 @@ def test_bg_task_worker_with_outbox_delivery():
     }
 
     spec_file = test_dir / "spec.json"
-    with open(spec_file, "w") as f:
+    with open(spec_file, "w", encoding="utf-8") as f:
         json.dump(spec, f)
 
     print(f"📝 Spec geschrieben: {spec_file}")
@@ -65,7 +65,7 @@ def test_bg_task_worker_with_outbox_delivery():
     }
 
     msg_file = outbox_dir / f"msg_{task_id}_{int(time.time())}.json"
-    with open(msg_file, "w") as f:
+    with open(msg_file, "w", encoding="utf-8") as f:
         json.dump(envelope, f, indent=2)
 
     print(f"📤 Discord Envelope geschrieben: {msg_file.name}")
@@ -73,7 +73,7 @@ def test_bg_task_worker_with_outbox_delivery():
 
     # Verify
     assert msg_file.exists(), "Discord envelope sollte existieren"
-    assert json.loads(msg_file.read_text())["ok"] is True
+    assert json.loads(msg_file.read_text(encoding="utf-8"))["ok"] is True
 
     print("✅ bg_task_worker delivery test erfolgreich\n")
 
@@ -103,7 +103,7 @@ def test_notification_router_processes_pipeline():
     }
 
     event_file = completion_dir / f"{task_id}.json"
-    with open(event_file, "w") as f:
+    with open(event_file, "w", encoding="utf-8") as f:
         json.dump(completion_event, f)
 
     print(f"📨 CompletionEvent geschrieben: {event_file.name}")
@@ -119,7 +119,7 @@ def test_notification_router_processes_pipeline():
         [sys.executable, str(router_script), str(test_dir)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
 
     print(f"🚀 NotificationRouter gestartet (PID: {proc.pid})")
@@ -143,7 +143,7 @@ def test_notification_router_processes_pipeline():
     else:
         print(f"📤 Discord Envelopes geschrieben: {len(msg_files)}")
         for msg_file in msg_files:
-            msg = json.loads(msg_file.read_text())
+            msg = json.loads(msg_file.read_text(encoding="utf-8"))
             print(f"   - {msg_file.name}: task={msg.get('task_id')}")
 
     print("✅ notification_router test erfolgreich\n")
@@ -163,7 +163,7 @@ def test_adapter_spec_has_outbox_dir():
         print(f"⚠️  adapter.py nicht gefunden")
         return
 
-    content = adapter_file.read_text()
+    content = adapter_file.read_text(encoding="utf-8")
 
     # Suche nach dem _spec Dictionary für Self-Delegation
     # (um Zeile 2267)
@@ -191,7 +191,7 @@ def test_systemd_service_no_user_directive():
         print(f"⚠️  systemd service file nicht gefunden: {service_file}")
         return
 
-    content = service_file.read_text()
+    content = service_file.read_text(encoding="utf-8")
 
     # Überprüfe, dass User=%u NICHT aktiv ist (auskommentiert ist okay)
     lines = content.split('\n')

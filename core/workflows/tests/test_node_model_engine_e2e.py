@@ -103,7 +103,7 @@ def cli_env(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     claude = bindir / "claude"
-    claude.write_text(FAKE_CLAUDE)
+    claude.write_text(FAKE_CLAUDE, encoding="utf-8")
     claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
@@ -115,7 +115,7 @@ def cli_env(tmp_path, monkeypatch):
 
 def _doc(tmp_path: Path, text: str = WORKFLOW):
     p = tmp_path / "wf.awp.yaml"
-    p.write_text(text)
+    p.write_text(text, encoding="utf-8")
     return load_workflow(p)
 
 
@@ -124,7 +124,7 @@ def _chain(tenant: str = "_default") -> list[dict]:
     path = fp.tenant_audit_chain(tenant)
     if not Path(path).exists():
         return []
-    return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _events(name: str, since: int = 0) -> list[dict]:
@@ -133,7 +133,7 @@ def _events(name: str, since: int = 0) -> list[dict]:
 
 def _argv(log: Path) -> list[list[str]]:
     """The NODE spawns only: the gates' own classifier calls (``--max-turns``) are not nodes."""
-    calls = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [c for c in calls if "--max-turns" not in c]
 
 

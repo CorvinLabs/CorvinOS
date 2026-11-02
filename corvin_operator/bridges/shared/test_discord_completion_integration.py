@@ -68,7 +68,7 @@ def main() -> int:
         # Load and validate the envelope
         print("\n[Validation] Check envelope format...")
         env_file = next(outbox.glob("cn_*.json"))
-        envelope = json.loads(env_file.read_text())
+        envelope = json.loads(env_file.read_text(encoding="utf-8"))
 
         # Required fields for Discord daemon's processOutboxPayload
         # Discord uses chat_id for channel routing, text for message body

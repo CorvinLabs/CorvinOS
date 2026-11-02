@@ -240,7 +240,7 @@ def load_config() -> dict[str, Any]:
             try:
                 p.parent.mkdir(parents=True, exist_ok=True)
                 cfg = _default_config()
-                p.write_text(json.dumps(cfg, indent=2))
+                p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
                 _CONFIG_CACHE = cfg
                 _CONFIG_MTIME = p.stat().st_mtime
                 return dict(cfg)
@@ -253,7 +253,7 @@ def load_config() -> dict[str, Any]:
             return dict(_CONFIG_CACHE) if _CONFIG_CACHE else _default_config()
         if not _CONFIG_CACHE or mtime != _CONFIG_MTIME:
             try:
-                _CONFIG_CACHE = json.loads(p.read_text())
+                _CONFIG_CACHE = json.loads(p.read_text(encoding="utf-8"))
                 _CONFIG_MTIME = mtime
             except (OSError, json.JSONDecodeError):
                 # Corrupt config — fall back to defaults but DON'T overwrite
@@ -269,7 +269,7 @@ def save_config(cfg: dict[str, Any]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     with _CONFIG_LOCK:
-        tmp.write_text(json.dumps(cfg, indent=2))
+        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
         tmp.replace(p)
         _CONFIG_CACHE = dict(cfg)
         _CONFIG_MTIME = p.stat().st_mtime
@@ -523,7 +523,7 @@ def _run_cli_judge(*, site: str, thesis: Any, antithesis: Any) -> str:
             [_bin, "-p", "--max-turns", "1", "--tools", "",
              *model_args,
              "--output-format", "text", _guard_prompt_head(prompt)],
-            capture_output=True, text=True, timeout=_CLI_TIMEOUT_SECONDS,
+            capture_output=True, text=True, timeout=_CLI_TIMEOUT_SECONDS, encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.TimeoutExpired):
         # OSError covers FileNotFoundError AND E2BIG: the prompt (user text)
@@ -617,7 +617,7 @@ def _run_summary_judge(source: str, candidate: str, lang: str) -> str:
              *model_args,
              "--output-format", "text", _guard_prompt_head(prompt)],
             capture_output=True, text=True,
-            timeout=_SUMMARY_JUDGE_TIMEOUT_SECONDS,
+            timeout=_SUMMARY_JUDGE_TIMEOUT_SECONDS, encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.TimeoutExpired):
         # OSError, not just FileNotFoundError — see the site above (E2BIG).

@@ -418,7 +418,7 @@ class TenantRegistry:
             return cls(path)
 
         try:
-            raw = yaml.safe_load(path.read_text()) or {}
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except (yaml.YAMLError, OSError) as exc:
             # Fail closed: do NOT return an empty registry. Returning empty would
             # let the next save() overwrite a merely unreadable file with {}.
@@ -480,7 +480,7 @@ class TenantRegistry:
         )
         tmp = Path(tmp_name)
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 yaml.safe_dump(payload, fh, sort_keys=False, default_flow_style=False)
                 fh.flush()
                 os.fsync(fh.fileno())

@@ -263,7 +263,7 @@ class AstLintTests(unittest.TestCase):
         for py_file in eci_dir.glob("*.py"):
             if py_file.name.startswith("test_"):
                 continue
-            src = py_file.read_text()
+            src = py_file.read_text(encoding="utf-8")
             tree = ast.parse(src, filename=str(py_file))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):

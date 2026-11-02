@@ -28,7 +28,7 @@ def test_core_audit_event_commits_and_returns_ref(home):
     from core.paths import tenant_audit_chain
 
     ref = core_audit_event("learning.outcome", tenant_id="_default", details={})
-    tail = tenant_audit_chain("_default").read_text().splitlines()[-1]
+    tail = tenant_audit_chain("_default").read_text(encoding="utf-8").splitlines()[-1]
     assert json.loads(tail)["details"]["audit_ref"] == ref
 
 
@@ -38,7 +38,7 @@ def test_readback_tolerates_a_concurrent_append_after_ours(tmp_path):
     chain = tmp_path / "audit.jsonl"
     ours = {"event_type": "learning.outcome", "details": {"audit_ref": "ref-ours"}}
     theirs = {"event_type": "other", "details": {"audit_ref": "ref-theirs"}}
-    chain.write_text(json.dumps(ours) + "\n" + json.dumps(theirs) + "\n")
+    chain.write_text(json.dumps(ours) + "\n" + json.dumps(theirs) + "\n", encoding="utf-8")
     assert _tail_contains(chain, "ref-ours") is True
 
 
@@ -47,7 +47,7 @@ def test_readback_is_exact_field_match_not_substring(tmp_path):
 
     chain = tmp_path / "audit.jsonl"
     junk = {"event_type": "x", "details": {"note": "ref-ours"}}  # needle in another field
-    chain.write_text(json.dumps(junk) + "\n" + "not json ref-ours\n")
+    chain.write_text(json.dumps(junk) + "\n" + "not json ref-ours\n", encoding="utf-8")
     assert _tail_contains(chain, "ref-ours") is False
     assert _tail_contains(tmp_path / "missing.jsonl", "ref-ours") is False
 

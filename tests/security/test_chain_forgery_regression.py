@@ -47,7 +47,7 @@ def _forged() -> str:
 
 
 def test_appended_forged_unchained_record_is_flagged(chain):
-    with open(chain, "a") as fh:
+    with open(chain, "a", encoding="utf-8") as fh:
         fh.write(_forged() + "\n")
     ok, problems = se.verify_chain(chain)
     assert not ok
@@ -55,9 +55,9 @@ def test_appended_forged_unchained_record_is_flagged(chain):
 
 
 def test_mid_inserted_forged_record_is_flagged(chain):
-    lines = chain.read_text().splitlines()
+    lines = chain.read_text(encoding="utf-8").splitlines()
     lines.insert(2, _forged())
-    chain.write_text("\n".join(lines) + "\n")
+    chain.write_text("\n".join(lines) + "\n", encoding="utf-8")
     ok, problems = se.verify_chain(chain)
     assert not ok
     assert any(p["issue"] == "unchained_record" and p["line"] == 3 for p in problems)
@@ -70,17 +70,17 @@ def test_gap_marker_is_bound_to_the_tail(chain):
     assert "hash" not in rec and rec["prev_hash"] and "mac" in rec
     assert se.verify_chain(chain) == (True, [])
     # a legacy-shaped gap marker (no prev_hash) — or one moved elsewhere — is refused
-    lines = chain.read_text().splitlines()
+    lines = chain.read_text(encoding="utf-8").splitlines()
     gap = json.loads(lines[-1])
     del gap["prev_hash"]
     lines[-1] = json.dumps(gap)
-    chain.write_text("\n".join(lines) + "\n")
+    chain.write_text("\n".join(lines) + "\n", encoding="utf-8")
     ok, problems = se.verify_chain(chain)
     assert not ok and problems[0]["issue"] == "unchained_record"
-    lines = chain.read_text().splitlines()
+    lines = chain.read_text(encoding="utf-8").splitlines()
     lines[-1] = json.dumps(rec)
     lines.insert(1, lines.pop())  # moved: its prev_hash no longer matches the tail there
-    chain.write_text("\n".join(lines) + "\n")
+    chain.write_text("\n".join(lines) + "\n", encoding="utf-8")
     ok, problems = se.verify_chain(chain)
     assert not ok and problems[0]["issue"] == "unchained_record" and problems[0]["line"] == 2
 
@@ -96,21 +96,21 @@ def test_pii_by_value_under_innocuous_keys_dropped(chain):
         "tel": "+49 170 1234567", "cc": "4111 1111 1111 1111", "reason": "bob@example.com",
         "count": 3,
     })
-    d = json.loads(chain.read_text().splitlines()[-1])["details"]
+    d = json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])["details"]
     assert d["count"] == 3
     assert sorted(d["_dropped_fields"]) == ["cc", "free", "note", "reason", "tel"]
-    text = chain.read_text()
+    text = chain.read_text(encoding="utf-8")
     for leak in ("alice@example.com", "medical", "1234567", "4111", "bob@example.com"):
         assert leak not in text
 
 
 def test_tenant_spoof_refused_at_wrapper_and_chokepoint(chain):
-    n = len(chain.read_text().splitlines())
+    n = len(chain.read_text(encoding="utf-8").splitlines())
     audit.audit_event("message.received", tenant_id="evil-tenant", details={"count": 1})
     with pytest.raises(se.AuditTenantMismatch):
         se.write_event(chain, "message.received",
                        details={"tenant_id": "evil-tenant", "channel": "c", "user": "u"})
-    recs = [json.loads(l) for l in chain.read_text().splitlines()[n:]]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines()[n:]]
     assert [r["event_type"] for r in recs] == ["audit.tenant_mismatch"] * 2
     for r in recs:
         assert r["details"]["tenant_id"] == "_default"
@@ -121,16 +121,16 @@ def test_tenant_spoof_refused_at_wrapper_and_chokepoint(chain):
 
 def test_unfiltered_flag_is_visible_and_cannot_be_forged(chain):
     se.write_event(chain, "message.received", details={"count": 1}, unfiltered=True)
-    d = json.loads(chain.read_text().splitlines()[-1])["details"]
+    d = json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])["details"]
     assert d["_unfiltered"] is True
     se.write_event(chain, "message.received", details={"count": 1, "_unfiltered": True})
-    d = json.loads(chain.read_text().splitlines()[-1])["details"]
+    d = json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])["details"]
     assert "_unfiltered" not in d
 
 
 def test_tail_truncation_detected(chain):
-    lines = chain.read_text().splitlines()
-    chain.write_text("\n".join(lines[:-1]) + "\n")
+    lines = chain.read_text(encoding="utf-8").splitlines()
+    chain.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
     ok, problems = se.verify_chain(chain)
     assert not ok and problems[0]["issue"] == "tail_truncated"
 
@@ -151,7 +151,7 @@ def test_group_readable_anchor_key_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(se, "_ANCHOR_KEY_REFUSED", None)
     p = audit.audit_path()
     audit.audit_event("message.received", details={"count": 1})
-    assert "mac" not in json.loads(p.read_text().splitlines()[-1])
+    assert "mac" not in json.loads(p.read_text(encoding="utf-8").splitlines()[-1])
     ok, problems = se.verify_chain(p)
     assert not ok and problems[0]["issue"] == "anchor_key_insecure_mode"
     os.chmod(key, 0o600)
@@ -169,6 +169,6 @@ def test_tmp_chain_writes_no_marker_beside_a_real_key(tmp_path, monkeypatch):
     monkeypatch.setattr(se, "_is_tmp_path", lambda p: "scratch-chain" in str(p))
     chain = tmp_path / "scratch-chain" / "audit.jsonl"
     se.write_event(chain, "message.received", details={"count": 1})
-    assert "mac" in json.loads(chain.read_text().splitlines()[-1])
+    assert "mac" in json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])
     assert not (real_key_dir / "mac_active_chains").exists()
     assert not (real_key_dir / "chain_tails").exists()

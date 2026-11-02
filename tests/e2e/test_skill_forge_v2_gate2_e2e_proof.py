@@ -140,7 +140,7 @@ This Skill emits:
 - Audit trail: ✓
 - PII handling: redacted
 """
-        (skill_dir / "README.md").write_text(readme_content)
+        (skill_dir / "README.md").write_text(readme_content, encoding="utf-8")
         print_success("Created README.md")
 
         # Create skill.json (manifest)
@@ -204,7 +204,7 @@ This Skill emits:
                 "eu_ai_act_tier": "high_risk",
             },
         }
-        (skill_dir / "skill.json").write_text(json.dumps(manifest_data, indent=2))
+        (skill_dir / "skill.json").write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
         print_success("Created skill.json")
 
         # Create src/skill.py (actual implementation)
@@ -260,7 +260,7 @@ class {_to_pascal_case(skill_id)}Skill:
         # Placeholder for learning loop integration
         pass
 '''
-        (skill_dir / "src" / "skill.py").write_text(skill_py_content)
+        (skill_dir / "src" / "skill.py").write_text(skill_py_content, encoding="utf-8")
         print_success("Created src/skill.py")
 
         # Create hooks
@@ -283,7 +283,7 @@ def on_unload():
     pass
 '''
         for hook_name in ["on_load", "on_execute", "on_feedback", "on_unload"]:
-            (skill_dir / "hooks" / f"{hook_name}.py").write_text(hook_content)
+            (skill_dir / "hooks" / f"{hook_name}.py").write_text(hook_content, encoding="utf-8")
         print_success("Created hooks (on_load, on_execute, on_feedback, on_unload)")
 
         # Create tests/test_skill.py
@@ -324,7 +324,7 @@ def test_skill_multiple_executions():
         result = skill.execute(f"input {{i}}")
         assert result["execution_count"] == i + 1
 '''
-        (skill_dir / "tests" / "test_skill.py").write_text(test_content)
+        (skill_dir / "tests" / "test_skill.py").write_text(test_content, encoding="utf-8")
         print_success("Created tests/test_skill.py")
 
         # Create scripts/install.py
@@ -337,7 +337,7 @@ def install():
     # Placeholder for installation logic
     return True
 '''
-        (skill_dir / "scripts" / "install.py").write_text(install_script)
+        (skill_dir / "scripts" / "install.py").write_text(install_script, encoding="utf-8")
         print_success("Created scripts/install.py")
 
         # Create .forge/generation_context.json
@@ -355,7 +355,7 @@ def install():
             "manifest_hash": "sha256:will_be_computed",
         }
         (skill_dir / ".forge" / "generation_context.json").write_text(
-            json.dumps(generation_context, indent=2)
+            json.dumps(generation_context, indent=2), encoding="utf-8"
         )
         print_success("Created .forge/generation_context.json")
 
@@ -377,16 +377,16 @@ def install():
             },
         ]
         audit_text = "\n".join(json.dumps(event) for event in audit_trail)
-        (skill_dir / ".forge" / "audit_trail.jsonl").write_text(audit_text)
+        (skill_dir / ".forge" / "audit_trail.jsonl").write_text(audit_text, encoding="utf-8")
         print_success("Created .forge/audit_trail.jsonl")
 
         # Create docs/README.md
-        (skill_dir / "docs" / "README.md").write_text("# Documentation\n\nSkill documentation goes here.\n")
+        (skill_dir / "docs" / "README.md").write_text("# Documentation\n\nSkill documentation goes here.\n", encoding="utf-8")
         print_success("Created docs/README.md")
 
         # Create references/similar_skills.md
         (skill_dir / "references" / "similar_skills.md").write_text(
-            "# Similar Skills\n\nReference implementations of related skills.\n"
+            "# Similar Skills\n\nReference implementations of related skills.\n", encoding="utf-8"
         )
         print_success("Created references/similar_skills.md")
 
@@ -449,7 +449,7 @@ def test_gate2_e2e_skill_forge_v2_full_pipeline():
         print_step(2, "Package Skill to ZIP (SkillPackager)")
 
         # Load manifest
-        manifest_data = json.loads((skill_folder / "skill.json").read_text())
+        manifest_data = json.loads((skill_folder / "skill.json").read_text(encoding="utf-8"))
         manifest = SkillManifestV2.from_dict(manifest_data)
         print_success(f"Loaded manifest: {manifest.skill_id} v{manifest.version}")
 
@@ -503,14 +503,14 @@ def test_gate2_e2e_skill_forge_v2_full_pipeline():
 
         # Verify checksums
         checksum_file = extracted_skill_dir / ".forge" / "checksum.sha256"
-        checksum_content = checksum_file.read_text()
+        checksum_content = checksum_file.read_text(encoding="utf-8")
         checksum_lines = [line for line in checksum_content.strip().split("\n") if line]
         print_success(f"Checksums verified: {len(checksum_lines)} files checksummed")
         print_info(f"  Format: sha256:<hash> <path>")
 
         # Verify generation_context
         context_file = extracted_skill_dir / ".forge" / "generation_context.json"
-        context = json.loads(context_file.read_text())
+        context = json.loads(context_file.read_text(encoding="utf-8"))
         print_success(f"Generation context loaded:")
         print_info(f"  skill_id: {context['skill_id']}")
         print_info(f"  version: {context['version']}")
@@ -518,7 +518,7 @@ def test_gate2_e2e_skill_forge_v2_full_pipeline():
 
         # Verify audit_trail
         audit_file = extracted_skill_dir / ".forge" / "audit_trail.jsonl"
-        audit_events = [json.loads(line) for line in audit_file.read_text().strip().split("\n") if line]
+        audit_events = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").strip().split("\n") if line]
         print_success(f"Audit trail loaded: {len(audit_events)} events")
         for event in audit_events:
             print_info(f"  • {event.get('event')} (phase {event.get('phase', '?')})")
@@ -704,14 +704,14 @@ def test_gate2_e2e_error_handling():
                 "boot_layer": "installed",
                 "input_schema": {},
                 "output_schema": {},
-            })
+            }), encoding="utf-8"
         )
 
-        (skill_dir / "README.md").write_text("# Invalid Skill\n")
+        (skill_dir / "README.md").write_text("# Invalid Skill\n", encoding="utf-8")
 
         # Try to load manifest
         try:
-            manifest_data = json.loads((skill_dir / "skill.json").read_text())
+            manifest_data = json.loads((skill_dir / "skill.json").read_text(encoding="utf-8"))
             manifest = SkillManifestV2.from_dict(manifest_data)
             print_error("Should have raised validation error")
             assert False, "Expected jsonschema.ValidationError"

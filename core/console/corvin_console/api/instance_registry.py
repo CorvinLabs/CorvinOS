@@ -216,7 +216,7 @@ class InstanceRegistry:
 
         records = []
         try:
-            with open(self.registry_path, "r") as f:
+            with open(self.registry_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -235,7 +235,7 @@ class InstanceRegistry:
         """Write all records to file (not thread-safe, use lock outside)."""
         try:
             self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.registry_path, "w") as f:
+            with open(self.registry_path, "w", encoding="utf-8") as f:
                 for record in records:
                     f.write(json.dumps(record.to_dict()) + "\n")
         except Exception as exc:

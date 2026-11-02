@@ -413,7 +413,7 @@ def gate_4_final_validation(video_file: Path) -> bool:
             ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(video_file)],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10, encoding="utf-8", errors="replace"
         )
 
         if result.returncode != 0:

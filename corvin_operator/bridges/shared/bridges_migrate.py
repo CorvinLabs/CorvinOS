@@ -279,7 +279,7 @@ def _move_one(entry: dict[str, Any]) -> dict[str, Any]:
                     f"# Source has been copied to:\n"
                     f"#   {dst}\n"
                     f"# Files: {files}, bytes: {total_bytes}\n"
-                    f"# Safe to delete this legacy entry once verified.\n"
+                    f"# Safe to delete this legacy entry once verified.\n", encoding="utf-8"
                 )
             except OSError:
                 pass
@@ -390,7 +390,7 @@ def migrate_bridges_state_if_needed(
         marker.write_text(
             f"# ADR-0008 bridges_migrate marker.\n"
             f"# Migrated entries: {len(completed)}\n"
-            f"# Failed entries:   {len(failed)}\n"
+            f"# Failed entries:   {len(failed)}\n", encoding="utf-8"
         )
     except OSError as exc:
         logger.warning("bridges_migrate: marker write failed (%s)", exc)

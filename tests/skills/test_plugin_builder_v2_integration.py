@@ -40,7 +40,7 @@ def _fake_scaffold(*, output_dir, plugin_id, **_kw):
     scaffold = Path(output_dir) / f"{plugin_id.replace('.', '_')}_scaffold"
     scaffold.mkdir(parents=True, exist_ok=True)
     plugin = scaffold / "plugin.py"
-    plugin.write_text("# fake\n")
+    plugin.write_text("# fake\n", encoding="utf-8")
     return {"plugin": plugin}
 
 
@@ -240,7 +240,7 @@ def _stage_records(tenant_id: str) -> list[dict]:
     chain = _chain_path(tenant_id)
     if not chain.exists():
         return []
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return [r for r in recs if r.get("event_type") == "plugin_builder.development"
             and (r.get("details") or {}).get("tenant_id") == tenant_id]
 
@@ -296,7 +296,7 @@ class TestAuditIntegration:
                                       description="SENTINEL_DESCRIPTION", author="SENTINEL_AUTHOR",
                                       steps=["scaffold"], audit_enabled=True), tmpdir)
         chain = _chain_path(tenant)
-        text = chain.read_text()
+        text = chain.read_text(encoding="utf-8")
         assert "plugin_builder.development" in text
         assert "SENTINEL_DESCRIPTION" not in text and "SENTINEL_AUTHOR" not in text
         # The previous implementation appended its own sha256 line: not a record the writer
@@ -552,10 +552,10 @@ class TestRealScaffoldKeepsTheChainIntact:
                                   steps=["scaffold"], audit_enabled=True), tmp_path / "out")
         assert result.success is True, result.errors
         chain = _chain_path(tenant)
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         stages = [r["details"]["stage"] for r in recs if r.get("event_type") == "plugin_builder.scaffold"]
         assert "scaffold_generated" in stages
-        assert str(tmp_path) not in chain.read_text()          # no scaffold directory in the record
+        assert str(tmp_path) not in chain.read_text(encoding="utf-8")          # no scaffold directory in the record
         assert se.verify_chain(chain)[0] is True
 
     def test_an_unknown_step_name_never_reaches_the_chain(self, chain_tenant, tmp_path):
@@ -564,4 +564,4 @@ class TestRealScaffoldKeepsTheChainIntact:
             PluginDevelopmentPlan(plugin_id="my.plugin", plugin_name="P", tenant_id=tenant,
                                   steps=["confidential merger with Acme"], audit_enabled=True),
             tmp_path / "out")
-        assert "confidential merger" not in _chain_path(tenant).read_text()
+        assert "confidential merger" not in _chain_path(tenant).read_text(encoding="utf-8")

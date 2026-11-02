@@ -64,12 +64,12 @@ class TestNotificationDeliveryE2E:
         }
 
         event_file = self.completion_dir / f"{task_id}.json"
-        with open(event_file, "w") as f:
+        with open(event_file, "w", encoding="utf-8") as f:
             json.dump(completion_event, f)
 
         # Assert: Event wurde geschrieben
         assert event_file.exists()
-        assert json.loads(event_file.read_text())["state"] == "ready"
+        assert json.loads(event_file.read_text(encoding="utf-8"))["state"] == "ready"
 
     def test_deliver_ready_writes_discord_envelope(self):
         """Test: deliver_ready() schreibt Envelope zu Outbox."""
@@ -87,12 +87,12 @@ class TestNotificationDeliveryE2E:
         }
 
         msg_file = self.outbox_dir / f"msg_{task_id}_{int(time.time())}.json"
-        with open(msg_file, "w") as f:
+        with open(msg_file, "w", encoding="utf-8") as f:
             json.dump(envelope, f, indent=2)
 
         # Assert: Envelope in Outbox
         assert msg_file.exists()
-        assert json.loads(msg_file.read_text())["task_id"] == task_id
+        assert json.loads(msg_file.read_text(encoding="utf-8"))["task_id"] == task_id
 
     def test_outbox_envelope_format_for_discord_daemon(self):
         """Test: Envelope-Format kommt Discord Daemon zugute."""
@@ -110,11 +110,11 @@ class TestNotificationDeliveryE2E:
         }
 
         msg_file = self.outbox_dir / f"msg_test_003_{int(time.time())}.json"
-        with open(msg_file, "w") as f:
+        with open(msg_file, "w", encoding="utf-8") as f:
             json.dump(envelope, f, indent=2)
 
         # Discord Daemon würde diese Felder lesen
-        msg = json.loads(msg_file.read_text())
+        msg = json.loads(msg_file.read_text(encoding="utf-8"))
         assert msg["channel"] == "discord"
         assert msg["chat_id"] == "123456789"
         assert msg["text"]  # non-empty
@@ -157,7 +157,7 @@ class TestNotificationDeliveryE2E:
         }
 
         event_file = self.completion_dir / f"{task_id}.json"
-        with open(event_file, "w") as f:
+        with open(event_file, "w", encoding="utf-8") as f:
             json.dump(completion_event, f)
 
         # Starte notification_router_minimal
@@ -166,7 +166,7 @@ class TestNotificationDeliveryE2E:
             [sys.executable, str(router_script), str(self.test_dir)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         # Warte bis Router die Event verarbeitet
@@ -177,7 +177,7 @@ class TestNotificationDeliveryE2E:
         msg_files = list(self.outbox_dir.glob("msg_*.json"))
         assert len(msg_files) > 0, "Router should have written a message"
 
-        msg = json.loads(msg_files[0].read_text())
+        msg = json.loads(msg_files[0].read_text(encoding="utf-8"))
         assert msg["task_id"] == task_id
         assert msg["event_type"] == "task_completed"
 
@@ -206,7 +206,7 @@ class TestNotificationDeliveryE2E:
             "summary": "Successfully completed",
         }
         event_file = self.completion_dir / f"{task_id}.json"
-        with open(event_file, "w") as f:
+        with open(event_file, "w", encoding="utf-8") as f:
             json.dump(completion_event, f)
 
         # Phase 4: deliver_ready() schreibt Discord Envelope
@@ -220,7 +220,7 @@ class TestNotificationDeliveryE2E:
             "ok": True,
         }
         msg_file = self.outbox_dir / f"msg_{task_id}_{int(time.time())}.json"
-        with open(msg_file, "w") as f:
+        with open(msg_file, "w", encoding="utf-8") as f:
             json.dump(envelope, f, indent=2)
 
         # Phase 5: Discord Daemon würde Envelope lesen und senden
@@ -230,8 +230,8 @@ class TestNotificationDeliveryE2E:
         assert event_file.exists(), "CompletionEvent should exist"
         assert msg_file.exists(), "Discord envelope should exist"
 
-        event = json.loads(event_file.read_text())
-        msg = json.loads(msg_file.read_text())
+        event = json.loads(event_file.read_text(encoding="utf-8"))
+        msg = json.loads(msg_file.read_text(encoding="utf-8"))
 
         assert event["task_id"] == task_id
         assert msg["task_id"] == task_id

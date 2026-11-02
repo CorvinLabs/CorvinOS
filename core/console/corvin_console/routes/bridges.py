@@ -224,7 +224,7 @@ def _supervisor_toggle(channel: str, enabled: bool) -> dict[str, Any]:
     cmd = ["supervisorctl", action, program]
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15, check=False,
+            cmd, capture_output=True, text=True, timeout=15, check=False, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         return {"applied": False, "reason": "supervisorctl not on PATH"}
@@ -276,7 +276,7 @@ def _unit_active(channel: str) -> bool:
     try:
         proc = subprocess.run(
             ["systemctl", "--user", "is-active", _unit_name(channel)],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True, text=True, timeout=5, check=False, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -288,7 +288,7 @@ def _systemctl_action(channel: str, action: str) -> dict[str, Any]:
     cmd = ["systemctl", "--user", action, _unit_name(channel)]
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30, check=False,
+            cmd, capture_output=True, text=True, timeout=30, check=False, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         return {"applied": False, "reason": "systemctl not on PATH"}
@@ -344,7 +344,7 @@ def _run_bridge_sh_up() -> dict[str, Any]:
         proc = subprocess.run(
             ["bash", str(script), "up"],
             capture_output=True, text=True, timeout=120, check=False,
-            env=env,
+            env=env, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         return {"applied": False, "reason": "bash not on PATH"}
@@ -436,7 +436,7 @@ def _ensure_npm_modules(channel: str) -> None:
     try:
         subprocess.run(
             [_resolve_npm(), "install", "--prefer-offline", "--no-audit", "--no-fund"],
-            cwd=chan_dir, capture_output=True, text=True, timeout=300, check=False,
+            cwd=chan_dir, capture_output=True, text=True, timeout=300, check=False, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
@@ -1133,7 +1133,7 @@ gen.generateAuthorizationUrl(process.env.DISCORD_TOKEN).then(result => {
                 **os.environ,
                 "AUTO_OAUTH2_PATH": str(auto_oauth2_path),
                 "DISCORD_TOKEN": token,  # ← Token via env, not interpolation
-            },
+            }, encoding="utf-8", errors="replace",
         )
 
         if result.returncode != 0:
@@ -1315,7 +1315,7 @@ prov.validateAndProvision(process.env.TELEGRAM_TOKEN).then(result => {
                 **os.environ,
                 "PROVISIONER_PATH": str(provisioner_path),
                 "TELEGRAM_TOKEN": token,
-            },
+            }, encoding="utf-8", errors="replace",
         )
 
         if result.returncode != 0:

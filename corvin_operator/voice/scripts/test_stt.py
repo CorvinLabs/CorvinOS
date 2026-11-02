@@ -772,7 +772,7 @@ class CliSurfaceTests(unittest.TestCase):
         env.pop("OPENAI_API_KEY", None)
         r = subprocess.run(
             [sys.executable, str(_SCRIPTS / "transcribe.py"), str(audio)],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True, env=env, encoding="utf-8", errors="replace",
         )
         self.assertEqual(r.returncode, 1, msg=r.stderr)
         self.assertIn("no provider", r.stderr.lower())
@@ -781,7 +781,7 @@ class CliSurfaceTests(unittest.TestCase):
         r = subprocess.run(
             [sys.executable, str(_SCRIPTS / "transcribe.py"),
              "/nonexistent/audio.ogg"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         self.assertEqual(r.returncode, 1)
         self.assertIn("file not found", r.stderr.lower())
@@ -805,7 +805,7 @@ class NoPIIContractTests(unittest.TestCase):
         # validate the contract structurally via the _emit_* helpers.
         # Read source, find _emit_transcribe_ok, assert the only
         # fields under 'details' are the curated metadata-only set.
-        src = adapter_path.read_text()
+        src = adapter_path.read_text(encoding="utf-8")
         # Sanity: function exists
         self.assertIn("def _emit_transcribe_ok", src)
         # The function MUST NOT contain 'result.text' in its details

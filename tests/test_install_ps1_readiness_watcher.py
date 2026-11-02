@@ -110,7 +110,7 @@ Remove-Item -Path '$WatcherPath' -Force -ErrorAction SilentlyContinue
         try:
             result = subprocess.run(
                 ["pwsh", "-NoProfile", "-File", str(harness_path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -128,7 +128,7 @@ if ($errs.Count -gt 0) {{ $errs | ForEach-Object {{ Write-Host $_.Message }}; ex
 """
             parse_result = subprocess.run(
                 ["pwsh", "-NoProfile", "-Command", parse_check],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
             )
             self.assertEqual(parse_result.returncode, 0, parse_result.stdout + parse_result.stderr)
         finally:
@@ -189,7 +189,7 @@ if (-not $found) {{ Write-Output "TIMEOUT" }}
         try:
             result = subprocess.run(
                 ["pwsh", "-NoProfile", "-File", str(poll_path)],
-                capture_output=True, text=True, timeout=20,
+                capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace",
             )
             self.assertIn("READY", result.stdout, result.stdout + result.stderr)
         finally:

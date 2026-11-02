@@ -68,7 +68,7 @@ def test_scaffold_writes_generic_provider_template(confirmed_session, tmp_path):
     # Both official-template warnings from the classifier should have made it
     # through as scaffold warnings too, OR be visible in the idea doc — either
     # way an author must not be able to miss "nothing calls this type".
-    idea_doc = (result.dest / "docs" / "plugin-idea.md").read_text()
+    idea_doc = (result.dest / "docs" / "plugin-idea.md").read_text(encoding="utf-8")
     assert "NOTHING currently invokes it" in idea_doc
 
 
@@ -80,7 +80,7 @@ def test_generated_plugin_satisfies_corvin_plugin_protocol(confirmed_session, tm
     idea, classification = confirmed_session.result()
     result = write_artifacts(idea, classification, tmp_path)
     plugin_py = result.dest / "plugin.py"
-    src = plugin_py.read_text()
+    src = plugin_py.read_text(encoding="utf-8")
 
     # No leftover placeholder tokens — every __TOKEN__ must have been substituted.
     assert not re.search(r"__[A-Z_]+__", src)
@@ -116,9 +116,9 @@ def test_second_run_same_idea_refuses_to_overwrite(confirmed_session, tmp_path):
 def test_docs_reference_each_other_consistently(confirmed_session, tmp_path):
     idea, classification = confirmed_session.result()
     result = write_artifacts(idea, classification, tmp_path)
-    idea_doc = (result.dest / "docs" / "plugin-idea.md").read_text()
-    plan_doc = (result.dest / "docs" / "build-plan.md").read_text()
-    adr_doc = next((result.dest / "docs").glob("plugin-adr-*.md")).read_text()
+    idea_doc = (result.dest / "docs" / "plugin-idea.md").read_text(encoding="utf-8")
+    plan_doc = (result.dest / "docs" / "build-plan.md").read_text(encoding="utf-8")
+    adr_doc = next((result.dest / "docs").glob("plugin-adr-*.md")).read_text(encoding="utf-8")
 
     assert "Postgres Connector" in idea_doc
     assert "corvin plugin check" in plan_doc

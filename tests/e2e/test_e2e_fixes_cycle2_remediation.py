@@ -209,12 +209,12 @@ def test_finding_6_lock_timeout_nonblocking(tmp_path: Path):
         lock_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Hold lock from independent fd
-        fh_holder = open(lock_path, "w")
+        fh_holder = open(lock_path, "w", encoding="utf-8")
         fcntl.flock(fh_holder.fileno(), fcntl.LOCK_EX)
 
         try:
             # Attempt non-blocking lock
-            fh_waiter = open(lock_path, "a")
+            fh_waiter = open(lock_path, "a", encoding="utf-8")
             started = time.monotonic()
             try:
                 fcntl.flock(fh_waiter.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -325,13 +325,13 @@ def test_finding_9_tenant_isolation_cross_tenant_leakage_prevention(tmp_path: Pa
         t_a = home / "tenants" / "tenant-a"
         (t_a / "sessions/web:abc/tasks").mkdir(parents=True)
         task_a = t_a / "sessions/web:abc/tasks/task_a.json"
-        task_a.write_text(json.dumps({"task_id": "task_a", "tenant_id": "tenant-a"}))
+        task_a.write_text(json.dumps({"task_id": "task_a", "tenant_id": "tenant-a"}), encoding="utf-8")
 
         # Create task for tenant B
         t_b = home / "tenants" / "tenant-b"
         (t_b / "sessions/web:xyz/tasks").mkdir(parents=True)
         task_b = t_b / "sessions/web:xyz/tasks/task_b.json"
-        task_b.write_text(json.dumps({"task_id": "task_b", "tenant_id": "tenant-b"}))
+        task_b.write_text(json.dumps({"task_id": "task_b", "tenant_id": "tenant-b"}), encoding="utf-8")
 
         # Verify task_a exists and task_b does not (from tenant-a perspective)
         add_assertion(task_a.exists(), "Task A exists")

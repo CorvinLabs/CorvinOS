@@ -67,6 +67,6 @@ class ConsoleRoutingLedgerE2E(_StreamTurnE2EBase):
         self._run_turn(FANOUT)
         from core.skills.os_skills.monitoring import routing_ledger
 
-        raw = routing_ledger.ledger_path("_default").read_text()
+        raw = routing_ledger.ledger_path("_default").read_text(encoding="utf-8")
         self.assertNotIn("Japan", raw)
         self.assertNotIn("Reiseplan", raw)

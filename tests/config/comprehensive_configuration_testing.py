@@ -480,7 +480,7 @@ async def run_comprehensive_configuration_tests() -> Dict[str, Any]:
     # Save report
     report_path = Path(__file__).parent.parent.parent / "benchmarks" / "config_test_report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2, default=str))
+    report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
 
     logger.info(f"Configuration test report saved to {report_path}")
 

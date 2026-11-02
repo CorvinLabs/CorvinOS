@@ -8,6 +8,7 @@ Covers the invariants the ADR's "Must NOT do" section pins down:
 """
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -39,10 +40,12 @@ class TestStage2AutoUpdateWiring:
 
 
 class TestIsElevated:
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX euid check; Windows uses the admin token")
     def test_posix_root_is_elevated(self):
         with mock.patch("os.geteuid", return_value=0, create=True):
             assert is_elevated() is True
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX euid check; Windows uses the admin token")
     def test_posix_non_root_is_not_elevated(self):
         with mock.patch("os.geteuid", return_value=1000, create=True):
             assert is_elevated() is False
@@ -75,7 +78,7 @@ class TestLinuxSystemServiceManager:
                 run.return_value = mock.Mock(returncode=0)
                 mgr.install_service(name="webui", command="/usr/bin/true")
 
-            content = (Path(tmp) / "corvin-webui.service").read_text()
+            content = (Path(tmp) / "corvin-webui.service").read_text(encoding="utf-8")
             assert "User=silvio" in content
             assert "root" not in content.lower()
             assert "StartLimitIntervalSec=120" in content
@@ -102,7 +105,7 @@ class TestLinuxSystemServiceManager:
                     name="webui", command="/usr/bin/true",
                     pre_exec='"/py" "/auto.py"',
                 )
-            content = (Path(tmp) / "corvin-webui.service").read_text()
+            content = (Path(tmp) / "corvin-webui.service").read_text(encoding="utf-8")
             assert 'ExecStartPre=-"/py" "/auto.py"' in content
             assert "TimeoutStartSec=300" in content
 
@@ -119,7 +122,7 @@ class TestLinuxSystemServiceManager:
             ), mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0)
                 mgr.install_service(name="webui", command="/usr/bin/true")
-            content = (Path(tmp) / "corvin-webui.service").read_text()
+            content = (Path(tmp) / "corvin-webui.service").read_text(encoding="utf-8")
             assert "ExecStartPre" not in content
             assert "TimeoutStartSec" not in content
 
@@ -159,7 +162,7 @@ class TestDarwinSystemServiceManager:
 
             plist_files = list(Path(tmp).glob("*.plist"))
             assert len(plist_files) == 1
-            content = plist_files[0].read_text()
+            content = plist_files[0].read_text(encoding="utf-8")
             assert "<key>UserName</key>" in content
             assert "<string>silvio</string>" in content
             assert "ThrottleInterval" in content
@@ -232,7 +235,7 @@ class TestWindowsSystemServiceManager:
             vbs_path = vbs_dir / "CorvinOS-AlwaysOn-webui.vbs"
             assert f'//B "{vbs_path}"' in ps
             assert vbs_path.exists()
-            vbs_content = vbs_path.read_text()
+            vbs_content = vbs_path.read_text(encoding="utf-16")
             # The .vbs runs the ORIGINAL program+args hidden (SW_HIDE=0) —
             # this is what actually starts CorvinOS; wscript.exe itself is
             # just the invisible launcher Task Scheduler shows instead.

@@ -40,7 +40,7 @@ def _drain(agen):
 def _tool_ids() -> dict[str, str]:
     """name-with-target -> tool_use id, read from the capture itself."""
     out = {}
-    for ln in FIXTURE.read_text().splitlines():
+    for ln in FIXTURE.read_text(encoding="utf-8").splitlines():
         d = json.loads(ln)
         if d.get("type") != "assistant":
             continue
@@ -93,8 +93,8 @@ class ChatDiffE2E(unittest.TestCase):
         finally:
             cr._DIFF_TURN_BUDGET = budget
         cls.turns = cr.read_turns("_default", cls.sess.sid)
-        cls.turns_raw = "\n".join(p.read_text() for p in (home / "corvin").rglob("*.turns.jsonl"))
-        cls.audit_raw = "\n".join(p.read_text() for p in home.rglob("audit.jsonl"))
+        cls.turns_raw = "\n".join(p.read_text(encoding="utf-8") for p in (home / "corvin").rglob("*.turns.jsonl"))
+        cls.audit_raw = "\n".join(p.read_text(encoding="utf-8") for p in home.rglob("audit.jsonl"))
         import session_ledger  # type: ignore
         cls.records = session_ledger.records_from_turn_log(cls.turns)
         cls.ids = _tool_ids()

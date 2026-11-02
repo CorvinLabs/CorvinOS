@@ -72,7 +72,7 @@ def test_routes_models_call_sites_use_real_signature():
     import ast
     import inspect
 
-    src = (_REPO / "core" / "console" / "corvin_console" / "routes" / "models.py").read_text()
+    src = (_REPO / "core" / "console" / "corvin_console" / "routes" / "models.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     sig_params = set(inspect.signature(console_audit.system_event).parameters)
 

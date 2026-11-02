@@ -19,7 +19,7 @@ from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
 @pytest.fixture
 def temp_audit_file():
     """Create a temporary audit chain file for testing."""
-    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.jsonl') as f:
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.jsonl', encoding="utf-8") as f:
         temp_path = Path(f.name)
     yield temp_path
     # Cleanup

@@ -37,7 +37,7 @@ def temp_corvin_home():
             }
         }
         config_path = home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(tenant_config, f)
         config_path.chmod(0o600)  # the loader refuses group/world-readable tenant config
 
@@ -62,12 +62,12 @@ def temp_plugin():
             "class_path": "test_plugin.TestPlugin",
         }
 
-        with open(plugin_dir / "plugin.yaml", "w") as f:
+        with open(plugin_dir / "plugin.yaml", "w", encoding="utf-8") as f:
             yaml.dump(plugin_yaml, f)
 
         # Create dummy plugin module
         (plugin_dir / "test_plugin.py").write_text(
-            "class TestPlugin:\n    pass\n"
+            "class TestPlugin:\n    pass\n", encoding="utf-8"
         )
 
         yield plugin_dir
@@ -151,7 +151,7 @@ def test_plugin_in_tenant_config_during_registry_sync():
         }
 
         config_path = home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(tenant_config, f)
 
         # Load registry (registry.yaml doesn't exist yet)
@@ -164,7 +164,7 @@ def test_plugin_in_tenant_config_during_registry_sync():
         assert len(registry.records) >= 0, "Registry should load even if empty"
 
         # Verify plugin data is in tenant config
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         installed = config.get("spec", {}).get("plugins", {}).get("installed", [])
@@ -204,7 +204,7 @@ def test_installation_writes_to_both_tenant_config_and_registry(
 
     # Verify tenant.corvin.yaml has the plugin
     tenant_config_path = home / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
-    with open(tenant_config_path) as f:
+    with open(tenant_config_path, encoding="utf-8") as f:
         tenant_config = yaml.safe_load(f)
 
     installed_in_config = tenant_config.get("spec", {}).get("plugins", {}).get("installed", [])
@@ -215,7 +215,7 @@ def test_installation_writes_to_both_tenant_config_and_registry(
     registry_path = home / "tenants" / tenant_id / "plugins" / "registry.yaml"
     assert registry_path.exists(), "registry.yaml should be created/updated (THIS WAS THE BUG)"
 
-    with open(registry_path) as f:
+    with open(registry_path, encoding="utf-8") as f:
         registry_data = yaml.safe_load(f)
 
     assert registry_data is not None, "registry.yaml should not be empty"

@@ -62,7 +62,7 @@ class TestEmitterR2SC09:
 
     def test_exactly_one_module_exit_hook(self):
         import atexit  # noqa: F401
-        src = open(em_mod.__file__).read()
+        src = open(em_mod.__file__, encoding="utf-8").read()
         assert src.count("atexit.register(") == 1 and "atexit.register(_flush_all)" in src
 
 
@@ -74,7 +74,7 @@ class TestCreatorWalR2SC10:
     def _entries(self, orch):
         if not orch.wal.wal_file.exists():
             return []
-        return [json.loads(l) for l in orch.wal.wal_file.read_text().splitlines() if l.strip()]
+        return [json.loads(l) for l in orch.wal.wal_file.read_text(encoding="utf-8").splitlines() if l.strip()]
 
     def test_failure_in_intake_marks_the_placeholder_entry(self, tmp_path):
         orch = self._orch(tmp_path)

@@ -389,7 +389,7 @@ class TestErrorHandling:
         quota_dir = tmp_path / "quotas"
         quota_dir.mkdir(parents=True, exist_ok=True)
         counter_file = quota_dir / "corrupted-tenant_brain_tasks_per_day_2026-08-17.json"
-        counter_file.write_text("invalid json {{{")
+        counter_file.write_text("invalid json {{{", encoding="utf-8")
 
         # Should start fresh despite corrupted file
         count = increment_and_check(

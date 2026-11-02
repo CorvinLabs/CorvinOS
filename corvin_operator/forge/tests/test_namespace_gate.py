@@ -78,7 +78,7 @@ class _PersonaMCPClient(MCPClient):
              "--permission-mode", permission_mode],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1,
-            cwd=str(TEST_ROOT), env=env,
+            cwd=str(TEST_ROOT), env=env, encoding="utf-8", errors="replace",
         )
         self._next_id = 0
         self._buffered = []
@@ -93,7 +93,7 @@ def _audit_events(root: Path) -> list[dict]:
     if not p.exists():
         return []
     out = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -209,7 +209,7 @@ def test_unknown_persona_falls_back_to_wildcard():
                 "coder": "code"
                 # "stranger" missing on purpose
             }
-        }))
+        }), encoding="utf-8")
         client = _PersonaMCPClient(td, caller_persona="stranger")
         try:
             client.initialize()

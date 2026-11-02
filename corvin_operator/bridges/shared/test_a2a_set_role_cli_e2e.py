@@ -29,7 +29,7 @@ def _write_endpoint(d: Path, eid: str, **extra) -> Path:
     p = d / f"{eid}.json"
     p.write_text(json.dumps({
         "endpoint_id": eid, "url": "https://peer.example.com/v1/a2a/receive", "hmac_key": "a" * 64,
-        "recv_key": "b" * 64, "instance_id": "iid-" + eid, "enabled": True, **extra}))
+        "recv_key": "b" * 64, "instance_id": "iid-" + eid, "enabled": True, **extra}), encoding="utf-8")
     p.chmod(0o600)
     return p
 
@@ -56,11 +56,11 @@ class TestSetRoleCli(unittest.TestCase):
             "CORVIN_TENANT_ID": "_default", "CORVIN_A2A_ATTESTATION_DISABLED": "1",
             "PYTHONPATH": os.pathsep.join(filter(None, [str(PIN), str(REPO), env.get("PYTHONPATH", "")])),
         })
-        return subprocess.run([sys.executable, str(CLI), *args], capture_output=True, text=True, timeout=120, env=env)
+        return subprocess.run([sys.executable, str(CLI), *args], capture_output=True, text=True, timeout=120, env=env, encoding="utf-8", errors="replace")
 
     def _chain(self) -> list[dict]:
         p = self.home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-        return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+        return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
     def _role_events(self) -> list[dict]:
         return [r for r in self._chain() if r.get("event_type") == "federation.endpoint_role_set"]
@@ -69,7 +69,7 @@ class TestSetRoleCli(unittest.TestCase):
         path = _write_endpoint(self.endpoints, "peer-a", label="Peer A")
         out = self._cli("set-role", "peer-a", "--role", "processor", "--organisation", "Acme Analytics GmbH")
         self.assertEqual(out.returncode, 0, msg=out.stdout + out.stderr)
-        cfg = json.loads(path.read_text())
+        cfg = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual((cfg["organisation"], cfg["gdpr_role"]), ("Acme Analytics GmbH", "processor"))
         self.assertEqual(cfg["hmac_key"], "a" * 64)
         self.assertNotIn("a" * 64, out.stdout, "keys never print")
@@ -84,16 +84,16 @@ class TestSetRoleCli(unittest.TestCase):
         path = _write_endpoint(self.endpoints, "peer-a", label="Peer A", organisation="Kept GmbH", gdpr_role="joint")
         out = self._cli("set-role", "Peer A", "--role", "controller")
         self.assertEqual(out.returncode, 0, msg=out.stdout + out.stderr)
-        cfg = json.loads(path.read_text())
+        cfg = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual((cfg["organisation"], cfg["gdpr_role"]), ("Kept GmbH", "controller"))
 
     def test_first_role_without_an_organisation_is_refused(self):
         path = _write_endpoint(self.endpoints, "peer-a")
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         out = self._cli("set-role", "peer-a", "--role", "processor")
         self.assertEqual(out.returncode, 2, msg=out.stdout + out.stderr)
         self.assertIn("--organisation", out.stderr)
-        self.assertEqual(path.read_text(), before)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
         self.assertEqual(self._role_events(), [])
 
     def test_unknown_endpoint_is_exit_2_and_writes_nothing(self):
@@ -105,20 +105,20 @@ class TestSetRoleCli(unittest.TestCase):
 
     def test_invalid_role_is_refused_and_writes_nothing(self):
         path = _write_endpoint(self.endpoints, "peer-a")
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         for role in ("data_processor", "Processor", ""):
             out = self._cli("set-role", "peer-a", "--role", role, "--organisation", "Acme")
             self.assertNotEqual(out.returncode, 0, msg=role)
-        self.assertEqual(path.read_text(), before)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
         self.assertEqual(self._role_events(), [])
 
     def test_invalid_organisation_is_refused_and_writes_nothing(self):
         path = _write_endpoint(self.endpoints, "peer-a")
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         for org in ("<b>Acme</b>", "x" * 81, "  "):
             out = self._cli("set-role", "peer-a", "--role", "processor", "--organisation", org)
             self.assertEqual(out.returncode, 2, msg=(org, out.stdout, out.stderr))
-        self.assertEqual(path.read_text(), before)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
         self.assertEqual(self._role_events(), [])
 
     def test_list_endpoints_shows_organisation_and_role(self):

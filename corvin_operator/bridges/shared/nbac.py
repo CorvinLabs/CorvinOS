@@ -201,7 +201,7 @@ def _software_commit() -> str:
         repo_root = Path(__file__).parent.parent.parent
         result = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=1,
+            capture_output=True, text=True, timeout=1, encoding="utf-8", errors="replace",
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -217,7 +217,7 @@ def get_genesis_block(audit_jsonl: Path) -> dict | None:
     if not audit_jsonl.exists():
         return None
     try:
-        with audit_jsonl.open("r") as fh:
+        with audit_jsonl.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -339,7 +339,7 @@ def save_epoch_cert(cert: EpochCertificate, nbac_dir: Path) -> Path:
     """Save cert to nbac_dir/epoch_N.json (mode 0600)."""
     nbac_dir.mkdir(parents=True, exist_ok=True)
     p = epoch_cert_path(nbac_dir, cert.epoch_number)
-    p.write_text(json.dumps(cert.to_dict(), indent=2))
+    p.write_text(json.dumps(cert.to_dict(), indent=2), encoding="utf-8")
     p.chmod(0o600)
     return p
 
@@ -359,7 +359,7 @@ def load_latest_epoch_cert(nbac_dir: Path) -> EpochCertificate | None:
         return None
     _, path = max(certs, key=lambda x: x[0])
     try:
-        return EpochCertificate.from_dict(json.loads(path.read_text()))
+        return EpochCertificate.from_dict(json.loads(path.read_text(encoding="utf-8")))
     except Exception:
         return None
 

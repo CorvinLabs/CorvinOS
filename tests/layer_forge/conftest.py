@@ -93,7 +93,7 @@ def verify_chain(tmp_corvin_home: Path) -> Callable[[], list[dict]]:
         if not chain.exists():
             return []
 
-        lines = chain.read_text().strip().splitlines()
+        lines = chain.read_text(encoding="utf-8").strip().splitlines()
         if not lines:
             return []
 
@@ -183,7 +183,7 @@ def cli_runner(tmp_corvin_home: Path) -> Callable[[list[str], str], subprocess.C
             capture_output=True,
             text=True,
             env=env,
-            cwd=str(REPO_ROOT),
+            cwd=str(REPO_ROOT), encoding="utf-8", errors="replace",
         )
 
     return _run
@@ -245,7 +245,7 @@ def registry_state(tmp_corvin_home: Path) -> Callable[[], dict]:
 
         result = {}
         for entry_file in registry.glob("*.json"):
-            data = json.loads(entry_file.read_text())
+            data = json.loads(entry_file.read_text(encoding="utf-8"))
             key = entry_file.stem  # "<id>@<version>"
             result[key] = data
 

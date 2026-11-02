@@ -27,7 +27,7 @@ ENV = {**os.environ, "KB_ACTOR": "human:new-operator"}
 
 def kb(*args: str) -> dict:
     r = subprocess.run([sys.executable, str(KB / "scripts" / "kb.py"), "--repo", str(KB), *args],
-                       capture_output=True, text=True, env=ENV)
+                       capture_output=True, text=True, env=ENV, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise SystemExit(f"kb {args} -> {r.returncode}\n{r.stdout}\n{r.stderr}")
     return json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
@@ -79,7 +79,7 @@ def main() -> int:
             report = Path(d) / "check.json"
             subprocess.run([sys.executable, str(KB / "scripts" / "kb.py"), "--repo", str(KB), "check",
                             "--json", str(report)], capture_output=True, env=ENV)
-            res = json.loads(report.read_text())
+            res = json.loads(report.read_text(encoding="utf-8"))
         gates = sorted(k for k in res["issues"] if re.match(r"^G[1-4]_", k))
         ready = kb("show", "ADR-0001").get("implementation_ready")
         print(json.dumps({"gates": gates, "ready": ready, "blocking": res["blocking"]}))

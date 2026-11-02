@@ -307,7 +307,7 @@ class TestAtomicWrite:
         """Reading a malformed JSON file returns None."""
         test_path = _batches_dir() / "malformed.json"
         test_path.parent.mkdir(parents=True, exist_ok=True)
-        test_path.write_text("{ invalid json }")
+        test_path.write_text("{ invalid json }", encoding="utf-8")
 
         result = _read(test_path)
         assert result is None
@@ -424,7 +424,7 @@ class TestAuditFailClosed:
         assert emit_orchestration_event(batch_id) is not None
         chain = tenant_audit_chain()
         assert str(chain).startswith(str(temp_corvin_home)), chain
-        [rec] = [json.loads(l) for l in chain.read_text().splitlines()
+        [rec] = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines()
                  if '"orchestration.batch_completed"' in l]
         d = rec["details"]
         assert d["batch_id"] == batch_id and d["failed_count"] == 1, d

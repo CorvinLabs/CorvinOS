@@ -152,7 +152,7 @@ def _read_json(p: Path, default: Any) -> Any:
     if not p.exists():
         return default
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default
 
@@ -160,7 +160,7 @@ def _read_json(p: Path, default: Any) -> Any:
 def _write_json(p: Path, data: Any) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(p)
     try:
         os.chmod(p, 0o600)
@@ -241,7 +241,7 @@ def _bullet_id(skill_name: str, ts: float) -> str:
 def _iter_audit_events(path: Path) -> Iterable[dict[str, Any]]:
     if not path.exists():
         return
-    with path.open("r") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -375,7 +375,7 @@ def _default_judge(cluster: Cluster, draft: str, *, timeout_s: int = 20) -> bool
         r = subprocess.run(
             [cli, "-p", "--max-turns", "1", "--tools", "", *model_args],
             input=_guard_prompt_head(prompt), capture_output=True, text=True,
-            timeout=timeout_s, check=False,
+            timeout=timeout_s, check=False, encoding="utf-8", errors="replace",
         )
         out = (r.stdout or "").strip().splitlines()
         if not out:
@@ -754,7 +754,7 @@ def _render_style_md(live: list[Candidate], *,
     for c in sorted(live, key=lambda x: x.live_started_at or 0.0):
         lines.append(f"- {c.bullet_text}")
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("\n".join(lines) + "\n")
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     try:
         os.chmod(p, 0o600)
     except OSError:

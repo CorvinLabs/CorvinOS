@@ -305,10 +305,10 @@ def test_skill_compilation():
             "scope": "local_development",
         }
         
-        with open(skill_dir / "manifest.yaml", "w") as f:
+        with open(skill_dir / "manifest.yaml", "w", encoding="utf-8") as f:
             yaml.dump(manifest, f)
         
-        with open(skill_dir / "skill.py", "w") as f:
+        with open(skill_dir / "skill.py", "w", encoding="utf-8") as f:
             f.write("def execute(input_data):\n    return {'output': 'test'}\n")
         
         compiler = SkillCompiler()
@@ -362,12 +362,12 @@ def test_module_encapsulation():
             "scope": "local_development",
         }
         
-        with open(skill_dir / "manifest.yaml", "w") as f:
+        with open(skill_dir / "manifest.yaml", "w", encoding="utf-8") as f:
             yaml.dump(manifest, f)
         
         # Create skill.py with forbidden import
         skill_code = "from corvin.skills.brain_loader import infer\n"
-        with open(skill_dir / "skill.py", "w") as f:
+        with open(skill_dir / "skill.py", "w", encoding="utf-8") as f:
             f.write(skill_code)
         
         compiler = SkillCompiler()

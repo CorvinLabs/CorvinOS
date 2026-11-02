@@ -46,7 +46,7 @@ def _ev(event_type: EventType, skill_id: str, session_id: str = "session_1", **s
 def _on_disk(tenant_home: Path) -> list[dict]:
     out: list[dict] = []
     for f in sorted((tenant_home / "learning" / "events").glob("*.jsonl")):
-        out.extend(json.loads(l) for l in f.read_text().splitlines() if l.strip())
+        out.extend(json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip())
     return out
 
 

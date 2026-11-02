@@ -290,7 +290,7 @@ class TestFeedbackPortal:
         for report in reports:
             triaged = portal.triage_engine.triage(report)
             triaged_file = portal.triaged_dir / f"{report.feedback_id}.json"
-            with open(triaged_file, "w") as f:
+            with open(triaged_file, "w", encoding="utf-8") as f:
                 json.dump(triaged.to_dict(), f)
 
         # Get counts

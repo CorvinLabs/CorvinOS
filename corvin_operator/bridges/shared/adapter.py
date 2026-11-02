@@ -4170,7 +4170,7 @@ def extract_document_text(path: Path, mimetype: str = "") -> str:
             try:
                 out = subprocess.run(
                     ["pdftotext", "-layout", str(path), "-"],
-                    capture_output=True, text=True, timeout=30, check=True, env=clean_env,
+                    capture_output=True, text=True, timeout=30, check=True, env=clean_env, encoding="utf-8", errors="replace",
                 )
                 return out.stdout.strip()
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -4180,7 +4180,7 @@ def extract_document_text(path: Path, mimetype: str = "") -> str:
             try:
                 out = subprocess.run(
                     ["pandoc", "-t", "plain", str(path)],
-                    capture_output=True, text=True, timeout=30, check=True, env=clean_env,
+                    capture_output=True, text=True, timeout=30, check=True, env=clean_env, encoding="utf-8", errors="replace",
                 )
                 return out.stdout.strip()
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -4899,7 +4899,9 @@ def _consume_observer_buffer(
     # Atomic ownership transfer: rename wins exclusively, reader is unique.
     tmp = path.with_suffix(".consuming")
     try:
-        path.rename(tmp)
+        # replace(): a .consuming left by a killed consumer must not block every
+        # later consume on Windows, where rename() refuses an existing target.
+        path.replace(tmp)
     except OSError:
         return []
     try:

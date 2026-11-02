@@ -88,14 +88,14 @@ def _send(adapter, base: Path, text: str) -> list[dict]:
     envelope = {"id": msg_id, "channel": "discord", "from": SENDER,
                 "chat_id": "chat-e2e", "text": text, "ts": time.time()}
     f = base / "inbox" / f"{msg_id}.json"
-    f.write_text(json.dumps(envelope))
+    f.write_text(json.dumps(envelope), encoding="utf-8")
     adapter.process_one(f, settings={"whitelist": [SENDER], "voice_summary_mode": "never"})
-    return [json.loads(p.read_text()) for p in sorted((base / "outbox").glob(f"{msg_id}*.json"))]
+    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted((base / "outbox").glob(f"{msg_id}*.json"))]
 
 
 def _chain(base: Path) -> list[dict]:
     p = base / "audit.jsonl"
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _verify(base: Path) -> None:
@@ -132,7 +132,7 @@ def _seed_ready_history():
             "phase": "dual_write", "bundled": "native", "skill": "native",
             "skill_conf": 0.9, "used": "native", "source": "bundled",
             "clamped": False, "features": {}}
-    with open(routing_ledger.ledger_path(TENANT), "a") as fh:
+    with open(routing_ledger.ledger_path(TENANT), "a", encoding="utf-8") as fh:
         fh.write(json.dumps(soak) + "\n")
     from core.skills.os_skills.monitoring import readiness
 

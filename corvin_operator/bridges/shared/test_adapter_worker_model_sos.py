@@ -60,7 +60,7 @@ def test_bridge_reads_tenant_yaml_worker_model_per_engine(tenant_home, monkeypat
                 }
             }
         }
-    }))
+    }), encoding="utf-8")
     _pin_engine(monkeypatch, None)  # no /engine pin → claude_code
 
     env = _spawn_env()
@@ -77,7 +77,7 @@ def test_bridge_reads_tenant_yaml_worker_model_global_fallback(tenant_home, monk
             "engine_models": {"claude_code": {"worker_model": "claude-opus-5"}},
             "default_worker_model": "claude-sonnet-5",
         }
-    }))
+    }), encoding="utf-8")
     _pin_engine(monkeypatch, "codex_cli")  # engine with no engine_models entry
 
     env = _spawn_env()
@@ -91,7 +91,7 @@ def test_bridge_persona_priority_over_tenant_yaml(tenant_home, monkeypatch):
     """Test: Bridge prefers persona per-engine setting over Tenant YAML."""
     (tenant_home / "tenant.corvin.yaml").write_text(yaml.dump({
         "spec": {"engine_models": {"claude_code": {"worker_model": "claude-opus-5"}}}
-    }))
+    }), encoding="utf-8")
     _pin_engine(monkeypatch, None)
 
     persona = {
@@ -111,7 +111,7 @@ def test_provider_qualified_console_pin_is_normalised(tenant_home, monkeypatch):
     ``anthropic/...`` (the API answers 404 model_not_found)."""
     (tenant_home / "tenant.corvin.yaml").write_text(yaml.dump({
         "spec": {"engine_models": {"claude_code": {"worker_model": "anthropic/claude-opus-5"}}}
-    }))
+    }), encoding="utf-8")
     _pin_engine(monkeypatch, None)
 
     env = _spawn_env()

@@ -115,7 +115,7 @@ def main() -> int:
     expect(mcp_path1 is not None and Path(mcp_path1).is_file(),
            "materialize_mcp writes file", f"path={mcp_path1}")
     if mcp_path1:
-        content = json.loads(Path(mcp_path1).read_text())
+        content = json.loads(Path(mcp_path1).read_text(encoding="utf-8"))
         expect("mcpServers" in content and "playwright" in content["mcpServers"],
                "MCP file has the 'mcpServers' top-level key")
     mcp_path2 = resolver.materialize_mcp({"mcp_servers": {
@@ -127,7 +127,7 @@ def main() -> int:
 
     fx.write_personas(user_dir, {"forge": fx.FORGE})
     fp = resolver.materialize_mcp(resolver.load("forge"))
-    cfg = json.loads(Path(fp).read_text())
+    cfg = json.loads(Path(fp).read_text(encoding="utf-8"))
     forge = cfg["mcpServers"]["forge"]
     expect(forge["command"] == sys.executable,
            "{{PYTHON}} expands to sys.executable", f"got {forge['command']}")

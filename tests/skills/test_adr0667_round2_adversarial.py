@@ -490,7 +490,7 @@ class TestAuditLogging:
         with pytest.raises(LicenseRequiredError):
             validator.validate_binding(manifest, free_user, tenant_id="_default")
 
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         denied = [r for r in recs if r["event_type"] == "license_denied"]
         assert len(denied) == 1
         d = denied[0]["details"]

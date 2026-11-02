@@ -65,7 +65,7 @@ class RenderPipeline:
             return self._get_default_config()
 
         try:
-            with open(self.config_path, 'r') as f:
+            with open(self.config_path, 'r', encoding="utf-8") as f:
                 config = yaml.safe_load(f)
             logger.info(f"✓ Loaded config: {self.config_path}")
             return config
@@ -277,7 +277,7 @@ class RenderPipeline:
 
             # Create concat demuxer file
             concat_file = os.path.join(self.output_dir, "concat_segments.txt")
-            with open(concat_file, 'w') as f:
+            with open(concat_file, 'w', encoding="utf-8") as f:
                 for seg in valid_segments:
                     f.write(f"file '{seg['video']}'\n")
                     logger.info(f"  Adding: {seg['name']} → {seg['video']}")
@@ -312,7 +312,7 @@ class RenderPipeline:
             ]
 
             logger.info("Concatenating video segments...")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 logger.error(f"Concatenation failed: {result.stderr}")
@@ -364,7 +364,7 @@ class RenderPipeline:
                 ]
 
                 logger.info("Adding audio narration...")
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
 
                 if result.returncode != 0 or not os.path.exists(final_video):
                     raise RuntimeError(

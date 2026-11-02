@@ -34,7 +34,7 @@ class GitHubRepoSync:
         """Load GitHub configuration."""
         try:
             if self.config_file.exists():
-                with open(self.config_file) as f:
+                with open(self.config_file, encoding="utf-8") as f:
                     return json.load(f)
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
@@ -156,7 +156,7 @@ class GitHubRepoSync:
         """Get current synchronization status."""
         try:
             if self.sync_state_file.exists():
-                with open(self.sync_state_file) as f:
+                with open(self.sync_state_file, encoding="utf-8") as f:
                     return json.load(f)
         except Exception as e:
             logger.error(f"Failed to read sync state: {e}")
@@ -170,7 +170,7 @@ class GitHubRepoSync:
     def _save_sync_state(self, state: Dict[str, Any]):
         """Save synchronization state."""
         self.tenant_path.mkdir(parents=True, exist_ok=True)
-        with open(self.sync_state_file, 'w') as f:
+        with open(self.sync_state_file, 'w', encoding="utf-8") as f:
             json.dump(state, f, indent=2)
     
     def _log_audit(self, event_type: str, details: Dict[str, Any]):

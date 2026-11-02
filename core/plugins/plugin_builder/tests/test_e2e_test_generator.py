@@ -40,7 +40,7 @@ def _scaffold(tmp_path, idea):
 def _run_generated_tests(test_path):
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", str(test_path), "-v"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
     )
     return proc
 

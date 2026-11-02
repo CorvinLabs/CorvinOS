@@ -325,7 +325,7 @@ class TestTier2DiscoveryLive(unittest.TestCase):
                 "            signal_type='live.ok',\n"
                 "            severity='OK',\n"
                 "            message='Live Plugin OK',\n"
-                "        )]\n"
+                "        )]\n", encoding="utf-8"
             )
 
             import importlib
@@ -378,7 +378,7 @@ class TestTier2DiscoveryLive(unittest.TestCase):
             plugins_dir = Path(td) / "nerve_fibers"
             plugins_dir.mkdir()
             bad_file = plugins_dir / "a_broken.py"
-            bad_file.write_text("this is not valid python {{{{")
+            bad_file.write_text("this is not valid python {{{{", encoding="utf-8")
             good_file = plugins_dir / "b_good.py"
             good_file.write_text(
                 "from corvin_console.aco.nerve import NerveFiber\n"
@@ -386,7 +386,7 @@ class TestTier2DiscoveryLive(unittest.TestCase):
                 "    fiber_id = 'user.good2'\n"
                 "    fiber_version = '1.0.0'\n"
                 "    def scan(self):\n"
-                "        return []\n"
+                "        return []\n", encoding="utf-8"
             )
 
             import importlib

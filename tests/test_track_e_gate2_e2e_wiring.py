@@ -204,11 +204,11 @@ class TestConfigApplierIntegration:
         }
 
         # Write to JSONL
-        with open(history_file, "a") as f:
+        with open(history_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(change_record) + "\n")
 
         # Verify written
-        with open(history_file, "r") as f:
+        with open(history_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
             assert len(lines) == 1
             written = json.loads(lines[0])
@@ -228,11 +228,11 @@ class TestConfigApplierIntegration:
             "config_before": skill_config,
             "config_after": {**skill_config, "routing_threshold": 0.72, "version": 1},
         }
-        with open(history_file, "a") as f:
+        with open(history_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(change_v0_to_v1) + "\n")
 
         # Simulate rollback request
-        with open(history_file, "r") as f:
+        with open(history_file, "r", encoding="utf-8") as f:
             records = [json.loads(line) for line in f]
 
         last_record = records[-1]
@@ -298,11 +298,11 @@ class TestFeedbackOptimizationLoop:
 
         # 2. FeedbackCollector validates and stores
         feedback_store = tmp_path / "feedback_store.jsonl"
-        with open(feedback_store, "a") as f:
+        with open(feedback_store, "a", encoding="utf-8") as f:
             f.write(json.dumps(feedback) + "\n")
 
         # 3. Feedback batching (simulate threshold: 10 feedback OR 1h)
-        with open(feedback_store, "r") as f:
+        with open(feedback_store, "r", encoding="utf-8") as f:
             feedback_count = len(f.readlines())
         should_trigger = feedback_count >= 10
         assert feedback_count == 1  # Not triggered yet
@@ -378,11 +378,11 @@ class TestConfigReloadOnSkillInit:
 
         # Write tuned config
         tuned = {**skill_config, "version": 1, "routing_threshold": 0.72}
-        with open(config_store, "w") as f:
+        with open(config_store, "w", encoding="utf-8") as f:
             json.dump({skill_config["skill_id"]: tuned}, f)
 
         # Simulate SkillInstance load
-        with open(config_store, "r") as f:
+        with open(config_store, "r", encoding="utf-8") as f:
             configs = json.load(f)
         loaded_config = configs[skill_config["skill_id"]]
 
@@ -444,7 +444,7 @@ class TestCompleteTrackEIntegration:
         # STEP 2: FeedbackCollector stores feedback
         # =====================================================================
         feedback_file = tmp_path / "feedback.jsonl"
-        with open(feedback_file, "a") as f:
+        with open(feedback_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(user_feedback) + "\n")
 
         # =====================================================================
@@ -473,13 +473,13 @@ class TestCompleteTrackEIntegration:
         # STEP 5: ConfigApplier applies config
         # =====================================================================
         config_file = tmp_path / "config.json"
-        with open(config_file, "w") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             json.dump(tuned_config, f)
 
         # =====================================================================
         # STEP 6: SkillInstance reloads and executes with new config
         # =====================================================================
-        with open(config_file, "r") as f:
+        with open(config_file, "r", encoding="utf-8") as f:
             loaded_config = json.load(f)
 
         # Simulate skill execution with loaded config

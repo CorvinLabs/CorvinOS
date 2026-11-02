@@ -44,12 +44,12 @@ def _run_cli(home: Path, *args):
                PYTHONPATH=os.pathsep.join(filter(None, [str(CLI.parents[1]), os.environ.get("PYTHONPATH")])))
     env.pop("CORVIN_TENANT_ID", None)
     return subprocess.run([sys.executable, "-c", _CLI_WRAPPER, str(CLI), "--tenant", TENANT, *args],
-                          capture_output=True, text=True, timeout=120, env=env)
+                          capture_output=True, text=True, timeout=120, env=env, encoding="utf-8", errors="replace")
 
 
 def _manifest(tmp_path: Path, manifest: dict) -> str:
     p = tmp_path / f"{manifest.get('id', 'm')}-{manifest.get('version', 'v')}.json"
-    p.write_text(json.dumps(manifest))
+    p.write_text(json.dumps(manifest), encoding="utf-8")
     return str(p)
 
 
@@ -61,7 +61,7 @@ def _lf_events(home: Path) -> list[dict]:
     chain = _chain(home)
     if not chain.exists():
         return []
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return [r for r in recs if str(r.get("event_type", r.get("event", ""))).startswith("layer_forge.")]
 
 
@@ -97,7 +97,7 @@ def test_create_lands_in_registry_and_hash_chain(tmp_path, home):
     assert result.returncode == 0, result.stdout + result.stderr
     out = json.loads(result.stdout)
     assert out["status"] == "SUCCESS" and out["registry_key"] == "e2e.test-rule@0.1.0"
-    assert json.loads(_registry_file(home, "e2e.test-rule@0.1.0").read_text())["status"] == "accepted"
+    assert json.loads(_registry_file(home, "e2e.test-rule@0.1.0").read_text(encoding="utf-8"))["status"] == "accepted"
 
     events = _lf_events(home)
     types = [_etype(e) for e in events]
@@ -180,7 +180,7 @@ def test_invalid_manifest_rejected_and_invalid_id_never_reaches_the_chain(tmp_pa
     d = _details(rejected[0])
     assert d["error_class"] == "LayerSchemaValidationError"
     assert "entry_id" not in d
-    assert "bad id with spaces" not in _chain(home).read_text()
+    assert "bad id with spaces" not in _chain(home).read_text(encoding="utf-8")
 
 
 def test_duplicate_version_refused(tmp_path, home):

@@ -29,7 +29,7 @@ class DiscoveryPeersTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         origins = tmp / "origins"
         origins.mkdir()
-        (origins / "peer-a.json").write_text(json.dumps({"peer_id": "peer-a", "name": "A"}))
+        (origins / "peer-a.json").write_text(json.dumps({"peer_id": "peer-a", "name": "A"}), encoding="utf-8")
         prev = os.environ.get("REMOTE_ORIGINS_DIR")
         os.environ["REMOTE_ORIGINS_DIR"] = str(origins)
         try:
@@ -61,7 +61,7 @@ class DodVerifierRoutesTest(unittest.TestCase):
             self.assertTrue(r.json()["accepted"])
             self.assertNotIn("weight_adjustment", r.json())
             events_dir = home / "tenants" / "_default" / "learning" / "events"
-            disk = "".join(p.read_text() for p in events_dir.glob("*.jsonl"))
+            disk = "".join(p.read_text(encoding="utf-8") for p in events_dir.glob("*.jsonl"))
             self.assertIn("dod_feedback", disk)
             self.assertNotIn("4711", disk + repr(_audit_events(home)))
 

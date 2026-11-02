@@ -429,7 +429,7 @@ class ClaudeCliEngine:
         t0 = perf_counter()
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.timeout_s,
+                cmd, capture_output=True, text=True, timeout=self.timeout_s, encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired as e:
             _span_end(tenant, meta, span_id, "", {}, "error", t0)

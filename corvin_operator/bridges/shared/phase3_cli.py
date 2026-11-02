@@ -520,7 +520,12 @@ def _kill(argv: list[str]) -> int:
             _cmd = ["taskkill", "/PID", str(pid), "/T"]
             if force:
                 _cmd.append("/F")
-            _rc = _sp.run(_cmd, capture_output=True, text=True)
+            _rc = _sp.run(_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            if _rc.returncode != 0 and not force:
+                # rc 128 is ALSO "can only be terminated forcefully" — a windowless CLI
+                # ignores the polite request, and the session was reported gone while it
+                # kept running. Windows has no graceful SIGTERM; force it.
+                _rc = _sp.run(_cmd + ["/F"], capture_output=True, text=True, encoding="utf-8", errors="replace")
             if _rc.returncode == 128:  # "process not found"
                 raise ProcessLookupError(pid)
             if _rc.returncode not in (0,):
@@ -539,7 +544,8 @@ def _kill(argv: list[str]) -> int:
         return _err(f"process {pid} already gone (registry updated)")
     except PermissionError as exc:
         return _err(f"permission denied killing pid {pid}: {exc}")
-    print(f"sent {sig.name} to pgid {pid} (session {session_id})")
+    # "SIGKILL" for -9 on Windows too, where sig fell back to SIGTERM's value.
+    print(f"sent {'SIGKILL' if force else sig.name} to pgid {pid} (session {session_id})")
     return 0
 
 

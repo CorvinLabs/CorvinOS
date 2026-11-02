@@ -39,7 +39,7 @@ def _run(body: str) -> str:
     env = {**os.environ, "CORVIN_HOME": home,
            "VOICE_AUDIT_PATH": str(Path(home) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl")}
     out = subprocess.run([sys.executable, "-c", _PRELUDE + body, str(HERE), str(FORGE)],
-                         env=env, capture_output=True, text=True, timeout=120)
+                         env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert out.returncode == 0, out.stderr[-2000:]
     return out.stdout
 

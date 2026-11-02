@@ -37,7 +37,7 @@ def install_via_setup_py(repo_path: str) -> bool:
             cwd=repo_path,
             capture_output=True,
             text=True,
-            timeout=300
+            timeout=300, encoding="utf-8", errors="replace"
         )
         if result.returncode == 0:
             print("✅ setup.py install succeeded")
@@ -75,7 +75,7 @@ def install_via_manual_sys_path() -> bool:
     # Write .pth file
     pth_content = f"{repo_root}\n{repo_root / 'core' / 'console'}"
     try:
-        pth_file.write_text(pth_content)
+        pth_file.write_text(pth_content, encoding="utf-8")
         print(f"✅ .pth file created: {pth_file}")
         return True
     except PermissionError:

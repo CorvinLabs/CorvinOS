@@ -29,7 +29,7 @@ from core.compliance.audit_chain_writer import AuditChainWriter
 @pytest.fixture
 def temp_audit_path():
     """Create a temporary audit file for testing."""
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8") as f:
         path = f.name
     yield path
     Path(path).unlink(missing_ok=True)
@@ -290,7 +290,7 @@ class TestAuditTrailIntegration:
         )
 
         # Read audit trail
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) > 0
@@ -318,7 +318,7 @@ class TestAuditTrailIntegration:
         )
 
         # Read audit trail
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             lines = f.readlines()
 
         # Find the rejection event
@@ -351,7 +351,7 @@ class TestAuditTrailIntegration:
                 request_tokens=1000,
             )
         for tid in ("tenant_1", "tenant_2"):
-            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text().splitlines()]
+            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text(encoding="utf-8").splitlines()]
             assert recs and {r["details"]["tenant_id"] for r in recs} == {tid}
 
 

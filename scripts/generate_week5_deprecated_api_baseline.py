@@ -45,7 +45,7 @@ def _parse_audit_chain(
     if not chain_path.exists():
         return events
 
-    with open(chain_path, "r") as f:
+    with open(chain_path, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
@@ -270,7 +270,7 @@ def main():
             output = _format_markdown(report)
 
         if args.output:
-            Path(args.output).write_text(output)
+            Path(args.output).write_text(output, encoding="utf-8")
             print(f"Report written to {args.output}")
         else:
             print(output)

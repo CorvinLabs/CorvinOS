@@ -53,7 +53,7 @@ def _records(home: Path, event_type: str) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         rec = json.loads(line)

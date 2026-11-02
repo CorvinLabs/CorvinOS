@@ -102,7 +102,7 @@ def run_turn(prompt: str, model: str, timeout: int = 180) -> dict:
     p = subprocess.run(
         ["claude", "-p", prompt, "--disallowedTools", "*", "--model", model,
          "--output-format", "json", "--max-turns", "1"],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace",
     )
     try:
         obj = json.loads(p.stdout)
@@ -150,10 +150,10 @@ def main() -> int:
     out = args.out or str(HERE / "results" / f"report-{ts}.json")
     raw_path = HERE / "results" / f"raw-{ts}.jsonl"
 
-    answerable = json.loads(Path(args.answerable).read_text())["tasks"]
+    answerable = json.loads(Path(args.answerable).read_text(encoding="utf-8"))["tasks"]
     for t in answerable:
         t["_class"] = "answerable"
-    traps = json.loads(Path(args.traps).read_text())["tasks"]
+    traps = json.loads(Path(args.traps).read_text(encoding="utf-8"))["tasks"]
     for t in traps:
         t["_class"] = "trap"
     tasks = answerable + traps
@@ -162,7 +162,7 @@ def main() -> int:
     total_calls = len(ARMS) * len(tasks) * args.reps
     done = 0
     t0 = time.time()
-    with raw_path.open("w") as rf:
+    with raw_path.open("w", encoding="utf-8") as rf:
         for arm in ARMS:
             for task in tasks:
                 for rep in range(args.reps):
@@ -221,7 +221,7 @@ def main() -> int:
         report["arms"][arm]["halluc_lift_vs_none"] = lift
         report["arms"][arm]["guardrail"] = "PASS" if lift <= args.guardrail else "REJECT"
 
-    Path(out).write_text(json.dumps(report, indent=2))
+    Path(out).write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     # --- console summary ---
     print("\n" + "=" * 78)

@@ -97,7 +97,7 @@ class TestCloseFailureIsLoud(_HomeCase):
         with mock.patch.object(a2a_outbox, "_rewrite", flaky):
             a2a_outbox.close("C1", "sent")
         self.assertEqual(calls["n"], 2)
-        raw = (a2a_outbox._root() / a2a_outbox.OUTBOX_FILE).read_text()
+        raw = (a2a_outbox._root() / a2a_outbox.OUTBOX_FILE).read_text(encoding="utf-8")
         self.assertNotIn("SECRET", raw)
 
     def test_persistent_failure_logs_an_error(self):

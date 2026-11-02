@@ -292,7 +292,7 @@ class PluginPanelRegistry:
         """Load registry from disk."""
         if self.path.exists():
             try:
-                with open(self.path) as f:
+                with open(self.path, encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"Registry load error: {e}, using empty")
@@ -302,7 +302,7 @@ class PluginPanelRegistry:
     def _save(self):
         """Save registry to disk."""
         try:
-            with open(self.path, "w") as f:
+            with open(self.path, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, indent=2)
             logger.info(f"Panel registry saved: {len(self.data['panels'])} panels")
         except Exception as e:

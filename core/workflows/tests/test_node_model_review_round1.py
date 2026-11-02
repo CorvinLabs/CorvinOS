@@ -50,7 +50,7 @@ def cli_log(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     claude = bindir / "claude"
-    claude.write_text(FAKE_CLAUDE)
+    claude.write_text(FAKE_CLAUDE, encoding="utf-8")
     claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
@@ -71,14 +71,14 @@ def _doc(graph: list[dict]) -> WorkflowDoc:
 def _node_calls(log: Path) -> list[list[str]]:
     if not log.exists():
         return []
-    rows = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in rows if "--max-turns" not in r]
 
 
 def _chain(tenant: str = "_default") -> list[dict]:
     from forge import paths as fp
     p = Path(fp.tenant_audit_chain(tenant))
-    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
 def _run(doc: WorkflowDoc, sink: list | None = None):

@@ -114,7 +114,7 @@ class ConsoleProviderRouteE2E(unittest.TestCase):
 
     def _spawn_env(self) -> dict[str, str]:
         self.assertTrue(self.dump.exists(), "the claude subprocess was never started")
-        return dict(line.split("=", 1) for line in self.dump.read_text().splitlines() if "=" in line)
+        return dict(line.split("=", 1) for line in self.dump.read_text(encoding="utf-8").splitlines() if "=" in line)
 
     @staticmethod
     def _text(events: list[dict]) -> str:
@@ -130,7 +130,7 @@ class ConsoleProviderRouteE2E(unittest.TestCase):
         self.assertEqual(spawned.get("ANTHROPIC_BASE_URL"), f"https://{PROVIDER_HOST}/v1")
         self.assertEqual(spawned.get("CORVIN_CC_PROVIDER"), "acme_llm")
         self.assertEqual(spawned.get("ANTHROPIC_API_KEY"), "k-acme-test")
-        self.assertNotIn("stale.example", self.dump.read_text(), "an inherited redirect reached the spawn")
+        self.assertNotIn("stale.example", self.dump.read_text(encoding="utf-8"), "an inherited redirect reached the spawn")
 
     def test_a_tenant_without_an_assignment_goes_native_and_loses_an_inherited_redirect(self) -> None:
         self._providers()

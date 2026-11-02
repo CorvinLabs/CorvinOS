@@ -104,7 +104,7 @@ class FakeHost:
                     self._send(400, {"reason": "invalid_json"})
                     return
                 try:
-                    cfg = json.loads((host.origins / f"{req['origin_id']}.json").read_text())
+                    cfg = json.loads((host.origins / f"{req['origin_id']}.json").read_text(encoding="utf-8"))
                 except (OSError, KeyError, ValueError):
                     self._send(403, {"reason": "ping_rejected"})
                     return
@@ -268,20 +268,20 @@ class TestProbeSafety(_Base):
 
     def test_an_origins_path_that_is_a_file_is_reported_not_raised(self):
         f = self.tmp / "not-a-dir"
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
         checks, _ = probe.probe_host(self.host().url, origins_dir=f, timeout_s=2)
         self.assertFalse(_by_name(checks)["probe_origin"].ok)
 
     def test_a_symlinked_origin_target_is_never_followed(self):
         target = self.tmp / "victim"
-        target.write_text("precious")
+        target.write_text("precious", encoding="utf-8")
         # an attacker pre-creates the path the probe would use (random 48-bit id — here forced)
         with mock.patch.object(probe.uuid, "uuid4", return_value=mock.Mock(hex="deadbeefcafe0123456789")):
             (self.origins / "live-probe-deadbeefcafe.json").symlink_to(target)
             with self.assertRaises(OSError):
                 with probe.throwaway_origin(self.origins):
                     pass
-        self.assertEqual(target.read_text(), "precious")
+        self.assertEqual(target.read_text(encoding="utf-8"), "precious")
 
 
 class TestAnalysePeers(unittest.TestCase):
@@ -378,10 +378,10 @@ class TestFreshnessAndVerdict(unittest.TestCase):
             d = repo / "corvin_operator" / "bridges" / "shared"
             d.mkdir(parents=True)
             old = d / "a2a_worker.py"
-            old.write_text("x")
+            old.write_text("x", encoding="utf-8")
             os.utime(old, (1000, 1000))
             for name in ("a2a_live_watch.py", "a2a_live_probe.py", "test_a2a_anything.py"):
-                (d / name).write_text("x")
+                (d / name).write_text("x", encoding="utf-8")
             ts, name = watch.newest_source(repo)
             self.assertEqual((ts, name), (1000.0, "a2a_worker.py"))
 
@@ -393,7 +393,7 @@ class TestFreshnessAndVerdict(unittest.TestCase):
             for rel in ("core/federation/local_agent.py", "core/console/corvin_console/routes/federation_routes.py"):
                 f = repo / rel
                 f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_text("x")
+                f.write_text("x", encoding="utf-8")
                 os.utime(f, (5000, 5000))
             ts, name = watch.newest_source(repo)
             self.assertEqual(ts, 5000.0)
@@ -416,8 +416,8 @@ class TestPersistenceAndRuns(_Base):
         home = self.tmp / "home"
         watch.persist(self.report(), home)
         watch.persist(self.report("broken", 1), home)
-        self.assertEqual(json.loads((home / "logs" / "a2a_watch.status.json").read_text())["verdict"], "broken")
-        lines = (home / "logs" / "a2a_watch.jsonl").read_text().splitlines()
+        self.assertEqual(json.loads((home / "logs" / "a2a_watch.status.json").read_text(encoding="utf-8"))["verdict"], "broken")
+        lines = (home / "logs" / "a2a_watch.jsonl").read_text(encoding="utf-8").splitlines()
         self.assertEqual([json.loads(x)["verdict"] for x in lines], ["healthy", "broken"])
         self.assertFalse(list((home / "logs").glob("*.tmp")))
 
@@ -426,7 +426,7 @@ class TestPersistenceAndRuns(_Base):
         with mock.patch.object(watch, "LOG_MAX_BYTES", 500), mock.patch.object(watch, "LOG_KEEP_LINES", 5):
             for i in range(60):
                 watch.persist(self.report(n=i), home)
-        lines = (home / "logs" / "a2a_watch.jsonl").read_text().splitlines()
+        lines = (home / "logs" / "a2a_watch.jsonl").read_text(encoding="utf-8").splitlines()
         self.assertLessEqual(len(lines), 30)
         self.assertEqual(json.loads(lines[-1])["ts"], NOW + 59)
 
@@ -470,7 +470,7 @@ class TestPersistenceAndRuns(_Base):
 
     def test_an_unwritable_home_does_not_change_the_verdict(self):
         blocker = self.tmp / "afile"
-        blocker.write_text("x")
+        blocker.write_text("x", encoding="utf-8")
         rc, out, _ = self._main("--url", self.host().url, "--home", str(blocker / "sub"), "--unit", "",
                                 "--origins-dir", str(self.origins))
         self.assertEqual(rc, 0, out)
@@ -496,16 +496,16 @@ class TestCallSites(_Base):
         env = {"PATH": os.environ.get("PATH", ""), "HOME": str(self.tmp), "CORVIN_HOME": str(home),
                "REMOTE_ORIGINS_DIR": str(self.origins)}
         r = subprocess.run([sys.executable, str(Path(watch.__file__)), "--url", h.url, "--unit", ""],
-                           env=env, capture_output=True, text=True, timeout=60)
+                           env=env, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("HEALTHY", r.stdout)
-        status = json.loads((home / "logs" / "a2a_watch.status.json").read_text())
+        status = json.loads((home / "logs" / "a2a_watch.status.json").read_text(encoding="utf-8"))
         self.assertEqual(status["verdict"], "healthy")
         self.assertEqual(len(status["checks"]), 7)
 
     def test_the_systemd_units_point_at_a_script_that_exists(self):
-        svc = (REPO / "ops" / "systemd" / "corvin-a2a-watch.service").read_text()
-        tmr = (REPO / "ops" / "systemd" / "corvin-a2a-watch.timer").read_text()
+        svc = (REPO / "ops" / "systemd" / "corvin-a2a-watch.service").read_text(encoding="utf-8")
+        tmr = (REPO / "ops" / "systemd" / "corvin-a2a-watch.timer").read_text(encoding="utf-8")
         self.assertIn("a2a_live_watch.py", svc)
         self.assertTrue((REPO / "corvin_operator" / "bridges" / "shared" / "a2a_live_watch.py").is_file())
         self.assertIn("Unit=corvin-a2a-watch.service", tmr)
@@ -513,9 +513,9 @@ class TestCallSites(_Base):
         self.assertIn("OnUnitActiveSec", tmr)
 
     def test_the_e2e_test_and_the_watch_share_one_probe(self):
-        e2e = (REPO / "tests" / "e2e" / "a2a" / "test_live_host_a2a_contract_e2e.py").read_text()
+        e2e = (REPO / "tests" / "e2e" / "a2a" / "test_live_host_a2a_contract_e2e.py").read_text(encoding="utf-8")
         self.assertIn("a2a_live_probe", e2e, "the live E2E must run the same probe the watch runs")
-        self.assertIn("probe_host", Path(watch.__file__).read_text())
+        self.assertIn("probe_host", Path(watch.__file__).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

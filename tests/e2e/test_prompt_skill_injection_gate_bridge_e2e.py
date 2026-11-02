@@ -65,11 +65,11 @@ def _send(adapter, base: Path, text: str) -> str:
     envelope = {"id": msg_id, "channel": "discord", "from": SENDER,
                 "chat_id": CHAT, "text": text, "ts": time.time()}
     f = base / "inbox" / f"{msg_id}.json"
-    f.write_text(json.dumps(envelope))
+    f.write_text(json.dumps(envelope), encoding="utf-8")
     dump = base / "args.jsonl"
-    before = len(dump.read_text().splitlines()) if dump.exists() else 0
+    before = len(dump.read_text(encoding="utf-8").splitlines()) if dump.exists() else 0
     adapter.process_one(f, settings={"whitelist": [SENDER], "voice_summary_mode": "never"})
-    calls = [json.loads(line) for line in dump.read_text().splitlines()[before:] if line.strip()]
+    calls = [json.loads(line) for line in dump.read_text(encoding="utf-8").splitlines()[before:] if line.strip()]
     assert calls, "the fake CLI was not reached"
     args = calls[-1]["args"]
     if "--append-system-prompt" in args:
@@ -78,7 +78,7 @@ def _send(adapter, base: Path, text: str) -> str:
 
 
 def _chain(base: Path) -> list[dict]:
-    return [json.loads(line) for line in (base / "audit.jsonl").read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in (base / "audit.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _events(base: Path, name: str) -> list[dict]:
@@ -162,7 +162,7 @@ def _pin(base: Path, version: str) -> None:
     import yaml
     p = Path(os.environ["CORVIN_HOME"]) / "tenants" / TENANT / "global" / "tenant.corvin.yaml"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(yaml.safe_dump({"spec": {"skills": {f"prompt.{PROBE}": {"version": version}}}}))
+    p.write_text(yaml.safe_dump({"spec": {"skills": {f"prompt.{PROBE}": {"version": version}}}}), encoding="utf-8")
     os.chmod(p, 0o600)
 
 
@@ -205,7 +205,7 @@ def test_a_pin_to_an_unknown_or_altered_version_withholds_never_falls_through(br
     _pin(base, sorted(_probe_versions())[0])
     cat = PromptVersionCatalog.for_tenant(TENANT)
     sha = _probe_versions()[sorted(_probe_versions())[0]]
-    (cat.bodies / f"{sha}.md").write_text("TAMPERED")  # a stored copy altered on disk
+    (cat.bodies / f"{sha}.md").write_text("TAMPERED", encoding="utf-8")  # a stored copy altered on disk
     prompt = _send(adapter, base, ask)
     assert "TAMPERED" not in prompt and "GATE-PROBE-BODY" not in prompt
     assert _events(base, "skill.injection.gated")[-1]["pin_unavailable"] == 1

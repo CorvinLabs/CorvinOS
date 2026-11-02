@@ -59,7 +59,7 @@ class LooksLikeSwappedArgsTests(unittest.TestCase):
             [sys.executable, str(_SCRIPTS / "say.py"),
              bad_name, "/tmp/never-written.opus"],
             capture_output=True, text=True, timeout=30,
-            cwd="/tmp",
+            cwd="/tmp", encoding="utf-8", errors="replace",
         )
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("swapped", proc.stderr)

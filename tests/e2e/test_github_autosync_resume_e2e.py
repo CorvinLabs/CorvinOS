@@ -62,7 +62,7 @@ def home(tmp_path, monkeypatch) -> Path:
         if auto is not None:
             (d / "github-config.json").write_text(json.dumps({
                 "url": "https://github.com/example/tenant", "auto_sync": auto, "owner": "example", "repo": "tenant",
-            }))
+            }), encoding="utf-8")
     monkeypatch.setenv("CORVIN_HOME", str(h))
     return h
 

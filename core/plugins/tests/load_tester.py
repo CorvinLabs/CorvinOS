@@ -227,7 +227,7 @@ class LoadTester:
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_file, "w", newline="") as f:
+        with open(output_file, "w", newline="", encoding="utf-8") as f:
             if not self.results or not self.results[0].results:
                 logger.warning("No results to export")
                 return
@@ -269,7 +269,7 @@ class LoadTester:
                 "statistics": stats,
             })
 
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
         logger.info(f"Results exported to {output_file}")

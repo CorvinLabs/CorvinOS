@@ -173,7 +173,7 @@ class TestADR0197ErrorCategories:
             "instance_id": "",
             "enabled": True,
             "default_ttl_s": 60,
-        }))
+        }), encoding="utf-8")
         _os.chmod(cfg_path, 0o600)
 
         se = MagicMock()

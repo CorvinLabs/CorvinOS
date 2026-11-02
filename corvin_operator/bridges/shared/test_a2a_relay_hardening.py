@@ -441,7 +441,7 @@ def _pair(x: _Instance, y: _Instance, dead_url: str) -> str:
         o["spawn_worker"] = False
         for d, data in ((inst.origins, o), (inst.endpoints, ft.to_endpoint_dict(tok))):
             p = d / f"{kid}.json"
-            p.write_text(json.dumps(data))
+            p.write_text(json.dumps(data), encoding="utf-8")
             p.chmod(0o600)
     return kid
 

@@ -18,10 +18,10 @@ def test_refusal_goes_to_the_process_tenants_chain(tmp_path, monkeypatch):
     with pytest.raises(se.AuditTenantMismatch):
         se.write_event(foreign, "learning.regeneration", details={"tenant_id": "_default", "stage": "x"})
 
-    assert not foreign.exists() or "audit.tenant_mismatch" not in foreign.read_text(), \
+    assert not foreign.exists() or "audit.tenant_mismatch" not in foreign.read_text(encoding="utf-8"), \
         "the refusal was written into the FOREIGN tenant's chain"
     own = paths.tenant_audit_chain("other")
-    recs = [json.loads(l) for l in own.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in own.read_text(encoding="utf-8").splitlines() if l.strip()]
     assert [r["event_type"] for r in recs][-1] == "audit.tenant_mismatch"
     assert recs[-1]["details"]["dropped_event_type"] == "learning.regeneration"
     assert se.verify_chain(own)[0] is True
@@ -38,6 +38,6 @@ def test_refusal_never_lands_in_any_file_under_the_foreign_tenant(tmp_path, monk
     sibling.parent.mkdir(parents=True, exist_ok=True)
     with pytest.raises(se.AuditTenantMismatch):
         se.write_event(sibling, "learning.regeneration", details={"tenant_id": "_default", "stage": "x"})
-    assert not sibling.exists() or "audit.tenant_mismatch" not in sibling.read_text()
+    assert not sibling.exists() or "audit.tenant_mismatch" not in sibling.read_text(encoding="utf-8")
     own = paths.tenant_audit_chain("other")
-    assert "audit.tenant_mismatch" in own.read_text()
+    assert "audit.tenant_mismatch" in own.read_text(encoding="utf-8")

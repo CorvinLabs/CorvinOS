@@ -73,7 +73,7 @@ def _fresh_adapter(env_overrides: dict):
     os.environ["CORVIN_OS_ENGINE"] = "claude_code"
     xdg = Path(tempfile.mkdtemp(prefix="selfdel-xdg-"))
     (xdg / "corvin-voice").mkdir(parents=True)
-    (xdg / "corvin-voice" / "profile.json").write_text("{}")
+    (xdg / "corvin-voice" / "profile.json").write_text("{}", encoding="utf-8")
     os.environ["XDG_CONFIG_HOME"] = str(xdg)
     os.environ["ADAPTER_DISABLE_VOICE"] = "1"
     sys.modules.pop("profile", None)
@@ -108,7 +108,7 @@ def _run_turn(adapter, inbox: Path, outbox: Path, *, text: str, answer: str,
     env = {"id": "msg-sd", "channel": "sandbox-task", "from": "u42",
            "chat_id": "chan-99", "text": text, "ts": 0}
     f = inbox / "msg-sd.json"
-    f.write_text(json.dumps(env))
+    f.write_text(json.dumps(env), encoding="utf-8")
     adapter.process_one(f, settings={"whitelist": ["u42"]})
 
 
@@ -139,7 +139,7 @@ def test_flag_off_no_spawn_no_leak() -> None:
         assert not list((home / "pending_notifications").glob("*.json"))
         # And the marker NEVER leaked into any outbox message.
         for pth in outbox.glob("*.json"):
-            body = pth.read_text()
+            body = pth.read_text(encoding="utf-8")
             assert "bgtask-run" not in body, f"marker leaked: {pth.name}: {body}"
         print("PASS: flag OFF — no spawn, no registration, no marker leak")
     finally:
@@ -185,7 +185,7 @@ def test_flag_on_spawns_one_detached_worker() -> None:
         spec_path = Path(argv[2])
         assert spec_path.is_file(), f"spec must be a file path, got {argv[2]!r}"
         assert instruction not in " ".join(argv), "instruction must NOT be on argv"
-        spec = json.loads(spec_path.read_text())
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
         assert spec["instruction"] == instruction, spec
         assert spec["channel"] == "sandbox-task"
         assert spec["chat_key"] == "chan-99"
@@ -195,7 +195,7 @@ def test_flag_on_spawns_one_detached_worker() -> None:
         # A pending completion carrying the origin channel/chat/sender + want_voice.
         recs = list((home / "pending_notifications").glob("*.json"))
         assert len(recs) == 1, recs
-        rec = json.loads(recs[0].read_text())
+        rec = json.loads(recs[0].read_text(encoding="utf-8"))
         assert rec["channel"] == "sandbox-task"
         assert rec["chat_id"] == "chan-99"
         assert rec["sender"] == "u42"
@@ -204,7 +204,7 @@ def test_flag_on_spawns_one_detached_worker() -> None:
 
         # The marker was stripped from every outbox message the user sees.
         for pth in outbox.glob("*.json"):
-            assert "bgtask-run" not in pth.read_text(), pth.name
+            assert "bgtask-run" not in pth.read_text(encoding="utf-8"), pth.name
         print("PASS: flag ON — one detached worker, correct spec + register + "
               "want_voice, marker stripped")
     finally:
@@ -314,10 +314,10 @@ def test_self_delegation_voice_gated_on_flag() -> None:
 
         worker_calls = _spawn_worker_calls(captured)
         assert len(worker_calls) == 1, worker_calls
-        spec = json.loads(Path(worker_calls[0]["args"][2]).read_text())
+        spec = json.loads(Path(worker_calls[0]["args"][2]).read_text(encoding="utf-8"))
         assert spec["want_voice"] is False, spec        # voice flag OFF → no voice
         Path(worker_calls[0]["args"][2]).unlink(missing_ok=True)
-        rec = json.loads(next((home / "pending_notifications").glob("*.json")).read_text())
+        rec = json.loads(next((home / "pending_notifications").glob("*.json")).read_text(encoding="utf-8"))
         assert rec["want_voice"] is False, rec
         print("PASS: self-delegation voice opt-in gated on proactive_voice_completion")
     finally:
@@ -351,12 +351,12 @@ def test_broken_spawn_does_not_break_turn() -> None:
         env = {"id": "msg-boom", "channel": "sandbox-task", "from": "u42",
                "chat_id": "chan-99", "text": "go", "ts": 0}
         f = inbox / "msg-boom.json"
-        f.write_text(json.dumps(env))
+        f.write_text(json.dumps(env), encoding="utf-8")
         # Must NOT raise — a broken hand-off degrades to a normal reply.
         adapter.process_one(f, settings={"whitelist": ["u42"]})
 
         # The user still got their reply, with the marker stripped.
-        finals = [json.loads(p.read_text()) for p in outbox.glob("msg-boom_*.json")]
+        finals = [json.loads(p.read_text(encoding="utf-8")) for p in outbox.glob("msg-boom_*.json")]
         assert finals, "the turn must still produce a reply"
         for e in finals:
             assert "bgtask-run" not in json.dumps(e), e
@@ -374,7 +374,7 @@ def test_reply_hook_wired_into_process_one() -> None:
     transport E2E of the full path needs a live bridge + model, so the actual
     execution is proven by the process_one-driven tests above; this asserts the
     static call graph so the hook can never be silently orphaned."""
-    src = (HERE / "adapter.py").read_text()
+    src = (HERE / "adapter.py").read_text(encoding="utf-8")
     # process_one calls the hook …
     assert "_maybe_self_delegate(answer" in src, "process_one must call the hook"
     # … the hook gates on the ship-dark flag …
@@ -395,7 +395,7 @@ def test_emission_block_gated_on_flag() -> None:
     """The EMISSION side: system_prompt_for teaches the ⟦bgtask-run⟧ protocol
     ONLY when the flag is on (ship-dark). Grep-level reachability (same
     infeasibility exception as C1-B: a live model is needed to emit)."""
-    src = (HERE / "adapter.py").read_text()
+    src = (HERE / "adapter.py").read_text(encoding="utf-8")
     assert '_bg_flag("bridge_self_delegation")' in src
     assert "⟦bgtask-run:" in src, "the emission block must document the run marker"
     print("PASS: emission-side marker protocol is flag-gated")

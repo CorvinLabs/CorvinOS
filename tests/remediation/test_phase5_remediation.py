@@ -62,7 +62,7 @@ def _chain(home, tenant="_default"):
     path = home / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
     if not path.exists():
         return []
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def _events(home, prefix="remediation."):

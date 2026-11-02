@@ -421,7 +421,7 @@ class TestGracefulDegradation:
             temp_corvin_home / "tenants" / "_default" / "learning" / "learned_thresholds.json"
         )
         store_path.parent.mkdir(parents=True, exist_ok=True)
-        store_path.write_text("{invalid json}")
+        store_path.write_text("{invalid json}", encoding="utf-8")
 
         reset_store("_default")
         store = get_store("_default")

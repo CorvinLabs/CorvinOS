@@ -13,7 +13,7 @@ KB_PY = 'import os\nRULES = {\n    "E07_status_invalid": ("error", True),\n    "
 
 def _kb(tmp_path: Path, src: str = KB_PY) -> Path:
     p = tmp_path / "kb.py"
-    p.write_text(src)
+    p.write_text(src, encoding="utf-8")
     return p
 
 

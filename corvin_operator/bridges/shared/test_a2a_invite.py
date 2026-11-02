@@ -138,7 +138,7 @@ class ParseRoundTripTests(unittest.TestCase):
             with mock.patch.dict(os.environ, env):
                 _, token_str = inv.generate_invite(iid="i", origin_id="p", url="https://a.b")
             # Tamper key
-            key_path.write_text(inv.secrets.token_hex(32))
+            key_path.write_text(inv.secrets.token_hex(32), encoding="utf-8")
             _, payload_bytes, sig_bytes = inv.parse_invite(token_str)
             with mock.patch.dict(os.environ, env):
                 sig_ok = inv.verify_invite_sig(payload_bytes, sig_bytes)

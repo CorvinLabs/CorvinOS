@@ -126,7 +126,7 @@ def test_live_tde_delegation_with_audit(audit_sandbox):
     # Audit: tde.* events on a verifying hash chain
     audit_file = audit_sandbox
     assert audit_file.exists(), "tde.* events were not persisted"
-    events = [json.loads(l) for l in audit_file.read_text().splitlines() if l.strip()]
+    events = [json.loads(l) for l in audit_file.read_text(encoding="utf-8").splitlines() if l.strip()]
     etypes = [e.get("event_type", "") for e in events]
     assert "tde.engine_selected" in etypes
     assert "tde.delegation_decision" in etypes

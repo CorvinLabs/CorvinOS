@@ -92,7 +92,7 @@ class TestInteractiveWritesToken:
         assert result.configured is True
         settings_path = tmp_path / "corvin_operator" / "bridges" / "telegram" / "settings.json"
         assert settings_path.exists()
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["telegram_token"] == "123456:ABC-DEF-token"
         assert data["whitelist"] == ["111", "222"]
 
@@ -104,7 +104,7 @@ class TestInteractiveWritesToken:
         result = results[0]
         assert result.configured is True
         settings_path = tmp_path / "corvin_operator" / "bridges" / "discord" / "settings.json"
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["discord_token"] == "discord-secret-token"
         assert data["whitelist"] == ["999999999999999999"]
 
@@ -116,7 +116,7 @@ class TestInteractiveWritesToken:
         result = results[0]
         assert result.configured is True
         settings_path = tmp_path / "corvin_operator" / "bridges" / "slack" / "settings.json"
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["slack_bot_token"] == "xoxb-bot-token"
         assert data["slack_app_token"] == "xapp-app-token"
         assert data["whitelist"] == ["U12345"]
@@ -130,14 +130,14 @@ class TestIdempotentSkipsRePrompt:
     def test_telegram_existing_token_is_kept_without_prompting(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "corvin_operator" / "bridges" / "telegram" / "settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({"telegram_token": "already-set-token", "whitelist": ["42"]}))
+        settings_path.write_text(json.dumps({"telegram_token": "already-set-token", "whitelist": ["42"]}), encoding="utf-8")
 
         with mock.patch("builtins.input", side_effect=AssertionError("input() must not be called")):
             results = bridges_mod.configure_bridges(tmp_path, ["telegram"], interactive=True)
 
         result = results[0]
         assert result.configured is True
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["telegram_token"] == "already-set-token"
         assert data["whitelist"] == ["42"]
 
@@ -146,7 +146,7 @@ class TestIdempotentSkipsRePrompt:
         it should fall through to the prompt path."""
         settings_path = tmp_path / "corvin_operator" / "bridges" / "discord" / "settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({"discord_token": "DEIN_DISCORD_TOKEN"}))
+        settings_path.write_text(json.dumps({"discord_token": "DEIN_DISCORD_TOKEN"}), encoding="utf-8")
 
         answers = iter(["real-token", ""])
         with mock.patch("builtins.input", side_effect=lambda *_a, **_k: next(answers)):
@@ -154,7 +154,7 @@ class TestIdempotentSkipsRePrompt:
 
         result = results[0]
         assert result.configured is True
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["discord_token"] == "real-token"
 
     def test_slack_existing_tokens_kept_without_prompting(self, tmp_path: Path) -> None:
@@ -163,21 +163,21 @@ class TestIdempotentSkipsRePrompt:
         settings_path.write_text(json.dumps({
             "slack_bot_token": "xoxb-existing",
             "slack_app_token": "xapp-existing",
-        }))
+        }), encoding="utf-8")
 
         with mock.patch("builtins.input", side_effect=AssertionError("input() must not be called")):
             results = bridges_mod.configure_bridges(tmp_path, ["slack"], interactive=True)
 
         result = results[0]
         assert result.configured is True
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["slack_bot_token"] == "xoxb-existing"
         assert data["slack_app_token"] == "xapp-existing"
 
     def test_email_existing_user_kept_without_prompting(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "corvin_operator" / "bridges" / "email" / "settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({"imap_user": "me@example.com"}))
+        settings_path.write_text(json.dumps({"imap_user": "me@example.com"}), encoding="utf-8")
 
         with mock.patch("builtins.input", side_effect=AssertionError("input() must not be called")), \
              mock.patch("corvinOS.installer.steps.bridges.getpass.getpass",
@@ -186,7 +186,7 @@ class TestIdempotentSkipsRePrompt:
 
         result = results[0]
         assert result.configured is True
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["imap_user"] == "me@example.com"
 
 

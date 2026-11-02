@@ -341,7 +341,7 @@ def load(channel: str, chat_key: str, *, tenant_id: str | None = None) -> UserMo
     if not path.is_file():
         return None
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(raw, dict):
@@ -376,7 +376,7 @@ def save(model: UserModel, *, tenant_id: str | None = None) -> Path:
         except OSError:
             pass
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(model.to_disk(), indent=2, sort_keys=False))
+        tmp.write_text(json.dumps(model.to_disk(), indent=2, sort_keys=False), encoding="utf-8")
         try:
             os.chmod(tmp, 0o600)
         except OSError:
@@ -478,7 +478,7 @@ def _default_judge(prompt: str, timeout_s: float, bin_path: str) -> str:
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            check=False,
+            check=False, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         return ""

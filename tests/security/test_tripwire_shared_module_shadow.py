@@ -42,7 +42,7 @@ def _probe(tmp_path: Path, pre_import: str = "") -> dict:
         "PYTHONPATH": os.pathsep.join(str(REPO / p) for p in _UNIT_PYTHONPATH),
     }
     out = subprocess.run([sys.executable, "-c", code], env=env, cwd=str(tmp_path),
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert out.returncode == 0, out.stderr[-2000:]
     return json.loads(out.stdout.strip().splitlines()[-1])
 

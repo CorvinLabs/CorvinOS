@@ -45,7 +45,7 @@ class TestMigrator:
         # Create fake ~/.claude/skills/test_skill
         source = tmp_path / ".claude" / "skills" / "test_skill"
         source.mkdir(parents=True)
-        (source / "body.md").write_text("# Test Skill")
+        (source / "body.md").write_text("# Test Skill", encoding="utf-8")
 
         migrator = SkillMigrator("_default")
         report = migrator.migrate_from_claude_global()
@@ -58,7 +58,7 @@ class TestMigrator:
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         source = tmp_path / ".claude" / "skills" / "test"
         source.mkdir(parents=True)
-        (source / "body.md").write_text("test")
+        (source / "body.md").write_text("test", encoding="utf-8")
 
         migrator = SkillMigrator("_default")
         report = migrator.migrate_from_claude_global(backup=True)
@@ -70,7 +70,7 @@ class TestMetaGenerator:
     def test_generate_skill_metadata(self, tmp_path):
         skill_dir = tmp_path / "test_skill"
         skill_dir.mkdir()
-        (skill_dir / "body.md").write_text("# Test")
+        (skill_dir / "body.md").write_text("# Test", encoding="utf-8")
 
         metadata = generate_skill_metadata(skill_dir, "test_skill")
 

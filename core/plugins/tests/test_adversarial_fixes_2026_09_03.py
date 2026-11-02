@@ -76,7 +76,7 @@ class _Env(unittest.TestCase):
         p = Path(_audit.audit_path())
         if not p.exists():
             return []
-        rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+        rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
         return [r for r in rows if event_type is None or r.get("event_type") == event_type]
 
 
@@ -406,7 +406,7 @@ class TestA6HealthMonitoringIsSharedBootWiring(_Env):
         except ImportError:
             self.skipTest("core.skills absent")
         (self.home / "tenants" / "_default" / "global" / "features.json").write_text(
-            json.dumps({"flags": {"plugin_health_monitoring": True, "plugin_self_healing": True}})
+            json.dumps({"flags": {"plugin_health_monitoring": True, "plugin_self_healing": True}}), encoding="utf-8"
         )
         bootstrap._boot_skills_registry()
         if _skills().execute("os.plugin_health_monitoring", {"tenant_id": "_default"}).status != "success":
@@ -432,7 +432,7 @@ class TestA6HealthMonitoringIsSharedBootWiring(_Env):
         except ImportError:
             self.skipTest("core.skills absent")
         (self.home / "tenants" / "_default" / "global" / "features.json").write_text(
-            json.dumps({"flags": {"plugin_health_monitoring": True}})
+            json.dumps({"flags": {"plugin_health_monitoring": True}}), encoding="utf-8"
         )
         bootstrap._boot_skills_registry()
         if _skills().execute("os.plugin_health_monitoring", {"tenant_id": "_default"}).status != "success":
@@ -517,7 +517,7 @@ def test_console_import_does_not_put_core_on_sys_path():
     )
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(str(_REPO / p) for p in paths) + os.pathsep + str(_REPO)}
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
-                         env=env, cwd=str(_REPO), timeout=300)
+                         env=env, cwd=str(_REPO), timeout=300, encoding="utf-8", errors="replace")
     assert out.returncode == 0, out.stderr[-2000:]
     assert json.loads(out.stdout.strip().splitlines()[-1]) == [], (
         f"importing corvin_console.app put {core!r} on sys.path")

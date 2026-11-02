@@ -179,7 +179,7 @@ class MetricsEngineIntegrationTests(unittest.TestCase):
                     home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
                 )
                 if audit_path.exists():
-                    with open(audit_path) as f:
+                    with open(audit_path, encoding="utf-8") as f:
                         lines = f.readlines()
                     # We should have at least one audit event (run status changed)
                     # Engine metrics events are bonus (engine.execution_completed)

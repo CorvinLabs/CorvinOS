@@ -339,8 +339,8 @@ async def test_records_land_in_the_chain_of_the_override_tenant(tmp_path, monkey
         OverrideType.FORCE_DISABLE, "vibe", "Maintenance", "fp_operator", "acme")
 
     acme = tenant_audit_chain("acme")
-    assert acme.exists() and ov["override_id"] in acme.read_text()
+    assert acme.exists() and ov["override_id"] in acme.read_text(encoding="utf-8")
     default = tenant_audit_chain("_default")
-    assert not default.exists() or ov["override_id"] not in default.read_text()
+    assert not default.exists() or ov["override_id"] not in default.read_text(encoding="utf-8")
     log = await authority.get_audit_log("acme")
     assert [e["event_type"] for e in log] == ["override_requested"]

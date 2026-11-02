@@ -73,7 +73,7 @@ class TestCorePackagesAreImportableTopLevel(unittest.TestCase):
         result = subprocess.run(
             ["grep", "-rEl", rf"^[[:space:]]*(from|import) {pkg}[. ]",
              "--include=*.py", "core", "operator"],
-            cwd=REPO, capture_output=True, text=True,
+            cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         return [
             line for line in result.stdout.splitlines()
@@ -168,7 +168,7 @@ class TestBareImportsResolveFromTheVendorBootstrap(unittest.TestCase):
         result = subprocess.run(
             ["grep", "-rEl", r"^[[:space:]]*from clag import|^[[:space:]]*import clag$",
              "--include=*.py", "operator", "core"],
-            cwd=REPO, capture_output=True, text=True,
+            cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         sites = [
             f for f in result.stdout.splitlines()

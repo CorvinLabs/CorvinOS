@@ -53,7 +53,7 @@ class _RolesTestBase(unittest.TestCase):
             "whitelist": [OWNER_UID],
             "read_only": [],
             "rate_limit_per_hour": 30,
-        }))
+        }), encoding="utf-8")
         self._orig_resolver = roles._channel_settings_path
         roles._channel_settings_path = lambda channel: self._channel_settings  # type: ignore[assignment]
 
@@ -143,11 +143,11 @@ class IntrinsicOwnerTests(_RolesTestBase):
     def test_empty_whitelist_makes_nobody_owner(self):
         # An empty whitelist is NOT dev-mode any more (F-A19 parity with
         # disclosure.py): a stranger on an unconfigured channel is no owner.
-        self._channel_settings.write_text(json.dumps({"whitelist": []}))
+        self._channel_settings.write_text(json.dumps({"whitelist": []}), encoding="utf-8")
         self.assertFalse(roles.is_intrinsic_owner(CHANNEL, "anyone"))
 
     def test_whatsapp_device_suffix_is_the_same_owner(self):
-        self._channel_settings.write_text(json.dumps({"whitelist": ["4917000@s.whatsapp.net"]}))
+        self._channel_settings.write_text(json.dumps({"whitelist": ["4917000@s.whatsapp.net"]}), encoding="utf-8")
         self.assertTrue(roles.is_intrinsic_owner(CHANNEL, "4917000:11@s.whatsapp.net"))
 
     def test_blank_uid_never_owner(self):
@@ -173,13 +173,13 @@ class EffectiveRoleTests(_RolesTestBase):
         roles.grant(CHANNEL, CHAT, MEMBER_UID,
                     bundle="member", granted_by=OWNER_UID, ttl_s=60)
         path = roles._store_path(CHANNEL, CHAT)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         data[MEMBER_UID]["expires_at"] = time.time() - 1
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(data), encoding="utf-8")
         # Lazy prune fires here:
         self.assertEqual(roles.effective_role(CHANNEL, CHAT, MEMBER_UID), "none")
         # And the store no longer contains the expired entry.
-        self.assertNotIn(MEMBER_UID, json.loads(path.read_text()))
+        self.assertNotIn(MEMBER_UID, json.loads(path.read_text(encoding="utf-8")))
 
 
 class GrantInputValidationTests(_RolesTestBase):
@@ -314,7 +314,7 @@ class RevokeTests(_RolesTestBase):
         owner2 = "owner-2"
         self._channel_settings.write_text(json.dumps({
             "whitelist": [OWNER_UID, owner2],
-        }))
+        }), encoding="utf-8")
         with self.assertRaises(ValueError) as cm:
             roles.revoke(CHANNEL, CHAT, owner2, revoked_by=OWNER_UID)
         self.assertEqual(str(cm.exception), "owner-not-revocable")
@@ -392,23 +392,23 @@ class CliRoundTripTests(_RolesTestBase):
         # OR if its whitelist already matches.
         if real_settings.exists():
             try:
-                live = json.loads(real_settings.read_text())
+                live = json.loads(real_settings.read_text(encoding="utf-8"))
             except Exception:
                 live = {}
             if (live.get("whitelist") or []) and OWNER_UID not in (live.get("whitelist") or []):
                 self.skipTest("real bridge settings would be clobbered")
         backup = None
         if real_settings.exists():
-            backup = real_settings.read_text()
+            backup = real_settings.read_text(encoding="utf-8")
         real_settings.parent.mkdir(parents=True, exist_ok=True)
-        real_settings.write_text(self._channel_settings.read_text())
+        real_settings.write_text(self._channel_settings.read_text(encoding="utf-8"), encoding="utf-8")
         try:
             proc = subprocess.run(
                 [sys.executable, str(HERE / "roles.py"), *args],
-                env=env, capture_output=True, text=True, timeout=10)
+                env=env, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
         finally:
             if backup is not None:
-                real_settings.write_text(backup)
+                real_settings.write_text(backup, encoding="utf-8")
             else:
                 try: real_settings.unlink()
                 except FileNotFoundError: pass

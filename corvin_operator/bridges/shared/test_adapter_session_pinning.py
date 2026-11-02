@@ -80,7 +80,7 @@ def test_session_main_file_persisted(temp_corvin_home, adapter_module):
     main_sess_file = session_dir / ".main_session.json"
     test_session_id = "s_0123456789ab"
 
-    with open(main_sess_file, "w") as f:
+    with open(main_sess_file, "w", encoding="utf-8") as f:
         json.dump({
             "session_id": test_session_id,
             "saved_at": "2026-06-03T12:00:00Z"
@@ -93,7 +93,7 @@ def test_session_main_file_persisted(temp_corvin_home, adapter_module):
     # Next turn: load the session ID
     loaded_session_id = None
     if main_sess_file.exists():
-        with open(main_sess_file) as f:
+        with open(main_sess_file, encoding="utf-8") as f:
             loaded_session_id = json.load(f).get("session_id")
 
     assert loaded_session_id == test_session_id
@@ -118,15 +118,15 @@ def test_multiple_tenants_isolated(temp_corvin_home, adapter_module):
     sess_a_file = dir_a / ".main_session.json"
     sess_b_file = dir_b / ".main_session.json"
 
-    with open(sess_a_file, "w") as f:
+    with open(sess_a_file, "w", encoding="utf-8") as f:
         json.dump({"session_id": "s_aaa"}, f)
-    with open(sess_b_file, "w") as f:
+    with open(sess_b_file, "w", encoding="utf-8") as f:
         json.dump({"session_id": "s_bbb"}, f)
 
     # Verify isolation
-    with open(sess_a_file) as f:
+    with open(sess_a_file, encoding="utf-8") as f:
         assert json.load(f)["session_id"] == "s_aaa"
-    with open(sess_b_file) as f:
+    with open(sess_b_file, encoding="utf-8") as f:
         assert json.load(f)["session_id"] == "s_bbb"
 
 
@@ -144,7 +144,7 @@ def test_deferred_marker_miss_clears_resume_id(temp_corvin_home, tmp_path):
     workdir = tmp_path / "sessions" / "discord" / "test_chat"
     workdir.mkdir(parents=True)
     main_sess = workdir / ".main_session.json"
-    main_sess.write_text(json.dumps({"session_id": "s_stale_123"}))
+    main_sess.write_text(json.dumps({"session_id": "s_stale_123"}), encoding="utf-8")
 
     # The error text that claude returns when --resume has no deferred marker
     deferred_miss_error = (
@@ -182,7 +182,7 @@ def test_legacy_migration_path(temp_corvin_home, adapter_module):
     legacy_dir.mkdir(parents=True, exist_ok=True)
 
     legacy_file = legacy_dir / ".main_session.json"
-    with open(legacy_file, "w") as f:
+    with open(legacy_file, "w", encoding="utf-8") as f:
         json.dump({"session_id": "s_legacy"}, f)
 
     # Now request via _session_dir with tenant_id — should find legacy first
@@ -195,7 +195,7 @@ def test_legacy_migration_path(temp_corvin_home, adapter_module):
     # Should prefer legacy if it exists and tenant-aware doesn't
     main_file = session_dir / ".main_session.json"
     if main_file.exists():
-        with open(main_file) as f:
+        with open(main_file, encoding="utf-8") as f:
             session_id = json.load(f).get("session_id")
             # Should either be the legacy ID or a newly created session
             assert session_id in ["s_legacy", None] or session_id.startswith("s_")

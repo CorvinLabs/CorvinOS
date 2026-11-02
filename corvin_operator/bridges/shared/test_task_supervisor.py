@@ -116,7 +116,7 @@ def test_resume_tells_the_user_it_is_healing(env):
     env["sup"].supervise(spawn=_Spawns())
     env["tp"].deliver_progress(env["outbox"])
 
-    texts = [json.loads(p.read_text()).get("text", "")
+    texts = [json.loads(p.read_text(encoding="utf-8")).get("text", "")
              for p in env["outbox"].glob("*.json")]
     assert any("resuming it" in t for t in texts), texts
 
@@ -179,7 +179,7 @@ def test_a_wedged_worker_is_only_announced_once(env, monkeypatch):
 
     assert terminated == [os.getpid()], f"terminated {len(terminated)}x"
     env["tp"].deliver_progress(env["outbox"])
-    texts = [json.loads(p.read_text()).get("text", "")
+    texts = [json.loads(p.read_text(encoding="utf-8")).get("text", "")
              for p in env["outbox"].glob("*.json")]
     # "wedged" may be 0 (coalesced away by the immediate resume, expected
     # under ADR-2107) but never more than 1 — that would mean the old bug
@@ -286,7 +286,7 @@ def test_a_poller_holding_the_spawn_lock_blocks_the_other(env):
     _stage_dead_worker(env, tid)
     # Stand in for the other poller being inside its critical section.
     lock = env["sup"]._run_path(tid).with_suffix(".json.spawnlock")
-    lock.write_text("")
+    lock.write_text("", encoding="utf-8")
 
     spawns = _Spawns()
     assert env["sup"].supervise(spawn=spawns) == 0
@@ -507,7 +507,7 @@ def test_resume_spawns_a_real_process(env, monkeypatch, tmp_path):
     (stub_dir / "bg_task_worker.py").write_text(
         "import json, sys, pathlib\n"
         "spec = json.loads(pathlib.Path(sys.argv[1]).read_text())\n"
-        f"pathlib.Path({str(marker)!r}).write_text(spec['instruction'])\n"
+        f"pathlib.Path({str(marker)!r}).write_text(spec['instruction'])\n", encoding="utf-8"
     )
     monkeypatch.setattr(sup, "HERE", stub_dir)
 
@@ -524,7 +524,7 @@ def test_resume_spawns_a_real_process(env, monkeypatch, tmp_path):
             break
         time.sleep(0.05)
     assert marker.exists(), "the resumed worker process never ran"
-    assert "RESUMING" in marker.read_text()
+    assert "RESUMING" in marker.read_text(encoding="utf-8")
 
 
 def test_bg_monitor_run_once_drives_supervision(env):
@@ -551,7 +551,7 @@ def test_bg_monitor_run_once_drives_supervision(env):
 
 def test_a_poisoned_record_does_not_starve_the_others(env):
     (env["home"] / "task_runs").mkdir(parents=True, exist_ok=True)
-    (env["home"] / "task_runs" / "aaa_broken.json").write_text("{not json")
+    (env["home"] / "task_runs" / "aaa_broken.json").write_text("{not json", encoding="utf-8")
     tid = _make_run(env, task_id="zzz_good")
     rec = env["sup"].get_run(tid)
     rec.update(worker_pid=999_999_999, worker_boot=env["sup"]._host_boot_id(),

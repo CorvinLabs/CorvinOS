@@ -55,7 +55,7 @@ def load_config() -> Dict:
     disable_all/reset in sequence in one process."""
     if _quality_layers_path().exists():
         try:
-            with open(_quality_layers_path(), "r") as f:
+            with open(_quality_layers_path(), "r", encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             return copy.deepcopy(DEFAULT_CONFIG)
@@ -65,7 +65,7 @@ def load_config() -> Dict:
 def save_config(config: Dict) -> None:
     """Save config to quality-layers.json."""
     _quality_layers_path().parent.mkdir(parents=True, exist_ok=True)
-    with open(_quality_layers_path(), "w") as f:
+    with open(_quality_layers_path(), "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
 

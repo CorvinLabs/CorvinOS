@@ -50,7 +50,7 @@ def setup_sandbox(profiles: dict) -> None:
     _seed_personas()
     TEST_CHANNEL_DIR.mkdir(exist_ok=True)
     (TEST_CHANNEL_DIR / "settings.json").write_text(
-        json.dumps({"chat_profiles": profiles}, indent=2)
+        json.dumps({"chat_profiles": profiles}, indent=2), encoding="utf-8"
     )
 
 
@@ -66,7 +66,7 @@ def write_inbox(item_id: str, chat_key: str, text: str) -> None:
     INBOX.mkdir(parents=True, exist_ok=True)
     payload = {"id": item_id, "channel": TEST_CHANNEL,
                "chat_id": chat_key, "from": chat_key, "text": text}
-    (INBOX / f"{item_id}.json").write_text(json.dumps(payload))
+    (INBOX / f"{item_id}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def wait_for_processed(n: int, timeout: float = 10.0) -> int:
@@ -82,7 +82,7 @@ def wait_for_processed(n: int, timeout: float = 10.0) -> int:
 def load_args_dump() -> list[dict]:
     if not ARGS_DUMP.exists():
         return []
-    return [json.loads(line) for line in ARGS_DUMP.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in ARGS_DUMP.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def find_call(dump: list[dict], chat_key: str) -> dict | None:
@@ -118,7 +118,7 @@ def system_prompt_from_args(args: list) -> str:
 def run_adapter_once(env: dict) -> None:
     proc = subprocess.Popen(
         ["python3", str(ADAPTER)],
-        env=env, stdout=open(LOG_FILE, "a"), stderr=subprocess.STDOUT,
+        env=env, stdout=open(LOG_FILE, "a", encoding="utf-8"), stderr=subprocess.STDOUT,
     )
     try:
         time.sleep(0.4)
@@ -183,7 +183,7 @@ def main() -> int:
         mcp_path = args[args.index("--mcp-config") + 1]
         if not Path(mcp_path).is_file():
             raise AssertionError(f"--mcp-config points to non-existent file {mcp_path}")
-        mcp_doc = json.loads(Path(mcp_path).read_text())
+        mcp_doc = json.loads(Path(mcp_path).read_text(encoding="utf-8"))
         if "playwright" not in mcp_doc.get("mcpServers", {}):
             raise AssertionError(f"playwright server missing in {mcp_doc}")
         # add_dirs aus persona → mindestens ein --add-dir, das auf cowork/research zeigt
@@ -333,7 +333,7 @@ def main() -> int:
         if "--mcp-config" not in args:
             raise AssertionError(f"auto-routing → kein --mcp-config: {args}")
         mcp_path = args[args.index("--mcp-config") + 1]
-        mcp_doc = json.loads(Path(mcp_path).read_text())
+        mcp_doc = json.loads(Path(mcp_path).read_text(encoding="utf-8"))
         if "playwright" not in mcp_doc.get("mcpServers", {}):
             raise AssertionError(f"router → browser, aber kein playwright-MCP: {mcp_doc}")
         sys_prompt = system_prompt_from_args(args)

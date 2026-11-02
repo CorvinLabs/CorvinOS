@@ -35,7 +35,7 @@ class CompositorPhase(BasePhase):
         self.log("Concatenating video segments...")
 
         # Create concat demuxer file
-        concat_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        concat_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding="utf-8")
 
         try:
             for segment in segments:

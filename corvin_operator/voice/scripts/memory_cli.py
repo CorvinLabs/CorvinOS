@@ -29,7 +29,7 @@ def cmd_list(_args: list[str]) -> int:
     print(f"{len(topics)} topic(s):")
     for t in topics:
         try:
-            summary = mem.first_line_summary(mem.topic_path(t).read_text())
+            summary = mem.first_line_summary(mem.topic_path(t).read_text(encoding="utf-8"))
         except OSError:
             summary = ""
         print(f"  {t}" + (f" — {summary}" if summary else ""))

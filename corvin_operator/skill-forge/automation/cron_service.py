@@ -295,7 +295,7 @@ class CronService:
         try:
             import yaml
 
-            with open(config_path, "r") as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
 
             autonomous_forge = config.get("autonomous_forge", {})

@@ -149,7 +149,7 @@ def _endpoint(d: Path, eid: str = "peer-b", **extra) -> Path:
     cfg = {"endpoint_id": eid, "url": "https://peer.example.com/v1/a2a/receive", "hmac_key": "a" * 64,
            "recv_key": "b" * 64, "instance_id": "iid-peer-b", "enabled": True, **extra}
     p = d / f"{eid}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
     return p
 
@@ -160,7 +160,7 @@ def test_set_endpoint_role_writes_both_fields_audit_first_without_free_text(tmp_
     out = er.set_endpoint_role("peer-b", organisation="  Acme Analytics GmbH ", gdpr_role="processor",
                                actor="console:fp1234abcd", tenant_id="_default", endpoints_dir=tmp_path, emit=emit)
     assert out == {"endpoint_id": "peer-b", "organisation": "Acme Analytics GmbH", "gdpr_role": "processor"}
-    cfg = json.loads(path.read_text())
+    cfg = json.loads(path.read_text(encoding="utf-8"))
     assert (cfg["organisation"], cfg["gdpr_role"]) == ("Acme Analytics GmbH", "processor")
     assert cfg["hmac_key"] == "a" * 64 and cfg["label"] == "Peer label" and cfg["enabled"] is True
     if not sys.platform.startswith("win"):
@@ -172,16 +172,16 @@ def test_set_endpoint_role_writes_both_fields_audit_first_without_free_text(tmp_
 
 def test_audit_failure_writes_nothing(tmp_path):
     path = _endpoint(tmp_path)
-    before = path.read_text()
+    before = path.read_text(encoding="utf-8")
     with pytest.raises(er.EndpointRoleError):
         er.set_endpoint_role("peer-b", organisation="Acme", gdpr_role="joint", actor="cli",
                              tenant_id="_default", endpoints_dir=tmp_path, emit=_Emit(fail=True))
-    assert path.read_text() == before
+    assert path.read_text(encoding="utf-8") == before
 
 
 def test_invalid_values_write_and_audit_nothing(tmp_path):
     path = _endpoint(tmp_path)
-    before = path.read_text()
+    before = path.read_text(encoding="utf-8")
     emit = _Emit()
     for kw in ({"organisation": "", "gdpr_role": "processor"}, {"organisation": "Acme", "gdpr_role": "data_processor"},
                {"organisation": "<i>Acme</i>", "gdpr_role": "processor"}):
@@ -190,7 +190,7 @@ def test_invalid_values_write_and_audit_nothing(tmp_path):
     with pytest.raises(er.EndpointRoleError):
         er.set_endpoint_role("peer-b", organisation="Acme", gdpr_role="joint", actor="anyone at all",
                              tenant_id="_default", endpoints_dir=tmp_path, emit=emit)
-    assert path.read_text() == before and emit.calls == []
+    assert path.read_text(encoding="utf-8") == before and emit.calls == []
 
 
 @pytest.mark.parametrize("eid", ["../x", "a/b", ".hidden", "C:x", ""])
@@ -210,13 +210,13 @@ def test_operator_can_reset_a_role_to_unset(tmp_path):
     path = _endpoint(tmp_path, organisation="Acme", gdpr_role="processor")
     er.set_endpoint_role("peer-b", organisation="Acme", gdpr_role="unset", actor="cli", tenant_id="_default",
                          endpoints_dir=tmp_path, emit=_Emit())
-    assert er.role_of(json.loads(path.read_text())) == "unset"
+    assert er.role_of(json.loads(path.read_text(encoding="utf-8"))) == "unset"
 
 
 def test_read_endpoint_roles_lists_every_endpoint_with_its_stated_role(tmp_path):
     _endpoint(tmp_path, "peer-a", organisation="Acme GmbH", gdpr_role="controller")
     _endpoint(tmp_path, "peer-b")
-    (tmp_path / "broken.json").write_text("{not json")
+    (tmp_path / "broken.json").write_text("{not json", encoding="utf-8")
     roles = er.read_endpoint_roles(tmp_path)
     assert roles["peer-a"] == ("Acme GmbH", "controller")
     assert roles["peer-b"] == ("", "unset")

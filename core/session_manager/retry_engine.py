@@ -118,7 +118,7 @@ class RetryEngine:
         # Persist to disk (for recovery after crash)
         try:
             retry_file = self.persistence_dir / f"{key}.jsonl"
-            with open(retry_file, "a") as f:
+            with open(retry_file, "a", encoding="utf-8") as f:
                 data = {
                     "task_id": attempt_record.task_id,
                     "split_id": attempt_record.split_id,

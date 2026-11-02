@@ -344,7 +344,7 @@ def _dependents_of(tenant_id: str, package_id: str) -> list[str]:
         if not other.is_dir() or other.name == package_id:
             continue
         try:
-            manifest = json.loads((other / "metadata.json").read_text()).get("manifest", {})
+            manifest = json.loads((other / "metadata.json").read_text(encoding="utf-8")).get("manifest", {})
         except (OSError, ValueError):
             continue
         if any(_dependency_name(d) == package_id for d in _extract_dependencies(manifest)):
@@ -389,7 +389,7 @@ def _list_installed_packages(tenant_id: str) -> list[PackageListItem]:
             continue
 
         try:
-            metadata = json.loads(metadata_file.read_text())
+            metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
             packages.append(
                 PackageListItem(
                     package_id=pkg_path.name,
@@ -453,7 +453,7 @@ async def upload_package(
         existing_metadata = final_pkg_dir / "metadata.json"
         if existing_metadata.exists():
             try:
-                existing = json.loads(existing_metadata.read_text())
+                existing = json.loads(existing_metadata.read_text(encoding="utf-8"))
                 existing_version = existing.get("version", "0.0.0")
                 if existing_version == version:
                     raise HTTPException(
@@ -502,7 +502,7 @@ async def upload_package(
             "license": manifest.get("license", ""),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "manifest": manifest,
-        }, indent=2))
+        }, indent=2), encoding="utf-8")
 
     except HTTPException:
         # Clean up temp directory on any HTTP error (includes audit failures)
@@ -572,7 +572,7 @@ async def get_package_details(
         )
 
     try:
-        metadata = json.loads(metadata_file.read_text())
+        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
         manifest = metadata.get("manifest", {})
 
         return PackageDetails(
@@ -638,7 +638,7 @@ async def uninstall_package(
         meta = pkg_dir / "metadata.json"
         if meta.is_file():
             try:
-                version = str(json.loads(meta.read_text()).get("version", "unknown"))
+                version = str(json.loads(meta.read_text(encoding="utf-8")).get("version", "unknown"))
             except ValueError:
                 version = "unknown"
             version = re.sub(r"[^0-9A-Za-z._-]", "_", version)[:40] or "unknown"

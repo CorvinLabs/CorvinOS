@@ -64,7 +64,7 @@ def test_refresh_daemon_state_persistence(tmp_path):
     # Verify file exists and has correct content
     state_file = corvin_home / "global" / "license" / "state.json"
     assert state_file.exists()
-    data = json.loads(state_file.read_text())
+    data = json.loads(state_file.read_text(encoding="utf-8"))
     assert data["cycle_count"] == 42
     assert data["last_crl_merge"] == 1111
 
@@ -93,7 +93,7 @@ def test_refresh_daemon_counter_increment(tmp_path):
     # Verify counter file exists and is readable
     counter_file = corvin_home / "global" / "license" / "refresh_counter.json"
     assert counter_file.exists()
-    data = json.loads(counter_file.read_text())
+    data = json.loads(counter_file.read_text(encoding="utf-8"))
     assert data["n"] == 3
 
 
@@ -164,7 +164,7 @@ def daemon_mod(monkeypatch):
 def _with_credential(tmp_path) -> Path:
     corvin_home = tmp_path / "corvin"
     (corvin_home / "global" / "license").mkdir(parents=True)
-    (corvin_home / "global" / "license.key").write_text("test-jwt-credential")
+    (corvin_home / "global" / "license.key").write_text("test-jwt-credential", encoding="utf-8")
     return corvin_home
 
 
@@ -331,7 +331,7 @@ def test_refresh_daemon_state_increments_cycle_count(tmp_path):
         daemon._release_lock(fd)
 
     state_file = corvin_home / "global" / "license" / "state.json"
-    assert json.loads(state_file.read_text())["cycle_count"] == 1
+    assert json.loads(state_file.read_text(encoding="utf-8"))["cycle_count"] == 1
     assert (state_file.stat().st_mode & 0o777) == 0o600
     assert RefreshWorkerThread(corvin_home).state.cycle_count == 1
 

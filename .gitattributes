@@ -7,3 +7,37 @@
 # tripwire refuses to boot the console on every fresh Windows install
 # (2026-09-14 fresh-install finding). Force LF regardless of local git config.
 corvin_operator/policy/house_rules.yaml text eol=lf
+
+# Windows checkouts (Git for Windows ships core.autocrlf=true system-wide) turn
+# every tracked text file into CRLF in the working tree. Many files are
+# byte-compared or hash-pinned against their committed LF blob: the signed L-layer
+# manifest (layer_integrity.MANDATORY_LAYER_FILES, *.py), the path-gate pinned
+# tools, the token-AB corpus (tests/benchmarking/token_ab/corpus/MANIFEST.json
+# pins tasks_*.jsonl), sha256 of skill/plugin/workflow sources, plus *.sh,
+# Dockerfiles and systemd units consumed by Linux tools (bash rejects
+# `set -e\r`). Pin LF for every text file, independent of local git config.
+# Binary files are auto-detected by text=auto and stay untouched.
+# NOTE: changing this file does not rewrite an existing checkout. Operators on
+# Windows must refresh the working tree once (with no local edits pending):
+#   git rm -r --cached -q . && git reset --hard
+* text=auto eol=lf
+
+# Windows-native scripts stay CRLF (cmd.exe label/goto parsing needs CRLF;
+# PowerShell 5.1 / wscript tooling expects it). Nothing hash-pins these.
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.vbs  text eol=crlf
+
+# Explicit binaries (never let autodetection guess on these).
+*.ogg  binary
+*.wav  binary
+*.mp4  binary
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.pdf  binary
+*.zip  binary
+*.pptx binary

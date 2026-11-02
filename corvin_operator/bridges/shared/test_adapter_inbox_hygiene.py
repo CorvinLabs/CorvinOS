@@ -97,11 +97,11 @@ def test_poison_envelope_is_quarantined_not_unlinked() -> None:
 def test_processed_sweep_is_age_bounded_and_keeps_poison() -> None:
     base, inbox, processed, audit_path, adapter = _sandbox()
     now = time.time()
-    old = processed / "old.json"; old.write_text("{}"); os.utime(old, (now - 40 * 86400, now - 40 * 86400))
+    old = processed / "old.json"; old.write_text("{}", encoding="utf-8"); os.utime(old, (now - 40 * 86400, now - 40 * 86400))
     old_att = processed / "old.ogg"; old_att.write_bytes(b"x"); os.utime(old_att, (now - 40 * 86400, now - 40 * 86400))
-    fresh = processed / "fresh.json"; fresh.write_text("{}")
+    fresh = processed / "fresh.json"; fresh.write_text("{}", encoding="utf-8")
     poison = processed / "poison"; poison.mkdir()
-    pfile = poison / "p.json"; pfile.write_text("{"); os.utime(pfile, (now - 400 * 86400, now - 400 * 86400))
+    pfile = poison / "p.json"; pfile.write_text("{", encoding="utf-8"); os.utime(pfile, (now - 400 * 86400, now - 400 * 86400))
 
     assert adapter._processed_retention_days() == 30.0, "default retention is 30 days"
     removed = adapter._sweep_processed(now=now)
@@ -115,13 +115,13 @@ def test_processed_sweep_is_age_bounded_and_keeps_poison() -> None:
 
     # Opt-out: retention 0 disables the sweep; settings.json value is honoured.
     os.environ["ADAPTER_PROCESSED_RETENTION_DAYS"] = "0"
-    stale = processed / "stale.json"; stale.write_text("{}"); os.utime(stale, (now - 900 * 86400, now - 900 * 86400))
+    stale = processed / "stale.json"; stale.write_text("{}", encoding="utf-8"); os.utime(stale, (now - 900 * 86400, now - 900 * 86400))
     assert adapter._sweep_processed(now=now) == 0 and stale.exists()
     os.environ.pop("ADAPTER_PROCESSED_RETENTION_DAYS", None)
     adapter.SETTINGS_FILE.write_text(json.dumps({"processed_retention_days": 7}), encoding="utf-8")
     adapter._settings_cache = None
     assert adapter._processed_retention_days() == 7.0
-    week_old = processed / "week.json"; week_old.write_text("{}"); os.utime(week_old, (now - 8 * 86400, now - 8 * 86400))
+    week_old = processed / "week.json"; week_old.write_text("{}", encoding="utf-8"); os.utime(week_old, (now - 8 * 86400, now - 8 * 86400))
     assert adapter._sweep_processed(now=now) >= 1 and not week_old.exists()
 
 
@@ -130,10 +130,10 @@ def test_sysprompt_sweep_removes_only_stale_leftovers() -> None:
     sess = adapter.SESSIONS_ROOT / "discord" / "chat-1"
     sess.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    stale = sess / ".corvin-sysprompt-abc123.txt"; stale.write_text("memory + vault hints")
+    stale = sess / ".corvin-sysprompt-abc123.txt"; stale.write_text("memory + vault hints", encoding="utf-8")
     os.utime(stale, (now - 7200, now - 7200))
-    live = sess / ".corvin-sysprompt-live.txt"; live.write_text("in use")
-    other = sess / "notes.txt"; other.write_text("keep"); os.utime(other, (now - 7200, now - 7200))
+    live = sess / ".corvin-sysprompt-live.txt"; live.write_text("in use", encoding="utf-8")
+    other = sess / "notes.txt"; other.write_text("keep", encoding="utf-8"); os.utime(other, (now - 7200, now - 7200))
     assert adapter._sweep_sysprompt_tmp(now=now) == 1
     assert not stale.exists()
     assert live.exists(), "a fresh temp file may belong to a live spawn"

@@ -160,7 +160,7 @@ class EventStore:
                 event_dict["audit_ref"] = audit_ref
                 line = json.dumps(event_dict, separators=(",", ":")) + "\n"
 
-                with open(event_file, "a") as f:
+                with open(event_file, "a", encoding="utf-8") as f:
                     f.write(line)
 
             except IOError as e:
@@ -245,7 +245,7 @@ class EventStore:
 
                 file_results: list[LearningEvent] = []
                 try:
-                    with open(event_file, "r") as f:
+                    with open(event_file, "r", encoding="utf-8") as f:
                         for line in f:
                             if not line.strip():
                                 continue
@@ -338,7 +338,7 @@ class EventStore:
         with self._lock:
             for event_file in sorted(self.events_dir.glob("*.jsonl")):
                 try:
-                    with open(event_file, "r") as f:
+                    with open(event_file, "r", encoding="utf-8") as f:
                         for line in f:
                             if not line.strip():
                                 continue

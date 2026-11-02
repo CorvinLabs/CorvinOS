@@ -193,7 +193,7 @@ class ComplianceAuditor:
             events_checked = 0
             prev_hash = None
 
-            with open(audit_path) as f:
+            with open(audit_path, encoding="utf-8") as f:
                 for line in f:
                     try:
                         import json
@@ -474,14 +474,12 @@ class ComplianceAuditor:
           - Trail file mode 0600
         """
         try:
-            import subprocess
+            import shutil
 
-            result = subprocess.run(
-                ["which", "corvin-erasure"],
-                capture_output=True,
-            )
-
-            if result.returncode != 0:
+            # shutil.which, not a `which` subprocess: Windows has no `which`
+            # binary (FileNotFoundError -> L36 reported "fail") and the console
+            # script there is corvin-erasure.exe, found only via PATHEXT.
+            if shutil.which("corvin-erasure") is None:
                 return ComplianceCheck(
                     layer=ComplianceLayer.L36_ERASURE,
                     engine_id=engine_id,
@@ -682,5 +680,5 @@ if __name__ == "__main__":
     import json
     from pathlib import Path
 
-    Path("compliance_audit_report.json").write_text(json.dumps(results, indent=2))
+    Path("compliance_audit_report.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     logger.info("\nReport saved: compliance_audit_report.json")

@@ -95,7 +95,7 @@ if __name__ == "__main__":
 """
 
     script_path = "/tmp/e2e_test.py"
-    with open(script_path, "w") as f:
+    with open(script_path, "w", encoding="utf-8") as f:
         f.write(test_script)
 
     # Run test
@@ -108,7 +108,7 @@ if __name__ == "__main__":
             cwd="/home/shumway/projects/CorvinOS",
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=60, encoding="utf-8", errors="replace",
         )
 
         print(result.stdout)
@@ -119,7 +119,7 @@ if __name__ == "__main__":
         # Log results
         output_file = "/home/shumway/projects/CorvinOS/outputs/console_plugin_e2e_60sec.txt"
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(result.stdout)
 
         print(f"\n✅ E2E TEST COMPLETE (60 seconds elapsed)")

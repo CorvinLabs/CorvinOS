@@ -217,7 +217,7 @@ class GitHubImporter:
             return None
 
         try:
-            with open(meta_path) as f:
+            with open(meta_path, encoding="utf-8") as f:
                 return json.load(f)
         except:
             return None

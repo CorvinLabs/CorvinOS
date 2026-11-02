@@ -221,7 +221,7 @@ class SkillDependencyResolver:
             return None
 
         try:
-            with open(meta_path) as f:
+            with open(meta_path, encoding="utf-8") as f:
                 manifest = json.load(f)
             skill = SkillInfo.from_manifest(manifest)
             self._skill_cache[cache_key] = skill

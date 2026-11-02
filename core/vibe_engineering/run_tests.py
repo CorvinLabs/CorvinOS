@@ -91,7 +91,7 @@ def run_all_tests():
 
     # Save results
     results_file = Path(__file__).parent / "test_results.json"
-    with open(results_file, "w") as f:
+    with open(results_file, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     print(f"Results saved to: {results_file}")
 
@@ -100,7 +100,7 @@ def run_all_tests():
 
 def _count_tests_in_file(filepath):
     """Count test functions in a Python file."""
-    with open(filepath) as f:
+    with open(filepath, encoding="utf-8") as f:
         content = f.read()
 
     # Count test_ functions and test methods

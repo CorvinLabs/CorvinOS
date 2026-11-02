@@ -221,7 +221,7 @@ class LangCliTests(unittest.TestCase):
     def _run(self, *args):
         r = subprocess.run(
             ["python3", str(LANG_CLI), *args],
-            capture_output=True, text=True, env=self.env,
+            capture_output=True, text=True, env=self.env, encoding="utf-8", errors="replace",
         )
         try:
             payload = json.loads(r.stdout)

@@ -13,7 +13,7 @@ def _read_chain(chain_path) -> list[dict]:
         return []
     return [
         json.loads(line)
-        for line in chain_path.read_text().splitlines()
+        for line in chain_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
 

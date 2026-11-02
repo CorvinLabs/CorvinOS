@@ -138,7 +138,7 @@ def _load_raw(channel: str, chat_key: str, tenant_id: str | None = None) -> dict
         _dbg_exc("_load_raw.json_parse", _exc, channel=channel, chat_key=chat_key)
         # Rename the corrupt file to prevent silent overwrite on next save.
         try:
-            p.rename(p.with_suffix(".corrupt"))
+            p.replace(p.with_suffix(".corrupt"))  # rename() fails on Windows if one exists
         except OSError:
             pass
         # Best-effort audit event — do not let audit failure suppress the corruption signal.

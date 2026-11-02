@@ -154,7 +154,7 @@ class AutoFormatConverter:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=3600,  # 1 hour timeout
+                timeout=3600, encoding="utf-8", errors="replace",  # 1 hour timeout
             )
 
             if result.returncode != 0:

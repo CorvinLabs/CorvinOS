@@ -72,7 +72,7 @@ def _run_cli(
         env=env,
         capture_output=True,
         text=True,
-        cwd=str(bridges_root.parent),  # so paths.py walk-up finds plugins/
+        cwd=str(bridges_root.parent), encoding="utf-8", errors="replace",  # so paths.py walk-up finds plugins/
     )
 
 
@@ -132,7 +132,7 @@ def case_status_off_when_no_profile(sandbox: Path, bridges: Path,
         env={**os.environ,
              "CORVIN_HOME": str(home),
              "CORVIN_CHANNEL_ID": "discord:abc123"},
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stderr
     assert "disabled" in r.stdout, r.stdout
@@ -150,7 +150,7 @@ def case_status_on_after_setting_flag(sandbox, bridges, outbox, home) -> None:
         env={**os.environ,
              "CORVIN_HOME": str(home),
              "CORVIN_CHANNEL_ID": "discord:abc123"},
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stderr
     assert "enabled" in r.stdout, r.stdout
@@ -169,13 +169,13 @@ def case_send_writes_outbox_when_enabled(sandbox, bridges, outbox, home) -> None
              "CORVIN_HOME": str(home),
              "CORVIN_CHANNEL_ID": "discord:abc123",
              "ADAPTER_OUTBOX": str(outbox)},
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, f"stderr={r.stderr} stdout={r.stdout}"
 
     files = list(outbox.glob("debug_*.json"))
     assert len(files) == 1, files
-    payload = json.loads(files[0].read_text())
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
     assert payload["chat_id"] == "abc123", payload
     assert payload["text"] == "hello world", payload
     assert payload["channel"] == "discord", payload
@@ -195,7 +195,7 @@ def case_send_denied_when_disabled(sandbox, bridges, outbox, home) -> None:
              "CORVIN_HOME": str(home),
              "CORVIN_CHANNEL_ID": "discord:abc123",
              "ADAPTER_OUTBOX": str(outbox)},
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 1, f"expected exit 1, got {r.returncode}"
     assert "debug not enabled" in r.stderr, r.stderr
@@ -216,7 +216,7 @@ def case_send_refuses_at_depth_3(sandbox, bridges, outbox, home) -> None:
              "CORVIN_CHANNEL_ID": "discord:abc123",
              "ADAPTER_OUTBOX": str(outbox),
              "CORVIN_DEBUG_DEPTH": "3"},
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 1, r.stdout
     assert "depth 3" in r.stderr, r.stderr
@@ -239,7 +239,7 @@ def case_rate_limit_blocks_at_11(sandbox, bridges, outbox, home) -> None:
     for i in range(12):
         r = subprocess.run(
             [sys.executable, str(cli), "debug", "send", f"msg-{i}"],
-            env=env, capture_output=True, text=True,
+            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if r.returncode == 0:
             successes += 1
@@ -260,7 +260,7 @@ def case_missing_channel_id_errors(sandbox, bridges, outbox, home) -> None:
     env.pop("CORVIN_CHANNEL_ID", None)
     r = subprocess.run(
         [sys.executable, str(cli), "debug", "status"],
-        env=env, capture_output=True, text=True,
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 1, r.stdout
     assert "CORVIN_CHANNEL_ID" in r.stderr, r.stderr
@@ -273,7 +273,7 @@ def case_help_text_includes_debug(sandbox, bridges, outbox, home) -> None:
     r = subprocess.run(
         [sys.executable, str(cli), "help"],
         env={**os.environ, "CORVIN_HOME": str(home)},
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0
     assert "debug status" in r.stdout, r.stdout

@@ -45,10 +45,25 @@ _ONBOARDING_JSON_PATH = _forge_paths.corvin_home() / "tenants" / "_default" / "g
 _SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 
 
+def _cli_argv(argv: list[str]):
+    """Windows: resolve a bare CLI name (npm ``*.cmd`` shims are invisible to
+    CreateProcess, which applies no PATHEXT) and wrap .cmd shims cmd.exe-safely
+    — ``agents._win_shim.resolve_cli_argv``. POSIX / import failure: identity."""
+    if os.name != "nt":
+        return argv
+    try:
+        if str(_SHARED) not in sys.path:
+            sys.path.insert(0, str(_SHARED))
+        from agents._win_shim import resolve_cli_argv  # type: ignore  # noqa: PLC0415
+        return resolve_cli_argv(argv)
+    except Exception:  # noqa: BLE001
+        return argv
+
+
 def _onboarding_complete() -> bool:
     """Return True iff onboarding.json exists with complete=true."""
     try:
-        data = _json.loads(_ONBOARDING_JSON_PATH.read_text())
+        data = _json.loads(_ONBOARDING_JSON_PATH.read_text(encoding="utf-8"))
         return bool(data.get("complete"))
     except Exception:
         return False
@@ -716,7 +731,7 @@ def list_engines(
     # Check Claude Code login status
     claude_ok = False
     try:
-        r = subprocess.run(["claude", "--version"], capture_output=True, timeout=5)
+        r = subprocess.run(_cli_argv(["claude", "--version"]), capture_output=True, timeout=5)
         claude_ok = r.returncode == 0
     except Exception:
         pass
@@ -726,7 +741,7 @@ def list_engines(
     copilot_version: str | None = None
     try:
         _copilot_bin = os.environ.get("CORVIN_COPILOT_BIN", "copilot") or "copilot"
-        r = subprocess.run([_copilot_bin, "--version"], capture_output=True, timeout=5)
+        r = subprocess.run(_cli_argv([_copilot_bin, "--version"]), capture_output=True, timeout=5)
         if r.returncode == 0:
             copilot_ok = True
             # First line of stdout, stripped — e.g. "GitHub Copilot CLI 1.0.56."
@@ -768,7 +783,7 @@ def setup_status(
     # Lightweight claude CLI probe (no spawn, just check executable exists)
     claude_ok = False
     try:
-        r = subprocess.run(["claude", "--version"], capture_output=True, timeout=5)
+        r = subprocess.run(_cli_argv(["claude", "--version"]), capture_output=True, timeout=5)
         claude_ok = r.returncode == 0
     except Exception:
         pass

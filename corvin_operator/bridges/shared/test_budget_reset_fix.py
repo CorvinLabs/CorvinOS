@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent
 
 def test_budget_reset_function_exists() -> bool:
     """Verify _reset_budget function exists in session_reset.py."""
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
     if "def _reset_budget(" in code:
         print("PASS: _reset_budget() function exists in session_reset.py")
         return True
@@ -30,7 +30,7 @@ def test_budget_reset_function_exists() -> bool:
 
 def test_budget_reset_called_in_reset_session() -> bool:
     """Verify _reset_budget is called from reset_session()."""
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
     if "budget_reset = _reset_budget(" in code:
         print("PASS: _reset_budget() is called in reset_session()")
         return True
@@ -41,7 +41,7 @@ def test_budget_reset_called_in_reset_session() -> bool:
 
 def test_budget_reset_in_output() -> bool:
     """Verify budget_reset field is in return dict."""
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
     if '"budget_reset":             budget_reset,' in code:
         print("PASS: budget_reset field added to return dict")
         return True
@@ -52,7 +52,7 @@ def test_budget_reset_in_output() -> bool:
 
 def test_context_budget_import() -> bool:
     """Verify context_budget import added."""
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
     if "from context_budget import" in code and "_unregister_budget" in code:
         print("PASS: context_budget import with _unregister_budget exists")
         return True
@@ -63,7 +63,7 @@ def test_context_budget_import() -> bool:
 
 def test_budget_reset_output_in_js() -> bool:
     """Verify budget reset status shown in JavaScript resetReply()."""
-    code = Path(ROOT / "js" / "in_chat_commands.js").read_text()
+    code = Path(ROOT / "js" / "in_chat_commands.js").read_text(encoding="utf-8")
     if "token budget reset:" in code and "out.budget_reset" in code:
         print("PASS: budget reset status displayed in Discord /new reply")
         return True

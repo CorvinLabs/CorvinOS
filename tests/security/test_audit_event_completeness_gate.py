@@ -31,7 +31,7 @@ def test_repository_passes_the_gate_in_a_bare_interpreter(tmp_path):
         [sys.executable, str(SCRIPT)],
         cwd=REPO, capture_output=True, text=True, timeout=120,
         env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
-             "CORVIN_HOME": str(tmp_path / "corvin")},
+             "CORVIN_HOME": str(tmp_path / "corvin")}, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "emitted, unregistered : 0" in proc.stdout
@@ -49,10 +49,10 @@ def test_counts_are_the_imported_dicts():
         "se=m.load_registry();print(len(se.EVENT_SEVERITY), len(se._EVENT_ALLOWLIST))"
     )
     counts = subprocess.run([sys.executable, "-c", probe], cwd=REPO,
-                            capture_output=True, text=True, timeout=120).stdout.split()
+                            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace").stdout.split()
     n_sev, n_allow = counts[-2], counts[-1]
     out = subprocess.run([sys.executable, str(SCRIPT)], cwd=REPO,
-                         capture_output=True, text=True, timeout=120).stdout
+                         capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace").stdout
     assert f"EVENT_SEVERITY entries : {n_sev}" in out
     assert f"_EVENT_ALLOWLIST entries: {n_allow}" in out
 

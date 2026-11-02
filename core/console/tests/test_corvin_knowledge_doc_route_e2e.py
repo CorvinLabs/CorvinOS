@@ -29,20 +29,20 @@ class KnowledgeDocRouteE2E(unittest.TestCase):
         kb = self.kb = self.tmp / "kb-repo"
         (kb / "scripts").mkdir(parents=True)
         for f in ("kb.py", "kb_model.py", "kb_lib.py"):
-            (kb / "scripts" / f).write_text((_KB_SCRIPTS / f).read_text())
+            (kb / "scripts" / f).write_text((_KB_SCRIPTS / f).read_text(encoding="utf-8"), encoding="utf-8")
         (kb / "kb/_meta").mkdir(parents=True)
         (kb / "kb/_meta/sources.yaml").write_text(
             "sources:\n  - name: kb\n    root: .\n    writable: true\n    dirs:\n"
-            "      decisions: decision\n      kb/tasks: task\n      kb/epics: epic\n      kb/initiatives: initiative\n")
-        (kb / "kb/audit.jsonl").write_text("")
+            "      decisions: decision\n      kb/tasks: task\n      kb/epics: epic\n      kb/initiatives: initiative\n", encoding="utf-8")
+        (kb / "kb/audit.jsonl").write_text("", encoding="utf-8")
         _sh("git", "init", "-q", "-b", "main", cwd=kb)
         _sh("git", "add", "-A", cwd=kb)   # kb refuses to write while kb/audit.jsonl is untracked
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init", cwd=kb)
         self.base = _kb(kb, "new", "decision", "--title", "Base decision")
         self.dep = _kb(kb, "new", "decision", "--title", "Depends on base")
         self.dep_file = next((kb / "decisions").glob(f"{self.dep['id']}-*.md"))
-        self.dep_file.write_text(self.dep_file.read_text().replace("depends_on: []", f"depends_on: [{self.base['id']}]")
-                                 + f"\nSee {self.base['id']} for the reason.\n")
+        self.dep_file.write_text(self.dep_file.read_text(encoding="utf-8").replace("depends_on: []", f"depends_on: [{self.base['id']}]")
+                                 + f"\nSee {self.base['id']} for the reason.\n", encoding="utf-8")
         self.index()
 
     def tearDown(self):
@@ -54,11 +54,11 @@ class KnowledgeDocRouteE2E(unittest.TestCase):
 
     def rewrite_path(self, ident: str, new_path: str):
         p = self.kb / "kb/graph/entities.jsonl"
-        rows = [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+        rows = [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
         for r in rows:
             if r.get("id") == ident:
                 r["path"] = new_path
-        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
     def get(self, key: str, *, login=True):
         from corvin_console.routes import plugins_corvin_knowledge_api as kg
@@ -99,7 +99,7 @@ class KnowledgeDocRouteE2E(unittest.TestCase):
 
     def test_path_outside_the_repo_is_never_read(self):
         outside = self.tmp / "outside.md"
-        outside.write_text("TOP SECRET")
+        outside.write_text("TOP SECRET", encoding="utf-8")
         for bad in (str(outside), "../outside.md", "/etc/passwd"):
             with self.subTest(path=bad):
                 self.rewrite_path(self.dep["id"], bad)
@@ -109,7 +109,7 @@ class KnowledgeDocRouteE2E(unittest.TestCase):
 
     def test_symlink_pointing_out_of_the_repo_is_refused(self):
         outside = self.tmp / "outside.md"
-        outside.write_text("TOP SECRET")
+        outside.write_text("TOP SECRET", encoding="utf-8")
         link = self.kb / "decisions" / "link.md"
         os.symlink(outside, link)
         self.rewrite_path(self.dep["id"], str(link))
@@ -122,7 +122,7 @@ class KnowledgeDocRouteE2E(unittest.TestCase):
         self.assertEqual(self.get(self.dep["id"]).status_code, 404)
 
     def test_oversized_document_is_413(self):
-        with self.dep_file.open("a") as fh:
+        with self.dep_file.open("a", encoding="utf-8") as fh:
             fh.write("x" * (600 * 1024))
         self.assertEqual(self.get(self.dep["id"]).status_code, 413)
 

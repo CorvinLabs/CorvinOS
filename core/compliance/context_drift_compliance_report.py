@@ -342,7 +342,7 @@ def generate_compliance_report_json(output_path: str = "context-drift-compliance
     reporter = ContextDriftComplianceReport()
     full_report = reporter.generate_full_report()
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(full_report, f, indent=2)
 
     logger.info(f"✅ Compliance report saved: {output_path}")

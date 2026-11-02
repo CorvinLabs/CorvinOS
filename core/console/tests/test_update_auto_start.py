@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="fake updater is
 
 def _git(cwd: Path, *a: str) -> str:
     return subprocess.run(["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", *a],
-                          check=True, capture_output=True, text=True).stdout
+                          check=True, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
 
 
 @pytest.fixture
@@ -32,9 +32,9 @@ def repo(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
     src = tmp_path / "src"
     subprocess.run(["git", "clone", "-q", str(origin), str(src)], check=True, capture_output=True)
-    (src / "pyproject.toml").write_text('[project]\nname = "corvinos"\nversion = "1.0.0"\n')
-    (src / "update.sh").write_text('#!/bin/sh\ndate +%s >> "$(dirname "$0")/runs.txt"\nexit 0\n')
-    (src / "update.ps1").write_text("")
+    (src / "pyproject.toml").write_text('[project]\nname = "corvinos"\nversion = "1.0.0"\n', encoding="utf-8")
+    (src / "update.sh").write_text('#!/bin/sh\ndate +%s >> "$(dirname "$0")/runs.txt"\nexit 0\n', encoding="utf-8")
+    (src / "update.ps1").write_text("", encoding="utf-8")
     _git(src, "checkout", "-q", "-B", "main")
     _git(src, "add", "-A"); _git(src, "commit", "-q", "-m", "init"); _git(src, "push", "-q", "origin", "main")
     monkeypatch.setenv("CORVIN_SRC_DIR", str(src))
@@ -46,7 +46,7 @@ def repo(tmp_path, monkeypatch):
 def _push_commit_without_version_bump(src: Path, tmp_path: Path) -> None:
     other = tmp_path / "other"
     subprocess.run(["git", "clone", "-q", str(src.parent / "origin.git"), str(other)], check=True, capture_output=True)
-    (other / "feature.txt").write_text("x")
+    (other / "feature.txt").write_text("x", encoding="utf-8")
     _git(other, "add", "-A"); _git(other, "commit", "-q", "-m", "feat: no version bump"); _git(other, "push", "-q", "origin", "main")
 
 
@@ -79,11 +79,11 @@ async def test_auto_update_runs_on_new_commit_and_only_once_per_commit(repo, tmp
         end = time.time() + 10
         while mgr.lock.locked() and time.time() < end:
             await asyncio.sleep(0.05)
-        assert (src / "runs.txt").read_text().count("\n") == 1
+        assert (src / "runs.txt").read_text(encoding="utf-8").count("\n") == 1
         # The fake updater does not pull, so HEAD is still behind - exactly the
         # rolled-back case. The same remote commit must not be attempted again.
         assert await um.auto_update_on_start("_default", enabled=True, delay_s=0) == "already-tried"
-    assert (src / "runs.txt").read_text().count("\n") == 1
+    assert (src / "runs.txt").read_text(encoding="utf-8").count("\n") == 1
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ async def test_a_refused_start_is_not_marked_as_attempted(repo, tmp_path):
     with patch.object(UpdateManager, "start_update", side_effect=um.UpdateNotAllowedError("busy")):
         assert await um.auto_update_on_start("_default", enabled=True, delay_s=0) == "busy"
     state_path = UpdateManager("_default").state_path()
-    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     assert "last_auto_target" not in state
     with patch("corvin_console.audit.action_performed"), patch("corvin_console.audit.action_failed"):
         assert await um.auto_update_on_start("_default", enabled=True, delay_s=0) == "started"
@@ -104,17 +104,17 @@ async def test_a_refused_start_is_not_marked_as_attempted(repo, tmp_path):
         end = time.time() + 10
         while mgr.lock.locked() and time.time() < end:
             await asyncio.sleep(0.05)
-    assert json.loads(state_path.read_text())["last_auto_target"]
+    assert json.loads(state_path.read_text(encoding="utf-8"))["last_auto_target"]
 
 
 def test_isolated_wrapper_records_result_even_if_console_is_gone(tmp_path):
     state = tmp_path / "state.json"
-    state.write_text(json.dumps({"status": "running", "started_at": 1.0, "version_before": "1.0.0"}))
+    state.write_text(json.dumps({"status": "running", "started_at": 1.0, "version_before": "1.0.0"}), encoding="utf-8")
     tree = tmp_path / "tree"; tree.mkdir()
-    (tree / "pyproject.toml").write_text('[project]\nversion = "7.7.7"\n')
+    (tree / "pyproject.toml").write_text('[project]\nversion = "7.7.7"\n', encoding="utf-8")
     subprocess.run([sys.executable, "-m", "corvin_console.update_manager", "--record", str(state), "1", str(tree)],
                    check=True, cwd=str(Path(um.__file__).resolve().parents[1]))
-    st = json.loads(state.read_text())
+    st = json.loads(state.read_text(encoding="utf-8"))
     assert st["version_after"] == "7.7.7"
     assert st["status"] == "failed" and "rolled back" in st["detail"] and st["finished_at"] > 1.0
     assert st["phase"] == "failed" and st["steps"]["update_script"]["status"] == "failed"

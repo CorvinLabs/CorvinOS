@@ -100,14 +100,14 @@ def test_wfb_r1_02_import_registers_code_without_consent_or_audit(sandbox):
     wf = _load_console_workflows()
     tools_dir = sandbox / "tenants" / "_default" / "global" / "forge" / "tools"
     tools_dir.mkdir(parents=True)
-    (tools_dir / "helper.py").write_text("def main():\n    return {'ok': 'original'}\n")
+    (tools_dir / "helper.py").write_text("def main():\n    return {'ok': 'original'}\n", encoding="utf-8")
     bundle = {"name": "helper", "code": "import os\n# evil\n", "description": "x"}
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("tools/helper.json", json.dumps(bundle))
     with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as zf:
         wf._register_tools_from_zip(zf, "_default")
-    text = (tools_dir / "helper.py").read_text()
+    text = (tools_dir / "helper.py").read_text(encoding="utf-8")
     assert text == "def main():\n    return {'ok': 'original'}\n", (
         "an imported bundle silently replaced an existing tenant tool implementation"
     )
@@ -133,7 +133,7 @@ def test_wfb_r1_04_resolve_skill_stays_inside_skill_dir(sandbox):
     (sandbox / "tenants" / "_default" / "global" / "skill-forge" / "skills").mkdir(parents=True)
     outside = sandbox / "escape"  # ../×5 from skills/ lands on CORVIN_HOME
     outside.mkdir(parents=True)
-    (outside / "SKILL.md").write_text("SECRET-OUTSIDE-SKILL")
+    (outside / "SKILL.md").write_text("SECRET-OUTSIDE-SKILL", encoding="utf-8")
     got = wf._resolve_skill("_default", "../../../../../escape")
     assert got is None, f"traversal skill name escaped the skill store and returned {len(got)} bytes"
 
@@ -155,9 +155,9 @@ def test_wfb_r1_06_compliance_zone_fails_closed_on_corrupt_tenant_yaml(sandbox):
     but a corrupt file silently yields {} (no policy) and the run is allowed."""
     wf = _load_console_workflows()
     cfg = sandbox / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
-    cfg.write_text("spec:\n  data_residency:\n    forbid_engines: [claude-code]\n")
+    cfg.write_text("spec:\n  data_residency:\n    forbid_engines: [claude-code]\n", encoding="utf-8")
     assert wf._check_compliance_zone("_default", "wid", "rid", "fp") is not None
-    cfg.write_text("spec:\n  data_residency:\n    forbid_engines: [claude-code\n")  # broken YAML
+    cfg.write_text("spec:\n  data_residency:\n    forbid_engines: [claude-code\n", encoding="utf-8")  # broken YAML
     assert wf._check_compliance_zone("_default", "wid", "rid", "fp") is not None, (
         "a corrupt tenant.corvin.yaml removed the forbid_engines policy instead of refusing the run"
     )
@@ -284,9 +284,9 @@ def test_wfb_r1_12_erasure_removes_awpkg_sidecar(sandbox):
 
     wd = _workflows_home(sandbox)
     subject = "subj-r1"
-    (wd / "w1.meta.json").write_text(json.dumps({"id": "w1", "owner": subject}))
-    (wd / "w1.awp.yaml").write_text("awp: '1.0'\n# personal text\n")
-    (wd / "w1.chat.jsonl").write_text("{}\n")
+    (wd / "w1.meta.json").write_text(json.dumps({"id": "w1", "owner": subject}), encoding="utf-8")
+    (wd / "w1.awp.yaml").write_text("awp: '1.0'\n# personal text\n", encoding="utf-8")
+    (wd / "w1.chat.jsonl").write_text("{}\n", encoding="utf-8")
     (wd / "w1.awpkg").write_bytes(b"PK-sidecar-with-yaml")
     WorkflowChatHandler(tenant_id="_default").purge(subject, "er-r1")
     assert not (wd / "w1.awpkg").exists(), "the .awpkg sidecar with the workflow YAML survived erasure"
@@ -329,7 +329,7 @@ def test_wfb_r1_15_scheduled_console_workflow_runs(sandbox):
     wd = _workflows_home(sandbox)
     (wd / "my_flow.awp.yaml").write_text(
         "awp: '1.0.0'\nworkflow:\n  name: my_flow\n  description: a console-authored flow\norchestration:\n  graph:\n"
-        "    - id: a\n      type: deliver\n      depends_on: []\n      config: {channel: discord, chat_id: x}\n"
+        "    - id: a\n      type: deliver\n      depends_on: []\n      config: {channel: discord, chat_id: x}\n", encoding="utf-8"
     )
     outbox = sandbox / "outbox"
     item = {"id": "t2", "channel": "console", "chat_id": "c", "workflow_name": "my_flow",
@@ -340,7 +340,7 @@ def test_wfb_r1_15_scheduled_console_workflow_runs(sandbox):
         scheduler._run_workflow_to_outbox(item, now=time.time())
     finally:
         _os.environ.pop("ADAPTER_OUTBOX", None)
-    reports = [json.loads(p.read_text()) for p in outbox.glob("sched_wf_t2_*.json")]
+    reports = [json.loads(p.read_text(encoding="utf-8")) for p in outbox.glob("sched_wf_t2_*.json")]
     assert reports and reports[0]["exit_code"] == 0, (
         f"the scheduled run of a console-authored workflow failed: {reports[0]['text'][:200] if reports else 'no report'}"
     )
@@ -394,10 +394,10 @@ def test_wfb_r1_18_schedule_file_survives_concurrent_writers(sandbox):
     tasks it could not parse. Silent data loss, not an error."""
     import scheduler
     scheduler.SCHEDULE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    scheduler.SCHEDULE_FILE.write_text('[{"id": "keep-me", "next_run": 1')  # truncated write
+    scheduler.SCHEDULE_FILE.write_text('[{"id": "keep-me", "next_run": 1', encoding="utf-8")  # truncated write
     with pytest.raises(scheduler.ScheduleFileCorrupt):          # a writer refuses (2026-10-21)
         scheduler.add_task(channel="console", chat_id="c", sender="s", text="t", when="in 5m")
-    assert "keep-me" in scheduler.SCHEDULE_FILE.read_text(), "the corrupt schedule file was overwritten"
+    assert "keep-me" in scheduler.SCHEDULE_FILE.read_text(encoding="utf-8"), "the corrupt schedule file was overwritten"
 
 
 def test_wfb_r1_19_invalid_cron_is_rejected_by_route(sandbox):
@@ -416,7 +416,7 @@ def test_wfb_r1_19_invalid_cron_is_rejected_by_route(sandbox):
     client.cookies.set("corvin_console_sid", rec.sid)
     client.headers.update({"X-CSRF-Token": csrf})
     wd = _workflows_home(sandbox)
-    (wd / "sched_wf.meta.json").write_text(json.dumps({"id": "sched_wf", "title": "t"}))
+    (wd / "sched_wf.meta.json").write_text(json.dumps({"id": "sched_wf", "title": "t"}), encoding="utf-8")
     resp = client.put("/v1/console/workflows/sched_wf/schedule",
                       json={"cron": "every day at noon", "timezone": "Mars/Olympus", "overrun": "skip"})
     assert resp.status_code in (400, 422), (

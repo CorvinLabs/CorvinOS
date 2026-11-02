@@ -60,7 +60,7 @@ def test_tts_runner_never_logs_key_material(monkeypatch, caplog):
 
 @pytest.mark.parametrize("name", ["run_openai_tts_e2e_tests.py", "generate_concept_videos.py"])
 def test_no_hardwired_live_tree_paths(name):
-    src = (SCRIPTS / name).read_text()
+    src = (SCRIPTS / name).read_text(encoding="utf-8")
     assert "/home/shumway" not in src
     assert 'projects/CorvinOS/' not in src
 
@@ -74,12 +74,12 @@ def test_concept_videos_output_dir_is_this_checkout():
 def test_csrf_bulk_fixers_refuse(tmp_path, name):
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS / name)],
-        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path,
+        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "defused" in proc.stderr
     assert "core.security.csrf" in proc.stderr
-    assert "/home/shumway" not in (SCRIPTS / name).read_text()
+    assert "/home/shumway" not in (SCRIPTS / name).read_text(encoding="utf-8")
 
 
 def _mini_repo(tmp_path: Path) -> Path:
@@ -87,7 +87,7 @@ def _mini_repo(tmp_path: Path) -> Path:
     (root / "pkg").mkdir(parents=True)
     (root / "pkg" / "routes.py").write_text(
         "from fastapi import APIRouter\nrouter = APIRouter()\n\n"
-        "@router.post('/x')\ndef create_x():\n    return {}\n"
+        "@router.post('/x')\ndef create_x():\n    return {}\n", encoding="utf-8"
     )
     return root
 
@@ -97,7 +97,7 @@ def test_csrf_inventory_writes_nothing_by_default(tmp_path, name):
     root = _mini_repo(tmp_path)
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS / name), "--repo-root", str(root)],
-        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path,
+        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Vulnerable endpoints (no CSRF protection): 1" in proc.stdout  # positive control
@@ -111,17 +111,17 @@ def test_csrf_inventory_writes_only_to_output(tmp_path, name):
     out = tmp_path / "todo.txt"
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS / name), "--repo-root", str(root), "--output", str(out)],
-        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path,
+        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "pkg/routes.py" in out.read_text()
+    assert "pkg/routes.py" in out.read_text(encoding="utf-8")
     assert not (root / "TODO_CSRF_ENDPOINTS.txt").exists()
 
 
 def test_rebuild_from_carve_help_names_real_default(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS / "recovery" / "rebuild_from_carve.py"), "--help"],
-        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path,
+        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path, encoding="utf-8", errors="replace",
     )
     # --help may exit before or after imports; either way the text is printed
     out = " ".join((proc.stdout + proc.stderr).split())

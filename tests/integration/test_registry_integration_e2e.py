@@ -227,7 +227,7 @@ class TestPluginBuilderDeployment:
         plugin_path.mkdir()
         (plugin_path / "src").mkdir()
         (plugin_path / "tests").mkdir()
-        (plugin_path / "README.md").write_text("# Test Plugin\n")
+        (plugin_path / "README.md").write_text("# Test Plugin\n", encoding="utf-8")
 
         # Setup: Create a valid plugin.json
         manifest = {
@@ -237,7 +237,7 @@ class TestPluginBuilderDeployment:
             "tier": "buildin",
             "category": "test",
         }
-        (plugin_path / "plugin.json").write_text(json.dumps(manifest))
+        (plugin_path / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Act: Validate plugin
         is_valid, errors = plugin_builder_adapter.validate_generated_plugin(plugin_path)
@@ -268,7 +268,7 @@ class TestPluginBuilderDeployment:
         plugin_path.mkdir()
         (plugin_path / "src").mkdir()
         (plugin_path / "tests").mkdir()
-        (plugin_path / "README.md").write_text("# Test Plugin\n")
+        (plugin_path / "README.md").write_text("# Test Plugin\n", encoding="utf-8")
         manifest = {
             "plugin_id": "test-plugin",
             "name": "Test Plugin",
@@ -276,7 +276,7 @@ class TestPluginBuilderDeployment:
             "tier": "buildin",
             "category": "test",
         }
-        (plugin_path / "plugin.json").write_text(json.dumps(manifest))
+        (plugin_path / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Act: Deploy plugin
         success, message, audit_id = registry_bridge.deploy_plugin_from_builder(

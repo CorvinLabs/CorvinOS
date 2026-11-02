@@ -219,7 +219,7 @@ class E2ETestDetector:
                 continue
 
             try:
-                with open(test_file) as f:
+                with open(test_file, encoding="utf-8") as f:
                     content = f.read()
 
                     # Extract test names

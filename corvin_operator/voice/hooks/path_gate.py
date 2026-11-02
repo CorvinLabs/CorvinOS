@@ -211,12 +211,71 @@ def _abs(p: str | Path) -> Path:
     real file. expandvars covers ``$HOME``/``${XDG_CONFIG_HOME}`` forms; command
     substitution ($(...)/backticks) is already fail-closed in _bash_targets."""
     pp = Path(_normalize_msys_drive(os.path.expanduser(os.path.expandvars(str(p)))))
+    if _IS_WIN:
+        pp = Path(_win_canonical_str(str(pp)))
     if not pp.is_absolute():
         pp = Path.cwd() / pp
     try:
-        return pp.resolve(strict=False)
+        pp = pp.resolve(strict=False)
     except (OSError, RuntimeError):
-        return pp
+        pass
+    if _IS_WIN:
+        # Case-folded (NTFS is case-insensitive): a not-yet-existing leaf such
+        # as ``forge\POLICY.JSON`` keeps the caller's case through resolve(),
+        # and every protected-name test below compares lowercase literals.
+        pp = Path(os.path.normcase(_win_strip_aliases(_win_canonical_str(str(pp)))))
+    return pp
+
+
+_IS_WIN = sys.platform.startswith("win")
+_WIN_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"})
+_WIN_ADMIN_SHARE_RE = re.compile(r"^\\\\([^\\]+)\\([A-Za-z])\$(\\.*)?$")
+
+
+def _win_canonical_str(s: str) -> str:
+    """Windows only: rewrite the alternative spellings of a local drive path to
+    the plain ``C:\\...`` form, so prefix checks against the protected roots
+    see them. Without this ``\\\\?\\C:\\...\\forge\\policy.json`` (Win32
+    extended-length form, kept verbatim by ``resolve()``) and
+    ``\\\\localhost\\C$\\...`` (loopback admin share) both named a protected file
+    yet matched no root, and the write went through. Handles ``\\\\?\\``,
+    ``\\\\.\\``, ``\\\\?\\UNC\\<host>\\...`` and loopback ``<host>\\X$`` shares."""
+    if s[:4] in ("\\\\?\\", "\\\\.\\"):
+        rest = s[4:]
+        s = "\\\\" + rest[4:] if rest[:4].upper() == "UNC\\" else rest
+    m = _WIN_ADMIN_SHARE_RE.match(s)
+    if m:
+        host = m.group(1).lower()
+        try:
+            import socket  # noqa: PLC0415
+            local = {socket.gethostname().lower()}
+        except Exception:  # noqa: BLE001
+            local = set()
+        if host in _WIN_LOOPBACK_HOSTS or host.startswith("127.") or host in local:
+            s = f"{m.group(2).upper()}:{m.group(3) or chr(92)}"
+    return s
+
+
+def _win_strip_aliases(s: str) -> str:
+    """Windows only: drop what Win32 ignores when it opens a not-yet-existing
+    path — trailing dots/spaces of a component (``audit.jsonl.`` creates
+    ``audit.jsonl``) and an NTFS stream suffix (``policy.json::$DATA`` IS the
+    file's content). ``resolve()`` canonicalises these only for existing paths."""
+    drive, rest = os.path.splitdrive(s)
+    out = []
+    for c in rest.split("\\"):
+        if c not in (".", ".."):
+            c = c.split(":", 1)[0].rstrip(" .") or c
+        out.append(c)
+    return drive + "\\".join(out)
+
+
+def _ref(p: str | Path) -> str:
+    """A protected ROOT/file in the same comparison form ``_abs`` gives the
+    target: unchanged ``str(p)`` on POSIX; on Windows resolved, de-prefixed and
+    case-folded (``CORVIN_HOME=c:\\users\\...`` or an 8.3 short name used to
+    make every ``startswith(home)`` test miss)."""
+    return str(_abs(p)) if _IS_WIN else str(p)
 
 
 def _is_ledger_store_path(path: str | Path) -> bool:
@@ -262,7 +321,7 @@ def is_protected_path(path: str | Path) -> bool:
         return True
 
     home = _corvin_home()
-    home_str = str(home)
+    home_str = _ref(home)
     if abs_str == home_str or abs_str.startswith(home_str + sep):
         rel_parts = abs_str[len(home_str):].lstrip(sep).split(sep)
         if "forge" in rel_parts or "skill-forge" in rel_parts:
@@ -354,13 +413,13 @@ def is_protected_path(path: str | Path) -> bool:
     repo = _repo_root()
     if repo is not None:
         slot = repo / "corvin_operator" / "skill-forge" / "skills" / "dyn"
-        slot_str = str(slot)
+        slot_str = _ref(slot)
         if abs_str == slot_str or abs_str.startswith(slot_str + sep):
             return True
-        bundled_policy = str(repo / "corvin_operator" / "forge" / "forge" / "policy.json")
+        bundled_policy = _ref(repo / "corvin_operator" / "forge" / "forge" / "policy.json")
         if abs_str == bundled_policy:
             return True
-        bundled_default = str(repo / "corvin_operator" / "forge" / "forge" / "policy.default.json")
+        bundled_default = _ref(repo / "corvin_operator" / "forge" / "forge" / "policy.default.json")
         if abs_str == bundled_default:
             return True
         # ADR-0143 Layer 44 — house-rules acceptable-use policy + its gate module.
@@ -369,8 +428,8 @@ def is_protected_path(path: str | Path) -> bool:
         # EXPECTED_POLICY_SHA256 integrity anchor + the gate logic) would defeat
         # the L44 acceptable-use guarantee without touching the audit chain.
         # Operator-side edits happen via git, not an in-process write tool.
-        house_rules_policy = str(repo / "corvin_operator" / "policy" / "house_rules.yaml")
-        house_rules_mod = str(repo / "corvin_operator" / "bridges" / "shared" / "house_rules.py")
+        house_rules_policy = _ref(repo / "corvin_operator" / "policy" / "house_rules.yaml")
+        house_rules_mod = _ref(repo / "corvin_operator" / "bridges" / "shared" / "house_rules.py")
         if abs_str in (house_rules_policy, house_rules_mod):
             return True
         # ADR-0093 M1.3 — license plugin source tree (verifier.py, tier_flags.py,
@@ -378,7 +437,7 @@ def is_protected_path(path: str | Path) -> bool:
         # patch to these files would bypass has_flag() / _verify_ed25519() locally
         # without touching the audit chain. Block the entire subdirectory.
         license_src = repo / "core" / "license" / "corvin_license"
-        license_src_str = str(license_src)
+        license_src_str = _ref(license_src)
         if abs_str == license_src_str or abs_str.startswith(license_src_str + sep):
             return True
         # Also protect the CorvinOS-side validator and limits modules under
@@ -391,7 +450,7 @@ def is_protected_path(path: str | Path) -> bool:
         # rewritten .pem (forging the attestation anchor) bypasses the gate that
         # blocks the equivalent .py edit. Block code + trust-anchor suffixes.
         op_license = repo / "corvin_operator" / "license"
-        op_license_str = str(op_license)
+        op_license_str = _ref(op_license)
         if abs_str.startswith(op_license_str + sep) and abs_p.suffix in (
             ".py", ".so", ".dylib", ".pyd", ".pem",
         ):
@@ -405,7 +464,7 @@ def is_protected_path(path: str | Path) -> bool:
         # or `python -m corvin_gateway.cli sbom build`.
         # Supply-chain manifests live under core/ and corvin_operator/ (was plugins/ before ADR-0035)
         _in_plugin_tree = any(
-            abs_str.startswith(str(repo / _d) + sep)
+            abs_str.startswith(_ref(repo / _d) + sep)
             for _d in ("core", "corvin_operator", "plugins")
         )
         if _in_plugin_tree:
@@ -424,7 +483,7 @@ def is_protected_path(path: str | Path) -> bool:
     # tool-allowlist layer, not this path-gate (corrected round-3: the prior
     # comment overclaimed read-denial that this function never enforced).
     vault = _vault_path()
-    vault_str = str(vault)
+    vault_str = _ref(vault)
     if abs_str == vault_str:
         return True
     # Also protect the parent dir against bulk-write tricks like
@@ -437,7 +496,7 @@ def is_protected_path(path: str | Path) -> bool:
     # by _find_token) lives in the same ~/.config/corvin-voice/ dir and is just
     # as operator-only as secrets.json — an LLM-side wipe forces a license
     # downgrade / DoS until session_refresh rewrites it.
-    if abs_str.startswith(str(vault.parent) + sep) and \
+    if abs_str.startswith(_ref(vault.parent) + sep) and \
             abs_p.name in ("secrets.json", "session.key"):
         return True
     # R4 addendum: when CORVIN_SECRET_VAULT points to a custom path, vault.parent
@@ -649,6 +708,19 @@ def _pin_hint(cmd: str) -> str:
     return ""
 
 
+def _pin_key(script: str) -> str:
+    """The pin-table key for a script named in a command: the string itself.
+
+    Windows only: the table key is ``str(Path)`` (backslash-separated), but a
+    Bash command there can only spell that path ``C:/.../kb.py`` or
+    ``/c/.../kb.py`` - Git-Bash eats unquoted backslashes - so the pinned tool
+    could never match and was always refused. Same absolute path, separator
+    spelling only: relative, ``~`` and ``$VAR`` forms still never match."""
+    if not _IS_WIN:
+        return script
+    return _normalize_msys_drive(script).replace("/", "\\")
+
+
 def _pinned_tool_gate(cmd: str) -> tuple[frozenset[str], str]:
     """Return (exempt script strings, deny reason).
 
@@ -662,21 +734,26 @@ def _pinned_tool_gate(cmd: str) -> tuple[frozenset[str], str]:
     exempt: set[str] = set()
     for m in _PY_FILE_RE.finditer(cmd):
         script = m.group(1)
-        bundle = _PINNED_PYTHON_TOOLS.get(script)          # exact string match, nothing else counts
+        bundle = _PINNED_PYTHON_TOOLS.get(_pin_key(script))  # exact string match, nothing else counts
         if bundle is None:
             continue
         if _PIN_REFUSED_CMD_RE.search(cmd):
             return frozenset(), (f"pinned tool {script!r} refused: the command carries an option or environment "
                                  f"that makes it run other code")
-        base = Path(script).parent
+        base = Path(_pin_key(script)).parent
         for name, want in bundle.items():
             p = base / name
             try:
                 if p.is_symlink() or not p.is_file():
                     return frozenset(), f"pinned tool file {name!r} is missing or not a regular file"
-                got = hashlib.sha256(p.read_bytes()).hexdigest()
+                data = p.read_bytes()
             except OSError:
                 return frozenset(), f"pinned tool file {name!r} is unreadable"
+            got = hashlib.sha256(data).hexdigest()
+            # The pins are taken from the LF blob; a Windows checkout (core.autocrlf=true) has CRLF on disk.
+            # Python's tokenizer reads CRLF exactly as LF, so the CRLF->LF form runs the very same code.
+            if not hmac.compare_digest(got, want) and b"\r\n" in data:
+                got = hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
             if not hmac.compare_digest(got, want):
                 return frozenset(), (f"pinned tool file {name!r} changed (sha256 mismatch); review it, then "
                                      f"update the pin in path_gate.py")
@@ -989,7 +1066,7 @@ def _dir_at_or_under_corvin_home(d: str) -> bool:
     roots: list[str] = []
     for _resolver in (_corvin_home, lambda: _vault_path().parent):
         try:
-            r = str(_resolver()).rstrip(sep)
+            r = _ref(_resolver()).rstrip(sep)
             if r:
                 roots.append(r)
         except Exception:  # noqa: BLE001
@@ -1094,7 +1171,7 @@ def _touches_corvin_tree(target: str) -> bool:
     roots: list[str] = []
     for _resolver in (_corvin_home, lambda: _vault_path().parent):
         try:
-            r = str(_resolver()).rstrip(sep)
+            r = _ref(_resolver()).rstrip(sep)
             if r:
                 roots.append(r)
         except Exception:  # noqa: BLE001
@@ -2147,7 +2224,22 @@ def path_gate_self_test() -> tuple[bool, list[str]]:
     return False, failures
 
 
+def _utf8_stdio() -> None:
+    """Claude Code speaks UTF-8 on the hook's stdin/stdout/stderr. On Windows
+    without UTF-8 mode those streams use the ANSI code page: a non-ASCII path
+    in the payload is mis-decoded, and a deny reason containing one raises
+    UnicodeEncodeError -> exit 1, a NON-blocking hook error (fail-open). No-op
+    where the streams are already UTF-8 (Linux/macOS, PYTHONUTF8=1)."""
+    for _s in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            if _s is not None and (_s.encoding or "").replace("-", "").lower() != "utf8":
+                _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main() -> int:
+    _utf8_stdio()
     raw = sys.stdin.read()
     if not raw.strip():
         return 0

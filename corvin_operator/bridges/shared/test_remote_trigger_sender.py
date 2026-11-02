@@ -137,7 +137,7 @@ def _write_origin_file(origins_dir: Path, origin_id: str) -> None:
         "allowed_personas": ["assistant"],
     }
     path = origins_dir / f"{origin_id}.json"
-    path.write_text(json.dumps(cfg))
+    path.write_text(json.dumps(cfg), encoding="utf-8")
     path.chmod(0o600)
 
 
@@ -156,7 +156,7 @@ def _write_endpoint_file(
         "our_origin_id": ORIGIN_ID,
     }
     path = endpoints_dir / f"{endpoint_id}.json"
-    path.write_text(json.dumps(cfg))
+    path.write_text(json.dumps(cfg), encoding="utf-8")
     path.chmod(0o600)
 
 
@@ -189,7 +189,7 @@ class TestEndpointRegistry(unittest.TestCase):
             "hmac_key": HMAC_KEY, "recv_key": RECV_KEY,
             "instance_id": "", "enabled": False,
         }
-        (self.endpoints_dir / f"{ENDPOINT_ID}.json").write_text(json.dumps(cfg))
+        (self.endpoints_dir / f"{ENDPOINT_ID}.json").write_text(json.dumps(cfg), encoding="utf-8")
         (self.endpoints_dir / f"{ENDPOINT_ID}.json").chmod(0o600)
         reg = rts.RemoteEndpointRegistry(self.endpoints_dir)
         with self.assertRaises(rts.EndpointError) as ctx:
@@ -231,7 +231,7 @@ class TestEndpointRegistry(unittest.TestCase):
             "hmac_key": HMAC_KEY, "recv_key": RECV_KEY,
             "instance_id": "", "enabled": True,
         }
-        (self.endpoints_dir / f"{ENDPOINT_ID}.json").write_text(json.dumps(cfg))
+        (self.endpoints_dir / f"{ENDPOINT_ID}.json").write_text(json.dumps(cfg), encoding="utf-8")
         (self.endpoints_dir / f"{ENDPOINT_ID}.json").chmod(0o600)
         reg = rts.RemoteEndpointRegistry(self.endpoints_dir)
         with self.assertRaises(rts.EndpointError) as ctx:
@@ -243,7 +243,7 @@ class TestEndpointRegistry(unittest.TestCase):
             "endpoint_id": ENDPOINT_ID, "url": "http://x/",
             "enabled": True,  # missing hmac_key + recv_key
         }
-        (self.endpoints_dir / f"{ENDPOINT_ID}.json").write_text(json.dumps(cfg))
+        (self.endpoints_dir / f"{ENDPOINT_ID}.json").write_text(json.dumps(cfg), encoding="utf-8")
         (self.endpoints_dir / f"{ENDPOINT_ID}.json").chmod(0o600)
         reg = rts.RemoteEndpointRegistry(self.endpoints_dir)
         with self.assertRaises(rts.EndpointError) as ctx:
@@ -313,9 +313,9 @@ class TestSenderE2E(unittest.TestCase):
     def test_pin_mismatch_rejected(self):
         # Configure a wrong pin
         cfg_path = self.endpoints_dir / f"{ENDPOINT_ID}.json"
-        cfg = json.loads(cfg_path.read_text())
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         cfg["instance_id"] = "wrong-pin"
-        cfg_path.write_text(json.dumps(cfg))
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
         cfg_path.chmod(0o600)
 
         sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
@@ -327,9 +327,9 @@ class TestSenderE2E(unittest.TestCase):
     def test_empty_pin_allows_any(self):
         # No pin → instance_id_match True regardless of receiver iid
         cfg_path = self.endpoints_dir / f"{ENDPOINT_ID}.json"
-        cfg = json.loads(cfg_path.read_text())
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         cfg["instance_id"] = ""
-        cfg_path.write_text(json.dumps(cfg))
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
         cfg_path.chmod(0o600)
 
         sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
@@ -346,9 +346,9 @@ class TestSenderE2E(unittest.TestCase):
     def test_transport_failure_returns_error(self):
         # Point endpoint at an unused port
         cfg_path = self.endpoints_dir / f"{ENDPOINT_ID}.json"
-        cfg = json.loads(cfg_path.read_text())
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         cfg["url"] = "http://127.0.0.1:1/v1/a2a/receive"
-        cfg_path.write_text(json.dumps(cfg))
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
         cfg_path.chmod(0o600)
 
         sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
@@ -363,9 +363,9 @@ class TestSenderE2E(unittest.TestCase):
         import a2a_connectivity
         from unittest.mock import patch
         cfg_path = self.endpoints_dir / f"{ENDPOINT_ID}.json"
-        cfg = json.loads(cfg_path.read_text())
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         cfg["url"] = "http://127.0.0.1:1/v1/a2a/receive"
-        cfg_path.write_text(json.dumps(cfg))
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
         cfg_path.chmod(0o600)
         sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
         with patch.object(a2a_connectivity, "wake") as wake:

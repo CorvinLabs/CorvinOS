@@ -50,7 +50,7 @@ def _probe(home: Path) -> dict:
     }
     out = subprocess.run(
         [sys.executable, "-c", PROBE], env=env, cwd=str(REPO),
-        capture_output=True, text=True, timeout=180,
+        capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace",
     )
     assert out.returncode == 0, out.stderr[-2000:]
     return json.loads(out.stdout.strip().splitlines()[-1])
@@ -58,7 +58,7 @@ def _probe(home: Path) -> dict:
 
 def _fake_cli(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\necho 2.0.0\n")
+    path.write_text("#!/bin/sh\necho 2.0.0\n", encoding="utf-8")
     path.chmod(0o755)
     return path
 
@@ -75,7 +75,7 @@ def test_console_resolves_cli_off_service_path(tmp_path: Path, rel: str) -> None
     # claude (there is no fallback engine), so the fake HOME carries a session.
     creds = tmp_path / ".claude" / ".credentials.json"
     creds.parent.mkdir(parents=True, exist_ok=True)
-    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "test"}}))
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "test"}}), encoding="utf-8")
     got = _probe(tmp_path)
     # Positive control: the stripped PATH really cannot see the CLI.
     assert got["before"] is None

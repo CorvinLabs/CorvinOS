@@ -284,7 +284,9 @@ def _askpass_helper(cache_dir: Path) -> Path:
     helper = Path(cache_dir) / ".git-askpass.sh"
     if not helper.is_file() or helper.read_text(encoding="utf-8") != _ASKPASS_SCRIPT:
         fd = os.open(str(helper), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        # newline="\n": a text-mode write on Windows emits CRLF, and Git for
+        # Windows runs this helper through its sh, which chokes on `in\r`.
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(_ASKPASS_SCRIPT)
     os.chmod(helper, 0o700)
     return helper
@@ -304,7 +306,7 @@ def _git(args: list[str], cwd: Path, *, pat: "str | None" = None,
         env["GIT_ASKPASS"] = str(_askpass_helper(cache_dir or Path(cwd)))
         env["CORVIN_SYNC_GIT_PAT"] = pat
     proc = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
-                          text=True, timeout=180, env=env)
+                          text=True, timeout=180, env=env, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise SyncError(f"git {args[0]} failed: {proc.stderr.strip()[:200]}")
     return proc.stdout

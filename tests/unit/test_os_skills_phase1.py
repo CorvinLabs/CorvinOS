@@ -32,7 +32,7 @@ class TestSkillManager:
         # Mock skill bundle
         skill_dir = temp_corvin_home / 'test_skill'
         skill_dir.mkdir()
-        (skill_dir / 'manifest.yaml').write_text('name: test.skill\nversion: "1.0.0"\n')
+        (skill_dir / 'manifest.yaml').write_text('name: test.skill\nversion: "1.0.0"\n', encoding="utf-8")
 
         result = mgr.install_skill(skill_dir)
 
@@ -58,7 +58,7 @@ class TestSkillManager:
 
         skill_dir = temp_corvin_home / 'bad_skill2'
         skill_dir.mkdir()
-        (skill_dir / 'manifest.yaml').write_text('version: "1.0.0"\n')
+        (skill_dir / 'manifest.yaml').write_text('version: "1.0.0"\n', encoding="utf-8")
 
         result = mgr.install_skill(skill_dir)
 
@@ -119,7 +119,7 @@ class TestStateManager:
         state_file = temp_skill_dir / 'runs' / state.run_id / 'run_state.json'
         assert state_file.exists()
 
-        with open(state_file) as f:
+        with open(state_file, encoding="utf-8") as f:
             data = json.load(f)
         assert data['skill_id'] == 'test.skill'
         assert data['skill_version'] == '1.0.0'
@@ -138,7 +138,7 @@ class TestStateManager:
         mgr.commit_phase_output(state.run_id, 3, {'decision': 'native'})
 
         state_file = temp_skill_dir / 'runs' / state.run_id / 'run_state.json'
-        with open(state_file) as f:
+        with open(state_file, encoding="utf-8") as f:
             data = json.load(f)
 
         assert data['phase_completed'] == 3
@@ -235,7 +235,7 @@ boot_layer: bundled
 origin: builtin
 scope: local_development
 """
-        temp_manifest.write_text(manifest_yaml)
+        temp_manifest.write_text(manifest_yaml, encoding="utf-8")
 
         report = validate_skill_manifest(temp_manifest)
 
@@ -248,7 +248,7 @@ scope: local_development
 name: test.skill
 version: "1.0.0"
 """
-        temp_manifest.write_text(manifest_yaml)
+        temp_manifest.write_text(manifest_yaml, encoding="utf-8")
 
         report = validate_skill_manifest(temp_manifest)
 
@@ -266,7 +266,7 @@ input_schema: {type: object}
 output_schema: {type: object}
 learning_signal: {}
 """
-        temp_manifest.write_text(manifest_yaml)
+        temp_manifest.write_text(manifest_yaml, encoding="utf-8")
 
         report = validate_skill_manifest(temp_manifest)
 
@@ -284,7 +284,7 @@ input_schema: "not an object"
 output_schema: {type: object}
 learning_signal: {}
 """
-        temp_manifest.write_text(manifest_yaml)
+        temp_manifest.write_text(manifest_yaml, encoding="utf-8")
 
         report = validate_skill_manifest(temp_manifest)
 
@@ -308,7 +308,7 @@ triggers: []
 input_schema: {type: object}
 output_schema: {type: object}
 learning_signal: {}
-""")
+""", encoding="utf-8")
             (skill_dir / 'runs').mkdir()
             yield skill_dir
 
@@ -404,7 +404,7 @@ triggers: []
 input_schema: {type: object}
 output_schema: {type: object}
 learning_signal: {}
-""")
+""", encoding="utf-8")
 
         # Install
         install_result = mgr.install_skill(skill_bundle)

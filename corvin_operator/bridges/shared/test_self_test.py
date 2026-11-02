@@ -155,6 +155,7 @@ class HomeResolverTests(unittest.TestCase):
 
 
 class MemoryCheckTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits only (NTFS ACLs)")
     def test_critical_when_recall_db_world_readable(self) -> None:
         with _Sandbox() as sbx:
             mem = sbx.home / "global" / "memory"
@@ -193,10 +194,11 @@ class MemoryCheckTests(unittest.TestCase):
 
 
 class VaultCheckTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits only (NTFS ACLs)")
     def test_critical_when_vault_world_readable(self) -> None:
         with _Sandbox() as sbx:
             sbx.fake_vault.parent.mkdir(parents=True)
-            sbx.fake_vault.write_text("{}")
+            sbx.fake_vault.write_text("{}", encoding="utf-8")
             os.chmod(sbx.fake_vault, 0o644)
             checks = st._check_vault()
             mode = next(c for c in checks if c.name == "vault.mode_0600")
@@ -251,7 +253,7 @@ class CLITests(unittest.TestCase):
                 env={**os.environ,
                      "CORVIN_HOME": os.environ["CORVIN_HOME"],
                      "CORVIN_TENANT_ID": "_default"},
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
             )
             self.assertIn(r.returncode, (0, 1))
             data = json.loads(r.stdout)
@@ -358,7 +360,7 @@ def _write_tenant_yaml(sandbox: _Sandbox, content: str) -> Path:
     home so _load_tenant_config_for_self_test() finds it."""
     cfg = sandbox.home / "global" / "tenant.corvin.yaml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text(content)
+    cfg.write_text(content, encoding="utf-8")
     return cfg
 
 
@@ -642,13 +644,15 @@ class A2AKeyFileCheckTests(unittest.TestCase):
             self.assertEqual(c.severity, st.INFO)
             self.assertTrue(c.ok)
 
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits only (NTFS ACLs)")
+
     def test_critical_on_world_readable_origin_key(self) -> None:
         """A world-readable origin JSON must trigger CRITICAL."""
         origins = self._origins_dir()
         key_file = origins / "_test_origin.json"
         try:
             origins.mkdir(parents=True, exist_ok=True)
-            key_file.write_text('{"hmac_key": "deadbeef"}')
+            key_file.write_text('{"hmac_key": "deadbeef"}', encoding="utf-8")
             os.chmod(key_file, 0o644)
             checks = st._check_a2a_key_files()
             origin_check = next(
@@ -668,7 +672,7 @@ class A2AKeyFileCheckTests(unittest.TestCase):
         key_file = endpoints / "_test_endpoint.json"
         try:
             endpoints.mkdir(parents=True, exist_ok=True)
-            key_file.write_text('{"api_key": "secret"}')
+            key_file.write_text('{"api_key": "secret"}', encoding="utf-8")
             os.chmod(key_file, 0o600)
             checks = st._check_a2a_key_files()
             endpoint_check = next(

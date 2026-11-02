@@ -45,7 +45,7 @@ class RAGErasureHandler:
 
             # Check if provider has erasure handler configured
             import yaml
-            with open(manifest_path) as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 manifest = yaml.safe_load(f)
 
             # Canonical manifest key is snake_case `erasure_handler` (what the
@@ -70,7 +70,7 @@ class RAGErasureHandler:
             )
 
             # Append to erasure log (immutable trail)
-            with open(self.erasure_log, "a") as f:
+            with open(self.erasure_log, "a", encoding="utf-8") as f:
                 f.write(
                     f"{request.subject_id}|{request.provider_id}|{request.reason}\n"
                 )

@@ -46,7 +46,7 @@ def load_env_file(path: Path) -> Dict[str, str]:
     if not path.exists():
         return result
     
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -58,7 +58,7 @@ def load_env_file(path: Path) -> Dict[str, str]:
 
 def save_env_file(path: Path, data: Dict[str, str]) -> None:
     """Save a dict to a .env or service.env file."""
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for key, value in data.items():
             f.write(f"{key}={value}\n")
 

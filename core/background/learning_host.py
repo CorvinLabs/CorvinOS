@@ -75,7 +75,7 @@ def _atomic_write(path: Path, data: dict) -> None:
     fd, tmp = tempfile.mkstemp(prefix=".state.", suffix=".tmp", dir=str(path.parent))
     try:
         os.fchmod(fd, 0o600) if hasattr(os, "fchmod") else None
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, separators=(",", ":"))
         os.replace(tmp, path)
     except BaseException:
@@ -103,7 +103,7 @@ class _Lease:
         if self._fh is not None:
             return True
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fh = open(self.path, "a+")
+        fh = open(self.path, "a+", encoding="utf-8")
         try:
             try:
                 import fcntl  # noqa: PLC0415
@@ -112,7 +112,9 @@ class _Lease:
             except ImportError:  # Windows
                 import msvcrt  # noqa: PLC0415
 
-                fh.seek(0)
+                # Same sentinel byte (1 TiB) the corvin_core/forge fcntl shims
+                # lock, so a process WITH the shim and one without exclude each other.
+                os.lseek(fh.fileno(), 1 << 40, os.SEEK_SET)
                 msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError:
             fh.close()
@@ -184,7 +186,7 @@ class LearningHost:
         if not path.exists():
             return False
         try:
-            raw = json.loads(path.read_text())
+            raw = json.loads(path.read_text(encoding="utf-8"))
             refused_reason = None if isinstance(raw, dict) else "not_an_object"
         except (OSError, ValueError):
             raw, refused_reason = {}, "unreadable"
@@ -532,7 +534,7 @@ def read_state_summary(tenant_id: str) -> dict[str, Any]:
     read what it last saved. ``running`` is only knowable in the process that hosts it
     (see :func:`status`)."""
     try:
-        raw = json.loads(state_path(tenant_id).read_text())
+        raw = json.loads(state_path(tenant_id).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"tenant_id": tenant_id, "state": "none", "saved_at": None, "weights": {},
                 "queue": [], "regenerations": [], "decisions": 0, "anomalies": [], "pending_inbox_files": len(

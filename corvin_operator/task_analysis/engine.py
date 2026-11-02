@@ -8,6 +8,7 @@ Integrates Context Engineering Layer (Phase 5.5) for memory enrichment.
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 from .normalizer import TaskNormalizer, InsufficientTaskInfo
@@ -28,7 +29,9 @@ SkillInjection = None
 
 try:
     # Load context_engineering module directly by file path (avoid stdlib operator)
-    cel_path = __file__.rsplit('/', 2)[0] + '/context_engineering/__init__.py'
+    # pathlib, not rsplit('/'): __file__ uses '\' on Windows, where the string
+    # split found no '/' and the CEL module was silently never loaded.
+    cel_path = str(Path(__file__).resolve().parents[1] / 'context_engineering' / '__init__.py')
     spec = importlib.util.spec_from_file_location("context_engineering", cel_path)
     if spec and spec.loader:
         cel_module = importlib.util.module_from_spec(spec)

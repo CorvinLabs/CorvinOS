@@ -42,7 +42,7 @@ def run_hook(payload: dict, config: dict | None,
     if config is None:
         relay_cfg.unlink(missing_ok=True)
     else:
-        relay_cfg.write_text(json.dumps(config))
+        relay_cfg.write_text(json.dumps(config), encoding="utf-8")
 
     OUTBOX.mkdir(parents=True, exist_ok=True)
     # Outbox vor dem Lauf säubern (nur unsere relay_*-Files).
@@ -53,7 +53,7 @@ def run_hook(payload: dict, config: dict | None,
     env["ADAPTER_OUTBOX"] = str(OUTBOX)
     res = subprocess.run(
         ["python3", str(RELAY)],
-        input=json.dumps(payload), text=True, capture_output=True, env=env,
+        input=json.dumps(payload), text=True, capture_output=True, env=env, encoding="utf-8", errors="replace",
     )
     new_files = [p for p in OUTBOX.glob("relay_*.json") if p.name not in pre]
     return res.returncode, new_files
@@ -84,7 +84,7 @@ def main() -> int:
              "m=u.module_from_spec(s);s.loader.exec_module(m);"
              "print(m._shared_outbox())"],
             capture_output=True, text=True,
-            env={k: v for k, v in os.environ.items() if k != "ADAPTER_OUTBOX"},
+            env={k: v for k, v in os.environ.items() if k != "ADAPTER_OUTBOX"}, encoding="utf-8", errors="replace",
         )
         default_path = Path(probe.stdout.strip())
         if default_path != REAL_OUTBOX:
@@ -129,7 +129,7 @@ def main() -> int:
         if rc != 0 or len(files) != 1:
             failures.append(f"notification: rc={rc} files={files}")
         else:
-            env = json.loads(files[0].read_text())
+            env = json.loads(files[0].read_text(encoding="utf-8"))
             if (env.get("channel") != "telegram"
                     or env.get("chat_id") != "999"
                     or "Tool needs approval" not in env.get("text", "")
@@ -150,7 +150,7 @@ def main() -> int:
         if rc != 0 or len(files) != 1:
             failures.append(f"sessionstart: rc={rc} files={files}")
         else:
-            env = json.loads(files[0].read_text())
+            env = json.loads(files[0].read_text(encoding="utf-8"))
             if "myproject" not in env.get("text", ""):
                 failures.append(f"sessionstart text missing cwd: {env}")
             else:
@@ -197,7 +197,7 @@ def main() -> int:
         if rc != 0 or len(files) != 1:
             failures.append(f"slack: rc={rc} files={files}")
         else:
-            env = json.loads(files[0].read_text())
+            env = json.loads(files[0].read_text(encoding="utf-8"))
             if env.get("channel") != "slack" or env.get("chat_id") != "C0CHANNEL9":
                 failures.append(f"slack chat_id not honoured: {env}")
             else:

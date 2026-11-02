@@ -541,6 +541,16 @@ class BridgeSupervisorPlugin:
                 return
             except (ProcessLookupError, PermissionError, OSError):
                 pass  # fall through to the single-process path
+        else:
+            # Windows: terminate() is TerminateProcess on the daemon pid alone (no graceful
+            # step exists either way), so its helpers (the WhatsApp daemon's browser) were
+            # left running after every unload. End the whole tree.
+            try:
+                from corvin_core.process_signals import kill_tree_windows  # noqa: PLC0415
+                if kill_tree_windows(proc.pid):
+                    return
+            except ImportError:
+                pass
         try:
             if terminate:
                 proc.terminate()

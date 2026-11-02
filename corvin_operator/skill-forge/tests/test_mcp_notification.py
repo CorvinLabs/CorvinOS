@@ -55,7 +55,7 @@ class _Client:
             text=True,
             bufsize=1,
             cwd=str(SKILL_FORGE_PKG),
-            env=env,
+            env=env, encoding="utf-8", errors="replace",
         )
         self._next_id = 0
         self._buf: list[dict[str, Any]] = []

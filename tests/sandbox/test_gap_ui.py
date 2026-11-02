@@ -58,7 +58,7 @@ def gw(sandbox, live_tripwire):
     (home / "files").mkdir(parents=True, exist_ok=True)
     (home / "files" / "ui-readme.txt").write_text("hello from the ui proof", encoding="utf-8")
     (home / "global").mkdir(parents=True, exist_ok=True)
-    (home / "global" / "connector_vault.json").write_text(json.dumps({"openai": "SBX-UI-VAULT-1"}))
+    (home / "global" / "connector_vault.json").write_text(json.dumps({"openai": "SBX-UI-VAULT-1"}), encoding="utf-8")
     # a STORED custom key, written by the same two writers apply_byok_secret() uses (L16 vault
     # item tagged byok + service.env), so the API Keys list and the delete both see a real key
     seed = sandbox.run_child(SEED_KEY, str(harness.REPO_ROOT / "corvin_operator"))
@@ -149,7 +149,7 @@ def test_UI_api_key_delete_removes_the_stored_key(gw, browser_page, sandbox):
         row_delete.click()
     resp = resp_info.value
     assert resp.status in (200,), f"delete answered {resp.status}: {resp.text()[:200]}"
-    env_text = ENV_PATH.read_text()
+    env_text = ENV_PATH.read_text(encoding="utf-8")
     assert "CORVIN_CUSTOM_SBXUIKEY" not in env_text, "the key is still in service.env"
 
 

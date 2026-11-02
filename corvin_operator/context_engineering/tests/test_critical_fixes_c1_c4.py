@@ -92,7 +92,7 @@ class TestQueueCorruptionRecovery:
         """C1: Corrupted records detected and skipped."""
         # Manually create a corrupted record
         queue_file = queue.queue_root / "2026-08-07.jsonl"
-        with open(queue_file, "w") as f:
+        with open(queue_file, "w", encoding="utf-8") as f:
             # Valid record
             valid = {
                 "context_id": "adr-0269",
@@ -117,7 +117,7 @@ class TestQueueCorruptionRecovery:
     def test_corruption_raises_when_strict(self, queue):
         """C1: Corruption raises error when skip_corrupt=False."""
         queue_file = queue.queue_root / "2026-08-07.jsonl"
-        with open(queue_file, "w") as f:
+        with open(queue_file, "w", encoding="utf-8") as f:
             corrupted = {
                 "context_id": "adr-0269",
                 "task_id": "task-001",
@@ -216,7 +216,7 @@ class TestAtomicSymlinks:
 
             # Create a dummy profile file
             new_profile = profile_dir / "tenant-baseline.v202608071800.json"
-            new_profile.write_text('{"data": "test"}')
+            new_profile.write_text('{"data": "test"}', encoding="utf-8")
 
             # Atomic update
             success = AtomicSymlinkManager.atomic_symlink_update(
@@ -238,7 +238,7 @@ class TestAtomicSymlinks:
 
             # Create initial profile
             v1 = profile_dir / "tenant-baseline.v202608071400.json"
-            v1.write_text('{"version": 1}')
+            v1.write_text('{"version": 1}', encoding="utf-8")
 
             # Initial symlink
             AtomicSymlinkManager.atomic_symlink_update(
@@ -250,7 +250,7 @@ class TestAtomicSymlinks:
 
             # Update to v2
             v2 = profile_dir / "tenant-baseline.v202608071800.json"
-            v2.write_text('{"version": 2}')
+            v2.write_text('{"version": 2}', encoding="utf-8")
 
             AtomicSymlinkManager.atomic_symlink_update(
                 profile_dir, "tenant-baseline", "202608071800"
@@ -266,7 +266,7 @@ class TestAtomicSymlinks:
             profile_dir = Path(tmpdir)
 
             profile = profile_dir / "tenant-baseline.v202608071800.json"
-            profile.write_text("{}")
+            profile.write_text("{}", encoding="utf-8")
 
             AtomicSymlinkManager.atomic_symlink_update(
                 profile_dir, "tenant-baseline", "202608071800"
@@ -402,14 +402,14 @@ class TestC1C4Integration:
 
             # Manually corrupt one record in the file
             queue_file = queue.queue_root / "2026-08-07.jsonl"
-            lines = queue_file.read_text().strip().split("\n")
+            lines = queue_file.read_text(encoding="utf-8").strip().split("\n")
 
             # Corrupt the first line
             corrupted_dict = json.loads(lines[0])
             corrupted_dict["checksum"] = "wrong_checksum"
             lines[0] = json.dumps(corrupted_dict)
 
-            queue_file.write_text("\n".join(lines) + "\n")
+            queue_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
             # Read with skip_corrupt: should recover
             records = list(queue.read_all_records(skip_corrupt=True))
@@ -426,14 +426,14 @@ class TestC1C4Integration:
             v1.write_text(json.dumps({
                 "confidence_scores": {"adr-0269": 0.85},
                 "danger_zones": ["skipping tests when urgent"],
-            }))
+            }), encoding="utf-8")
 
             AtomicSymlinkManager.atomic_symlink_update(
                 profile_dir, "tenant-baseline", "202608071400"
             )
 
             symlink = profile_dir / "tenant-baseline.json"
-            profile = json.loads(symlink.read_text())
+            profile = json.loads(symlink.read_text(encoding="utf-8"))
 
             # Danger zones enforced
             guard = DangerZoneGuard({"tenant-baseline": profile})

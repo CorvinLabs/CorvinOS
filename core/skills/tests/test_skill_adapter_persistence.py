@@ -119,7 +119,7 @@ class TestRouterConsumesLearnedConfig:
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
         skills = tmp_path / "tenants" / TENANT / "skills"
         skills.mkdir(parents=True)
-        (skills / "os_delegation_router_config.json").write_text("{not json")
+        (skills / "os_delegation_router_config.json").write_text("{not json", encoding="utf-8")
         out = DelegationRouterSkill().execute({"complexity": 9, "task_type": "chat", "tenant_id": TENANT})
         assert out["engine"] in self.ENGINES  # advice survives; no threshold is invented
         assert "learned_config_version" not in out

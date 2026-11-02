@@ -254,7 +254,7 @@ class DetectorPluginRegistry:
 
             # Load metadata
             try:
-                with open(metadata_file, "r") as f:
+                with open(metadata_file, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
             except Exception as e:
                 _logger.error(f"Plugin {plugin_name}: failed to load metadata.json: {e}")

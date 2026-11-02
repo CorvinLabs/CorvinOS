@@ -166,7 +166,7 @@ def test_result_shape():
 def test_no_anthropic_import():
     """AST walk — the module must not import the anthropic SDK (L25 rule)."""
     import ast
-    tree = ast.parse(Path(emr.__file__).read_text())
+    tree = ast.parse(Path(emr.__file__).read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             assert all(a.name != "anthropic" and not a.name.startswith("anthropic.")

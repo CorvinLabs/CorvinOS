@@ -207,12 +207,12 @@ class BackendRegistry:
     def _load_yaml(self, path: Path, yaml_available: bool) -> dict:
         if yaml_available:
             import yaml  # type: ignore[import]
-            with path.open() as f:
+            with path.open(encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}
         # Fallback: minimal parser for simple key: value (no nested structures)
         # Only used in environments without PyYAML — covers basic test cases.
         result: dict = {}
-        with path.open() as f:
+        with path.open(encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and ":" in line:

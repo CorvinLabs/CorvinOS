@@ -60,7 +60,7 @@ class TaskCLI:
             logger.info(f"Found checkpoint: {latest_checkpoint_path}")
 
             # Load and validate checkpoint JSON
-            with open(latest_checkpoint_path, 'r') as f:
+            with open(latest_checkpoint_path, 'r', encoding="utf-8") as f:
                 checkpoint_data = json.load(f)
 
             checkpoint_id = checkpoint_data.get("checkpoint_id", latest_checkpoint_path.stem)

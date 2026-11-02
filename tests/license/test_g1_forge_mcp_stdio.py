@@ -44,7 +44,7 @@ def _decisions():
              / "forge" / "audit.jsonl")
     if not chain.exists():
         return []
-    return [r["details"] for r in map(json.loads, chain.read_text().splitlines())
+    return [r["details"] for r in map(json.loads, chain.read_text(encoding="utf-8").splitlines())
             if r.get("event_type") == "license.capability_decision"]
 
 

@@ -25,7 +25,7 @@ def alert_rules():
     Module-scoped (it used to be defined inside TestPrometheusAlerts, so
     TestAlertNaming errored with "fixture 'alert_rules' not found").
     """
-    with open(ALERTS_FILE, "r") as f:
+    with open(ALERTS_FILE, "r", encoding="utf-8") as f:
         content = f.read()
         # Remove comments for YAML parsing
         lines = [line for line in content.split("\n") if not line.strip().startswith("#")]
@@ -39,7 +39,7 @@ class TestPrometheusAlerts:
 
     def test_alert_yaml_valid(self):
         """Test that alert rules YAML is valid."""
-        with open(ALERTS_FILE, "r") as f:
+        with open(ALERTS_FILE, "r", encoding="utf-8") as f:
             # Should parse without errors
             content = f.read()
             lines = [line for line in content.split("\n") if not line.strip().startswith("#")]

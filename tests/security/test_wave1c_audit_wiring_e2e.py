@@ -45,7 +45,7 @@ def _chain(home: Path, tenant: str = "_default") -> Path:
 def _records(chain: Path, event_type: str) -> list[dict]:
     if not chain.exists():
         return []
-    rows = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    rows = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return [r for r in rows if r.get("event_type") == event_type]
 
 
@@ -115,7 +115,7 @@ _A2A_CLI = _REPO / "corvin_operator" / "voice" / "scripts" / "corvin_a2a.py"
 def _pair(tmp_path: Path, env: dict, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(_A2A_CLI), "pair", "peerx", "http://127.0.0.1:9", *extra],
-        env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=120,
+        env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
     )
 
 
@@ -123,7 +123,7 @@ def _t_offline_recorded(tmp_path):
     env = _env(tmp_path)
     res = _pair(tmp_path, env, "--offline-pair")
     assert res.returncode == 0, res.stderr[-2000:]
-    origin = json.loads((tmp_path / "origins" / "peerx.json").read_text())
+    origin = json.loads((tmp_path / "origins" / "peerx.json").read_text(encoding="utf-8"))
     assert origin["require_network_attestation"] is False
 
     chain = _chain(tmp_path / "home")
@@ -147,7 +147,7 @@ def _t_offline_refused(tmp_path):
     # forge directory must go.
     g = tmp_path / "home" / "tenants" / "_default" / "global"
     g.mkdir(parents=True)
-    (g / "forge").write_text("not a directory")
+    (g / "forge").write_text("not a directory", encoding="utf-8")
     res = _pair(tmp_path, env, "--offline-pair")
     assert res.returncode == 1
     assert "offline pairing refused" in res.stderr
@@ -167,7 +167,7 @@ def _t_genesis_fence():
             if "/tests/" in s or p.name.startswith("test_") or p.name == "nbac.py":
                 continue
             try:
-                text = p.read_text(errors="ignore")
+                text = p.read_text(errors="ignore", encoding="utf-8")
             except OSError:
                 continue
             if "sign_genesis_block(" in text or "build_genesis_payload(" in text:

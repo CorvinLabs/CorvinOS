@@ -73,7 +73,7 @@ class TestValidateZipIntegrity:
     def test_corrupted_zip(self, tmp_path):
         """Corrupted ZIP should raise."""
         bad_zip = tmp_path / "bad.zip"
-        bad_zip.write_text("not a zip file")
+        bad_zip.write_text("not a zip file", encoding="utf-8")
 
         with pytest.raises(ValidationError, match="ZIP archive corrupted"):
             PackageValidator.validate_zip_integrity(bad_zip)

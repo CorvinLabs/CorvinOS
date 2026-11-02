@@ -136,7 +136,7 @@ class CaptureRoutesE2E(unittest.TestCase):
                 self.assertEqual(rec["details"]["host"], "example.com")
                 self.assertEqual(rec["details"]["url_sha256_prefix"], prefix)
                 self.assertNotIn("_dropped_fields", rec["details"])
-            chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text()
+            chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
             for leak in ("SECRET-QUERY-123", "campaign", "https://example.com", "pricing page"):
                 self.assertNotIn(leak, chain)
             acc = done[0]["details"]
@@ -157,7 +157,7 @@ class CaptureRoutesE2E(unittest.TestCase):
             self.assertEqual(ca.get(f"{V}/assets").json()["assets"][0]["caption"], "Example home")
             upd = _chain_records(home, "tenant_a", "video_producer.asset_updated")
             self.assertEqual([(u["details"]["hotspot_count"], u["details"]["caption_changed"]) for u in upd], [(2, True)])
-            chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text()
+            chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("Example home", chain)
             from forge import security_events as se
             ok, problems = se.verify_chain(home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl")
@@ -216,7 +216,7 @@ class CaptureRoutesE2E(unittest.TestCase):
             fetched = [d for d in done if d["details"]["refusal"] != "egress_denied"]
             self.assertEqual(len(_chain_records(home, "tenant_a", "video_producer.capture_started")),
                              len([d for d in fetched if d["details"]["outcome"] != "refused"]))
-            chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text()
+            chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
             for leak in ("local-login", "meta-data", "capture-e2e-probe.invalid/"):
                 self.assertNotIn(leak, chain)
 

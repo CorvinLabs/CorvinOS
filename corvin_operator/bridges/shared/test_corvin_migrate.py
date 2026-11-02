@@ -49,8 +49,8 @@ def _seed_legacy_tree(legacy: Path, *, files: int = 3) -> None:
     legacy.mkdir(parents=True)
     (legacy / "global" / "forge").mkdir(parents=True)
     for i in range(files):
-        (legacy / "global" / "forge" / f"f{i}.txt").write_text(f"data-{i}")
-    (legacy / "audit.jsonl").write_text("{}\n")
+        (legacy / "global" / "forge" / f"f{i}.txt").write_text(f"data-{i}", encoding="utf-8")
+    (legacy / "audit.jsonl").write_text("{}\n", encoding="utf-8")
 
 
 def test_no_legacy_no_op() -> None:
@@ -76,7 +76,7 @@ def test_corvin_already_exists_no_op() -> None:
         new = td_p / ".corvin"
         _seed_legacy_tree(legacy)
         new.mkdir()
-        (new / "marker").write_text("already-here")
+        (new / "marker").write_text("already-here", encoding="utf-8")
         m = _fresh_module()
         result = m.migrate_home_if_needed(new_home=new, legacy_home=legacy)
         t("status == skipped-target-exists",
@@ -84,7 +84,7 @@ def test_corvin_already_exists_no_op() -> None:
           detail=str(result))
         t("legacy still intact", legacy.exists() and (legacy / "audit.jsonl").exists())
         t("corvin marker untouched",
-          (new / "marker").read_text() == "already-here")
+          (new / "marker").read_text(encoding="utf-8") == "already-here")
 
 
 def test_opt_out_env() -> None:
@@ -141,12 +141,12 @@ def test_same_fs_rename() -> None:
         t("new dir exists", new.exists())
         t("legacy dir gone", not legacy.exists())
         t("contents transferred",
-          (new / "global" / "forge" / "f0.txt").read_text() == "data-0")
+          (new / "global" / "forge" / "f0.txt").read_text(encoding="utf-8") == "data-0")
         t("audit.jsonl in new tree",
           (new / "audit.jsonl").exists())
         # Audit event landed
         if audit_path.exists():
-            line = audit_path.read_text().strip().splitlines()[-1]
+            line = audit_path.read_text(encoding="utf-8").strip().splitlines()[-1]
             ev = json.loads(line)
             t("audit event session.path_migrated",
               ev.get("event_type") == "session.path_migrated",
@@ -183,11 +183,11 @@ def test_cross_fs_copy_with_marker(monkeypatched_rename: bool = True) -> None:
         t("method == copy", result["method"] == "copy")
         t("new dir exists", new.exists())
         t("contents copied",
-          (new / "global" / "forge" / "f0.txt").read_text() == "data-0")
+          (new / "global" / "forge" / "f0.txt").read_text(encoding="utf-8") == "data-0")
         # Cross-FS path leaves the legacy dir + a MIGRATED marker file
         t("MIGRATED marker placed in legacy",
           (legacy / "MIGRATED").exists())
-        marker_text = (legacy / "MIGRATED").read_text()
+        marker_text = (legacy / "MIGRATED").read_text(encoding="utf-8")
         t("MIGRATED marker points at new", str(new) in marker_text)
 
 

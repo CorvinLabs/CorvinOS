@@ -91,7 +91,7 @@ def test_openrouter_key_round_trips_to_canonical_env_var(tmp_path, monkeypatch):
     _isolated_service_env(tmp_path, monkeypatch)
     service_env = tmp_path / "service.env"
     provider_keys.write_key("openrouter_api_key", "sk-or-v1-test123", path_override=service_env)
-    assert "OPENROUTER_API_KEY=sk-or-v1-test123" in service_env.read_text()
+    assert "OPENROUTER_API_KEY=sk-or-v1-test123" in service_env.read_text(encoding="utf-8")
     assert provider_keys.resolve_key("openrouter_api_key") == "sk-or-v1-test123"
 
 
@@ -99,7 +99,7 @@ def test_ollama_key_round_trips_to_canonical_env_var(tmp_path, monkeypatch):
     _isolated_service_env(tmp_path, monkeypatch)
     service_env = tmp_path / "service.env"
     provider_keys.write_key("ollama_api_key", "ollama-cloud-secret", path_override=service_env)
-    assert "OLLAMA_API_KEY=ollama-cloud-secret" in service_env.read_text()
+    assert "OLLAMA_API_KEY=ollama-cloud-secret" in service_env.read_text(encoding="utf-8")
     assert provider_keys.resolve_key("ollama_api_key") == "ollama-cloud-secret"
 
 
@@ -139,7 +139,7 @@ def test_resolve_by_env_var_prefers_live_process_env_over_file(tmp_path, monkeyp
 def test_console_byok_route_lists_openrouter_and_ollama():
     import importlib
     byok_route = importlib.import_module("corvin_console.routes.byok")
-    src = Path(byok_route.__file__).read_text()
+    src = Path(byok_route.__file__).read_text(encoding="utf-8")
     assert '"openrouter_api_key"' in src
     assert '"ollama_api_key"' in src
 

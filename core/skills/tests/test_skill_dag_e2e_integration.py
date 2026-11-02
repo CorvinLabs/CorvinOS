@@ -92,7 +92,7 @@ class TestSkillsDAGEndToEnd:
         """Set up registry with real skills and dependencies."""
         # Create audit backend with temporary file
         self.audit_path = Path(tempfile.gettempdir()) / f"test_audit_{id(self)}.jsonl"
-        self.audit_path.write_text("")
+        self.audit_path.write_text("", encoding="utf-8")
 
         self.audit_backend = CoreAuditBackend(
             tenant_id="_default",

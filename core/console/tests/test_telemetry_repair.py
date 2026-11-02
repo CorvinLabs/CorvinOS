@@ -84,7 +84,7 @@ _FIX = "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n"
 def _runner(repo):
     def run(cmd):
         p = subprocess.run([sys.executable, "-m", "pytest", *cmd, "-q"],
-                           cwd=str(repo), capture_output=True, text=True, timeout=300)
+                           cwd=str(repo), capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
         return p.returncode, (p.stdout + p.stderr)[-300:]   # raw pytest rc
     return (lambda targets: run(targets)), (lambda: run([]))
 
@@ -99,7 +99,7 @@ def test_repro_gate_proves_real_fix(tmp_path):
     assert res.proven and res.stage_a_red and res.stage_b_green and res.stage_c_green
     # gate leaves the tree clean
     assert subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
-                          capture_output=True, text=True).stdout.strip() == ""
+                          capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip() == ""
 
 
 def test_repro_gate_rejects_test_that_does_not_reproduce(tmp_path):
@@ -205,7 +205,7 @@ def test_synth_queues_recurring_localized_only(tmp_path):
     assert len(res["queued"]) == 1                  # the recurring one
     pend = list((home / "aco" / "diagnoses" / "pending").glob("*.json"))
     assert len(pend) == 1
-    diag = json.loads(pend[0].read_text())
+    diag = json.loads(pend[0].read_text(encoding="utf-8"))
     assert diag["requires_repro_test"] is True
     assert diag["file"] == "core/console/corvin_console/aco/foo.py"
     assert diag["repro"]["occurrences"] == 3
@@ -215,7 +215,7 @@ def test_synth_queues_recurring_localized_only(tmp_path):
 
 def test_synth_dedups_known(tmp_path):
     home = tmp_path / "home"; (home / "logs").mkdir(parents=True)
-    (home / "logs" / "corvin.log").write_text(_tb(val=1) + _tb(val=2) + _tb(val=3))
+    (home / "logs" / "corvin.log").write_text(_tb(val=1) + _tb(val=2) + _tb(val=3), encoding="utf-8")
     DS.synthesize(home, min_occurrences=3)
     res2 = DS.synthesize(home, min_occurrences=3)   # second run: already known
     assert res2["queued"] == [] and res2["skipped_known"] >= 1
@@ -223,7 +223,7 @@ def test_synth_dedups_known(tmp_path):
 
 def test_synth_ingests_telemetry_counts(tmp_path):
     home = tmp_path / "home"; (home / "logs").mkdir(parents=True)
-    (home / "logs" / "corvin.log").write_text(_tb(val=1))   # only 1 locally
+    (home / "logs" / "corvin.log").write_text(_tb(val=1), encoding="utf-8")   # only 1 locally
     sig = ES.parse_tracebacks(_tb(val=1))[0]
     tsig = {**sig.to_dict(), "count": 5, "instance": "userX"}  # foreign users saw it 5×
     res = DS.synthesize(home, min_occurrences=3, telemetry_sigs=[tsig])
@@ -294,7 +294,7 @@ def test_telemetry_opt_in_collects_scrubbed(tmp_path, monkeypatch):
 
 def test_telemetry_submit_uses_injected_http_and_moves_sent(tmp_path):
     home = tmp_path / "home"; (home / "logs").mkdir(parents=True)
-    (home / "logs" / "corvin.log").write_text(_tb(val=1))
+    (home / "logs" / "corvin.log").write_text(_tb(val=1), encoding="utf-8")
     TEL.grant_consent(home, pseudonym="t")
     rep = TEL.collect_local(home)
     TEL.write_outbox(home, rep, stamp="0001")
@@ -371,8 +371,8 @@ def test_telemetry_ingest_inbox_roundtrip(tmp_path):
     rep = {"schema": "aco.telemetry/1", "instance": "u1",
            "signatures": [{"signature": "abc", "exc_type": "ValueError",
                            "top_repo_file": "core/x.py", "count": 4}]}
-    (inbox / "r1.json").write_text(json.dumps(rep))
-    (inbox / "bad.json").write_text(json.dumps({"schema": "other"}))
+    (inbox / "r1.json").write_text(json.dumps(rep), encoding="utf-8")
+    (inbox / "bad.json").write_text(json.dumps({"schema": "other"}), encoding="utf-8")
     out = TEL.ingest_inbox(inbox)
     assert len(out) == 1 and out[0]["signature"] == "abc" and out[0]["instance"] == "u1"
 
@@ -394,7 +394,7 @@ def _cap_repo(tmp_path, monkeypatch):
     repo = tmp_path / "repo"; repo.mkdir()
     def g(*a): subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
     g("init", "-b", "main"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
-    (repo / "app.py").write_text("x = 1\n"); g("add", "-A"); g("commit", "-m", "init")
+    (repo / "app.py").write_text("x = 1\n", encoding="utf-8"); g("add", "-A"); g("commit", "-m", "init")
     return repo
 
 
@@ -413,7 +413,7 @@ def test_loop_fail_closed_when_proof_required_but_no_runner(tmp_path, monkeypatc
     assert r.status == "repro_failed" and "no repro_runner" in r.detail
     # main untouched
     head = subprocess.run(["git", "-C", str(repo), "show", "main:app.py"],
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     assert head == "x = 1\n"
 
 

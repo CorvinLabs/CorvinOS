@@ -85,7 +85,7 @@ def _load_preset(name: str) -> dict[str, Any]:
     path = _PRESETS_DIR / name
     if not path.is_file():
         raise unittest.SkipTest(f"preset template missing: {path}")
-    return yaml.safe_load(path.read_text())
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 class TestNoEgressToAnthropic(unittest.TestCase):
@@ -311,7 +311,7 @@ class TestErasureCrossLayer(unittest.TestCase):
             trail = Path(td) / "erasure" / f"{req.request_id}.json"
             self.assertTrue(trail.is_file())
             self.assertEqual(trail.stat().st_mode & 0o777, 0o600)
-            data = json.loads(trail.read_text())
+            data = json.loads(trail.read_text(encoding="utf-8"))
             self.assertEqual(data["request"]["subject_id"], "user_42")
             # notes field is preserved on the trail (operator visibility)
             self.assertIn("must NOT leak", data["request"]["notes"])
@@ -382,7 +382,7 @@ class TestAuditChainSurvivesRotation(unittest.TestCase):
             audit = Path(td) / "audit.jsonl"
             prev = ""
             # Write 5 entries
-            with audit.open("w") as fh:
+            with audit.open("w", encoding="utf-8") as fh:
                 for i in range(5):
                     rec = self._make_entry(prev, i)
                     fh.write(json.dumps(rec) + "\n")
@@ -402,7 +402,7 @@ class TestAuditChainSurvivesRotation(unittest.TestCase):
             # The fresh live file starts with rotation_link; ADR-0135 M2
             # may also append audit.chain_anchor_written immediately after.
             self.assertTrue(audit.is_file())
-            lines = audit.read_text().splitlines()
+            lines = audit.read_text(encoding="utf-8").splitlines()
             self.assertGreaterEqual(len(lines), 1)
             link = json.loads(lines[0])
             self.assertEqual(link["event_type"], "audit.rotation_link")
@@ -431,7 +431,7 @@ class TestAuditChainSurvivesRotation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             audit = Path(td) / "audit.jsonl"
             prev = ""
-            with audit.open("w") as fh:
+            with audit.open("w", encoding="utf-8") as fh:
                 for i in range(3):
                     rec = self._make_entry(prev, i)
                     fh.write(json.dumps(rec) + "\n")
@@ -444,7 +444,7 @@ class TestAuditChainSurvivesRotation(unittest.TestCase):
             )
             rotate_and_seal(audit, policy)
 
-            link = json.loads(audit.read_text().splitlines()[0])
+            link = json.loads(audit.read_text(encoding="utf-8").splitlines()[0])
             # R3-A1: the sealer MACs the rotation link under the anchor key, so a
             # forged "rotation" cannot be minted by anyone who can only edit
             # audit.jsonl. `mac` is NOT part of the chain hash — recompute over

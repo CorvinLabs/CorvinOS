@@ -155,7 +155,7 @@ class TestStartSweep(_Store):
         bad_bin, bad_meta = root / ("C" * 32 + ".bin"), root / ("C" * 32 + ".json")
         for p in (old_bin, young_bin, bad_bin):
             p.write_bytes(b"x" * 100)
-        bad_meta.write_text("{not json")
+        bad_meta.write_text("{not json", encoding="utf-8")
         past = time.time() - o.MAX_TTL_S - 60
         for p in (old_bin, bad_bin, bad_meta):
             os.utime(p, (past, past))

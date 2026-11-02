@@ -308,7 +308,7 @@ class OTELIntegrator:
             )
 
             record = asdict(signal)
-            with open(fallback_file, "a") as f:
+            with open(fallback_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record) + "\n")
 
             self.audit_logger.info(
@@ -399,7 +399,7 @@ class OTELIntegrator:
         )
         fallback_count = 0
         if fallback_file.exists():
-            with open(fallback_file) as f:
+            with open(fallback_file, encoding="utf-8") as f:
                 fallback_count = sum(1 for _ in f)
 
         return {

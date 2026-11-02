@@ -86,7 +86,7 @@ def _onboarding_complete() -> bool:
         base = _Path.home() / ".corvin"
     onboarding_path = base / "tenants" / "_default" / "global" / "onboarding.json"
     try:
-        return bool(_json.loads(onboarding_path.read_text()).get("complete"))
+        return bool(_json.loads(onboarding_path.read_text(encoding="utf-8")).get("complete"))
     except Exception:
         return False
 

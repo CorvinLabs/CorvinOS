@@ -636,12 +636,12 @@ class MasterRolloutOrchestrator:
 
             # Save to main file
             self.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.STATE_FILE, "w") as f:
+            with open(self.STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(state_dict, f, indent=2, default=str)
 
             # Create timestamped checkpoint
             checkpoint_path = self.CHECKPOINT_DIR / f"state_{state_dict['last_saved_time'].replace(':', '-')}.json"
-            with open(checkpoint_path, "w") as f:
+            with open(checkpoint_path, "w", encoding="utf-8") as f:
                 json.dump(state_dict, f, indent=2, default=str)
 
             self.state.last_saved_time = state_dict["last_saved_time"]
@@ -664,7 +664,7 @@ class MasterRolloutOrchestrator:
             return
 
         try:
-            with open(self.STATE_FILE, "r") as f:
+            with open(self.STATE_FILE, "r", encoding="utf-8") as f:
                 state_dict = json.load(f)
 
             # Verify hash

@@ -329,7 +329,7 @@ class TestCoreAuditIsUnaffected(unittest.TestCase):
         audit_provider.set_active(ExplodingAuditBackend())
         self._audit.audit_event("bridge.login", channel="test", user="u", tenant_id="t-9")
         self.assertTrue(self._path.exists(), "core record must exist")
-        contents = self._path.read_text()
+        contents = self._path.read_text(encoding="utf-8")
         self.assertIn("bridge.login", contents)
         ok, problems = self._audit.verify_audit(self._path)
         self.assertTrue(ok, f"core chain must verify: {problems}")
@@ -339,11 +339,11 @@ class TestCoreAuditIsUnaffected(unittest.TestCase):
             self.skipTest("forge.security_events not importable in this layout")
         audit_provider.clear()
         self._audit.audit_event("bridge.login", channel="test", user="u")
-        without = self._path.read_text().count("bridge.login")
+        without = self._path.read_text(encoding="utf-8").count("bridge.login")
 
         audit_provider.set_active(MutatingAuditBackend())
         self._audit.audit_event("bridge.login", channel="test", user="u")
-        after = self._path.read_text()
+        after = self._path.read_text(encoding="utf-8")
         self.assertEqual(after.count("bridge.login"), without + 1)
         self.assertNotIn("injected", after, "a plugin must not alter the core record")
         ok, _ = self._audit.verify_audit(self._path)
@@ -557,13 +557,13 @@ class TestTripwire(unittest.TestCase):
                 self.assertTrue(self.tripwire.audit_chain_intact().ok,
                                 "a freshly written chain must verify")
 
-                lines = path.read_text().splitlines()
+                lines = path.read_text(encoding="utf-8").splitlines()
                 self.assertGreaterEqual(len(lines), 2)
                 record = json.loads(lines[0])
                 self.assertIn("hash", record, "core writes must be chained")
                 record["details"]["user"] = "tampered-by-attacker"
                 lines[0] = json.dumps(record)
-                path.write_text("\n".join(lines) + "\n")
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
                 result = self.tripwire.audit_chain_intact()
                 self.assertFalse(result.ok, "a tampered chain must fail the tripwire")
@@ -574,7 +574,7 @@ class TestTripwire(unittest.TestCase):
 
     def test_there_is_no_override_switch(self):
         """CLAUDE.md: no compliance-off mode via any env var."""
-        source = Path(self.tripwire.__file__).read_text()
+        source = Path(self.tripwire.__file__).read_text(encoding="utf-8")
         for forbidden in (
             "CORVIN_TRIPWIRE_DEV_OVERRIDE",
             "TRIPWIRE_DISABLE",
@@ -667,7 +667,7 @@ class TestFanoutNeverLeaks(unittest.TestCase):
                 with self.assertLogs("corvin.audit.fanout", level="ERROR"):
                     _audit.audit_event("bridge.login", channel="test", user="u")
                     _await_delivery()
-                self.assertIn("bridge.login", path.read_text())
+                self.assertIn("bridge.login", path.read_text(encoding="utf-8"))
                 ok, problems = _audit.verify_audit(path)
                 self.assertTrue(ok, f"core chain must still verify: {problems}")
             finally:
@@ -677,7 +677,7 @@ class TestFanoutNeverLeaks(unittest.TestCase):
         """Structural pin: the sink call must not sit inside the core write's try."""
         import audit as _audit  # type: ignore[import-not-found]
 
-        source = Path(_audit.__file__).read_text()
+        source = Path(_audit.__file__).read_text(encoding="utf-8")
         marker = "core_write_committed = True"
         self.assertIn(marker, source, "the commit flag is the ordering guard")
         commit_pos = source.index(marker)
@@ -704,7 +704,7 @@ class TestTripwireHasNoSecondCopyOfTheList(unittest.TestCase):
         self.tripwire = tripwire
 
     def test_source_holds_no_duplicate_name_list(self):
-        source = Path(self.tripwire.__file__).read_text()
+        source = Path(self.tripwire.__file__).read_text(encoding="utf-8")
         # The names may appear at most once each — inside the failure message or a
         # comment, never as a second executable tuple.
         for name in ("set_writer", "replace_writer", "disable_core"):
@@ -1057,12 +1057,12 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
     def _tamper(self, path, index):
         import json
 
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         record = json.loads(lines[index])
         self.assertIn("hash", record, "core writes must be chained")
         record["details"]["user"] = "tampered-by-attacker"
         lines[index] = json.dumps(record)
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         self.tripwire._verify_cache.clear()
 
     def test_an_old_break_does_not_stop_the_platform_but_is_recorded(self):
@@ -1081,9 +1081,9 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
             self.assertFalse(history.ok, "the break must still be reported")
             self.assertIn("permanent", history.detail)
 
-            before = len(path.read_text().splitlines())
+            before = len(path.read_text(encoding="utf-8").splitlines())
             self.tripwire.assert_all()  # must NOT raise
-            lines = path.read_text().splitlines()
+            lines = path.read_text(encoding="utf-8").splitlines()
             self.assertGreater(len(lines), before, "the finding must be appended")
             appended = [json.loads(l)["event_type"] for l in lines[before:]]
             self.assertIn("compliance.chain_discontinuity", appended, appended)
@@ -1098,12 +1098,12 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path, _audit = self._chain(tmp, self.tripwire.TAIL_RECORDS + 20)
             self._tamper(path, self.tripwire.TAIL_RECORDS + 15)  # inside the tail
-            before = path.read_text()
+            before = path.read_text(encoding="utf-8")
 
             result = self.tripwire.audit_chain_intact()
             self.assertTrue(result.ok, result.detail)
             self.assertIn("sealed", result.detail)
-            after = path.read_text()
+            after = path.read_text(encoding="utf-8")
             self.assertTrue(after.startswith(before), "no record may be removed or rewritten")
             seam = json.loads(after.splitlines()[-1])
             self.assertEqual(seam["event_type"], "compliance.chain_discontinuity")
@@ -1118,11 +1118,11 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
             path, _audit = self._chain(tmp, 20)
             for line in range(20):
                 self._tamper(path, line)  # every record: the lost-anchor-key shape
-            before = path.read_text()
+            before = path.read_text(encoding="utf-8")
             result = self.tripwire.audit_chain_intact()
             self.assertFalse(result.ok, "whole-chain failure must block the boot")
             self.assertIn("audit_anchor.key", result.detail)
-            self.assertTrue(path.read_text().startswith(before))
+            self.assertTrue(path.read_text(encoding="utf-8").startswith(before))
             with self.assertRaises(self.tripwire.TripwireError):
                 self.tripwire.assert_all()
 

@@ -57,7 +57,7 @@ class BasePhase:
                 cmd,
                 capture_output=capture_output,
                 text=True,
-                timeout=3600  # 1 hour timeout
+                timeout=3600, encoding="utf-8", errors="replace"  # 1 hour timeout
             )
 
             if result.returncode != 0:
@@ -78,7 +78,7 @@ class BasePhase:
         result = subprocess.run(
             ["which", tool],
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         return result.returncode == 0
 
@@ -96,7 +96,7 @@ class BasePhase:
         """Save metadata JSON for output"""
         metadata_file = f"{output_file}.metadata.json"
         try:
-            with open(metadata_file, 'w') as f:
+            with open(metadata_file, 'w', encoding="utf-8") as f:
                 json.dump({
                     "timestamp": datetime.now().isoformat(),
                     **metadata
@@ -146,7 +146,7 @@ class FFmpegHelper:
             output_file
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             self.logger.error(f"Frame to video conversion failed: {result.stderr}")
@@ -166,7 +166,7 @@ class FFmpegHelper:
         # Create concat demuxer file
         concat_file = "/tmp/concat_list.txt"
         try:
-            with open(concat_file, 'w') as f:
+            with open(concat_file, 'w', encoding="utf-8") as f:
                 for video_file in input_files:
                     f.write(f"file '{video_file}'\n")
         except Exception as e:
@@ -183,7 +183,7 @@ class FFmpegHelper:
             output_file
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         os.remove(concat_file)
 
         if result.returncode != 0:
@@ -214,7 +214,7 @@ class FFmpegHelper:
             output_file
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             self.logger.error(f"Audio addition failed: {result.stderr}")
@@ -241,7 +241,7 @@ class FFmpegHelper:
             output_file
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             self.logger.error(f"Filter application failed: {result.stderr}")
@@ -262,7 +262,7 @@ class FFmpegHelper:
             video_file
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode == 0:
             try:
@@ -320,7 +320,7 @@ class VideoCompositor:
             output_file
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             self.logger.error(f"Blending failed: {result.stderr}")

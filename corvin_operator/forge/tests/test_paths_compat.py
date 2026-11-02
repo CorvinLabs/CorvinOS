@@ -125,8 +125,8 @@ def test_repo_corvin_dir_wins() -> None:
         (repo / ".corvin").mkdir()
         # Stamp a paths.py at the right depth so _repo_root walks find
         # this synthetic repo as the ancestor.
-        paths_src = (REPO / "corvin_operator" / "forge" / "forge" / "paths.py").read_text()
-        (repo / "corvin_operator" / "forge" / "forge" / "paths.py").write_text(paths_src)
+        paths_src = (REPO / "corvin_operator" / "forge" / "forge" / "paths.py").read_text(encoding="utf-8")
+        (repo / "corvin_operator" / "forge" / "forge" / "paths.py").write_text(paths_src, encoding="utf-8")
 
         sys.modules.pop("paths_synth", None)
         spec_path = repo / "corvin_operator" / "forge" / "forge" / "paths.py"
@@ -161,8 +161,8 @@ def test_repo_legacy_corvinos_only_is_not_honoured() -> None:
         (repo / "corvin_operator" / "forge" / "forge").mkdir(parents=True)
         (repo / ".corvin_repo").touch()  # ADR-0035 repo-root marker
         (repo / ".corvinOS").mkdir()
-        paths_src = (REPO / "corvin_operator" / "forge" / "forge" / "paths.py").read_text()
-        (repo / "corvin_operator" / "forge" / "forge" / "paths.py").write_text(paths_src)
+        paths_src = (REPO / "corvin_operator" / "forge" / "forge" / "paths.py").read_text(encoding="utf-8")
+        (repo / "corvin_operator" / "forge" / "forge" / "paths.py").write_text(paths_src, encoding="utf-8")
 
         sys.path.insert(0, str(repo / "corvin_operator" / "forge"))
         sys.modules.pop("forge", None)
@@ -195,8 +195,8 @@ def test_repo_both_dirs_corvin_wins() -> None:
         (repo / ".corvin_repo").touch()  # ADR-0035 repo-root marker
         (repo / ".corvin").mkdir()
         (repo / ".corvinOS").mkdir()
-        paths_src = (REPO / "corvin_operator" / "forge" / "forge" / "paths.py").read_text()
-        (repo / "corvin_operator" / "forge" / "forge" / "paths.py").write_text(paths_src)
+        paths_src = (REPO / "corvin_operator" / "forge" / "forge" / "paths.py").read_text(encoding="utf-8")
+        (repo / "corvin_operator" / "forge" / "forge" / "paths.py").write_text(paths_src, encoding="utf-8")
 
         sys.path.insert(0, str(repo / "corvin_operator" / "forge"))
         sys.modules.pop("forge", None)
@@ -222,8 +222,8 @@ def test_repo_neither_dir_defaults_to_corvin() -> None:
         repo = Path(td) / "fake-repo"
         (repo / "corvin_operator" / "forge" / "forge").mkdir(parents=True)
         (repo / ".corvin_repo").touch()  # ADR-0035 repo-root marker
-        paths_src = (REPO / "corvin_operator" / "forge" / "forge" / "paths.py").read_text()
-        (repo / "corvin_operator" / "forge" / "forge" / "paths.py").write_text(paths_src)
+        paths_src = (REPO / "corvin_operator" / "forge" / "forge" / "paths.py").read_text(encoding="utf-8")
+        (repo / "corvin_operator" / "forge" / "forge" / "paths.py").write_text(paths_src, encoding="utf-8")
 
         sys.path.insert(0, str(repo / "corvin_operator" / "forge"))
         sys.modules.pop("forge", None)

@@ -123,7 +123,7 @@ class ApproverBindingTests(_TmpHomeMixin, unittest.TestCase):
             "awp": "1.1.0",
             "workflow": {"name": "approver_flow", "description": "t"},
             "inputs": {}, "orchestration": {"engine": "dag", "graph": graph},
-        }))
+        }), encoding="utf-8")
         return str(path)
 
     def _pause(self, tenant_id=None):

@@ -123,7 +123,7 @@ class TestModelCatalogIntegration(unittest.TestCase):
                     )
                     self.assertTrue(cache_path.exists(), "Cache file should be created")
 
-                    cache_data = json.loads(cache_path.read_text())
+                    cache_data = json.loads(cache_path.read_text(encoding="utf-8"))
                     self.assertIn("providers", cache_data)
                     self.assertIn("anthropic", cache_data["providers"])
                     self.assertEqual(
@@ -258,7 +258,7 @@ class TestModelCatalogIntegration(unittest.TestCase):
                         }
                     }
                 }
-                cache_path.write_text(json.dumps(cache_data))
+                cache_path.write_text(json.dumps(cache_data), encoding="utf-8")
 
                 # GET should read it
                 resp = client.get("/v1/console/models/live")

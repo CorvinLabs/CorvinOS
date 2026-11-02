@@ -77,7 +77,7 @@ def _run(tmp_path: Path, body: str, *, helpers: bool = True) -> dict:
     )
     proc = subprocess.run(
         [sys.executable, "-c", script, str(tmp_path)],
-        env=env, capture_output=True, text=True, timeout=180, cwd=str(tmp_path),
+        env=env, capture_output=True, text=True, timeout=180, cwd=str(tmp_path), encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr[-3000:]
     return json.loads(proc.stdout.strip().splitlines()[-1])

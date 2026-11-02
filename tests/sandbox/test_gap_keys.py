@@ -54,14 +54,14 @@ def test_G_keys_delete_refuses_a_missing_or_wrong_token_and_removes_nothing(sand
     for token in (None, "", "wrong-token"):
         r = _delete(server, sess, token)
         assert r.status_code == 401, (token, r.status_code, r.text[:200])
-    assert ENV_LINE in env_file.read_text(), "a refused delete removed the key"
+    assert ENV_LINE in env_file.read_text(encoding="utf-8"), "a refused delete removed the key"
 
 
 def test_G_keys_delete_removes_the_key_and_keeps_other_keys(sandbox, server, session_for, env_file):
     sess = session_for("_default")
     r = _delete(server, sess, _fp(server, sess))
     assert r.status_code == 200, r.text[:300]
-    text = env_file.read_text()
+    text = env_file.read_text(encoding="utf-8")
     assert "CORVIN_CUSTOM_SBXDEMO" not in text, "the key is still in service.env"
     assert "OTHER_KEY=keep-me" in text, "an unrelated key was removed"
     recs = action_records(sandbox, "_default", "byok.secret_deleted")

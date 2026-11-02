@@ -325,7 +325,7 @@ class TestWriteTrace:
         assert result is True
         today = htrace_dir(tmpdir) / f"{_today_utc()}.jsonl"
         assert today.exists()
-        records = [json.loads(ln) for ln in today.read_text().splitlines() if ln.strip()]
+        records = [json.loads(ln) for ln in today.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(records) == 1
         assert records[0]["error_type"] == "ValueError"
 
@@ -345,7 +345,7 @@ class TestWriteTrace:
         assert result is False
         dropped_p = htrace_dir(tmpdir) / "dropped.count"
         assert dropped_p.exists()
-        assert int(dropped_p.read_text().strip()) == 1
+        assert int(dropped_p.read_text(encoding="utf-8").strip()) == 1
 
 
 # ── compress_for_upload ───────────────────────────────────────────────────────
@@ -613,7 +613,7 @@ class TestRevokeFlowStopsCollection:
             cfg = _tenant_cfg_path(home)
             assert cfg.exists()
             import yaml
-            data = yaml.safe_load(cfg.read_text())
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
             spec = data.get("spec", data)
             assert spec["telemetry"]["healing_traces"] is False
 
@@ -626,9 +626,9 @@ class TestRevokeFlowStopsCollection:
             cfg.parent.mkdir(parents=True, exist_ok=True)
             cfg.write_text(yaml.dump({
                 "spec": {"telemetry": {"ping_enabled": True}, "aco": {"l5_enabled": True}}
-            }))
+            }), encoding="utf-8")
             run_revoke_flow(home)
-            data = yaml.safe_load(cfg.read_text())
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
             assert data["spec"]["telemetry"]["healing_traces"] is False
             assert data["spec"]["telemetry"]["ping_enabled"] is True  # untouched
             assert data["spec"]["aco"]["l5_enabled"] is True          # untouched

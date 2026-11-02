@@ -44,7 +44,7 @@ class DeploymentOrchestrator:
             ["bash", "scripts/validate_deployment.sh"],
             cwd="/home/shumway/projects/CorvinOS",
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         
         if result.returncode == 0:

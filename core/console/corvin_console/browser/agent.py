@@ -150,10 +150,14 @@ def _claude_argv() -> list[str]:
     ``installer.steps.plugins._run_claude`` for the identical binary."""
     binary = _resolve_claude_bin()
     if sys.platform == "win32" and not os.path.isabs(binary):
-        resolved = shutil.which(binary)
-        if resolved and resolved.lower().endswith((".cmd", ".bat")):
-            return ["cmd", "/c", resolved]
-        binary = resolved or binary
+        # The resolved path (a .cmd shim too) is launched directly:
+        # CreateProcess runs a batch file itself as `cmd /c "<line>"`, with
+        # the outer quotes that keep a quoted path intact. The former explicit
+        # ["cmd", "/c", shim, ...] list broke once the shim path held a space
+        # (C:/Users/John Doe/AppData/Roaming/npm/claude.cmd): cmd's legacy
+        # quote stripping split it at "John" (measured). Safe only because
+        # every argv element here is a trusted constant; the prompt is stdin.
+        binary = shutil.which(binary) or binary
     return [binary]
 
 

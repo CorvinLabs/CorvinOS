@@ -53,7 +53,7 @@ def test_ping_if_due_skips_network_call_when_lock_already_held(tmp_path):
     ):
         lock_path = hu.htrace_dir(home) / hu._PING_LOCK_FILENAME
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        holder = lock_path.open("w")
+        holder = lock_path.open("w", encoding="utf-8")
         _fcntl.flock(holder, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
         try:
             with patch("urllib.request.urlopen") as mock_urlopen:
@@ -295,7 +295,7 @@ def test_ping_if_due_provisions_tokens_inside_the_lock_not_before(tmp_path):
 
     def _fake_ensure_tokens(_home):
         lock_path = hu.htrace_dir(home) / hu._PING_LOCK_FILENAME
-        probe = lock_path.open("w")
+        probe = lock_path.open("w", encoding="utf-8")
         try:
             _fcntl.flock(probe, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
             observed_locked_during_provision.append(False)  # we got it — not locked
@@ -508,7 +508,7 @@ class TestPing401Reprovision:
         assert not (tel_dir / ".reprovision_401").exists(), (
             "no destructive re-provision may have been attempted"
         )
-        assert (tel_dir / ".consec_401").read_text().strip() == "1", (
+        assert (tel_dir / ".consec_401").read_text(encoding="utf-8").strip() == "1", (
             "the consecutive-401 counter must be at 1 after one 401"
         )
 
@@ -566,7 +566,7 @@ class TestPing401Reprovision:
         ):
             with patch.object(hu, "_open_no_redirect", side_effect=self._raise_401):
                 hu.ping_if_due(home)  # 401 → counter = 1
-            assert (tel_dir / ".consec_401").read_text().strip() == "1"
+            assert (tel_dir / ".consec_401").read_text(encoding="utf-8").strip() == "1"
             # A success in between (delete the rate-limit stamp so it sends).
             stamp.unlink(missing_ok=True)
             with patch.object(hu, "_open_no_redirect", return_value=self._ok_ctx()):

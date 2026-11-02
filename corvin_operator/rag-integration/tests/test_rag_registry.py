@@ -50,7 +50,7 @@ def valid_manifest(tmp_path):
     }
 
     manifest_file = tmp_path / "test-manifest.yaml"
-    with open(manifest_file, "w") as f:
+    with open(manifest_file, "w", encoding="utf-8") as f:
         yaml.dump(manifest, f)
 
     return manifest_file
@@ -111,7 +111,7 @@ kind: RAGProvider
 metadata:
   id: bad-provider
 # Missing spec!
-"""
+""", encoding="utf-8"
         )
 
         success, message = registry.register(bad_manifest)
@@ -166,7 +166,7 @@ class TestListing:
             }
 
             manifest_file = tmp_path / f"manifest-{i}.yaml"
-            with open(manifest_file, "w") as f:
+            with open(manifest_file, "w", encoding="utf-8") as f:
                 yaml.dump(manifest, f)
 
             registry.register(manifest_file)

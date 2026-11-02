@@ -329,7 +329,7 @@ class TestJSONFallbackVerification:
         assert fallback_file.exists()
 
         # Verify JSON content is valid
-        with open(fallback_file) as f:
+        with open(fallback_file, encoding="utf-8") as f:
             record = json.loads(f.readline())
 
         assert record["tenant_id"] == "tenant_prod"
@@ -441,9 +441,9 @@ class TestTenantIsolationE2E:
             assert file_2.exists()
 
             # Verify no cross-tenant data
-            with open(file_1) as f:
+            with open(file_1, encoding="utf-8") as f:
                 record_1 = json.loads(f.readline())
-            with open(file_2) as f:
+            with open(file_2, encoding="utf-8") as f:
                 record_2 = json.loads(f.readline())
 
             assert record_1["tenant_id"] == "tenant_1"

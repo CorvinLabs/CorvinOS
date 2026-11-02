@@ -94,7 +94,7 @@ def test_compute_file_hash_changes():
     p = _write_csv("a,b,c\n1,2,3\n")
     try:
         h1 = compute_file_hash(p)
-        p.write_text("a,b,c\n1,2,3\n4,5,6\n")
+        p.write_text("a,b,c\n1,2,3\n4,5,6\n", encoding="utf-8")
         h2 = compute_file_hash(p)
         t("different", h1 != h2)
     finally:

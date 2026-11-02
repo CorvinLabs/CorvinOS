@@ -251,7 +251,7 @@ segments:
 """.format(os.path.join(self.test_dir, "test8_full"))
 
         config_file = os.path.join(self.test_dir, "test_config.yaml")
-        with open(config_file, 'w') as f:
+        with open(config_file, 'w', encoding="utf-8") as f:
             f.write(config_content)
 
         # Note: Full pipeline requires OpenAI API key, so we test orchestration logic
@@ -289,7 +289,7 @@ segments:
                 "-v", "error"
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
             # If histogram generation succeeds, video likely has content
             return result.returncode == 0
         except:
@@ -306,7 +306,7 @@ segments:
                 video_file
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 data = json.loads(result.stdout)
@@ -329,7 +329,7 @@ segments:
                 "-v", "error"
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
             stderr = result.stderr or result.stdout
 
             for line in stderr.split('\n'):

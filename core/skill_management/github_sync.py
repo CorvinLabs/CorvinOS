@@ -138,7 +138,7 @@ class GitClient:
             status = subprocess.run(
                 ["git", "-C", str(self.local_repo_path), "status", "--porcelain"],
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
             if not status.stdout.strip():
                 return GitPushResult(success=True, error="Nothing to commit")
@@ -147,7 +147,7 @@ class GitClient:
             result = subprocess.run(
                 ["git", "-C", str(self.local_repo_path), "commit", "-m", message],
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
             if result.returncode != 0:
                 return GitPushResult(success=False, error=f"Commit failed: {result.stderr}")
@@ -156,7 +156,7 @@ class GitClient:
             sha_result = subprocess.run(
                 ["git", "-C", str(self.local_repo_path), "rev-parse", "HEAD"],
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
             commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else None
 
@@ -165,7 +165,7 @@ class GitClient:
                 ["git", "-C", str(self.local_repo_path), "push", "origin", self.branch],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30, encoding="utf-8", errors="replace"
             )
 
             if push_result.returncode != 0:
@@ -194,7 +194,7 @@ class GitClient:
                 ["git", "-C", str(self.local_repo_path), "pull", "origin", self.branch],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30, encoding="utf-8", errors="replace"
             )
 
             if result.returncode != 0:
@@ -202,7 +202,7 @@ class GitClient:
                 status = subprocess.run(
                     ["git", "-C", str(self.local_repo_path), "status", "--porcelain"],
                     capture_output=True,
-                    text=True
+                    text=True, encoding="utf-8", errors="replace"
                 )
                 conflicts = [line[3:] for line in status.stdout.split("\n") if line.startswith("UU")]
 
@@ -216,7 +216,7 @@ class GitClient:
             sha_result = subprocess.run(
                 ["git", "-C", str(self.local_repo_path), "rev-parse", "HEAD"],
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
             commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else None
 
@@ -233,7 +233,7 @@ class GitClient:
             result = subprocess.run(
                 ["git", "-C", str(self.local_repo_path), "rev-parse", "HEAD"],
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
             return result.stdout.strip() if result.returncode == 0 else None
         except:

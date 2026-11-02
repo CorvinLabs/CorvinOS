@@ -200,7 +200,7 @@ def _transcripts(root: Path, since: float, corvin: Path | None) -> Iterator[Path
 
 def _proc_start(pid: int) -> str | None:
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
         return None
     # comm may contain spaces/parens: fields after the LAST ')'; starttime is field 22.
@@ -390,7 +390,7 @@ def git_commits(repo: Path | None = None, now: float | None = None) -> list[dict
         cp = subprocess.run(
             ["git", "-C", str(repo), "log", f"--since={int(now - WINDOW_S)}", "--no-merges",
              "-n", "2000", "--pretty=format:%H%x1f%ct%x1f%s%x1e"],
-            capture_output=True, text=True, timeout=20, check=False,
+            capture_output=True, text=True, timeout=20, check=False, encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.SubprocessError):
         return []

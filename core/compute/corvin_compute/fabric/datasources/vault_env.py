@@ -29,7 +29,7 @@ def _read_vault(vault_path: Path) -> dict[str, str]:
 
     file_stat = vault_path.stat()
     mode = stat.S_IMODE(file_stat.st_mode)
-    if mode != 0o600:
+    if os.name != "nt" and mode != 0o600:  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
         raise PermissionError(
             f"Vault file {vault_path} has mode {oct(mode)}, expected 0o600. "
             "Fix with: chmod 600 <vault_path>"

@@ -285,7 +285,7 @@ if __name__ == "__main__":
     results = print_benchmark_report(baseline, routed, usage)
 
     _out = _REPO / "docs" / "adr0377_phase3_cost_baseline_results.json"
-    with open(_out, "w") as f:
+    with open(_out, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
     print(f"\n\u2713 Results saved to {_out}")

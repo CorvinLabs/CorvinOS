@@ -44,7 +44,7 @@ class TestFilterGraphInjection:
             assert malicious not in filter_str, "narration leaked into the filtergraph string"
             assert "textfile=" in filter_str
             caption_file = slides_dir.parent / "captions" / "s01.txt"
-            assert caption_file.read_text() == malicious[:50]
+            assert caption_file.read_text(encoding="utf-8") == malicious[:50]
 
     def test_unsafe_scene_id_is_rejected(self):
         """scene.id becomes a bare filtergraph LABEL ([scaled_<id>]) with no

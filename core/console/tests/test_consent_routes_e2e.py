@@ -34,7 +34,7 @@ FEEDBACK = {"task_id": "task-1", "outcome_quality": "good", "would_repeat": True
 def _chain_records(home: Path) -> list[dict]:
     out: list[dict] = []
     for f in home.rglob("audit.jsonl"):
-        out += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+        out += [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
     return out
 
 

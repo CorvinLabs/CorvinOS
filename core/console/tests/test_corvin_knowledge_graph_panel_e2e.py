@@ -33,7 +33,7 @@ def _projects_root() -> Path:
     """Sibling repos live next to the MAIN checkout — also when this runs in a linked worktree."""
     here = Path(__file__).resolve().parent
     r = subprocess.run(["git", "-C", str(here), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     return Path(r.stdout.strip()).parent.parent if r.returncode == 0 else Path(__file__).resolve().parents[4]
 
 
@@ -42,7 +42,7 @@ def _this_checkout() -> Path:
     change is being proved there, the main checkout once merged. Never a hardcoded
     sibling guess, or the reachability check would read the wrong tree's registry.tsx."""
     r = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True, check=True)
+                       capture_output=True, text=True, check=True, encoding="utf-8", errors="replace")
     return Path(r.stdout.strip())
 
 
@@ -50,7 +50,7 @@ _KB_SCRIPTS = Path(os.environ.get("CORVIN_KB_SCRIPTS") or _projects_root() / "Co
 
 
 def _sh(*args, cwd=None):
-    r = subprocess.run([str(x) for x in args], cwd=cwd, capture_output=True, text=True)
+    r = subprocess.run([str(x) for x in args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise AssertionError(f"{args} -> {r.returncode}\n{r.stdout}\n{r.stderr}")
     return r.stdout
@@ -67,12 +67,12 @@ class KnowledgeGraphPanelE2E(unittest.TestCase):
         kb = self.kb = self.tmp / "kb-repo"
         (kb / "scripts").mkdir(parents=True)
         for f in ("kb.py", "kb_model.py", "kb_lib.py"):
-            (kb / "scripts" / f).write_text((_KB_SCRIPTS / f).read_text())
+            (kb / "scripts" / f).write_text((_KB_SCRIPTS / f).read_text(encoding="utf-8"), encoding="utf-8")
         (kb / "kb/_meta").mkdir(parents=True)
         (kb / "kb/_meta/sources.yaml").write_text(
             "sources:\n  - name: kb\n    root: .\n    writable: true\n    dirs:\n"
-            "      decisions: decision\n      kb/tasks: task\n      kb/epics: epic\n      kb/initiatives: initiative\n")
-        (kb / "kb/audit.jsonl").write_text("")
+            "      decisions: decision\n      kb/tasks: task\n      kb/epics: epic\n      kb/initiatives: initiative\n", encoding="utf-8")
+        (kb / "kb/audit.jsonl").write_text("", encoding="utf-8")
         _sh("git", "init", "-q", "-b", "main", cwd=kb)
         _sh("git", "add", "-A", cwd=kb)   # kb refuses to write while kb/audit.jsonl is untracked
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init", cwd=kb)
@@ -86,13 +86,13 @@ class KnowledgeGraphPanelE2E(unittest.TestCase):
         base = _kb(kb, "new", "decision", "--title", "Base decision")
         dep = _kb(kb, "new", "decision", "--title", "Depends on base")
         dep_file = next(p for p in (kb / "decisions").glob(f"{dep['id']}-*.md"))  # root: . -> top-level decisions/
-        dep_file.write_text(dep_file.read_text().replace("depends_on: []", f"depends_on: [{base['id']}]"))
+        dep_file.write_text(dep_file.read_text(encoding="utf-8").replace("depends_on: []", f"depends_on: [{base['id']}]"), encoding="utf-8")
         ini = _kb(kb, "new", "initiative", "--title", "I")
         ep = _kb(kb, "new", "epic", "--title", "E", "--initiative", ini["id"])
         t = _kb(kb, "new", "task", "--title", "Implements it", "--epic", ep["id"],
                "--link", f"implements={dep['id']}", "--link", "source=https://example.org/x")
         tf = next(p for p in (kb / "kb/tasks").glob(f"{t['id']}-*.md"))
-        tf.write_text(tf.read_text().replace("title:", "labels: [urgent, kb]\ntitle:", 1))
+        tf.write_text(tf.read_text(encoding="utf-8").replace("title:", "labels: [urgent, kb]\ntitle:", 1), encoding="utf-8")
         _sh(sys.executable, kb / "scripts/kb.py", "--repo", kb, "index")
 
         with _sandbox(self.tmp) as (client, csrf, _home, _):
@@ -137,17 +137,17 @@ class KnowledgeGraphPanelE2E(unittest.TestCase):
         plugin. This pins the SOURCE wiring; that a browser really shows it under Marketplace is
         proved by tests/e2e/knowledge-graph-explorer.spec.ts against the live console."""
         web = _this_checkout() / "core" / "console" / "corvin_console" / "web-next"
-        reg = (web / "src" / "panels" / "registry.tsx").read_text()
+        reg = (web / "src" / "panels" / "registry.tsx").read_text(encoding="utf-8")
         self.assertNotIn('rc("corvin-knowledge"', reg)
         # mountable by name from the manifest: the component name the plugin declares
         self.assertRegex(reg, r"COMPONENTS_BY_NAME[^=]*=\s*\{[^}]*\bCorvinKnowledgePage,")
-        nav = (web / "src" / "components" / "layout.tsx").read_text()
+        nav = (web / "src" / "components" / "layout.tsx").read_text(encoding="utf-8")
         self.assertNotIn("/app/corvin-knowledge", nav)
         self.assertIn('id: "marketplace"', nav)   # the group the manifest entry is appended to
         yaml_ = (_projects_root() / "Corvin-Marketplace" / "plugins" / "contributor" / "knowledge_management"
                  / "corvin_knowledge" / "plugin.yaml")
         if yaml_.is_file():
-            text = yaml_.read_text()
+            text = yaml_.read_text(encoding="utf-8")
             self.assertIn("group: marketplace", text)
             self.assertIn("component: CorvinKnowledgePage", text)
 

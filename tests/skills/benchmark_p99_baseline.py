@@ -260,13 +260,13 @@ async def main():
     }
 
     json_path = output_dir / "p99_baseline_week4.json"
-    with open(json_path, "w") as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
     print(f"📄 JSON report: {json_path}\n")
 
     # CSV for Grafana/Excel
     csv_path = output_dir / "p99_baseline_week4.csv"
-    with open(csv_path, "w") as f:
+    with open(csv_path, "w", encoding="utf-8") as f:
         f.write("request_id,old_path_ms,new_path_ms,regression_pct,error\n")
         for s in samples:
             f.write(f"{s.request_id},{s.old_path_ms:.3f},{s.new_path_ms:.3f},{s.regression_pct:.2f},{s.error}\n")

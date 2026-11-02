@@ -479,7 +479,7 @@ def _chain_records(chain):
 
     if not chain.exists():
         return []
-    return [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _l10_trace(trace):

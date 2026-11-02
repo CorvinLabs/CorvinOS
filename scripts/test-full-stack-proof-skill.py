@@ -24,7 +24,7 @@ def test_skill_execution():
     # For now, verify the skill file exists
     skill_path = "/home/shumway/.claude/skills/full-stack-implementation-proof.md"
     try:
-        with open(skill_path, 'r') as f:
+        with open(skill_path, 'r', encoding="utf-8") as f:
             content = f.read()
             assert "5-Layer Adversarial Proof" in content
             assert "Layer 1: Code Correctness" in content
@@ -60,7 +60,7 @@ def check_code_layer():
     try:
         # Check token-metrics.tsx exists
         path = "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/pages/token-metrics.tsx"
-        with open(path, 'r') as f:
+        with open(path, 'r', encoding="utf-8") as f:
             content = f.read()
             # Must have real content
             assert len(content) > 500, "File too small"
@@ -77,7 +77,7 @@ def check_wiring_layer():
     try:
         # Check component is imported
         registry_path = "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/panels/registry.tsx"
-        with open(registry_path, 'r') as f:
+        with open(registry_path, 'r', encoding="utf-8") as f:
             content = f.read()
             assert "TokenMetricsPage" in content, "Not imported"
             assert '"token-metrics"' in content, "Not registered"
@@ -92,7 +92,7 @@ def check_frontend_layer():
     try:
         # Check API path is correct
         token_metrics_path = "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/pages/token-metrics.tsx"
-        with open(token_metrics_path, 'r') as f:
+        with open(token_metrics_path, 'r', encoding="utf-8") as f:
             content = f.read()
             # Must use correct API path
             assert "/v1/console/api/metrics" in content, "Wrong API path"
@@ -110,7 +110,7 @@ def check_security_layer():
     try:
         # Check auth is required
         settings_path = "/home/shumway/projects/CorvinOS/core/console/corvin_console/routes/settings.py"
-        with open(settings_path, 'r') as f:
+        with open(settings_path, 'r', encoding="utf-8") as f:
             content = f.read()
             # Must have auth requirement
             assert "require_session" in content, "No session required"
@@ -125,7 +125,7 @@ def check_usability_layer():
     try:
         # Check component has proper labels
         token_metrics_path = "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/pages/token-metrics.tsx"
-        with open(token_metrics_path, 'r') as f:
+        with open(token_metrics_path, 'r', encoding="utf-8") as f:
             content = f.read()
             # Must have descriptive text
             assert "Token Metrics Dashboard" in content, "No title"

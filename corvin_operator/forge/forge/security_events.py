@@ -1875,10 +1875,13 @@ def _mac_sentinel_path() -> Path:
 def _is_tmp_path(p: Path) -> bool:
     """True when *p* lives under a temp directory (tests, throwaway chains)."""
     try:
-        s = os.path.abspath(str(p))
+        # normcase: identity on POSIX; on Windows %TEMP% and the chain path may
+        # differ only in case (NTFS is case-insensitive) - that miss stamped
+        # markers beside the operator's real anchor key (F-A14).
+        s = os.path.normcase(os.path.abspath(str(p)))
     except Exception:  # noqa: BLE001
         return False
-    roots = {tempfile.gettempdir(), "/tmp", "/var/tmp"}
+    roots = {os.path.normcase(tempfile.gettempdir()), "/tmp", "/var/tmp"}
     if any(s == r or s.startswith(r.rstrip(os.sep) + os.sep) for r in roots):
         return True
     return "pytest-of-" in s
@@ -2004,7 +2007,7 @@ def _record_chain_tail(chain_path: Path, tail_hash: str, *, genesis: str | None 
         tp.parent.mkdir(parents=True, exist_ok=True)
         tmp = tp.with_name(tp.name + f".{os.getpid()}.tmp")
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps({"tail": tail_hash, "ts": time.time()}))
         os.replace(tmp, tp)
     except Exception:  # noqa: BLE001
@@ -2027,7 +2030,7 @@ def _read_chain_tail(chain_path: Path) -> str | None:
         tp = _chain_tail_anchor_path(chain_path)
         if tp is None or not tp.exists():
             return None
-        t = json.loads(tp.read_text()).get("tail")
+        t = json.loads(tp.read_text(encoding="utf-8")).get("tail")
         return t if isinstance(t, str) and t else None
     except Exception:  # noqa: BLE001
         return None
@@ -2102,7 +2105,7 @@ def _read_chain_path_record(chain_path: Path) -> dict | None:
         for rp in candidates:
             if not rp.exists():
                 continue
-            d = json.loads(rp.read_text())
+            d = json.loads(rp.read_text(encoding="utf-8"))
             if not isinstance(d, dict) or not isinstance(d.get("genesis"), str) or not d["genesis"]:
                 continue
             return d
@@ -2118,7 +2121,7 @@ def _write_chain_path_record(chain_path: Path, rec: dict) -> None:
         rp.parent.mkdir(parents=True, exist_ok=True)
         tmp = rp.with_name(rp.name + f".{os.getpid()}.tmp")
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(rec))
         os.replace(tmp, rp)
     except Exception:  # noqa: BLE001
@@ -2937,7 +2940,7 @@ def _read_chain_witness(chain_path: Path, *, initial_prev: str):
         wp = _chain_witness_path(chain_path)
         if not wp.exists():
             return None, None
-        doc = json.loads(wp.read_text())
+        doc = json.loads(wp.read_text(encoding="utf-8"))
         body = doc.get("body") if isinstance(doc, dict) else None
         if not isinstance(body, dict) or int(body.get("v", 0)) != _CHAIN_WITNESS_VERSION:
             return None, None
@@ -3020,7 +3023,7 @@ def _write_chain_witness(chain_path: Path, state: dict, *, initial_prev: str,
         wp.parent.mkdir(parents=True, exist_ok=True)
         tmp = wp.with_name(wp.name + f".{os.getpid()}.tmp")
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(doc))
         os.replace(tmp, wp)
     except Exception:  # noqa: BLE001
@@ -3184,7 +3187,7 @@ def _mark_mac_active(now: float | None = None, chain_path: Path | None = None,
             sp.parent.mkdir(parents=True, exist_ok=True)
             try:
                 fd = os.open(str(sp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, "w") as fh:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(stamp)
             except FileExistsError:
                 pass
@@ -3197,7 +3200,7 @@ def _mark_mac_active(now: float | None = None, chain_path: Path | None = None,
                 mp.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     fd = os.open(str(mp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                    with os.fdopen(fd, "w") as fh:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
                         fh.write(stamp)
                 except FileExistsError:
                     pass
@@ -3213,7 +3216,7 @@ def _mac_active_since() -> float | None:
         sp = _mac_sentinel_path()
         if not sp.exists():
             return None
-        raw = sp.read_text().strip()
+        raw = sp.read_text(encoding="utf-8").strip()
         if not raw:
             return 0.0
         try:
@@ -6271,7 +6274,7 @@ def write_event(
                 fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             else:
                 raise
-        with open(fd, "a", closefd=True) as fh:
+        with open(fd, "a", closefd=True, encoding="utf-8") as fh:
             _lock_chain(fh)
             try:
                 # Identity of the chain BEFORE this write (None on a fresh file:

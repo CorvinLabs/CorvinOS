@@ -73,7 +73,7 @@ class BenchmarkResult:
 
     def save_report(self, path: Path | str) -> None:
         """Save report to file."""
-        Path(path).write_text(self.report)
+        Path(path).write_text(self.report, encoding="utf-8")
         logger.info(f"Report saved to {path}")
 
 
@@ -169,7 +169,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkResult:
 def _load_tasks(dataset_path: str) -> List[Dict[str, Any]]:
     """Load benchmark tasks from JSONL file."""
     tasks = []
-    with open(dataset_path) as f:
+    with open(dataset_path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 tasks.append(json.loads(line))
@@ -383,21 +383,21 @@ def _grade_quality(
 
 def _save_runs(runs: List[Dict[str, Any]], path: Path) -> None:
     """Save runs to JSONL file."""
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding="utf-8") as f:
         for run in runs:
             f.write(json.dumps(run) + "\n")
 
 
 def _save_scores(scores: List[Dict[str, Any]], path: Path) -> None:
     """Save quality scores to JSONL file."""
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding="utf-8") as f:
         for score in scores:
             f.write(json.dumps(score) + "\n")
 
 
 def _save_metrics(metrics: AllMetrics, path: Path) -> None:
     """Save metrics to JSON file."""
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding="utf-8") as f:
         json.dump(metrics.to_dict(), f, indent=2)
 
 

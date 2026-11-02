@@ -22,7 +22,7 @@ from pathlib import Path
 
 def check_fix_1_and_9(file_path):
     """Check that _get_current_config_hash raises ValueError for missing _config_getter."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
 
     # Should raise ValueError if _config_getter not set
     if 'raise ValueError("_config_getter not configured' in content:
@@ -35,7 +35,7 @@ def check_fix_1_and_9(file_path):
 
 def check_fix_2(file_path):
     """Check that _restore_config raises ValueError for missing _config_restorer."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
 
     # Should raise ValueError if _config_restorer not set
     if 'raise ValueError("_config_restorer not configured' in content:
@@ -48,7 +48,7 @@ def check_fix_2(file_path):
 
 def check_fix_3_8_10(file_path):
     """Check that previous_hash is saved BEFORE applying config."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
 
     # Check _apply_config saves hash before applying
     apply_section = re.search(
@@ -73,7 +73,7 @@ def check_fix_3_8_10(file_path):
 
 def check_fix_4(file_path):
     """Check that exception in process_feedback propagates (fail-closed)."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
 
     # Should NOT have try/except catching the approval_gate.request_approval exception
     process_feedback_section = re.search(
@@ -94,7 +94,7 @@ def check_fix_4(file_path):
 
 def check_fix_5(file_path):
     """Check that tests use public handle_approval instead of private callback."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
 
     # Count private callback calls
     private_calls = len(re.findall(r'config_applier\._on_approval_callback\(', content))
@@ -110,7 +110,7 @@ def check_fix_5(file_path):
 
 def check_fix_6(file_path):
     """Check that config hash format is correct (64-char hex)."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
 
     # Look for the hash format fix
     if 'new_config_hash = f"{cycle:064x}"' in content:
@@ -123,7 +123,7 @@ def check_fix_6(file_path):
 
 def check_fix_3_optimizer(file_path):
     """Check that hash is updated AFTER callback succeeds in handle_approval."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
 
     # Should have callback called first, then hash updated
     handle_approval_section = re.search(
@@ -142,7 +142,7 @@ def check_fix_3_optimizer(file_path):
 
 def check_fix_7(file_path):
     """Check that metrics avoid double-count of auto-approved approvals."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
 
     # Should have logic to exclude auto-approved from manual count
     if 'auto_approved_ids = {r["approval_id"] for r in self.approval_requests if r["auto_approved"]}' in content:

@@ -354,7 +354,7 @@ class LLMSynthesisStage:
                 # service, a TTY) can stall it until the 45s timeout kills the turn's
                 # enrichment. It never has stdin input to read; say so explicitly.
                 stdin=subprocess.DEVNULL, cwd=_neutral_cwd(),
-                capture_output=True, text=True, timeout=timeout_s, check=True)
+                capture_output=True, text=True, timeout=timeout_s, check=True, encoding="utf-8", errors="replace")
         except subprocess.TimeoutExpired as e:
             # DISTINCT from llm_unavailable (found 2026-08-18): collapsing both into
             # one reason made the console's pipeline view report "unavailable" for a

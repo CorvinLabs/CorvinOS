@@ -180,7 +180,7 @@ def load_skill_config(
     if cached is not None and cached[0] == mtime:
         return cached[1], cached[2]
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         config = SkillConfig.from_dict(data.get("config"))
         versions = data.get("versions") or []
         version_id = data.get("active_version")
@@ -287,7 +287,7 @@ class SkillAdapter:
             self.state.best_config = SkillConfig()
             return
         try:
-            data = json.loads(self.config_file.read_text())
+            data = json.loads(self.config_file.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
             raise RuntimeError(f"Failed to read SkillAdapter config: {e}") from e
         self.state.best_config = SkillConfig.from_dict(data.get("config"))
@@ -351,7 +351,7 @@ class SkillAdapter:
         }
         tmp = self.config_file.with_suffix(".tmp")
         try:
-            tmp.write_text(json.dumps(data, indent=2))
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
             tmp.replace(self.config_file)
         except (IOError, OSError) as e:
             raise RuntimeError(f"Failed to persist SkillAdapter config: {e}") from e

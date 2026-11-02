@@ -93,7 +93,7 @@ def test_g1_binding_no_longer_depends_on_import_order(tmp_path):
         out = subprocess.run(
             [sys.executable, "-c", probe.format(first=first, second=second),
              str(tmp_path / f"r{i}")],
-            cwd=REPO, capture_output=True, text=True, timeout=120,
+            cwd=REPO, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
         )
         assert out.stdout.strip().splitlines()[-1] == "DENIED", out.stderr[-2000:]
 

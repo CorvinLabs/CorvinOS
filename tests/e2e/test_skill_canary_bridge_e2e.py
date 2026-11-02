@@ -72,12 +72,12 @@ def _send(adapter, base: Path, chat: str, text: str) -> None:
     envelope = {"id": msg_id, "channel": "discord", "from": SENDER, "chat_id": chat,
                 "text": text, "ts": time.time()}
     f = base / "inbox" / f"{msg_id}.json"
-    f.write_text(json.dumps(envelope))
+    f.write_text(json.dumps(envelope), encoding="utf-8")
     adapter.process_one(f, settings={"whitelist": [SENDER], "voice_summary_mode": "never"})
 
 
 def _served_in_last_turn(base: Path) -> str:
-    lines = (base / "args.jsonl").read_text().splitlines()
+    lines = (base / "args.jsonl").read_text(encoding="utf-8").splitlines()
     args = json.loads(lines[-1])["args"]
     # The system prompt travels as a file; read what the engine would read.
     sys_file = args[args.index("--append-system-prompt-file") + 1]
@@ -125,4 +125,4 @@ def test_bridge_turns_split_and_follow_ups_grade_the_served_variant(bridge):
     ok, problems = verify_chain(chain)
     assert ok, problems[:3]
     assert any(json.loads(l).get("event_type") == "skill.canary_graded"
-               for l in chain.read_text().splitlines() if l.strip())
+               for l in chain.read_text(encoding="utf-8").splitlines() if l.strip())

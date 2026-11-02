@@ -119,7 +119,7 @@ def test_real_inbox_turn_reaches_outbox_with_disclosure_and_audit(tmp_path: Path
         in_file.write_text(json.dumps(envelope), encoding="utf-8")
 
         t0 = time.time()
-        adapter.process_one(in_file, settings=json.loads(shared_settings.read_text()))
+        adapter.process_one(in_file, settings=json.loads(shared_settings.read_text(encoding="utf-8")))
         elapsed = time.time() - t0
 
         # 2. inbox file moved to processed (never unlinked / never left behind)

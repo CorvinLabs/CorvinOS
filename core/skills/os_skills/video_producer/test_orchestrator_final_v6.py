@@ -50,7 +50,7 @@ def sample_asset_paths(temp_project):
     for i in range(3):
         asset_file = temp_project / "assets" / f"asset_{i}.txt"
         asset_file.parent.mkdir(parents=True, exist_ok=True)
-        asset_file.write_text(f"Asset {i} content")
+        asset_file.write_text(f"Asset {i} content", encoding="utf-8")
         assets.append(asset_file)
     return assets
 

@@ -116,7 +116,7 @@ class Policy:
         if not p.exists():
             return {}
         try:
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
         except (OSError, json.JSONDecodeError):
             return {}
@@ -133,7 +133,7 @@ class Policy:
             d: dict = {}
         else:
             try:
-                d = json.loads(p.read_text())
+                d = json.loads(p.read_text(encoding="utf-8"))
             except json.JSONDecodeError as e:
                 raise ValueError(f"policy.json malformed: {e}") from e
 

@@ -738,7 +738,7 @@ class OriginRegistry:
             if not p.is_file():
                 continue
             try:
-                cfg = json.loads(p.read_text())
+                cfg = json.loads(p.read_text(encoding="utf-8"))
                 if cfg.get("enabled", False):
                     n += 1
             except (OSError, ValueError):
@@ -816,7 +816,7 @@ class OriginRegistry:
             if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
                 raise ValidationError("origin_file_world_readable")
 
-        with path.open() as fh:
+        with path.open(encoding="utf-8") as fh:
             config = json.load(fh)
 
         # ADR-2295: an offline pair whose fingerprint this side's operator has not
@@ -2229,14 +2229,14 @@ class RemoteTriggerReceiver:
         """
         # Try the well-known embedded path first (set at module level).
         if _A2A_NETWORK_PUBKEY_PATH.exists():
-            return _A2A_NETWORK_PUBKEY_PATH.read_text()
+            return _A2A_NETWORK_PUBKEY_PATH.read_text(encoding="utf-8")
         # Fallback: walk up from this file looking for the operator/license/ tree
         # (handles worktree layouts where __file__ is not at the shared/ level).
         here = Path(__file__).resolve()
         for parent in here.parents:
             candidate = parent / "corvin_operator" / "license" / "a2a_network_pubkey.pem"
             if candidate.exists():
-                return candidate.read_text()
+                return candidate.read_text(encoding="utf-8")
         # Last resort: operator-supplied env var (test / air-gapped deployments).
         env_key = os.environ.get("CORVIN_IBC_PUBKEY_PEM")
         return env_key or None

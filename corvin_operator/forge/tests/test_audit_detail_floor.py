@@ -188,13 +188,13 @@ def test_write_event_applies_floor_and_chain_verifies():
         write_event(path, "test.event", severity="INFO",
                     details={"prompt": "LEAK", "tokens_used": 5, "reason": "ok",
                              "adhoc_key": "x"})
-        rec = json.loads(path.read_text().strip().splitlines()[-1])
+        rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
         assert "prompt" not in rec["details"]
         assert "adhoc_key" not in rec["details"]
         assert rec["details"]["tokens_used"] == 5
         assert rec["details"]["reason"] == "ok"
         assert rec["details"]["_dropped_fields"] == ["adhoc_key", "prompt"]
-        assert "LEAK" not in path.read_text()
+        assert "LEAK" not in path.read_text(encoding="utf-8")
         ok, problems = verify_chain(path)
         assert ok, problems
 
@@ -204,7 +204,7 @@ def test_write_event_unfiltered_keeps_field():
         path = Path(td) / "audit.jsonl"
         write_event(path, "test.event", details={"output_hash": "h" * 64},
                     unfiltered=True)
-        rec = json.loads(path.read_text().strip().splitlines()[-1])
+        rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
         assert rec["details"]["output_hash"] == "h" * 64
 
 
@@ -214,7 +214,7 @@ def test_write_event_binds_lom_hash():
         path = Path(td) / "audit.jsonl"
         write_event(path, "test.event",
                     details={"lom": "corvin_operator/forge/forge/security_events.py:write_event"})
-        rec = json.loads(path.read_text().strip().splitlines()[-1])
+        rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
         assert len(rec["details"]["lom_hash"]) == 64
         ok, problems = verify_chain(path)
         assert ok, problems
@@ -339,7 +339,7 @@ def test_write_event_strips_forged_unfiltered_marker():
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "audit.jsonl"
         write_event(path, "test.x", details={"_unfiltered": True, "count": 1})
-        rec = json.loads(path.read_text().strip().splitlines()[-1])
+        rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
         # normal (filtered) write: forged marker must be gone
         assert rec["details"].get("_unfiltered") is None
         assert rec["details"]["count"] == 1
@@ -376,7 +376,7 @@ def test_non_str_and_mixed_keys_do_not_crash_writer():
         # mixed int+str keys make sort_keys json.dumps raise; exotic tuple key
         # likewise. Writer must not crash and the chain must verify.
         write_event(path, "test.keys", details={1: "a", "name": "c", (1, 2): "d"})
-        rec = json.loads(path.read_text().strip().splitlines()[-1])
+        rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
         assert rec["details"].get("name") == "c"
         ok, problems = verify_chain(path)
         assert ok, problems
@@ -388,7 +388,7 @@ def test_write_event_survives_unserialisable_details():
         # never-raise contract: set/bytes values must not crash the write.
         write_event(path, "test.weird",
                     details={"skills": {"x", "y"}, "bundle": b"raw", "count": 1})
-        rec = json.loads(path.read_text().strip().splitlines()[-1])
+        rec = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
         assert rec["details"]["count"] == 1
         assert "skills" not in rec["details"] and "bundle" not in rec["details"]
         ok, problems = verify_chain(path)

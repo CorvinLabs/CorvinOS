@@ -102,7 +102,7 @@ class PowerPointGenerator:
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 logger.warning(f"LibreOffice conversion failed: {result.stderr}")
@@ -242,7 +242,7 @@ class PowerPointGenerator:
 
         # Create concat file for FFmpeg (without quotes)
         concat_file = os.path.join(self.output_dir, "concat_images.txt")
-        with open(concat_file, 'w') as f:
+        with open(concat_file, 'w', encoding="utf-8") as f:
             for image_file, duration in zip(image_files, durations_per_slide):
                 # Write without quotes to avoid "unsafe file name" errors
                 f.write(f"file {image_file}\n")
@@ -265,7 +265,7 @@ class PowerPointGenerator:
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 logger.error(f"Video conversion failed: {result.stderr}")

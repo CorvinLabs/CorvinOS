@@ -48,14 +48,14 @@ class TestCrashRecoveryE2E:
             manager.record(entry)
 
         # Record the last good line count
-        with open(temp_log) as f:
+        with open(temp_log, encoding="utf-8") as f:
             good_lines = len(f.readlines())
 
         # Simulate crash: write extra entries to WAL, then truncate audit log
         wal_file = temp_log.with_suffix(".wal")
 
         # Manually create uncommitted WAL entries (simulating in-flight writes)
-        with open(wal_file, "a") as f:
+        with open(wal_file, "a", encoding="utf-8") as f:
             uncommitted = {
                 "record_type": "begin",
                 "timestamp": "2026-08-12T10:00:10Z",
@@ -67,11 +67,11 @@ class TestCrashRecoveryE2E:
             f.write("\n")
 
         # Truncate audit log by 50% to simulate partial write crash
-        with open(temp_log) as f:
+        with open(temp_log, encoding="utf-8") as f:
             all_lines = f.readlines()
 
         truncate_at = len(all_lines) // 2
-        with open(temp_log, "w") as f:
+        with open(temp_log, "w", encoding="utf-8") as f:
             f.writelines(all_lines[:truncate_at])
 
         # Recovery: reload manager with crash detection
@@ -104,7 +104,7 @@ class TestCrashRecoveryE2E:
             manager.record(entry)
 
         # Simulate partial JSON write (incomplete due to crash)
-        with open(temp_log, "a") as f:
+        with open(temp_log, "a", encoding="utf-8") as f:
             f.write('{"event_type": "incomplete"')  # No closing }
 
         # Recovery: reload and verify chain
@@ -138,7 +138,7 @@ class TestCrashRecoveryE2E:
 
         # Verify checkpoint was written
         wal_file = temp_log.with_suffix(".wal")
-        with open(wal_file) as f:
+        with open(wal_file, encoding="utf-8") as f:
             wal_lines = f.readlines()
 
         wal_records = [json.loads(line) for line in wal_lines if line.strip()]
@@ -146,10 +146,10 @@ class TestCrashRecoveryE2E:
         assert has_checkpoint
 
         # Simulate crash by truncating audit log
-        with open(temp_log) as f:
+        with open(temp_log, encoding="utf-8") as f:
             lines = f.readlines()
 
-        with open(temp_log, "w") as f:
+        with open(temp_log, "w", encoding="utf-8") as f:
             f.writelines(lines[: len(lines) // 2])
 
         # Recovery: should find checkpoint and recover
@@ -180,10 +180,10 @@ class TestCrashRecoveryE2E:
             manager1.record(entry)
 
         # Corrupt by truncating
-        with open(temp_log) as f:
+        with open(temp_log, encoding="utf-8") as f:
             lines = f.readlines()
 
-        with open(temp_log, "w") as f:
+        with open(temp_log, "w", encoding="utf-8") as f:
             f.writelines(lines[: len(lines) // 2])
 
         # Simulate crash by writing uncommitted WAL entries
@@ -191,7 +191,7 @@ class TestCrashRecoveryE2E:
         if not wal_file.exists():
             wal_file.touch()
 
-        with open(wal_file, "a") as f:
+        with open(wal_file, "a", encoding="utf-8") as f:
             uncommitted = {
                 "record_type": "begin",
                 "timestamp": "2026-08-12T10:00:10Z",
@@ -231,12 +231,12 @@ class TestCrashRecoveryE2E:
         # Simulate partial WAL write by truncating WAL file
         wal_file = temp_log.with_suffix(".wal")
         if wal_file.exists():
-            with open(wal_file) as f:
+            with open(wal_file, encoding="utf-8") as f:
                 content = f.read()
 
             # Truncate WAL to 50%
             truncated = content[: len(content) // 2]
-            with open(wal_file, "w") as f:
+            with open(wal_file, "w", encoding="utf-8") as f:
                 f.write(truncated)
 
         # Recovery should handle gracefully
@@ -268,7 +268,7 @@ class TestCrashRecoveryE2E:
         # Simulate crash
         wal_file = temp_log.with_suffix(".wal")
         if wal_file.exists():
-            with open(wal_file, "a") as f:
+            with open(wal_file, "a", encoding="utf-8") as f:
                 uncommitted = {
                     "record_type": "begin",
                     "timestamp": "2026-08-12T10:00:10Z",
@@ -338,7 +338,7 @@ class TestCrashRecoveryE2E:
         # Verify WAL is smaller after cleanup
         wal_file = temp_log.with_suffix(".wal")
         if wal_file.exists():
-            with open(wal_file) as f:
+            with open(wal_file, encoding="utf-8") as f:
                 lines = f.readlines()
 
             # Should keep only recent records
@@ -371,7 +371,7 @@ class TestFileCorruptionHandling:
         temp_log.parent.mkdir(parents=True, exist_ok=True)
 
         # Write valid entry
-        with open(temp_log, "w") as f:
+        with open(temp_log, "w", encoding="utf-8") as f:
             entry = AuditEntry(
                 event_type="test",
                 actor="system",

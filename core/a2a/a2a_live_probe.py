@@ -108,7 +108,7 @@ def throwaway_origin(origins_dir: Path) -> Iterator[dict]:
     path = origins_dir / f"{oid}.json"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)  # no O_NOFOLLOW on Windows
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(cfg, fh)
         yield cfg
     finally:

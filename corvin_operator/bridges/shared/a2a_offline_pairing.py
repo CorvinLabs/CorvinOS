@@ -219,7 +219,7 @@ def _ledger_lock(directory: Path):
     """
     lock_path = directory / LEDGER_LOCK_NAME
     try:
-        fh = open(lock_path, "a+")  # noqa: SIM115 — closed in finally
+        fh = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115 — closed in finally
     except OSError as exc:
         raise OfflinePairError("ledger_lock_unavailable",
                                f"fingerprint ledger lock unavailable ({type(exc).__name__})") from exc

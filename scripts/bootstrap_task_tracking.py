@@ -109,7 +109,7 @@ def git_sync_wiring_check(dry_run: bool = False):
         print(f"     ⚠️  {git_sync_path} not found")
         return True
 
-    with open(git_sync_path) as f:
+    with open(git_sync_path, encoding="utf-8") as f:
         content = f.read()
 
     if "from core.task_tracking import" in content:

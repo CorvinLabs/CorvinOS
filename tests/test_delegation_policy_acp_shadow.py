@@ -92,7 +92,7 @@ class TestShadowWiring:
         # the core audit chain got the skill execution AND the learning record
         assert sum(1 for et, _ in audit if et == "skill.executed") == 3  # CoreAuditBackend dots the type
         chain = Path(__import__("os").environ["VOICE_AUDIT_PATH"])
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert sum(1 for r in recs if r.get("event_type") == "learning.skill_executed") == 3
 
     def test_unbooted_process_routes_without_shadow(self, monkeypatch):

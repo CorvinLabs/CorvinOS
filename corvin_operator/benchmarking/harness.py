@@ -199,7 +199,7 @@ class BenchmarkHarness:
         # Raw results
         import json
 
-        (run_dir / "raw_results.json").write_text(json.dumps(results, indent=2))
+        (run_dir / "raw_results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
 
         # Analysis
         analysis = BenchmarkAnalysis(results)

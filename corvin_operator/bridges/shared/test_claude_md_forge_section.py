@@ -36,7 +36,7 @@ def t(label: str, ok: bool, *, detail: str = "") -> None:
 
 def main() -> int:
     print("\n[CLAUDE.md forge section]")
-    body = CLAUDE_MD.read_text()
+    body = CLAUDE_MD.read_text(encoding="utf-8")
     t("CLAUDE.md exists", CLAUDE_MD.exists())
 
     # Section heading

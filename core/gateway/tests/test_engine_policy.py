@@ -178,7 +178,7 @@ class AllowlistTests(unittest.TestCase):
             self.assertIn("codex_cli", got.json()["error"])
             # Audit event landed
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             denied = [e for e in lines if e["event_type"] == "gateway.engine_denied"]
             self.assertEqual(len(denied), 1)
             self.assertEqual(denied[0]["details"]["engine"], "codex_cli")
@@ -212,7 +212,7 @@ class MalformedConfigTests(unittest.TestCase):
         with sandbox(("acme",)) as home:
             # Inject a corrupt tenant.corvin.yaml
             p = home / "tenants" / "acme" / "global" / "tenant.corvin.yaml"
-            p.write_text("not: a: valid: yaml:")
+            p.write_text("not: a: valid: yaml:", encoding="utf-8")
             os.chmod(p, 0o600)
             with gateway_client(
                 engine_factory=lambda: _NamedEngine("claude_code"),

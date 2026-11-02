@@ -266,12 +266,12 @@ def test_loss_trigger_without_hash_chain_verification(tmp_corvin_home, audit_pat
     # this is exactly the tampering-after-the-fact scenario Fix #1 exists
     # to catch, unlike the fresh-forgery residual documented in
     # test_loss_signal_injection_via_forged_audit_events above.
-    with open(audit_path, "r") as f:
+    with open(audit_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     modified_line = re.sub(r'"correct":\s*true', '"correct": false', lines[0])
     assert modified_line != lines[0], "tamper did not change the record"
-    with open(audit_path, "w") as f:
+    with open(audit_path, "w", encoding="utf-8") as f:
         f.write(modified_line)
 
     # Fix #1 (2026-09-21): retroactive tampering breaks the hash link and is
@@ -371,8 +371,8 @@ async def test_manifest_path_traversal_cross_tenant(tmp_corvin_home, console_cli
         "secret": "TENANT_B_SECRET",
     }
 
-    (tenant_a / "os.delegation_router" / "1.0.0" / "skill.json").write_text(json.dumps(manifest_a))
-    (tenant_b / "os.delegation_router" / "1.0.0" / "skill.json").write_text(json.dumps(manifest_b))
+    (tenant_a / "os.delegation_router" / "1.0.0" / "skill.json").write_text(json.dumps(manifest_a), encoding="utf-8")
+    (tenant_b / "os.delegation_router" / "1.0.0" / "skill.json").write_text(json.dumps(manifest_b), encoding="utf-8")
 
     # Attack: Try to access tenant B's manifest from tenant A
     traversal_paths = [
@@ -642,7 +642,7 @@ def test_yaml_injection_in_config_loading(tmp_corvin_home):
             "cron_poll_interval_minutes": 60,
         }
     }
-    config_path.write_text(yaml.dump(benign_config))
+    config_path.write_text(yaml.dump(benign_config), encoding="utf-8")
 
     service = CronService()
     interval = service._read_poll_interval()
@@ -659,7 +659,7 @@ autonomous_forge:
   dangerous_object: !!python/object/apply:os.system
     args: ['touch /tmp/pwned']
 """
-    config_path.write_text(malicious_yaml)
+    config_path.write_text(malicious_yaml, encoding="utf-8")
 
     try:
         service2 = CronService()
@@ -698,7 +698,7 @@ def test_validator_layer_bypass_zero_mask():
     # Create a temporary skill directory
     with tempfile.TemporaryDirectory() as tmp_dir:
         skill_dir = Path(tmp_dir)
-        (skill_dir / "skill.json").write_text('{"id": "test", "version": "1.0.0"}')
+        (skill_dir / "skill.json").write_text('{"id": "test", "version": "1.0.0"}', encoding="utf-8")
         (skill_dir / "src").mkdir()
         (skill_dir / "tests").mkdir()
         (skill_dir / "hooks").mkdir()

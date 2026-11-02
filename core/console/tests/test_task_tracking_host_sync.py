@@ -37,11 +37,11 @@ ITEMS = "/v1/console/task-tracking"
 
 def _git(repo: Path, *args: str, env: dict | None = None) -> str:
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
-                          env={**os.environ, **(env or {})}).stdout
+                          env={**os.environ, **(env or {})}, encoding="utf-8", errors="replace").stdout
 
 
 def _commit(repo: Path, subject: str, when: float) -> str:
-    (repo / "f.txt").write_text(subject)
+    (repo / "f.txt").write_text(subject, encoding="utf-8")
     _git(repo, "add", "f.txt")
     stamp = f"@{int(when)} +0000"
     _git(repo, "commit", "-q", "-m", subject,
@@ -50,13 +50,13 @@ def _commit(repo: Path, subject: str, when: float) -> str:
 
 
 def _proc_start(pid: int) -> str:
-    stat = Path(f"/proc/{pid}/stat").read_text()
+    stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     return stat[stat.rfind(")") + 2:].split()[19]
 
 
 def _jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
 
 def _cc(cwd: str) -> str:
@@ -88,7 +88,7 @@ class HostSyncTest(unittest.TestCase):
 
     def _adr(self, n: int, status: str, title: str) -> None:
         (self.adr / "decisions" / f"ADR-{n}-x.md").write_text(
-            f"---\nid: ADR-{n}\nstatus: {status}\n---\n\n# ADR-{n}: {title}\n\nbody\n")
+            f"---\nid: ADR-{n}\nstatus: {status}\n---\n\n# ADR-{n}: {title}\n\nbody\n", encoding="utf-8")
 
     def _seed_sessions(self, corvin_home: Path) -> None:
         proj = self.claude / "projects" / _cc(str(self.repo))
@@ -119,10 +119,10 @@ class HostSyncTest(unittest.TestCase):
         (reg / f"{me}.json").write_text(json.dumps({
             "pid": me, "procStart": _proc_start(me), "sessionId": "s-live", "cwd": str(self.repo),
             "kind": "interactive", "entrypoint": "cli", "status": "busy", "name": "proj-01",
-            "startedAt": int((self.now - 600) * 1000), "updatedAt": int(self.now * 1000)}))
+            "startedAt": int((self.now - 600) * 1000), "updatedAt": int(self.now * 1000)}), encoding="utf-8")
         (reg / "999999.json").write_text(json.dumps({
             "pid": 999999, "procStart": "1", "sessionId": "s-dead", "cwd": str(self.repo),
-            "kind": "interactive", "entrypoint": "cli", "status": "busy"}))
+            "kind": "interactive", "entrypoint": "cli", "status": "busy"}), encoding="utf-8")
         _jsonl(proj / "s-live.jsonl", [
             {"type": "user", "entrypoint": "cli", "cwd": str(self.repo), "timestamp": self.now - 2000},
             {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {
@@ -230,12 +230,12 @@ class HostSyncTest(unittest.TestCase):
         with self._env() as (client, _csrf, _home, _):
             # ADR-9001: the ADR- prefixed file is a superseded stub, the bare file the real record.
             (self.adr / "decisions" / "ADR-9001-x.md").write_text(
-                "---\nid: ADR-9001\nstatus: SUPERSEDED\n---\n\n# ADR-9001: Stub\n")
+                "---\nid: ADR-9001\nstatus: SUPERSEDED\n---\n\n# ADR-9001: Stub\n", encoding="utf-8")
             (self.adr / "decisions" / "9001-real.md").write_text(
-                "---\nid: ADR-9001\nstatus: ACCEPTED\n---\n\n# ADR-9001: The first thing\n")
+                "---\nid: ADR-9001\nstatus: ACCEPTED\n---\n\n# ADR-9001: The first thing\n", encoding="utf-8")
             # ADR-9002: two live records disagree.
             (self.adr / "decisions" / "9002-other.md").write_text(
-                "---\nid: ADR-9002\nstatus: ACCEPTED\n---\n\n# ADR-9002: Another take\n")
+                "---\nid: ADR-9002\nstatus: ACCEPTED\n---\n\n# ADR-9002: Another take\n", encoding="utf-8")
             self._sync()
             items = {i["external_ref"]: i for i in client.get(f"{ITEMS}/items").json()["items"]}
             first, second = items["git:Proj#ADR-9001"], items["git:Proj#ADR-9002"]
@@ -311,13 +311,13 @@ class HostSyncTest(unittest.TestCase):
                    "CORVIN_ADR_ROOT": str(self.adr)}
             cp = subprocess.run([sys.executable, "-m", "corvin_console.task_tracking_git_sync", "--dry-run"],
                                 capture_output=True, text=True, env=env, timeout=120,
-                                cwd=str(Path(__file__).resolve().parents[3]))
+                                cwd=str(Path(__file__).resolve().parents[3]), encoding="utf-8", errors="replace")
             self.assertEqual(cp.returncode, 0, cp.stderr[-2000:])
             out = json.loads(cp.stdout.strip().splitlines()[-1])
             self.assertTrue(out.get("dry_run"))
             other = subprocess.run([sys.executable, "-m", "corvin_console.task_tracking_git_sync",
                                     "--tenant", "acme"], capture_output=True, text=True, env=env, timeout=120,
-                                   cwd=str(Path(__file__).resolve().parents[3]))
+                                   cwd=str(Path(__file__).resolve().parents[3]), encoding="utf-8", errors="replace")
             self.assertIn("skipped", json.loads(other.stdout.strip().splitlines()[-1]))
 
 

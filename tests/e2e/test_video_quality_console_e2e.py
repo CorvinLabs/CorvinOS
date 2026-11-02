@@ -82,7 +82,7 @@ def _render(tmp: Path) -> Path:
         subprocess.run([ff, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=1", "-frames:v", "1", str(out / "scenes" / f"scene_{i:03d}.png")], check=True)
     subprocess.run([ff, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=24000",
                     "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out / "output.mp4")], check=True)
-    (out / "output.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n\n2\n00:00:01,000 --> 00:00:02,000\nHello\n")
+    (out / "output.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n\n2\n00:00:01,000 --> 00:00:02,000\nHello\n", encoding="utf-8")
     return out
 
 

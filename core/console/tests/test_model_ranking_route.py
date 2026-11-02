@@ -270,7 +270,7 @@ def _chain_records(home: str, tenant_id: str) -> list[dict]:
     p = Path(home) / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
     if not p.exists():
         return []
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 class RecentAndFeedbackRouteTests(unittest.TestCase):

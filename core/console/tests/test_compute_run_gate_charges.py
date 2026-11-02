@@ -150,7 +150,7 @@ def test_submit_run_charges_exactly_once(monkeypatch, tmp_path, charges):
     import corvin_compute.client as _client_mod
 
     sock = tmp_path / "worker.sock"
-    sock.write_text("")
+    sock.write_text("", encoding="utf-8")
     monkeypatch.setattr(C, "_socket_path", lambda tid: sock)
     monkeypatch.setattr(C, "verify_reauth", lambda *a, **k: True, raising=False)
 

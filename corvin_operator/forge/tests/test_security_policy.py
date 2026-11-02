@@ -81,7 +81,7 @@ def test_loads_custom_policy():
     print("\n[explicit policy.json overrides every field]")
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
-        (td / "policy.json").write_text(json.dumps(SAMPLE_POLICY))
+        (td / "policy.json").write_text(json.dumps(SAMPLE_POLICY), encoding="utf-8")
         pol = Policy.load(td)
         t("default_budget.cpu_seconds = 3",
           pol.default_budget.cpu_seconds == 3)
@@ -109,7 +109,7 @@ def test_malformed_json_raises():
     print("\n[malformed policy.json raises clear ValueError]")
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
-        (td / "policy.json").write_text("this is not json")
+        (td / "policy.json").write_text("this is not json", encoding="utf-8")
         try:
             Policy.load(td)
             t("malformed → raises", False)

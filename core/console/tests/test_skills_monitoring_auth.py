@@ -134,7 +134,7 @@ class TestSkillsMonitoringAuth(unittest.TestCase):
         with _sandbox(Path(self._tmp)) as (client, home, tid, csrf):
             manifest = home / "tenants" / tid / "skill-forge" / "manifest.json"
             manifest.parent.mkdir(parents=True, exist_ok=True)
-            manifest.write_text(json.dumps({"skills": [{"name": "a.b", "metadata": {}}]}))
+            manifest.write_text(json.dumps({"skills": [{"name": "a.b", "metadata": {}}]}), encoding="utf-8")
 
             from core.skills.corvin_skills.resolver import resolver_for
             shared = resolver_for(tid)
@@ -154,7 +154,7 @@ class TestSkillsMonitoringAuth(unittest.TestCase):
             self.assertEqual(client.get("/v1/console/api/skills/cache-stats").json()["size"], 0)
 
     def test_source_has_no_auth_fallback_stub(self):
-        src = (_CONSOLE / "corvin_console" / "routes" / "skills_monitoring.py").read_text()
+        src = (_CONSOLE / "corvin_console" / "routes" / "skills_monitoring.py").read_text(encoding="utf-8")
         self.assertNotIn("except ImportError", src)
         self.assertNotIn("Depends(get_current_user)", src)
         self.assertNotIn("import get_current_user", src)

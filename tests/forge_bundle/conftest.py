@@ -80,18 +80,18 @@ def make_skill(tmp_corvin_home: Path) -> Callable[..., Path]:
         folder = tmp_corvin_home / "skills_gen" / skill_id
         for sub in ("src", "hooks", "tests", "scripts", "docs", "references"):
             (folder / sub).mkdir(parents=True, exist_ok=True)
-        (folder / "src" / "skill.py").write_text("def run(text):\n    return text[:100]\n")
-        (folder / "README.md").write_text(f"# {skill_id}\n")
+        (folder / "src" / "skill.py").write_text("def run(text):\n    return text[:100]\n", encoding="utf-8")
+        (folder / "README.md").write_text(f"# {skill_id}\n", encoding="utf-8")
         manifest = {
             "skill_id": skill_id, "version": version, "boot_layer": "installed",
             "entry_point": "src.skill:run",
         }
-        (folder / "skill.json").write_text(json.dumps(manifest))
+        (folder / "skill.json").write_text(json.dumps(manifest), encoding="utf-8")
         (folder / ".forge").mkdir(exist_ok=True)
         (folder / ".forge" / "generation_context.json").write_text(json.dumps({
             "generated_at": "2026-01-01T00:00:00Z", "generated_by": "test-fixture",
             "skill_id": skill_id, "version": version,
-        }))
+        }), encoding="utf-8")
         return folder
     return _make
 
@@ -149,7 +149,7 @@ def cli_runner(tmp_corvin_home: Path) -> Callable[[list[str]], subprocess.Comple
         return subprocess.run(
             [sys.executable, str(REPO_ROOT / "scripts" / "forge_bundle_cli.py"), *args],
             capture_output=True, text=True, timeout=30,
-            env={**os.environ},
+            env={**os.environ}, encoding="utf-8", errors="replace",
         )
     return _run
 
@@ -183,7 +183,7 @@ def chain_events(tmp_corvin_home: Path) -> Callable[[], list[dict]]:
         chain = tmp_corvin_home / "tenants" / TENANT_ID / "global" / "forge" / "audit.jsonl"
         if not chain.exists():
             return []
-        return [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        return [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     return _read
 
 

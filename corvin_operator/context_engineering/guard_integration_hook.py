@@ -89,7 +89,7 @@ class ContextSuggestionGate:
 
                 # Cache miss or stale (mtime changed); read content OUTSIDE lock
                 import json
-                with open(baseline_link, "r") as f:
+                with open(baseline_link, "r", encoding="utf-8") as f:
                     file_content = f.read()
 
                 # Update cache with mtime (not hash; faster)

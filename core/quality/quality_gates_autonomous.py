@@ -445,7 +445,7 @@ class QualityGatesEngine:
         report_dict["errors"] = asdict(report.errors)
         report_dict["resources"] = asdict(report.resources)
 
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report_dict, f, indent=2)
 
         return report_path

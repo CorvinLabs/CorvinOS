@@ -89,7 +89,7 @@ if HAS_FLASK:
         """Serve stats dashboard HTML."""
         html_path = Path(__file__).parent.parent / 'docs' / 'stats.html'
         if html_path.exists():
-            with open(html_path) as f:
+            with open(html_path, encoding="utf-8") as f:
                 html = f.read()
             # Update API endpoint in HTML to point to localhost
             html = html.replace(

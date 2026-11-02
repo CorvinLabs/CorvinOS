@@ -81,7 +81,7 @@ def _load_peer_from_origin(origin_file: Path) -> PeerInfo | None:
         if not origin_file.exists():
             return None
 
-        with open(origin_file, "r") as f:
+        with open(origin_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         return PeerInfo(

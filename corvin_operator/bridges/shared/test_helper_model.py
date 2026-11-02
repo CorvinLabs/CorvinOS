@@ -192,7 +192,7 @@ class NoSdkImportContractTests(unittest.TestCase):
     pattern, never through the SDK."""
 
     def test_no_anthropic_or_openai_import(self) -> None:
-        src = (Path(__file__).resolve().parent / "helper_model.py").read_text()
+        src = (Path(__file__).resolve().parent / "helper_model.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         forbidden = {"anthropic", "openai"}
         offenders: list[str] = []
@@ -234,7 +234,7 @@ class ResolveClaudeBinTests(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             fake = Path(d) / "claude"
-            fake.write_text("#!/bin/sh\nexit 0\n")
+            fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             fake.chmod(0o755)
             os.environ.pop("CORVIN_CLAUDE_BIN", None)
             os.environ["PATH"] = "/nonexistent-dir-xyz"
@@ -245,7 +245,7 @@ class ResolveClaudeBinTests(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             fake = Path(d) / "claude"
-            fake.write_text("#!/bin/sh\nexit 0\n")
+            fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             fake.chmod(0o755)
             os.environ.pop("CORVIN_CLAUDE_BIN", None)
             os.environ.pop("CORVIN_CLAUDE_BIN_FALLBACKS", None)
@@ -282,7 +282,7 @@ class InstallMethodCoverageTests(unittest.TestCase):
     def _fake(self, rel: str) -> Path:
         p = self.home / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("#!/bin/sh\nexit 0\n")
+        p.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         p.chmod(0o755)
         return p
 
@@ -350,7 +350,7 @@ class WindowsBinFallbacksTests(unittest.TestCase):
             npm_dir = appdata / "npm"
             npm_dir.mkdir(parents=True)
             shim = npm_dir / "claude.cmd"
-            shim.write_text("@echo off\n")
+            shim.write_text("@echo off\n", encoding="utf-8")
             os.environ["APPDATA"] = str(appdata)
             os.environ.pop("USERPROFILE", None)
             os.environ.pop("CORVIN_CLAUDE_BIN", None)
@@ -368,7 +368,7 @@ class WindowsBinFallbacksTests(unittest.TestCase):
             npm_dir = appdata / "npm"
             npm_dir.mkdir(parents=True)
             shim = npm_dir / "claude.cmd"
-            shim.write_text("@echo off\n")
+            shim.write_text("@echo off\n", encoding="utf-8")
             os.environ["APPDATA"] = str(appdata)
             os.environ.pop("CORVIN_CLAUDE_BIN", None)
             os.environ.pop("CORVIN_CLAUDE_BIN_FALLBACKS", None)

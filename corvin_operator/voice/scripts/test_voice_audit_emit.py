@@ -41,7 +41,7 @@ def t(label: str, ok: bool, *, detail: str = "") -> None:
 def _run(*args, audit_path):
     return subprocess.run(
         [sys.executable, str(CLI), "--path", str(audit_path), *args],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -60,7 +60,7 @@ def test_emit_writes_one_record():
         t("emit rc=0", proc.returncode == 0,
           detail=f"stderr={proc.stderr!r}")
         t("audit file exists", audit.exists())
-        lines = audit.read_text().splitlines()
+        lines = audit.read_text(encoding="utf-8").splitlines()
         t("exactly one line written", len(lines) == 1)
         rec = json.loads(lines[0])
         t("event_type matches",
@@ -91,7 +91,7 @@ def test_two_emits_link():
              "--channel", "telegram", "--user", "u1",
              "--chat-key", "chat-42",
              audit_path=audit)
-        lines = audit.read_text().splitlines()
+        lines = audit.read_text(encoding="utf-8").splitlines()
         t("two records", len(lines) == 2)
         r1, r2 = (json.loads(l) for l in lines)
         t("second prev_hash == first hash",
@@ -113,11 +113,11 @@ def test_tamper_caught():
              "--channel", "discord", "--user", "u",
              audit_path=audit)
         # tamper line 1: change channel
-        lines = audit.read_text().splitlines()
+        lines = audit.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[0])
         rec["details"]["channel"] = "evil"
         lines[0] = json.dumps(rec)
-        audit.write_text("\n".join(lines) + "\n")
+        audit.write_text("\n".join(lines) + "\n", encoding="utf-8")
         v = _run("verify", audit_path=audit)
         t("verify rc=1", v.returncode == 1)
         t("stderr names line 1",

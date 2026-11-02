@@ -101,8 +101,8 @@ def test_a_corrected_clock_is_not_mistaken_for_a_stale_probe():
 def test_empty_seq_file_continues_above_every_handed_out_seq(tmp_path):
     import a2a_feed
     (tmp_path / "messages.jsonl").write_text(
-        "\n".join(json.dumps({"seq": n, "peer_id": "p"}) for n in (1, 2, 7)) + "\n")
-    (tmp_path / "seq").write_text("")
+        "\n".join(json.dumps({"seq": n, "peer_id": "p"}) for n in (1, 2, 7)) + "\n", encoding="utf-8")
+    (tmp_path / "seq").write_text("", encoding="utf-8")
     assert a2a_feed._next_seq(tmp_path) == 8
 
 
@@ -113,12 +113,12 @@ def test_feed_erasure_matches_the_peer_id_not_a_shared_label(tmp_path, monkeypat
     root.mkdir(parents=True, exist_ok=True)
     recs = [{"seq": 1, "peer_id": "p-subject", "peer_label": "Laptop", "text": "a"},
             {"seq": 2, "peer_id": "p-other", "peer_label": "Laptop", "text": "b"}]
-    (root / "messages.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    (root / "messages.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
     a2a_feed.erase_peer("Laptop", tenant_id="_default")
-    left = [json.loads(line)["peer_id"] for line in (root / "messages.jsonl").read_text().splitlines() if line]
+    left = [json.loads(line)["peer_id"] for line in (root / "messages.jsonl").read_text(encoding="utf-8").splitlines() if line]
     assert left == ["p-subject", "p-other"]
     a2a_feed.erase_peer("p-subject", tenant_id="_default")
-    left = [json.loads(line)["peer_id"] for line in (root / "messages.jsonl").read_text().splitlines() if line]
+    left = [json.loads(line)["peer_id"] for line in (root / "messages.jsonl").read_text(encoding="utf-8").splitlines() if line]
     assert left == ["p-other"]
 
 

@@ -61,7 +61,7 @@ def _make_fake_claude(tmp: Path, events: list[str]) -> Path:
             sys.stdout.write(ev + "\\n")
             sys.stdout.flush()
     ''')
-    script.write_text(body)
+    script.write_text(body, encoding="utf-8")
     script.chmod(0o755)
     return bin_dir
 

@@ -44,7 +44,7 @@ def _hanging_ffmpeg_dir(root: Path) -> str:
     d = root / "bin"
     d.mkdir()
     p = d / "ffmpeg"
-    p.write_text('#!/bin/sh\ntrap "" TERM\nsleep 600 &\nsleep 600\n')
+    p.write_text('#!/bin/sh\ntrap "" TERM\nsleep 600 &\nsleep 600\n', encoding="utf-8")
     p.chmod(p.stat().st_mode | stat.S_IEXEC)
     return f"{d}{os.pathsep}{os.environ['PATH']}"
 

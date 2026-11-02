@@ -118,7 +118,7 @@ class TestSandboxExecutor:
             assert (jail_root / "config.json").exists()
 
             # Verify config content
-            config = json.loads((jail_root / "config.json").read_text())
+            config = json.loads((jail_root / "config.json").read_text(encoding="utf-8"))
             assert config["plugin_id"] == "test-plugin"
             assert config["profile"]["cpu_limit_percent"] == 20
 

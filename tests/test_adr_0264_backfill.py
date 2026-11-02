@@ -313,7 +313,7 @@ class TestRealCliEndToEnd:
             [sys.executable, str(_SCRIPT),
              "--decisions-dir", str(adr_repo / "decisions"),
              "--adr-repo", str(adr_repo), "--corvin-repo", str(corvin_repo)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         assert f.read_text(encoding="utf-8") == original  # untouched
@@ -326,12 +326,12 @@ class TestRealCliEndToEnd:
                         "--adr-repo", str(adr_repo), "--corvin-repo", str(corvin_repo)]
 
         r1 = subprocess.run([sys.executable, str(_SCRIPT), "--write", *common_args],
-                             capture_output=True, text=True, timeout=30)
+                             capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
         assert r1.returncode == 0, r1.stderr
         assert "Wrote frontmatter to 1 file" in r1.stdout
 
         r2 = subprocess.run([sys.executable, str(_SCRIPT), "--write", *common_args],
-                             capture_output=True, text=True, timeout=30)
+                             capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
         assert r2.returncode == 0, r2.stderr
         assert "0 will be backfilled" in r2.stdout
         assert "1 already have frontmatter" in r2.stdout
@@ -354,7 +354,7 @@ class TestRealCliEndToEnd:
             [sys.executable, str(_SCRIPT), "--write",
              "--decisions-dir", str(adr_repo / "decisions"),
              "--adr-repo", str(adr_repo), "--corvin-repo", str(corvin_repo)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         assert f.read_text(encoding="utf-8") == dirty_content  # bit-for-bit unchanged
@@ -371,7 +371,7 @@ class TestRealCliEndToEnd:
             [sys.executable, str(_SCRIPT), "--write",
              "--decisions-dir", str(adr_repo / "decisions"),
              "--adr-repo", str(adr_repo), "--corvin-repo", str(corvin_repo)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         assert f1.read_text(encoding="utf-8") == c1
@@ -393,7 +393,7 @@ class TestRealCliEndToEnd:
             [sys.executable, str(_SCRIPT), "--write", "--limit", "1",
              "--decisions-dir", str(adr_repo / "decisions"),
              "--adr-repo", str(adr_repo), "--corvin-repo", str(corvin_repo)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         nodes = load_graph(adr_repo / "decisions")
@@ -425,7 +425,7 @@ class TestRealCliEndToEnd:
             [sys.executable, str(_SCRIPT), "--write",
              "--decisions-dir", str(adr_repo / "decisions"),
              "--adr-repo", str(adr_repo), "--corvin-repo", str(corvin_repo)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         assert "Wrote frontmatter to 1 file" in result.stdout

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # validate-install.ps1 — CorvinOS Post-Installation Verification
 # Run AFTER install.ps1 completes to prove the system is fully operational
 # Usage:

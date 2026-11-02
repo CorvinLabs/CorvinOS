@@ -78,8 +78,8 @@ def test_house_rules_gate_with_real_haiku_classifier(tmp_path, monkeypatch):
     assert "house_rules.allowed" in types, types
     ok, problems = se.verify_chain(chain)
     assert ok, problems
-    recs = [json.loads(l) for l in chain.read_text().splitlines()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines()]
     assert all("hash" in r for r in recs)
     # metadata only — neither message text reaches the chain
-    text = chain.read_text()
+    text = chain.read_text(encoding="utf-8")
     assert "phishing" not in text and "asyncio.gather" not in text

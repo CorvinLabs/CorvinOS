@@ -456,7 +456,7 @@ def _inner(argv: list[str]) -> int:
     ap.add_argument("--samples", type=int, default=0)
     ap.add_argument("--scene", default="", help="render only this scene (all are still built)")
     a = ap.parse_args(argv)
-    concept = json.loads(Path(a.spec).read_text())
+    concept = json.loads(Path(a.spec).read_text(encoding="utf-8"))
     out = Path(a.out)
     report: dict[str, Any] = {"concept": concept["name"], "blender": bpy.app.version_string,
                               "ok": False, "scenes": []}
@@ -509,7 +509,7 @@ def _inner(argv: list[str]) -> int:
         report["error"] = f"{type(exc).__name__}: {exc}"
         report["traceback"] = traceback.format_exc()[-4000:]
     report["duration_s"] = round(time.time() - t0, 2)
-    Path(a.report).write_text(json.dumps(report, indent=2))
+    Path(a.report).write_text(json.dumps(report, indent=2), encoding="utf-8")
     return 0 if report["ok"] else 1
 
 
@@ -534,7 +534,7 @@ def build(concept_path: Path, *, out: Path | None = None, render: bool = False,
     out = Path(out) if out else default_out_dir(concept["slug"])
     out.mkdir(parents=True, exist_ok=True)
     spec = out / "concept.json"
-    spec.write_text(json.dumps(concept, indent=2))
+    spec.write_text(json.dumps(concept, indent=2), encoding="utf-8")
     report_path = out / "report.json"
     cmd = [blender, "--background", "--factory-startup"]
     if threads:
@@ -558,9 +558,9 @@ def build(concept_path: Path, *, out: Path | None = None, render: bool = False,
     report: dict[str, Any] = {}
     for attempt in range(1, attempts + 1):
         report_path.unlink(missing_ok=True)
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-        (out / f"blender_attempt_{attempt}.log").write_text(proc.stdout[-200_000:] + proc.stderr[-50_000:])
-        report = json.loads(report_path.read_text()) if report_path.is_file() else {
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, encoding="utf-8", errors="replace")
+        (out / f"blender_attempt_{attempt}.log").write_text(proc.stdout[-200_000:] + proc.stderr[-50_000:], encoding="utf-8")
+        report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else {
             "ok": False, "error": f"blender exited {proc.returncode} without a report"}
         report["attempts"] = attempt
         if report.get("ok"):

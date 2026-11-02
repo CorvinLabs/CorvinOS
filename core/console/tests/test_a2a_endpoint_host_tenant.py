@@ -38,7 +38,7 @@ class EndpointMutationsAreHostScopedTest(unittest.TestCase):
 
     def test_a_session_of_another_tenant_cannot_change_or_delete_an_endpoint(self):
         path = _write_endpoint(self.eps, "peer-a")
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         with _sandbox(self.tmp, tenants=("_default", "other")) as (_host, _hcsrf, _home, clients):
             other, csrf = clients["other"]
             h = {"X-CSRF-Token": csrf}
@@ -53,7 +53,7 @@ class EndpointMutationsAreHostScopedTest(unittest.TestCase):
             self.assertEqual(r.status_code, 403, r.text)
             r = other.delete(f"{_PAIR}/friendship/peer-a", headers=h)
             self.assertEqual(r.status_code, 403, r.text)
-            self.assertEqual(path.read_text(), before)
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
 
     def test_the_host_tenant_session_still_works(self):
         _write_endpoint(self.eps, "peer-a")
@@ -61,7 +61,7 @@ class EndpointMutationsAreHostScopedTest(unittest.TestCase):
             r = host.put(f"{_EP}/peer-a/gdpr-role", headers={"X-CSRF-Token": csrf},
                          json={"organisation": "Acme", "gdpr_role": "processor"})
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(json.loads((self.eps / "peer-a.json").read_text())["gdpr_role"], "processor")
+            self.assertEqual(json.loads((self.eps / "peer-a.json").read_text(encoding="utf-8"))["gdpr_role"], "processor")
 
 
 if __name__ == "__main__":

@@ -851,21 +851,21 @@ def ensure_marketplace_source(*, force: bool = False) -> None:
     failed = cache_root.parent / ".sync_failed_at"
     if not force and marker.is_file() and (cache_root / "plugins").is_dir():
         try:
-            age = time.time() - float(marker.read_text().strip())
+            age = time.time() - float(marker.read_text(encoding="utf-8").strip())
             if age < _MARKETPLACE_SYNC_TTL_S:
                 return
         except (OSError, ValueError):
             pass
     if not force and failed.is_file():
         try:
-            if time.time() - float(failed.read_text().strip()) < _MARKETPLACE_FAIL_BACKOFF_S:
+            if time.time() - float(failed.read_text(encoding="utf-8").strip()) < _MARKETPLACE_FAIL_BACKOFF_S:
                 return  # offline / rate-limited a moment ago: keep what the cache holds
         except (OSError, ValueError):
             pass
     try:
         _download_and_extract_marketplace(cache_root)
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(str(time.time()))
+        marker.write_text(str(time.time()), encoding="utf-8")
         failed.unlink(missing_ok=True)
         log.info("marketplace source synced from GitHub into %s", cache_root)
     except Exception as exc:  # noqa: BLE001 - best-effort fallback, not a hard dependency
@@ -875,7 +875,7 @@ def ensure_marketplace_source(*, force: bool = False) -> None:
                     type(exc).__name__, str(exc)[:200], exc_info=True)
         try:
             failed.parent.mkdir(parents=True, exist_ok=True)
-            failed.write_text(str(time.time()))
+            failed.write_text(str(time.time()), encoding="utf-8")
         except OSError:
             pass
 

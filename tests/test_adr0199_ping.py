@@ -566,14 +566,14 @@ class TestADR0199ReceiverBackendParity:
     def test_stdlib_receiver_has_ping_route(self):
         server_file = Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared" / "a2a_http_server.py"
         assert server_file.exists(), "a2a_http_server.py must exist"
-        content = server_file.read_text()
+        content = server_file.read_text(encoding="utf-8")
         assert "/v1/a2a/ping" in content, \
             "a2a_http_server.py must have POST /v1/a2a/ping route"
 
     def test_gateway_receiver_has_ping_route(self):
         gateway_file = Path(__file__).parent.parent / "core" / "gateway" / "corvin_gateway" / "app.py"
         assert gateway_file.exists(), "gateway app.py must exist"
-        content = gateway_file.read_text()
+        content = gateway_file.read_text(encoding="utf-8")
         assert "/v1/a2a/ping" in content, \
             "gateway app.py must have POST /v1/a2a/ping route"
 
@@ -591,7 +591,7 @@ class TestADR0199MCP:
     def test_mcp_tool_a2a_ping_exists(self):
         mcp_file = Path(__file__).parent.parent / "core" / "orchestration" / "corvin_orchestration" / "mcp_server.py"
         assert mcp_file.exists()
-        content = mcp_file.read_text()
+        content = mcp_file.read_text(encoding="utf-8")
         assert "a2a_ping" in content, "mcp_server.py must expose 'a2a_ping' tool"
 
     def test_ping_result_is_json_serializable(self):
@@ -651,9 +651,9 @@ class TestADR0198ReconnectSSRF:
         from a2a_friendship import update_endpoint_url
         endpoints = tmp_path / "endpoints"
         path = _write_friendship_endpoint(endpoints, "kid1", _PREV_HTTPS)
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         assert update_endpoint_url("kid1", bad_url, endpoints_dir=endpoints) is False
-        assert path.read_text() == before, "endpoint file must not be mutated"
+        assert path.read_text(encoding="utf-8") == before, "endpoint file must not be mutated"
 
     def test_scheme_downgrade_https_to_http_rejected(self, tmp_path):
         from a2a_friendship import update_endpoint_url
@@ -662,7 +662,7 @@ class TestADR0198ReconnectSSRF:
         assert update_endpoint_url(
             "kid1", "http://93.184.216.34", endpoints_dir=endpoints,
         ) is False
-        assert "93.184.216.34" not in path.read_text()
+        assert "93.184.216.34" not in path.read_text(encoding="utf-8")
 
     def test_http_allowed_when_previous_was_http(self, tmp_path):
         from a2a_friendship import update_endpoint_url
@@ -671,7 +671,7 @@ class TestADR0198ReconnectSSRF:
         assert update_endpoint_url(
             "kid1", "http://93.184.216.34", endpoints_dir=endpoints,
         ) is True
-        cfg = json.loads(path.read_text())
+        cfg = json.loads(path.read_text(encoding="utf-8"))
         assert cfg["url"] == "http://93.184.216.34/v1/a2a/receive"
 
     def test_legit_global_https_change_applied(self, tmp_path):
@@ -681,7 +681,7 @@ class TestADR0198ReconnectSSRF:
         assert update_endpoint_url(
             "kid1", "https://93.184.216.34:9443", endpoints_dir=endpoints,
         ) is True
-        cfg = json.loads(path.read_text())
+        cfg = json.loads(path.read_text(encoding="utf-8"))
         assert cfg["url"] == "https://93.184.216.34:9443/v1/a2a/receive"
 
     def test_hostname_resolving_to_private_rejected(self, tmp_path, monkeypatch):
@@ -725,7 +725,7 @@ class TestADR0198ReconnectSSRF:
         assert update_endpoint_url(
             "kid1", "https://peer.example", endpoints_dir=endpoints,
         ) is True
-        assert "peer.example" in path.read_text()
+        assert "peer.example" in path.read_text(encoding="utf-8")
 
     def test_pending_endpoint_still_rejected(self, tmp_path):
         """Reconnect must never bootstrap trust (pre-existing invariant)."""
@@ -770,7 +770,7 @@ class TestADR0198DangerCategory:
             endpoints, "kid1", "http://192.168.1.4/v1/a2a/receive")
         assert update_endpoint_url(
             "kid1", "http://192.168.1.9", endpoints_dir=endpoints) is True
-        assert json.loads(path.read_text())["url"] == "http://192.168.1.9/v1/a2a/receive"
+        assert json.loads(path.read_text(encoding="utf-8"))["url"] == "http://192.168.1.9/v1/a2a/receive"
 
     def test_hotspot_private_to_private_allowed(self, tmp_path):
         """172.20.10.x iPhone-hotspot renumber — the ADR-0198 use case."""
@@ -792,10 +792,10 @@ class TestADR0198DangerCategory:
         from a2a_friendship import update_endpoint_url
         endpoints = tmp_path / "endpoints"
         path = _write_friendship_endpoint(endpoints, "kid1", _PREV_HTTPS)
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         assert update_endpoint_url(
             "kid1", "https://10.0.0.5", endpoints_dir=endpoints) is False
-        assert path.read_text() == before
+        assert path.read_text(encoding="utf-8") == before
 
     def test_global_to_global_allowed(self, tmp_path):
         from a2a_friendship import _reconnect_url_rejection_reason

@@ -61,7 +61,7 @@ def _run_turn(text: str, mode: str, *, with_args: bool = False, chat_profile: di
     if chat_profile is not None:
         (base / "bridges" / "discord").mkdir(parents=True)
         (base / "bridges" / "discord" / "settings.json").write_text(
-            json.dumps({"chat_profiles": {"c-1": chat_profile}}))
+            json.dumps({"chat_profiles": {"c-1": chat_profile}}), encoding="utf-8")
     env = {
         "ADAPTER_INBOX": str(base / "inbox"),
         "ADAPTER_OUTBOX": str(base / "outbox"),
@@ -85,13 +85,13 @@ def _run_turn(text: str, mode: str, *, with_args: bool = False, chat_profile: di
         skill_inject._request_diag_seen.clear()
         in_file = base / "inbox" / "m1.json"
         in_file.write_text(json.dumps({"id": "m1", "channel": "discord", "from": "u-1",
-                                       "chat_id": "c-1", "text": text, "ts": time.time()}))
+                                       "chat_id": "c-1", "text": text, "ts": time.time()}), encoding="utf-8")
         # No voice note: the summary step would otherwise call a real TTS provider.
         adapter.process_one(in_file, settings={"whitelist": ["u-1"], "voice_summary_mode": "never"})
-        events = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()] \
+        events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()] \
             if audit_path.exists() else []
         if with_args:
-            dumps = [json.loads(l) for l in (base / "args.jsonl").read_text().splitlines() if l.strip()] \
+            dumps = [json.loads(l) for l in (base / "args.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()] \
                 if (base / "args.jsonl").exists() else []
             return events, dict(skill_inject._request_diag_counts), dumps
         return events, dict(skill_inject._request_diag_counts)
@@ -130,7 +130,7 @@ def _mcp_servers(argv: list[str]) -> dict:
         return {}
     cfg = argv[argv.index("--mcp-config") + 1]
     try:
-        return (json.loads(Path(cfg).read_text()) or {}).get("mcpServers") or {}
+        return (json.loads(Path(cfg).read_text(encoding="utf-8")) or {}).get("mcpServers") or {}
     except (OSError, ValueError):
         # inline JSON form
         try:

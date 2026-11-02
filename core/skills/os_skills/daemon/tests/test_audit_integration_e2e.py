@@ -81,7 +81,7 @@ class TestAuditIntegration:
 
             # Read checkpoint and verify hash
             checkpoint_path = daemon._find_latest_checkpoint()
-            with open(checkpoint_path) as f:
+            with open(checkpoint_path, encoding="utf-8") as f:
                 data = json.load(f)
 
             # Checkpoint must have checksum
@@ -446,7 +446,7 @@ class TestAdversarialScenarios:
 
             # Corrupt the checkpoint
             checkpoint_path = daemon1._find_latest_checkpoint()
-            with open(checkpoint_path, "w") as f:
+            with open(checkpoint_path, "w", encoding="utf-8") as f:
                 f.write("CORRUPTED DATA")
 
             # Try to load corrupted checkpoint

@@ -43,7 +43,7 @@ def _procs(job_id):
         if d.isdigit():
             try:
                 if needle in open(f"/proc/{d}/environ", "rb").read():
-                    out.append((int(d), open(f"/proc/{d}/comm").read().strip()))
+                    out.append((int(d), open(f"/proc/{d}/comm", encoding="utf-8").read().strip()))
             except OSError:
                 pass
     return out
@@ -54,7 +54,7 @@ def _descendants(root: int):
     for d in os.listdir("/proc"):
         if d.isdigit():
             try:
-                ppid = int(open(f"/proc/{d}/stat").read().rsplit(")", 1)[1].split()[1])
+                ppid = int(open(f"/proc/{d}/stat", encoding="utf-8").read().rsplit(")", 1)[1].split()[1])
             except (OSError, IndexError, ValueError):
                 continue
             kids.setdefault(ppid, []).append(int(d))
@@ -82,7 +82,7 @@ def _alive(pids):
     alive = []
     for p in pids:
         try:
-            if open(f"/proc/{p}/stat").read().rsplit(")", 1)[1].split()[0] != "Z":
+            if open(f"/proc/{p}/stat", encoding="utf-8").read().rsplit(")", 1)[1].split()[0] != "Z":
                 alive.append(p)
         except OSError:
             pass

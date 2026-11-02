@@ -46,7 +46,7 @@ def test_real_haiku_turn_lands_a_chained_outcome_and_shows_in_status(tmp_path: P
         t0 = time.monotonic()
         proc = subprocess.run(
             ["claude", "-p", "Reply with exactly the single word OK and nothing else.", "--model", "haiku"],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace",
         )
         duration_ms = int((time.monotonic() - t0) * 1000)
         assert proc.returncode == 0, proc.stderr

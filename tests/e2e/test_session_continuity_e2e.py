@@ -87,7 +87,7 @@ class TestSessionBridgeProducerE2E:
         # Verify audit.jsonl was written
         audit_file = tmp_path / "audit.jsonl"
         assert audit_file.exists()
-        assert audit_file.read_text().count("\n") == 1  # One event
+        assert audit_file.read_text(encoding="utf-8").count("\n") == 1  # One event
 
 
 class TestSessionRecoveryE2E:
@@ -141,9 +141,9 @@ class TestSessionRecoveryE2E:
         producer.emit_bridge_event(snapshot=snapshot, source_session_id="s1")
         latest = tenant_root("_default") / "snapshots" / "task_t" / "latest.json"
         assert oct(latest.stat().st_mode & 0o777) == "0o600"
-        data = json.loads(latest.read_text())
+        data = json.loads(latest.read_text(encoding="utf-8"))
         data["snapshot"]["phase_name"] = "Injected"
-        latest.write_text(json.dumps(data))
+        latest.write_text(json.dumps(data), encoding="utf-8")
 
         recovery = SessionRecoveryManager(event_store_path=tmp_path / "audit.jsonl")
         with pytest.raises(SnapshotVerificationError) as exc_info:
@@ -286,7 +286,7 @@ def test_full_session_continuity_flow(tmp_path):
     from forge import security_events
 
     chain = tmp_path / "audit.jsonl"
-    types = [json.loads(line)["event_type"] for line in chain.read_text().splitlines() if line.strip()]
+    types = [json.loads(line)["event_type"] for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert types[-1] == "infinite_session.context_restored"
     assert len(types) == 2
     assert security_events.verify_chain(chain)[0]

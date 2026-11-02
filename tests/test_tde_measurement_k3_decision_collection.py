@@ -127,7 +127,7 @@ def test_decision_sample_persisted_on_real_offload_path(tmp_path):
     asyncio.run(_drive())
 
     assert log.exists(), "sample was not persisted on the real offload path"
-    lines = [ln for ln in log.read_text().splitlines() if ln.strip()]
+    lines = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert len(lines) == 1
     rec = json.loads(lines[0])
     # Real decision + real native outcome recorded, content-free.
@@ -178,7 +178,7 @@ def test_recording_never_raises_on_malformed_ctx(tmp_path):
 
     asyncio.run(_drive())
     # Dropped, not fabricated: no partial/garbage line on disk.
-    assert not log.exists() or log.read_text().strip() == ""
+    assert not log.exists() or log.read_text(encoding="utf-8").strip() == ""
 
 
 # ---------------------------------------------------------------------------

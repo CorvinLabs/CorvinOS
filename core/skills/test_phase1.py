@@ -370,7 +370,7 @@ class TestSkillSkeletonGenerator:
             skill_py = skill_dir / "src" / "skill.py"
 
             assert skill_py.exists()
-            code = skill_py.read_text()
+            code = skill_py.read_text(encoding="utf-8")
             # Verify key class structure
             assert "class CodeGen" in code
             assert "async def execute" in code
@@ -436,8 +436,8 @@ class TestSkillSkeletonGenerator:
                 dir2 = gen2.generate(config)
 
                 # Compare skill.json contents
-                manifest1 = json.loads((dir1 / "skill.json").read_text())
-                manifest2 = json.loads((dir2 / "skill.json").read_text())
+                manifest1 = json.loads((dir1 / "skill.json").read_text(encoding="utf-8"))
+                manifest2 = json.loads((dir2 / "skill.json").read_text(encoding="utf-8"))
 
                 assert manifest1["skill_id"] == manifest2["skill_id"]
                 assert manifest1["domain"] == manifest2["domain"]
@@ -555,7 +555,7 @@ class TestE2EWiring:
             skill_py = skill_dir / "src" / "skill.py"
 
             # Try to compile (parse) the generated code
-            code = skill_py.read_text()
+            code = skill_py.read_text(encoding="utf-8")
             try:
                 compile(code, str(skill_py), "exec")
             except SyntaxError as e:
@@ -736,7 +736,7 @@ class TestAuditIntegration:
             )
 
             skill_dir = generator.generate(config)
-            manifest_data = json.loads((skill_dir / "skill.json").read_text())
+            manifest_data = json.loads((skill_dir / "skill.json").read_text(encoding="utf-8"))
 
             assert "generation_metadata" in manifest_data
             metadata = manifest_data["generation_metadata"]

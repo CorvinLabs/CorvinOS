@@ -35,14 +35,14 @@ def _doc(graph, tmp_path=None, name="r2"):
         import yaml
         p = tmp_path / f"{name}.awp.yaml"
         p.write_text(yaml.safe_dump({"awp": "1.1.0", "workflow": {"name": name, "description": "d"},
-                                     "orchestration": {"engine": "dag", "graph": graph}}))
+                                     "orchestration": {"engine": "dag", "graph": graph}}), encoding="utf-8")
         from corvin_workflows.storage import load_workflow
         return load_workflow(p)
     return d
 
 
 def _texts(outbox):
-    return [json.loads(p.read_text())["text"] for p in sorted(outbox.glob("*.json"))]
+    return [json.loads(p.read_text(encoding="utf-8"))["text"] for p in sorted(outbox.glob("*.json"))]
 
 
 def _approval_doc(tmp_path):
@@ -214,8 +214,8 @@ def test_a10_cli_resume_of_an_expired_pause_exits_3_without_traceback(tmp_path):
     run = DAGRunner(doc, engine=StubEngine(), console_run=True).run({})
     saved = ckpt.load(run.run_id)
     saved["expires_at_ms"] = int(time.time() * 1000) - 1
-    ckpt._run_path(run.run_id, None).write_text(json.dumps(saved))
+    ckpt._run_path(run.run_id, None).write_text(json.dumps(saved), encoding="utf-8")
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]))
     r = subprocess.run([sys.executable, "-m", "corvin_workflows", "resume", run.run_id, "approve",
-                        "--engine", "stub"], capture_output=True, text=True, env=env)
+                        "--engine", "stub"], capture_output=True, text=True, env=env, encoding="utf-8", errors="replace")
     assert r.returncode == 3 and "Traceback" not in r.stderr and "deadline" in r.stderr

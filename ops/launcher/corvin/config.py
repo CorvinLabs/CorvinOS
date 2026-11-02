@@ -23,7 +23,7 @@ _LEGACY_KEYS = frozenset({"ollama_url", "model"})
 def load() -> dict[str, Any]:
     if _CONFIG_PATH.exists():
         try:
-            data = json.loads(_CONFIG_PATH.read_text())
+            data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 data = {k: v for k, v in data.items() if k not in _LEGACY_KEYS}
                 return {**_DEFAULTS, **data}
@@ -39,7 +39,7 @@ def is_configured() -> bool:
 
 def save(cfg: dict[str, Any]) -> None:
     _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    _CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
 def get(key: str) -> Any:

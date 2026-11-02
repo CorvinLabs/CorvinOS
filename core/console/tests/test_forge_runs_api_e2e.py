@@ -121,12 +121,12 @@ def test_a_live_peers_run_is_listed_live_and_an_orphan_is_listed_not_resumed(tmp
         d.mkdir(parents=True, exist_ok=True)
         base = {"tenant_id": "_default", "kind": "tool", "status": "running", "phase": "planning", "phases": ["planning"],
                 "progress": 5, "message": "m", "engine": "e", "boot_id": "another", "resume": {"request": "x" * 12}}
-        (d / "run-111111111111.json").write_text(json.dumps({**base, "heartbeat_at": time.time(), "started_at": "2026-10-11T10:00:00+00:00"}))
-        (d / "run-222222222222.json").write_text(json.dumps({**base, "heartbeat_at": 0, "started_at": "2026-10-11T09:00:00+00:00"}))
+        (d / "run-111111111111.json").write_text(json.dumps({**base, "heartbeat_at": time.time(), "started_at": "2026-10-11T10:00:00+00:00"}), encoding="utf-8")
+        (d / "run-222222222222.json").write_text(json.dumps({**base, "heartbeat_at": 0, "started_at": "2026-10-11T09:00:00+00:00"}), encoding="utf-8")
         rows = {r["run_id"]: r for r in client.get(f"{B}/runs").json()["runs"]}
         assert rows["run-111111111111"]["live"] is True and rows["run-222222222222"]["live"] is False
         assert spawned == [], "a viewer never resumes anything"
-        assert json.loads((d / "run-222222222222.json").read_text())["status"] == "running", "and never rewrites a record"
+        assert json.loads((d / "run-222222222222.json").read_text(encoding="utf-8"))["status"] == "running", "and never rewrites a record"
         order = [r["run_id"] for r in client.get(f"{B}/runs").json()["runs"]]
         assert order == ["run-111111111111", "run-222222222222"], "newest first"
 
@@ -137,7 +137,7 @@ def test_listing_prunes_a_quiet_tenant(tmp_path):
         d = client.home / "tenants/_default/global/forge_runs"
         d.mkdir(parents=True, exist_ok=True)
         old = d / "run-333333333333.json"
-        old.write_text(json.dumps({"tenant_id": "_default", "kind": "tool", "status": "success", "boot_id": "x"}))
+        old.write_text(json.dumps({"tenant_id": "_default", "kind": "tool", "status": "success", "boot_id": "x"}), encoding="utf-8")
         t = time.time() - 30 * 86400
         os.utime(old, (t, t))
         assert client.get(f"{B}/runs").json()["runs"] == []
@@ -149,7 +149,7 @@ def test_run_start_and_finish_are_on_the_audit_chain_with_ids_and_counts_only(tm
         run_id = start(client, "tool", REQ_TOOL + " secret-marker-9876")
         poll(client, run_id)
         chain = client.home / "tenants/_default/global/forge/audit.jsonl"
-        recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
         started = [r for r in recs if r.get("event_type") == "forge_run.started"]
         finished = [r for r in recs if r.get("event_type") == "forge_run.finished"]
         assert len(started) == 1 and len(finished) == 1
@@ -157,7 +157,7 @@ def test_run_start_and_finish_are_on_the_audit_chain_with_ids_and_counts_only(tm
         d = finished[0]["details"]
         assert d["status"] == "success" and d["artifact_kind"] == "tool" and d["artifact_id"] and d["event_count"] >= 2
         assert d["truncated"] is False
-        assert "secret-marker-9876" not in chain.read_text()
+        assert "secret-marker-9876" not in chain.read_text(encoding="utf-8")
         assert all("_dropped_fields" not in r.get("details", {}) for r in started + finished), "every field is allowlisted"
 
 

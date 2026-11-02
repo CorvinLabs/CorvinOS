@@ -185,16 +185,16 @@ class TestPhase3E2E:
                 },
             ]
         }
-        with open(registry_dir / "registry.json", "w") as f:
+        with open(registry_dir / "registry.json", "w", encoding="utf-8") as f:
             json.dump(registry_data, f)
 
         # Save manifests
         import yaml
 
-        with open(registry_dir / "manifests" / "elasticsearch-docs.yaml", "w") as f:
+        with open(registry_dir / "manifests" / "elasticsearch-docs.yaml", "w", encoding="utf-8") as f:
             yaml.dump(elasticsearch_manifest, f)
 
-        with open(registry_dir / "manifests" / "vector-db.yaml", "w") as f:
+        with open(registry_dir / "manifests" / "vector-db.yaml", "w", encoding="utf-8") as f:
             yaml.dump(vector_manifest, f)
 
         # Create orchestrator

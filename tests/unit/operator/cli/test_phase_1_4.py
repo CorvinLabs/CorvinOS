@@ -57,7 +57,7 @@ def temp_tenant_cli(tmp_path, monkeypatch):
             "dependencies": data["deps"],
             "tags": ["testing"]
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
     return tenant_path
@@ -130,7 +130,7 @@ class TestCliValidate:
             "created": datetime.now().isoformat(),
             "last_modified": datetime.now().isoformat()
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(bad_meta, f)
 
         result = cli_runner.invoke(validate_skills, ["--tenant", "_default", "--scope", "_shared"])
@@ -162,7 +162,7 @@ class TestCliMigrate:
         # Create fake ~/.claude/skills
         source_dir = tmp_path / ".claude" / "skills" / "test-skill"
         source_dir.mkdir(parents=True)
-        (source_dir / "body.md").write_text("# Test")
+        (source_dir / "body.md").write_text("# Test", encoding="utf-8")
 
         result = cli_runner.invoke(migrate, ["--tenant", "_default", "--dry-run"])
         assert result.exit_code == 0
@@ -175,7 +175,7 @@ class TestCliMigrate:
         # Create fake ~/.claude/skills
         source_dir = tmp_path / ".claude" / "skills" / "test-skill"
         source_dir.mkdir(parents=True)
-        (source_dir / "body.md").write_text("# Test")
+        (source_dir / "body.md").write_text("# Test", encoding="utf-8")
 
         result = cli_runner.invoke(migrate, ["--tenant", "_default", "--confirm"])
         assert result.exit_code == 0
@@ -216,7 +216,7 @@ class TestCliSkillInfoRealBoundary:
         return subprocess.run(
             [sys.executable, "-m", "corvin", *args],
             cwd=str(repo / "ops" / "launcher"), env=env,
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
         )
 
     def test_info_missing_skill_exits_nonzero(self, tmp_path):
@@ -235,7 +235,7 @@ class TestCliSkillInfoRealBoundary:
             "created": datetime.now().isoformat(),
             "last_modified": datetime.now().isoformat(),
             "dependencies": [], "tags": ["testing"],
-        }))
+        }), encoding="utf-8")
         res = self._run(["skill", "info", "demo-skill", "--tenant", "_default"], home)
         assert res.returncode == 0, res.stdout + res.stderr
         assert "demo-skill@1.0.0" in res.stdout

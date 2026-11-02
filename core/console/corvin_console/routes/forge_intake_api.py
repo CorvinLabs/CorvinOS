@@ -64,7 +64,7 @@ def _prune(tenant_id: str) -> None:
         if not _ID_RE.match(d.name) or d.is_symlink() or not d.is_dir():
             continue
         try:
-            meta = json.loads((d / "meta.json").read_text())
+            meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
             ttl = USED_TTL_S if meta.get("used") else UNUSED_TTL_S
             if now - d.stat().st_mtime > ttl:
                 shutil.rmtree(d, ignore_errors=True)
@@ -125,7 +125,7 @@ async def upload(
 def _finish(rec: session_auth.SessionRecord, att_id: str, d: Path, stored_ext: str, item: Any) -> Dict[str, Any]:
     report = item.report.to_dict()
     (d / "meta.json").write_text(json.dumps({"owner": rec.sid_fingerprint, "ext": stored_ext, "sha256_prefix": report["sha256_prefix"],
-                                             "verdict": report["verdict"], "used": False}))
+                                             "verdict": report["verdict"], "used": False}), encoding="utf-8")
     console_audit.forge_intake_item(tenant_id=rec.tenant_id, report=report)
     return report
 
@@ -189,7 +189,7 @@ async def remove(
 ) -> Dict[str, Any]:
     d = _dir(rec.tenant_id, att_id)
     try:
-        meta = json.loads((d / "meta.json").read_text())
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise HTTPException(status_code=404, detail="Attachment not found")
     if meta.get("owner") != rec.sid_fingerprint:
@@ -210,7 +210,7 @@ def resolve_pack(ids: List[str], *, tenant_id: str, sid_fingerprint: str, run_id
     for att_id in ids:
         d = _dir(tenant_id, att_id)
         try:
-            meta = json.loads((d / "meta.json").read_text())
+            meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raise HTTPException(status_code=404, detail="Attachment not found")
         if meta.get("owner") != sid_fingerprint:
@@ -226,9 +226,9 @@ def resolve_pack(ids: List[str], *, tenant_id: str, sid_fingerprint: str, run_id
     for att_id in ids:
         try:
             m = _dir(tenant_id, att_id) / "meta.json"
-            meta = json.loads(m.read_text())
+            meta = json.loads(m.read_text(encoding="utf-8"))
             meta["used"] = True
-            m.write_text(json.dumps(meta))
+            m.write_text(json.dumps(meta), encoding="utf-8")
         except OSError:
             pass
     return build_pack(items)

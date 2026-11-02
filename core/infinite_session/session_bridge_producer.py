@@ -334,7 +334,7 @@ class SessionBridgeProducer:
         tmp = snapshot_file.with_name(f".latest.json.{os.getpid()}.tmp")
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(snapshot_data, f, indent=2)
             os.chmod(tmp, 0o600)
             os.replace(tmp, snapshot_file)

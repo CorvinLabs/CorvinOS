@@ -94,7 +94,7 @@ class SkillDirectoryInitializer:
             "skills": [],
             "tools": []
         }
-        with open(self.base_path / "_platform" / "manifest.json", "w") as f:
+        with open(self.base_path / "_platform" / "manifest.json", "w", encoding="utf-8") as f:
             json.dump(platform_manifest, f, indent=2)
 
         # _shared manifest
@@ -113,7 +113,7 @@ class SkillDirectoryInitializer:
                 "last_push": None
             }
         }
-        with open(self.base_path / "_shared" / "manifest.json", "w") as f:
+        with open(self.base_path / "_shared" / "manifest.json", "w", encoding="utf-8") as f:
             json.dump(shared_manifest, f, indent=2)
 
         # _local manifest
@@ -125,7 +125,7 @@ class SkillDirectoryInitializer:
             "skills": [],
             "tools": []
         }
-        with open(self.base_path / "_local" / "manifest.json", "w") as f:
+        with open(self.base_path / "_local" / "manifest.json", "w", encoding="utf-8") as f:
             json.dump(local_manifest, f, indent=2)
 
 

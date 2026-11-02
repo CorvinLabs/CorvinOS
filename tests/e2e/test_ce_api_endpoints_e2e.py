@@ -69,7 +69,7 @@ def test_get_default_update_persist_reset_audited(home):
     r = c.post(f"{P}/config", json={"stages": {"memory_lookup": {"max_results": 5}}})
     assert r.status_code == 200, r.text
     cfg = home / "tenants" / "_default" / "global" / "context-engineering.yaml"
-    assert yaml.safe_load(cfg.read_text())["stages"]["memory_lookup"]["max_results"] == 5
+    assert yaml.safe_load(cfg.read_text(encoding="utf-8"))["stages"]["memory_lookup"]["max_results"] == 5
     assert c.get(f"{P}/config").json()["stages"]["memory_lookup"]["max_results"] == 5
 
     assert c.post(f"{P}/config", json={"no_such_field": 1}).status_code == 400
@@ -79,7 +79,7 @@ def test_get_default_update_persist_reset_audited(home):
     assert r.json()["config"]["stages"]["memory_lookup"]["max_results"] == 10
 
     chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-    actions = [json.loads(l).get("details", {}).get("action") for l in chain.read_text().splitlines()]
+    actions = [json.loads(l).get("details", {}).get("action") for l in chain.read_text(encoding="utf-8").splitlines()]
     assert "context_engineering.config_updated" in actions
     assert "context_engineering.config_reset" in actions
 

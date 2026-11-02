@@ -54,7 +54,7 @@ class TestReplayManifest:
         f.write_text(json.dumps({
             "version": 1, "scenario": "file", "description": "",
             "turns": [{"input": "Q"}],
-        }))
+        }), encoding="utf-8")
         m = ReplayManifest.from_file(f)
         assert m.scenario == "file"
 
@@ -293,7 +293,7 @@ class TestDebugLogger:
         write_event(tmp_path, "test.event", foo="bar", count=42)
         log = tmp_path / "chat_debug.jsonl"
         assert log.exists()
-        data = json.loads(log.read_text().strip())
+        data = json.loads(log.read_text(encoding="utf-8").strip())
         assert data["event"] == "test.event"
         assert data["foo"] == "bar"
         assert data["count"] == 42
@@ -303,7 +303,7 @@ class TestDebugLogger:
         from corvin_console.aco.debug_logger import write_event
         write_event(tmp_path, "test.ns", obj=object())  # non-serializable → str
         log = tmp_path / "chat_debug.jsonl"
-        data = json.loads(log.read_text().strip())
+        data = json.loads(log.read_text(encoding="utf-8").strip())
         assert isinstance(data["obj"], str)
 
     def test_write_event_silent_on_bad_path(self):
@@ -388,9 +388,9 @@ class TestRepairLayer5:
         _write_log(tmp_path, [
             {"ts": "2026-06-28T10:00:00Z", "event": "turn.start"},
         ])
-        log_before = (tmp_path / "chat_debug.jsonl").read_text()
+        log_before = (tmp_path / "chat_debug.jsonl").read_text(encoding="utf-8")
         result = repair_session(tmp_path, dry_run=True)
-        log_after = (tmp_path / "chat_debug.jsonl").read_text()
+        log_after = (tmp_path / "chat_debug.jsonl").read_text(encoding="utf-8")
 
         assert log_before == log_after          # nothing written in dry_run
         assert result.dry_run is True
@@ -492,12 +492,12 @@ class TestBootHealer(unittest.TestCase):
             tmp_path = Path(tmp)
             # Simulate sessions/ with web, discord, voice, cli channels
             (tmp_path / "web:abc123").mkdir()
-            (tmp_path / "web:abc123" / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n')
+            (tmp_path / "web:abc123" / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
             (tmp_path / "discord:12345").mkdir()
-            (tmp_path / "discord:12345" / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n')
+            (tmp_path / "discord:12345" / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
             voice_dir = tmp_path / "voice" / "telegram" / "user42"
             voice_dir.mkdir(parents=True)
-            (voice_dir / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n')
+            (voice_dir / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
             # cli session with no chat_debug.jsonl — must NOT appear
             (tmp_path / "cli:test").mkdir()
 
@@ -793,10 +793,10 @@ class TestAuditChainIncrementalInMonitor(unittest.TestCase):
                 im._chain_verify_cache.clear()
                 self.assertEqual(im.check_audit_chain_integrity("_default"), [])  # resumed
                 # Tamper with a record deep inside the proven prefix.
-                lines = chain.read_text().splitlines(keepends=True)
+                lines = chain.read_text(encoding="utf-8").splitlines(keepends=True)
                 lines[10] = lines[10].replace('"test.event"', '"test.evil"')
                 self.assertIn('"test.evil"', lines[10])
-                chain.write_text("".join(lines))
+                chain.write_text("".join(lines), encoding="utf-8")
                 im._chain_verify_cache.clear()
                 findings = im.check_audit_chain_integrity("_default")
                 self.assertEqual([f.check_name for f in findings], ["audit_chain_integrity"])
@@ -852,7 +852,7 @@ class TestIntegrityMonitor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
             config = tmp_path / "tenant.corvin.yaml"
-            config.write_text("spec:\n  default_engine: claude_code\n")
+            config.write_text("spec:\n  default_engine: claude_code\n", encoding="utf-8")
 
             with mock.patch(
                 "corvin_console.aco.integrity_monitor._tenant_global_dir",
@@ -872,7 +872,7 @@ class TestIntegrityMonitor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
             config = tmp_path / "tenant.corvin.yaml"
-            config.write_text("spec:\n  default_engine: claude_code\n")
+            config.write_text("spec:\n  default_engine: claude_code\n", encoding="utf-8")
 
             # Alter Hash (simuliert anderen gespeicherten Zustand)
             fake_state = {
@@ -906,7 +906,7 @@ class TestIntegrityMonitor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
             config = tmp_path / "tenant.corvin.yaml"
-            config.write_text("spec:\n  default_engine: claude_code\n")
+            config.write_text("spec:\n  default_engine: claude_code\n", encoding="utf-8")
             with mock.patch(
                 "corvin_console.aco.integrity_monitor._tenant_global_dir",
                 return_value=tmp_path,
@@ -922,7 +922,7 @@ class TestIntegrityMonitor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
             config = tmp_path / "tenant.corvin.yaml"
-            config.write_text("spec:\n  default_engine: http://evil.hacker.com/v1\n")
+            config.write_text("spec:\n  default_engine: http://evil.hacker.com/v1\n", encoding="utf-8")
             with mock.patch(
                 "corvin_console.aco.integrity_monitor._tenant_global_dir",
                 return_value=tmp_path,
@@ -940,7 +940,7 @@ class TestIntegrityMonitor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
             config = tmp_path / "tenant.corvin.yaml"
-            config.write_text("spec:\n  default_engine: http://localhost:8080\n")
+            config.write_text("spec:\n  default_engine: http://localhost:8080\n", encoding="utf-8")
             with mock.patch(
                 "corvin_console.aco.integrity_monitor._tenant_global_dir",
                 return_value=tmp_path,
@@ -977,7 +977,7 @@ class TestIntegrityMonitor(unittest.TestCase):
             fake_dir = tmp_path / "corvin_operator" / "bridges" / "shared"
             fake_dir.mkdir(parents=True)
             target = fake_dir / "house_rules.py"
-            target.write_text("# original content")
+            target.write_text("# original content", encoding="utf-8")
 
             fake_state = {
                 "compliance_file_hashes": {
@@ -1025,7 +1025,7 @@ class TestIntegrityMonitor(unittest.TestCase):
                 alerts_dir = tmp_path / "alerts"
                 alert_files = list(alerts_dir.glob("integrity-*.json"))
                 self.assertEqual(len(alert_files), 1)
-                content = json.loads(alert_files[0].read_text())
+                content = json.loads(alert_files[0].read_text(encoding="utf-8"))
                 self.assertEqual(content["severity"], "CRITICAL")
                 self.assertEqual(content["finding_count"], 1)  # nur CRITICALs
 
@@ -1038,9 +1038,9 @@ class TestIntegrityMonitor(unittest.TestCase):
             tmp_path = Path(td)
             alerts_dir = tmp_path / "alerts"
             alerts_dir.mkdir()
-            (alerts_dir / "integrity-2026-01.json").write_text("{}")
-            (alerts_dir / "integrity-2026-02.json").write_text("{}")
-            (alerts_dir / "other-file.json").write_text("{}")  # zählt nicht
+            (alerts_dir / "integrity-2026-01.json").write_text("{}", encoding="utf-8")
+            (alerts_dir / "integrity-2026-02.json").write_text("{}", encoding="utf-8")
+            (alerts_dir / "other-file.json").write_text("{}", encoding="utf-8")  # zählt nicht
 
             with mock.patch(
                 "corvin_console.aco.integrity_monitor._corvin_home",

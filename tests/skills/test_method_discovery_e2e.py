@@ -139,7 +139,7 @@ def _chain_records(tmp_path: Path) -> list[dict]:
     chain = tmp_path / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 # ── Gate criterion 1: five tasks -> five observations ───────────────────────
@@ -311,9 +311,9 @@ class TestGateAuditChainVerified:
         partitions = sorted(md.sink._store.events_dir.glob("*.jsonl"))
         assert partitions
         target = partitions[0]
-        lines = [json.loads(l) for l in target.read_text().splitlines() if l.strip()]
+        lines = [json.loads(l) for l in target.read_text(encoding="utf-8").splitlines() if l.strip()]
         lines[0]["payload"]["outcome"] = "failure"  # rewrite history
-        target.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+        target.write_text("\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
 
         result = await md.sink.verify_chain()
         assert result.ok is False
@@ -324,10 +324,10 @@ class TestGateAuditChainVerified:
         md = MethodDiscovery(TENANT)
         await _run_five_tasks(md)
         partitions = sorted(md.sink._store.events_dir.glob("*.jsonl"))
-        lines = [l for l in partitions[0].read_text().splitlines() if l.strip()]
+        lines = [l for l in partitions[0].read_text(encoding="utf-8").splitlines() if l.strip()]
         assert len(lines) >= 3
         del lines[1]
-        partitions[0].write_text("\n".join(lines) + "\n")
+        partitions[0].write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         result = await md.sink.verify_chain()
         assert result.ok is False

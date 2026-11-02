@@ -136,7 +136,7 @@ class ConsoleSensitiveRerouteE2E(unittest.TestCase):
 
     def _spawn_env(self) -> dict[str, str]:
         self.assertTrue(self.dump.exists(), "the claude subprocess was never started")
-        return dict(line.split("=", 1) for line in self.dump.read_text().splitlines() if "=" in line)
+        return dict(line.split("=", 1) for line in self.dump.read_text(encoding="utf-8").splitlines() if "=" in line)
 
     @staticmethod
     def _text(events: list[dict]) -> str:
@@ -149,9 +149,9 @@ class ConsoleSensitiveRerouteE2E(unittest.TestCase):
         spawned = self._spawn_env()
         self.assertEqual(spawned.get("ANTHROPIC_BASE_URL"), f"https://{PROVIDER_HOST}/v1")
         self.assertEqual(spawned.get("ANTHROPIC_API_KEY"), "k-acme-test")
-        self.assertNotIn("stale.example", self.dump.read_text())
-        self.assertNotIn("k-anthropic-original", self.dump.read_text())
-        args = self.argdump.read_text().splitlines()
+        self.assertNotIn("stale.example", self.dump.read_text(encoding="utf-8"))
+        self.assertNotIn("k-anthropic-original", self.dump.read_text(encoding="utf-8"))
+        args = self.argdump.read_text(encoding="utf-8").splitlines()
         self.assertIn("--model", args)
         self.assertEqual(args[args.index("--model") + 1], "vendor/Model-1")
 
@@ -160,7 +160,7 @@ class ConsoleSensitiveRerouteE2E(unittest.TestCase):
         self._turn("write a haiku about spring")
         spawned = self._spawn_env()
         self.assertNotEqual(spawned.get("ANTHROPIC_BASE_URL"), f"https://{PROVIDER_HOST}/v1")
-        self.assertNotIn("vendor/Model-1", self.argdump.read_text().splitlines())
+        self.assertNotIn("vendor/Model-1", self.argdump.read_text(encoding="utf-8").splitlines())
 
     def test_an_undeclared_target_refuses_and_never_spawns(self) -> None:
         self._write(_policy(declared=False))
@@ -186,7 +186,7 @@ class ConsoleSensitiveRerouteE2E(unittest.TestCase):
 
     # -- ADR-2268: one claude session per endpoint ------------------------------------------
     def _args(self) -> list[str]:
-        return self.argdump.read_text().splitlines()
+        return self.argdump.read_text(encoding="utf-8").splitlines()
 
     def _fresh_spawn(self) -> None:
         self.dump.unlink(missing_ok=True)

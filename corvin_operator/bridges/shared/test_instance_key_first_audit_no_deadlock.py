@@ -31,13 +31,13 @@ def test_first_audit_write_on_fresh_install_completes():
                 " details={'boundary': 'reset', 'reason': 'timeout'});"
                 "print(audit.audit_path()); print(ok)")
         r = subprocess.run([sys.executable, "-c", code, str(HERE)], env=env,
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
         assert r.returncode == 0, r.stderr
         out = r.stdout.strip().splitlines()
         assert out[-1] == "True", r.stdout + r.stderr
         chain = Path(out[-2])
         assert str(chain).startswith(d), f"chain escaped the sandbox: {chain}"
-        kinds = [json.loads(l)["event_type"] for l in chain.read_text().splitlines() if l.strip()]
+        kinds = [json.loads(l)["event_type"] for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert "session_ledger.boundary" in kinds
         assert any((Path(d) / "home").rglob("instance_key.pem")), "the key was generated"
 

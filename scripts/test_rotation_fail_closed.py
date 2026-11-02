@@ -22,7 +22,7 @@ def test_placeholders_in_env():
         print(f"❌ .env not found at {env_path}")
         return False
 
-    with open(env_path) as f:
+    with open(env_path, encoding="utf-8") as f:
         content = f.read()
 
     # Count placeholders

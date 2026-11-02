@@ -72,7 +72,7 @@ print("")
 def _install_fake_claude(body: str, dest: Path) -> Path:
     """Drop a fake claude binary into *dest* and make it executable."""
     fake = dest / "claude"
-    fake.write_text(body)
+    fake.write_text(body, encoding="utf-8")
     fake.chmod(0o755)
     return fake
 
@@ -91,7 +91,7 @@ def _run_summarize(stdin: str, *args: str, fake_path: Path | None = None,
     return subprocess.run(
         ["python3", str(SCRIPTS / "summarize.py"), *args],
         input=stdin, capture_output=True, text=True,
-        env=env, timeout=timeout, check=False,
+        env=env, timeout=timeout, check=False, encoding="utf-8", errors="replace",
     )
 
 

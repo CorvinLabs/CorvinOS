@@ -118,7 +118,7 @@ class MemoryCoordinator:
             return None
 
         try:
-            with open(template_file, "r") as f:
+            with open(template_file, "r", encoding="utf-8") as f:
                 template = json.load(f)
             template["_source"] = "project"
             return template
@@ -144,7 +144,7 @@ class MemoryCoordinator:
             return None
 
         try:
-            with open(template_file, "r") as f:
+            with open(template_file, "r", encoding="utf-8") as f:
                 template = json.load(f)
             template["_source"] = "global"
             return template
@@ -196,7 +196,7 @@ class MemoryCoordinator:
 
         # Append to jsonl file (atomically)
         try:
-            with open(self._learning_events_path, "a") as f:
+            with open(self._learning_events_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event_record) + "\n")
         except (IOError, OSError) as e:
             raise EventPersistenceError(
@@ -241,7 +241,7 @@ class MemoryCoordinator:
 
         # Append all events to jsonl file
         try:
-            with open(self._learning_events_path, "a") as f:
+            with open(self._learning_events_path, "a", encoding="utf-8") as f:
                 for record in event_records:
                     f.write(json.dumps(record) + "\n")
         except (IOError, OSError) as e:
@@ -270,7 +270,7 @@ class MemoryCoordinator:
 
         events = []
         try:
-            with open(self._learning_events_path, "r") as f:
+            with open(self._learning_events_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -315,7 +315,7 @@ class MemoryCoordinator:
         task_ids = set()
 
         try:
-            with open(self._learning_events_path, "r") as f:
+            with open(self._learning_events_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

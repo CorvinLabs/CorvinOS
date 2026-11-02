@@ -167,7 +167,7 @@ class JobExecutionIsRecordedForTheFeedbackGate(unittest.TestCase):
             self.assertEqual(len(evs), 1)
             self.assertEqual((evs[0].signal["task_id"], evs[0].signal["status"]), (job_id, "complete"))
             self.assertTrue(evs[0].audit_ref, "audit-first: the chain record exists")
-            on_disk = "".join(p.read_text(errors="replace") for p in (home / "tenants").rglob("*.jsonl"))
+            on_disk = "".join(p.read_text(errors="replace", encoding="utf-8") for p in (home / "tenants").rglob("*.jsonl"))
             self.assertNotIn("SECRET-TASK-TEXT", on_disk)
             self.assertEqual(self._events("tenant_b"), [], "another tenant has no execution")
             # tenant B's own feedback cannot ride on A's execution

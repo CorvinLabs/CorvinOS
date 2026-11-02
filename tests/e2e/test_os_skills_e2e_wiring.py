@@ -84,8 +84,8 @@ Route tasks.
 def _write_bundle(root: Path) -> Path:
     bundled_dir = root / "bundle" / "os_delegation_router_v1.0"
     bundled_dir.mkdir(parents=True)
-    (bundled_dir / "manifest.yaml").write_text(MANIFEST)
-    (bundled_dir / "SKILL.md").write_text(SKILL_MD)
+    (bundled_dir / "manifest.yaml").write_text(MANIFEST, encoding="utf-8")
+    (bundled_dir / "SKILL.md").write_text(SKILL_MD, encoding="utf-8")
     return bundled_dir
 
 
@@ -191,7 +191,7 @@ class TestE2EWiringProof:
         assert mgr.get_skill_status("evil") is None
         chain = temp_corvin_home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
         assert chain.exists(), "refusal must be audited"
-        events = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        events = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert any(e["event_type"] == "skill.path_refused" and e.get("tool") == "evil" for e in events)
 
     # ── Phase 2: functional ──────────────────────────────────────────────────
@@ -248,17 +248,17 @@ class TestE2EWiringProof:
         assert run_dir.exists(), f"Run directory not found: {run_dir}"
         state_file = run_dir / "run_state.json"
         assert state_file.exists()
-        state_data = json.loads(state_file.read_text())
+        state_data = json.loads(state_file.read_text(encoding="utf-8"))
         assert state_data["skill_id"] == "os.delegation_router"
         assert state_data["trigger"] == "before_delegation_decision"
         assert state_data["phase_completed"] >= 0
         # manifest sanitization.disallow_fields applied BEFORE persistence
         assert "prompt" not in state_data["inputs"]
-        assert "SECRET USER TEXT" not in state_file.read_text()
+        assert "SECRET USER TEXT" not in state_file.read_text(encoding="utf-8")
 
         # metadata-only skill.executed event in the tenant CORE chain
         chain = temp_corvin_home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-        events = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        events = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         executed = [e for e in events if e["event_type"] == "skill.executed"
                     and e.get("details", {}).get("run_id") == run_id]
         assert len(executed) == 1, events

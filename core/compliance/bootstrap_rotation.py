@@ -50,7 +50,7 @@ def verify_secret_rotation_policy() -> bool:
         # Load policy
         try:
             import yaml
-            with open(policy_path) as f:
+            with open(policy_path, encoding="utf-8") as f:
                 policy = yaml.safe_load(f)
         except ImportError:
             _log.warning("PyYAML not available; skipping rotation check")
@@ -65,7 +65,7 @@ def verify_secret_rotation_policy() -> bool:
         state_file = tenant_global / ".secret_rotation_state"
         if state_file.exists():
             try:
-                with open(state_file) as f:
+                with open(state_file, encoding="utf-8") as f:
                     state = json.load(f)
                 last_rotation = _parse_utc(state.get("last_rotation", "2000-01-01"))
                 age_days = (datetime.now(timezone.utc) - last_rotation).days
@@ -111,7 +111,7 @@ def trigger_rotation(policy_path: Path, tenant_id: str) -> bool:
             [sys.executable, str(script_path), str(policy_path), tenant_id],
             capture_output=True,
             text=True,
-            timeout=300,  # 5-minute timeout
+            timeout=300, encoding="utf-8", errors="replace",  # 5-minute timeout
         )
 
         if result.returncode != 0:
@@ -127,7 +127,7 @@ def trigger_rotation(policy_path: Path, tenant_id: str) -> bool:
             raise RuntimeError("Rotation script did not report success")
         state_file = _tenant_global(tenant_id) / ".secret_rotation_state"
         state_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(state_file, "w") as f:
+        with open(state_file, "w", encoding="utf-8") as f:
             json.dump({"last_rotation": datetime.now(timezone.utc).isoformat()}, f)
         _log.info("Rotation succeeded; state updated")
         return True

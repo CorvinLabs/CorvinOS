@@ -114,7 +114,7 @@ def load_manifest(manifest_path: Path) -> list[dict]:
         raise RuntimeError("PyYAML is required to load WIRING.yaml manifests")
     if not manifest_path.is_file():
         return []
-    data = yaml.safe_load(manifest_path.read_text()) or {}
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     return data.get("components", [])
 
 
@@ -259,7 +259,7 @@ def lint_dotted_operator_imports(result: GateResult) -> None:
             if any(part in _LINT_EXCLUDE_DIR_NAMES for part in py_file.parts):
                 continue
             try:
-                text = py_file.read_text(errors="replace")
+                text = py_file.read_text(errors="replace", encoding="utf-8")
             except OSError:
                 continue
             try:

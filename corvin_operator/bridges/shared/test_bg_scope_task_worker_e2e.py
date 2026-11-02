@@ -49,7 +49,7 @@ def box(tmp_path, monkeypatch):
     home, outbox = tmp_path / "corvin", tmp_path / "outbox"
     xdg = tmp_path / "xdg"
     (xdg / "corvin-voice").mkdir(parents=True)
-    (xdg / "corvin-voice" / "profile.json").write_text("{}")
+    (xdg / "corvin-voice" / "profile.json").write_text("{}", encoding="utf-8")
     home.mkdir()
     outbox.mkdir()
     for k, v in {"CORVIN_HOME": home, "XDG_CONFIG_HOME": xdg, "FORGE_ROOT": tmp_path / "forge",
@@ -93,11 +93,11 @@ def _start(box, spec, fixture, *, speedup=4.0, extra_env=None, child=False):
         **(extra_env or {}),
     })
     return subprocess.Popen([sys.executable, str(runner)], env=env, cwd=str(HERE),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
 
 
 def _outbox(box):
-    return [(p.name, json.loads(p.read_text())) for p in sorted(box["outbox"].glob("*.json"))]
+    return [(p.name, json.loads(p.read_text(encoding="utf-8"))) for p in sorted(box["outbox"].glob("*.json"))]
 
 
 def _progress_texts(box):
@@ -105,7 +105,7 @@ def _progress_texts(box):
     out = []
     for p in sorted(d.glob("tp_*.json")) if d.exists() else []:
         try:
-            out.append(json.loads(p.read_text()).get("text", ""))
+            out.append(json.loads(p.read_text(encoding="utf-8")).get("text", ""))
         except ValueError:
             pass
     return out
@@ -181,7 +181,7 @@ def test_a_killed_worker_leaves_the_lost_children_for_the_resume(box):
     p.communicate(timeout=30)
     pidfile = box["tmp"] / "fake.pid"
     if kit.pid_alive(pidfile):
-        os.kill(int(pidfile.read_text()), signal.SIGKILL)       # the orphaned fake CLI
+        os.kill(int(pidfile.read_text(encoding="utf-8")), signal.SIGKILL)       # the orphaned fake CLI
     prompt = box["sup"].continuation_prompt(box["sup"].get_run(spec["task_id"]))
     assert "BACKGROUND PROCESSES THAT WERE RUNNING" in prompt
     assert "GONE now" in prompt and "bash" in prompt and "Sleep 8" in prompt

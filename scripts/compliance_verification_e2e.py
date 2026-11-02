@@ -85,11 +85,11 @@ class ComplianceVerifier:
 
             # Write to audit trail
             audit_path = self.tmp_dir / "audit.jsonl"
-            with open(audit_path, "a") as f:
+            with open(audit_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
 
             # Verify written correctly
-            with open(audit_path, "r") as f:
+            with open(audit_path, "r", encoding="utf-8") as f:
                 written_event = json.loads(f.readline())
 
             # PROOF: Event persists in audit trail
@@ -134,12 +134,12 @@ class ComplianceVerifier:
                     "event_type": "test_isolation",
                     "details": {"test": True},
                 }
-                with open(audit_path, "a") as f:
+                with open(audit_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(event) + "\n")
 
             # Query tenant_a only
             tenant_a_events = []
-            with open(audit_path, "r") as f:
+            with open(audit_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)
@@ -198,7 +198,7 @@ class ComplianceVerifier:
             }
 
             # Write audit FIRST
-            with open(audit_path, "a") as f:
+            with open(audit_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(audit_event) + "\n")
             writes.append(("audit_written", audit_path))
 
@@ -256,7 +256,7 @@ class ComplianceVerifier:
                 event["hash"] = current_hash
 
                 # Write to audit
-                with open(audit_path, "a") as f:
+                with open(audit_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(event) + "\n")
 
                 hashes.append(current_hash)
@@ -264,7 +264,7 @@ class ComplianceVerifier:
 
             # Verify chain integrity
             prev_hash = "0" * 64
-            with open(audit_path, "r") as f:
+            with open(audit_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)
@@ -320,11 +320,11 @@ class ComplianceVerifier:
 
             # Write event
             audit_path = self.tmp_dir / "audit_lom.jsonl"
-            with open(audit_path, "a") as f:
+            with open(audit_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
 
             # Read back and verify
-            with open(audit_path, "r") as f:
+            with open(audit_path, "r", encoding="utf-8") as f:
                 read_event = json.loads(f.readline())
 
             # Verify LoM hash
@@ -373,7 +373,7 @@ class ComplianceVerifier:
                 "status": "pending",
             }
 
-            with open(approval_path, "a") as f:
+            with open(approval_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(request) + "\n")
 
             # Operator approves
@@ -387,11 +387,11 @@ class ComplianceVerifier:
                 "consent_basis": "Art. 6(1)(f)",
             }
 
-            with open(approval_path, "a") as f:
+            with open(approval_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(approval) + "\n")
 
             # Verify both written
-            with open(approval_path, "r") as f:
+            with open(approval_path, "r", encoding="utf-8") as f:
                 lines = [json.loads(line) for line in f if line.strip()]
 
             has_request = any(l.get("request_id") == request["request_id"] for l in lines)
@@ -445,11 +445,11 @@ class ComplianceVerifier:
                 },
             }
 
-            with open(audit_path, "a") as f:
+            with open(audit_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rollback_event) + "\n")
 
             # Verify event has reason
-            with open(audit_path, "r") as f:
+            with open(audit_path, "r", encoding="utf-8") as f:
                 event = json.loads(f.readline())
 
             has_reason = "reason" in event["details"] and event["details"]["reason"]
@@ -499,23 +499,23 @@ class ComplianceVerifier:
                 }
                 event_str = json.dumps(event, sort_keys=True)
                 event["hash"] = hashlib.sha256(event_str.encode()).hexdigest()
-                with open(audit_path, "a") as f:
+                with open(audit_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(event) + "\n")
                 prev_hash = event["hash"]
 
             # Now corrupt the chain in the middle
-            lines = audit_path.read_text().split("\n")
+            lines = audit_path.read_text(encoding="utf-8").split("\n")
             if len(lines) > 1 and lines[1].strip():
                 corrupt_event = json.loads(lines[1])
                 corrupt_event["hash"] = "corrupted_hash_12345"
                 lines[1] = json.dumps(corrupt_event)
-                audit_path.write_text("\n".join(lines))
+                audit_path.write_text("\n".join(lines), encoding="utf-8")
 
             # Verify tripwire detects corruption
             corruption_detected = False
             try:
                 prev_hash = "0" * 64
-                with open(audit_path, "r") as f:
+                with open(audit_path, "r", encoding="utf-8") as f:
                     for line in f:
                         if line.strip():
                             event = json.loads(line)
@@ -781,7 +781,7 @@ def main():
 
     # Output JSON proof
     output_path = Path("/tmp/compliance_proof.json")
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(artifacts, f, indent=2)
 
     print(f"\n✅ Proof artifacts saved to: {output_path}")

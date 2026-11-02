@@ -56,10 +56,10 @@ def test_cli_run_passes_the_node_model_and_writes_the_resolution_event(tmp_path)
     bindir = tmp_path / "bin"
     bindir.mkdir()
     claude = bindir / "claude"
-    claude.write_text(FAKE_CLAUDE)
+    claude.write_text(FAKE_CLAUDE, encoding="utf-8")
     claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
     wf = tmp_path / "cli_node_model.awp.yaml"
-    wf.write_text(WORKFLOW)
+    wf.write_text(WORKFLOW, encoding="utf-8")
     log = tmp_path / "argv.jsonl"
 
     env = dict(os.environ)  # keeps the sandboxed CORVIN_HOME / XDG / anchor key of the test session
@@ -73,10 +73,10 @@ def test_cli_run_passes_the_node_model_and_writes_the_resolution_event(tmp_path)
     env.pop("CORVIN_HELPER_MODEL_WORKFLOW_NODE", None)
     proc = subprocess.run(
         [sys.executable, "-m", "corvin_workflows", "run", str(wf), "--engine", "claude", "--format", "json"],
-        capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=120)
+        capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=120, encoding="utf-8", errors="replace")
     assert proc.returncode == 0, proc.stderr[-1500:]
 
-    calls = [json.loads(line)["argv"] for line in log.read_text().splitlines() if line.strip()]
+    calls = [json.loads(line)["argv"] for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     nodes = [c for c in calls if "--max-turns" not in c]
     assert len(nodes) == 2, nodes
     models = [c[c.index("--model") + 1] for c in nodes]
@@ -88,7 +88,7 @@ def test_cli_run_passes_the_node_model_and_writes_the_resolution_event(tmp_path)
     sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
     try:
         from forge import paths as fp
-        rows = [json.loads(line) for line in Path(fp.tenant_audit_chain("_default")).read_text().splitlines()
+        rows = [json.loads(line) for line in Path(fp.tenant_audit_chain("_default")).read_text(encoding="utf-8").splitlines()
                 if line.strip()]
     finally:
         sys.path.remove(str(REPO / "corvin_operator" / "forge"))
@@ -103,7 +103,7 @@ def test_cli_run_passes_the_node_model_and_writes_the_resolution_event(tmp_path)
     launcher_env = dict(env)
     launcher_env["PYTHONPATH"] = os.pathsep.join([str(REPO / "ops" / "launcher"), env["PYTHONPATH"]])
     rep = subprocess.run([sys.executable, "-m", "corvin", "tde", "workflow-loss", "--tenant", "_default"],
-                         capture_output=True, text=True, env=launcher_env, cwd=str(tmp_path), timeout=120)
+                         capture_output=True, text=True, env=launcher_env, cwd=str(tmp_path), timeout=120, encoding="utf-8", errors="replace")
     assert rep.returncode == 0, rep.stderr[-1500:]
     report = json.loads(rep.stdout)
     assert report["status"] in ("underpowered", "ok") and report["loss"] is None

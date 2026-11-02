@@ -393,14 +393,14 @@ def test_workflow_start_attempt_reaches_the_tenant_audit_chain(tmp_path, monkeyp
     monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
     monkeypatch.setenv("CORVIN_BRIDGE_TYPE", "discord")
     ack = WorkflowBackgroundRunner().start(script="s", description="secret-description")
-    recs = [json.loads(l) for l in chain.read_text().splitlines()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines()]
     mine = [r for r in recs if r.get("event_type") == "workflow.background_start"]
     assert mine, recs
     d = mine[-1].get("details") or mine[-1]
     assert d["run_id"] == ack.run_id
     assert d["status"] == "blocked"
     assert d["reason_code"] == "not_implemented"
-    assert "secret-description" not in chain.read_text()
+    assert "secret-description" not in chain.read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -925,7 +925,7 @@ def _find_token() -> str | None:
                     st.st_mode & 0o777,
                 )
                 return None
-            t = session_file.read_text().strip()
+            t = session_file.read_text(encoding="utf-8").strip()
             if t:
                 return t
         except OSError:
@@ -951,7 +951,7 @@ def _find_token() -> str | None:
                     return None
             except OSError:
                 pass
-            t = global_key.read_text().strip()
+            t = global_key.read_text(encoding="utf-8").strip()
             if t:
                 return t
     except OSError:
@@ -979,7 +979,7 @@ def _find_token_disk_only() -> str | None:
                     st.st_mode & 0o777,
                 )
                 return None
-            t = session_file.read_text().strip()
+            t = session_file.read_text(encoding="utf-8").strip()
             if t:
                 return t
         except OSError:
@@ -1005,7 +1005,7 @@ def _find_token_disk_only() -> str | None:
                     return None
             except OSError:
                 pass
-            t = global_key.read_text().strip()
+            t = global_key.read_text(encoding="utf-8").strip()
             if t:
                 return t
     except OSError:

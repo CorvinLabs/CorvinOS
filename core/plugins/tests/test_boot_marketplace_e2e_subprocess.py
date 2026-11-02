@@ -62,7 +62,7 @@ def test_bootstrap_all_in_a_subprocess_loads_every_marketplace_plugin(tmp_path):
     env["CORVIN_HOME"] = str(home)
     proc = subprocess.run(
         [sys.executable, "-c", _CHILD, str(_REPO)],
-        capture_output=True, text=True, timeout=180, env=env, cwd=str(tmp_path),
+        capture_output=True, text=True, timeout=180, env=env, cwd=str(tmp_path), encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr[-3000:]
     out = json.loads(proc.stdout.strip().splitlines()[-1])
@@ -78,7 +78,7 @@ def test_bootstrap_all_in_a_subprocess_loads_every_marketplace_plugin(tmp_path):
 
     # 3. one plugin.loaded record per plugin, with root-derived provenance
     seen: dict[str, str] = {}
-    for line in audit_path.read_text().splitlines():
+    for line in audit_path.read_text(encoding="utf-8").splitlines():
         rec = json.loads(line)
         if rec.get("event_type") != "plugin.loaded":
             continue

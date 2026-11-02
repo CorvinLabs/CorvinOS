@@ -108,7 +108,7 @@ class FeedbackWAL:
         state_file = self.tenant_wal_dir / "processing_state.json"
         if state_file.exists():
             try:
-                with open(state_file, "r") as f:
+                with open(state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
                     self.last_processed_entry_id = state.get(
                         "last_processed_entry_id"
@@ -145,7 +145,7 @@ class FeedbackWAL:
 
         # Write to WAL (append-only, durable)
         try:
-            with open(self.wal_file, "a") as f:
+            with open(self.wal_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry.to_dict()) + "\n")
                 f.flush()
                 os.fsync(f.fileno())  # Force durability
@@ -167,7 +167,7 @@ class FeedbackWAL:
 
         unprocessed = []
         try:
-            with open(self.wal_file, "r") as f:
+            with open(self.wal_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -206,7 +206,7 @@ class FeedbackWAL:
         try:
             # Read entire WAL
             entries = []
-            with open(self.wal_file, "r") as f:
+            with open(self.wal_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -222,7 +222,7 @@ class FeedbackWAL:
 
             # Rewrite WAL (atomic: write to temp, then rename)
             temp_file = self.wal_file.with_suffix(".tmp")
-            with open(temp_file, "w") as f:
+            with open(temp_file, "w", encoding="utf-8") as f:
                 for entry in entries:
                     f.write(json.dumps(entry.to_dict()) + "\n")
                 f.flush()
@@ -244,7 +244,7 @@ class FeedbackWAL:
         """Persist processing state for crash recovery."""
         state_file = self.tenant_wal_dir / "processing_state.json"
         try:
-            with open(state_file, "w") as f:
+            with open(state_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "last_processed_entry_id": self.last_processed_entry_id,
@@ -271,7 +271,7 @@ class FeedbackWAL:
 
         try:
             entries_to_keep = []
-            with open(self.wal_file, "r") as f:
+            with open(self.wal_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -297,7 +297,7 @@ class FeedbackWAL:
 
             # Rewrite WAL with kept entries
             temp_file = self.wal_file.with_suffix(".tmp")
-            with open(temp_file, "w") as f:
+            with open(temp_file, "w", encoding="utf-8") as f:
                 for entry in entries_to_keep:
                     f.write(json.dumps(entry.to_dict()) + "\n")
                 f.flush()

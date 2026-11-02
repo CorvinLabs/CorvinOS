@@ -54,7 +54,7 @@ class TestLicenseGateRealImport(unittest.TestCase):
         env["PYTHONPATH"] = str(REPO / "corvin_operator" / "forge")
         result = subprocess.run(
             [sys.executable, "-c", script],
-            capture_output=True, text=True, cwd=str(REPO), env=env, timeout=30,
+            capture_output=True, text=True, cwd=str(REPO), env=env, timeout=30, encoding="utf-8", errors="replace",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK", result.stdout)
@@ -118,7 +118,7 @@ class TestDatasourceConnectWired(unittest.TestCase):
         # Real file actually written under the temp CORVIN_HOME.
         written = self.home / "tenants" / "_default" / "datasource_connections" / "m3_local_test.json"
         self.assertTrue(written.exists())
-        on_disk = json.loads(written.read_text())
+        on_disk = json.loads(written.read_text(encoding="utf-8"))
         self.assertEqual(on_disk["adapter"], "local_file")
 
     def test_free_tier_denies_postgresql_same_as_console_route(self):

@@ -365,7 +365,7 @@ def test_e2e_complex_plugin_ideas_mode(
         if result.scaffold_dir:
             plugin_py = result.scaffold_dir / "plugin.py"
             if plugin_py.exists():
-                content = plugin_py.read_text()
+                content = plugin_py.read_text(encoding="utf-8")
                 # Learning-related hooks should be present
                 assert "on_execute" in content, "on_execute hook missing"
 
@@ -722,14 +722,14 @@ def test_e2e_scaffold_validity() -> None:
         # Validate Python syntax
         plugin_py = scaffold_dir / "plugin.py"
         try:
-            compile(plugin_py.read_text(), str(plugin_py), "exec")
+            compile(plugin_py.read_text(encoding="utf-8"), str(plugin_py), "exec")
         except SyntaxError as e:
             pytest.fail(f"plugin.py has syntax errors: {e}")
 
         # Validate JSON
         plugin_json = scaffold_dir / "plugin.json"
         try:
-            json.loads(plugin_json.read_text())
+            json.loads(plugin_json.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
             pytest.fail(f"plugin.json is not valid JSON: {e}")
 

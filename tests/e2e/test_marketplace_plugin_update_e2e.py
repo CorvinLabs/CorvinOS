@@ -76,7 +76,7 @@ def env(tmp_path, monkeypatch):
     entry = {"id": INDEX_ID, "name": "Update Probe", "version": "1.0.0", "tier": "buildin",
              "category": "memory"}
     index.write_text(json.dumps({"version": "3", "generated_at": "t0", "plugins": [entry],
-                                 "by_id": {INDEX_ID: entry}}))
+                                 "by_id": {INDEX_ID: entry}}), encoding="utf-8")
     monkeypatch.setenv("CORVIN_HOME", str(home))
     monkeypatch.setenv("VOICE_AUDIT_PATH", str(home / "tenants/_default/global/forge/audit.jsonl"))
     monkeypatch.setenv("CORVIN_MARKETPLACE_ROOT", str(root / "plugins" / "buildin"))
@@ -99,7 +99,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(feature_flags, "is_enabled", lambda *a, **k: True)
 
     def write(version, **over):
-        (pdir / "plugin.yaml").write_text(yaml.safe_dump(_manifest(version, **over)))
+        (pdir / "plugin.yaml").write_text(yaml.safe_dump(_manifest(version, **over)), encoding="utf-8")
 
     write("1.0.0")
     with TestClient(app) as c:
@@ -195,7 +195,7 @@ def test_index_newer_than_the_source_is_reported_as_stale_source_not_as_nothing(
     _install(c)
     index = Path(os.environ["CORVIN_MARKETPLACE_INDEX"])
     entry = {"id": INDEX_ID, "name": "Update Probe", "version": "1.2.0", "tier": "buildin", "category": "memory"}
-    index.write_text(json.dumps({"version": "3", "generated_at": "t1", "plugins": [entry], "by_id": {INDEX_ID: entry}}))
+    index.write_text(json.dumps({"version": "3", "generated_at": "t1", "plugins": [entry], "by_id": {INDEX_ID: entry}}), encoding="utf-8")
     marketplace.set_marketplace_index_path(index)
     marketplace._RESOLVE_CACHE.clear()
 

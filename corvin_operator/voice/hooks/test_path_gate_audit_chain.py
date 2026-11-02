@@ -26,7 +26,7 @@ def _run(tmp_path: Path, extra_env: dict) -> subprocess.CompletedProcess:
                               "content": "x"}}
     return subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(payload),
                           env=env, cwd=tmp_path, capture_output=True, text=True,
-                          timeout=120)
+                          timeout=120, encoding="utf-8", errors="replace")
 
 
 def _events(chain: Path) -> list[str]:

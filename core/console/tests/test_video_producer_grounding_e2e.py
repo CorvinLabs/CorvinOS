@@ -31,18 +31,18 @@ def _fixture_kb(root: Path) -> Path:
     (kb / "kb" / "graph").mkdir(parents=True)
     (kb / "kb" / "_meta").mkdir(parents=True)
     (kb / "scripts").mkdir()
-    (kb / "scripts" / "kb.py").write_text("# fixture: kb_repo() checks that it exists; never executed\n")
-    (kb / "kb" / "_meta" / "sources.yaml").write_text("sources: []\n")
+    (kb / "scripts" / "kb.py").write_text("# fixture: kb_repo() checks that it exists; never executed\n", encoding="utf-8")
+    (kb / "kb" / "_meta" / "sources.yaml").write_text("sources: []\n", encoding="utf-8")
     doc = kb / "decisions" / "ADR-0640-audit-chain.md"
     doc.write_text(
         "---\nid: ADR-0640\nstatus: accepted\npaths:\n- operator/forge/forge/security_events.py\n---\n\n"
         "# ADR-0640 — Audit chain\n\n## Decision\n\nEvery record is chained; `verify_chain` walks the file. "
-        + PACK_ONLY + "\n"
+        + PACK_ONLY + "\n", encoding="utf-8"
     )
     ents = [{"uid": "U1", "id": "ADR-0640", "type": "decision", "title": "Audit chain — forgery resistance",
              "status": "accepted", "path": str(doc)}]
-    (kb / "kb" / "graph" / "entities.jsonl").write_text("\n".join(json.dumps(e) for e in ents) + "\n")
-    (kb / "kb" / "graph" / "relations.jsonl").write_text("")
+    (kb / "kb" / "graph" / "entities.jsonl").write_text("\n".join(json.dumps(e) for e in ents) + "\n", encoding="utf-8")
+    (kb / "kb" / "graph" / "relations.jsonl").write_text("", encoding="utf-8")
     return kb
 
 
@@ -51,7 +51,7 @@ class VideoProducerGroundingE2E(unittest.TestCase):
         self._tmp = Path(tempfile.mkdtemp())
         self._kb = _fixture_kb(self._tmp)
         fake = self._tmp / "claude"
-        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         fake.chmod(0o755)
         self._env = mock.patch.dict(os.environ, {"CORVIN_KB_REPO": str(self._kb), "CORVIN_CLAUDE_BIN": str(fake)})
         self._env.start()
@@ -101,7 +101,7 @@ class VideoProducerGroundingE2E(unittest.TestCase):
             self.assertEqual(d["job_id"], r.json()["job_id"])
             self.assertEqual(len(d["pack_sha256"]), 16)
             self.assertNotIn(PACK_ONLY, _chain_text(home))
-            stored = "\n".join(p.read_text(errors="replace") for p in (home / "tenants").rglob("*.json"))
+            stored = "\n".join(p.read_text(errors="replace", encoding="utf-8") for p in (home / "tenants").rglob("*.json"))
             self.assertNotIn(PACK_ONLY, stored)
 
     def test_another_tenant_never_gets_the_operators_knowledge(self):

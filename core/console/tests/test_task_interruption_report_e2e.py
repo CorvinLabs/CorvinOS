@@ -105,7 +105,7 @@ class TaskInterruptionReportE2E(unittest.TestCase):
         }
         return subprocess.run(
             [sys.executable, "-I", str(SCRIPT), "--tenant", "_default"],
-            cwd=self.tmp.name, env=env, capture_output=True, text=True, timeout=120,
+            cwd=self.tmp.name, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
         )
 
     def test_three_known_interruptions_are_counted_exactly(self):
@@ -138,7 +138,7 @@ class TaskInterruptionReportE2E(unittest.TestCase):
     def test_missing_root_is_refused_not_guessed(self):
         env = {"PATH": os.environ.get("PATH", ""), "HOME": self.tmp.name}
         proc = subprocess.run([sys.executable, "-I", str(SCRIPT)], cwd=self.tmp.name, env=env,
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
         self.assertEqual(proc.returncode, 2)
         self.assertIn("no root", proc.stderr)
 

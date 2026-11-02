@@ -32,7 +32,7 @@ def _projects_root() -> Path:
     """Sibling repos live next to the MAIN checkout — also when this runs in a linked worktree."""
     here = Path(__file__).resolve().parent
     r = subprocess.run(["git", "-C", str(here), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     return Path(r.stdout.strip()).parent.parent if r.returncode == 0 else Path(__file__).resolve().parents[4]
 
 
@@ -41,7 +41,7 @@ _KB_SRC = Path(os.environ.get("CORVIN_KB_SCRIPTS") or _projects_root() / "Corvin
 
 
 def _sh(*args, cwd=None):
-    r = subprocess.run(list(map(str, args)), cwd=cwd, capture_output=True, text=True)
+    r = subprocess.run(list(map(str, args)), cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise AssertionError(f"{args} -> {r.returncode}\n{r.stdout}\n{r.stderr}")
     return r.stdout
@@ -100,8 +100,8 @@ class KbProjectionE2E(unittest.TestCase):
             "sources:\n  - name: kb\n    root: kb\n    writable: true\n    dirs:\n"
             + "".join(f"      {d}: {t}\n" for d, t in (("decisions", "decision"), ("concepts", "concept"),
                                                        ("initiatives", "initiative"),
-                                                       ("epics", "epic"), ("tasks", "task"))))
-        (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n")
+                                                       ("epics", "epic"), ("tasks", "task"))), encoding="utf-8")
+        (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n", encoding="utf-8")
         _sh("git", "init", "-q", "-b", "main", cwd=kb)
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init", cwd=kb)
         self.adr = _kb(kb, "new", "decision", "--title", "Board follows the KB")
@@ -204,7 +204,7 @@ class KbProjectionE2E(unittest.TestCase):
                             headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(r.json()["status"], "in_progress")
-            text = next((self.kb / "kb" / "tasks").glob(f"{self.t1['id']}-*.md")).read_text()
+            text = next((self.kb / "kb" / "tasks").glob(f"{self.t1['id']}-*.md")).read_text(encoding="utf-8")
             self.assertIn("status: in_progress", text)
             self.assertIn("in_progress", _sh("git", "log", "-1", "--format=%s", cwd=self.kb))
             self.assertEqual(self._items(client)[f"kb:{self.epic['uid']}"]["status"], "in_progress")  # rollup
@@ -234,21 +234,21 @@ class KbProjectionE2E(unittest.TestCase):
 
             # 6. heal: an epic carrying a status is a derivable deviation
             ep = next((self.kb / "kb" / "epics").glob(f"{self.epic['id']}-*.md"))
-            ep.write_text(ep.read_text().replace("title:", "status: done\ntitle:", 1))
+            ep.write_text(ep.read_text(encoding="utf-8").replace("title:", "status: done\ntitle:", 1), encoding="utf-8")
             st = self._sync(client, csrf)                     # uncommitted: never swept into a heal;
             self.assertEqual(st["state"], "blocked", st)      # still red, so red is reported first
-            self.assertIn("status: done", ep.read_text())
+            self.assertIn("status: done", ep.read_text(encoding="utf-8"))
             self._commit("operator edit")
             st = self._sync(client, csrf)
             self.assertEqual(st["healed"], 1, st)
-            self.assertNotIn("status:", ep.read_text().split("---")[1])
+            self.assertNotIn("status:", ep.read_text(encoding="utf-8").split("---")[1])
             self.assertIn("heal", _sh("git", "log", "-1", "--format=%s", cwd=self.kb))
             self.assertEqual(self._items(client)[f"kb:{self.epic['uid']}"]["status"], "in_progress")
 
             # 7. a red KB blocks the projection and writes nothing else
             bad = self.kb / "kb" / "tasks" / "T-0099-orphan.md"
             bad.write_text("---\nid: T-0099\nuid: 01J00000000000000000000000\ntitle: orphan\n"
-                           "status: open\nepic: E-404\n---\n")
+                           "status: open\nepic: E-404\n---\n", encoding="utf-8")
             self._commit("bad task")
             before = len(self._items(client))
             st = self._sync(client, csrf)
@@ -294,7 +294,7 @@ class KbProjectionE2E(unittest.TestCase):
             # (c) duplicate and >12 labels converge instead of re-writing every tick / crashing
             tf = next((self.kb / "kb" / "tasks").glob(f"{self.t1['id']}-*.md"))
             labels = ", ".join(["dup", "dup"] + [f"l{i}" for i in range(15)])
-            tf.write_text(tf.read_text().replace("title:", f"labels: [{labels}]\ntitle:", 1))
+            tf.write_text(tf.read_text(encoding="utf-8").replace("title:", f"labels: [{labels}]\ntitle:", 1), encoding="utf-8")
             self._commit("labels")
             st = self._sync(client, csrf)
             self.assertEqual(st["state"], "ok", st)
@@ -303,7 +303,7 @@ class KbProjectionE2E(unittest.TestCase):
             self.assertEqual(got[:2], ["kb", "dup"])
             self.assertEqual(self._sync(client, csrf)["updated"], 0)
             # (d) the graph the Knowledge Graph panel reads is rebuilt by the projector
-            ents = (self.kb / "kb" / "graph" / "entities.jsonl").read_text()
+            ents = (self.kb / "kb" / "graph" / "entities.jsonl").read_text(encoding="utf-8")
             self.assertIn(self.t1["uid"], ents)
             # (e) a board rollback cannot rewrite a KB item
             with self.assertRaises(service.KbOwned):
@@ -317,11 +317,11 @@ class KbProjectionE2E(unittest.TestCase):
                             json={"to": "blocked", "reason": "--dod=sneaky waiting on Jane"},
                             headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertIn("--dod=sneaky waiting on Jane", tf.read_text())   # one reason, not an option
+            self.assertIn("--dod=sneaky waiting on Jane", tf.read_text(encoding="utf-8"))   # one reason, not an option
             outcomes = [e.get("details", {}).get("outcome") for e in _audit_events(home, "_default")
                         if e.get("event_type") == "task_item.kb_transition"]
             self.assertEqual(outcomes.count("applied"), 2)
-            self.assertNotIn("Jane", (self.kb / "kb" / "audit.jsonl").read_text())
+            self.assertNotIn("Jane", (self.kb / "kb" / "audit.jsonl").read_text(encoding="utf-8"))
 
     def test_held_state_repairs_drift_refuses_moves_and_yields_to_red(self):
         """Refutation round 2026-10-03: held skipped drift repair, stuck on a scratch file,
@@ -334,10 +334,10 @@ class KbProjectionE2E(unittest.TestCase):
             items = self._items(client)
             t1, t2 = items[f"kb:{self.t1['uid']}"], items[f"kb:{self.t2['uid']}"]
             scratch = self.kb / "kb" / "tasks" / "scratch.txt"
-            scratch.write_text("not a work item")
+            scratch.write_text("not a work item", encoding="utf-8")
             self.assertEqual(self._sync_tick()["state"], "ok")                 # (b) no held for a .txt
             f1 = next((self.kb / "kb" / "tasks").glob(f"{self.t1['id']}-*.md"))
-            f1.write_text(f1.read_text() + "\nhalf-written\n")
+            f1.write_text(f1.read_text(encoding="utf-8") + "\nhalf-written\n", encoding="utf-8")
             st = self._sync_tick()
             self.assertEqual(st["state"], "held", st)
             db = home / "tenants" / "_default" / "global" / "task_tracking" / "tasks.db"
@@ -351,10 +351,10 @@ class KbProjectionE2E(unittest.TestCase):
             self.assertEqual(r.status_code, 409, r.text)                       # (c) refused, not a silent 200
             self.assertIn("paused", r.json()["detail"]["message"])
             bad = self.kb / "kb" / "tasks" / "T-0099-orphan.md"                 # (d) red wins over held
-            bad.write_text("---\nid: T-0099\nuid: 01J00000000000000000000099\ntitle: o\nstatus: open\nepic: E-404\n---\n")
+            bad.write_text("---\nid: T-0099\nuid: 01J00000000000000000000099\ntitle: o\nstatus: open\nepic: E-404\n---\n", encoding="utf-8")
             self.assertEqual(self._sync_tick()["state"], "blocked")
             bad.unlink()
-            f1.write_text(f1.read_text().replace("\nhalf-written\n", ""))      # revert: back to clean
+            f1.write_text(f1.read_text(encoding="utf-8").replace("\nhalf-written\n", ""), encoding="utf-8")      # revert: back to clean
             self.assertEqual(self._sync_tick()["state"], "ok")
             # tenant check: the projector serves one tenant
             with self.assertRaisesRegex(service.TaskTrackingError, "another tenant"):
@@ -366,9 +366,9 @@ class KbProjectionE2E(unittest.TestCase):
         dump = self.tmp / "hook-env.txt"
         kbpy = self.kb / "scripts" / "kb.py"
         probe = f"import os as _o\nopen({str(dump)!r}, 'a').write(''.join(f'{{k}}={{v}}\\n' for k, v in _o.environ.items()))\n"
-        src = kbpy.read_text()
+        src = kbpy.read_text(encoding="utf-8")
         anchor = "from __future__ import annotations\n"
-        kbpy.write_text(src.replace(anchor, anchor + probe, 1))
+        kbpy.write_text(src.replace(anchor, anchor + probe, 1), encoding="utf-8")
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "probe", cwd=self.kb)
         os.environ["ANTHROPIC_API_KEY"] = "sk-probe-must-not-leak"
         self.addCleanup(os.environ.pop, "ANTHROPIC_API_KEY", None)
@@ -378,7 +378,7 @@ class KbProjectionE2E(unittest.TestCase):
             r = client.post(f"{_URL}/items/{t1['id']}/kb-transition", json={"to": "in_progress"},
                             headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 200, r.text)
-        env = dump.read_text()
+        env = dump.read_text(encoding="utf-8")
         self.assertIn("KB_ACTOR=", env)                                         # positive control
         self.assertNotIn("sk-probe-must-not-leak", env)
 
@@ -435,8 +435,8 @@ class KbReadyBadgeE2E(unittest.TestCase):
             "sources:\n  - name: kb\n    root: kb\n    writable: true\n    dirs:\n"
             + "".join(f"      {d}: {t}\n" for d, t in (
                 ("decisions", "decision"), ("concepts", "concept"), ("reviews", "review"),
-                ("initiatives", "initiative"), ("epics", "epic"), ("tasks", "task"))))
-        (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n")
+                ("initiatives", "initiative"), ("epics", "epic"), ("tasks", "task"))), encoding="utf-8")
+        (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n", encoding="utf-8")
         _sh("git", "init", "-q", "-b", "main", cwd=kb)
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init", cwd=kb)
         self.adr = _kb(kb, "new", "decision", "--title", "Ready decision")
@@ -465,7 +465,7 @@ class KbReadyBadgeE2E(unittest.TestCase):
             "    a, b = orig.read_text().split(chr(10)), (d / rel).read_text().split(chr(10))\n"
             "    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():\n"
             "        if tag != 'equal': out.append(dict(file=rel, line=j1 + 1, repro='diff', observed=tag))\n"
-            "print(json.dumps(dict(findings=out, claims_checked=['decision consistent'])))\n")
+            "print(json.dumps(dict(findings=out, claims_checked=['decision consistent'])))\n", encoding="utf-8")
         rev = _kb(kb, "review", "open", "--title", "Review", "--reviews", self.adr["id"],
                   "--reviews", self.epic["id"])                       # G4: the decision AND its plan
         for q in ("correctness", "failure paths", "docs versus code"):
@@ -524,12 +524,12 @@ class KbPeriodicLoopE2E(unittest.TestCase):
         (kb / "kb" / "_meta" / "sources.yaml").write_text(
             "sources:\n  - name: kb\n    root: .\n    writable: true\n    dirs:\n"
             "      decisions: decision\n      concepts: concept\n      ideas: idea\n      reviews: review\n"
-            "      kb/initiatives: initiative\n      kb/epics: epic\n      kb/tasks: task\n")
-        (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n.kb-cache/\n")
+            "      kb/initiatives: initiative\n      kb/epics: epic\n      kb/tasks: task\n", encoding="utf-8")
+        (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n.kb-cache/\n", encoding="utf-8")
         (kb / "src").mkdir()
-        (kb / "src" / "feature.py").write_text("def feature(x):\n    if x > 1:\n        return x\n    return 0\n")
+        (kb / "src" / "feature.py").write_text("def feature(x):\n    if x > 1:\n        return x\n    return 0\n", encoding="utf-8")
         (kb / "tests").mkdir()
-        (kb / "tests" / "test_feature.py").write_text("def test_feature():\n    assert True\n")
+        (kb / "tests" / "test_feature.py").write_text("def test_feature():\n    assert True\n", encoding="utf-8")
         origin = self.tmp / "origin.git"
         _sh("git", "init", "-q", "--bare", "-b", "main", origin)
         _sh("git", "init", "-q", "-b", "main", cwd=kb)
@@ -562,7 +562,7 @@ class KbPeriodicLoopE2E(unittest.TestCase):
         self._commit("G3 paths")
         t = _kb(kb, "new", "task", "--title", "Implement it", "--epic", e["id"], "--dod", "feature() works")
         oracle = self.tmp / "oracle.py"
-        oracle.write_text(_ORACLE)
+        oracle.write_text(_ORACLE, encoding="utf-8")
         rv = _kb(kb, "review", "open", "--title", "Review", "--reviews", d["id"], "--reviews", e["id"])
         for q in ("correctness", "failure paths", "docs versus code"):
             _kb(kb, "review", "calibrate", rv["id"], "--lead-question", q, "--reviewer", "agent:rev",
@@ -599,7 +599,7 @@ class KbPeriodicLoopE2E(unittest.TestCase):
     def test_periodic_skips_a_kb_checkout_that_lags_behind_origin(self):
         kb = self.kb
         self._push()
-        (kb / "src" / "late.py").write_text("x = 1\n")
+        (kb / "src" / "late.py").write_text("x = 1\n", encoding="utf-8")
         self._commit("a commit the checkout will not have")
         self._push()
         _sh("git", "reset", "-q", "--hard", "HEAD~1", cwd=kb)          # the checkout lags behind origin/main
@@ -618,7 +618,7 @@ class KbPeriodicLoopE2E(unittest.TestCase):
         _kb(kb, "new", "idea", "--title", "Alpha beta gamma delta")
         for title in ("Alpha beta gamma delta epsilon", "Alpha beta gamma delta zeta"):
             r = subprocess.run([sys.executable, str(kb / "scripts" / "kb.py"), "--repo", str(kb), "new", "idea",
-                                "--title", title], capture_output=True, text=True)
+                                "--title", title], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(r.returncode, 2, r.stdout)
         with _sandbox(self.tmp) as (client, csrf, home, _):
             from corvin_console import kb_projection as kp
@@ -629,7 +629,7 @@ class KbPeriodicLoopE2E(unittest.TestCase):
             spec = kp._skill_registry("_default").get(name)
             self.assertEqual(spec.type, "learned-experience")
             self.assertEqual([g["score"] if isinstance(g, dict) else g.score for g in spec.grades], [0.3])
-            gfile = (kb / "kb" / "_meta" / "guidance" / "G0_no_search_evidence.md").read_text()
+            gfile = (kb / "kb" / "_meta" / "guidance" / "G0_no_search_evidence.md").read_text(encoding="utf-8")
             self.assertIn("skillforge_injection: minted", gfile)
             self.assertIn(f"skill: {name}", gfile)
             self.assertEqual(kp.periodic("_default", force=True)["skills"]["minted"], [])   # once
@@ -686,9 +686,9 @@ class SandboxedHomeNeverProjectsIntoTheRealKb(unittest.TestCase):
         os.environ["CORVIN_HOME"] = tempfile.mkdtemp(prefix="kb-sandbox-")
         fake = Path(tempfile.mkdtemp(prefix="kb-fixture-"))
         (fake / "scripts").mkdir()
-        (fake / "scripts" / "kb.py").write_text("")
+        (fake / "scripts" / "kb.py").write_text("", encoding="utf-8")
         (fake / "kb" / "_meta").mkdir(parents=True)
-        (fake / "kb" / "_meta" / "sources.yaml").write_text("")
+        (fake / "kb" / "_meta" / "sources.yaml").write_text("", encoding="utf-8")
         os.environ["CORVIN_KB_REPO"] = str(fake)
         self.assertEqual(self.kp.kb_repo(), fake)
 

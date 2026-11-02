@@ -204,7 +204,7 @@ class _FreshInstallTestCase(unittest.TestCase):
         self.assertTrue(str(p).startswith(str(self.home)), p)
         if not p.exists():
             return []
-        rows = [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+        rows = [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
         return [r for r in rows if r.get("event_type") == event_type]
 
 

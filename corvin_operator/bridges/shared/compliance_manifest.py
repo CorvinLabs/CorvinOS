@@ -143,7 +143,7 @@ def _load_yaml(path: Path) -> Any:
     try:
         import yaml  # type: ignore
 
-        with path.open() as fh:
+        with path.open(encoding="utf-8") as fh:
             return yaml.safe_load(fh)
     except ImportError:
         raise ImportError(
@@ -194,7 +194,7 @@ def _verify_signature(
     try:
         sha_proc = subprocess.run(
             ["sha256sum", *[str(p) for p in all_paths]],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         if sha_proc.returncode != 0:
             return False, "sha256sum failed"
@@ -207,7 +207,7 @@ def _verify_signature(
         gpg_proc = subprocess.run(
             gpg_cmd,
             input=sha_proc.stdout,
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         if gpg_proc.returncode == 0:
             return True, "signature valid"
@@ -347,7 +347,7 @@ def run_compliance_check(
         # ── Version ──────────────────────────────────────────────────────
         version_path = manifest_dir / _VERSION_FILE
         if version_path.exists():
-            result.manifest_version = version_path.read_text().strip()
+            result.manifest_version = version_path.read_text(encoding="utf-8").strip()
         else:
             result.manifest_version = "unknown"
 

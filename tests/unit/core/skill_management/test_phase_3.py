@@ -32,7 +32,7 @@ def temp_tenant_phase3(tmp_path, monkeypatch):
         "skill_aliases": {"paper": "academic-paper-generation"},
         "tool_cost_limits": {"expensive-tool": 1000}
     }
-    with open(config_dir / "skill-prefs.json", "w") as f:
+    with open(config_dir / "skill-prefs.json", "w", encoding="utf-8") as f:
         json.dump(prefs, f)
 
     # Create tenant.corvin.yaml
@@ -50,7 +50,7 @@ def temp_tenant_phase3(tmp_path, monkeypatch):
             }
         }
     }
-    with open(config_dir / "tenant.corvin.yaml", "w") as f:
+    with open(config_dir / "tenant.corvin.yaml", "w", encoding="utf-8") as f:
         yaml.dump(config, f)
 
     # Create test skills
@@ -73,7 +73,7 @@ def temp_tenant_phase3(tmp_path, monkeypatch):
             "dependencies": [],
             "task_id": f"task-{i}"
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
     return tenant_path
@@ -214,7 +214,7 @@ class TestPromotion:
         # Create skill in _shared/
         shared_dir = Path.home() / ".corvin" / "tenants" / "_default" / "_shared" / "skills" / "skill-1"
         shared_dir.mkdir(parents=True, exist_ok=True)
-        with open(shared_dir / "meta.json", "w") as f:
+        with open(shared_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump({"id": "skill-1", "version": "2.0.0", "scope": "_shared"}, f)
 
         promoter = SkillPromoter()

@@ -60,7 +60,7 @@ def setup_sandbox() -> None:
         d.mkdir(parents=True, exist_ok=True)
     TEST_CHANNEL_DIR.mkdir(exist_ok=True)
     (TEST_CHANNEL_DIR / "settings.json").write_text(
-        json.dumps({"chat_profiles": CHAT_PROFILES}, indent=2)
+        json.dumps({"chat_profiles": CHAT_PROFILES}, indent=2), encoding="utf-8"
     )
 
 
@@ -78,7 +78,7 @@ def write_inbox(item_id: str, chat_key: str, text: str) -> None:
         "from":    chat_key,
         "text":    text,
     }
-    (INBOX / f"{item_id}.json").write_text(json.dumps(payload))
+    (INBOX / f"{item_id}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def wait_for_processed(n: int, timeout: float = 10.0) -> int:
@@ -94,7 +94,7 @@ def wait_for_processed(n: int, timeout: float = 10.0) -> int:
 def load_args_dump() -> list[dict]:
     if not ARGS_DUMP.exists():
         return []
-    return [json.loads(line) for line in ARGS_DUMP.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in ARGS_DUMP.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def find_call(dump: list[dict], chat_key: str) -> dict | None:
@@ -164,7 +164,7 @@ def main() -> int:
 
     proc = subprocess.Popen(
         ["python3", str(ADAPTER)],
-        env=env, stdout=open(LOG_FILE, "w"), stderr=subprocess.STDOUT,
+        env=env, stdout=open(LOG_FILE, "w", encoding="utf-8"), stderr=subprocess.STDOUT,
     )
     failures: list[str] = []
     try:
@@ -248,7 +248,7 @@ def main() -> int:
         # Settings write OHNE chat_profiles, fresh start,
         # eine Message schicken, prüfen dass --dangerously-skip-permissions drin ist.
         (TEST_CHANNEL_DIR / "settings.json").write_text(
-            json.dumps({"whitelist": [], "rate_limit_per_hour": 30}, indent=2)
+            json.dumps({"whitelist": [], "rate_limit_per_hour": 30}, indent=2), encoding="utf-8"
         )
         ARGS_DUMP.unlink(missing_ok=True)
         for d in (INBOX, OUTBOX, PROCESSED):
@@ -257,7 +257,7 @@ def main() -> int:
 
         proc_default = subprocess.Popen(
             ["python3", str(ADAPTER)],
-            env=env, stdout=open(LOG_FILE, "a"), stderr=subprocess.STDOUT,
+            env=env, stdout=open(LOG_FILE, "a", encoding="utf-8"), stderr=subprocess.STDOUT,
         )
         try:
             time.sleep(0.4)
@@ -284,7 +284,7 @@ def main() -> int:
 
         # Settings for den nachfolgenden Hot-Reload-Test wieder backset.
         (TEST_CHANNEL_DIR / "settings.json").write_text(
-            json.dumps({"chat_profiles": CHAT_PROFILES}, indent=2)
+            json.dumps({"chat_profiles": CHAT_PROFILES}, indent=2), encoding="utf-8"
         )
     except AssertionError as e:
         failures.append(f"max-open-default: {e}")
@@ -300,7 +300,7 @@ def main() -> int:
             },
         }
         (TEST_CHANNEL_DIR / "settings.json").write_text(
-            json.dumps({"chat_profiles": new_profiles}, indent=2)
+            json.dumps({"chat_profiles": new_profiles}, indent=2), encoding="utf-8"
         )
         # mtime garantiert neue stat — _load_channel_settings reads pro Message
         # fresh, kein Adapter-Cache zwischen.
@@ -318,7 +318,7 @@ def main() -> int:
 
         proc2 = subprocess.Popen(
             ["python3", str(ADAPTER)],
-            env=env2, stdout=open(LOG_FILE, "a"), stderr=subprocess.STDOUT,
+            env=env2, stdout=open(LOG_FILE, "a", encoding="utf-8"), stderr=subprocess.STDOUT,
         )
         try:
             time.sleep(0.4)

@@ -17,7 +17,7 @@ BASELINE = REPO / "scripts" / "audit_unregistered_baseline.json"
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=300)
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
 
 
 def test_the_committed_baseline_passes_and_is_non_trivial():
@@ -40,7 +40,7 @@ def test_a_name_missing_from_the_baseline_fails_the_gate(tmp_path):
     assert live, "positive control: at least one baseline name must still be emitted unregistered"
     dropped = live[0]
     probe = tmp_path / "baseline.json"
-    probe.write_text(json.dumps([n for n in names if n != dropped]))
+    probe.write_text(json.dumps([n for n in names if n != dropped]), encoding="utf-8")
     out = _run("--baseline", str(probe))
     assert out.returncode == 1, out.stdout[-1500:]
     assert f"not in the baseline: {dropped}" in out.stdout
@@ -50,7 +50,7 @@ def test_a_registered_name_is_a_note_and_shrink_never_adds(tmp_path):
     names = json.loads(BASELINE.read_text("utf-8"))
     probe = tmp_path / "baseline.json"
     # one made-up name (stands for "registered since") and one real name left out
-    probe.write_text(json.dumps(names[1:] + ["zz.not_emitted_anywhere"]))
+    probe.write_text(json.dumps(names[1:] + ["zz.not_emitted_anywhere"]), encoding="utf-8")
     out = _run("--baseline", str(probe), "--shrink-baseline")
     assert "registered now, remove from the baseline (--shrink-baseline): zz.not_emitted_anywhere" in out.stdout
     after = json.loads(probe.read_text("utf-8"))
@@ -60,7 +60,7 @@ def test_a_registered_name_is_a_note_and_shrink_never_adds(tmp_path):
 
 def test_init_baseline_refuses_to_overwrite(tmp_path):
     probe = tmp_path / "baseline.json"
-    probe.write_text("[]")
+    probe.write_text("[]", encoding="utf-8")
     out = _run("--baseline", str(probe), "--init-baseline")
     assert out.returncode == 2
-    assert probe.read_text() == "[]"
+    assert probe.read_text(encoding="utf-8") == "[]"

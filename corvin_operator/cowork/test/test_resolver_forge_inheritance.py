@@ -140,7 +140,7 @@ def test_materialize_per_persona_root():
     print("\n[materialize_mcp expands FORGE_PERSONA + REPO_ROOT]")
     merged = resolver.resolve("coder")
     cfg_path = resolver.materialize_mcp(merged)
-    cfg = json.loads(Path(cfg_path).read_text())
+    cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
     env = cfg["mcpServers"]["forge"]["env"]
     # J.1.4a: per-persona FORGE_ROOT removed; FORGE_PERSONA is the
     # attribution mechanism the audit log relies on.

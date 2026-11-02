@@ -77,7 +77,7 @@ class StagingDeploymentValidator:
                      f"{self.BASE_URL}/security/health"],
                     capture_output=True,
                     text=True,
-                    timeout=self.TIMEOUT_SECONDS
+                    timeout=self.TIMEOUT_SECONDS, encoding="utf-8", errors="replace"
                 )
                 response_time_ms = (time.time() - start_time) * 1000
 
@@ -119,7 +119,7 @@ class StagingDeploymentValidator:
                 ["curl", "-s", f"{self.BASE_URL}/v1/console/security/threats"],
                 capture_output=True,
                 text=True,
-                timeout=self.TIMEOUT_SECONDS
+                timeout=self.TIMEOUT_SECONDS, encoding="utf-8", errors="replace"
             )
             response_time_ms = (time.time() - start_time) * 1000
 
@@ -165,7 +165,7 @@ class StagingDeploymentValidator:
                  f"{self.BASE_URL}/v1/console/security/policy"],
                 capture_output=True,
                 text=True,
-                timeout=self.TIMEOUT_SECONDS
+                timeout=self.TIMEOUT_SECONDS, encoding="utf-8", errors="replace"
             )
             response_time_ms = (time.time() - start_time) * 1000
 
@@ -206,7 +206,7 @@ class StagingDeploymentValidator:
                 ["curl", "-s", f"{self.BASE_URL}/v1/console/security/audit?limit=10"],
                 capture_output=True,
                 text=True,
-                timeout=self.TIMEOUT_SECONDS
+                timeout=self.TIMEOUT_SECONDS, encoding="utf-8", errors="replace"
             )
             response_time_ms = (time.time() - start_time) * 1000
 
@@ -262,7 +262,7 @@ class StagingDeploymentValidator:
                 ["curl", "-s", f"{self.BASE_URL}/v1/console/security/metrics"],
                 capture_output=True,
                 text=True,
-                timeout=self.TIMEOUT_SECONDS
+                timeout=self.TIMEOUT_SECONDS, encoding="utf-8", errors="replace"
             )
             response_time_ms = (time.time() - start_time) * 1000
 
@@ -303,7 +303,7 @@ class StagingDeploymentValidator:
                 ["wscat", "-c", f"ws://localhost:8765/v1/console/security/stream", "--max", "1"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5, encoding="utf-8", errors="replace"
             )
             response_time_ms = (time.time() - start_time) * 1000
 
@@ -324,7 +324,7 @@ class StagingDeploymentValidator:
                      f"http://localhost:8765/v1/console/security/stream"],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5, encoding="utf-8", errors="replace"
                 )
                 if "101" in result.stdout:
                     return SmokeTestResult(
@@ -351,7 +351,7 @@ class StagingDeploymentValidator:
                      f"http://localhost:8765/v1/console/security/stream"],
                     capture_output=True,
                     text=True,
-                    timeout=2
+                    timeout=2, encoding="utf-8", errors="replace"
                 )
                 response_time_ms = (time.time() - start_time) * 1000
                 if "101" in result.stdout:

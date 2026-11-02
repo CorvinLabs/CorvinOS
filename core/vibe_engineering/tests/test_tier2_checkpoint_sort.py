@@ -24,7 +24,7 @@ def test_finding_4_checkpoint_sorting_code():
     Expected: Source code contains correct sort pattern
     """
     source_file = Path(__file__).parent / '../checkpoint_manager.py'
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Verify the sort statement uses timestamp
     assert 'timestamp' in source_code, \
@@ -43,7 +43,7 @@ def test_finding_4_checkpoint_sort_order():
     Expected: sort() call includes reverse=True
     """
     source_file = Path(__file__).parent / '../checkpoint_manager.py'
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Find the sort statement
     import re

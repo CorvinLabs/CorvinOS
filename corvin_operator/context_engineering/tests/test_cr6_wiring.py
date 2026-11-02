@@ -34,7 +34,7 @@ class TestContextSuggestionGate:
                 "danger_zones": ["skipping tests when urgent (70% fail)"],
             }
             profile_file = profile_dir / "tenant-baseline.json"
-            profile_file.write_text(json.dumps(profile))
+            profile_file.write_text(json.dumps(profile), encoding="utf-8")
 
             # Create gate
             gate = ContextSuggestionGate(profile_dir)
@@ -62,7 +62,7 @@ class TestContextSuggestionGate:
                 "danger_zones": [],
             }
             profile_file = profile_dir / "tenant-baseline.json"
-            profile_file.write_text(json.dumps(profile))
+            profile_file.write_text(json.dumps(profile), encoding="utf-8")
 
             gate = ContextSuggestionGate(profile_dir)
 
@@ -87,7 +87,7 @@ class TestContextSuggestionGate:
                 "danger_zones": ["skipping tests when urgent (70% fail)"],
             }
             profile_file = profile_dir / "tenant-baseline.json"
-            profile_file.write_text(json.dumps(profile))
+            profile_file.write_text(json.dumps(profile), encoding="utf-8")
 
             gate = ContextSuggestionGate(profile_dir)
 
@@ -115,7 +115,7 @@ class TestConsoleIntegration:
                 "danger_zones": ["skipping tests when urgent (70% fail)"],
             }
             profile_file = profile_dir / "tenant-baseline.json"
-            profile_file.write_text(json.dumps(profile))
+            profile_file.write_text(json.dumps(profile), encoding="utf-8")
 
             suggested = ["adr-0269", "skill-e2e-wiring", "memory-phase3"]
             approved, blocked = console_suggest_contexts_with_guard(
@@ -142,7 +142,7 @@ class TestAgentIntegration:
                 "danger_zones": ["skipping tests when urgent (70% fail)"],
             }
             profile_file = profile_dir / "tenant-baseline.json"
-            profile_file.write_text(json.dumps(profile))
+            profile_file.write_text(json.dumps(profile), encoding="utf-8")
 
             context_pool = {
                 "adrs": ["ADR-0269", "ADR-0270"],

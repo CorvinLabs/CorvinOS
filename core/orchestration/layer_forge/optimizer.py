@@ -147,7 +147,7 @@ class ReviewPromptVersions:
             }
         try:
             data = {}
-            with open(self.storage_path, "r") as f:
+            with open(self.storage_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             # Ensure canary_percentage is in the loaded data
             if "canary_percentage" not in data:
@@ -220,7 +220,7 @@ class ReviewPromptVersions:
         """Write version history to disk (atomic swap)."""
         import tempfile
         try:
-            with tempfile.NamedTemporaryFile(mode="w", dir=self.storage_path.parent, delete=False) as f:
+            with tempfile.NamedTemporaryFile(mode="w", dir=self.storage_path.parent, delete=False, encoding="utf-8") as f:
                 json.dump(self._data, f, indent=2)
                 temp_path = f.name
             # Atomic move

@@ -60,7 +60,7 @@ def cli_log(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     claude = bindir / "claude"
-    claude.write_text(FAKE_CLAUDE)
+    claude.write_text(FAKE_CLAUDE, encoding="utf-8")
     claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
@@ -78,7 +78,7 @@ def _doc(graph: list[dict]) -> WorkflowDoc:
 def _chain(tenant: str = "_default") -> list[dict]:
     from forge import paths as fp
     p = Path(fp.tenant_audit_chain(tenant))
-    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
 def _engine():
@@ -149,7 +149,7 @@ def test_the_cli_json_reports_model_and_tokens_per_node(cli_log, tmp_path, monke
     wf.write_text(yaml.safe_dump({"awp": "1.0.0", "workflow": {"name": "cli_r2", "description": "d"},
                                   "orchestration": {"engine": "dag", "graph": [
                                       {"id": "n", "type": "agent", "agent": "a", "instructions": "x",
-                                       "model": "haiku"}]}}))
+                                       "model": "haiku"}]}}), encoding="utf-8")
     import contextlib
     import io
     buf = io.StringIO()
@@ -255,7 +255,7 @@ def test_cli_resume_json_names_the_attempts_of_a_retried_model_node(cli_log, tmp
                                        "chat_id": "owner-chat", "prompt": "Go on?",
                                        "expect": {"field": "ok", "type": "boolean"}},
                                       {"id": "after", "type": "agent", "agent": "a", "depends_on": ["ask"],
-                                       "instructions": "MARK-ERRENV", "retry": {"max_retries": 1}}]}}))
+                                       "instructions": "MARK-ERRENV", "retry": {"max_retries": 1}}]}}), encoding="utf-8")
 
     def run_cli(argv):
         buf = io.StringIO()

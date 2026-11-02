@@ -123,7 +123,7 @@ def test_registry_yaml_privileged_claim_is_audited_under_the_real_tenant(tmp_pat
     path.write_text(yaml.safe_dump({
         "spec": {"schema_version": state.REGISTRY_SCHEMA_VERSION},
         "plugins": {"acme-audit": _privileged_record().to_dict()},
-    }))
+    }), encoding="utf-8")
     audited: list[tuple[str, dict, str]] = []
     with mock.patch.object(
         state, "_audit", lambda e, d, *, tenant_id: audited.append((e, d, tenant_id))
@@ -147,7 +147,7 @@ def test_install_never_stores_a_privileged_boot_layer(tmp_path):
         stored = lifecycle.install(_privileged_record(), installed_by="test")
     assert stored.boot_layer is BootLayer.INSTALLED
     on_disk = yaml.safe_load(
-        state.registry_path(tenant_id="acme", corvin_home_path=tmp_path).read_text()
+        state.registry_path(tenant_id="acme", corvin_home_path=tmp_path).read_text(encoding="utf-8")
     )
     assert on_disk["plugins"]["acme-audit"]["boot_layer"] == "installed"
     kinds = [(e, t) for e, _d, t in audited]

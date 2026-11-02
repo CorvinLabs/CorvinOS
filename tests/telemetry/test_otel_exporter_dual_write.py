@@ -195,7 +195,7 @@ class TestJSONFallback:
             )
 
         expected_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
-        with open(expected_file) as f:
+        with open(expected_file, encoding="utf-8") as f:
             lines = f.readlines()
 
         # Should have exactly 1 line
@@ -233,7 +233,7 @@ class TestJSONFallback:
             )
 
         expected_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
-        with open(expected_file) as f:
+        with open(expected_file, encoding="utf-8") as f:
             lines = f.readlines()
 
         # Should have exactly 2 lines (append-only)
@@ -261,7 +261,7 @@ class TestJSONFallback:
             )
 
         expected_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
-        with open(expected_file) as f:
+        with open(expected_file, encoding="utf-8") as f:
             record = json.loads(f.readline())
 
         # Verify geo attributes are included
@@ -285,7 +285,7 @@ class TestJSONFallback:
             )
 
         expected_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
-        with open(expected_file) as f:
+        with open(expected_file, encoding="utf-8") as f:
             record = json.loads(f.readline())
 
         assert record["geo"] is None
@@ -412,7 +412,7 @@ class TestDualWriteBehavior:
         assert expected_file.exists()
 
         # Verify data is intact
-        with open(expected_file) as f:
+        with open(expected_file, encoding="utf-8") as f:
             record = json.loads(f.readline())
         assert record["uptime_seconds"] == heartbeat_signal.uptime_seconds
 
@@ -543,7 +543,7 @@ class TestConcurrentExports:
 
         # Verify all records were written
         expected_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
-        with open(expected_file) as f:
+        with open(expected_file, encoding="utf-8") as f:
             lines = f.readlines()
 
         # Should have 5 lines (one per export)

@@ -204,7 +204,7 @@ class CentralizedConfigManager:
         """
         try:
             if self.SCHEMA_PATH.exists():
-                with open(self.SCHEMA_PATH, "r") as f:
+                with open(self.SCHEMA_PATH, "r", encoding="utf-8") as f:
                     return json.load(f)
         except (json.JSONDecodeError, IOError):
             pass
@@ -532,7 +532,7 @@ class CentralizedConfigManager:
             config_file = _config_file(tenant_id)
 
             if config_file.exists():
-                with open(config_file, "r") as f:
+                with open(config_file, "r", encoding="utf-8") as f:
                     return json.load(f)
 
             return None
@@ -545,7 +545,7 @@ class CentralizedConfigManager:
         config_file = _config_file(tenant_id)
         config_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(config_file, "w") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
     def _deep_merge(

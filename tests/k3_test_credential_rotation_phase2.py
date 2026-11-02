@@ -18,7 +18,7 @@ class TestCredentialRotationScript(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.script_content = self.script_path.read_text()
+        self.script_content = self.script_path.read_text(encoding="utf-8")
 
     def test_script_file_exists(self):
         """Verify Phase 2 script file exists."""
@@ -164,7 +164,7 @@ class TestFailClosedStrategy(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.script_content = self.script_path.read_text()
+        self.script_content = self.script_path.read_text(encoding="utf-8")
 
     def test_placeholders_are_not_real_credentials(self):
         """Verify placeholders don't contain real credential patterns."""
@@ -185,7 +185,7 @@ class TestCredentialCoverage(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.script_content = self.script_path.read_text()
+        self.script_content = self.script_path.read_text(encoding="utf-8")
 
     def test_13_plus_credentials_supported(self):
         """Verify at least 13 credential types are supported."""
@@ -216,7 +216,7 @@ class TestAuditTrail(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.script_content = self.script_path.read_text()
+        self.script_content = self.script_path.read_text(encoding="utf-8")
 
     def test_audit_event_structure(self):
         """Verify audit event has required structure."""

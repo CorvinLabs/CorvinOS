@@ -64,7 +64,7 @@ class AuditChainVerifier:
             return False
 
         try:
-            with open(self.audit_path, "r") as f:
+            with open(self.audit_path, "r", encoding="utf-8") as f:
                 for line_num, line in enumerate(f, 1):
                     if not line.strip():
                         continue  # Skip empty lines

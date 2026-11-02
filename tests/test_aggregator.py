@@ -321,7 +321,7 @@ class TestMetricsCollector:
         assert metrics_file.exists()
 
         # Verify content
-        with open(metrics_file, "r") as f:
+        with open(metrics_file, "r", encoding="utf-8") as f:
             line = f.readline()
             data = json.loads(line)
             assert data["instance_count"] == 1

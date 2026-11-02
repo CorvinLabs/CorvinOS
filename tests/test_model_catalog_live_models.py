@@ -410,8 +410,8 @@ class TestSubscriptionLogin:
         monkeypatch.setattr(engine_providers, "claude_subscription_token",
                             engine_providers.__dict__["claude_subscription_token"])
         creds.write_text(json.dumps({"claudeAiOauth": {
-            "accessToken": "oat-x", "expiresAt": (time.time() - 60) * 1000}}))
-        assert engine_providers._oauth_from_blob(json.loads(creds.read_text())) == ""
+            "accessToken": "oat-x", "expiresAt": (time.time() - 60) * 1000}}), encoding="utf-8")
+        assert engine_providers._oauth_from_blob(json.loads(creds.read_text(encoding="utf-8"))) == ""
         creds.write_text(json.dumps({"claudeAiOauth": {
-            "accessToken": "oat-x", "expiresAt": (time.time() + 3600) * 1000}}))
-        assert engine_providers._oauth_from_blob(json.loads(creds.read_text())) == "oat-x"
+            "accessToken": "oat-x", "expiresAt": (time.time() + 3600) * 1000}}), encoding="utf-8")
+        assert engine_providers._oauth_from_blob(json.loads(creds.read_text(encoding="utf-8"))) == "oat-x"

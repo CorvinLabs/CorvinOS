@@ -102,7 +102,7 @@ class FederationTokenManager:
         """
         if not force_rotate and self._token_file.exists():
             try:
-                token = self._token_file.read_text().strip()
+                token = self._token_file.read_text(encoding="utf-8").strip()
 
                 # Validate existing token
                 if self._validate_token(token):
@@ -143,7 +143,7 @@ class FederationTokenManager:
                 )
 
             # Store token securely
-            self._token_file.write_text(token)
+            self._token_file.write_text(token, encoding="utf-8")
             os.chmod(self._token_file, 0o600)
 
             # Record metadata
@@ -157,7 +157,7 @@ class FederationTokenManager:
                 'rotation_count': rotation_count,
             }
 
-            with open(self._token_metadata_file, 'w') as f:
+            with open(self._token_metadata_file, 'w', encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
             os.chmod(self._token_metadata_file, 0o600)
 
@@ -209,7 +209,7 @@ class FederationTokenManager:
             return 0
 
         try:
-            with open(self._token_metadata_file) as f:
+            with open(self._token_metadata_file, encoding="utf-8") as f:
                 metadata = json.load(f)
             return metadata.get('rotation_count', 0)
         except Exception as e:
@@ -229,7 +229,7 @@ class FederationTokenManager:
             return True
 
         try:
-            with open(self._token_metadata_file) as f:
+            with open(self._token_metadata_file, encoding="utf-8") as f:
                 metadata = json.load(f)
 
             expires_at_str = metadata.get('expires_at')
@@ -277,7 +277,7 @@ class FederationTokenManager:
             return None
 
         try:
-            with open(self._token_metadata_file) as f:
+            with open(self._token_metadata_file, encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             logger.error(f"Failed to read token metadata: {e}")

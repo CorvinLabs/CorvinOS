@@ -220,13 +220,13 @@ class DaemonIntegration:
         checkpoint_data["checksum"] = checksum
 
         # Write
-        with open(checkpoint_path, "w") as f:
+        with open(checkpoint_path, "w", encoding="utf-8") as f:
             json.dump(checkpoint_data, f, indent=2)
 
     def _load_checkpoint(self, checkpoint_path: Path) -> bool:
         """Load daemon state from checkpoint."""
         try:
-            with open(checkpoint_path, "r") as f:
+            with open(checkpoint_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             # Verify checksum

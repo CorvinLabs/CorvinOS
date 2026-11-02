@@ -77,7 +77,7 @@ def lost_identity() -> dict:
     out = {}
     for p in sorted(d.glob("*")) if d.is_dir() else []:
         try:
-            rec = json.loads(p.read_text())
+            rec = json.loads(p.read_text(encoding="utf-8"))
             out[p.name] = rec
         except (OSError, ValueError):
             continue
@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         "note": "Records authenticated individually (hash + anchor-key MAC). Segments are "
                 "separated by gaps where the original blocks were overwritten before the carve.",
     }
-    (rec_dir / f"audit.carved-{stamp}.manifest.json").write_text(json.dumps(manifest, indent=2))
+    (rec_dir / f"audit.carved-{stamp}.manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     seam = se.record_chain_supersession(canonical, out, reason="chain_loss_carve")
     print(f"wrote {out} ({n_kept} records); seam {'written' if seam else 'NOT written'}")
 

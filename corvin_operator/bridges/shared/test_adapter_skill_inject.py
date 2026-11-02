@@ -44,7 +44,7 @@ def _make_sandbox(prefix: str) -> Path:
 def _write_settings(profiles: dict) -> None:
     TEST_CHANNEL_DIR.mkdir(exist_ok=True)
     (TEST_CHANNEL_DIR / "settings.json").write_text(
-        json.dumps({"chat_profiles": profiles}, indent=2)
+        json.dumps({"chat_profiles": profiles}, indent=2), encoding="utf-8"
     )
 
 
@@ -60,7 +60,7 @@ def _write_inbox(sandbox: Path, item_id: str, chat_key: str, text: str) -> None:
         "id": item_id, "channel": TEST_CHANNEL,
         "chat_id": chat_key, "from": chat_key, "text": text,
     }
-    (inbox / f"{item_id}.json").write_text(json.dumps(payload))
+    (inbox / f"{item_id}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _wait_processed(sandbox: Path, n: int, timeout: float = 10.0) -> int:
@@ -85,7 +85,7 @@ def _load_args(sandbox: Path) -> list[dict]:
     if not dump.exists():
         return []
     return [
-        json.loads(line) for line in dump.read_text().splitlines() if line.strip()
+        json.loads(line) for line in dump.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
 
 
@@ -147,7 +147,7 @@ def _run_adapter(env: dict, sandbox: Path):
     log_file = sandbox / "adapter.log"
     proc = subprocess.Popen(
         ["python3", str(ADAPTER)],
-        env=env, stdout=open(log_file, "a"), stderr=subprocess.STDOUT,
+        env=env, stdout=open(log_file, "a", encoding="utf-8"), stderr=subprocess.STDOUT,
     )
     time.sleep(0.4)
     return proc
@@ -206,7 +206,7 @@ if payload.get('grade') is not None:
          str(corvin_home), str(plugin_slot), channel_id,
          str(SKILL_FORGE_PKG), str(FORGE_PKG),
          json.dumps(payload), scope],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -672,7 +672,7 @@ def case_skill_body_escape_blocked(failures: list[str]) -> None:
     # own genuine </auto_skill> closes, breaking the "exactly 1" assertion
     # below for reasons unrelated to what this case actually tests.
     (home / "global").mkdir(parents=True, exist_ok=True)
-    (home / "global" / "quality-layers.json").write_text(json.dumps({"enabled": False}))
+    (home / "global" / "quality-layers.json").write_text(json.dumps({"enabled": False}), encoding="utf-8")
     # Body uses `</auto_skill>` literal — that's the wrapper-escape vector
     # we want to neutralize. We deliberately do NOT include prompt-injection
     # phrases (e.g. "system override", "ignore previous") because the

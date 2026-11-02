@@ -84,7 +84,7 @@ class CredentialRotator:
                 continue
 
             try:
-                with open(file_path, "r") as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     backup_data[file_path_str] = f.read()
                 print(f"   ✅ Backed up: {file_path}")
             except PermissionError:
@@ -96,7 +96,7 @@ class CredentialRotator:
             return True
 
         try:
-            with open(self.backup_path, "w") as f:
+            with open(self.backup_path, "w", encoding="utf-8") as f:
                 json.dump(backup_data, f, indent=2)
             os.chmod(self.backup_path, 0o600)  # Only owner can read
             print(f"   ✅ Backup saved: {self.backup_path} (mode 0600)")
@@ -119,7 +119,7 @@ class CredentialRotator:
             print(f"   📝 Processing: {file_path}")
 
             try:
-                with open(file_path, "r") as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
 
                 # Replace each credential
@@ -158,7 +158,7 @@ class CredentialRotator:
                 if self.dry_run:
                     print(f"   [DRY-RUN] Would update: {file_path}")
                 else:
-                    with open(file_path, "w") as f:
+                    with open(file_path, "w", encoding="utf-8") as f:
                         f.write(content)
                     print(f"   ✅ Updated: {file_path}")
 
@@ -179,7 +179,7 @@ class CredentialRotator:
             # Read existing audit trail (for hash-chaining)
             prev_hash = "0" * 64  # Initial hash
             if audit_file.exists():
-                with open(audit_file, "r") as f:
+                with open(audit_file, "r", encoding="utf-8") as f:
                     for line in f:
                         if line.strip():
                             last_event = json.loads(line)
@@ -205,7 +205,7 @@ class CredentialRotator:
                 if self.dry_run:
                     print(f"   [DRY-RUN] Would emit: {event_data['event_type']} ({event_data['service']})")
                 else:
-                    with open(audit_file, "a") as f:
+                    with open(audit_file, "a", encoding="utf-8") as f:
                         f.write(json.dumps(event_data) + "\n")
                     print(f"   ✅ Emitted: {event_data['event_type']} ({event_data['service']})")
 
@@ -237,7 +237,7 @@ class CredentialRotator:
                 continue
 
             try:
-                with open(file_path, "r") as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     for line_no, line in enumerate(f, 1):
                         for pattern in dangerous_patterns:
                             if pattern in line and "PLACEHOLDER" not in line:

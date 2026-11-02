@@ -124,7 +124,7 @@ class VoiceSynthesizerWorker:
             r = subprocess.run(
                 ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
                  "stream=codec_type:format=duration", "-of", "default=noprint_wrappers=1", path],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
             )
         except (subprocess.TimeoutExpired, OSError):
             return False
@@ -278,7 +278,7 @@ class VoiceSynthesizerWorker:
         }
 
         # Write mock audio file with metadata
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
         return output_path
@@ -312,7 +312,7 @@ class VoiceSynthesizerWorker:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=10, encoding="utf-8", errors="replace",
             )
 
             if result.returncode == 0 and result.stdout.strip():
@@ -363,7 +363,7 @@ class VoiceSynthesizerWorker:
                     output_normalized,
                 ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
 
                 if result.returncode == 0:
                     os.replace(output_normalized, audio_file)

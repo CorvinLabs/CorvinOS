@@ -106,10 +106,10 @@ def case_hot_reload_via_mtime():
     ldd.load_config()  # populate cache
     p = ldd._config_path()
     # Write a different config out-of-band.
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["layers"]["e2e_driven_iteration"] = False
     # Bump mtime so the cache busts even on coarse-grained filesystems.
-    p.write_text(json.dumps(raw))
+    p.write_text(json.dumps(raw), encoding="utf-8")
     os.utime(p, (time.time() + 2, time.time() + 2))
     cfg = ldd.load_config()
     t("layers picked up the out-of-band change",
@@ -321,7 +321,7 @@ def _run_cli(*args):
     return subprocess.run(
         [sys.executable, str(REPO / "corvin_operator/bridges/shared/ldd.py"),
          *args],
-        capture_output=True, text=True, env={**os.environ},
+        capture_output=True, text=True, env={**os.environ}, encoding="utf-8", errors="replace",
     )
 
 
@@ -341,12 +341,12 @@ def case_cli_on_off():
     reset_config()
     r = _run_cli("off")
     t("off exit 0", r.returncode == 0)
-    cfg = json.loads(ldd._config_path().read_text())
+    cfg = json.loads(ldd._config_path().read_text(encoding="utf-8"))
     t("off persisted enabled=false",
       cfg.get("enabled") is False)
     r = _run_cli("on")
     t("on exit 0", r.returncode == 0)
-    cfg = json.loads(ldd._config_path().read_text())
+    cfg = json.loads(ldd._config_path().read_text(encoding="utf-8"))
     t("on persisted enabled=true",
       cfg.get("enabled") is True)
 
@@ -356,11 +356,11 @@ def case_cli_set():
     # Hyphenated form is accepted (auto-canonicalized).
     r = _run_cli("set", "loop-driven-engineering", "off")
     t("set hyphenated layer exit 0", r.returncode == 0)
-    cfg = json.loads(ldd._config_path().read_text())
+    cfg = json.loads(ldd._config_path().read_text(encoding="utf-8"))
     t("set persisted loop_driven_engineering=False",
       cfg["layers"]["loop_driven_engineering"] is False)
     r = _run_cli("set", "loop_driven_engineering", "on")
-    cfg = json.loads(ldd._config_path().read_text())
+    cfg = json.loads(ldd._config_path().read_text(encoding="utf-8"))
     t("set on flips it back",
       cfg["layers"]["loop_driven_engineering"] is True)
     # Unknown layer rejected.
@@ -375,13 +375,13 @@ def case_cli_preset():
     reset_config()
     r = _run_cli("preset", "quick")
     t("preset quick exit 0", r.returncode == 0)
-    cfg = json.loads(ldd._config_path().read_text())
+    cfg = json.loads(ldd._config_path().read_text(encoding="utf-8"))
     t("preset quick: e2e on",
       cfg["layers"]["e2e_driven_iteration"] is True)
     t("preset quick: drift_detection off",
       cfg["layers"]["drift_detection"] is False)
     r = _run_cli("preset", "off")
-    cfg = json.loads(ldd._config_path().read_text())
+    cfg = json.loads(ldd._config_path().read_text(encoding="utf-8"))
     t("preset off: enabled=False",
       cfg.get("enabled") is False)
 
@@ -450,7 +450,7 @@ def case_no_anthropic_sdk_import():
     print("\n[14] ldd.py must NOT import the Anthropic SDK")
     import ast
     src_path = REPO / "corvin_operator/bridges/shared/ldd.py"
-    tree = ast.parse(src_path.read_text())
+    tree = ast.parse(src_path.read_text(encoding="utf-8"))
     bad = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

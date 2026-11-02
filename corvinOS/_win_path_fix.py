@@ -130,4 +130,25 @@ def _ensure_scripts_on_path() -> None:  # pragma: no cover — Windows-only
         pass
 
 
+def _ensure_utf8_child_env() -> None:
+    """Make every CHILD of a Corvin Python process run in Python UTF-8 mode.
+
+    Windows only. Without PYTHONUTF8, open()/read_text()/subprocess text pipes
+    default to the ANSI code page (cp1252 on a German Windows) while the same
+    stores are written as UTF-8 by Linux, Node and the other Corvin processes.
+    UTF-8 mode is fixed at interpreter start-up, so this cannot switch THIS
+    process -- the launchers (install.ps1 / update.ps1 / the .vbs task
+    wrappers) set it for the top-level process -- but the environment is
+    inherited by every bridge, worker, engine and hook spawned from here.
+    An explicit operator value (including PYTHONUTF8=0) always wins.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        os.environ.setdefault("PYTHONUTF8", "1")
+    except Exception:
+        pass
+
+
+_ensure_utf8_child_env()
 _ensure_scripts_on_path()

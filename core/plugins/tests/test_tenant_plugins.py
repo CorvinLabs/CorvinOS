@@ -370,9 +370,9 @@ class TestEdgeCases:
         plugin_dir_b = tmp_path / "plugin-b"
         plugin_dir_b.mkdir()
         (plugin_dir_b / "plugin.yaml").write_text(
-            "plugin_id: plugin-b\nplugin_type: summary_provider\nversion: 2.0.0\n"
+            "plugin_id: plugin-b\nplugin_type: summary_provider\nversion: 2.0.0\n", encoding="utf-8"
         )
-        (plugin_dir_b / "plugin.py").write_text("pass")
+        (plugin_dir_b / "plugin.py").write_text("pass", encoding="utf-8")
         registry.register_plugin(
             "plugin-b",
             plugin_dir_b,

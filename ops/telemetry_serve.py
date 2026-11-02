@@ -185,7 +185,7 @@ def start_basic_server(aggregator: TelemetryAggregator, host: str, port: int) ->
             """Serve dashboard HTML."""
             html_path = Path(__file__).parent / 'docs' / 'stats.html'
             if html_path.exists():
-                with open(html_path) as f:
+                with open(html_path, encoding="utf-8") as f:
                     html = f.read()
                 html = html.replace(
                     "'https://api.corvin-labs.com/api/metrics/stats'",

@@ -71,10 +71,10 @@ print("@@" + json.dumps({{
     "chain": str(ba.audit_path()),
     "span_id": span,
 }}))
-''')
+''', encoding="utf-8")
     proc = subprocess.run([str(REPO / ".venv" / "bin" / "python"), str(driver)],
                           capture_output=True, text=True, env=env,
-                          cwd=str(REPO), timeout=300)
+                          cwd=str(REPO), timeout=300, encoding="utf-8", errors="replace")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     out = json.loads([l for l in proc.stdout.splitlines() if l.startswith("@@")][-1][2:])
     print("LIVE E2E:", json.dumps(out, indent=2))
@@ -92,7 +92,7 @@ print("@@" + json.dumps({{
     assert [p for p in home.rglob("audit.jsonl")] == [canonical]
 
     # 4. both spans of the real turn are in it, hash-chained
-    recs = [json.loads(l) for l in canonical.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in canonical.read_text(encoding="utf-8").splitlines() if l.strip()]
     kinds = [r["event_type"] for r in recs]
     assert "engine.span.start" in kinds and "engine.span.end" in kinds, kinds
     span_recs = [r for r in recs if r["details"].get("span_id") == out["span_id"]]

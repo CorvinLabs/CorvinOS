@@ -172,11 +172,11 @@ def service_started_ts(unit: str | None) -> float | None:
             env["XDG_RUNTIME_DIR"] = rt
             env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={rt}/bus")
         out = subprocess.run(["systemctl", "--user", "show", unit, "-p", "ActiveEnterTimestampMonotonic", "--value"],
-                             capture_output=True, text=True, timeout=10, env=env).stdout.strip()
+                             capture_output=True, text=True, timeout=10, env=env, encoding="utf-8", errors="replace").stdout.strip()
         mono = int(out)
         if mono <= 0:
             return None
-        boot = time.time() - float(Path("/proc/uptime").read_text().split()[0])
+        boot = time.time() - float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
         return boot + mono / 1_000_000
     except Exception:  # noqa: BLE001
         return None

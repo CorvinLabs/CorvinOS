@@ -58,7 +58,7 @@ def test_every_builtin_skill_run_is_audited(booted, skill_id):
 
 
 def test_manifest_skills_are_booted_or_declared_optional():
-    manifest = json.loads((REPO / "core/skills/os_skills/MANIFEST.json").read_text())
+    manifest = json.loads((REPO / "core/skills/os_skills/MANIFEST.json").read_text(encoding="utf-8"))
     declared = {s["id"] for s in manifest["skills"]}
     unaccounted = declared - set(BUILTIN_SKILL_IDS) - set(OPTIONAL_SKILLS)
     assert not unaccounted, f"in MANIFEST but neither booted nor optional: {sorted(unaccounted)}"

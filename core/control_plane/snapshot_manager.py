@@ -431,7 +431,7 @@ class SnapshotManager:
         if not chain.exists():
             return []
         out: List[Dict] = []
-        with open(chain, "r") as f:
+        with open(chain, "r", encoding="utf-8") as f:
             for line in f:
                 try:
                     rec = json.loads(line)

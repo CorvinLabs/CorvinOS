@@ -53,7 +53,7 @@ class ContextBridgeTestBase(unittest.TestCase):
         if not chain.is_file():
             return []
         out = []
-        for line in chain.read_text().splitlines():
+        for line in chain.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             rec = json.loads(line)

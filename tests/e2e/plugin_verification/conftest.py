@@ -364,7 +364,7 @@ class StateCorruptionInjector:
         state_file = plugin_path / "state.json"
         if state_file.exists():
             # Truncate file to simulate incomplete write
-            with open(state_file, "w") as f:
+            with open(state_file, "w", encoding="utf-8") as f:
                 f.write("{")  # Invalid JSON
 
     def create_zombie_process(self, plugin_id: str) -> int:

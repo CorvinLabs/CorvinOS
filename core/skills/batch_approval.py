@@ -113,7 +113,7 @@ class BatchApprovalManager:
             return
 
         try:
-            with open(self.batches_file, "r") as f:
+            with open(self.batches_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -145,7 +145,7 @@ class BatchApprovalManager:
         try:
             self.batches_file.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(self.batches_file, "a") as f:
+            with open(self.batches_file, "a", encoding="utf-8") as f:
                 data = {
                     "batch_id": record.batch_id,
                     "skill_id": record.skill_id,

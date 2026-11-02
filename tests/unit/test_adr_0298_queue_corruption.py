@@ -35,7 +35,7 @@ from core.audit.integration import AuditChainWithCorruptionDetection
 @pytest.fixture
 def temp_queue_file():
     """Create temporary queue file for testing."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         temp_path = Path(f.name)
     yield temp_path
     # Cleanup
@@ -133,12 +133,12 @@ class TestHashChainVerification:
         chain.record(entry)
 
         # Corrupt the hash directly
-        with open(temp_queue_file, "r") as f:
+        with open(temp_queue_file, "r", encoding="utf-8") as f:
             data = json.loads(f.readline())
 
         data["self_hash"] = "0000000000000000000000000000000000000000000000000000000000000000"
 
-        with open(temp_queue_file, "w") as f:
+        with open(temp_queue_file, "w", encoding="utf-8") as f:
             json.dump(data, f)
             f.write("\n")
 
@@ -178,7 +178,7 @@ class TestTimestampMonotonicity:
     def test_non_monotonic_timestamps_detected(self, monitor, temp_queue_file):
         """Test detection of non-monotonic timestamps."""
         # Write record 1
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             entry1 = {
                 "event_type": "event_1",
                 "actor": "system",
@@ -194,7 +194,7 @@ class TestTimestampMonotonicity:
             f.write("\n")
 
         # Write record 2 with earlier timestamp
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             entry2 = {
                 "event_type": "event_2",
                 "actor": "system",
@@ -231,7 +231,7 @@ class TestDuplicateDetection:
     def test_no_duplicates_in_clean_queue(self, monitor, temp_queue_file):
         """Test clean queue has no duplicates."""
         # Write records with unique event_ids
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             for i in range(3):
                 entry = {
                     "event_type": f"event_{i}",
@@ -260,7 +260,7 @@ class TestDuplicateDetection:
     def test_duplicate_event_id_detected(self, monitor, temp_queue_file):
         """Test detection of duplicate event IDs."""
         # Write same event_id twice
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             for i in range(2):
                 entry = {
                     "event_type": f"event_{i}",
@@ -298,7 +298,7 @@ class TestJSONParsing:
     def test_invalid_json_detected(self, monitor, temp_queue_file):
         """Test detection of invalid JSON."""
         # Write invalid JSON
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             f.write("{ invalid json ]\n")
 
         report = monitor.verify_queue_integrity(skip_corrupt=True)
@@ -313,7 +313,7 @@ class TestJSONParsing:
     def test_missing_required_field(self, monitor, temp_queue_file):
         """Test detection of missing required fields."""
         # Write record with missing self_hash
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             entry = {
                 "event_type": "test",
                 "actor": "system",
@@ -376,7 +376,7 @@ class TestRecoveryMechanisms:
             "self_hash": "bad_hash",
         }
 
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             json.dump(good_record, f)
             f.write("\n")
             json.dump(bad_record, f)
@@ -410,7 +410,7 @@ class TestRecoveryMechanisms:
                 "prior_hash": f"hash_{i-1}" if i > 0 else "genesis",
                 "self_hash": f"hash_{i}",
             }
-            with open(temp_queue_file, "a") as f:
+            with open(temp_queue_file, "a", encoding="utf-8") as f:
                 json.dump(entry, f)
                 f.write("\n")
 
@@ -562,7 +562,7 @@ class TestEdgeCases:
     def test_empty_lines_in_queue(self, monitor, temp_queue_file):
         """Test handling of empty lines in queue."""
         # Write record with empty lines
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             entry = {
                 "event_type": "test",
                 "event_id": "id_1",
@@ -601,7 +601,7 @@ class TestEdgeCases:
                 "prior_hash": f"hash_{i-1}" if i > 0 else "genesis",
                 "self_hash": f"hash_{i}",
             }
-            with open(temp_queue_file, "a") as f:
+            with open(temp_queue_file, "a", encoding="utf-8") as f:
                 json.dump(entry, f)
                 f.write("\n")
 
@@ -648,7 +648,7 @@ class TestIntegration:
         )
 
         # Manually create a corrupted file
-        with open(temp_queue_file, "a") as f:
+        with open(temp_queue_file, "a", encoding="utf-8") as f:
             bad_entry = {
                 "event_type": "corrupted",
                 "actor": "system",

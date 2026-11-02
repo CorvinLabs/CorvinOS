@@ -38,7 +38,7 @@ def test_one_tick_logs_no_failure(tmp_path, monkeypatch):
     qdir.mkdir(parents=True, exist_ok=True)
     rec = {"id": "t1", "state": "delivered", "ok": True, "created_at": time.time(),
            "delivered_at": time.time(), "chat_id": "c", "label": "x"}
-    (qdir / "t1.json").write_text(json.dumps(rec))
+    (qdir / "t1.json").write_text(json.dumps(rec), encoding="utf-8")
 
     lines: list[str] = []
     monkeypatch.setattr(adapter, "log", lambda msg, *a, **k: lines.append(str(msg)))
@@ -48,7 +48,7 @@ def test_one_tick_logs_no_failure(tmp_path, monkeypatch):
     assert not failed, failed
     # the tick no longer marks completion records as consumed for a feature
     # that never delivers anything
-    assert "_aggregated" not in json.loads((qdir / "t1.json").read_text())
+    assert "_aggregated" not in json.loads((qdir / "t1.json").read_text(encoding="utf-8"))
 
 
 def test_adapter_calls_no_orchestration_aggregator_api():

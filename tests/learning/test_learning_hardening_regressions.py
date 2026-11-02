@@ -58,12 +58,12 @@ def test_grade_pattern_goes_through_the_chained_store(tmp_path: Path):
         "has_reason": True, "reason_length": len("private operator remark"), "source": "operator",
         "trust_weight": 1.0,
     }
-    chain = Path(os.environ["VOICE_AUDIT_PATH"]).read_text()
+    chain = Path(os.environ["VOICE_AUDIT_PATH"]).read_text(encoding="utf-8")
     assert disk[0].audit_ref in chain and "operator remark" not in chain
     # the unchained TreeOfThoughts JSONL is no longer written for grades
     assert not list((th / "learning" / "events").glob("*.jsonl")) or all(
         "confidence_delta" not in line
-        for f in (th / "learning" / "events").glob("*.jsonl") for line in f.read_text().splitlines()
+        for f in (th / "learning" / "events").glob("*.jsonl") for line in f.read_text(encoding="utf-8").splitlines()
     )
 
 
@@ -100,7 +100,7 @@ def test_no_module_in_core_learning_hardcodes_home_corvin():
     root = Path(__file__).resolve().parents[2] / "core" / "learning"
     offenders = []
     for py in root.glob("*.py"):
-        for i, line in enumerate(py.read_text().splitlines(), 1):
+        for i, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
             if 'Path.home() / ".corvin"' in line or 'Path.home()/".corvin"' in line:
                 offenders.append(f"{py.name}:{i}")
     assert offenders == []

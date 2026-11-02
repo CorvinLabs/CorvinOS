@@ -163,7 +163,7 @@ class RAGOrchestrator:
                 manifest_file = store.find_manifest(self.registry_dir, provider_id)
                 if manifest_file is None:
                     continue
-                with open(manifest_file) as f:
+                with open(manifest_file, encoding="utf-8") as f:
                     manifest = yaml.safe_load(f)
                 if not isinstance(manifest, dict):
                     continue

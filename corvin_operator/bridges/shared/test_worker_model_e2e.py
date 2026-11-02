@@ -33,7 +33,7 @@ class TestWorkerModelE2E:
                     }
                 }
             }
-            yaml_path.write_text(yaml.dump(yaml_data))
+            yaml_path.write_text(yaml.dump(yaml_data), encoding="utf-8")
 
             # Step 2: Bridge reads YAML and injects env var
             import sys
@@ -73,7 +73,7 @@ class TestWorkerModelE2E:
                     }
                 }
             }
-            yaml_path.write_text(yaml.dump(yaml_data))
+            yaml_path.write_text(yaml.dump(yaml_data), encoding="utf-8")
 
             import sys
             bridge_path = Path(__file__).parent
@@ -109,7 +109,7 @@ class TestWorkerModelE2E:
                     }
                 }
             }
-            yaml_path.write_text(yaml.dump(yaml_data))
+            yaml_path.write_text(yaml.dump(yaml_data), encoding="utf-8")
 
             import sys
             bridge_path = Path(__file__).parent
@@ -151,7 +151,7 @@ class TestWorkerModelE2E:
                     "default_worker_model": "claude-sonnet-5"
                 }
             }
-            yaml_path.write_text(yaml.dump(yaml_data))
+            yaml_path.write_text(yaml.dump(yaml_data), encoding="utf-8")
 
             import sys
             bridge_path = Path(__file__).parent

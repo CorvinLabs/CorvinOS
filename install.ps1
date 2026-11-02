@@ -142,6 +142,12 @@ if ($ExecutionContext.SessionState.LanguageMode -ne "FullLanguage") {
 # scope only, and an operator's own value always wins.
 if (-not $env:UV_NATIVE_TLS)      { $env:UV_NATIVE_TLS = "1" }
 if (-not $env:NODE_USE_SYSTEM_CA) { $env:NODE_USE_SYSTEM_CA = "1" }
+# Python UTF-8 mode for every Corvin Python process this script starts (and,
+# by inheritance, every bridge/worker/hook those spawn): without it open() /
+# read_text() without encoding= use the ANSI code page (cp1252 on a German
+# Windows) for files Linux, Node and the other processes write as UTF-8, and a
+# piped stdout raises UnicodeEncodeError on the first non-cp1252 character.
+if (-not $env:PYTHONUTF8)         { $env:PYTHONUTF8 = "1" }
 
 $CorvinRepoUrl = "https://github.com/CorvinLabs/CorvinOS"
 
@@ -398,7 +404,14 @@ function Invoke-NativeTimed {
         RedirectStandardOutput = $outLog
         RedirectStandardError  = $errLog
     }
-    if ($Arguments.Count -gt 0)     { $startArgs.ArgumentList     = $Arguments }
+    # Start-Process joins ArgumentList items with bare spaces and does not
+    # quote them: curl's "-o <TEMP>\..." split in two under a profile path with
+    # a space. Quote any item with whitespace that is not quoted already.
+    if ($Arguments.Count -gt 0) {
+        $startArgs.ArgumentList = @($Arguments | ForEach-Object {
+            if ($_ -match '\s' -and $_ -notmatch '^".*"$') { '"' + $_ + '"' } else { $_ }
+        })
+    }
     if ($WorkingDirectory)          { $startArgs.WorkingDirectory = $WorkingDirectory }
 
     $proc = Start-Process @startArgs
@@ -1627,11 +1640,19 @@ function New-HiddenConsoleAction {
     $homeEscaped = $CorvinHome.Replace('"', '""')
     # The PROCESS environment belongs to wscript.exe itself, so the child
     # started by any WScript.Shell object's Run inherits it.
+    # PYTHONUTF8=1: the console (and every bridge/worker/hook it spawns, which
+    # inherit it) must run in Python UTF-8 mode -- otherwise open()/read_text()
+    # without encoding= use the ANSI code page (cp1252 on a German Windows) for
+    # stores that Linux, Node and the other Corvin processes write as UTF-8.
     $vbs = @(
         "CreateObject(""WScript.Shell"").Environment(""PROCESS"")(""CORVIN_HOME"") = ""$homeEscaped""",
+        "CreateObject(""WScript.Shell"").Environment(""PROCESS"")(""PYTHONUTF8"") = ""1""",
         "CreateObject(""WScript.Shell"").Run ""$vbsEscaped"", 0, False"
     )
-    Set-Content -LiteralPath $vbsPath -Value $vbs -Encoding ASCII
+    # Unicode (UTF-16 LE + BOM), not ASCII: -Encoding ASCII turns every
+    # non-ASCII path character (a profile folder with an umlaut) into '?', and
+    # wscript.exe reads a BOM-less .vbs as ANSI -- the task then starts nothing.
+    Set-Content -LiteralPath $vbsPath -Value $vbs -Encoding Unicode
     return New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$vbsPath`""
 }
 

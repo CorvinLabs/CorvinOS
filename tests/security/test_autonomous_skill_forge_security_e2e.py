@@ -231,7 +231,7 @@ async def test_01_audit_trail_tampering_injectable_loss_signals(temp_corvin_home
     )
     env = dict(os.environ, CORVIN_AUDIT_ANCHOR_KEY=str(audit_path.parent / "attacker.key"))
     r = subprocess.run([_sys.executable, "-c", forge_code], env=env,
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr[-2000:]
 
     detector = SkillLossTriggerDetector()
@@ -496,7 +496,7 @@ async def test_05_cross_tenant_audit_leakage_symlinks(tmp_path):
         "outcome_feedback": {"correct": True},
         "secret_data": "API_KEY_12345",  # Sensitive
     }
-    with open(default_audit, "a") as f:
+    with open(default_audit, "a", encoding="utf-8") as f:
         f.write(json.dumps(sensitive_event) + "\n")
 
     # ATTACK: Create evil tenant with symlink to _default's audit
@@ -833,12 +833,12 @@ config:
   threshold: 0.75
 """
 
-    config_path.write_text(safe_yaml)
+    config_path.write_text(safe_yaml, encoding="utf-8")
 
     # Attempt to parse (safe)
     import yaml
     try:
-        config = yaml.safe_load(config_path.read_text())
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         print(f"[OK] YAML safe_load works: {config.get('skill_id')}")
     except Exception as e:
         print(f"[ERROR] YAML parsing failed: {e}")
@@ -970,7 +970,7 @@ async def test_12_non_atomic_trigger_file_write_race(approval_gate):
     approval_file = approval_gate.approvals_file
     persisted_count = 0
     if approval_file.exists():
-        with open(approval_file, "r") as f:
+        with open(approval_file, "r", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     persisted_count += 1
@@ -1408,12 +1408,12 @@ config:
   version 1.0.0: bad syntax
 this: is: invalid: yaml:
 """
-    config_path.write_text(invalid_yaml)
+    config_path.write_text(invalid_yaml, encoding="utf-8")
 
     # Try to parse (should fail)
     import yaml
     try:
-        config = yaml.safe_load(config_path.read_text())
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         print(f"[VULN] Invalid YAML silently parsed: {config}")
         print(f"[IMPACT] Invalid config could cause unexpected behavior")
     except yaml.YAMLError as e:

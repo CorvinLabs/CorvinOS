@@ -31,7 +31,7 @@ def test_rotate_secrets_refuses_and_writes_nothing(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(REPO / "scripts" / "rotate_secrets.py"),
          "--policy-file", str(REPO / "core" / "compliance" / "secret_rotation_policy.yaml")],
-        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path,
+        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 2
     assert "defused" in proc.stderr
@@ -52,7 +52,7 @@ def test_rotate_secrets_manager_raises():
 def test_adr2083_never_reports_a_staging_pass(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(REPO / "scripts" / "adr2083_staging_validation.py")],
-        capture_output=True, text=True, timeout=240, env=_env(tmp_path), cwd=tmp_path,
+        capture_output=True, text=True, timeout=240, env=_env(tmp_path), cwd=tmp_path, encoding="utf-8", errors="replace",
     )
     out = proc.stdout + proc.stderr
     assert proc.returncode in (1, 3), out[-2000:]
@@ -66,7 +66,7 @@ def test_compliance_verification_e2e_refuses(tmp_path):
     """Its 15 'proofs' read back lines it wrote itself; a pass proved nothing."""
     proc = subprocess.run(
         [sys.executable, str(REPO / "scripts" / "compliance_verification_e2e.py")],
-        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path,
+        capture_output=True, text=True, timeout=60, env=_env(tmp_path), cwd=tmp_path, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 2
     assert "defused" in proc.stderr

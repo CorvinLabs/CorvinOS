@@ -83,17 +83,17 @@ def test_the_gate_passes_on_the_committed_baseline():
 
 def test_mechanics_on_a_synthetic_tree(tmp_path, monkeypatch):
     (tmp_path / "core" / "pkg").mkdir(parents=True)
-    (tmp_path / "core" / "pkg" / "__init__.py").write_text("")
-    (tmp_path / "core" / "pkg" / "base.py").write_text("class Subsystem: pass\n")
+    (tmp_path / "core" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "core" / "pkg" / "base.py").write_text("class Subsystem: pass\n", encoding="utf-8")
     (tmp_path / "core" / "pkg" / "wired.py").write_text(
-        "from .base import Subsystem\nclass Wired(Subsystem): pass\n")
+        "from .base import Subsystem\nclass Wired(Subsystem): pass\n", encoding="utf-8")
     (tmp_path / "core" / "pkg" / "by_string.py").write_text(
-        "from .base import Subsystem\nclass ByString(Subsystem): pass\n")
+        "from .base import Subsystem\nclass ByString(Subsystem): pass\n", encoding="utf-8")
     (tmp_path / "core" / "pkg" / "dead.py").write_text(
-        "from .base import Subsystem\nclass Dead(Subsystem): pass\n")
+        "from .base import Subsystem\nclass Dead(Subsystem): pass\n", encoding="utf-8")
     (tmp_path / "core" / "main.py").write_text(
-        "from core.pkg.wired import Wired\nREG = {'x': 'core.pkg.by_string:ByString'}\n")
-    (tmp_path / "pyproject.toml").write_text('[project.scripts]\nx = "core.main:run"\n')
+        "from core.pkg.wired import Wired\nREG = {'x': 'core.pkg.by_string:ByString'}\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text('[project.scripts]\nx = "core.main:run"\n', encoding="utf-8")
     monkeypatch.setattr(z, "REPO", tmp_path)
     monkeypatch.setattr(z, "EXTRA_ROOTS", ())
     monkeypatch.setattr(z, "SCAN_DIRS", ("core",))
@@ -105,8 +105,8 @@ def _tree(tmp_path, files: dict[str, str]):
     for rel, body in files.items():
         f = tmp_path / rel
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(body)
-    (tmp_path / "pyproject.toml").write_text('[project.scripts]\nx = "core.main:run"\n')
+        f.write_text(body, encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text('[project.scripts]\nx = "core.main:run"\n', encoding="utf-8")
 
 
 def _sandbox(monkeypatch, tmp_path):
@@ -149,11 +149,11 @@ def test_check_fails_on_new_dead_and_on_stale_baseline(tmp_path, monkeypatch):
     _sandbox(monkeypatch, tmp_path)
     base = tmp_path / "baseline.json"
     monkeypatch.setattr(z, "BASELINE", base)
-    base.write_text("[]")
+    base.write_text("[]", encoding="utf-8")
     assert z.main(["--check"]) == 1                       # new dead
-    base.write_text('["core/zz.py::Dead"]')
+    base.write_text('["core/zz.py::Dead"]', encoding="utf-8")
     assert z.main(["--check"]) == 0                       # baselined
-    base.write_text('["core/zz.py::Dead", "core/gone.py::Old"]')
+    base.write_text('["core/zz.py::Dead", "core/gone.py::Old"]', encoding="utf-8")
     assert z.main(["--check"]) == 1                       # stale line
 
 
@@ -332,7 +332,7 @@ def test_stdlib_and_third_party_names_never_link_into_the_repo(tmp_path, monkeyp
     })
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "x"\ndependencies = ["PyYAML >= 6"]\n\n'
-        '[project.scripts]\nx = "core.app.main:run"\n')
+        '[project.scripts]\nx = "core.app.main:run"\n', encoding="utf-8")
     _sandbox(monkeypatch, tmp_path)
     assert {c for _, c in _dead()} == {"StdTypes", "DeadRootHelper", "StdRandom", "StdQueue",
                                        "ThirdPartyYaml", "ThirdPartyPackaging", "SiblingRandom"}

@@ -461,7 +461,7 @@ if __name__ == "__main__":
 
     # Save report
     output_path = "/tmp/token_benchmark_report.json"
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
     print(f"\n📊 Report saved to {output_path}")

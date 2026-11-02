@@ -65,7 +65,7 @@ class AuditChain:
             return
 
         try:
-            with open(self.log_file, "r") as f:
+            with open(self.log_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -112,7 +112,7 @@ class AuditChain:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Append JSON line
-        with open(self.log_file, "a") as f:
+        with open(self.log_file, "a", encoding="utf-8") as f:
             json.dump(asdict(entry), f)
             f.write("\n")
             f.flush()

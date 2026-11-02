@@ -137,7 +137,7 @@ def test_multiple_sends_ordered(outbox, _flag_on, _house_pass, _owner):
         assert P.send_proactive(channel=CHANNEL, chat_id=CHAT_ID, uid=UID,
                                 tenant_id=TENANT, text=t, kind="digest",
                                 voice="off", outbox_dir=outbox) is P.EmitResult.EMITTED
-    envs = [json.loads(f.read_text()) for f in _outbox_files(outbox)]
+    envs = [json.loads(f.read_text(encoding="utf-8")) for f in _outbox_files(outbox)]
     assert len(envs) == 3
     envs.sort(key=lambda e: e["ts"])
     assert [e["text"] for e in envs] == texts       # delivered in send order
@@ -167,7 +167,7 @@ def test_voice_single_site_synthesized(outbox, _flag_on, _house_pass, _owner, mo
                            voice="summary", outbox_dir=outbox)
     assert res is P.EmitResult.EMITTED
     assert calls == {"summary": 1, "tts": 1}          # synthesized exactly once
-    env = json.loads(_outbox_files(outbox)[0].read_text())
+    env = json.loads(_outbox_files(outbox)[0].read_text(encoding="utf-8"))
     assert env["voice_path"] == "/tmp/digest-note.ogg"
     # A content-free proactive.voice_synthesized event landed, no text/summary.
     vs = [e for e in _audit_spy if e[1] == "proactive.voice_synthesized"]
@@ -196,7 +196,7 @@ def test_voice_tts_error_text_only(outbox, _flag_on, _house_pass, _owner, monkey
                            tenant_id=TENANT, text=TEXT, kind="digest",
                            voice="summary", outbox_dir=outbox)
     assert res is P.EmitResult.EMITTED                 # text still delivered
-    env = json.loads(_outbox_files(outbox)[0].read_text())
+    env = json.loads(_outbox_files(outbox)[0].read_text(encoding="utf-8"))
     assert "voice_path" not in env                     # text-only
     assert env["text"] == TEXT
     skipped = [e for e in _audit_spy if e[1] == "proactive.voice_skipped"]
@@ -218,7 +218,7 @@ def test_voice_preset_path_no_double_synth(outbox, _flag_on, _house_pass, _owner
                            voice_path="/tmp/prebuilt.ogg", voice="summary",
                            outbox_dir=outbox)
     assert res is P.EmitResult.EMITTED
-    env = json.loads(_outbox_files(outbox)[0].read_text())
+    env = json.loads(_outbox_files(outbox)[0].read_text(encoding="utf-8"))
     assert env["voice_path"] == "/tmp/prebuilt.ogg"    # the pre-set path
     assert [e for e in _audit_spy if e[1] == "proactive.voice_synthesized"] == []
 
@@ -316,7 +316,7 @@ def test_e2e_owner_flag_on_three_voice_digests_and_audit(outbox, _owner, monkeyp
     files = _outbox_files(outbox)
     assert len(files) == 3
     for f in files:
-        env = json.loads(f.read_text())
+        env = json.loads(f.read_text(encoding="utf-8"))
         assert env["_proactive_contact"] is True and env["kind"] == "digest"
         assert env["channel"] == CHANNEL and env["chat_id"] == CHAT_ID
         assert env["voice_path"] == "/tmp/e2e-note.ogg"
@@ -324,7 +324,7 @@ def test_e2e_owner_flag_on_three_voice_digests_and_audit(outbox, _owner, monkeyp
     # Content-free proactive.emitted (unsolicited) + voice_synthesized on the chain.
     audit = P._audit_path(TENANT)
     assert audit.is_file()
-    lines = [json.loads(ln) for ln in audit.read_text().splitlines() if ln.strip()]
+    lines = [json.loads(ln) for ln in audit.read_text(encoding="utf-8").splitlines() if ln.strip()]
     emitted = [r for r in lines if r.get("event_type") == "proactive.emitted"]
     synth = [r for r in lines if r.get("event_type") == "proactive.voice_synthesized"]
     assert len(emitted) == 3 and len(synth) == 3

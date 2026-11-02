@@ -52,7 +52,7 @@ def _write_log(home: str, spec: dict[str, bool], n_per_band: int = 32) -> None:
     """spec: band -> win?. Writes n_per_band samples for each named band."""
     log_dir = Path(home) / "measurement-week"
     log_dir.mkdir(parents=True, exist_ok=True)
-    with open(log_dir / "measurement.jsonl", "w") as f:
+    with open(log_dir / "measurement.jsonl", "w", encoding="utf-8") as f:
         for band, win in spec.items():
             for i in range(n_per_band):
                 f.write(json.dumps(_sample_dict(band, i, win=win),
@@ -67,7 +67,7 @@ def _run_gate(home: str, *extra: str) -> subprocess.CompletedProcess:
             "from ops.launcher.corvin.cli import main; main()" % list(extra))
     return subprocess.run(
         [sys.executable, "-c", code],
-        cwd=str(_REPO), env=env, capture_output=True, text=True, timeout=120,
+        cwd=str(_REPO), env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
     )
 
 
@@ -75,7 +75,7 @@ def _features_worker_engine(home: str, tenant: str = "_default") -> str | None:
     """Read worker_engine out of the tenant overlay the arm actuator writes."""
     for p in Path(home).rglob("features.json"):
         try:
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
             if "worker_engine" in data:
                 return data["worker_engine"]
         except Exception:  # noqa: BLE001

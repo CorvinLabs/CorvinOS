@@ -106,7 +106,7 @@ class TestSessionRecovery:
         """Recovery should handle corrupted JSON files."""
         # Create a corrupted JSON file
         corrupt_file = mock_sessions_dir / "corrupt_sid_12345678901234567890123456789012.json"
-        corrupt_file.write_text("{invalid json")
+        corrupt_file.write_text("{invalid json", encoding="utf-8")
 
         # Create a valid session
         rec = session_auth.create_session(tenant_id="tenant_valid", persistent=False)
@@ -337,7 +337,7 @@ class TestSessionRecoveryEdgeCases:
         """Recovery should skip files with invalid SID format."""
         # Create a file with invalid SID (wrong length)
         invalid_file = mock_sessions_dir / "invalid_short.json"
-        invalid_file.write_text('{"some": "data"}')
+        invalid_file.write_text('{"some": "data"}', encoding="utf-8")
 
         manager = SessionManager()
         recovered = manager._recover_sessions()

@@ -245,7 +245,7 @@ class AuditChainTests(unittest.TestCase):
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
             ok, problems = _security_events.verify_chain(chain)
             self.assertTrue(ok, f"chain broken: {problems}")
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             events = {e["event_type"] for e in lines}
             self.assertIn("gateway.run_created", events)
             self.assertIn("gateway.run_not_found", events)

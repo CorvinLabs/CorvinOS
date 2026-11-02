@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX uninstaller")
 
 def _shim(bindir: Path, name: str, body: str) -> None:
     p = bindir / name
-    p.write_text("#!/bin/sh\n" + body + "\n")
+    p.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
     p.chmod(p.stat().st_mode | stat.S_IEXEC)
 
 
@@ -40,34 +40,34 @@ def sandbox(tmp_path: Path):
 
     # A dev checkout the receipt points at, with generated state inside.
     (dev / ".corvin/tenants/_default/global/forge").mkdir(parents=True)
-    (dev / "pyproject.toml").write_text("[project]\nname='corvinos'\n")
-    (dev / ".corvin_repo").write_text("")
-    (dev / ".corvin/tenants/_default/global/forge/audit.jsonl").write_text('{"e":1}\n')
+    (dev / "pyproject.toml").write_text("[project]\nname='corvinos'\n", encoding="utf-8")
+    (dev / ".corvin_repo").write_text("", encoding="utf-8")
+    (dev / ".corvin/tenants/_default/global/forge/audit.jsonl").write_text('{"e":1}\n', encoding="utf-8")
     # Installer-managed tree (marker) — must be deleted.
     managed.mkdir(parents=True)
-    (managed / "pyproject.toml").write_text("")
-    (managed / ".corvin-managed").write_text("")
+    (managed / "pyproject.toml").write_text("", encoding="utf-8")
+    (managed / ".corvin-managed").write_text("", encoding="utf-8")
     # uv tool env + receipt + shims.
     (env_dir / "bin").mkdir(parents=True)
     (env_dir / "uv-receipt.toml").write_text(
-        f'[tool]\nrequirements = [{{ name = "corvinos", editable = "{dev}" }}]\n')
+        f'[tool]\nrequirements = [{{ name = "corvinos", editable = "{dev}" }}]\n', encoding="utf-8")
     bindir = home / ".local/bin"
     bindir.mkdir(parents=True)
     (bindir / "corvinos-serve").symlink_to(env_dir / "bin/corvinos-serve")
-    (bindir / "corvin-install").write_text(f"#!{env_dir}/bin/python\n# corvinos\n")
-    (bindir / "corvin-mytool").write_text("#!/bin/sh\necho mine\n")  # not ours
+    (bindir / "corvin-install").write_text(f"#!{env_dir}/bin/python\n# corvinos\n", encoding="utf-8")
+    (bindir / "corvin-mytool").write_text("#!/bin/sh\necho mine\n", encoding="utf-8")  # not ours
     # Data + secrets.
     (home / ".corvin/node/bin").mkdir(parents=True)
-    (home / ".corvin/node/bin/node").write_text("x" * 1000)
-    (home / ".corvin/instance_id").write_text("abc")
+    (home / ".corvin/node/bin/node").write_text("x" * 1000, encoding="utf-8")
+    (home / ".corvin/instance_id").write_text("abc", encoding="utf-8")
     (home / ".config/corvin-voice/piper-models").mkdir(parents=True)
-    (home / ".config/corvin-voice/service.env").write_text("OPENAI_API_KEY=sk-test\n")
+    (home / ".config/corvin-voice/service.env").write_text("OPENAI_API_KEY=sk-test\n", encoding="utf-8")
     units = home / ".config/systemd/user"
     (units / "default.target.wants").mkdir(parents=True)
     for u in ("corvin-webui.service", "corvin-watchdog.service"):
-        (units / u).write_text("[Service]\n")
+        (units / u).write_text("[Service]\n", encoding="utf-8")
         (units / "default.target.wants" / u).symlink_to(units / u)
-    (units / "other.service").write_text("[Service]\n")
+    (units / "other.service").write_text("[Service]\n", encoding="utf-8")
 
     for name in ("systemctl", "launchctl", "docker", "claude"):
         _shim(fake, name, f'echo "{name} $*" >> "{calls}"; exit 0')
@@ -97,7 +97,7 @@ def sandbox(tmp_path: Path):
 
 def _run(sb, *args, stdin=subprocess.DEVNULL):
     return subprocess.run(["bash", str(SCRIPT), *args], env=sb["env"], cwd=sb["home"],
-                          capture_output=True, text=True, stdin=stdin, timeout=120)
+                          capture_output=True, text=True, stdin=stdin, timeout=120, encoding="utf-8", errors="replace")
 
 
 def test_verify_only_reports_an_installed_system(sandbox):
@@ -139,7 +139,7 @@ def test_full_uninstall_backs_up_removes_and_verifies(sandbox):
     assert not any("/.corvin/node/" in n for n in names)
 
     # 2. watchdog stopped BEFORE the console
-    calls = sandbox["calls"].read_text()
+    calls = sandbox["calls"].read_text(encoding="utf-8")
     assert calls.index("stop corvin-watchdog.service") < \
         calls.index("stop corvin-webui.service")
     assert "plugin uninstall voice@corvin-voice-local" in calls
@@ -171,13 +171,13 @@ def test_never_touches_a_checkout_no_install_points_at(sandbox, tmp_path):
     outside the sandbox HOME, like the real repo — must survive untouched."""
     outside = tmp_path / "elsewhere/CorvinOS"
     (outside / ".corvin").mkdir(parents=True)
-    (outside / ".corvin_repo").write_text("")
-    (outside / "pyproject.toml").write_text("")
+    (outside / ".corvin_repo").write_text("", encoding="utf-8")
+    (outside / "pyproject.toml").write_text("", encoding="utf-8")
     script = outside / "uninstall.sh"
-    script.write_text(SCRIPT.read_text())
+    script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     r = subprocess.run(["bash", str(script), "--yes"], env=sandbox["env"],
                        cwd=outside, capture_output=True, text=True, timeout=120,
-                       stdin=subprocess.DEVNULL)
+                       stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stdout + r.stderr
     assert (outside / ".corvin").is_dir()
     assert str(outside) not in r.stdout
@@ -186,9 +186,9 @@ def test_never_touches_a_checkout_no_install_points_at(sandbox, tmp_path):
 def test_refuses_data_outside_home_unless_explicit(sandbox, tmp_path):
     ext = tmp_path / "external/.corvin"
     (ext.parent / ".corvin").mkdir(parents=True)
-    (ext.parent / "pyproject.toml").write_text("")
+    (ext.parent / "pyproject.toml").write_text("", encoding="utf-8")
     receipt = sandbox["env_dir"] / "uv-receipt.toml"
-    receipt.write_text(f'[tool]\nrequirements = [{{ name = "corvinos", editable = "{ext.parent}" }}]\n')
+    receipt.write_text(f'[tool]\nrequirements = [{{ name = "corvinos", editable = "{ext.parent}" }}]\n', encoding="utf-8")
     r = _run(sandbox, "--yes")
     assert r.returncode == 0, r.stdout + r.stderr
     assert ext.is_dir(), "a receipt-named tree outside HOME must not be deleted implicitly"
@@ -196,7 +196,7 @@ def test_refuses_data_outside_home_unless_explicit(sandbox, tmp_path):
 
 def test_failed_backup_removes_nothing_and_restarts_services(sandbox, tmp_path):
     blocker = tmp_path / "not-a-dir"
-    blocker.write_text("x")  # a FILE where the backup dir should be
+    blocker.write_text("x", encoding="utf-8")  # a FILE where the backup dir should be
     r = _run(sandbox, "--yes", "--backup-dir", str(blocker / "sub"))
     assert r.returncode == 1
     assert "nothing was removed" in r.stderr
@@ -204,7 +204,7 @@ def test_failed_backup_removes_nothing_and_restarts_services(sandbox, tmp_path):
     assert (home / ".corvin/instance_id").exists()
     assert (sandbox["units"] / "corvin-webui.service").exists()
     assert sandbox["env_dir"].exists()
-    calls = sandbox["calls"].read_text()
+    calls = sandbox["calls"].read_text(encoding="utf-8")
     assert "--user start corvin-webui.service" in calls
     assert "disable" not in calls
 
@@ -215,7 +215,7 @@ def _docker_shim(sandbox, *, cp_ok: bool):
     fake = Path(sandbox["env"]["PATH"].split(":")[0])
     state = fake.parent / "docker-state"
     state.mkdir(exist_ok=True)
-    (state / "containers").write_text("c0ffee\n")
+    (state / "containers").write_text("c0ffee\n", encoding="utf-8")
     calls = sandbox["calls"]
     # Built outside the f-string: a backslash inside an f-string expression
     # is a SyntaxError before Python 3.12, which made this whole file fail to
@@ -238,7 +238,7 @@ def test_docker_data_is_exported_before_volumes_are_destroyed(sandbox):
     _docker_shim(sandbox, cp_ok=True)
     r = _run(sandbox, "--yes")
     assert r.returncode == 0, r.stdout + r.stderr
-    calls = sandbox["calls"].read_text()
+    calls = sandbox["calls"].read_text(encoding="utf-8")
     assert calls.index("docker cp c0ffee:/root/.corvin") < calls.index("docker rm -f c0ffee")
     assert calls.index("docker rm -f c0ffee") < calls.index("docker volume rm corvin-data")
     exported = list(sandbox["home"].glob("corvin-backup-docker-*/corvin-console/audit.jsonl"))
@@ -249,7 +249,7 @@ def test_failed_docker_export_keeps_the_volumes(sandbox):
     _docker_shim(sandbox, cp_ok=False)
     r = _run(sandbox, "--yes")
     assert "Docker volumes KEPT" in r.stdout
-    assert "docker volume rm" not in sandbox["calls"].read_text()
+    assert "docker volume rm" not in sandbox["calls"].read_text(encoding="utf-8")
 
 
 def test_keep_data_keeps_the_data_inside_a_managed_tree(sandbox):
@@ -257,11 +257,11 @@ def test_keep_data_keeps_the_data_inside_a_managed_tree(sandbox):
     along with the code (found in review 2026-09-24)."""
     data = sandbox["managed"] / ".corvin" / "instance_id"
     data.parent.mkdir()
-    data.write_text("keep me")
+    data.write_text("keep me", encoding="utf-8")
     (sandbox["managed"] / "core").mkdir()
     r = _run(sandbox, "--yes", "--keep-data")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert data.read_text() == "keep me"
+    assert data.read_text(encoding="utf-8") == "keep me"
     assert not (sandbox["managed"] / "core").exists()
     assert not (sandbox["managed"] / ".corvin-managed").exists()
 

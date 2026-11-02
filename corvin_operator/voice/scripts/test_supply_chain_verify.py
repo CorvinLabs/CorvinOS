@@ -59,16 +59,16 @@ def section_walk_imports() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = Path(tmp) / "p"
         plugin.mkdir()
-        (plugin / "main.py").write_text("import fastapi\nfrom pydantic import BaseModel\n")
-        (plugin / "lib.py").write_text("import httpx\n")
+        (plugin / "main.py").write_text("import fastapi\nfrom pydantic import BaseModel\n", encoding="utf-8")
+        (plugin / "lib.py").write_text("import httpx\n", encoding="utf-8")
         # Excluded: .venv / __pycache__
         (plugin / ".venv").mkdir()
-        (plugin / ".venv" / "site.py").write_text("import requests\n")
+        (plugin / ".venv" / "site.py").write_text("import requests\n", encoding="utf-8")
         (plugin / "__pycache__").mkdir()
-        (plugin / "__pycache__" / "x.py").write_text("import boto3\n")
+        (plugin / "__pycache__" / "x.py").write_text("import boto3\n", encoding="utf-8")
         # try/except module-level
         (plugin / "optional.py").write_text(
-            "try:\n    import yaml\nexcept ImportError:\n    yaml = None\n"
+            "try:\n    import yaml\nexcept ImportError:\n    yaml = None\n", encoding="utf-8"
         )
 
         imports = sc.walk_python_imports(plugin)
@@ -92,7 +92,7 @@ def section_detect_drift() -> None:
         plugin = Path(tmp) / "myplugin"
         plugin.mkdir()
         (plugin / "main.py").write_text(
-            "import fastapi\nimport httpx\nfrom pydantic import BaseModel\n"
+            "import fastapi\nimport httpx\nfrom pydantic import BaseModel\n", encoding="utf-8"
         )
         # declared has fastapi + pydantic, but missing httpx (undeclared)
         # and includes "uvicorn" that's not actually imported (unused)
@@ -115,7 +115,7 @@ def section_detect_drift() -> None:
 
         # Stdlib filter — `os` import should not count as undeclared
         (plugin / "main.py").write_text(
-            "import fastapi\nimport os\nimport sys\nimport json\n"
+            "import fastapi\nimport os\nimport sys\nimport json\n", encoding="utf-8"
         )
         manifest = {"spec": {"declared_imports": {"python": ["fastapi"]}}}
         report = sc.detect_capability_drift(plugin, manifest)
@@ -147,12 +147,12 @@ def section_load_manifest() -> None:
         # Well-formed manifest → dict
         (plugin / "plugin.corvin.yaml").write_text(
             "apiVersion: corvin/v1\nkind: PluginCapabilities\n"
-            "spec:\n  declared_imports:\n    python: [fastapi]\n"
+            "spec:\n  declared_imports:\n    python: [fastapi]\n", encoding="utf-8"
         )
         m = sc.load_capability_manifest(plugin)
         t("manifest loads as dict", isinstance(m, dict))
         # Malformed YAML → None (fail-open)
-        (plugin / "plugin.corvin.yaml").write_text("not yaml {")
+        (plugin / "plugin.corvin.yaml").write_text("not yaml {", encoding="utf-8")
         t("malformed YAML → None", sc.load_capability_manifest(plugin) is None)
 
 
@@ -168,7 +168,7 @@ def section_pip_audit_fake() -> None:
     try:
         with tempfile.TemporaryDirectory() as tmp:
             req = Path(tmp) / "requirements.txt"
-            req.write_text("cryptography==42.0.0\n")
+            req.write_text("cryptography==42.0.0\n", encoding="utf-8")
             findings, err = sc.run_pip_audit(req, "test-plugin")
             t("fake-mode returns 1 finding",
               err == "" and len(findings) == 1)
@@ -194,12 +194,12 @@ def section_scan_plugin() -> None:
             sc = _fresh()
             plugin = Path(tmp) / "fake-plugin"
             plugin.mkdir()
-            (plugin / "main.py").write_text("import fastapi\nimport httpx\n")
+            (plugin / "main.py").write_text("import fastapi\nimport httpx\n", encoding="utf-8")
             (plugin / "requirements.txt").write_text(
-                "cryptography==42.0.0 --hash=sha256:abc\n")
+                "cryptography==42.0.0 --hash=sha256:abc\n", encoding="utf-8")
             (plugin / "plugin.corvin.yaml").write_text(
                 "apiVersion: corvin/v1\nkind: PluginCapabilities\n"
-                "spec:\n  declared_imports:\n    python: [fastapi]\n"
+                "spec:\n  declared_imports:\n    python: [fastapi]\n", encoding="utf-8"
             )
             findings, drift = sc.scan_plugin(plugin)
             t("CVE finding returned",
@@ -215,7 +215,7 @@ def section_scan_plugin() -> None:
             t("audit file created", audit.exists())
             if audit.exists():
                 lines = [json.loads(l) for l in
-                         audit.read_text().splitlines() if l]
+                         audit.read_text(encoding="utf-8").splitlines() if l]
                 kinds = {l["event_type"] for l in lines}
                 t("capability_drift event emitted",
                   "supply_chain.capability_drift" in kinds,
@@ -258,7 +258,7 @@ def section_critical_diff() -> None:
               (snap_p.stat().st_mode & 0o777) == 0o600)
 
             # Malformed → empty
-            snap_p.write_text("garbage{")
+            snap_p.write_text("garbage{", encoding="utf-8")
             t("malformed snapshot → empty set",
               sc._load_critical_snapshot() == set())
         finally:
@@ -305,7 +305,7 @@ def section_audit_cost() -> None:
 
     # Cost contract: AST walk for forbidden imports
     p = REPO / "corvin_operator" / "voice" / "scripts" / "supply_chain_verify.py"
-    tree = ast.parse(p.read_text())
+    tree = ast.parse(p.read_text(encoding="utf-8"))
     forbidden = ("anthropic", "openai", "google.generativeai")
     bad: list[str] = []
     for node in ast.walk(tree):

@@ -161,7 +161,7 @@ def test_install_registers_the_plugin_then_uninstall_removes_it(client, home):
     # on disk: the tenant registry has the record, disabled
     reg = home / "tenants" / "_default" / "plugins" / "registry.yaml"
     assert reg.is_file()
-    raw = yaml.safe_load(reg.read_text())
+    raw = yaml.safe_load(reg.read_text(encoding="utf-8"))
     assert entry["registry_id"] in raw["plugins"]
     assert raw["plugins"][entry["registry_id"]]["enabled"] is False
     assert oct(reg.stat().st_mode & 0o777) == "0o600"
@@ -180,7 +180,7 @@ def test_install_registers_the_plugin_then_uninstall_removes_it(client, home):
     r3 = client.delete(f"/v1/console/plugins/{entry['registry_id']}")
     assert r3.status_code == 200, r3.text
     assert r3.json()["uninstalled"] == entry["registry_id"]
-    raw = yaml.safe_load(reg.read_text())
+    raw = yaml.safe_load(reg.read_text(encoding="utf-8"))
     assert entry["registry_id"] not in (raw.get("plugins") or {})
     assert entry["registry_id"] not in {p["plugin_id"] for p in client.get("/v1/console/plugins").json()["plugins"]}
     assert next(e for e in _index_entries(client) if e["id"] == entry["id"])["installed"] is False
@@ -202,9 +202,9 @@ def test_registry_records_nested_under_spec_are_read(client, home):
     entry = _pick_installable(client)
     assert client.post(f"/v1/console/api/v1/marketplace/plugins/{entry['id']}/install", json={}).json()["status"] == "completed"
     reg = home / "tenants" / "_default" / "plugins" / "registry.yaml"
-    raw = yaml.safe_load(reg.read_text())
+    raw = yaml.safe_load(reg.read_text(encoding="utf-8"))
     nested = {"spec": {"schema_version": raw["spec"]["schema_version"], "plugins": raw["plugins"]}}
-    reg.write_text(yaml.safe_dump(nested, sort_keys=False))
+    reg.write_text(yaml.safe_dump(nested, sort_keys=False), encoding="utf-8")
     listed = {p["plugin_id"] for p in client.get("/v1/console/plugins").json()["plugins"]}
     assert entry["registry_id"] in listed, "a nested registry read as 'not installed' until 2026-09-19"
     assert client.get(f"/v1/console/plugins/{entry['registry_id']}").status_code == 200
@@ -315,7 +315,7 @@ def test_video_producer_panel_follows_enable_disable_uninstall(client, home):
     assert (panel.get("title") or panel.get("label")) == "CorvinTV", panel
     assert panel["element"] == {"kind": "react-component", "component": "VideoProducerPage"}
     reg = home / "tenants" / "_default" / "plugins" / "panel_registry.json"
-    assert reg.is_file() and "plugin-video_producer" in reg.read_text()
+    assert reg.is_file() and "plugin-video_producer" in reg.read_text(encoding="utf-8")
 
     # settings are validated against the schema and persisted
     r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "auto", "max_video_length_minutes": 5}})
@@ -329,7 +329,7 @@ def test_video_producer_panel_follows_enable_disable_uninstall(client, home):
     assert "video-producer" not in _manifest_panel_routes(client)
     assert client.delete("/v1/console/plugins/video_producer").status_code == 200
     assert "video-producer" not in _manifest_panel_routes(client)
-    assert "plugin-video_producer" not in reg.read_text()
+    assert "plugin-video_producer" not in reg.read_text(encoding="utf-8")
 
 
 def test_a_stale_panel_entry_without_an_installed_plugin_is_not_listed(client, home):

@@ -82,7 +82,7 @@ def _policy(home, endpoints):
     import yaml
 
     (home / "tenants" / TENANT / "global" / "tenant.corvin.yaml").write_text(
-        yaml.safe_dump({"spec": {"workflows": {"peer_policy": {"endpoints": endpoints}}}}))
+        yaml.safe_dump({"spec": {"workflows": {"peer_policy": {"endpoints": endpoints}}}}), encoding="utf-8")
 
 
 def _evaluate(text, sender=PAIRED, endpoint="ep_acme"):
@@ -93,7 +93,7 @@ def _chain(home):
     from core.paths import tenant_audit_chain
 
     p = tenant_audit_chain(TENANT)
-    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
 def test_public_text_to_a_paired_pinned_endpoint_is_allowed(home):
@@ -155,12 +155,12 @@ def test_role_unset_is_a_closed_reason_code():
 
 @pytest.mark.parametrize("body", ["spec: [unclosed", "- not a mapping\n- at all", "spec: {workflows: 3}"])
 def test_unreadable_or_malformed_policy_refuses_classified_text(home, body):
-    (home / "tenants" / TENANT / "global" / "tenant.corvin.yaml").write_text(body)
+    (home / "tenants" / TENANT / "global" / "tenant.corvin.yaml").write_text(body, encoding="utf-8")
     assert not _evaluate("[class:internal] x").allowed
 
 
 def test_unreadable_policy_does_not_block_public_text(home):
-    (home / "tenants" / TENANT / "global" / "tenant.corvin.yaml").write_text("spec: [unclosed")
+    (home / "tenants" / TENANT / "global" / "tenant.corvin.yaml").write_text("spec: [unclosed", encoding="utf-8")
     assert _evaluate("hello public world").allowed
 
 

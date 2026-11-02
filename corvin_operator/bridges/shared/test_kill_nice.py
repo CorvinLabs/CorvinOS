@@ -76,7 +76,7 @@ def _run_cli(*args: str, home: Path) -> subprocess.CompletedProcess:
     env["CORVIN_HOME"] = str(home)
     return subprocess.run(
         [sys.executable, str(CLI), *args],
-        env=env, capture_output=True, text=True,
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 

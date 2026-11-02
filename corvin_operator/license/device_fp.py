@@ -29,7 +29,7 @@ def compute_device_fp() -> str:
         machine_id = ""
         for _mp in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
             try:
-                machine_id = Path(_mp).read_text().strip()
+                machine_id = Path(_mp).read_text(encoding="utf-8").strip()
                 if machine_id:
                     break
             except Exception:

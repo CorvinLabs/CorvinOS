@@ -87,7 +87,7 @@ def _fake_claude(tmp: Path, *, hang_first: bool, overflow_first: bool = False,
         sys.stdout.write(json.dumps({{"type": "result", "is_error": False,
                                       "result": "all   phases\\n done"}}) + "\\n")
         sys.stdout.flush()
-    '''))
+    '''), encoding="utf-8")
     script.chmod(0o755)
     return bin_dir
 
@@ -105,14 +105,14 @@ def _setup(tmp: Path, *, hang_first: bool, overflow_first: bool = False, profile
     os.environ["ADAPTER_BRIDGES_DIR"] = str(tmp / "bridges")
     (tmp / "bridges" / "discord").mkdir(parents=True, exist_ok=True)
     (tmp / "bridges" / "discord" / "settings.json").write_text(
-        json.dumps({"whitelist": [OPERATOR], "chat_profiles": profiles or {}}))
+        json.dumps({"whitelist": [OPERATOR], "chat_profiles": profiles or {}}), encoding="utf-8")
     os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "2"
     os.environ["ADAPTER_HEARTBEAT_INTERVAL"] = "0"
     return _fresh_adapter()
 
 
 def _records(workdir: Path) -> list[dict]:
-    return [json.loads(p.read_text()) for p in (workdir / "tasks").glob("*.json")]
+    return [json.loads(p.read_text(encoding="utf-8")) for p in (workdir / "tasks").glob("*.json")]
 
 
 def _run(fn) -> None:
@@ -135,18 +135,18 @@ def test_opened_at_pickup_and_closed_once() -> None:
         ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt1", msg_id="m-1",
                                             sender=OPERATOR)
         assert "phases" in ans, ans
-        [probe] = [json.loads(line) for line in (tmp / "probe.jsonl").read_text().splitlines()]
+        [probe] = [json.loads(line) for line in (tmp / "probe.jsonl").read_text(encoding="utf-8").splitlines()]
         assert probe == [{"status": "running", "preparing": True}], probe
         workdir = adapter._session_dir("discord", "tt1")
         [rec] = _records(workdir)
         assert rec["status"] == "completed", rec
         assert rec["result_summary"] == "all phases done", rec
         events = [json.loads(line) for line in (workdir / "tasks" / f"{rec['task_id']}.events.jsonl")
-                  .read_text().splitlines()]
+                  .read_text(encoding="utf-8").splitlines()]
         kinds = [e["event"] for e in events]
         assert kinds.count("task.started") == 1 and "task.engine_started" in kinds, kinds
         assert kinds.count("task.completed") == 1, kinds
-        dbg = [json.loads(line) for line in (workdir / "chat_debug.jsonl").read_text().splitlines()]
+        dbg = [json.loads(line) for line in (workdir / "chat_debug.jsonl").read_text(encoding="utf-8").splitlines()]
         done = [d for d in dbg if d["event"] == "turn.done"]
         assert len(done) == 1 and done[0]["msg_id"] == "m-1" and done[0]["status"] == "completed", dbg
         starts = [d for d in dbg if d["event"] == "turn.start"]
@@ -167,11 +167,11 @@ def test_recovered_retry_ends_completed() -> None:
         workdir.mkdir(parents=True, exist_ok=True)
         (workdir / ".session_started").touch()   # a stream idle on a live session retries
         ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt2", msg_id="m-2")
-        assert int((tmp / "calls").read_text()) == 2, "the retry did not run"
+        assert int((tmp / "calls").read_text(encoding="utf-8")) == 2, "the retry did not run"
         assert "phases" in ans, ans
         [rec] = _records(workdir)
         assert rec["status"] == "completed", rec
-        dbg = [json.loads(line) for line in (workdir / "chat_debug.jsonl").read_text().splitlines()]
+        dbg = [json.loads(line) for line in (workdir / "chat_debug.jsonl").read_text(encoding="utf-8").splitlines()]
         kinds = [d["event"] for d in dbg if d["event"].startswith("turn.")]
         assert kinds.count("turn.start") == 1 and kinds.count("turn.done") == 1, kinds
         assert "turn.retry" in kinds, kinds
@@ -242,7 +242,7 @@ def test_refusal_is_not_a_completed_turn() -> None:
         assert rec.get("result_summary") == "refused: budget", rec
         assert not (tmp / "calls").exists(), "the engine ran despite the refusal"
         dbg_file = adapter._session_dir("discord", "tt5") / "chat_debug.jsonl"
-        dbg = dbg_file.read_text().splitlines() if dbg_file.exists() else []
+        dbg = dbg_file.read_text(encoding="utf-8").splitlines() if dbg_file.exists() else []
         assert not any('"turn.done"' in l for l in dbg), "turn.done without a turn.start"
         print("PASS: a budget refusal is recorded as refused (cancelled), not completed or failed")
     _run(body)
@@ -318,7 +318,7 @@ def test_escalation_retry_ends_completed() -> None:
         adapter = _setup(tmp, hang_first=False, overflow_first=True)
         ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt7", msg_id="m-7",
                                             sender=OPERATOR, profile={"model": "claude-haiku-4-5-20251001"})
-        assert int((tmp / "calls").read_text()) == 2, "the escalation retry did not run"
+        assert int((tmp / "calls").read_text(encoding="utf-8")) == 2, "the escalation retry did not run"
         assert "phases" in ans, ans
         [rec] = _records(adapter._session_dir("discord", "tt7"))
         assert rec["status"] == "completed", rec
@@ -399,7 +399,7 @@ def test_round4_rules() -> None:
         try:
             turn = adapter._open_turn_task(prompt="x", channel="discord", chat_key="tt10",
                                            profile=None, msg_id="m", sender="")
-            meta = json.loads((turn.tasks_dir / f"{turn.task_id}.json").read_text())
+            meta = json.loads((turn.tasks_dir / f"{turn.task_id}.json").read_text(encoding="utf-8"))
             assert meta["input"]["tenant_id"] == "acme", meta["input"]
             assert "tenants/acme/" in str(turn.tasks_dir), turn.tasks_dir
             adapter._close_turn_task(turn, "ok", None, "m")
@@ -443,7 +443,7 @@ def test_stream_loop_error_fails_turn_without_rerun() -> None:
         ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt12",
                                             msg_id="m-12", sender=OPERATOR)
         assert not legacy, "the legacy blocking path re-ran the prompt"
-        assert int((tmp / "calls").read_text()) == 1, "a second CLI was spawned"
+        assert int((tmp / "calls").read_text(encoding="utf-8")) == 1, "a second CLI was spawned"
         assert (tmp / "exited").exists(), "the reply went out while the engine process was still alive"
         assert ans.startswith("Claude API call failed"), ans
         [rec] = _records(adapter._session_dir("discord", "tt12"))

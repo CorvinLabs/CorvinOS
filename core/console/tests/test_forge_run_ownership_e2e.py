@@ -27,11 +27,11 @@ def _write_record(client, run_id: str, **fields) -> None:
     rec.update(fields)
     d = client.home / "tenants" / "_default" / "global" / "forge_runs"
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"{run_id}.json").write_text(json.dumps(rec))
+    (d / f"{run_id}.json").write_text(json.dumps(rec), encoding="utf-8")
 
 
 def _read(client, run_id: str) -> dict:
-    return json.loads((client.home / "tenants" / "_default" / "global" / "forge_runs" / f"{run_id}.json").read_text())
+    return json.loads((client.home / "tenants" / "_default" / "global" / "forge_runs" / f"{run_id}.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture
@@ -89,7 +89,7 @@ def test_a_live_peer_hosts_run_is_not_respawned_nor_failed(tmp_path, spawned):
         assert rec["status"] == "running" and rec["resumes"] == 0
         # the peer finishes: the next poll shows it (no stale in-memory copy)
         rec.update(status="success", progress=100, message="done by the peer")
-        (client.home / "tenants/_default/global/forge_runs/run-dddddddddddd.json").write_text(json.dumps(rec))
+        (client.home / "tenants/_default/global/forge_runs/run-dddddddddddd.json").write_text(json.dumps(rec), encoding="utf-8")
         assert client.get("/v1/console/forge-creator/status/run-dddddddddddd").json()["status"] == "success"
 
 

@@ -166,9 +166,9 @@ def generate_folder_structure(root: Path, skill_name: str) -> Path:
     (skill_dir / "tests").mkdir(exist_ok=True)   # Test suite
 
     # Write standard files
-    (skill_dir / ".forge" / "manifest.json").write_text("{}")
-    (skill_dir / ".forge" / "hooks.json").write_text('{"on_skill_loaded": []}')
-    (skill_dir / "tests" / "__init__.py").write_text("")
-    (skill_dir / "README.md").write_text(f"# {skill_name}\n\nSkill documentation.\n")
+    (skill_dir / ".forge" / "manifest.json").write_text("{}", encoding="utf-8")
+    (skill_dir / ".forge" / "hooks.json").write_text('{"on_skill_loaded": []}', encoding="utf-8")
+    (skill_dir / "tests" / "__init__.py").write_text("", encoding="utf-8")
+    (skill_dir / "README.md").write_text(f"# {skill_name}\n\nSkill documentation.\n", encoding="utf-8")
 
     return skill_dir

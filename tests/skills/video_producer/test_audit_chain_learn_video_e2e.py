@@ -52,7 +52,7 @@ def test_audit_chain_learn_video_assembles_and_verifies(tmp_path):
             f"missing {required} -- see this file's module docstring to regenerate"
         )
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     segs = manifest["segments"]
     expected_total = manifest["total_duration_s"]
 
@@ -78,7 +78,7 @@ seg3.unlink()
 """
     proc = subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=50,
+        capture_output=True, text=True, timeout=50, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, f"assembly failed:\nSTDOUT:{proc.stdout}\nSTDERR:{proc.stderr}"
     assert out_path.exists()

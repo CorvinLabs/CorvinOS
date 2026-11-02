@@ -205,7 +205,7 @@ def test_run_completion_records_envelope():
 
         run_id = resp["result"]["structuredContent"]["run_id"]
         stdout_json = td / "runs" / run_id / "stdout.json"
-        envelope_on_disk = json.loads(stdout_json.read_text())
+        envelope_on_disk = json.loads(stdout_json.read_text(encoding="utf-8"))
         t("on-disk envelope.meta.deterministic = True",
           envelope_on_disk.get("meta", {}).get("deterministic") is True)
         t("on-disk envelope.data.sum = 3",

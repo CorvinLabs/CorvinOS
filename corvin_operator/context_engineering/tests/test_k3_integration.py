@@ -56,7 +56,7 @@ class TestH2FileSnapshot:
             record["checksum"] = compute_record_checksum(record)
 
             # Append record (simulate direct write, since _atomic_append_to_queue_file is now private)
-            with open(queue_file, "a") as f:
+            with open(queue_file, "a", encoding="utf-8") as f:
                 json.dump(record, f)
                 f.write("\n")
 
@@ -114,7 +114,7 @@ class TestH4IntegrationE2E:
 
                         # Append record directly (caller holds lock)
                         try:
-                            with open(queue_file, "a") as f:
+                            with open(queue_file, "a", encoding="utf-8") as f:
                                 json.dump(record, f)
                                 f.write("\n")
                         except Exception as e:
@@ -144,7 +144,7 @@ class TestH4IntegrationE2E:
                     # Read queue file
                     records = []
                     if queue_file.exists():
-                        with open(queue_file, "r") as f:
+                        with open(queue_file, "r", encoding="utf-8") as f:
                             for line in f:
                                 line = line.strip()
                                 if not line:

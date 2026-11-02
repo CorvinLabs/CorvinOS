@@ -78,7 +78,7 @@ def test_session_id_persistence():
         # Test 2a: Write session ID
         main_sess_file = session_dir / ".main_session.json"
         test_session_id = "s_test1234567890ab"
-        with open(main_sess_file, "w") as f:
+        with open(main_sess_file, "w", encoding="utf-8") as f:
             json.dump({
                 "session_id": test_session_id,
                 "saved_at": "2026-06-03T12:00:00Z"
@@ -89,7 +89,7 @@ def test_session_id_persistence():
         # Test 2b: Load session ID
         loaded_id = None
         if main_sess_file.exists():
-            with open(main_sess_file) as f:
+            with open(main_sess_file, encoding="utf-8") as f:
                 loaded_id = json.load(f).get("session_id")
         print(f"  Loaded session ID:  {loaded_id}")
 
@@ -129,15 +129,15 @@ def test_multi_tenant_isolation():
         file_a = dir_a / ".main_session.json"
         file_b = dir_b / ".main_session.json"
 
-        with open(file_a, "w") as f:
+        with open(file_a, "w", encoding="utf-8") as f:
             json.dump({"session_id": "s_aaa"}, f)
-        with open(file_b, "w") as f:
+        with open(file_b, "w", encoding="utf-8") as f:
             json.dump({"session_id": "s_bbb"}, f)
 
         # Verify they remain isolated
-        with open(file_a) as f:
+        with open(file_a, encoding="utf-8") as f:
             id_a = json.load(f)["session_id"]
-        with open(file_b) as f:
+        with open(file_b, encoding="utf-8") as f:
             id_b = json.load(f)["session_id"]
 
         assert id_a == "s_aaa", f"Tenant A session corrupted: {id_a}"

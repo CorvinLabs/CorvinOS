@@ -120,7 +120,7 @@ def _env(home: Path) -> dict:
 
 def _run(script: str, home: Path) -> str:
     proc = subprocess.run([sys.executable, "-c", script], env=_env(home),
-                          cwd=str(_REPO), capture_output=True, text=True, timeout=300)
+                          cwd=str(_REPO), capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
     return proc.stdout + "\n" + proc.stderr
 
 
@@ -337,9 +337,9 @@ print("FORGED")
     def test_a_witness_with_a_broken_mac_is_ignored(self, chain):
         home, path = chain
         wp = Path(_witness(home)["path"])
-        doc = json.loads(wp.read_text())
+        doc = json.loads(wp.read_text(encoding="utf-8"))
         doc["mac"] = "0" * 32
-        wp.write_text(json.dumps(doc))
+        wp.write_text(json.dumps(doc), encoding="utf-8")
 
         lines = _lines(path)
         rec = json.loads(lines[8])
@@ -400,7 +400,7 @@ class TestGrowth:
         env = _env(home)
         env["N"] = "15"
         proc = subprocess.run([sys.executable, "-c", _SEED], env=env, cwd=str(_REPO),
-                              capture_output=True, text=True, timeout=300)
+                              capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
         assert "SEEDED" in proc.stdout, proc.stdout + proc.stderr
 
         grown = _witness(home)
@@ -418,7 +418,7 @@ class TestGrowth:
             env = _env(home)
             env["N"] = "10"
             subprocess.run([sys.executable, "-c", _SEED], env=env, cwd=str(_REPO),
-                           capture_output=True, text=True, timeout=300)
+                           capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
             result = _verify(home)
             assert result["ok"] and result["issues"] == [], result
             assert result["agrees_with_full_walk"], result

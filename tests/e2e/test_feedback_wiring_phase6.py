@@ -163,7 +163,7 @@ def create_temp_skill_config() -> Path:
             "quality_multiplier": 1.0,
         },
         "version": "1.0",
-    }))
+    }), encoding="utf-8")
     return tmpdir, config_file
 
 
@@ -188,7 +188,7 @@ class TestFeedbackWiringPhase6:
 
         # Phase 1: Baseline execution
         logger.info("\n--- PHASE 1: BASELINE EXECUTION ---")
-        baseline_config = json.loads(config_file.read_text())["config"]
+        baseline_config = json.loads(config_file.read_text(encoding="utf-8"))["config"]
         baseline_result = skill.execute(job_id, scene_id, baseline_config)
         baseline_quality = baseline_result.quality_score
 
@@ -229,9 +229,9 @@ class TestFeedbackWiringPhase6:
         updated_config["quality_multiplier"] = max(0.5, min(1.5, updated_config["quality_multiplier"]))
 
         # Write updated config
-        updated_config_data = json.loads(config_file.read_text())
+        updated_config_data = json.loads(config_file.read_text(encoding="utf-8"))
         updated_config_data["config"] = updated_config
-        config_file.write_text(json.dumps(updated_config_data))
+        config_file.write_text(json.dumps(updated_config_data), encoding="utf-8")
 
         logger.info(f"Config updated: quality_multiplier {baseline_config['quality_multiplier']:.3f} → "
                    f"{updated_config['quality_multiplier']:.3f}")

@@ -36,7 +36,7 @@ class StagingHarness:
         if not self.test_data_path.exists():
             raise FileNotFoundError(f"Test data not found: {self.test_data_path}")
 
-        with open(self.test_data_path) as f:
+        with open(self.test_data_path, encoding="utf-8") as f:
             return json.load(f)
 
     def run_analysis(self, tasks: List[Dict]) -> None:
@@ -270,7 +270,7 @@ class StagingHarness:
 
         # Write report
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
         print(f"\nReport written to: {output_path}")

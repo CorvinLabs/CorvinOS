@@ -32,7 +32,7 @@ def temp_measurement_dir():
             {"confidence_pred": 0.82, "outcome_actual": 0.80},
             {"confidence_pred": 0.88, "outcome_actual": 0.90},
         ]
-        with open(date_dir / "predictions.jsonl", "w") as f:
+        with open(date_dir / "predictions.jsonl", "w", encoding="utf-8") as f:
             for p in predictions:
                 f.write(json.dumps(p) + "\n")
 
@@ -42,7 +42,7 @@ def temp_measurement_dir():
             {"feedback_impact": "helpful"},
             {"feedback_impact": "neutral"},
         ]
-        with open(date_dir / "feedback.jsonl", "w") as f:
+        with open(date_dir / "feedback.jsonl", "w", encoding="utf-8") as f:
             for fb in feedback:
                 f.write(json.dumps(fb) + "\n")
 
@@ -52,7 +52,7 @@ def temp_measurement_dir():
             {"task_type": "devops"},
             {"task_type": "refactor"},
         ]
-        with open(date_dir / "user_choices.jsonl", "w") as f:
+        with open(date_dir / "user_choices.jsonl", "w", encoding="utf-8") as f:
             for c in choices:
                 f.write(json.dumps(c) + "\n")
 
@@ -62,7 +62,7 @@ def temp_measurement_dir():
             {"match_score": 0.85},
             {"match_score": 0.90},
         ]
-        with open(date_dir / "budget_allocations.jsonl", "w") as f:
+        with open(date_dir / "budget_allocations.jsonl", "w", encoding="utf-8") as f:
             for b in budget:
                 f.write(json.dumps(b) + "\n")
 

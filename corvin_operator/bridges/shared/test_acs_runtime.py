@@ -152,7 +152,7 @@ def _fake_claude_reads_stdin(tmp_path) -> str:
         "#!/usr/bin/env python3\n"
         "import sys, json\n"
         "stdin_text = sys.stdin.read()\n"
-        "print(json.dumps({'result': 'ECHO:' + stdin_text}))\n"
+        "print(json.dumps({'result': 'ECHO:' + stdin_text}))\n", encoding="utf-8"
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     return str(script)
@@ -225,7 +225,7 @@ def _fake_claude_huge_output(tmp_path, total_chars: int) -> str:
         "import sys, json\n"
         "sys.stdin.read()\n"
         f"payload = 'X' * {total_chars}\n"
-        "sys.stdout.write(json.dumps({'result': payload}))\n"
+        "sys.stdout.write(json.dumps({'result': payload}))\n", encoding="utf-8"
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     return str(script)
@@ -1030,7 +1030,7 @@ def _write_datasource_conn(conn_dir: Path, name: str, *, adapter: str,
         "adapter": adapter,
         "data_classification": classification,
         "config": config or {"host": "localhost", "port": 5432, "dbname": "db", "user": "u"},
-    }))
+    }), encoding="utf-8")
 
 
 def test_resolve_acs_datasources_withholds_sensitive_snapshot_with_no_key(monkeypatch):

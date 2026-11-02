@@ -45,13 +45,13 @@ class AttachmentHardeningE2E(unittest.TestCase):
         with _sandbox(Path(self._tmp)) as (client, home, tenant_id, _e, _c):
             sid, sess = self._session(client, tenant_id)
             victim = Path(self._tmp) / "victim.txt"
-            victim.write_text("original")
+            victim.write_text("original", encoding="utf-8")
             att = sess.workdir / "attachments"
             att.mkdir(parents=True, exist_ok=True)
             (att / "note.txt").symlink_to(victim)
             r = self._up(client, sid, ("note.txt", b"EVIL"))
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(victim.read_text(), "original")
+            self.assertEqual(victim.read_text(encoding="utf-8"), "original")
             stored = r.json()["attachments"][0]["name"]
             self.assertNotEqual(stored, "note.txt")
             self.assertEqual((att / stored).read_bytes(), b"EVIL")
@@ -61,12 +61,12 @@ class AttachmentHardeningE2E(unittest.TestCase):
             sid, sess = self._session(client, tenant_id)
             att = sess.workdir / "attachments"
             att.mkdir(parents=True, exist_ok=True)
-            (att / "a.txt").write_text("first")
+            (att / "a.txt").write_text("first", encoding="utf-8")
             for i in range(1, 100):
-                (att / f"a_{i}.txt").write_text(f"n{i}")
+                (att / f"a_{i}.txt").write_text(f"n{i}", encoding="utf-8")
             r = self._up(client, sid, ("a.txt", b"new"))
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual((att / "a.txt").read_text(), "first")
+            self.assertEqual((att / "a.txt").read_text(encoding="utf-8"), "first")
             name = r.json()["attachments"][0]["name"]
             self.assertTrue(name.startswith("a_") and name.endswith(".txt"))
             self.assertEqual((att / name).read_bytes(), b"new")

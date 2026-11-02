@@ -112,11 +112,11 @@ class _ObjectCase(TransportCase):
         return [r for r in _records(self.home) if r.get("event_type") == name]
 
     def holder_meta(self, ref_id: str) -> dict:
-        return json.loads((a2a_objects.store_dir("_default") / f"{ref_id}.json").read_text())
+        return json.loads((a2a_objects.store_dir("_default") / f"{ref_id}.json").read_text(encoding="utf-8"))
 
     def write_holder_meta(self, ref_id: str, **changes: Any) -> None:
         p = a2a_objects.store_dir("_default") / f"{ref_id}.json"
-        p.write_text(json.dumps({**json.loads(p.read_text()), **changes}))
+        p.write_text(json.dumps({**json.loads(p.read_text(encoding="utf-8")), **changes}), encoding="utf-8")
 
     def raw_pull(self, ref_id: str, offset: int, length: int, *, kid: "str | None" = None):
         """One signed pull through the real transport, returning the verified response dict."""
@@ -181,7 +181,7 @@ class _ObjectScenarios:
         self.assertEqual((d["ref_prefix"], d["size"], d["sha_prefix"], d["classification"], d["origin_id"]),
                          (ref["ref_id"][:8], BIG, ref["sha256"][:16], "INTERNAL", self.pair.kid))
         self.assertEqual(self.events("A2A.object_fetched")[-1]["details"]["status"], "ok")
-        chain_text = _chain_path(self.home).read_text()
+        chain_text = _chain_path(self.home).read_text(encoding="utf-8")
         for leak in ("big.bin", "small.csv", ref["sha256"], ref["ref_id"]):
             self.assertNotIn(leak, chain_text, "the chain carries prefixes and metadata only")
         for r in [*issued, *chunks]:
@@ -409,7 +409,7 @@ class _ObjectScenarios:
     def _egress_forbid_peer(self) -> None:
         cfg = self.home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
         cfg.write_text("apiVersion: corvin/v1\nkind: Tenant\nspec:\n  egress:\n    enabled: true\n"
-                       "    default_action: allow\n    forbidden_hosts: ['127.0.0.1']\n")
+                       "    default_action: allow\n    forbidden_hosts: ['127.0.0.1']\n", encoding="utf-8")
         cfg.chmod(0o600)
 
     def test_l35_egress_refuses_at_issue_like_inline(self):
@@ -504,7 +504,7 @@ class TestCliPullsReferences(_ObjectCase):
         self.engine.files = {"cli.bin": big, "note.txt": b"hi"}
         out = self.root / "cli-out"
         schema = self.root / "schema.json"
-        schema.write_text(json.dumps(SCHEMA))
+        schema.write_text(json.dumps(SCHEMA), encoding="utf-8")
         with mock.patch.dict(os.environ, {"REMOTE_ENDPOINTS_DIR": str(self.pair.a_endpoints)}), \
                 mock.patch.object(rts, "RemoteTriggerSender",
                                   lambda endpoints_dir=None, **k: self.pair.sender):
@@ -584,7 +584,7 @@ class TestCliPullsReferences(_ObjectCase):
 
         out = self.root / "cli-dup"
         schema = self.root / "schema.json"
-        schema.write_text(json.dumps(SCHEMA))
+        schema.write_text(json.dumps(SCHEMA), encoding="utf-8")
         buf = _io.StringIO()
         with mock.patch.object(rtr.RemoteTriggerReceiver, "_release_outputs", hostile), \
                 mock.patch.dict(os.environ, {"REMOTE_ENDPOINTS_DIR": str(self.pair.a_endpoints)}), \

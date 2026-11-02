@@ -57,9 +57,20 @@ def whatsapp_qr_pair(repo_root: Path) -> None:
         print(f"⚠ QR pair script not found at {script}")
         return
     print("\n  Starting WhatsApp QR pairing...")
-    result = subprocess.run(["bash", str(script), "pair"], check=False)
-    if result.returncode != 0:
+    result = _run_pair_script(script)
+    if result is None or result.returncode != 0:
         print("  ⚠ Pairing exited — retry: bash corvin_operator/voice/scripts/whatsapp_cli.sh pair")
+
+
+def _run_pair_script(script: Path) -> "subprocess.CompletedProcess | None":
+    """``bash whatsapp_cli.sh pair``; None when there is no bash (native
+    Windows without Git Bash: the bare ``bash`` raised FileNotFoundError and
+    aborted the whole installer run)."""
+    try:
+        return subprocess.run(["bash", str(script), "pair"], check=False)
+    except FileNotFoundError:
+        print("  ⚠ bash not found — pair WhatsApp later from the web console")
+        return None
 
 
 # ── Internal bridge configurators ──────────────────────────────────────────
@@ -86,7 +97,7 @@ def _configure_whatsapp(bridges_dir: Path, interactive: bool) -> BridgeSetup:
             if not answer.startswith("n"):
                 script = bridges_dir.parent.parent / "corvin_operator" / "voice" / "scripts" / "whatsapp_cli.sh"
                 if script.exists():
-                    subprocess.run(["bash", str(script), "pair"], check=False)
+                    _run_pair_script(script)
                 else:
                     print("  ⚠ QR script not found — pair later with: bridge.sh pair-whatsapp")
 

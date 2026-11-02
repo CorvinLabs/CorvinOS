@@ -50,7 +50,7 @@ def test_save_and_load_preset():
 
             # Verify YAML is valid
             yaml_path = mock_path()
-            with open(yaml_path) as f:
+            with open(yaml_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             assert data["spec"]["preset"] == "advanced"
         finally:

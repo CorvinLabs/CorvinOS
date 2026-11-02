@@ -277,7 +277,7 @@ class TestCheckpointManager:
         )
 
         cp_file = Path(self.tmpdir.name) / f"{checkpoint.checkpoint_id}.json"
-        with open(cp_file) as f:
+        with open(cp_file, encoding="utf-8") as f:
             data = json.load(f)
 
         # Verify key fields

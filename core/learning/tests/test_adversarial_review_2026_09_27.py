@@ -16,7 +16,7 @@ def _chain_records():
     chain = Path(os.environ["VOICE_AUDIT_PATH"])
     if not chain.exists():
         return []
-    return [json.loads(ln) for ln in chain.read_text().splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in chain.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 def test_every_learning_event_type_is_allowlisted():

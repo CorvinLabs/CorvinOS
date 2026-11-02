@@ -54,7 +54,7 @@ class LocalSkillCleanup:
                 continue
 
             try:
-                with open(meta_path) as f:
+                with open(meta_path, encoding="utf-8") as f:
                     metadata = json.load(f)
 
                 created_str = metadata.get("created")

@@ -125,7 +125,7 @@ def main() -> int:
         "name": "assistant",
         "orchestration_enabled": False,
         "permission_mode": "bypassPermissions",
-    }))
+    }), encoding="utf-8")
     for mod in [m for m in list(sys.modules) if m == "resolver"]:
         del sys.modules[mod]
     import resolver as resolver2  # type: ignore

@@ -416,7 +416,7 @@ def _run_critique_sync(result_text: str, goal: str, model: str) -> dict[str, Any
                 "--max-turns", "1",
                 "--output-format", "text",
             ],
-            capture_output=True, text=True, env=env, timeout=60, check=False,
+            capture_output=True, text=True, env=env, timeout=60, check=False, encoding="utf-8", errors="replace",
         )
         if out.returncode != 0:
             log.debug("acs: gate_3 critique returned exit %d", out.returncode)

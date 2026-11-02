@@ -332,7 +332,7 @@ def save_dataset(tasks: list[BenchmarkTask], output_path: Path):
     """Save tasks to JSONL."""
     print(f"\n[PHASE 1] Saving dataset...")
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         for task in tasks:
             f.write(json.dumps(task.to_dict()) + "\n")
 
@@ -407,7 +407,7 @@ def run_baseline_phase(tasks: list[BenchmarkTask], output_path: Path) -> list[Ba
     print(f"  ✓ Baseline complete: {len(results)} successes, {failures} failures ({success_rate:.1f}%)")
 
     # Save results
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         for result in results:
             f.write(json.dumps(result.to_dict()) + "\n")
     print(f"  ✓ Saved baseline results to {output_path}")
@@ -526,7 +526,7 @@ def run_routing_phase(
     print(f"    Model distribution: Haiku={model_dist['haiku']}, Sonnet={model_dist['sonnet']}, Opus={model_dist['opus']}")
 
     # Save results
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         for result in results:
             f.write(json.dumps(result.to_dict()) + "\n")
     print(f"  ✓ Saved routing results to {output_path}")
@@ -595,7 +595,7 @@ def run_quality_phase(
     print(f"  ✓ Quality grading complete: {len(scores)} tasks graded")
 
     # Save results
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         for score in scores:
             f.write(json.dumps(score.to_dict()) + "\n")
     print(f"  ✓ Saved quality scores to {output_path}")
@@ -662,7 +662,7 @@ def run_metrics_phase(
         metrics.append(metric)
 
     # Save metrics
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         for metric in metrics:
             f.write(json.dumps(metric.to_dict()) + "\n")
     print(f"  ✓ Calculated metrics for {len(metrics)} tasks")
@@ -1090,7 +1090,7 @@ Total tasks analyzed: {len(metrics)}
 *Report generated {datetime.now().isoformat()} as part of benchmark run {run_id}*
 """
 
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
 
     print(f"  ✓ Report generated at {report_path}")
@@ -1241,7 +1241,7 @@ def main():
 
     # Save analysis
     analysis_path = dirs["reports"] / "analysis.json"
-    with open(analysis_path, "w") as f:
+    with open(analysis_path, "w", encoding="utf-8") as f:
         json.dump(analysis, f, indent=2)
 
     print(f"✓ Analysis saved: {analysis_path}")

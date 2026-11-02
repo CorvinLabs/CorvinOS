@@ -135,12 +135,12 @@ class TestE2EChecksumValidation:
         # Store on "console"
         console_file = tmp_path / "console" / "wid_123.awp.yaml"
         console_file.parent.mkdir(parents=True)
-        console_file.write_text(workflow_content)
+        console_file.write_text(workflow_content, encoding="utf-8")
 
         # Store on "plugin"
         plugin_file = tmp_path / "plugin" / "wid_123.awp.yaml"
         plugin_file.parent.mkdir(parents=True)
-        plugin_file.write_text(workflow_content)
+        plugin_file.write_text(workflow_content, encoding="utf-8")
 
         # Checksums should match
         import hashlib
@@ -162,12 +162,12 @@ class TestE2EChecksumValidation:
         # Store on "console"
         console_file = tmp_path / "console" / "wid_123.meta.json"
         console_file.parent.mkdir(parents=True)
-        console_file.write_text(json.dumps(metadata, sort_keys=True))
+        console_file.write_text(json.dumps(metadata, sort_keys=True), encoding="utf-8")
 
         # Store on "plugin"
         plugin_file = tmp_path / "plugin" / "wid_123.meta.json"
         plugin_file.parent.mkdir(parents=True)
-        plugin_file.write_text(json.dumps(metadata, sort_keys=True))
+        plugin_file.write_text(json.dumps(metadata, sort_keys=True), encoding="utf-8")
 
         # Checksums should match
         import hashlib

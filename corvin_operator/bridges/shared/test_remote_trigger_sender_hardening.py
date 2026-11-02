@@ -86,11 +86,11 @@ class _Pairing:
 
     @staticmethod
     def _write(path: Path, data: dict) -> None:
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(data), encoding="utf-8")
         path.chmod(0o600)
 
     def endpoint(self) -> dict:
-        return json.loads((self.endpoints / f"{self.kid}.json").read_text())
+        return json.loads((self.endpoints / f"{self.kid}.json").read_text(encoding="utf-8"))
 
     def receiver(self, instance_id: str) -> rtr.RemoteTriggerReceiver:
         return rtr.RemoteTriggerReceiver(
@@ -498,7 +498,7 @@ class TestNetworkAttestationToken(unittest.TestCase):
         self._tmp.cleanup()
 
     def _licence(self, token: str) -> None:
-        (self.corvin / "global" / "license.key").write_text(token)
+        (self.corvin / "global" / "license.key").write_text(token, encoding="utf-8")
 
     def test_eddsa_licence_is_not_used_as_sest(self):
         self._licence(_jwt({"alg": "EdDSA", "typ": "JWT"}, prefix="CORVIN-"))

@@ -215,7 +215,7 @@ class CliRoundTripTests(_ProposalTestBase):
         env["CORVIN_HOME"] = self._tmp
         proc = subprocess.run(
             [sys.executable, str(HERE / "proposal.py"), *args],
-            env=env, capture_output=True, text=True, timeout=10)
+            env=env, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
         try:
             return json.loads(proc.stdout)
         except json.JSONDecodeError:

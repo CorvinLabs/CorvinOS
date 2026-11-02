@@ -57,7 +57,7 @@ def test_remote_log_fiber_flags_mirrored_errors(tmp_path, monkeypatch):
 def test_remote_log_fiber_silent_when_clean(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / "aco" / "remote" / "h" / "logs").mkdir(parents=True)
-    (home / "aco" / "remote" / "h" / "logs" / "corvin.log").write_text("INFO ok\n" * 50)
+    (home / "aco" / "remote" / "h" / "logs" / "corvin.log").write_text("INFO ok\n" * 50, encoding="utf-8")
     monkeypatch.setattr(NB, "_home", lambda: home)
     assert NB.RemoteLogFiber().scan() == []
 

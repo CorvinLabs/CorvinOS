@@ -179,7 +179,7 @@ def _channel_settings_path(channel: str) -> Path:
 def _load_channel(channel: str) -> dict[str, Any]:
     p = _channel_settings_path(channel)
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
 
@@ -199,7 +199,7 @@ def _channel_lock(channel: str):
     p = _channel_settings_path(channel)
     lock_path = p.with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a") as lock_fh:
+    with open(lock_path, "a", encoding="utf-8") as lock_fh:
         deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
         while True:
             try:

@@ -71,7 +71,7 @@ def _configured_engine(tenant_id: str) -> str:
         )
         if not yaml_path.exists():
             return "claude_code"
-        data = yaml.safe_load(yaml_path.read_text()) or {}
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
         spec = data.get("spec", {})
         engine = spec.get("default_engine", "")
         if not (isinstance(engine, str) and engine.strip()):

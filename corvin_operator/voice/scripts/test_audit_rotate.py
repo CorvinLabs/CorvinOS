@@ -53,13 +53,13 @@ def _make_tenant(root: Path, tenant_id: str, *,
     audit_dir.mkdir()
     audit = audit_dir / "audit.jsonl"
     prev = ""
-    with audit.open("w") as fh:
+    with audit.open("w", encoding="utf-8") as fh:
         for i in range(chain_entries):
             rec = _entry(prev, i)
             fh.write(json.dumps(rec) + "\n")
             prev = rec["hash"]
     if yaml_content is not None:
-        (tenant / "tenant.corvin.yaml").write_text(yaml_content)
+        (tenant / "tenant.corvin.yaml").write_text(yaml_content, encoding="utf-8")
     return tenant
 
 
@@ -137,7 +137,7 @@ spec:
             # New audit.jsonl starts with audit.rotation_link; ADR-0135 M2
             # may also append audit.chain_anchor_written immediately after.
             audit_p, _ = audit_rotate._tenant_paths(root, "_default")
-            lines = audit_p.read_text().splitlines()
+            lines = audit_p.read_text(encoding="utf-8").splitlines()
             self.assertGreaterEqual(len(lines), 1)
             self.assertEqual(json.loads(lines[0])["event_type"],
                              "audit.rotation_link")
@@ -152,13 +152,13 @@ spec:
       max_size_mb: 0.0000001
 """)
             audit_p, _ = audit_rotate._tenant_paths(root, "_default")
-            content_before = audit_p.read_text()
+            content_before = audit_p.read_text(encoding="utf-8")
             with redirect_stdout(io.StringIO()) as out:
                 rc = audit_rotate.process_tenant("_default", root,
                                                  dry_run=True)
             self.assertEqual(rc, 0)
             self.assertIn("DRY-RUN", out.getvalue())
-            self.assertEqual(audit_p.read_text(), content_before,
+            self.assertEqual(audit_p.read_text(encoding="utf-8"), content_before,
                              "dry-run modified the audit file")
 
     def test_missing_audit_skipped(self):

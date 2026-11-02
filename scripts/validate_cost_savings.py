@@ -417,7 +417,7 @@ def main():
     output_file = Path(__file__).parent.parent / "docs" / "cost_savings_report.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_file, "w") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(
             {
                 "timestamp": datetime.utcnow().isoformat(),

@@ -139,7 +139,7 @@ def test_gdpr_ropa_pdf_does_not_leak_pii_into_audit(
     )
     # The generator itself does NOT auto-write audit events; that's
     # the route-layer's responsibility. So chain should be unchanged.
-    chain_text = chain_path.read_text() if chain_path.exists() else ""
+    chain_text = chain_path.read_text(encoding="utf-8") if chain_path.exists() else ""
     assert "compliance.report_generated" not in chain_text
 
 
@@ -184,11 +184,11 @@ def test_attestation_detects_tampered_chain(
     seed_chain("event.c", x=3)
     # Tamper: rewrite the middle line's event_type — definitely changes
     # the canonical-JSON over which the stored hash was computed.
-    lines = chain_path.read_text().splitlines()
+    lines = chain_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 3
     assert '"event.b"' in lines[1], f"unexpected line: {lines[1]}"
     lines[1] = lines[1].replace('"event.b"', '"event.TAMPERED"')
-    chain_path.write_text("\n".join(lines) + "\n")
+    chain_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     out = tmp_path / "attestation.pdf"
     md = audit_attestation.generate(

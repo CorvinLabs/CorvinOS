@@ -125,7 +125,7 @@ class TestCheckpointManagerStress:
                 assert loaded is not None, f"Failed to load checkpoint: {path}"
                 assert loaded.task_id == task_id, f"Task ID mismatch in {path}"
                 # Verify JSON is not corrupted
-                json_str = path.read_text()
+                json_str = path.read_text(encoding="utf-8")
                 data = json.loads(json_str)
                 assert "checkpoint_id" in data, f"Missing checkpoint_id in {path}"
                 assert "merkle_root" in data, f"Missing merkle_root in {path}"
@@ -393,9 +393,9 @@ class TestCheckpointManagerStress:
 
         # A tampered checkpoint is still audited as an integrity failure.
         saved = manager.save(self.create_test_checkpoint(task_id, "audit_ckpt_2", 2))
-        data = json.loads(saved.read_text())
+        data = json.loads(saved.read_text(encoding="utf-8"))
         data["iteration_num"] = 99
-        saved.write_text(json.dumps(data))
+        saved.write_text(json.dumps(data), encoding="utf-8")
         audit_events.clear()
         with pytest.raises(Exception):
             manager.load(saved)

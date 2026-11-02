@@ -114,7 +114,7 @@ async def test_audit_lands_on_canonical_tenant_chain_with_fields(isolated_home):
     assert not (home / ".corvin").exists()
     chain = corvin_home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     assert chain.is_file(), "audit must land on tenant_audit_chain()"
-    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     by_type = {r["event_type"]: r for r in recs}
     reg = by_type["discovery.instance_registered"]["details"]
     assert reg["org_id"] == "org" and reg["instance_id"] == "inst1"

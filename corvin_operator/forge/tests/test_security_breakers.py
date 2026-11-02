@@ -154,7 +154,7 @@ def test_rate_limit_rejects_after_capacity():
         (td / "policy.json").write_text(json.dumps({
             "rate_limit": {"default_calls_per_minute": 3},
             "circuit_breaker": {"enabled": False},  # isolate the rate-limit
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()
@@ -169,7 +169,7 @@ def test_rate_limit_rejects_after_capacity():
         t("first 3 calls succeed", ok[:3] == [True, True, True])
         t("4th call rejected",     ok[3] is False)
         # audit.jsonl should record rate_limit.exceeded
-        audit = (td / "audit.jsonl").read_text().splitlines()
+        audit = (td / "audit.jsonl").read_text(encoding="utf-8").splitlines()
         events = [json.loads(l) for l in audit
                   if "rate_limit.exceeded" in l]
         t("rate_limit.exceeded event in audit",
@@ -186,7 +186,7 @@ def test_per_tool_rate_limit_override():
             "rate_limit": {"default_calls_per_minute": 10,
                             "per_tool": {"slow_tool": 1}},
             "circuit_breaker": {"enabled": False},
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()
@@ -214,7 +214,7 @@ def test_circuit_breaker_opens_after_threshold():
                                  "failure_threshold": 2,
                                  "reset_timeout": 60,
                                  "half_open_max": 1},
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()
@@ -239,7 +239,7 @@ def test_circuit_breaker_opens_after_threshold():
         t("call 3 returned fast (<200ms — no subprocess)",
           elapsed < 0.2, detail=f"elapsed={elapsed*1000:.0f}ms")
         # audit
-        audit = (td / "audit.jsonl").read_text().splitlines()
+        audit = (td / "audit.jsonl").read_text(encoding="utf-8").splitlines()
         opened_events = [json.loads(l) for l in audit
                           if "circuit_breaker.opened" in l]
         t("circuit_breaker.opened event recorded",
@@ -254,7 +254,7 @@ def test_circuit_breaker_recovers_after_reset_timeout():
             "rate_limit": {"default_calls_per_minute": 100},
             "circuit_breaker": {"enabled": True, "failure_threshold": 1,
                                  "reset_timeout": 0.5, "half_open_max": 1},
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()
@@ -302,7 +302,7 @@ def test_schema_error_does_not_count_against_breaker():
             "rate_limit": {"default_calls_per_minute": 100},
             "circuit_breaker": {"enabled": True, "failure_threshold": 2,
                                  "reset_timeout": 60, "half_open_max": 1},
-        }))
+        }), encoding="utf-8")
         schema = {"type": "object", "required": ["a"],
                    "properties": {"a": {"type": "integer"}}}
         client = MCPClient(td)

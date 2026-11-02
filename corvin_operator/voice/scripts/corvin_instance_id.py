@@ -263,7 +263,7 @@ def _cmd_ca_init(args: argparse.Namespace) -> int:
 
     out_path = getattr(args, "out", None)
     if out_path:
-        Path(out_path).write_text(json.dumps(out, indent=2) + "\n")
+        Path(out_path).write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
         os.chmod(out_path, 0o600)
         print(f"keypair written to {out_path} (mode 0600)")
     else:

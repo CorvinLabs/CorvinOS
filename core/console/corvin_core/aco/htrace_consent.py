@@ -335,7 +335,7 @@ def provision_telemetry_tokens(
         try:
             lock_path = _ping_lock_path(home)
             lock_path.parent.mkdir(parents=True, exist_ok=True)
-            lf = lock_path.open("w")
+            lf = lock_path.open("w", encoding="utf-8")
             if _HAS_FLOCK:
                 _fcntl.flock(lf, _fcntl.LOCK_EX)  # blocking — serialize the pair write
         except OSError:

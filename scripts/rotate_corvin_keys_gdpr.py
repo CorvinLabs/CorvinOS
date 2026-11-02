@@ -63,7 +63,7 @@ class RotationEvent:
 def load_rotation_policy(policy_path: str) -> dict:
     """Load rotation policy YAML (simplified → dict)."""
     import yaml
-    with open(policy_path) as f:
+    with open(policy_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -96,7 +96,7 @@ def _legacy_emit_audit_event(event: RotationEvent) -> None:  # pragma: no cover 
     payload["hash"] = event.hash
 
     try:
-        with open(audit_path, "a") as f:
+        with open(audit_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload) + "\n")
         _log.info(f"Audit event emitted: {event.event_type}")
     except Exception as exc:
@@ -111,7 +111,7 @@ def get_prev_hash(tenant_id: str) -> Optional[str]:
         return None
 
     try:
-        with open(audit_path) as f:
+        with open(audit_path, encoding="utf-8") as f:
             lines = f.readlines()
         if lines:
             last_event = json.loads(lines[-1])

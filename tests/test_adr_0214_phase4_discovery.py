@@ -30,12 +30,12 @@ def test_plugin_discovery_from_directory():
             "version": "1.0.0",
             "author": "test",
             "cls_tier": "free",
-        }))
+        }), encoding="utf-8")
         (plugin1_dir / "detector.py").write_text("""
 class Detector:
     async def detect_engine(self, task, context, analysis):
         return ("tiered_delegation", 0.80, {})
-""")
+""", encoding="utf-8")
 
         # Create plugin 2
         plugin2_dir = tmppath / "advanced_detector"
@@ -45,12 +45,12 @@ class Detector:
             "version": "2.0.0",
             "author": "test",
             "cls_tier": "team",
-        }))
+        }), encoding="utf-8")
         (plugin2_dir / "detector.py").write_text("""
 class Detector:
     async def detect_engine(self, task, context, analysis):
         return ("acs", 0.70, {})
-""")
+""", encoding="utf-8")
 
         # Load plugins (advanced_detector should fail due to cls_tier)
         loaded, failed = registry.load_from_plugin_directory(str(tmppath))
@@ -82,7 +82,7 @@ def test_plugin_discovery_missing_files():
             "version": "1.0.0",
             "author": "test",
             "cls_tier": "free",
-        }))
+        }), encoding="utf-8")
         # Missing detector.py
 
         loaded, failed = registry.load_from_plugin_directory(str(tmppath))
@@ -129,12 +129,12 @@ async def test_async_plugin_execution():
             "version": "1.0.0",
             "author": "test",
             "cls_tier": "free",
-        }))
+        }), encoding="utf-8")
         (plugin_dir / "detector.py").write_text("""
 class Detector:
     async def detect_engine(self, task, context, analysis):
         return ("tiered_delegation", 0.85, {"parallelization_ratio": 0.6})
-""")
+""", encoding="utf-8")
 
         registry.load_from_plugin_directory(str(tmppath))
 

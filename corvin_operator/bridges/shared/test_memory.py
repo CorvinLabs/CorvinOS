@@ -78,7 +78,7 @@ class IndexTests(unittest.TestCase):
     def test_index_lists_topics(self):
         mem.write_topic("a", "Alpha summary line")
         mem.write_topic("b", "# Bravo header\n\nBravo summary line.")
-        idx = mem.INDEX_FILE.read_text()
+        idx = mem.INDEX_FILE.read_text(encoding="utf-8")
         self.assertIn("`a`", idx)
         self.assertIn("`b`", idx)
         self.assertIn("Alpha summary line", idx)

@@ -150,7 +150,7 @@ def test_e2e_classifier_importable_as_top_level_module() -> None:
         "print('OK')\n" % _SHARED
     )
     proc = subprocess.run(
-        [sys.executable, "-c", snippet], capture_output=True, text=True, timeout=60,
+        [sys.executable, "-c", snippet], capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr
     assert "OK" in proc.stdout

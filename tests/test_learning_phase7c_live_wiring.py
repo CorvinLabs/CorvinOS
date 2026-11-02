@@ -7,7 +7,7 @@ def test_chat_learning_wrapper_exists():
     wrapper_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/chat_learning_wrapper.py")
     assert wrapper_file.exists(), "ChatLearningWrapper file should exist"
 
-    content = wrapper_file.read_text()
+    content = wrapper_file.read_text(encoding="utf-8")
     assert "class ChatLearningWrapper" in content, "Should define ChatLearningWrapper class"
     assert "stream_turn_with_learning" in content, "Should have stream_turn_with_learning method"
     assert "get_chat_learning_wrapper" in content, "Should have singleton getter"
@@ -20,7 +20,7 @@ def test_learning_integration_api_exists():
     api_file = Path("/home/shumway/projects/CorvinOS/core/learning/integration.py")
     assert api_file.exists(), "LearningIntegration should exist"
 
-    content = api_file.read_text()
+    content = api_file.read_text(encoding="utf-8")
     assert "execute_method_with_learning" in content
     assert "execute_tts_with_learning" in content
 
@@ -32,7 +32,7 @@ def test_console_learning_route_exists():
     route_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/routes/learning.py")
     assert route_file.exists(), "Learning route module should exist"
 
-    content = route_file.read_text()
+    content = route_file.read_text(encoding="utf-8")
     assert "get_learning_nodes" in content, "Should have GET /nodes endpoint"
     assert "grade_pattern" in content, "Should have POST /grade endpoint"
     assert "add_operator_note" in content, "Should have POST /note endpoint"
@@ -46,11 +46,11 @@ def test_dashboard_page_exists():
     panel_file = web / "panels" / "LearningDashboard.tsx"
     assert panel_file.exists(), "LearningDashboard panel should exist"
 
-    content = panel_file.read_text()
+    content = panel_file.read_text(encoding="utf-8")
     assert "LearningDashboard" in content
     assert "/v1/console/learning/" in content, "Panel must call the real learning API"
 
-    registry = (web / "panels" / "registry.tsx").read_text()
+    registry = (web / "panels" / "registry.tsx").read_text(encoding="utf-8")
     assert 'rc("learning-dashboard"' in registry, "Panel must be registered in PANELS"
 
     print("✅ Dashboard frontend page wired")

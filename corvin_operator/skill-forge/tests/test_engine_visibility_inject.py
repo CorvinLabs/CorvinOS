@@ -98,7 +98,7 @@ def main() -> int:
             result = subprocess.run(
                 ["claude", "-p", prompt, "--append-system-prompt", block],
                 capture_output=True, text=True, timeout=180,
-                check=False,
+                check=False, encoding="utf-8", errors="replace",
             )
         except FileNotFoundError:
             print("FAIL: `claude` binary not on PATH")

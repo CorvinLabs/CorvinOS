@@ -109,7 +109,7 @@ class DecisionRecordTests(unittest.TestCase):
         from corvin_operator.forge.forge.paths import tenant_global_dir
         chain = Path(tenant_global_dir("_default")) / "forge" / "audit.jsonl"
         self.assertTrue(chain.exists(), "Layer A written to the hash-chained log")
-        events = [json.loads(ln) for ln in chain.read_text().splitlines() if ln.strip()]
+        events = [json.loads(ln) for ln in chain.read_text(encoding="utf-8").splitlines() if ln.strip()]
         cel = [e for e in events if e.get("event_type") == "cel.decision"
                or e.get("type") == "cel.decision"]
         self.assertEqual(len(cel), 1)

@@ -562,7 +562,7 @@ class CheckpointManager:
 
         filepath = self.checkpoint_dir / f"{checkpoint.checkpoint_id}.json"
         try:
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(checkpoint.to_dict(), f, indent=2, default=str)
             logger.debug(f"Persisted checkpoint to {filepath}")
         except Exception as e:
@@ -582,7 +582,7 @@ class CheckpointManager:
 
         filepath = self.checkpoint_dir / f"{checkpoint_id}.json"
         try:
-            with open(filepath, "r") as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
             checkpoint = SessionCheckpoint.from_dict(data)
             self.checkpoints[checkpoint_id] = checkpoint

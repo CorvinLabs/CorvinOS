@@ -147,7 +147,7 @@ def test_acs_runtime_claude_binary_survives_stripped_path() -> None:
     empty_dir.mkdir()
     offpath = work / "offpath" / "claude"
     offpath.parent.mkdir(parents=True)
-    offpath.write_text("#!/bin/sh\nexit 0\n")
+    offpath.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     offpath.chmod(0o755)
     saved = {
         k: os.environ.get(k)

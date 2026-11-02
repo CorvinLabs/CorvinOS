@@ -170,7 +170,7 @@ class EventStore:
         limit = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
         task_dir.mkdir(parents=True, exist_ok=True)
         lock = task_dir / ".lock"
-        with open(lock, "a+") as fh:
+        with open(lock, "a+", encoding="utf-8") as fh:
             deadline = time.monotonic() + limit
             while True:
                 try:

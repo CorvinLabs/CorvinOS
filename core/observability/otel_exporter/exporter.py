@@ -404,7 +404,7 @@ class OTELExporter:
         }
 
         # Append to file (immutable log)
-        with open(fallback_file, "a") as f:
+        with open(fallback_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
         logger.info(f"Wrote heartbeat to JSON fallback: {fallback_file}")

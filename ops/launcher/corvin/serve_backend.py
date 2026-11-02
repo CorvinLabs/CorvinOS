@@ -248,7 +248,7 @@ def _ensure_browser_provisioned() -> None:
             print("  restoring the corvinos[browser] extra (lost in upgrade) …")
             r = subprocess.run(
                 [uv, "tool", "install", "--force", "corvinos[browser]"],
-                capture_output=True, text=True, timeout=_BROWSER_PROVISION_TIMEOUT,
+                capture_output=True, text=True, timeout=_BROWSER_PROVISION_TIMEOUT, encoding="utf-8", errors="replace",
             )
             if r.returncode != 0 or not _browser_extra_present():
                 print("  ⚠ could not restore the [browser] extra — run: "
@@ -709,7 +709,7 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
             cmd,
             capture_output=True,
             timeout=120,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         if result.returncode == 0:
             print("done — restart corvin-serve to apply")

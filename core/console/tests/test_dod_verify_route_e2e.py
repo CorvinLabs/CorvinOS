@@ -84,7 +84,7 @@ class DodVerifyRouteTest(unittest.TestCase):
 
     def test_files_outside_the_project_are_not_read(self):
         outside = Path(tempfile.mkdtemp()) / "out.txt"
-        outside.write_text("1 passed in 0.1s SECRET-4711\n" * 3)
+        outside.write_text("1 passed in 0.1s SECRET-4711\n" * 3, encoding="utf-8")
         with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, _home, _):
             r = client.post(_VERIFY, headers={"X-CSRF-Token": csrf}, json={
                 "task_id": "dod-e2e-5",

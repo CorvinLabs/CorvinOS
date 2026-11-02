@@ -54,7 +54,7 @@ def _upload(client, csrf, data: bytes, filename="pkg.zip"):
 def _events(home: Path, tenant: str, event: str) -> list[dict]:
     chain = home / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
     out = []
-    for ln in chain.read_text().splitlines() if chain.exists() else []:
+    for ln in chain.read_text(encoding="utf-8").splitlines() if chain.exists() else []:
         try:
             rec = json.loads(ln)
         except ValueError:
@@ -122,7 +122,7 @@ class PackagesTabE2E(unittest.TestCase):
             self.assertFalse(installed.exists())
             archived = sorted((root / "archive").glob("sales-core-1.0.0-*"))
             self.assertEqual(len(archived), 1, "uninstall must keep the manifest in an archive")
-            kept = json.loads((archived[0] / "metadata.json").read_text())
+            kept = json.loads((archived[0] / "metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(kept["manifest"]["name"], "sales-core")
             self.assertEqual(ca.get(P).json()["total"], 0)
             self.assertEqual(ca.delete(f"{P}/sales-core", headers=H(csrf)).status_code, 404)

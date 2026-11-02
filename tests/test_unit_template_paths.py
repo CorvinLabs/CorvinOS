@@ -22,7 +22,7 @@ _PATH_RE = re.compile(r"(?:%s)[^\s'\":;]*" % "|".join(map(re.escape, PLACEHOLDER
 
 def _templates() -> list[Path]:
     out = subprocess.run(["git", "ls-files", "*.service"], cwd=REPO,
-                         capture_output=True, text=True, check=True).stdout.split()
+                         capture_output=True, text=True, check=True, encoding="utf-8", errors="replace").stdout.split()
     return [REPO / p for p in out if not p.startswith(".claude/")]
 
 
@@ -66,7 +66,7 @@ def _resolves(path: Path) -> bool:
                 return False
             rel = "/".join(parts[:i]) or "."
             tracked = subprocess.run(["git", "ls-files", "--", rel], cwd=REPO,
-                                     capture_output=True, text=True, check=True).stdout
+                                     capture_output=True, text=True, check=True, encoding="utf-8", errors="replace").stdout
             return bool(tracked.strip())
     return False
 
@@ -97,6 +97,6 @@ def test_resolver_positive_controls():
 def test_every_repo_path_in_a_template_exists():
     missing = []
     for tpl in _templates():
-        for raw in _missing_in(tpl.read_text()):
+        for raw in _missing_in(tpl.read_text(encoding="utf-8")):
             missing.append(f"{tpl.relative_to(REPO)}: {raw}")
     assert not missing, "unit templates name paths that do not exist:\n" + "\n".join(missing)

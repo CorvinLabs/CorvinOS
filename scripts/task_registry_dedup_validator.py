@@ -59,14 +59,14 @@ class TaskRegistryDedup:
     def _extract_id(self, file_path: Path) -> str:
         """Extract ADR ID from frontmatter (e.g., id: ADR-0123)"""
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, 'r', encoding="utf-8") as f:
                 for line in f:
                     if line.startswith('id:'):
                         # Extract ID (e.g., "id: ADR-0123" → "ADR-0123")
                         match = re.search(r'ADR-\d{4}', line)
                         if match:
                             return match.group(0)
-                    if line.startswith('---') and 'id:' not in open(file_path).read()[:200]:
+                    if line.startswith('---') and 'id:' not in open(file_path, encoding="utf-8").read()[:200]:
                         # End of frontmatter without finding ID
                         break
         except Exception as e:
@@ -120,7 +120,7 @@ class TaskRegistryDedup:
 
         # Save audit report
         audit_file = AUDIT_DIR / f"dedup_audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(audit_file, 'w') as f:
+        with open(audit_file, 'w', encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         print(f"\n[OK] Audit report saved: {audit_file}")
 

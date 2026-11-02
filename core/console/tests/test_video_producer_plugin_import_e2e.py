@@ -78,7 +78,7 @@ def _env(home: Path) -> dict:
 
 def _probe(argv_prefix: list, home: Path) -> dict:
     proc = subprocess.run([*argv_prefix, sys.executable, "-c", _PROBE], env=_env(home), cwd=str(home),
-                          capture_output=True, text=True, timeout=180)
+                          capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("PROBE")), None)
     assert proc.returncode == 0 and line, f"rc={proc.returncode}\n{proc.stdout[-2000:]}\n{proc.stderr[-4000:]}"
     return json.loads(line[len("PROBE"):])

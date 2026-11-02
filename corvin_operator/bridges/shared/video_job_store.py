@@ -79,7 +79,7 @@ def sidecar_lock(base: Path) -> Iterator[None]:
     base = Path(base)
     base.mkdir(parents=True, exist_ok=True)
     with _local_lock:
-        fh = open(base / _LOCK_FILE, "a")
+        fh = open(base / _LOCK_FILE, "a", encoding="utf-8")
         try:
             if fcntl is not None:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX)

@@ -233,7 +233,7 @@ class TestCase2FreeTierDenial(TestA2AFixture):
         # Check audit
         audit_file = Path(self.tmpdir) / "licensing" / "verification_audit.jsonl"
         events = []
-        with open(audit_file) as f:
+        with open(audit_file, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     events.append(json.loads(line))
@@ -340,7 +340,7 @@ class TestCase4RevocationAndCRL(TestA2AFixture):
         # Read audit events
         audit_file = Path(self.tmpdir) / "licensing" / "verification_audit.jsonl"
         events = []
-        with open(audit_file) as f:
+        with open(audit_file, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     events.append(json.loads(line))

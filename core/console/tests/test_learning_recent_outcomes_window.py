@@ -147,7 +147,7 @@ def _seed_outcomes(home: Path, *, failures: int, successes: int) -> None:
         record = event.to_dict()
         record["timestamp"] = "2026-09-06T00:00:00Z"
         lines.append(json.dumps(record, separators=(",", ":")))
-    (events_dir / "2026-09-06.jsonl").write_text("\n".join(lines) + "\n")
+    (events_dir / "2026-09-06.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def test_feedback_route_sees_the_newest_outcomes_past_the_query_limit(tmp_path):

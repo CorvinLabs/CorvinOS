@@ -223,7 +223,7 @@ class CanaryTrafficController:
             )
 
         try:
-            with open(self.state_file, "r") as f:
+            with open(self.state_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             logger.info(f"Loaded canary state: {data['current_traffic_percent']}% traffic")
             return CanaryState.from_dict(data)
@@ -240,7 +240,7 @@ class CanaryTrafficController:
         """Save canary state to disk (fail-closed if unsuccessful)"""
         try:
             tmp = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-            with open(tmp, "w") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.state.to_dict(), f, indent=2)
             # Atomic replace; a read-only target directory/file refuses it.
             if self.state_file.exists() and not os.access(self.state_file, os.W_OK):

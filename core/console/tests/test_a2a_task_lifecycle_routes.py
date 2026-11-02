@@ -110,7 +110,7 @@ class TaskLifecycleRouteTests(unittest.TestCase):
 
         def put(pid, **cfg):
             for kind, key in (("origins", "origin_id"), ("endpoints", "endpoint_id")):
-                (home / kind / f"{pid}.json").write_text(json.dumps({key: pid, "enabled": True, **cfg}))
+                (home / kind / f"{pid}.json").write_text(json.dumps({key: pid, "enabled": True, **cfg}), encoding="utf-8")
 
         put("full-peer", state="ACTIVE", _last_check_at=now - 20, _last_ok_at=now - 20,
             _peer_task_capacity="limit_reached")

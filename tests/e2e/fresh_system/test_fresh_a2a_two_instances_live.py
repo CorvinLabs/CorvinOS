@@ -50,7 +50,7 @@ def ex(name: str, cmd: str, *, timeout: float = 300, stdin: str | None = None) -
             "-e", "XDG_RUNTIME_DIR=/run/user/1000", "-e", "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
             "-e", "PATH=/home/tester/.local/bin:/home/tester/.corvin/node/bin:/usr/local/bin:/usr/bin:/bin",
             name, "bash", "-lc", cmd]
-    out = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, input=stdin if stdin is not None else "")
+    out = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, input=stdin if stdin is not None else "", encoding="utf-8", errors="replace")
     return out.stdout + out.stderr
 
 
@@ -118,7 +118,7 @@ def wait_for(fn, *, timeout: float, every: float = 3.0, what: str = ""):
 
 
 def member_pin(name: str, mode: str) -> None:
-    subprocess.run([str(HERE / "a2a_member_pin.sh"), name, mode], check=True, capture_output=True, text=True, timeout=120)
+    subprocess.run([str(HERE / "a2a_member_pin.sh"), name, mode], check=True, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     wait_for(lambda: "200" in ex(name, "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/v1/console/healthz"),
              timeout=120, what=f"{name} console after restart")
     time.sleep(8)  # the connectivity manager's first hello/ping

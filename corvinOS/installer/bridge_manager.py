@@ -127,7 +127,7 @@ class BridgeManager:
                 ["which" if sys.platform != "win32" else "where", "npm"],
                 capture_output=True,
                 text=True,
-                check=False,
+                check=False, encoding="utf-8", errors="replace",
             )
             if result.returncode == 0:
                 return Path(result.stdout.strip().split("\n")[0])
@@ -153,7 +153,7 @@ class BridgeManager:
         result = subprocess.run(
             [str(python_exe), "--version"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             print(f"✗ Python verification failed for {channel}: {result.stderr}")
@@ -168,7 +168,11 @@ class BridgeManager:
         if sys.platform == "win32":
             script_path = script_dir / f"start-{channel}.bat"
             python_exe = self.bridge_python_exe(channel)
+            # chcp 65001: the file is written as UTF-8, cmd.exe parses a batch
+            # file in the OEM code page -- a profile path with an umlaut
+            # would otherwise be mangled.
             script_content = f"""@echo off
+chcp 65001 >nul
 cd /d "{script_dir}"
 "{python_exe}" -m {daemon_module}
 """
@@ -181,7 +185,7 @@ exec "{python_exe}" -m {daemon_module}
 """
             script_path.chmod(0o755)
 
-        script_path.write_text(script_content)
+        script_path.write_text(script_content, encoding="utf-8")
         print(f"✓ Launch script created at {script_path}")
         return script_path
 

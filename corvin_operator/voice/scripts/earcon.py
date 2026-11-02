@@ -176,7 +176,7 @@ def main() -> int:
     if args.cmd == "play":
         return play(args.name)
     if args.cmd == "classify":
-        text = Path(args.file).read_text() if args.file else sys.stdin.read()
+        text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
         print(classify(text, args.threshold))
         return 0
     if args.legacy in GENERATORS:

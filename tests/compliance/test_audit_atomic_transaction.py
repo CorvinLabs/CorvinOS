@@ -167,7 +167,7 @@ class TestAtomicTransaction:
         assert txn.committed is True
 
         # Verify record was written
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == 1
@@ -206,7 +206,7 @@ class TestAtomicTransaction:
             pass  # Expected
 
         # Verify only first event exists
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             lines = [l for l in f.readlines() if l.strip()]
 
         assert len(lines) == 1
@@ -246,7 +246,7 @@ class TestAtomicTransaction:
             hashes.append(record2.hash)
 
         # Verify chain
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == 2
@@ -278,7 +278,7 @@ class TestAtomicTransaction:
             event_hash = record.hash
 
         # Verify written
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             entry = json.loads(f.readline())
 
         assert entry["event_id"] == "evt-001"
@@ -297,7 +297,7 @@ class TestAtomicTransaction:
         ) as txn:
             txn.write_record(sequence=1)
 
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             entry = json.loads(f.readline())
 
         assert entry["tenant_id"] == "tenant-abc"
@@ -318,7 +318,7 @@ class TestAtomicTransaction:
                 txn.write_record(sequence=1)
 
         # Verify all events recorded
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             lines = [l for l in f.readlines() if l.strip()]
 
         assert len(lines) == 4
@@ -359,7 +359,7 @@ class TestConcurrentWrites:
             t.join()
 
         # Verify all events written
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             lines = [l for l in f.readlines() if l.strip()]
 
         # Each thread writes 10 events
@@ -396,7 +396,7 @@ class TestConcurrentWrites:
             for _ in range(10):
                 try:
                     if temp_audit_log.exists():
-                        with open(temp_audit_log, "r") as f:
+                        with open(temp_audit_log, "r", encoding="utf-8") as f:
                             lines = f.readlines()
                             for line in lines:
                                 if line.strip():
@@ -418,7 +418,7 @@ class TestConcurrentWrites:
         reader2.join()
 
         # Verify final state
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             lines = [l for l in f.readlines() if l.strip()]
         assert len(lines) == 5
 
@@ -447,7 +447,7 @@ class TestRecoveryAndVerification:
                 prev_hash = record.hash
 
         # Verify chain integrity manually
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == 3
@@ -482,16 +482,16 @@ class TestRecoveryAndVerification:
             txn.write_record(sequence=1)
 
         # Corrupt the hash in the file
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             content = f.read()
 
         corrupted = content.replace('"hash":"', '"hash":"CORRUPTED_')
 
-        with open(temp_audit_log, "w") as f:
+        with open(temp_audit_log, "w", encoding="utf-8") as f:
             f.write(corrupted)
 
         # Reading the file shows corruption
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             entry = json.loads(f.read())
 
         # The hash is corrupted
@@ -529,7 +529,7 @@ class TestRecoveryAndVerification:
             f.truncate(file_size // 2)  # Truncate to half
 
         # Trying to read the file now shows incomplete JSON
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             content = f.read()
 
         # The last line should be incomplete
@@ -571,7 +571,7 @@ class TestAuditEventTypes:
         ) as txn:
             txn.write_record(sequence=1)
 
-        with open(temp_audit_log, "r") as f:
+        with open(temp_audit_log, "r", encoding="utf-8") as f:
             entry = json.loads(f.read())
 
         assert entry["event_type"] == event_type

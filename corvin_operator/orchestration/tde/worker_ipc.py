@@ -145,6 +145,19 @@ def _bridges_shared_dir() -> Path:
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
+def _kill_tree_windows(pid: int) -> None:
+    """Windows: end *pid* and its descendants. ``proc.kill()`` (TerminateProcess) reaches
+    only the direct child, so the claude CLI's tool children survived a timeout/cancel and
+    kept the pipes open. No-op on POSIX (the process-group kill covers it there)."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                       capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 class ProcHolder:
     """Mutable holder so a cancelled ``asyncio.to_thread(run_one_shot, ...)``
     caller can kill the subprocess it started.
@@ -170,6 +183,7 @@ class ProcHolder:
         with self._lock:
             proc = self.popen
         if proc is not None and proc.poll() is None:
+            _kill_tree_windows(proc.pid)  # no-op on POSIX
             try:
                 proc.kill()
             except Exception:  # noqa: BLE001 — best-effort, never raise from cleanup
@@ -210,7 +224,7 @@ def run_one_shot(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         stdin=subprocess.PIPE if stdin_text is not None else None,
         cwd=cwd or tempfile.gettempdir(),
-        start_new_session=posix,
+        start_new_session=posix, encoding="utf-8", errors="replace",
     )
     if proc_holder is not None:
         proc_holder._set(proc)
@@ -222,6 +236,7 @@ def run_one_shot(
             if posix:
                 _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
             else:  # pragma: no cover - windows
+                _kill_tree_windows(proc.pid)
                 proc.kill()
         except (ProcessLookupError, PermissionError, OSError):
             pass

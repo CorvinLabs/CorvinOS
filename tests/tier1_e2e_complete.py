@@ -10,7 +10,7 @@ class TestTier1Complete:
         """Part 3: Tenant Skill Architecture (schema + validation)."""
         # Load config
         import yaml
-        with open("core/skills/tenant_skill_config.yaml") as f:
+        with open("core/skills/tenant_skill_config.yaml", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         # Validate structure

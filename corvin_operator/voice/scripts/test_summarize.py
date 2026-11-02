@@ -659,7 +659,7 @@ def test_claude_authenticated_true_with_oauth_creds(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     creds_dir = tmp_path / ".claude"
     creds_dir.mkdir()
-    (creds_dir / ".credentials.json").write_text('{"claudeAiOauth": {"x": "y"}}')
+    (creds_dir / ".credentials.json").write_text('{"claudeAiOauth": {"x": "y"}}', encoding="utf-8")
     assert summarize._claude_authenticated() is True
 
 

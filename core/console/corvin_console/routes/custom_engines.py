@@ -58,7 +58,7 @@ def _load_tenant_yaml(tid: str) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return yaml.safe_load(path.read_text()) or {}
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         raise HTTPException(
             http_status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -199,7 +199,7 @@ class TestOrchestratorHappyPath(unittest.TestCase):
         # mode 0600
         mode = trail.stat().st_mode & 0o777
         self.assertEqual(mode, 0o600)
-        data = json.loads(trail.read_text())
+        data = json.loads(trail.read_text(encoding="utf-8"))
         self.assertEqual(data["request"]["subject_id"], "user_42")
         self.assertEqual(data["overall_status"], "completed")
 
@@ -421,7 +421,7 @@ class TestNoAnthropicImport(unittest.TestCase):
 
     def test_no_anthropic_in_source(self):
         import ast
-        src = (Path(__file__).resolve().parent / "erasure_orchestrator.py").read_text()
+        src = (Path(__file__).resolve().parent / "erasure_orchestrator.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -458,7 +458,7 @@ class TestL28UserModelHandler(unittest.TestCase):
                         '"metadata":{"channel":"' + channel + '","chat_key":"' + chat_key + '",'
                         '"created_at":0.0,"updated_at":0.0,"distill_count":0},'
                         '"spec":{"communication_style":"","preferences":[],'
-                        '"recurring_topics":[],"goals":[],"patterns":[],"do_not_assume":[]}}')
+                        '"recurring_topics":[],"goals":[],"patterns":[],"do_not_assume":[]}}', encoding="utf-8")
         return path
 
     def test_erasure_user_model_handler_applied(self):
@@ -516,7 +516,7 @@ class TestL28UserModelHandler(unittest.TestCase):
             "preferences": ["verbose", "formal"],
         })
         path = self._write_model_file(channel, chat_key)
-        path.write_text(pii_content)  # overwrite with PII-like content
+        path.write_text(pii_content, encoding="utf-8")  # overwrite with PII-like content
         self.assertTrue(path.exists(), "precondition: file must exist before purge")
 
         _os.environ["CORVIN_HOME"] = str(self.tmp)
@@ -633,7 +633,7 @@ class TestReasonCodeControlledVocabulary(unittest.TestCase):
             req = ErasureRequest(subject_id="user_42", requester="dpo")
             result = orch.execute(req)
             trail = Path(td) / "erasure" / f"{req.request_id}.json"
-            trail_data = json.loads(trail.read_text())
+            trail_data = json.loads(trail.read_text(encoding="utf-8"))
         return events, result, trail_data
 
     def test_forced_path_and_exception_reason_not_in_audit(self):

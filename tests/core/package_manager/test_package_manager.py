@@ -77,7 +77,7 @@ class TestPackageManagerLoadFromZip:
     def test_load_invalid_zip(self, pm, tmp_path):
         """Loading invalid ZIP should raise."""
         bad_zip = tmp_path / "bad.zip"
-        bad_zip.write_text("not a zip")
+        bad_zip.write_text("not a zip", encoding="utf-8")
 
         with pytest.raises(ValidationError):
             pm.load_from_zip(bad_zip)

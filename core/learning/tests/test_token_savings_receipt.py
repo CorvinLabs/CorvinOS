@@ -43,7 +43,7 @@ def _turn(fh, turn_id: str, model: str, ts: float, **tokens) -> None:
 @pytest.fixture
 def chain(tmp_path: Path) -> Path:
     p = tmp_path / "audit.jsonl"
-    with p.open("w") as fh:
+    with p.open("w", encoding="utf-8") as fh:
         # before the window (2026-09-28): must not count with --since 2026-09-28
         _turn(fh, "t0", "claude-opus-5", _ts("2026-09-20"), input_tokens=1000, output_tokens=1000)
         # priced: Haiku 10K in / 2K out -> actual $0.02, on Opus 5 $0.10, on Opus 5.5 $0.08
@@ -83,7 +83,7 @@ class TestComputeCostEfficiencyWindowAndReference:
 
 def _run(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, "-I", str(_SCRIPT), *args], capture_output=True, text=True,
-                          env={**os.environ, **(env or {})}, timeout=120)
+                          env={**os.environ, **(env or {})}, timeout=120, encoding="utf-8", errors="replace")
 
 
 class TestReceiptCli:

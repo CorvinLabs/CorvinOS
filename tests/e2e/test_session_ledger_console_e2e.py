@@ -111,7 +111,7 @@ def run(tmp_path_factory):
                     for _ in range(400):
                         if ws.receive_json().get("type") == "done":
                             break
-        calls = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+        calls = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
         os_calls = [c for c in calls if any(m.split()[0] in c["prompt"] for m in MSGS)]
         return {"calls": os_calls}
     finally:

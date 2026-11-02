@@ -72,7 +72,7 @@ class TestComputeFileHash:
     def test_compute_file_hash(self, tmp_path):
         """Computing hash of a file works."""
         test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
+        test_file.write_text("test content", encoding="utf-8")
 
         hash1 = asyncio.run(_compute_file_hash(test_file))
         hash2 = asyncio.run(_compute_file_hash(test_file))
@@ -84,10 +84,10 @@ class TestComputeFileHash:
     def test_compute_file_hash_different_content(self, tmp_path):
         """Different content produces different hash."""
         file1 = tmp_path / "file1.txt"
-        file1.write_text("content1")
+        file1.write_text("content1", encoding="utf-8")
 
         file2 = tmp_path / "file2.txt"
-        file2.write_text("content2")
+        file2.write_text("content2", encoding="utf-8")
 
         hash1 = asyncio.run(_compute_file_hash(file1))
         hash2 = asyncio.run(_compute_file_hash(file2))
@@ -114,10 +114,10 @@ class TestInventoryWorkflows:
     def test_inventory_single_workflow(self, tmp_path):
         """Inventory of single workflow works."""
         yaml_file = tmp_path / "wid1.awp.yaml"
-        yaml_file.write_text("name: test\n")
+        yaml_file.write_text("name: test\n", encoding="utf-8")
 
         meta_file = tmp_path / "wid1.meta.json"
-        meta_file.write_text('{"title": "Test"}')
+        meta_file.write_text('{"title": "Test"}', encoding="utf-8")
 
         manifest = asyncio.run(inventory_workflows("tenant1", tmp_path))
 
@@ -130,7 +130,7 @@ class TestInventoryWorkflows:
         """Inventory of multiple workflows works."""
         for i in range(3):
             yaml_file = tmp_path / f"wid{i}.awp.yaml"
-            yaml_file.write_text(f"name: workflow{i}\n")
+            yaml_file.write_text(f"name: workflow{i}\n", encoding="utf-8")
 
         manifest = asyncio.run(inventory_workflows("tenant1", tmp_path))
 
@@ -159,7 +159,7 @@ class TestValidateSourceData:
     def test_validate_valid_workflows(self, tmp_path):
         """Validating valid workflows succeeds."""
         yaml_file = tmp_path / "wid1.awp.yaml"
-        yaml_file.write_text("name: test\n")
+        yaml_file.write_text("name: test\n", encoding="utf-8")
 
         manifest = MigrationManifest()
         manifest.add_workflow("wid1", "hash1", "missing")
@@ -193,7 +193,7 @@ class TestCopyFilesAtomic:
 
         # Create workflow in source
         yaml_file = source / "wid1.awp.yaml"
-        yaml_file.write_text("name: test\n")
+        yaml_file.write_text("name: test\n", encoding="utf-8")
 
         # Compute hash
         yaml_hash = asyncio.run(_compute_file_hash(yaml_file))
@@ -207,7 +207,7 @@ class TestCopyFilesAtomic:
         # Verify target has the file
         target_yaml = target / "wid1.awp.yaml"
         assert target_yaml.exists()
-        assert target_yaml.read_text() == "name: test\n"
+        assert target_yaml.read_text(encoding="utf-8") == "name: test\n"
 
 
 class TestVerifyChecksums:
@@ -223,7 +223,7 @@ class TestVerifyChecksums:
     def test_verify_checksum_match(self, tmp_path):
         """Verifying matching checksums succeeds."""
         yaml_file = tmp_path / "wid1.awp.yaml"
-        yaml_file.write_text("name: test\n")
+        yaml_file.write_text("name: test\n", encoding="utf-8")
 
         yaml_hash = asyncio.run(_compute_file_hash(yaml_file))
 
@@ -236,7 +236,7 @@ class TestVerifyChecksums:
     def test_verify_checksum_mismatch_fails(self, tmp_path):
         """Verifying mismatched checksums fails."""
         yaml_file = tmp_path / "wid1.awp.yaml"
-        yaml_file.write_text("name: test\n")
+        yaml_file.write_text("name: test\n", encoding="utf-8")
 
         manifest = MigrationManifest()
         manifest.add_workflow("wid1", "wrong_hash", "meta")
@@ -257,7 +257,7 @@ class TestRunSmokeTests:
     def test_smoke_test_with_workflows(self, tmp_path):
         """Smoke test loads workflow files."""
         yaml_file = tmp_path / "wid1.awp.yaml"
-        yaml_file.write_text("name: test\n")
+        yaml_file.write_text("name: test\n", encoding="utf-8")
 
         # Should not raise
         asyncio.run(run_smoke_tests("tenant1", tmp_path))
@@ -298,9 +298,9 @@ class TestMigrateWorkflowsE2E:
 
         # Create workflow in source
         yaml_file = source / "wid1.awp.yaml"
-        yaml_file.write_text("name: test workflow\n")
+        yaml_file.write_text("name: test workflow\n", encoding="utf-8")
         meta_file = source / "wid1.meta.json"
-        meta_file.write_text('{"title": "Test"}')
+        meta_file.write_text('{"title": "Test"}', encoding="utf-8")
 
         result = asyncio.run(migrate_workflows_to_plugin(
             tenant_id="tenant1",
@@ -324,7 +324,7 @@ class TestMigrateWorkflowsE2E:
         # Create 3 workflows
         for i in range(3):
             yaml_file = source / f"wid{i}.awp.yaml"
-            yaml_file.write_text(f"name: workflow {i}\n")
+            yaml_file.write_text(f"name: workflow {i}\n", encoding="utf-8")
 
         result = asyncio.run(migrate_workflows_to_plugin(
             tenant_id="tenant1",
@@ -343,16 +343,16 @@ class TestRollbackMigration:
         """Rollback restores from backup."""
         backup_dir = tmp_path / "backup"
         backup_dir.mkdir()
-        (backup_dir / "file.txt").write_text("backup content")
+        (backup_dir / "file.txt").write_text("backup content", encoding="utf-8")
 
         target_dir = tmp_path / "target"
         target_dir.mkdir()
-        (target_dir / "file.txt").write_text("old content")
+        (target_dir / "file.txt").write_text("old content", encoding="utf-8")
 
         asyncio.run(rollback_migration("tenant1", backup_dir, target_dir))
 
         # Target should have backup content
-        assert (target_dir / "file.txt").read_text() == "backup content"
+        assert (target_dir / "file.txt").read_text(encoding="utf-8") == "backup content"
 
 
 if __name__ == "__main__":

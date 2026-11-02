@@ -293,7 +293,7 @@ class TestAuditChain:
             chain.record(entry)
 
         # Read file and verify JSONL
-        with open(temp_log) as f:
+        with open(temp_log, encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == 3

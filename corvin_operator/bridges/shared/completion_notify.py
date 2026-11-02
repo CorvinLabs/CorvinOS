@@ -130,7 +130,7 @@ def _host_boot_id() -> str:
     mistaken for a live producer. Empty string when unavailable (Windows/mac):
     the pid check + grace still bound the lockout."""
     try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
     except OSError:
         return ""
 

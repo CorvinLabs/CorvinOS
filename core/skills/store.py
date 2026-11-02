@@ -115,7 +115,7 @@ class FileSkillStore:
         """Write skill to <root>/<name>/<version>.json."""
         skill_file = self._path(skill.name, skill.version)
         skill_file.parent.mkdir(parents=True, exist_ok=True)
-        skill_file.write_text(json.dumps(skill.to_dict(), indent=2))
+        skill_file.write_text(json.dumps(skill.to_dict(), indent=2), encoding="utf-8")
 
     def load(self, name: str, version: str) -> Skill | None:
         """Load skill from <root>/<name>/<version>.json."""
@@ -123,7 +123,7 @@ class FileSkillStore:
         if not skill_file.exists():
             return None
 
-        data = json.loads(skill_file.read_text())
+        data = json.loads(skill_file.read_text(encoding="utf-8"))
         return Skill.from_dict(data)
 
     def list_all(self) -> list[Skill]:
@@ -134,7 +134,7 @@ class FileSkillStore:
                 continue
             for version_file in skill_dir.glob("*.json"):
                 try:
-                    data = json.loads(version_file.read_text())
+                    data = json.loads(version_file.read_text(encoding="utf-8"))
                     skills.append(Skill.from_dict(data))
                 except (json.JSONDecodeError, KeyError, ValueError):
                     pass  # Skip corrupted files

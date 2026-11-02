@@ -106,7 +106,7 @@ class ChatGroupsE2ETests(unittest.TestCase):
         (self.home / "endpoints" / f"{peer_id}.json").write_text(json.dumps({
             "endpoint_id": peer_id, "url": "http://10.9.9.9:9999",
             "hmac_key": "k", "enabled": True,
-        }))
+        }), encoding="utf-8")
 
     def test_create_group_without_session_is_401(self):
         r = self._client(tenant=None).post("/v1/console/chat/groups", json={"title": "x"})
@@ -203,9 +203,9 @@ class ChatGroupsE2ETests(unittest.TestCase):
         )
         # Revoke: disable the endpoint (same state a2a_pair.py's disable flips).
         ep_path = self.home / "endpoints" / "friend-peer.json"
-        data = json.loads(ep_path.read_text())
+        data = json.loads(ep_path.read_text(encoding="utf-8"))
         data["enabled"] = False
-        ep_path.write_text(json.dumps(data))
+        ep_path.write_text(json.dumps(data), encoding="utf-8")
 
         r = client.post(
             f"/v1/console/chat/groups/{group['group_id']}/messages",

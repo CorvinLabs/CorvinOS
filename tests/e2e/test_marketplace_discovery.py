@@ -79,7 +79,7 @@ class MarketplaceDiscoveryTest(unittest.TestCase):
         index_path = resolve_index_path()
         if not index_path.is_file():
             self.skipTest(f"no local index at {index_path}")
-        on_disk = json.loads(index_path.read_text())["plugins"]
+        on_disk = json.loads(index_path.read_text(encoding="utf-8"))["plugins"]
 
         served = self._index()
         self.assertEqual(

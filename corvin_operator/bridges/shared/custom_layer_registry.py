@@ -345,7 +345,7 @@ def save_registry(
     # then write via a sibling temp file and rename (POSIX atomic).
     lock_path = path.with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w") as lock_fd:
+    with open(lock_path, "w", encoding="utf-8") as lock_fd:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
             tmp = path.with_suffix(".tmp")

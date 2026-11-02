@@ -116,7 +116,7 @@ def _write_acs_completion(fh, *, model_id: str, input_tokens: int,
 class TestComputeCostEfficiency:
     def test_real_token_usage_produces_real_totals(self, tmp_path):
         chain = tmp_path / "audit.jsonl"
-        with chain.open("w") as fh:
+        with chain.open("w", encoding="utf-8") as fh:
             # Actual model used: cheap sonnet turn, 10K in / 2K out.
             _write_turn(fh, turn_id="t1", model="claude-sonnet-5",
                         input_tokens=10_000, output_tokens=2_000, ts=1_800_000_000.0)
@@ -139,7 +139,7 @@ class TestComputeCostEfficiency:
 
     def test_unrecognized_model_excluded_not_guessed(self, tmp_path):
         chain = tmp_path / "audit.jsonl"
-        with chain.open("w") as fh:
+        with chain.open("w", encoding="utf-8") as fh:
             _write_turn(fh, turn_id="t1", model="some-future-model-nobody-priced-yet",
                         input_tokens=5_000, output_tokens=1_000, ts=1_800_000_000.0)
 
@@ -156,7 +156,7 @@ class TestComputeCostEfficiency:
 
     def test_turn_without_token_counts_excluded(self, tmp_path):
         chain = tmp_path / "audit.jsonl"
-        with chain.open("w") as fh:
+        with chain.open("w", encoding="utf-8") as fh:
             # Pre-ADR-0696 event shape: no input_tokens/output_tokens at all.
             fh.write(json.dumps({
                 "ts": 1_800_000_000.0,
@@ -189,7 +189,7 @@ class TestComputeCostEfficiency:
         chain = tmp_path / "audit.jsonl"
         day1 = 1_800_000_000.0          # some day
         day2 = day1 + 24 * 3600.0       # next day
-        with chain.open("w") as fh:
+        with chain.open("w", encoding="utf-8") as fh:
             _write_turn(fh, turn_id="t1", model="claude-haiku-4-5",
                         input_tokens=1_000, output_tokens=500, ts=day1)
             _write_turn(fh, turn_id="t2", model="claude-opus-5",
@@ -266,7 +266,7 @@ class TestStatusEndpointRealCost:
         """With real os_turn.completed events on the chain, the real HTTP
         response carries real $ totals derived from them — not $100 flat."""
         chain = self._chain_path()
-        with chain.open("w") as fh:
+        with chain.open("w", encoding="utf-8") as fh:
             _write_turn(fh, turn_id="t1", model="claude-sonnet-5",
                         input_tokens=10_000, output_tokens=2_000, ts=1_800_000_000.0)
 
@@ -292,7 +292,7 @@ class TestStatusEndpointRealCost:
         this flag exists to name.
         """
         chain = self._chain_path()
-        with chain.open("w") as fh:
+        with chain.open("w", encoding="utf-8") as fh:
             _write_turn(fh, turn_id="t1", model="claude-sonnet-5",
                         input_tokens=10_000, output_tokens=2_000, ts=1_800_000_000.0)
 
@@ -319,7 +319,7 @@ class TestStatusEndpointRealCost:
         the real HTTP route.
         """
         acs_chain = self._acs_chain_path()
-        with acs_chain.open("w") as fh:
+        with acs_chain.open("w", encoding="utf-8") as fh:
             _write_acs_completion(fh, model_id="claude-haiku-4-5-20251001",
                                   input_tokens=8_000, output_tokens=3_000,
                                   ts=1_800_000_000.0)
@@ -453,10 +453,10 @@ class TestBedrockPrefixedModelIdsArePriced:
     def test_prefixed_id_costs_the_same_as_the_bare_id(self, tmp_path, prefix):
         bare = tmp_path / "bare.jsonl"
         prefixed = tmp_path / "prefixed.jsonl"
-        with bare.open("w") as fh:
+        with bare.open("w", encoding="utf-8") as fh:
             _write_turn(fh, turn_id="t1", model="claude-sonnet-5",
                         input_tokens=10_000, output_tokens=2_000, ts=1_800_000_000.0)
-        with prefixed.open("w") as fh:
+        with prefixed.open("w", encoding="utf-8") as fh:
             _write_turn(fh, turn_id="t1", model=f"{prefix}claude-sonnet-5",
                         input_tokens=10_000, output_tokens=2_000, ts=1_800_000_000.0)
 

@@ -82,16 +82,16 @@ def main() -> int:
         n = cn.deliver_ready(outbox)
         assert n == 1, f"deliver_ready produced {n} envelopes, expected 1"
         env_file = next(outbox.glob("cn_*.json"))
-        envelope = json.loads(env_file.read_text())
+        envelope = json.loads(env_file.read_text(encoding="utf-8"))
         assert envelope["channel"] == "signal"
         assert envelope["chat_id"] == recipient  # signal chat_id stays a string
 
         # Stage 4+5 — the REAL signal handler sends it (send faked).
         driver = Path(td) / "driver.js"
-        driver.write_text(_NODE_DRIVER)
+        driver.write_text(_NODE_DRIVER, encoding="utf-8")
         res = subprocess.run(
             [node, str(driver), str(SIGNAL_HANDLER), json.dumps(envelope)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
         if res.returncode != 0:
             print(f"FAIL: node driver error: {res.stderr}")

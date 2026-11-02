@@ -33,7 +33,7 @@ def test_build_frontend_returns_true_when_dist_already_built(tmp_path: Path) -> 
     webnext_dir = tmp_path / "core" / "console" / "corvin_console" / "web-next"
     dist_dir = webnext_dir / "dist"
     dist_dir.mkdir(parents=True)
-    (dist_dir / "index.html").write_text("<html></html>")
+    (dist_dir / "index.html").write_text("<html></html>", encoding="utf-8")
 
     with mock.patch.object(console_mod.subprocess, "run") as m_run:
         ok = console_mod.build_frontend(tmp_path)
@@ -69,7 +69,7 @@ def test_build_frontend_returns_true_when_package_json_missing(tmp_path: Path) -
 def _make_webnext_with_package_json(tmp_path: Path) -> Path:
     webnext_dir = tmp_path / "core" / "console" / "corvin_console" / "web-next"
     webnext_dir.mkdir(parents=True)
-    (webnext_dir / "package.json").write_text("{}")
+    (webnext_dir / "package.json").write_text("{}", encoding="utf-8")
     return webnext_dir
 
 
@@ -83,7 +83,7 @@ def test_build_frontend_rebuilds_when_source_tree_has_a_stale_dist(tmp_path: Pat
     webnext_dir = _make_webnext_with_package_json(tmp_path)
     dist_dir = webnext_dir / "dist"
     dist_dir.mkdir(parents=True)
-    (dist_dir / "index.html").write_text("<html>stale</html>")
+    (dist_dir / "index.html").write_text("<html>stale</html>", encoding="utf-8")
 
     with mock.patch.object(console_mod, "_find_npm", return_value="npm"), \
          mock.patch.object(console_mod.subprocess, "run", return_value=mock.Mock(returncode=0)) as m_run:
@@ -161,7 +161,7 @@ def test_build_frontend_returns_true_when_build_actually_produces_dist(tmp_path:
         if cmd[-2:] == ["run", "build"]:
             dist_dir = webnext_dir / "dist"
             dist_dir.mkdir(parents=True, exist_ok=True)
-            (dist_dir / "index.html").write_text("<html></html>")
+            (dist_dir / "index.html").write_text("<html></html>", encoding="utf-8")
         return mock.Mock(returncode=0)
 
     with mock.patch.object(console_mod, "_find_npm", return_value="npm"), \

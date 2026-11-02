@@ -70,7 +70,7 @@ def get_video_metadata(video_path: str) -> Dict[str, Any]:
     """Extract metadata with robust parsing"""
     try:
         cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", video_path]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
         data = json.loads(result.stdout)
         return data
     except json.JSONDecodeError:
@@ -85,7 +85,7 @@ def _parse_ffprobe_text(video_path: str) -> Dict[str, Any]:
     """Fallback text-based ffprobe parsing"""
     try:
         cmd = ["ffprobe", "-v", "error", "-show_format", "-show_streams", video_path]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
 
         data = {"streams": [], "format": {}}
         current_stream = None

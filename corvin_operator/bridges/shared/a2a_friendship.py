@@ -703,7 +703,7 @@ def config_file_lock(*dirs: Path):
             try:
                 d.mkdir(parents=True, exist_ok=True)
                 lock_path = d / CONFIG_LOCK_NAME
-                lf = open(lock_path, "a+")
+                lf = open(lock_path, "a+", encoding="utf-8")
                 try:
                     os.chmod(lock_path, 0o600)
                 except OSError:
@@ -1218,7 +1218,7 @@ def detect_mesh_vpn_address() -> str:
     try:
         proc = subprocess.run(
             [exe, "ip", "-4"],
-            capture_output=True, text=True, timeout=_TAILSCALE_TIMEOUT_S,
+            capture_output=True, text=True, timeout=_TAILSCALE_TIMEOUT_S, encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""

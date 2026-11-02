@@ -46,7 +46,7 @@ class VideoGeneratorOrchestrator:
     def _load_config(self) -> Dict[str, Any]:
         """Load and validate configuration"""
         try:
-            with open(self.config_path, 'r') as f:
+            with open(self.config_path, 'r', encoding="utf-8") as f:
                 config = yaml.safe_load(f)
             print(f"✓ Loaded config: {self.config_path}")
             return config

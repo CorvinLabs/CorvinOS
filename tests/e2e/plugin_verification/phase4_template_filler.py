@@ -21,7 +21,7 @@ class TestImplementationFiller:
 
     def __init__(self, inventory_path: Path):
         self.inventory_path = inventory_path
-        self.inventory = json.loads(inventory_path.read_text())
+        self.inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
         self.plugins = self.inventory["plugins"]
 
     def fill_test_file(self, test_file_path: Path) -> bool:
@@ -43,7 +43,7 @@ class TestImplementationFiller:
             print(f"⚠ File not found: {test_file_path}")
             return False
 
-        content = test_file_path.read_text()
+        content = test_file_path.read_text(encoding="utf-8")
 
         # Extract plugin_id from test filename
         # Pattern: test_<plugin_id>_<test_type>.py
@@ -73,7 +73,7 @@ class TestImplementationFiller:
             content = self._fill_cleanup(content, plugin_id, plugin_meta)
 
         # Write back
-        test_file_path.write_text(content)
+        test_file_path.write_text(content, encoding="utf-8")
         print(f"✓ Filled: {test_file_path.name}")
         return True
 

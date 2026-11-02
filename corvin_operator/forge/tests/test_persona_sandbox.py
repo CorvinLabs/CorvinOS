@@ -146,7 +146,7 @@ def main() -> int:
                 "persona_sandbox_overrides": {
                     "browser": {"network": "allow", "loopback": "allow"}
                 }
-            }))
+            }), encoding="utf-8")
             policy_loop = Policy.load(Path(td))
             t("workspace loopback:allow lifts deny",
               policy_loop.deny_loopback_for_persona("browser") is False)
@@ -188,7 +188,7 @@ def main() -> int:
             wp = Path(td) / "policy.json"
             wp.write_text(json.dumps({
                 "persona_sandbox_overrides": {"browser": {"network": "deny"}}
-            }))
+            }), encoding="utf-8")
             policy_tight = Policy.load(Path(td))
             t("workspace override flips browser to deny",
               policy_tight.network_for_persona("browser") is False)
@@ -205,7 +205,7 @@ def main() -> int:
                 "persona_sandbox_overrides": {
                     "browser": {"network": "allow", "loopback": "allow"}
                 }
-            }))
+            }), encoding="utf-8")
             policy_kw = Policy.load(Path(td))
             os.environ["FORGE_PERSONA"] = "coder"
             r_kw = run_tool(reg, "web.fetch", {"url": url},
@@ -236,7 +236,7 @@ def main() -> int:
               audit_file.exists(), detail=str(audit_file))
             if audit_file.exists():
                 events = []
-                for line in audit_file.read_text().splitlines():
+                for line in audit_file.read_text(encoding="utf-8").splitlines():
                     if line.strip():
                         try:
                             events.append(json.loads(line))

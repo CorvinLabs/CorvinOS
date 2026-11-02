@@ -229,7 +229,7 @@ def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
         capture_output=True,
         text=True,
         env=env,
-        timeout=900,
+        timeout=900, encoding="utf-8", errors="replace",
     )
     if proc.returncode != 0:
         pytest.skip(f"`uv build --wheel` failed (rc={proc.returncode}); tail:\n{proc.stderr[-2000:]}")
@@ -385,7 +385,7 @@ def test_boot_platform_does_not_depend_on_console_import_order() -> None:
         capture_output=True,
         text=True,
         env=env,
-        timeout=300,
+        timeout=300, encoding="utf-8", errors="replace",
     )
     if proc.returncode != 0 and "TripwireError" in proc.stderr:
         pytest.xfail("F12 requirement not implemented: boot_platform() fails closed without `import corvin_console` first")

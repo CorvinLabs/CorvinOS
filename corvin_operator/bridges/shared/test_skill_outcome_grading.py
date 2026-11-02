@@ -349,7 +349,7 @@ def section_e2e_via_adapter() -> None:
             "ts": time.time(),
         }
         msg_path = inbox / "turn-outcome-e2e.json"
-        msg_path.write_text(json.dumps(msg))
+        msg_path.write_text(json.dumps(msg), encoding="utf-8")
 
         adapter.process_one(msg_path, settings={"whitelist": [chat_key]})
 
@@ -419,7 +419,7 @@ def section_snapshot_hygiene() -> None:
             "ts": time.time(),
         }
         msg_path = inbox / "reset-msg.json"
-        msg_path.write_text(json.dumps(msg_reset))
+        msg_path.write_text(json.dumps(msg_reset), encoding="utf-8")
         adapter.process_one(
             msg_path, settings={"whitelist": [chat_key_reset]},
         )
@@ -445,7 +445,7 @@ def section_snapshot_hygiene() -> None:
             "ts": time.time(),
         }
         msg_path = inbox / "cancel-msg.json"
-        msg_path.write_text(json.dumps(msg_cancel))
+        msg_path.write_text(json.dumps(msg_cancel), encoding="utf-8")
         adapter.process_one(
             msg_path, settings={"whitelist": [chat_key_cancel]},
         )

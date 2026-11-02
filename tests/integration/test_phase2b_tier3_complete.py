@@ -43,7 +43,7 @@ def test_tier3_eventstore_with_limits():
 
         # Write 100 events
         event_file = events_dir / "2026-09-04.jsonl"
-        with open(event_file, "w") as f:
+        with open(event_file, "w", encoding="utf-8") as f:
             for i in range(100):
                 event = {
                     "event_id": f"evt_{i}",
@@ -57,7 +57,7 @@ def test_tier3_eventstore_with_limits():
 
         # Simulate query_events with limit
         results = []
-        with open(event_file) as f:
+        with open(event_file, encoding="utf-8") as f:
             for i, line in enumerate(f):
                 if i >= 10:  # limit=10
                     break
@@ -73,14 +73,14 @@ def test_tier3_corrupted_json_logging():
         event_file = Path(tmpdir) / "events.jsonl"
 
         # Write mixed valid + corrupted lines
-        with open(event_file, "w") as f:
+        with open(event_file, "w", encoding="utf-8") as f:
             f.write('{"event_id": "1", "event_type": "test"}\n')
             f.write('CORRUPTED JSON HERE\n')
             f.write('{"event_id": "2", "event_type": "test"}\n')
 
         # Simulate EventStore query_events error handling
         results = []
-        with open(event_file) as f:
+        with open(event_file, encoding="utf-8") as f:
             for line in f:
                 try:
                     results.append(json.loads(line))

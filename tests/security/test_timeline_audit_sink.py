@@ -20,13 +20,13 @@ def test_timeline_action_is_written_to_the_tenant_chain():
         "task-9",
     )
     chain = forge_paths.tenant_audit_chain("_default")
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     rec = [r for r in recs if r["event_type"] == "video_producer.timeline_event"][-1]
     assert rec["details"]["action"] == "frame_status_changed"
     assert rec["details"]["task_id"] == "task-9"
     assert rec["details"]["frame_id"] == "f1"
     assert rec["details"]["progress"] == 100
-    assert "secret text" not in chain.read_text()
+    assert "secret text" not in chain.read_text(encoding="utf-8")
     # the per-process index carries the REAL chain hash, not a private one
     assert timeline._AUDIT_EVENTS[-1]["hash"] == rec["hash"]
     assert security_events.verify_chain(chain)[0]

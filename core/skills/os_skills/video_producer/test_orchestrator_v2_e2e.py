@@ -38,7 +38,7 @@ def temp_project(tmp_path):
         "## Phase 1: Asset Analysis\nAnalyze input content.\n\n"
         "## Phase 2: Storyboard\nGenerate narrative structure.\n\n"
         "## Phase 3: Workers\nGenerate audio, music, visuals.\n\n"
-        "## Phase 4: Assembly\nCombine into final video.\n"
+        "## Phase 4: Assembly\nCombine into final video.\n", encoding="utf-8"
     )
 
     # Create design system
@@ -49,7 +49,7 @@ def temp_project(tmp_path):
         "video_specs": {"resolution": "1280x720", "fps": 30}
     }
     design_file = project_dir / "design_system.json"
-    design_file.write_text(json.dumps(design_system))
+    design_file.write_text(json.dumps(design_system), encoding="utf-8")
 
     return project_dir
 

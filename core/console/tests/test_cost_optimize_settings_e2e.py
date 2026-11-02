@@ -96,7 +96,7 @@ def test_put_lower_value_is_stored_0600_and_read_back_by_the_real_reader(home):
     assert r.status_code == 200, r.text
     assert r.json()["effective"]["ratio"] == 0.05
     f = _file(home)
-    assert json.loads(f.read_text()) == {"cap_ratio": 0.05}
+    assert json.loads(f.read_text(encoding="utf-8")) == {"cap_ratio": 0.05}
     assert stat.S_IMODE(f.stat().st_mode) == 0o600
     import savings_cap
     assert savings_cap.resolve("_default").effective_ratio == 0.05      # the other side of the file
@@ -130,7 +130,7 @@ def test_put_merges_keys_instead_of_replacing(home):
     c = _client()
     c.put(URL, json={"cap_ratio": 0.05})
     c.put(URL, json={"floor_usd": 1.0})
-    assert json.loads(_file(home).read_text()) == {"cap_ratio": 0.05, "floor_usd": 1.0}
+    assert json.loads(_file(home).read_text(encoding="utf-8")) == {"cap_ratio": 0.05, "floor_usd": 1.0}
 
 
 @pytest.mark.parametrize("raw", [
@@ -158,7 +158,7 @@ def test_get_reports_the_measured_state(home):
     from core.paths.tenant import tenant_audit_chain
     chain = tenant_audit_chain("_default")
     chain.parent.mkdir(parents=True, exist_ok=True)
-    with chain.open("a") as fh:
+    with chain.open("a", encoding="utf-8") as fh:
         for n in range(10):
             fh.write(json.dumps({"ts": time.time(), "event_type": "os_turn.completed", "details": {
                 "turn_id": f"t{n}", "model": HAIKU, "exit_code": 0,
@@ -203,7 +203,7 @@ def test_a_config_change_is_audited_with_what_was_asked_and_what_is_in_force(hom
     c = _client()
     c.put(URL, json={"cap_ratio": 0.5})                      # Free: asked 0.5, in force 0.10
     chain = tenant_audit_chain("_default")
-    recs = [json.loads(l) for l in chain.read_text().splitlines()
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines()
             if '"cost.optimize_config_changed"' in l]
     recs = [r for r in recs if r.get("event_type") == "cost.optimize_config_changed"]
     assert len(recs) == 1, recs

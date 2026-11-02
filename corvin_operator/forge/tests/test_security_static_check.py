@@ -233,7 +233,7 @@ def test_mcp_respects_custom_policy_widens_forbidden():
         # Operator decides 'csv' is also forbidden (silly but tests the path).
         (td / "policy.json").write_text(json.dumps({
             "forbidden_imports": ["socket", "subprocess", "csv"],
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()
@@ -255,7 +255,7 @@ def test_mcp_respects_custom_policy_narrows_forbidden():
         # by default unless meta.network is also set).
         (td / "policy.json").write_text(json.dumps({
             "forbidden_imports": [],   # explicit empty list
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()

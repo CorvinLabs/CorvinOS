@@ -33,7 +33,7 @@ def sample_skill_folder():
             (skill_dir / subdir).mkdir()
 
         # Create required files
-        (skill_dir / "README.md").write_text("# Test Skill\n\nA test skill for packaging.")
+        (skill_dir / "README.md").write_text("# Test Skill\n\nA test skill for packaging.", encoding="utf-8")
 
         # Create minimal skill.json
         (skill_dir / "skill.json").write_text(
@@ -46,7 +46,7 @@ def sample_skill_folder():
                 "boot_layer": "installed",
                 "input_schema": {"input": "string"},
                 "output_schema": {"output": "string"},
-            })
+            }), encoding="utf-8"
         )
 
         # Create src/skill.py
@@ -55,7 +55,7 @@ def sample_skill_folder():
 class TestSkill:
     def execute(self, input_data: str) -> str:
         return f"processed: {input_data}"
-"""
+""", encoding="utf-8"
         )
 
         # Create minimal test file
@@ -63,7 +63,7 @@ class TestSkill:
             """
 def test_skill_works():
     assert True
-"""
+""", encoding="utf-8"
         )
 
         yield skill_dir
@@ -80,7 +80,7 @@ class TestSkillPackager:
 
     def test_package_skill_basic(self, sample_skill_folder):
         """Package a skill and verify ZIP is created."""
-        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text())
+        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text(encoding="utf-8"))
         manifest = SkillManifestV2.from_dict(manifest_data)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -102,7 +102,7 @@ class TestSkillPackager:
 
     def test_package_duplicate_error(self, sample_skill_folder):
         """Packaging same skill twice should raise FileExistsError."""
-        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text())
+        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text(encoding="utf-8"))
         manifest = SkillManifestV2.from_dict(manifest_data)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -130,7 +130,7 @@ class TestSkillPackager:
 
     def test_zip_contents_valid(self, sample_skill_folder):
         """Verify ZIP contains all expected files and structure."""
-        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text())
+        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text(encoding="utf-8"))
         manifest = SkillManifestV2.from_dict(manifest_data)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -154,7 +154,7 @@ class TestSkillPackager:
 
     def test_metadata_files_content(self, sample_skill_folder):
         """Verify .forge metadata files have correct content."""
-        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text())
+        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text(encoding="utf-8"))
         manifest = SkillManifestV2.from_dict(manifest_data)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -188,7 +188,7 @@ class TestSkillPackager:
 
     def test_checksum_validation(self, sample_skill_folder):
         """Verify checksums are computed and included."""
-        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text())
+        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text(encoding="utf-8"))
         manifest = SkillManifestV2.from_dict(manifest_data)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -219,7 +219,7 @@ class TestPackageE2E:
 
     def test_e2e_generate_package_extract(self, sample_skill_folder):
         """E2E: Create skill folder → Package → Extract → Validate."""
-        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text())
+        manifest_data = json.loads((sample_skill_folder / "skill.json").read_text(encoding="utf-8"))
         manifest = SkillManifestV2.from_dict(manifest_data)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -242,7 +242,7 @@ class TestPackageE2E:
 
                 # Verify manifest is still valid
                 extracted_manifest_data = json.loads(
-                    (extracted_skill / "skill.json").read_text()
+                    (extracted_skill / "skill.json").read_text(encoding="utf-8")
                 )
                 extracted_manifest = SkillManifestV2.from_dict(extracted_manifest_data)
                 assert extracted_manifest.skill_id == "test_skill"

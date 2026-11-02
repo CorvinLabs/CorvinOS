@@ -215,7 +215,7 @@ def _do_increment_and_check(
     with _INCREMENT_LOCK:
         try:
             # File-level locking for cross-process atomicity
-            with open(lock_path, "w") as lock_file:
+            with open(lock_path, "w", encoding="utf-8") as lock_file:
                 try:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
                 except (AttributeError, OSError):

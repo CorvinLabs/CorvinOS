@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 job_id, cfg = sys.argv[1], Path(sys.argv[2])
-payload = json.loads(cfg.read_text())
+payload = json.loads(cfg.read_text(encoding="utf-8"))
 cfg.unlink()  # like job_main: the task file does not outlive its read
 task = payload["task"]
 base = Path(payload["config"]["storage_base"])
@@ -48,7 +48,7 @@ def advance(status, **fields):
 advance("skills_running", started_at=datetime.now(), percent=10)
 marks = base / "stub_marks"
 marks.mkdir(exist_ok=True)
-(marks / job_id).write_text("started")
+(marks / job_id).write_text("started", encoding="utf-8")
 
 if "[die]" in task:
     sys.exit(7)
@@ -57,7 +57,7 @@ if "[hang]" in task:
     sys.exit(0)
 if "[pair]" in task:
     end = time.monotonic() + 20
-    while time.monotonic() < end and len([p for p in marks.iterdir() if (p.read_text() == "started")]) < 2:
+    while time.monotonic() < end and len([p for p in marks.iterdir() if (p.read_text(encoding="utf-8") == "started")]) < 2:
         time.sleep(0.05)
     time.sleep(0.3)  # both are now running at the same time
 

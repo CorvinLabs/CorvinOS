@@ -69,7 +69,7 @@ class SkillStatus:
 def _load_manifest_file(manifest_file: Path) -> Dict[str, Any]:
     import yaml
 
-    with open(manifest_file) as f:
+    with open(manifest_file, encoding="utf-8") as f:
         content = f.read()
     if content.startswith('---'):
         content = content.split('---', 2)[2]
@@ -113,12 +113,12 @@ class SkillRegistry:
     def _ensure_registry(self):
         with self._lock:
             if not self.registry_file.exists():
-                self.registry_file.write_text("skills: {}\n")
+                self.registry_file.write_text("skills: {}\n", encoding="utf-8")
 
     def _read(self) -> Dict[str, Any]:
         import yaml
 
-        with open(self.registry_file) as f:
+        with open(self.registry_file, encoding="utf-8") as f:
             registry = yaml.safe_load(f) or {}
         if not isinstance(registry, dict) or not isinstance(registry.get('skills'), dict):
             registry = {'skills': {}}
@@ -128,7 +128,7 @@ class SkillRegistry:
         import yaml
 
         tmp = self.registry_file.with_suffix('.tmp')
-        with open(tmp, 'w') as f:
+        with open(tmp, 'w', encoding="utf-8") as f:
             yaml.dump(registry, f)
         tmp.replace(self.registry_file)
 

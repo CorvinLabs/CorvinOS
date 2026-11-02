@@ -125,7 +125,7 @@ def test_tamper_detection():
         reg = Registry(Path(td))
         spec = reg.create("echo", "e", ECHO_SCHEMA, ECHO_IMPL)
         # Mutate the impl file out from under the manifest.
-        Path(spec.impl_path).write_text(ECHO_IMPL + "\n# evil\n")
+        Path(spec.impl_path).write_text(ECHO_IMPL + "\n# evil\n", encoding="utf-8")
         try:
             run_tool(reg, "echo", {"msg": "hi"}, permission_mode="yes")
             t("sha drift refused", False)
@@ -218,7 +218,7 @@ def test_manifest_corruption():
         reg = Registry(Path(td))
         reg.create("echo", "e", ECHO_SCHEMA, ECHO_IMPL)
         # Corrupt the manifest.
-        reg.manifest_path.write_text("{ this is not json")
+        reg.manifest_path.write_text("{ this is not json", encoding="utf-8")
         try:
             reg.list()
             t("corruption raises", False)
@@ -234,7 +234,7 @@ def test_audit_integrity():
         reg.delete("echo")
         reg.create("echo", "e", ECHO_SCHEMA, ECHO_IMPL)
         reg.promote("echo")
-        events = (reg.root / "audit.jsonl").read_text().splitlines()
+        events = (reg.root / "audit.jsonl").read_text(encoding="utf-8").splitlines()
         # Audit format is now structured (event_type instead of action)
         types = [json.loads(line)["event_type"] for line in events]
         t("4 events recorded", len(types) == 4,
@@ -340,7 +340,7 @@ def test_promote_layout():
         t("SKILL.md written", (skill_dir / "SKILL.md").exists())
         t("impl copied alongside",
           any(p.suffix == ".py" for p in skill_dir.iterdir()))
-        body = (skill_dir / "SKILL.md").read_text()
+        body = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
         t("SKILL.md has frontmatter",
           body.startswith("---\nname: echo"))
 

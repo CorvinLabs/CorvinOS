@@ -35,7 +35,7 @@ class VoiceSynthesizerWorkerReal:
         result = subprocess.run(
             ["espeak-ng", "--version"],
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         if result.returncode != 0:
             print("⚠️  espeak-ng not found. Install with: apt-get install espeak-ng")
@@ -102,7 +102,7 @@ class VoiceSynthesizerWorkerReal:
             text
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"  ✗ espeak-ng failed: {result.stderr}")
@@ -116,7 +116,7 @@ class VoiceSynthesizerWorkerReal:
             mp3_path
         ]
 
-        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"  ✗ ffmpeg WAV→MP3 failed: {result.stderr}")
@@ -138,7 +138,7 @@ class VoiceSynthesizerWorkerReal:
                 audio_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 duration = float(result.stdout.strip())
@@ -158,7 +158,7 @@ class VoiceSynthesizerWorkerReal:
                 "-y", f"{audio_file}.norm.mp3"
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 os.replace(f"{audio_file}.norm.mp3", audio_file)

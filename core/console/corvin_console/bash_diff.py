@@ -181,7 +181,9 @@ def take_snapshot(command: str, cwd: str, tool_use_id: str, snap_dir: str) -> in
 def hook_main() -> int:
     """PreToolUse hook entry. Always exits 0 — it must never block a tool."""
     try:
-        payload = json.load(sys.stdin)
+        # Bytes + explicit UTF-8: Claude Code sends UTF-8; the text stdin is the
+        # ANSI code page on Windows without UTF-8 mode (non-ASCII paths mangled).
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
         snap_dir = os.environ.get(SNAP_ENV, "")
         if snap_dir and payload.get("tool_name") == "Bash":
             take_snapshot(str((payload.get("tool_input") or {}).get("command") or ""),

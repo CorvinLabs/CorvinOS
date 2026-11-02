@@ -312,7 +312,7 @@ Use for validation.
             return events
 
         try:
-            with open(self.audit_chain, "r") as f:
+            with open(self.audit_chain, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)
@@ -395,7 +395,7 @@ Use for validation.
             return events
 
         try:
-            with open(audit_path, "r") as f:
+            with open(audit_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         events.append(json.loads(line))

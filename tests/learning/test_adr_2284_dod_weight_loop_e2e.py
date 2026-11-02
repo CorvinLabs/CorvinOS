@@ -40,7 +40,7 @@ def _tenant_chain(sb) -> list[dict]:
     chain = sb.tenant_home / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    return [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _config_updates(sb) -> list[dict]:
@@ -109,7 +109,7 @@ def test_feedback_moves_weights_only_past_the_confidence_gate(tmp_path, gate_clo
             assert d["old_weights"] != d["new_weights"]
             assert "w_repro" in d["confidence"]
             assert rec.get("hash") and "prev_hash" in rec
-        assert "free text" not in (sb.tenant_home / "global" / "forge" / "audit.jsonl").read_text()
+        assert "free text" not in (sb.tenant_home / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
         # the records are consecutive links of the tenant chain
         chain = _tenant_chain(sb)
         by_hash = {r.get("hash"): i for i, r in enumerate(chain)}

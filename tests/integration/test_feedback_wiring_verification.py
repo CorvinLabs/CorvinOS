@@ -23,7 +23,7 @@ def test_feedback_emitter_helper_file_exists():
     helper_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/routes/feedback_emitter_helper.py")
     assert helper_file.exists(), f"feedback_emitter_helper.py not found at {helper_file}"
 
-    content = helper_file.read_text()
+    content = helper_file.read_text(encoding="utf-8")
     assert "async def emit_feedback_event" in content, "emit_feedback_event function not found"
     assert "EventStore" in content, "EventStore not used in helper"
     assert "EventEmitter" in content, "EventEmitter not used in helper"
@@ -37,7 +37,7 @@ def test_feedback_emitter_helper_file_exists():
 def test_video_producer_api_wiring():
     """Verify video_producer_api.py has feedback wiring."""
     api_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/routes/video_producer_api.py")
-    content = api_file.read_text()
+    content = api_file.read_text(encoding="utf-8")
 
     # Verify the submit_scene_feedback endpoint exists
     assert "async def submit_scene_feedback" in content, "submit_scene_feedback endpoint not found"
@@ -83,7 +83,7 @@ def test_feedback_validation_logic():
 
     # Verify feedback_sink.py has these validations
     sink_file = Path("/home/shumway/projects/CorvinOS/core/learning/feedback_sink.py")
-    sink_content = sink_file.read_text()
+    sink_content = sink_file.read_text(encoding="utf-8")
 
     assert "class FeedbackValidator" in sink_content, "FeedbackValidator not found"
     assert "def validate(" in sink_content, "validate method not found"
@@ -99,7 +99,7 @@ def test_feedback_flow_audit_trail():
     """Verify audit trail integration in the flow."""
     # Check that EventStore is audit-first
     event_store_file = Path("/home/shumway/projects/CorvinOS/core/learning/event_store.py")
-    event_store_content = event_store_file.read_text()
+    event_store_content = event_store_file.read_text(encoding="utf-8")
 
     # Note: We don't check internals, just verify the file exists and has expected patterns
     assert event_store_file.exists(), "event_store.py not found"
@@ -107,7 +107,7 @@ def test_feedback_flow_audit_trail():
 
     # Verify EventEmitter exists and is non-blocking
     emitter_file = Path("/home/shumway/projects/CorvinOS/core/learning/event_emitter.py")
-    emitter_content = emitter_file.read_text()
+    emitter_content = emitter_file.read_text(encoding="utf-8")
 
     assert "class EventEmitter" in emitter_content, "EventEmitter class not found"
     assert "fire-and-forget" in emitter_content, "fire-and-forget pattern not documented"
@@ -137,7 +137,7 @@ def test_feedback_loop_closure_design():
 def test_no_silent_drops():
     """Verify no silent drops in feedback processing."""
     helper_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/routes/feedback_emitter_helper.py")
-    content = helper_file.read_text()
+    content = helper_file.read_text(encoding="utf-8")
 
     # Verify all error paths log explicitly
     assert "logger.error" in content, "Error logging missing"
@@ -173,7 +173,7 @@ def test_call_sites_wired():
             logger.warning(f"  ⚠ {site['name']}: file not found")
             continue
 
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
         if site["marker"] in content:
             logger.info(f"  ✓ {site['name']}: WIRED (uses {site['marker'].split('(')[0]})")
         else:

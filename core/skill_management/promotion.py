@@ -59,7 +59,7 @@ class SkillPromoter:
             )
 
         try:
-            with open(meta_path) as f:
+            with open(meta_path, encoding="utf-8") as f:
                 metadata = json.load(f)
         except Exception as e:
             return PromotionResult(
@@ -126,7 +126,7 @@ class SkillPromoter:
             shutil.copytree(local_skill_dir, shared_skill_dir)
 
             # Update meta.json
-            with open(shared_skill_dir / "meta.json", "w") as f:
+            with open(shared_skill_dir / "meta.json", "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
 
             # Remove from _local/
@@ -168,7 +168,7 @@ class SkillPromoter:
             meta_path = skill_dir / "meta.json"
             if meta_path.exists():
                 try:
-                    with open(meta_path) as f:
+                    with open(meta_path, encoding="utf-8") as f:
                         metadata = json.load(f)
                     promotable[skill_dir.name] = {
                         "version": metadata.get("version"),

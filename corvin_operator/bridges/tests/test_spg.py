@@ -201,7 +201,7 @@ def _cli(tmp_dir, *args):
     extra = list(args[1:])
     r = subprocess.run(
         [sys.executable, SPG_PY, cmd, "discord", "testchat", *extra],
-        capture_output=True, text=True, env=env, timeout=10,
+        capture_output=True, text=True, env=env, timeout=10, encoding="utf-8", errors="replace",
     )
     return r, session_path
 
@@ -241,7 +241,7 @@ def test_cli_mode_command(tmp_path):
 
 
 def test_cli_no_command_exits_nonzero(tmp_path):
-    r = subprocess.run([sys.executable, SPG_PY], capture_output=True, text=True, timeout=5)
+    r = subprocess.run([sys.executable, SPG_PY], capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
     assert r.returncode != 0
 
 

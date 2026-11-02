@@ -99,11 +99,11 @@ class TestCanonicalManifest:
         assert manager.verify_manifest_integrity()
 
         # Tamper with manifest
-        with open(self.manifest_path, "r") as f:
+        with open(self.manifest_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         data["plugins"][0]["version"] = "2.0.0"  # Tamper
-        with open(self.manifest_path, "w") as f:
+        with open(self.manifest_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
         # Reload should detect tampering
@@ -155,14 +155,14 @@ class TestPluginHashVerification:
         Path(plugin_path).mkdir(parents=True, exist_ok=True)
 
         # Create plugin.json
-        with open(os.path.join(plugin_path, "plugin.json"), "w") as f:
+        with open(os.path.join(plugin_path, "plugin.json"), "w", encoding="utf-8") as f:
             json.dump(
                 {"id": plugin_id, "version": version},
                 f,
             )
 
         # Create some content
-        with open(os.path.join(plugin_path, "main.py"), "w") as f:
+        with open(os.path.join(plugin_path, "main.py"), "w", encoding="utf-8") as f:
             f.write(content)
 
         return plugin_path
@@ -216,7 +216,7 @@ class TestPluginHashVerification:
         assert manager.add_plugin(plugin)
 
         # Tamper with plugin
-        with open(os.path.join(plugin_path, "main.py"), "w") as f:
+        with open(os.path.join(plugin_path, "main.py"), "w", encoding="utf-8") as f:
             f.write("tampered content")
 
         # Verify should fail
@@ -488,7 +488,7 @@ class TestPluginRegistrySynchronizer:
         # A plugin tree present on disk is reported with its version
         plugin_dir = Path(self.plugins_dir) / "plugin1"
         plugin_dir.mkdir()
-        (plugin_dir / "plugin.json").write_text(json.dumps({"id": "plugin1", "version": "1.0.0"}))
+        (plugin_dir / "plugin.json").write_text(json.dumps({"id": "plugin1", "version": "1.0.0"}), encoding="utf-8")
         local = sync.get_local_plugins()
         assert local.get("plugin1") == "1.0.0"
 
@@ -536,7 +536,7 @@ class TestPluginInstallerAndUpdater:
         # An installed v1 tree
         plugin_dir = Path(self.plugins_dir) / "test_plugin"
         plugin_dir.mkdir()
-        (plugin_dir / "plugin.json").write_text(json.dumps({"id": "test_plugin", "version": "1.0.0"}))
+        (plugin_dir / "plugin.json").write_text(json.dumps({"id": "test_plugin", "version": "1.0.0"}), encoding="utf-8")
 
         # Update to v2 cannot install (not implemented) → fails and leaves v1 intact
         plugin_v2 = PluginEntry(
@@ -551,7 +551,7 @@ class TestPluginInstallerAndUpdater:
 
     def _read_plugin_version(self, plugin_path: str) -> str:
         """Helper to read plugin version"""
-        with open(os.path.join(plugin_path, "plugin.json"), "r") as f:
+        with open(os.path.join(plugin_path, "plugin.json"), "r", encoding="utf-8") as f:
             return json.load(f)["version"]
 
 
@@ -642,7 +642,7 @@ class TestPhase3Integration:
         # The attempt is audited as a FAILED remediation — never a success.
         from forge import paths as forge_paths
         chain = forge_paths.tenant_audit_chain("_default")
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         rem = [r for r in recs if r["event_type"] == "plugin.remediation_attempted"]
         assert rem and all(r["details"]["success"] is False for r in rem)
 
@@ -688,7 +688,7 @@ class TestPhase3RegressionsAdversarialReview:
         assert sync._audit_remediation_attempt("p_missing", "INSTALL", True, "free text x@y.z")
         chain = tenant_audit_chain("_default")
         assert str(chain).startswith(home)
-        recs = [json.loads(l) for l in open(chain) if l.strip()]
+        recs = [json.loads(l) for l in open(chain, encoding="utf-8") if l.strip()]
         rec = [r for r in recs if r.get("event_type") == "plugin.remediation_attempted"][-1]
         details = rec.get("details", {})
         assert details["plugin_id"] == "p_missing"

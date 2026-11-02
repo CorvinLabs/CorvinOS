@@ -97,7 +97,7 @@ class CryptoBinding:
             fd, tmp_name = tempfile.mkstemp(prefix=".signing.key.", dir=str(key_path.parent))
             tmp = Path(tmp_name)
             try:
-                with os.fdopen(fd, "w") as fh:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(secrets.token_hex(32))  # 256-bit key
                     fh.flush()
                     os.fsync(fh.fileno())
@@ -121,7 +121,7 @@ class CryptoBinding:
         if not key_path.exists():
             return None, f"Signing key not found for tenant {tenant_id} (fail-closed)"
         try:
-            material = key_path.read_text().strip()
+            material = key_path.read_text(encoding="utf-8").strip()
         except OSError as exc:
             return None, f"Failed to read signing key: {exc}"
         if not material:
@@ -251,7 +251,7 @@ class CryptoBinding:
                 archive_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
                 stamp = _now().replace(":", "-")
                 archive_path = archive_dir / f"signing_{stamp}.key.old"
-                archive_path.write_text(key_path.read_text())
+                archive_path.write_text(key_path.read_text(encoding="utf-8"), encoding="utf-8")
                 archive_path.chmod(0o600)
                 key_path.unlink()
             ok, error = self._ensure_key_exists(tenant_id)

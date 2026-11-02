@@ -231,7 +231,7 @@ class TestIssuerLicenceRefusal(_RouteSandbox):
         kid = ft.parse_and_verify(tok).kid
         self.import_(tok)
         for d in (self.od, self.ed):
-            self.assertEqual(json.loads((d / f"{kid}.json").read_text())["_peer_instance_id"],
+            self.assertEqual(json.loads((d / f"{kid}.json").read_text(encoding="utf-8"))["_peer_instance_id"],
                              "iid-issuer")
 
 
@@ -310,7 +310,7 @@ class LegacyInviteRound8Tests(_RouteSandbox):
     def _plant_alice(self) -> dict:
         real = {"origin_id": "alice", "hmac_key": "1" * 64, "recv_key": "2" * 64}
         for d in (self.od, self.ed):
-            (d / "alice.json").write_text(json.dumps(real))
+            (d / "alice.json").write_text(json.dumps(real), encoding="utf-8")
         return real
 
     def test_redeem_never_overwrites_or_deletes_an_existing_connection(self):
@@ -319,7 +319,7 @@ class LegacyInviteRound8Tests(_RouteSandbox):
         self.assertEqual(code, 409)
         self.assertEqual(posted, [], "no request before the id check")
         for d in (self.od, self.ed):
-            self.assertEqual(json.loads((d / "alice.json").read_text()), real)
+            self.assertEqual(json.loads((d / "alice.json").read_text(encoding="utf-8")), real)
 
     def test_redeem_gates_invite_urls_before_any_request(self):
         for field, url in (("accept_url", "http://169.254.169.254/latest/x"),
@@ -341,7 +341,7 @@ class LegacyInviteRound8Tests(_RouteSandbox):
         pd = Path(os.environ["REMOTE_PENDING_DIR"])
         pd.mkdir(parents=True, exist_ok=True)
         f = pd / "acc-1.json"
-        f.write_text(json.dumps(self._invite()))
+        f.write_text(json.dumps(self._invite()), encoding="utf-8")
         return f
 
     def _accept(self, *, url: str, oid: str) -> int:
@@ -373,7 +373,7 @@ class LegacyInviteRound8Tests(_RouteSandbox):
 
     def test_accept_licence_refusal_leaves_no_key_file(self):
         pending = self._pending()
-        (self.od / "x.json").write_text("{}")
+        (self.od / "x.json").write_text("{}", encoding="utf-8")
         with mock.patch.object(ap, "_lic_get_limit", lambda f: 1 if f == "a2a_peers_max" else None):
             self.assertEqual(self._accept(url="http://10.4.4.4:8775", oid="bob"), 402)
         self.assertFalse(pending.exists())
@@ -411,7 +411,7 @@ class ForeignInviteHostGateRound9Tests(_RouteSandbox):
 
     def test_a_lan_peer_is_still_accepted(self):
         self.assertEqual(self._accept(self._foreign("http://10.1.1.1:8765")), 200)
-        self.assertEqual(json.loads((self.ed / "peerx.json").read_text())["url"],
+        self.assertEqual(json.loads((self.ed / "peerx.json").read_text(encoding="utf-8"))["url"],
                          "http://10.1.1.1:8765/v1/a2a/receive")
 
     def test_generate_refuses_a_receive_path_that_is_not_a_plain_path(self):

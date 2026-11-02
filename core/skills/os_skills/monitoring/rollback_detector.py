@@ -30,7 +30,7 @@ def rollback_active(tenant_id: str) -> bool:
     ``tripped: false``, means inactive. A torn or unreadable file keeps Phase 2 off."""
     path = state_path(tenant_id)
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return False
     except OSError:
@@ -49,7 +49,7 @@ def _write_state(tenant_id: str, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(data, fh)
     os.replace(tmp, path)
 

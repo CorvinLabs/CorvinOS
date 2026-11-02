@@ -55,7 +55,7 @@ def _write_origin(tmp: Path, **extra) -> None:
         **extra,
     }
     p = tmp / f"{ORIGIN_ID}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
 
 
@@ -347,7 +347,7 @@ class TestCLICommands(unittest.TestCase):
         out_file = str(self.tmp / "ca.json")
         rc, out, err = self._run_cli(["ca-init", "--yes", "--out", out_file])
         self.assertEqual(rc, 0, f"stderr: {err}")
-        keypair = json.loads(Path(out_file).read_text())
+        keypair = json.loads(Path(out_file).read_text(encoding="utf-8"))
         self.assertIn("ca_privkey_hex", keypair)
         self.assertIn("ca_pubkey_hex", keypair)
         # Verify it's a real Ed25519 keypair

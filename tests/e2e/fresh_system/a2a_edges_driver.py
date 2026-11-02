@@ -19,8 +19,8 @@ import remote_trigger_sender as rts  # noqa: E402
 
 kid = sys.argv[1]
 url = sys.argv[2]
-cfg = json.load(open(f"/home/tester/CorvinOS/corvin_operator/cowork/remote_endpoints/{kid}.json"))
-iid = json.load(open("/home/tester/CorvinOS/.corvin/global/instance_id.json"))["instance_id"]
+cfg = json.load(open(f"/home/tester/CorvinOS/corvin_operator/cowork/remote_endpoints/{kid}.json", encoding="utf-8"))
+iid = json.load(open("/home/tester/CorvinOS/.corvin/global/instance_id.json", encoding="utf-8"))["instance_id"]
 
 
 def att(name, payload=b"x", sha=None):

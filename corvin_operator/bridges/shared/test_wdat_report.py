@@ -28,7 +28,7 @@ def _make_event(event_type: str, details: dict) -> str:
 
 
 def test_iter_audit_events_filters_by_type():
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         f.write(_make_event("acs.worker_spawned", {"worker_id": "w1", "run_id": "r1"}) + "\n")
         f.write(_make_event("acs.manager_decided", {"run_id": "r1"}) + "\n")
         f.write(_make_event("unrelated.event", {"foo": "bar"}) + "\n")
@@ -47,7 +47,7 @@ def test_iter_audit_events_missing_file():
 
 
 def test_iter_audit_events_malformed_lines():
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         f.write("not json\n")
         f.write(_make_event("acs.worker_spawned", {"worker_id": "w2", "run_id": "r1"}) + "\n")
         path = Path(f.name)
@@ -219,7 +219,7 @@ def test_chain_integrity_broken_when_chain_is_tampered():
 def test_chain_integrity_unavailable_when_verifier_cannot_be_reached():
     with tempfile.TemporaryDirectory() as td:
         audit_path = Path(td) / "audit.jsonl"
-        audit_path.write_text("{}\n")
+        audit_path.write_text("{}\n", encoding="utf-8")
         with patch.object(_wr, "_FORGE_PATH", "/nonexistent/path/that/breaks/import"), \
              patch("builtins.__import__", side_effect=ImportError("boom")):
             assert _wr._real_chain_integrity(audit_path, run_event_count=1) == "unavailable"
@@ -253,7 +253,7 @@ def test_generate_report_no_workers():
     """Report with no matching events should still produce valid structure."""
     with tempfile.TemporaryDirectory() as td:
         audit_path = Path(td) / "audit.jsonl"
-        audit_path.write_text("")
+        audit_path.write_text("", encoding="utf-8")
         with patch.object(_wr, "_audit_path", return_value=audit_path):
             report = _wr.generate_report("run-xyz", tenant_id="_test")
     assert report["run_id"] == "run-xyz"
@@ -266,7 +266,7 @@ def test_generate_report_with_events():
     with tempfile.TemporaryDirectory() as td:
         audit_path = Path(td) / "audit.jsonl"
         lines = [json.dumps(ev) + "\n" for ev in _mock_events("run-001")]
-        audit_path.write_text("".join(lines))
+        audit_path.write_text("".join(lines), encoding="utf-8")
         with patch.object(_wr, "_audit_path", return_value=audit_path):
             report = _wr.generate_report("run-001", tenant_id="_test")
     assert report["total_workers"] == 2
@@ -284,7 +284,7 @@ def test_generate_report_include_content_no_key():
     with tempfile.TemporaryDirectory() as td:
         audit_path = Path(td) / "audit.jsonl"
         lines = [json.dumps(ev) + "\n" for ev in _mock_events("run-001")]
-        audit_path.write_text("".join(lines))
+        audit_path.write_text("".join(lines), encoding="utf-8")
         # Set run_dir so traces dir lookup succeeds (matches acs_runtime session path)
         run_dir = Path(td) / "tenants" / "_test" / "sessions" / "discord:test" / "acs" / "runs" / "run-001"
         run_dir.mkdir(parents=True)
@@ -314,10 +314,10 @@ def test_cli_help(capsys):
 def test_cli_output_to_file():
     with tempfile.TemporaryDirectory() as td:
         audit_path = Path(td) / "audit.jsonl"
-        audit_path.write_text("")
+        audit_path.write_text("", encoding="utf-8")
         out_path = Path(td) / "report.json"
         with patch.object(_wr, "_audit_path", return_value=audit_path):
             _wr.main(["run-abc", "--tenant", "_test", "--output", str(out_path)])
-        report = json.loads(out_path.read_text())
+        report = json.loads(out_path.read_text(encoding="utf-8"))
     assert report["run_id"] == "run-abc"
     assert report["total_workers"] == 0

@@ -78,7 +78,7 @@ class OldCodeUnreachabilityGate:
               jq -r 'select(.caller_module | (startswith("core.legacy_compat") | not) and (startswith("core.skills") | not)) | \
               "\\(.timestamp) \\(.api_name) \\(.caller_module)"' 2>/dev/null"""
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.stdout.strip():
                 for line in result.stdout.strip().split('\n'):

@@ -44,7 +44,7 @@ def docx(area, text, name="spec.docx"):
 
 def test_markdown_is_admitted_and_its_email_and_phone_are_redacted(area):
     p = area / "notes.md"
-    p.write_text("# Runbook\nContact anna.schmidt@example.org or +49 30 1234567 when the job fails.\n")
+    p.write_text("# Runbook\nContact anna.schmidt@example.org or +49 30 1234567 when the job fails.\n", encoding="utf-8")
     r = run(area, p)
     assert r.report.verdict == "admitted_redacted" and set(r.report.pii_kinds) == {"email", "phone"}
     text = r.projection["text"]
@@ -53,7 +53,7 @@ def test_markdown_is_admitted_and_its_email_and_phone_are_redacted(area):
 
 def test_a_plain_document_without_pii_is_admitted_unchanged(area):
     p = area / "plain.txt"
-    p.write_text("How to deploy: build, test, ship.\n")
+    p.write_text("How to deploy: build, test, ship.\n", encoding="utf-8")
     r = run(area, p)
     assert r.report.verdict == "admitted" and r.projection["text"].startswith("How to deploy")
 
@@ -82,7 +82,7 @@ def test_a_secret_anywhere_in_the_extracted_text_refuses_the_document(area):
 
 def test_a_secret_past_the_part_shown_to_a_generator_is_still_found(area):
     p = area / "long.md"
-    p.write_text("word " * 20000 + "\nAKIAIOSFODNN7EXAMPLE\n")   # the secret sits far beyond DOC_TEXT_MAX
+    p.write_text("word " * 20000 + "\nAKIAIOSFODNN7EXAMPLE\n", encoding="utf-8")   # the secret sits far beyond DOC_TEXT_MAX
     assert run(area, p).report.reason_code == "contains_secret"
 
 
@@ -103,7 +103,7 @@ def test_a_zip_renamed_docx_without_the_document_part_is_a_mismatch_and_a_plain_
 
 def test_a_long_unbroken_run_cannot_stall_the_redactor(area):
     p = area / "blob.txt"
-    p.write_text("a" * 1_500_000 + " end\n")
+    p.write_text("a" * 1_500_000 + " end\n", encoding="utf-8")
     t = time.time()
     r = run(area, p)
     assert r.report.verdict.startswith("admitted") and time.time() - t < 10, "regexes never see a megabyte-long word"
@@ -124,13 +124,13 @@ def test_a_pdf_goes_through_pdftotext_and_without_it_is_refused_with_a_reason(ar
 
 def test_a_pdf_extension_on_other_bytes_is_a_mismatch(area):
     p = area / "x.pdf"
-    p.write_text("not a pdf")
+    p.write_text("not a pdf", encoding="utf-8")
     assert run(area, p).report.reason_code == "format_mismatch"
 
 
 def test_the_gate_sees_the_redacted_text_and_a_refusal_or_crash_refuses(area):
     p = area / "g.md"
-    p.write_text("mail me: zed@example.org\n")
+    p.write_text("mail me: zed@example.org\n", encoding="utf-8")
     seen = []
     run(area, p, gate=lambda t: seen.append(t))
     assert seen and "zed@example.org" not in seen[0]
@@ -143,7 +143,7 @@ def test_a_pack_of_big_documents_stays_under_the_cap_and_says_it_shrank(area):
     items = []
     for i in range(5):
         p = area / f"d{i}.md"
-        p.write_text(("lorem ipsum dolor sit amet " * 900))
+        p.write_text(("lorem ipsum dolor sit amet " * 900), encoding="utf-8")
         items.append(analyze_item(p, item_id=f"d{i}", upload_root=area, tenant_id="_default", gate=lambda t: None))
     pack = build_pack(items)
     assert len(json.dumps(pack).encode()) <= 24 * 1024 and "document_text" in pack["degraded"]

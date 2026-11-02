@@ -242,14 +242,14 @@ class TestWindowsPathsSymlinks(unittest.TestCase):
         link = Path(self.test_dir) / "link.txt"
 
         # Create source file
-        source.write_text("test content")
+        source.write_text("test content", encoding="utf-8")
 
         # Create symlink
         create_symlink(source, link, is_dir=False)
 
         # Verify link exists and points to source
         self.assertTrue(link.exists())
-        self.assertEqual(link.read_text(), "test content")
+        self.assertEqual(link.read_text(encoding="utf-8"), "test content")
 
     def test_create_symlink_directory(self):
         """create_symlink creates directory symlinks/junctions."""
@@ -258,7 +258,7 @@ class TestWindowsPathsSymlinks(unittest.TestCase):
 
         # Create source directory with a file
         source.mkdir(exist_ok=True)
-        (source / "test.txt").write_text("test")
+        (source / "test.txt").write_text("test", encoding="utf-8")
 
         # Create symlink
         create_symlink(source, link, is_dir=True)
@@ -276,22 +276,22 @@ class TestWindowsPathsSymlinks(unittest.TestCase):
         source2 = Path(self.test_dir) / "source2.txt"
         link = Path(self.test_dir) / "link.txt"
 
-        source1.write_text("content1")
-        source2.write_text("content2")
+        source1.write_text("content1", encoding="utf-8")
+        source2.write_text("content2", encoding="utf-8")
 
         # Create first link
         create_symlink(source1, link, is_dir=False)
-        self.assertEqual(link.read_text(), "content1")
+        self.assertEqual(link.read_text(encoding="utf-8"), "content1")
 
         # Replace with second link
         create_symlink(source2, link, is_dir=False)
-        self.assertEqual(link.read_text(), "content2")
+        self.assertEqual(link.read_text(encoding="utf-8"), "content2")
 
     def test_create_symlink_normalize_paths(self):
         """create_symlink normalizes paths."""
         # Use mixed separators
         source = Path(self.test_dir) / "source.txt"
-        source.write_text("test")
+        source.write_text("test", encoding="utf-8")
 
         if is_windows():
             link_path = str(Path(self.test_dir) / "link.txt").replace("\\", "/")

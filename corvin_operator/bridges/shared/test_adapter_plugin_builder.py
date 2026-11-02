@@ -119,14 +119,14 @@ def _send(adapter, inbox: Path, *, msg_id: str, channel: str, chat_id: str,
     env = {"id": msg_id, "channel": channel, "from": sender,
            "chat_id": chat_id, "text": text, "ts": 0}
     f = inbox / f"{msg_id}.json"
-    f.write_text(json.dumps(env))
+    f.write_text(json.dumps(env), encoding="utf-8")
     adapter.process_one(f, settings={"whitelist": [sender]})
 
 
 def _last_ack_text(outbox: Path, msg_id: str) -> str:
     files = sorted(outbox.glob(f"{msg_id}_*.json"))
     assert files, f"no ack written for {msg_id}"
-    return json.loads(files[-1].read_text())["text"]
+    return json.loads(files[-1].read_text(encoding="utf-8"))["text"]
 
 
 POSTGRES_ANSWERS = [
@@ -339,7 +339,7 @@ def test_flag_on_but_audio_message_is_not_intercepted() -> None:
                "chat_id": chat_id, "document_path": "/nonexistent/file.txt",
                "document_name": "file.txt", "text": "Ignored Name", "ts": 0}
         f = inbox / "pba-2.json"
-        f.write_text(json.dumps(env))
+        f.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(f, settings={"whitelist": [sender]})
 
         # The interview must NOT have advanced past its first question.

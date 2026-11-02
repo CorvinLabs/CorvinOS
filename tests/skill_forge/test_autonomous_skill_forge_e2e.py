@@ -245,15 +245,15 @@ class AutonomousSkillForge:
 
         # Write files
         (new_skill.path / "manifest.json").write_text(
-            json.dumps(asdict(new_skill.manifest), indent=2)
+            json.dumps(asdict(new_skill.manifest), indent=2), encoding="utf-8"
         )
         (new_skill.path / "src").mkdir(exist_ok=True)
         (new_skill.path / "src" / "handler.py").write_text(
-            "# Generated skill handler\ndef handle(input): return {'result': 'improved'}\n"
+            "# Generated skill handler\ndef handle(input): return {'result': 'improved'}\n", encoding="utf-8"
         )
         (new_skill.path / "tests").mkdir(exist_ok=True)
         (new_skill.path / "tests" / "test_handler.py").write_text(
-            "# Generated tests\ndef test_handle(): pass\n"
+            "# Generated tests\ndef test_handle(): pass\n", encoding="utf-8"
         )
 
         self.generated_skills[new_version] = new_skill
@@ -448,7 +448,7 @@ class TestAutonomousSkillForgeE2E:
         bad_skill_dir = ctx.temp_dir / f"skill-{ctx.new_version}"
         bad_skill_dir.mkdir(parents=True, exist_ok=True)
         (bad_skill_dir / "manifest.json").write_text(
-            json.dumps({"skill_id": ctx.skill_id, "version": ctx.new_version})
+            json.dumps({"skill_id": ctx.skill_id, "version": ctx.new_version}), encoding="utf-8"
         )
         (bad_skill_dir / "src").mkdir(exist_ok=True)
         # NO tests directory — will fail coverage check

@@ -200,7 +200,7 @@ def test_grade_on_unknown_pattern_is_404_and_stores_nothing(tmp_path: Path):
         )
         assert r.status_code == 404, r.text
         assert [e for e in sb.events_on_disk() if e["event_type"] == "feedback"] == []
-        assert "hunter2" not in (sb.chain.read_text() if sb.chain.exists() else "")
+        assert "hunter2" not in (sb.chain.read_text(encoding="utf-8") if sb.chain.exists() else "")
 
 
 def test_grade_is_chained_and_reason_is_not_persisted(tmp_path: Path):
@@ -218,7 +218,7 @@ def test_grade_is_chained_and_reason_is_not_persisted(tmp_path: Path):
         assert on_disk[0]["signal"]["trust_weight"] == 1.0
         assert on_disk[0]["audit_ref"]
         assert "hunter2" not in json.dumps(on_disk)
-        assert "hunter2" not in sb.chain.read_text()
+        assert "hunter2" not in sb.chain.read_text(encoding="utf-8")
         chain = [c for c in sb.chain_records() if c.get("event_type") == "learning.feedback"]
         assert any(c["details"].get("audit_ref") == on_disk[0]["audit_ref"] for c in chain)
 

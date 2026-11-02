@@ -69,8 +69,8 @@ def _multi(args) -> MultiRegistry:
 
 
 def cmd_create(args) -> int:
-    schema = json.loads(Path(args.schema).read_text())
-    impl = Path(args.impl).read_text()
+    schema = json.loads(Path(args.schema).read_text(encoding="utf-8"))
+    impl = Path(args.impl).read_text(encoding="utf-8")
     if _root_was_overridden(args):
         # Legacy: explicit --root means single-root registry. The CLI
         # --scope flag is reused for the (legacy) permission-scope here,

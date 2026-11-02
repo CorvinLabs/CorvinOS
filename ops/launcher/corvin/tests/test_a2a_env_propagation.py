@@ -21,7 +21,7 @@ class TestA2AEnvPropagation(unittest.TestCase):
     def test_serve_backend_sets_remote_origins_dir(self):
         """Code to set REMOTE_ORIGINS_DIR exists."""
         serve_backend_py = Path(__file__).parent.parent / "serve_backend.py"
-        content = serve_backend_py.read_text()
+        content = serve_backend_py.read_text(encoding="utf-8")
 
         # Check for the env var setup code
         assert "REMOTE_ORIGINS_DIR" in content, "REMOTE_ORIGINS_DIR not found in serve_backend.py"
@@ -30,7 +30,7 @@ class TestA2AEnvPropagation(unittest.TestCase):
     def test_serve_backend_sets_remote_endpoints_dir(self):
         """Code to set REMOTE_ENDPOINTS_DIR exists."""
         serve_backend_py = Path(__file__).parent.parent / "serve_backend.py"
-        content = serve_backend_py.read_text()
+        content = serve_backend_py.read_text(encoding="utf-8")
 
         assert "REMOTE_ENDPOINTS_DIR" in content, "REMOTE_ENDPOINTS_DIR not found in serve_backend.py"
         assert "remote_endpoints" in content, "remote_endpoints directory not referenced"
@@ -38,14 +38,14 @@ class TestA2AEnvPropagation(unittest.TestCase):
     def test_serve_backend_sets_pending_dir(self):
         """Code to set REMOTE_PENDING_DIR exists."""
         serve_backend_py = Path(__file__).parent.parent / "serve_backend.py"
-        content = serve_backend_py.read_text()
+        content = serve_backend_py.read_text(encoding="utf-8")
 
         assert "REMOTE_PENDING_DIR" in content, "REMOTE_PENDING_DIR not found in serve_backend.py"
 
     def test_serve_backend_creates_directories(self):
         """Code to create A2A directories exists."""
         serve_backend_py = Path(__file__).parent.parent / "serve_backend.py"
-        content = serve_backend_py.read_text()
+        content = serve_backend_py.read_text(encoding="utf-8")
 
         # Check for mkdir calls
         assert "mkdir" in content, "mkdir not found in serve_backend.py"
@@ -54,7 +54,7 @@ class TestA2AEnvPropagation(unittest.TestCase):
     def test_serve_backend_catches_import_errors(self):
         """Code gracefully handles missing forge.paths."""
         serve_backend_py = Path(__file__).parent.parent / "serve_backend.py"
-        content = serve_backend_py.read_text()
+        content = serve_backend_py.read_text(encoding="utf-8")
 
         # Check for try/except around forge import
         assert "try:" in content, "try block not found"
@@ -65,7 +65,7 @@ class TestA2AEnvPropagation(unittest.TestCase):
     def test_serve_backend_uses_setdefault(self):
         """Code uses setdefault to preserve existing env vars."""
         serve_backend_py = Path(__file__).parent.parent / "serve_backend.py"
-        content = serve_backend_py.read_text()
+        content = serve_backend_py.read_text(encoding="utf-8")
 
         # Check that setdefault is used (important for respecting already-set vars)
         assert "setdefault" in content, "setdefault not found in serve_backend.py"

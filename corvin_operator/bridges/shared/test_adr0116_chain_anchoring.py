@@ -73,7 +73,7 @@ def _make_origin_dir(
         "enabled": True,
     }
     origin_file = origins_dir / f"{origin_id}.json"
-    origin_file.write_text(json.dumps(cfg))
+    origin_file.write_text(json.dumps(cfg), encoding="utf-8")
     origin_file.chmod(0o600)
     return origins_dir
 
@@ -94,7 +94,7 @@ def _make_endpoint_dir(
         "hmac_key": hmac_key,
         "recv_key": recv_key,
     }
-    (ep_dir / f"{endpoint_id}.json").write_text(json.dumps(cfg))
+    (ep_dir / f"{endpoint_id}.json").write_text(json.dumps(cfg), encoding="utf-8")
     return ep_dir
 
 
@@ -108,7 +108,7 @@ def _mock_forge_se(audit_path: Path | None = None) -> mock.MagicMock:
                "severity": severity or "INFO", "details": details or {}}
         written.append(rec)
         if audit_path and audit_path.exists():
-            with audit_path.open("a") as fh:
+            with audit_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec) + "\n")
 
     m.write_event.side_effect = _write
@@ -122,7 +122,7 @@ def _build_test_chain(path: Path, n_records: int = 3) -> str:
     import hashlib as _hl, json as _json
     prev = ""
     last_hash = ""
-    with path.open("w") as fh:
+    with path.open("w", encoding="utf-8") as fh:
         for i in range(n_records):
             rec = {"ts": time.time(), "event_type": f"test.record_{i}",
                    "severity": "INFO", "details": {"seq": i}, "prev_hash": prev}
@@ -239,7 +239,7 @@ class TestAuditWriteEventTool(unittest.TestCase):
         audit_file = _server_audit_chain()
         self.assertFalse((stub.registry.root / stub.registry.AUDIT_NAME).exists())
         self.assertTrue(audit_file.exists(), "audit file must be created")
-        events = [json.loads(line) for line in audit_file.read_text().splitlines() if line]
+        events = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line]
         written_types = [e.get("event_type") for e in events]
         self.assertIn("delegation.started", written_types)
 
@@ -317,7 +317,7 @@ class TestGetAuditChainTail(unittest.TestCase):
     def test_returns_none_for_empty_file(self):
         from forge.security_events import get_audit_chain_tail
         p = self._tmp_path / "empty.jsonl"
-        p.write_text("")
+        p.write_text("", encoding="utf-8")
         result = get_audit_chain_tail(p)
         self.assertIsNone(result)
 
@@ -334,7 +334,7 @@ class TestGetAuditChainTail(unittest.TestCase):
         # Write one record without hash, then one with hash.
         p.write_text(
             json.dumps({"event_type": "test.a"}) + "\n"
-            + json.dumps({"event_type": "test.b", "hash": "abc123def456abcd"}) + "\n"
+            + json.dumps({"event_type": "test.b", "hash": "abc123def456abcd"}) + "\n", encoding="utf-8"
         )
         result = get_audit_chain_tail(p)
         self.assertEqual(result, "abc123def456abcd")
@@ -516,7 +516,7 @@ class TestChainAnchorRoundTrip(unittest.TestCase):
             rec = {"event_type": evt, "details": details or {}}
             h = _hl.sha256(json.dumps(rec, sort_keys=True).encode()).hexdigest()[:16]
             rec["hash"] = h
-            with fake_audit.open("a") as fh:
+            with fake_audit.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec) + "\n")
 
         mock_receiver_se.write_event.side_effect = _recv_write
@@ -654,7 +654,7 @@ class TestCrossPeerVerify(unittest.TestCase):
         """Write a chain that includes one A2A chain anchor event; return last hash."""
         last = _build_test_chain(path, n_records=2)
         # Append anchor event
-        with path.open("a") as fh:
+        with path.open("a", encoding="utf-8") as fh:
             rec: dict = {
                 "ts": time.time(),
                 "event_type": anchor_event,
@@ -684,7 +684,7 @@ class TestCrossPeerVerify(unittest.TestCase):
         # Build local chain; get last hash (will be our_tail)
         our_tail = _build_test_chain(local, n_records=3)
         # Write chain_anchor_sent in local chain referencing that same tail
-        with local.open("a") as fh:
+        with local.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "event_type": "A2A.chain_anchor_sent",
                 "severity": "INFO",
@@ -695,7 +695,7 @@ class TestCrossPeerVerify(unittest.TestCase):
 
         # Build peer chain with chain_anchor_received referencing our_tail prefix
         _build_test_chain(peer, n_records=2)
-        with peer.open("a") as fh:
+        with peer.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "event_type": "A2A.chain_anchor_received",
                 "severity": "INFO",
@@ -715,7 +715,7 @@ class TestCrossPeerVerify(unittest.TestCase):
         peer = self._tmp_path / "peer.jsonl"
 
         our_tail = _build_test_chain(local, n_records=3)
-        with local.open("a") as fh:
+        with local.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "event_type": "A2A.chain_anchor_sent",
                 "severity": "INFO",
@@ -737,7 +737,7 @@ class TestCrossPeerVerify(unittest.TestCase):
         peer = self._tmp_path / "peer.jsonl"
 
         our_tail = _build_test_chain(local, n_records=3)
-        with local.open("a") as fh:
+        with local.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "event_type": "A2A.chain_anchor_sent",
                 "severity": "INFO",
@@ -757,7 +757,7 @@ class TestCrossPeerVerify(unittest.TestCase):
 
         _build_test_chain(local, n_records=2)
         for tid in ("task-A", "task-B"):
-            with local.open("a") as fh:
+            with local.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps({
                     "event_type": "A2A.chain_anchor_sent",
                     "details": {"task_id": tid, "our_chain_tail": "abc123"},
@@ -774,8 +774,8 @@ class TestCrossPeerVerify(unittest.TestCase):
         _cpv = self._import_cross_peer()
         local = self._tmp_path / "local.jsonl"
         peer = self._tmp_path / "peer.jsonl"
-        local.write_text("")
-        peer.write_text("")
+        local.write_text("", encoding="utf-8")
+        peer.write_text("", encoding="utf-8")
         ok, problems, results = _cpv(local, peer)
         self.assertTrue(ok)
         self.assertEqual(results, [])

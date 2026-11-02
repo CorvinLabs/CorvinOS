@@ -214,7 +214,7 @@ class TestCacheOperations:
         manager.add_repository(repo_url)
 
         cache_file = manager._get_cache_file(repo_url)
-        with open(cache_file, "r") as f:
+        with open(cache_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         assert data["repo_url"] == repo_url

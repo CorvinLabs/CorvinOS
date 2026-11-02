@@ -76,7 +76,7 @@ def test_normalise_lang(code, expected):
 
 
 def test_every_console_language_is_offline_or_declared_online_only():
-    src = (REPO / "core/console/corvin_console/web-next/src/pages/voice.tsx").read_text()
+    src = (REPO / "core/console/corvin_console/web-next/src/pages/voice.tsx").read_text(encoding="utf-8")
     block = src[src.index("LANG_OPTIONS"):]
     block = block[: block.index("];")]
     codes = {vm.normalise_lang(c) for c in re.findall(r'value:\s*"([^"]+)"', block)}
@@ -130,7 +130,7 @@ def test_download_records_config_and_heals_a_corrupt_model(server, voice_dir, mo
     onnx = vm.download_piper_model("sv-SE")
     assert onnx == bad and onnx.stat().st_size == len(MODEL_BYTES)
     assert vm.model_valid(onnx)
-    cfg = json.loads((voice_dir / "config.json").read_text())
+    cfg = json.loads((voice_dir / "config.json").read_text(encoding="utf-8"))
     assert cfg["piper_model_sv"] == str(onnx)
     assert vm.model_path("sv") == onnx
     assert vm.language_status("sv")["state"] == "ready"

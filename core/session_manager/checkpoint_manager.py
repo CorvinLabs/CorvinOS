@@ -32,7 +32,7 @@ def file_lock(lock_file_path: Path, timeout_sec: float = 5.0):
 
 	lock_handle = None
 	try:
-		lock_handle = open(lock_file, 'w')
+		lock_handle = open(lock_file, 'w', encoding="utf-8")
 		# A3 FIX: Use LOCK_NB (non-blocking) + manual timeout to prevent fcntl deadlock
 		try:
 			fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -176,7 +176,7 @@ class CheckpointManager:
 
 				# Write to temp file atomically
 				temp_file = self.checkpoint_dir / f"{checkpoint.session_id}.tmp"
-				with open(temp_file, 'w') as f:
+				with open(temp_file, 'w', encoding="utf-8") as f:
 					json.dump(checkpoint_data, f, indent=2)
 					f.flush()
 					os.fsync(f.fileno())  # Force disk write
@@ -224,7 +224,7 @@ class CheckpointManager:
 				logger.warning(f"[CheckpointManager] Checkpoint not found: {session_id}")
 				return None
 
-			with open(checkpoint_file, 'r') as f:
+			with open(checkpoint_file, 'r', encoding="utf-8") as f:
 				data = json.load(f)
 
 			# Reconstruct checkpoint object

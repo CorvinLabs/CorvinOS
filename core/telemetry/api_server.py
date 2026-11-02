@@ -75,7 +75,7 @@ class TelemetryAPIServer:
         def stats_dashboard():
             """Serve dashboard HTML."""
             if self.html_path.exists():
-                with open(self.html_path) as f:
+                with open(self.html_path, encoding="utf-8") as f:
                     html = f.read()
                 # Update API endpoint
                 html = html.replace(

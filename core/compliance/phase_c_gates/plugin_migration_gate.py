@@ -79,7 +79,7 @@ class PluginMigrationGate:
             if not os.path.exists(registry_path):
                 return 0, 0, []
 
-            with open(registry_path, 'r') as f:
+            with open(registry_path, 'r', encoding="utf-8") as f:
                 registry = yaml.safe_load(f) or {}
 
             plugins = registry.get('plugins', [])
@@ -94,7 +94,7 @@ class PluginMigrationGate:
 
                 # Check plugin's source files for old imports
                 cmd = f"""grep -r "{old_imports_pattern}" "{plugin_path}" --include="*.py" 2>/dev/null | wc -l"""
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
                 old_import_count = int(result.stdout.strip() or 0)
 
                 if old_import_count == 0:

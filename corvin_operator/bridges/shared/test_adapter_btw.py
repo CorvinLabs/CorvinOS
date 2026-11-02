@@ -77,7 +77,7 @@ def test_inject_btw_roundtrip() -> None:
     adapter = _fresh_adapter()
     proc = subprocess.Popen(
         ["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        text=True, bufsize=1,
+        text=True, bufsize=1, encoding="utf-8", errors="replace",
     )
     try:
         adapter._register_stdin("chatA", proc.stdin)
@@ -111,7 +111,7 @@ def test_inject_btw_closed_pipe() -> None:
     adapter = _fresh_adapter()
     proc = subprocess.Popen(
         ["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        text=True, bufsize=1,
+        text=True, bufsize=1, encoding="utf-8", errors="replace",
     )
     adapter._register_stdin("chatB", proc.stdin)
     proc.stdin.close()
@@ -127,7 +127,7 @@ def test_inject_btw_empty_text() -> None:
     adapter = _fresh_adapter()
     proc = subprocess.Popen(
         ["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        text=True, bufsize=1,
+        text=True, bufsize=1, encoding="utf-8", errors="replace",
     )
     try:
         adapter._register_stdin("chatC", proc.stdin)
@@ -151,19 +151,19 @@ def test_peek_side_channel() -> None:
     base = Path(tempfile.mkdtemp(prefix="peek-side-"))
     try:
         f1 = base / "btw.json"
-        f1.write_text(json.dumps({"_btw": True, "text": "x", "from": "u"}))
+        f1.write_text(json.dumps({"_btw": True, "text": "x", "from": "u"}), encoding="utf-8")
         assert adapter._peek_side_channel(f1) is True
 
         f2 = base / "cancel.json"
-        f2.write_text(json.dumps({"_cancel": True, "from": "u"}))
+        f2.write_text(json.dumps({"_cancel": True, "from": "u"}), encoding="utf-8")
         assert adapter._peek_side_channel(f2) is True
 
         f3 = base / "normal.json"
-        f3.write_text(json.dumps({"text": "hello", "from": "u"}))
+        f3.write_text(json.dumps({"text": "hello", "from": "u"}), encoding="utf-8")
         assert adapter._peek_side_channel(f3) is False
 
         f4 = base / "broken.json"
-        f4.write_text("{not-json")
+        f4.write_text("{not-json", encoding="utf-8")
         assert adapter._peek_side_channel(f4) is False
 
         print("PASS: peek correctly classifies all four envelope shapes")
@@ -199,7 +199,7 @@ def test_process_one_btw_no_running() -> None:
             "ts": time.time(),
         }
         in_file = inbox / "msg-btw-1.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
 
         adapter.process_one(in_file, settings={"whitelist": ["u123"]})
 
@@ -207,7 +207,7 @@ def test_process_one_btw_no_running() -> None:
         assert (processed / "msg-btw-1.json").exists()
         out_files = list(outbox.glob("msg-btw-1_*.json"))
         assert len(out_files) == 1
-        ack = json.loads(out_files[0].read_text())
+        ack = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert ack["channel"] == "discord"
         assert ack["chat_id"] == "chat-456"
         assert "kein Task" in ack["text"] or "No task" in ack["text"], f"unexpected ack: {ack['text']!r}"
@@ -241,11 +241,11 @@ def test_process_one_btw_empty_text() -> None:
             "ts": time.time(),
         }
         in_file = inbox / "msg-btw-2.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(in_file, settings={"whitelist": ["u999"]})
         out_files = list(outbox.glob("msg-btw-2_*.json"))
         assert len(out_files) == 1
-        ack = json.loads(out_files[0].read_text())
+        ack = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert "Leere /btw" in ack["text"] or "Empty /btw" in ack["text"], f"unexpected ack: {ack['text']!r}"
         print(f"PASS: empty-text ack — {ack['text']!r}")
     finally:
@@ -273,7 +273,7 @@ def test_process_one_btw_with_running() -> None:
         })
         proc = subprocess.Popen(
             ["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            text=True, bufsize=1,
+            text=True, bufsize=1, encoding="utf-8", errors="replace",
         )
         chat_key = "chat-789"
         adapter._register_stdin(chat_key, proc.stdin)
@@ -288,14 +288,14 @@ def test_process_one_btw_with_running() -> None:
             "ts": time.time(),
         }
         in_file = inbox / "msg-btw-3.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
 
         adapter.process_one(in_file, settings={"whitelist": ["u111"]})
 
         # ACK in outbox
         out_files = list(outbox.glob("msg-btw-3_*.json"))
         assert len(out_files) == 1
-        ack = json.loads(out_files[0].read_text())
+        ack = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert "Notiz" in ack["text"] or "Note" in ack["text"], f"unexpected ack: {ack['text']!r}"
 
         # The injected line landed in the cat subprocess: close stdin,
@@ -366,7 +366,7 @@ def test_e2e_call_claude_streaming_with_btw() -> None:
     fake_dir = work / "bin"
     fake_dir.mkdir()
     fake_claude = fake_dir / "claude"
-    fake_claude.write_text(_FAKE_CLAUDE_SCRIPT)
+    fake_claude.write_text(_FAKE_CLAUDE_SCRIPT, encoding="utf-8")
     fake_claude.chmod(0o755)
 
     # Sandbox the adapter's session-dir under work/ to keep the test hermetic.
@@ -494,13 +494,13 @@ def test_process_one_btw_running_non_claude_queues() -> None:
             "ts": time.time(),
         }
         in_file = inbox / "msg-btw-nc.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
 
         adapter.process_one(in_file, settings={"whitelist": ["u222"]})
 
         out_files = list(outbox.glob("msg-btw-nc_*.json"))
         assert len(out_files) == 1
-        ack = json.loads(out_files[0].read_text())
+        ack = json.loads(out_files[0].read_text(encoding="utf-8"))
         # Honest ACK: NOT the misleading "no task running" line.
         assert "No task is running" not in ack["text"], f"regressed: {ack['text']!r}"
         assert "queued" in ack["text"].lower(), f"unexpected ack: {ack['text']!r}"

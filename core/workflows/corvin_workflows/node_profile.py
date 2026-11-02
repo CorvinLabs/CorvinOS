@@ -131,12 +131,16 @@ def _locked(fd: int) -> Iterator[None]:
     except ImportError:
         yield
         return
-    os.lseek(fd, 0, os.SEEK_SET)
+    # Lock a sentinel byte far past EOF, not byte 0: msvcrt locks are MANDATORY,
+    # so locking data made the segment unreadable to read_entries() mid-append.
+    # 1 TiB is the byte the corvin_core/forge fcntl shims lock, so a process with
+    # the shim and one without still exclude each other. O_APPEND writes go to EOF.
+    os.lseek(fd, 1 << 40, os.SEEK_SET)
     msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
     try:
         yield
     finally:
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, 1 << 40, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 

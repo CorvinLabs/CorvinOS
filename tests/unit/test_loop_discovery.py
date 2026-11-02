@@ -55,7 +55,7 @@ class _Fixture:
         for ev in events:
             by_day.setdefault(ev["timestamp"][:10], []).append(ev)
         for day, rows in by_day.items():
-            with (self.events_dir / f"{day}.jsonl").open("a") as fh:
+            with (self.events_dir / f"{day}.jsonl").open("a", encoding="utf-8") as fh:
                 for row in rows:
                     fh.write(json.dumps(row) + "\n")
 
@@ -185,7 +185,7 @@ class TestCelStageLoops(unittest.TestCase):
 
         path = Path(tenant_global_dir("_default")) / "ce_stage_grades.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"memory": {"grades": grades}}))
+        path.write_text(json.dumps({"memory": {"grades": grades}}), encoding="utf-8")
 
     def _memory(self):
         from core.learning import loop_discovery

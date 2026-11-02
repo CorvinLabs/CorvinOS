@@ -146,19 +146,19 @@ class QualityReportE2E(unittest.TestCase):
             self.assertEqual(report("job_00000004")["reason"], "other_job")
             # a symlink to a report outside the store is never followed
             outside = Path(tempfile.mkdtemp()) / "report.json"
-            outside.write_text(json.dumps({**json.loads(FIXTURE.read_text()), "job_id": "job_00000005"}))
+            outside.write_text(json.dumps({**json.loads(FIXTURE.read_text(encoding="utf-8")), "job_id": "job_00000005"}), encoding="utf-8")
             d5 = _job_with_output(home, "tenant_a", "job_00000005", metadata={"report": "report.json"}, video=False)
             (d5 / "report.json").symlink_to(outside)
             self.assertEqual(report("job_00000005"), {"state": "unreadable", "reason": "unreadable", "signals": []})
             # too large
             d6 = _job_with_output(home, "tenant_a", "job_00000006", metadata={"report": "report.json"}, video=False)
-            (d6 / "report.json").write_text(" " * (64 * 1024 + 1))
+            (d6 / "report.json").write_text(" " * (64 * 1024 + 1), encoding="utf-8")
             self.assertEqual(report("job_00000006")["reason"], "too_large")
             # an unknown verdict is shown as unknown, never as a pass
             d7 = _job_with_output(home, "tenant_a", "job_00000007", metadata={"report": "report.json"}, video=False)
             data = _place_report(d7, "job_00000007")
             data["signals"][0]["verdict"] = "great"
-            (d7 / "report.json").write_text(json.dumps(data))
+            (d7 / "report.json").write_text(json.dumps(data), encoding="utf-8")
             rep = report("job_00000007")
             self.assertEqual(rep["signals"][0]["verdict"], "unknown")
             self.assertEqual(rep["verdicts"]["unknown"], 1)

@@ -136,7 +136,7 @@ def test_validate_path_symlink_to_sibling_tenant_rejected():
 
         # Create audit file in tenant2
         audit_t2 = tenant2 / "audit.jsonl"
-        audit_t2.write_text('{"event": "test"}\n')
+        audit_t2.write_text('{"event": "test"}\n', encoding="utf-8")
 
         # Create symlink in tenant1 pointing to tenant2's audit
         symlink_path = tenant1 / "audit.jsonl"

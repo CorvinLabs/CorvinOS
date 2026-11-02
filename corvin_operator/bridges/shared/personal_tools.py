@@ -107,7 +107,7 @@ def _read_registry(p: Path) -> dict[str, Any]:
     if not p.exists():
         return {}
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
@@ -116,7 +116,7 @@ def _read_registry(p: Path) -> dict[str, Any]:
 def _write_registry(p: Path, data: dict[str, Any]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(p)
     try:
         os.chmod(p, 0o600)
@@ -274,7 +274,7 @@ def save_from_body(personal_name: str, *,
 
         # Body.
         body_path = tools_dir / f"{full}.py"
-        body_path.write_text(impl_text)
+        body_path.write_text(impl_text, encoding="utf-8")
         try:
             os.chmod(body_path, 0o600)
         except OSError:
@@ -340,7 +340,7 @@ def save_from_scope(source_name: str, personal_name: str | None = None,
                 f"impl body missing for {source_name!r} "
                 f"(expected at {src_entry.get('impl_path')})"
             )
-    body = src_impl.read_text()
+    body = src_impl.read_text(encoding="utf-8")
 
     if personal_name is None:
         # last component of dotted name

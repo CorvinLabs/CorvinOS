@@ -152,7 +152,7 @@ print("\n🔗 PHASE 3: Concatenating {len(video_segments)} video segments")
 print("-"*80)
 
 concat_file = os.path.join(temp_dir, "concat.txt")
-with open(concat_file, 'w') as f:
+with open(concat_file, 'w', encoding="utf-8") as f:
     for seg in video_segments:
         f.write(f"file '{seg}'\n")
 
@@ -224,7 +224,7 @@ probe_cmd = [
 ]
 
 try:
-    result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+    result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
     output = result.stdout
 
     # Extract key info

@@ -27,7 +27,7 @@ EN = ("Solar has two upsides.\n\nSteps\n🧭 Iteration 1: manager splits into 2 
 
 def _run(text: str, mode: str) -> str:
     return subprocess.run([sys.executable, "-I", str(SCRIPT), "--mode", mode], input=text,
-                          capture_output=True, text=True, timeout=30, check=True).stdout
+                          capture_output=True, text=True, timeout=30, check=True, encoding="utf-8", errors="replace").stdout
 
 
 @pytest.mark.parametrize("mode", ["code-only", "full"])

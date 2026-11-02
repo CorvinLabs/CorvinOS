@@ -128,14 +128,14 @@ class TestCheckpointMerkleRoot:
         filepath = checkpoint_manager.save(checkpoint)
 
         # Load JSON, tamper with task_state
-        with open(filepath, 'r') as f:
+        with open(filepath, 'r', encoding="utf-8") as f:
             data = json.load(f)
 
         # Tamper with progress value
         data["task_state"]["progress"] = 99  # Changed from 50
 
         # Write tampered checkpoint back
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding="utf-8") as f:
             json.dump(data, f)
 
         # Try to load tampered checkpoint
@@ -235,7 +235,7 @@ class TestCheckpointTenantSignature:
         filepath = checkpoint_manager.save(checkpoint)
 
         # Load JSON, tamper with tenant_signature
-        with open(filepath, 'r') as f:
+        with open(filepath, 'r', encoding="utf-8") as f:
             data = json.load(f)
 
         # Tamper with signature (flip first character)
@@ -244,7 +244,7 @@ class TestCheckpointTenantSignature:
         data["tenant_signature"] = new_sig
 
         # Write tampered checkpoint back
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding="utf-8") as f:
             json.dump(data, f)
 
         # Try to load tampered checkpoint
@@ -276,7 +276,7 @@ class TestCheckpointIntegrityRestore:
         filepath = checkpoint_manager.save(checkpoint)
 
         # Tamper with merkle_root
-        with open(filepath, 'r') as f:
+        with open(filepath, 'r', encoding="utf-8") as f:
             data = json.load(f)
 
         # Change one character in merkle_root
@@ -285,7 +285,7 @@ class TestCheckpointIntegrityRestore:
         data["merkle_root"] = new_root
 
         # Write tampered checkpoint back
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding="utf-8") as f:
             json.dump(data, f)
 
         # Try to load directly; should raise
@@ -337,7 +337,7 @@ class TestCheckpointIntegrityRestore:
 
         # ...but load() fails closed: unverifiable, not silently accepted.
         filepath = temp_checkpoint_dir / "legacy_checkpoint.json"
-        filepath.write_text(json_str)
+        filepath.write_text(json_str, encoding="utf-8")
         with pytest.raises(CheckpointIntegrityError, match="no integrity binding"):
             checkpoint_manager.load(filepath)
 
@@ -387,14 +387,14 @@ class TestCheckpointAuditTrail:
         filepath = checkpoint_manager.save(checkpoint)
 
         # Tamper with merkle_root
-        with open(filepath, 'r') as f:
+        with open(filepath, 'r', encoding="utf-8") as f:
             data = json.load(f)
 
         old_root = data["merkle_root"]
         new_root = ("0" if old_root[0] != "0" else "1") + old_root[1:]
         data["merkle_root"] = new_root
 
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding="utf-8") as f:
             json.dump(data, f)
 
         # Try to load; should raise and emit audit event
@@ -406,7 +406,7 @@ class TestCheckpointAuditTrail:
         assert audit_log_path.exists()
 
         # Parse audit events
-        with open(audit_log_path, 'r') as f:
+        with open(audit_log_path, 'r', encoding="utf-8") as f:
             lines = f.readlines()
 
         # Find checkpoint_integrity_failed event
@@ -549,7 +549,7 @@ class TestCheckpointWatchdogCircumvention:
 
         # Write malicious checkpoint to disk
         malicious_filepath = temp_checkpoint_dir / "malicious_checkpoint.json"
-        with open(malicious_filepath, 'w') as f:
+        with open(malicious_filepath, 'w', encoding="utf-8") as f:
             json.dump(malicious_data, f)
 
         # Try to load malicious checkpoint
@@ -590,10 +590,10 @@ class TestCheckpointWatchdogCircumvention:
         assert loaded2.iteration_num == 10
 
         # If attacker tries to swap the merkle_root/signature of checkpoint1 with checkpoint2's data
-        malicious_data = json.loads(filepath2.read_text())
+        malicious_data = json.loads(filepath2.read_text(encoding="utf-8"))
         malicious_data["iteration_num"] = 5  # Change iteration but keep signature from checkpoint2
         malicious_filepath = temp_checkpoint_dir / "rollback_attack.json"
-        with open(malicious_filepath, 'w') as f:
+        with open(malicious_filepath, 'w', encoding="utf-8") as f:
             json.dump(malicious_data, f)
 
         # Try to load malicious checkpoint

@@ -83,7 +83,7 @@ def _test_files():
     this repo's tests)."""
     import subprocess  # noqa: PLC0415
     out = subprocess.run(["git", "-C", str(_REPO), "ls-files", "*test_*.py", "*conftest.py",
-                          "*_test.py"], capture_output=True, text=True, check=True).stdout
+                          "*_test.py"], capture_output=True, text=True, check=True, encoding="utf-8", errors="replace").stdout
     for rel in sorted(set(out.splitlines())):
         p = _REPO / rel
         if not _SKIP.intersection(p.parts) and p.is_file():
@@ -107,14 +107,14 @@ class NoImportTimeGatePatchTests(unittest.TestCase):
                '_P = mock.patch.object(spawn_gates, "check_l44", None)\n_P.start()\n'
                'def setUpModule():\n    _P.start()\n')
         p = Path(tempfile.mkdtemp()) / "test_x.py"
-        p.write_text(src)
+        p.write_text(src, encoding="utf-8")
         self.assertEqual(_module_level_gate_starts(p), [3, 5])
         src2 = ('import spawn_gates, remote_trigger_receiver as r\n'
                 'try:\n    from unittest import mock\n'
                 '    mock.patch.object(r, "_forge_se", None).start()\nexcept ImportError:\n    pass\n'
                 'spawn_gates.check_l44 = lambda *a, **k: None\n')
         p2 = p.with_name("test_y.py")
-        p2.write_text(src2)
+        p2.write_text(src2, encoding="utf-8")
         self.assertEqual(_module_level_gate_starts(p2), [4, 7])
 
 

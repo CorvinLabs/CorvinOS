@@ -368,7 +368,7 @@ class E2EProofVideoGenerator:
         }
 
         report_path = self.output_dir / "phase5_e2e_proof_report.json"
-        report_path.write_text(json.dumps(report, indent=2))
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         logger.info(f"✓ Report saved: {report_path}")
 
         return report_path

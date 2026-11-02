@@ -55,7 +55,7 @@ def _iter_events(path: Path):
     """Yield every parseable event in the chain, in chain order."""
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

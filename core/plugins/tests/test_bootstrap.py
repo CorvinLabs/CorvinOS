@@ -147,11 +147,11 @@ class TestAssertCompliance(unittest.TestCase):
         path = Path(_audit.audit_path())  # R4: ask the resolver, never name the location
         _audit.audit_event("bridge.login", channel="test", user="u1")
         _audit.audit_event("bridge.login", channel="test", user="u2")
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         record = json.loads(lines[0])
         record["details"]["user"] = "tampered"
         lines[0] = json.dumps(record)
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         with self.assertRaises(Exception) as ctx:
             bootstrap.assert_compliance()
@@ -183,11 +183,11 @@ class TestAssertCompliance(unittest.TestCase):
         path = Path(_audit.audit_path())  # R4: ask the resolver, never name the location
         _audit.audit_event("bridge.login", channel="test", user="u1")
         _audit.audit_event("bridge.login", channel="test", user="u2")
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         record = json.loads(lines[0])
         record["details"]["user"] = "tampered"
         lines[0] = json.dumps(record)
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         with self.assertRaises(bootstrap.CoreAuditUnavailable):
             bootstrap._assert_core_audit_inline()
@@ -365,7 +365,7 @@ class TestBootstrapTenant(unittest.TestCase):
 
         path = registry_path(tenant_id="_default", corvin_home_path=self.home)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("plugins: {broken")
+        path.write_text("plugins: {broken", encoding="utf-8")
         with self.assertLogs("corvin.plugins.bootstrap", level="ERROR"):
             self.assertEqual(
                 bootstrap.bootstrap_tenant(
@@ -645,7 +645,7 @@ class TestDegradationIsAudited(unittest.TestCase):
     def test_a_corrupt_registry_is_audited_as_a_subsystem_degradation(self):
         path = self.home / "tenants" / "_default" / "plugins" / "registry.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{{{ not yaml :::")
+        path.write_text("{{{ not yaml :::", encoding="utf-8")
         loaded = bootstrap.bootstrap_tenant(
             tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
         )
@@ -656,7 +656,7 @@ class TestDegradationIsAudited(unittest.TestCase):
         """Core stability: the whole subsystem failing is a degrade, not an abort."""
         path = self.home / "tenants" / "_default" / "plugins" / "registry.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("- not\n- a\n- mapping\n")
+        path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
         config = {"spec": {"plugins": {
             # This test exercises failure-degradation of the global/declared/runtime
             # paths; the builtin path is a HEALTHY path (it ships real plugins in the

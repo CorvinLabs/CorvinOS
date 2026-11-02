@@ -38,7 +38,7 @@ def read_instance_epoch(corvin_home: Path) -> int:
     path = _epoch_path(corvin_home)
     try:
         mode = path.stat().st_mode & 0o077
-        if mode:
+        if mode and os.name != "nt":  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
             # Permissive mode is a tamper indicator — return a very large epoch
             # so the SOB epoch check fails for all SOBs (fail-closed, not fail-open).
             log.warning(

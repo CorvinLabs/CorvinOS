@@ -56,6 +56,6 @@ def test_default_root_does_not_import_paths_by_full_dotted_name(tmp_path):
     env["CORVIN_TENANT_ID"] = "acme"
     env["CORVIN_HOME"] = str(tmp_path / "home")
     r = subprocess.run([sys.executable, "-c", code], env=env, cwd=tmp_path,
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr[-2000:]
     assert "acme" in r.stdout

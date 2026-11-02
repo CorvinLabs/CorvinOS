@@ -149,7 +149,7 @@ class TestBridgeTransportProbeTCP(unittest.TestCase):
 class TestBridgeTransportNoAnthropicImport(unittest.TestCase):
     def test_no_anthropic_import(self):
         src = Path(_SHARED) / "bridge_transport.py"
-        tree = ast.parse(src.read_text())
+        tree = ast.parse(src.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = (

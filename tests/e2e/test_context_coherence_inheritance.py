@@ -254,13 +254,13 @@ class TestContextCoherenceInheritance:
 
         import json
 
-        with open(latest_path) as f:
+        with open(latest_path, encoding="utf-8") as f:
             data = json.load(f)
 
         old_time = (datetime.utcnow() - timedelta(hours=25)).isoformat()
         data["created_at"] = old_time
 
-        with open(latest_path, "w") as f:
+        with open(latest_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
         # Load should still work (warning in logs, not error)

@@ -79,7 +79,7 @@ class TestFormatOrchestrationForTelegram:
                 assert len(files) == 1
 
                 # Verify envelope content
-                with open(files[0]) as f:
+                with open(files[0], encoding="utf-8") as f:
                     envelope = json.load(f)
 
                 assert envelope["message_type"] == "orchestration_complete"
@@ -109,7 +109,7 @@ class TestFormatOrchestrationForTelegram:
                 # Verify event type
                 outbox = _get_telegram_outbox_dir()
                 files = list(outbox.glob("orchestration_*.json"))
-                with open(files[0]) as f:
+                with open(files[0], encoding="utf-8") as f:
                     envelope = json.load(f)
 
                 assert envelope["event_type"] == "ORCHESTRATION_COMPLETE_MIXED"
@@ -135,7 +135,7 @@ class TestFormatOrchestrationForTelegram:
                 # Verify voice path is in envelope
                 outbox = _get_telegram_outbox_dir()
                 files = list(outbox.glob("orchestration_*.json"))
-                with open(files[0]) as f:
+                with open(files[0], encoding="utf-8") as f:
                     envelope = json.load(f)
 
                 assert envelope["voice_attachment_path"] == voice_path
@@ -167,7 +167,7 @@ class TestFormatOrchestrationForTelegram:
 
                 # Verify each envelope has target_chat_id
                 for f in files:
-                    with open(f) as fh:
+                    with open(f, encoding="utf-8") as fh:
                         envelope = json.load(fh)
                     assert "target_chat_id" in envelope
                     assert envelope["target_chat_id"] in target_chats
@@ -261,7 +261,7 @@ class TestFormatOrchestrationForTelegram:
                 )
 
                 outbox = _get_telegram_outbox_dir()
-                with open(list(outbox.glob("*.json"))[0]) as f:
+                with open(list(outbox.glob("*.json"))[0], encoding="utf-8") as f:
                     envelope = json.load(f)
 
                 required_fields = [

@@ -40,7 +40,7 @@ class _Sandbox:
         tenant_global.mkdir(parents=True)
         (tenant_global / "forge").mkdir()
         if self.yaml_content is not None:
-            (tenant_global / "tenant.corvin.yaml").write_text(self.yaml_content)
+            (tenant_global / "tenant.corvin.yaml").write_text(self.yaml_content, encoding="utf-8")
         self.env = mock.patch.dict(os.environ, {
             "CORVIN_HOME": str(self.root),
             "CORVIN_TENANT_ID": self.tenant_id,
@@ -197,7 +197,7 @@ spec:
   data_classification:
     matrix:
       INTERNAL: [local, eu_cloud, us_cloud]
-""")
+""", encoding="utf-8")
             import time as _t
             future = _t.time() + 10
             os.utime(cfg_path, (future, future))

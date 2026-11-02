@@ -169,7 +169,7 @@ def test_a_hostile_document_is_refused_with_a_named_reason_and_nothing_is_writte
         _make(tid, "wf", good)
         from forge import paths as fp
         path = fp.tenant_home(tid) / "workflows" / "wf.awp.yaml"
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         r = put_yaml(client, "wf", text)
         if status is None:                       # shape the contract only requires to be a controlled answer
             assert r.status_code in (200, 400, 422), r.text
@@ -177,7 +177,7 @@ def test_a_hostile_document_is_refused_with_a_named_reason_and_nothing_is_writte
             assert r.status_code == status, (case, r.status_code, r.text[:300])
             assert needle in r.text, (case, r.text[:300])
         if r.status_code != 200:
-            assert path.read_text() == before, "a refused document must leave the file unchanged (INV-D1)"
+            assert path.read_text(encoding="utf-8") == before, "a refused document must leave the file unchanged (INV-D1)"
         assert shim.count() == 0, "saving a document never spawns anything"
         assert_chain_intact(tid)
 

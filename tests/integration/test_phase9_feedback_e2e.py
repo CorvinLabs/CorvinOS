@@ -66,7 +66,7 @@ class TestPhase9FeedbackE2E:
         report_file = portal.reports_dir / f"{feedback_id}.json"
         assert report_file.exists()
 
-        with open(report_file) as f:
+        with open(report_file, encoding="utf-8") as f:
             report_data = json.load(f)
             assert report_data["title"] == "Console crashes on startup"
             assert report_data["severity"] == "critical"
@@ -75,7 +75,7 @@ class TestPhase9FeedbackE2E:
         triaged_file = portal.triaged_dir / f"{feedback_id}.json"
         assert triaged_file.exists()
 
-        with open(triaged_file) as f:
+        with open(triaged_file, encoding="utf-8") as f:
             triaged_data = json.load(f)
             # Critical bug in console = P0
             assert triaged_data["priority"] == "p0"
@@ -104,7 +104,7 @@ class TestPhase9FeedbackE2E:
 
         # Verify triage
         triaged_file = portal.triaged_dir / f"{feedback_id}.json"
-        with open(triaged_file) as f:
+        with open(triaged_file, encoding="utf-8") as f:
             triaged_data = json.load(f)
             # Feature requests default to P2-P3
             assert triaged_data["priority"] in ["p2", "p3"]
@@ -127,7 +127,7 @@ class TestPhase9FeedbackE2E:
 
         # Verify triage
         triaged_file = portal.triaged_dir / f"{feedback_id}.json"
-        with open(triaged_file) as f:
+        with open(triaged_file, encoding="utf-8") as f:
             triaged_data = json.load(f)
             # Low NPS = P1 minimum
             assert triaged_data["priority"] in ["p0", "p1"]
@@ -165,9 +165,9 @@ class TestPhase9FeedbackE2E:
         report_file_a = portal_a.triaged_dir / f"{report_a.feedback_id}.json"
         report_file_b = portal_b.triaged_dir / f"{report_b.feedback_id}.json"
 
-        with open(report_file_a, "w") as f:
+        with open(report_file_a, "w", encoding="utf-8") as f:
             json.dump(triaged_a.to_dict(), f)
-        with open(report_file_b, "w") as f:
+        with open(report_file_b, "w", encoding="utf-8") as f:
             json.dump(triaged_b.to_dict(), f)
 
         # Verify isolation

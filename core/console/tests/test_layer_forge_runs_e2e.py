@@ -164,7 +164,7 @@ def test_layer_runs_do_not_count_against_the_generation_cap_and_are_never_refuse
         runs_dir.mkdir(parents=True, exist_ok=True)
         for i in range(forge_runs.MAX_RUNNING_PER_TENANT):  # a live peer's engine runs fill the cap
             (runs_dir / f"run-{i:012d}.json").write_text(json.dumps({
-                "tenant_id": TENANT, "kind": "tool", "status": "running", "boot_id": "peer", "heartbeat_at": time.time()}))
+                "tenant_id": TENANT, "kind": "tool", "status": "running", "boot_id": "peer", "heartbeat_at": time.time()}), encoding="utf-8")
         assert forge_runs.running_count(TENANT) == forge_runs.MAX_RUNNING_PER_TENANT
         r = client.post(BASE, json=_manifest(), headers={"X-CSRF-Token": csrf})
         assert r.status_code == 200, "a layer create is not an engine generation: the cap must not refuse it"
@@ -175,6 +175,6 @@ def test_run_start_and_finish_are_on_the_chain_for_a_layer_run(tmp_path):
     with _client(tmp_path) as (client, csrf, home):
         run_id = client.post(BASE, json=_manifest(), headers={"X-CSRF-Token": csrf}).json()["run_id"]
         chain = home / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
-        recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
         fin = [r for r in recs if r.get("event_type") == "forge_run.finished" and r["details"]["run_id"] == run_id]
         assert len(fin) == 1 and fin[0]["details"]["run_kind"] == "layer" and fin[0]["details"]["artifact_id"] == "console.rule@0.1.0"

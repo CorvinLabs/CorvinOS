@@ -308,7 +308,7 @@ class RealtimeHealthMonitor:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, default=str, indent=2)
 
     def save_history_checkpoint(self):
@@ -320,7 +320,7 @@ class RealtimeHealthMonitor:
             "snapshots": [asdict(s) for s in list(self.snapshots)[-2000:]],  # Last 2000
         }
 
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, default=str, indent=2)
 
 

@@ -70,7 +70,7 @@ class DataIntegrityChecker:
 
         events = []
         try:
-            with open(audit_file, "r") as f:
+            with open(audit_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         events.append(json.loads(line))
@@ -129,7 +129,7 @@ class DataIntegrityChecker:
         gaps = []
         for adr_file in adrs[:20]:  # Check first 20 for speed
             try:
-                with open(adr_file, "r") as f:
+                with open(adr_file, "r", encoding="utf-8") as f:
                     content = f.read()
 
                 # Extract ADR ID from filename
@@ -171,7 +171,7 @@ class DataIntegrityChecker:
         events = []
         cross_tenant_events = []
         try:
-            with open(audit_file, "r") as f:
+            with open(audit_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)
@@ -223,7 +223,7 @@ class DataIntegrityChecker:
         for skill_file in skills[:5]:  # Check first 5 for speed
             try:
                 events = []
-                with open(skill_file, "r") as f:
+                with open(skill_file, "r", encoding="utf-8") as f:
                     for line in f:
                         if line.strip():
                             events.append(json.loads(line))
@@ -303,7 +303,7 @@ class DataIntegrityChecker:
         learning_events = 0
 
         try:
-            with open(audit_file, "r") as f:
+            with open(audit_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)
@@ -348,7 +348,7 @@ class DataIntegrityChecker:
         duplicates = []
 
         try:
-            with open(audit_file, "r") as f:
+            with open(audit_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)

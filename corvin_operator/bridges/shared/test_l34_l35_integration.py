@@ -472,7 +472,7 @@ class TestNoAnthropicImport(unittest.TestCase):
 
     def _check_module(self, filename: str) -> None:
         import ast
-        src = (Path(__file__).resolve().parent / filename).read_text()
+        src = (Path(__file__).resolve().parent / filename).read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

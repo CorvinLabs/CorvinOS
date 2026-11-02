@@ -345,7 +345,7 @@ class SessionRecoveryManager:
             return None
 
         try:
-            with open(snapshot_file) as f:
+            with open(snapshot_file, encoding="utf-8") as f:
                 data = json.load(f)
                 snapshot = data.get("snapshot", {})
                 signature = data.get("signature", "")

@@ -263,7 +263,7 @@ def _read_cgroup_mem() -> int:
 
 def _read_file_safe(path: str) -> Optional[str]:
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
     except (OSError, IOError):
         return None

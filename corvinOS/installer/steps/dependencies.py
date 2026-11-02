@@ -41,12 +41,12 @@ def ensure_claude_code(interactive: bool = True) -> bool:
                 result = subprocess.run(
                     f'"{claude_bin}" --version',
                     capture_output=True, text=True, check=False,
-                    shell=True,
+                    shell=True, encoding="utf-8", errors="replace",
                 )
             else:
                 result = subprocess.run(
                     [claude_bin, "--version"],
-                    capture_output=True, text=True, check=False,
+                    capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
                 )
             lines = result.stdout.strip().splitlines()
             version = lines[0] if lines else "unknown"
@@ -106,12 +106,15 @@ def ensure_claude_code(interactive: bool = True) -> bool:
     import os as _os
     for d in extras:
         if d.is_dir() and str(d) not in _os.environ.get("PATH", ""):
-            _os.environ["PATH"] = str(d) + ":" + _os.environ.get("PATH", "")
+            # os.pathsep: this loop also runs on Windows (~/.local/bin holds
+            # claude.exe there), where ":" glued the dir onto the first PATH
+            # entry and made both unresolvable.
+            _os.environ["PATH"] = str(d) + _os.pathsep + _os.environ.get("PATH", "")
 
     if shutil.which("claude"):
         version = subprocess.run(
             ["claude", "--version"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
         ).stdout.strip().splitlines()[0]
         print(f"✓ Claude Code installed: {version}")
         return True
@@ -218,7 +221,7 @@ def ensure_claude_login(interactive: bool = True) -> bool:
             [claude_bin, "auth", "login"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
-            creationflags=no_console_window_flags(),
+            creationflags=no_console_window_flags(), encoding="utf-8", errors="replace",
         )
     except OSError as exc:
         print(f"⚠ Could not start 'claude auth login': {exc}")
@@ -262,7 +265,7 @@ def ensure_node(info: PlatformInfo, interactive: bool = True) -> bool:
     node = shutil.which("node")
     if node:
         result = subprocess.run(
-            ["node", "--version"], capture_output=True, text=True, check=False,
+            ["node", "--version"], capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
         )
         ver = result.stdout.strip().lstrip("v")
         major = int(ver.split(".")[0]) if ver else 0
@@ -278,7 +281,7 @@ def ensure_node(info: PlatformInfo, interactive: bool = True) -> bool:
                 r = subprocess.run(
                     f"source {nvm_sh} && which npm",
                     shell=True, executable="/bin/bash",
-                    capture_output=True, text=True, check=False,
+                    capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
                 )
                 npm_bin = r.stdout.strip()
                 if npm_bin and Path(npm_bin).exists():
@@ -356,7 +359,7 @@ def _ensure_node_via_bootstrap() -> bool:
         os.environ["PATH"] = str(node_bin) + os.pathsep + os.environ.get("PATH", "")
     ok = bool(shutil.which("node")) and bool(shutil.which("npm"))
     if ok:
-        print(f"✓ node {subprocess.run(['node', '--version'], capture_output=True, text=True, check=False).stdout.strip()} + npm ({node_bin})")
+        print(f"✓ node {subprocess.run(['node', '--version'], capture_output=True, text=True, check=False, encoding="utf-8", errors="replace").stdout.strip()} + npm ({node_bin})")
     return ok
 
 
@@ -460,7 +463,7 @@ def _ensure_pip_available(python_exe: str) -> None:
         [python_exe, "-m", "pip", "--version"],
         capture_output=True,
         text=True,
-        check=False,
+        check=False, encoding="utf-8", errors="replace",
     )
     if result.returncode == 0:
         return  # pip is already available
@@ -470,7 +473,7 @@ def _ensure_pip_available(python_exe: str) -> None:
         [python_exe, "-m", "ensurepip", "--upgrade"],
         capture_output=True,
         text=True,
-        check=False,
+        check=False, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         # ensurepip failed — log but don't crash, we'll fall back to venv
@@ -519,7 +522,7 @@ def pip_install(*packages: str, venv_python: Path | None = None) -> bool:
         [python, "-m", "pip", "install", "--user", "--quiet"] + pkg_list,
         capture_output=True,
         text=True,
-        check=False,
+        check=False, encoding="utf-8", errors="replace",
     )
     if result.returncode == 0:
         return True
@@ -537,7 +540,7 @@ def pip_install(*packages: str, venv_python: Path | None = None) -> bool:
          "--break-system-packages"] + pkg_list,
         capture_output=True,
         text=True,
-        check=False,
+        check=False, encoding="utf-8", errors="replace",
     )
     if result2.returncode == 0:
         print("  Installed via --break-system-packages")
@@ -552,7 +555,7 @@ def pip_install(*packages: str, venv_python: Path | None = None) -> bool:
         [python, "-m", "venv", str(venv_dir)],
         capture_output=True,
         text=True,
-        check=False,
+        check=False, encoding="utf-8", errors="replace",
     )
     if venv_create.returncode != 0:
         print(f"✗ venv creation failed: {venv_create.stderr.strip()}")
@@ -589,9 +592,9 @@ def _persist_venv_python(venv_python: Path) -> None:
     env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.touch()
 
-    lines = [l for l in env_file.read_text().splitlines() if not l.startswith("PY_BIN=")]
+    lines = [l for l in env_file.read_text(encoding="utf-8").splitlines() if not l.startswith("PY_BIN=")]
     lines.append(f"PY_BIN={venv_python}")
-    env_file.write_text("\n".join(lines) + "\n")
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if sys.platform != "win32":
         env_file.chmod(0o600)
     print(f"  PY_BIN={venv_python} written to service.env")
@@ -621,7 +624,9 @@ def _install_claude_windows() -> bool:
     if npm:
         print("  Trying: npm install -g @anthropic-ai/claude-code ...")
         r = subprocess.run(
-            ["npm", "install", "-g", "@anthropic-ai/claude-code"],
+            # The resolved path, not bare "npm": on Windows that is npm.cmd,
+            # which CreateProcess never finds without PATHEXT (FileNotFoundError).
+            [npm, "install", "-g", "@anthropic-ai/claude-code"],
             check=False,
         )
         if r.returncode == 0:

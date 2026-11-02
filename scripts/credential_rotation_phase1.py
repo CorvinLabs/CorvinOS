@@ -122,7 +122,7 @@ class CredentialRotationPhase1:
             return {}
         try:
             data = {}
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
@@ -138,7 +138,7 @@ class CredentialRotationPhase1:
         if not path.exists():
             return {}
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             _log.warning(f"Failed to load {path}: {e}")
@@ -185,7 +185,7 @@ class CredentialRotationPhase1:
                  "https://api.github.com/user"],
                 timeout=5,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
             if result.returncode == 0 and "login" in result.stdout:
                 return True, "authenticated"
@@ -202,7 +202,7 @@ class CredentialRotationPhase1:
                  "https://api.hetzner.cloud/v1/account"],
                 timeout=5,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
             if result.returncode == 0 and "account" in result.stdout:
                 return True, "authenticated"
@@ -219,7 +219,7 @@ class CredentialRotationPhase1:
                  "https://api.cloudflare.com/client/v4/user"],
                 timeout=5,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
             if result.returncode == 0 and "result" in result.stdout:
                 return True, "authenticated"
@@ -236,7 +236,7 @@ class CredentialRotationPhase1:
                  "https://api.openai.com/v1/models"],
                 timeout=5,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
             if result.returncode == 0 and "data" in result.stdout:
                 return True, "authenticated"
@@ -253,7 +253,7 @@ class CredentialRotationPhase1:
                  "https://ollama.com/api/tags"],
                 timeout=5,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
             if result.returncode == 0 and "models" in result.stdout:
                 return True, "authenticated"
@@ -378,7 +378,7 @@ class CredentialRotationPhase1:
         baseline_event["hash"] = sha256(event_str.encode()).hexdigest()
 
         try:
-            with open(self.audit_path, "a") as f:
+            with open(self.audit_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(baseline_event) + "\n")
             os.chmod(self.audit_path, 0o600)
             print(self._color(f"✓ Baseline documented: {self.audit_path}", "green"))
@@ -449,7 +449,7 @@ class CredentialRotationPhase1:
         # Save report
         report_path = self.repo_root / f"CREDENTIAL_ROTATION_PHASE1_REPORT.md"
         try:
-            with open(report_path, "w") as f:
+            with open(report_path, "w", encoding="utf-8") as f:
                 f.write(report)
             print(f"\n{self._color(f'✓ Report saved: {report_path}', 'green')}")
         except Exception as e:

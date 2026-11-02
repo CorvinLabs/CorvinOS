@@ -352,7 +352,7 @@ class TestNotesNotInAudit(unittest.TestCase):
             trail_dir = sb.root / "tenants" / sb.tenant_id / "global" / "erasure"
             trails = list(trail_dir.glob("er-*.json"))
             self.assertEqual(len(trails), 1)
-            trail_data = json.loads(trails[0].read_text())
+            trail_data = json.loads(trails[0].read_text(encoding="utf-8"))
             self.assertEqual(
                 trail_data["request"]["notes"],
                 "sensitive context that should NOT leak",
@@ -361,7 +361,7 @@ class TestNotesNotInAudit(unittest.TestCase):
             # Audit chain (if exists) must NOT carry notes
             audit = sb.root / "tenants" / sb.tenant_id / "global" / "forge" / "audit.jsonl"
             if audit.exists():
-                for line in audit.read_text().splitlines():
+                for line in audit.read_text(encoding="utf-8").splitlines():
                     if not line.strip():
                         continue
                     rec = json.loads(line)

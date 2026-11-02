@@ -97,7 +97,7 @@ class TestPluginExecutionTimeoutAudit(unittest.TestCase):
         self.assertTrue(str(p).startswith(str(self.home)), p)
         if not p.exists():
             return []
-        rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+        rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
         return [
             r for r in rows
             if r.get("event_type") == event_type and r["details"].get("plugin_id") == plugin_id

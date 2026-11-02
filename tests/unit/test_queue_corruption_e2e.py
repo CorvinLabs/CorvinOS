@@ -69,7 +69,7 @@ class TestQueueCorruptionE2E:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -112,7 +112,7 @@ class TestQueueCorruptionE2E:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -228,7 +228,7 @@ class TestQueueCorruptionE2E:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -261,7 +261,7 @@ class TestQueueCorruptionE2E:
                 "timestamp": f"2026-08-12T10:00:{i:02d}Z",
                 "event_id": f"evt_{i}",
             }
-            with open(temp_queue, "a") as f:
+            with open(temp_queue, "a", encoding="utf-8") as f:
                 json.dump(record, f)
                 f.write("\n")
 
@@ -313,7 +313,7 @@ class TestQueueCorruptionE2E:
             "session_id": "sess_1",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)

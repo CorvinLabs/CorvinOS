@@ -24,7 +24,7 @@ import session_reset  # noqa: E402
 def test_high_heat_reset_runs_no_llm_judge(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
     forge_chan_id = session_reset.forge_channel_id("discord", "c1")
-    root = session_reset._sessions_root("_default") / forge_chan_id
+    root = session_reset._session_chan_dir("_default", forge_chan_id)  # ":"-free on Windows
     # 5 skills: heat = 0.4*0.8 + 0.3*0.4 + 0.3*(3/5) = 0.62 > 0.5 on a timeout
     for i in range(5):
         (root / "skill-forge" / "skills" / f"s{i}").mkdir(parents=True)

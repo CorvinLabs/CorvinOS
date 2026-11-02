@@ -11,7 +11,8 @@ import { fileURLToPath } from 'url';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const harness = path.join(dir, 'tests/e2e/video-lifecycle/harness/isolated_vp_lifecycle_backend.py');
-const python = path.resolve(dir, '../../.venv/bin/python');
+// Windows venvs keep the interpreter in Scripts/python.exe, not bin/python.
+const python = path.resolve(dir, process.platform === 'win32' ? '../../.venv/Scripts/python.exe' : '../../.venv/bin/python');
 export const VL_PORT = Number(process.env.VL_E2E_PORT ?? 8797);
 export const VL_HOME = process.env.VL_E2E_HOME ?? '/tmp/corvin-vl-e2e';
 
@@ -27,7 +28,7 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${VL_PORT}`, trace: 'retain-on-failure', ...devices['Desktop Chrome'] },
   projects: [{ name: 'chromium' }],
   webServer: {
-    command: `${python} ${harness}`,
+    command: `"${python}" "${harness}"`,
     url: `http://127.0.0.1:${VL_PORT}/healthz`,
     reuseExistingServer: false,
     timeout: 120_000,

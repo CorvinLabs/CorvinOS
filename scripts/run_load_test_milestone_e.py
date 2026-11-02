@@ -136,7 +136,7 @@ async def main():
 
     # Save metrics to file for documentation
     metrics_file = Path("/home/shumway/projects/CorvinOS/LOAD_TEST_METRICS_E.json")
-    metrics_file.write_text(json.dumps(metrics, indent=2))
+    metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print(f"✅ Metrics saved to {metrics_file}\n")
 
     return metrics

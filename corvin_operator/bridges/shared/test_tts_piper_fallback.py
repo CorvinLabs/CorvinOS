@@ -141,7 +141,7 @@ def test_try_piper_tts_returns_none_when_no_model_configured(tmp_path: Path, mon
     already correct and is intentionally left unchanged here."""
     _section("piper binary present, no model configured -> None")
     fake_bin = tmp_path / "piper"
-    fake_bin.write_text("#!/bin/sh\nexit 1\n")
+    fake_bin.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IEXEC)
 
     empty_config_dir = tmp_path / "voice_config"

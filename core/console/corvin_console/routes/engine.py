@@ -126,7 +126,7 @@ def _load_tenant_yaml(tenant_id: str) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return yaml.safe_load(path.read_text()) or {}
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:
         _log.warning(f"Failed to load tenant YAML at {path}", exc_info=True)
         return {}
@@ -144,7 +144,7 @@ def _load_tenant_yaml_for_write(tenant_id: str) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception as exc:
         _log.error("tenant YAML at %s is unparseable; refusing to overwrite it", path)
         raise HTTPException(
@@ -917,7 +917,7 @@ def _load_policy(rec: session_auth.SessionRecord, target_id: str) -> dict[str, A
     if not path.exists():
         return {}
     try:
-        data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception as exc:
         _log.error("tenant YAML at %s is unparseable; refusing the sensitive-route request", path)
         raise _refuse(rec, target_id, "policy_invalid",

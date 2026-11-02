@@ -83,7 +83,7 @@ def run_tests(targets: list[str]) -> dict[str, Any]:
         proc = subprocess.run(
             [_python(), "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:logging",
              "--continue-on-collection-errors", *safe],
-            cwd=str(REPO), env=env, capture_output=True, text=True, timeout=_TIMEOUT_S,
+            cwd=str(REPO), env=env, capture_output=True, text=True, timeout=_TIMEOUT_S, encoding="utf-8", errors="replace",
         )
         tail = next((ln for ln in reversed(proc.stdout.splitlines()) if _SUMMARY_RE.search(ln)), "")
     except subprocess.TimeoutExpired:
@@ -150,7 +150,7 @@ def _items(ini: dict[str, Any]):
 def _git(*args: str) -> str:
     try:
         return subprocess.run(["git", *args], cwd=str(REPO), capture_output=True,
-                              text=True, timeout=30).stdout
+                              text=True, timeout=30, encoding="utf-8", errors="replace").stdout
     except Exception:  # noqa: BLE001
         return ""
 
@@ -194,7 +194,7 @@ def needs_run(tenant_id: str, now: float | None = None) -> tuple[bool, str]:
         return False, "no initiatives file"
     sp = _state_path(tenant_id)
     try:
-        state = json.loads(sp.read_text()) if sp and sp.is_file() else {}
+        state = json.loads(sp.read_text(encoding="utf-8")) if sp and sp.is_file() else {}
     except (OSError, json.JSONDecodeError):
         state = {}
     if now - float(state.get("at", 0)) > MAX_AGE_S:
@@ -215,7 +215,7 @@ def is_running(tenant_id: str) -> bool:
     if lp is None or not lp.exists():
         return False
     try:
-        pid = int(lp.read_text().strip() or 0)
+        pid = int(lp.read_text(encoding="utf-8").strip() or 0)
         from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415 — os.kill(pid, 0) kills on Windows
         return _os_pid_exists(pid)
     except (ValueError, ProcessLookupError, PermissionError, OSError):
@@ -229,7 +229,7 @@ def verify(tenant_id: str) -> dict[str, Any]:
     if is_running(tenant_id):
         return {"verified": 0, "reason": "already running"}
     lp.parent.mkdir(parents=True, exist_ok=True)
-    lp.write_text(str(os.getpid()))
+    lp.write_text(str(os.getpid()), encoding="utf-8")
     try:
         return _verify(tenant_id)
     finally:
@@ -278,7 +278,7 @@ def _verify(tenant_id: str) -> dict[str, Any]:
 
     sp = _state_path(tenant_id)
     if sp is not None:
-        sp.write_text(json.dumps({"at": time.time(), "fingerprint": fingerprint(fresh)}))
+        sp.write_text(json.dumps({"at": time.time(), "fingerprint": fingerprint(fresh)}), encoding="utf-8")
     green = sum(1 for v in results.values() if v["first_ok_at"])
     summary = {"verified": len(results), "green": green, "red": len(results) - green,
                "test_runs": len(cache)}

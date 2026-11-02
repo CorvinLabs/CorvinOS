@@ -278,7 +278,7 @@ async def get_audit_graph(
 
         # Read audit chain
         events = []
-        with chain_path.open("r") as f:
+        with chain_path.open("r", encoding="utf-8") as f:
             for line in f:
                 if not line.strip():
                     continue

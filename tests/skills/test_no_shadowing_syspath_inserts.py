@@ -90,7 +90,7 @@ def test_collecting_every_os_skills_test_package_leaves_audit_resolving_to_the_c
         "print('AUDIT=' + os.path.realpath(o or ''))"
     )
     out = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True,
-                         timeout=600)
+                         timeout=600, encoding="utf-8", errors="replace")
     hits = [l for l in out.stdout.splitlines() if l.startswith("HITS=")]
     aud = [l for l in out.stdout.splitlines() if l.startswith("AUDIT=")]
     assert hits and aud, out.stdout[-2000:] + out.stderr[-2000:]

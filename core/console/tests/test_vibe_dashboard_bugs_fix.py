@@ -33,7 +33,7 @@ def test_audit_tail_respects_since_parameter():
     """Verify audit_tail endpoint filters events by ?since parameter."""
     from corvin_console.routes.audit_tail import _parse_chain_file
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         # Write 3 events with different timestamps
         events = [
             {"ts": 1000.0, "event_type": "test.event1", "severity": "INFO", "details": {}},

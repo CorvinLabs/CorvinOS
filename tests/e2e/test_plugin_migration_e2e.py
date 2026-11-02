@@ -70,7 +70,7 @@ class TestPluginLifecycle:
         assert vibe_path.exists(), "Vibe plugin.json not found"
 
         import json
-        plugin_def = json.loads(vibe_path.read_text())
+        plugin_def = json.loads(vibe_path.read_text(encoding="utf-8"))
         assert plugin_def["id"] == "ai.vibe_engineering"
         assert "active_mode" in plugin_def.get("config", {})
 

@@ -21,6 +21,30 @@ logger = logging.getLogger(__name__)
 
 ACTION = "process.signal_sent"
 
+# The only two values os.kill delivers as a signal on Windows; every other one terminates.
+_WIN_CTRL_EVENTS = tuple(getattr(signal, n) for n in ("CTRL_C_EVENT", "CTRL_BREAK_EVENT")
+                         if hasattr(signal, n))
+
+
+def kill_tree_windows(pid: int) -> bool:
+    """Windows: end *pid* AND every descendant (``taskkill /T /F``). True when it succeeded.
+
+    ``TerminateProcess`` (``os.kill``/``Popen.kill``) reaches only the one pid, so a CLI
+    started through a ``.cmd`` shim (cmd.exe -> node.exe) or one with live tool children
+    leaves them running. False on POSIX, on a pid that is already gone, or when taskkill
+    itself fails — the caller then falls back to its single-process kill.
+    """
+    if os.name != "nt" or not pid or int(pid) <= 0:
+        return False
+    import subprocess  # noqa: PLC0415 - only needed on this path
+
+    try:
+        rc = subprocess.run(["taskkill", "/T", "/F", "/PID", str(int(pid))],
+                            capture_output=True, timeout=10, check=False).returncode
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return rc == 0
+
 
 def record_signal(
     *,
@@ -68,6 +92,12 @@ def send_signal(
     record_signal(pid=pid, signal_name=name, reason=reason,
                   tenant_id=tenant_id, sid_fingerprint=sid_fingerprint)
     if pid:
+        # Windows: os.kill with anything but CTRL_C/CTRL_BREAK is TerminateProcess on this ONE
+        # pid — there is no graceful SIGTERM there either way. When the CLI runs through an npm
+        # .cmd shim that pid is cmd.exe and the real engine (node.exe) kept running after the
+        # "stop". End the whole tree instead; os.kill stays the fallback.
+        if os.name == "nt" and sig not in _WIN_CTRL_EVENTS and kill_tree_windows(int(pid)):
+            return
         os.kill(int(pid), sig)
 
 
@@ -86,5 +116,7 @@ def hard_kill(proc, *, reason: str, tenant_id: str = "_default",
     sigkill = getattr(signal, "SIGKILL", None)
     if sigkill is not None and pid:
         os.kill(int(pid), sigkill)
+    elif os.name == "nt" and pid and kill_tree_windows(int(pid)):
+        return                              # proc.kill() alone missed the shim's node.exe
     else:
         proc.kill()

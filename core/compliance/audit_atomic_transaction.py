@@ -245,7 +245,7 @@ class AuditAtomicTransaction:
 
             try:
                 # Write record to temp file
-                with os.fdopen(fd, "w") as f:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(record_json + "\n")
                     f.flush()
                     os.fsync(f.fileno())  # Force sync to disk
@@ -259,7 +259,7 @@ class AuditAtomicTransaction:
                     "operation": "append",
                 }
 
-                with open(self.journal_path, "a") as f:
+                with open(self.journal_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(journal_entry) + "\n")
                     f.flush()
                     os.fsync(f.fileno())
@@ -313,7 +313,7 @@ class AuditAtomicTransaction:
         Uses file locking + append mode to prevent partial writes.
         """
         try:
-            with open(self.log_path, "a") as f:
+            with open(self.log_path, "a", encoding="utf-8") as f:
                 # Use O_APPEND for atomic writes on POSIX
                 # On failure, file is left unchanged (no partial record)
                 f.write(record_json + "\n")
@@ -333,7 +333,7 @@ class AuditAtomicTransaction:
             if not self.log_path.exists():
                 return False
 
-            with open(self.log_path, "r") as f:
+            with open(self.log_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             if not lines:

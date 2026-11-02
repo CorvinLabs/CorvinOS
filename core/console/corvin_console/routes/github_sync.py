@@ -143,7 +143,7 @@ class GitHubSyncWorker:
         """Load GitHub configuration."""
         try:
             if self.config_file.exists():
-                with open(self.config_file) as f:
+                with open(self.config_file, encoding="utf-8") as f:
                     return json.load(f)
         except Exception as e:
             logger.error(f"Failed to load config: {e}")

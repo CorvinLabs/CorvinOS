@@ -486,7 +486,7 @@ def main():
 
     # Save report
     report_path = prep.phase5_dir / "phase_5_readiness_report.json"
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, default=str)
     print(f"\n📄 Report saved to: {report_path}")
 

@@ -85,8 +85,8 @@ print("\n[1/7] Spotify-Daten laden")
 
 p_dir = fp.tenant_home(TID) / "compute" / "pipelines" / PID
 csv_path = p_dir / "stages" / "stage_ingest" / "artifacts" / "weekly_chart_aggregates.csv"
-manifest = json.loads((p_dir / "manifest.json").read_text())
-summary  = json.loads((p_dir / "pipeline_summary.json").read_text())
+manifest = json.loads((p_dir / "manifest.json").read_text(encoding="utf-8"))
+summary  = json.loads((p_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
 
 df = pd.read_csv(csv_path)
 log(f"Zeilen: {len(df):,} | Spalten: {list(df.columns)}")
@@ -98,7 +98,7 @@ log(f"Unique Tracks: {df['track_id'].nunique()}")
 iters_dir = p_dir / "stages" / "stage_train" / "iterations"
 iter_files = sorted(iters_dir.glob("*.json"),
                     key=lambda f: int(f.stem.split("_")[-1]) if f.stem.split("_")[-1].isdigit() else 0)
-losses = [json.loads(f.read_text())["loss"] for f in iter_files]
+losses = [json.loads(f.read_text(encoding="utf-8"))["loss"] for f in iter_files]
 iters  = list(range(len(losses)))
 
 # ── 2. Charts erzeugen ────────────────────────────────────────────────────
@@ -362,7 +362,7 @@ wf_doc_extended["orchestration"]["graph"] = extended_graph
 awp_yaml_extended = _yaml.dump(wf_doc_extended, allow_unicode=True, sort_keys=False)
 
 wf_yaml_path = workflows_dir / f"{wid}.awp.yaml"
-wf_yaml_path.write_text(awp_yaml_extended)
+wf_yaml_path.write_text(awp_yaml_extended, encoding="utf-8")
 os.chmod(str(wf_yaml_path), 0o600)
 
 wf_meta = {
@@ -382,7 +382,7 @@ wf_meta = {
     "pipeline_id": PID,
 }
 wf_meta_path = workflows_dir / f"{wid}.meta.json"
-wf_meta_path.write_text(json.dumps(wf_meta, indent=2, ensure_ascii=False))
+wf_meta_path.write_text(json.dumps(wf_meta, indent=2, ensure_ascii=False), encoding="utf-8")
 os.chmod(str(wf_meta_path), 0o600)
 
 log(f"✓ Workflow-ID: {wid}")
@@ -439,7 +439,7 @@ result = subprocess.run(
     ["claude", "-p", _guard_prompt_head(ANALYST_PROMPT),
      "--max-turns", "1", "--tools", ""],
     capture_output=True, text=True, timeout=120,
-    env={**os.environ, "CLAUDE_SKIP_CONFIRMATION": "1"},
+    env={**os.environ, "CLAUDE_SKIP_CONFIRMATION": "1"}, encoding="utf-8", errors="replace",
 )
 
 if result.returncode == 0 and result.stdout.strip():
@@ -499,8 +499,8 @@ run_log_path = run_dir / f"{RID}_log.jsonl"
 run_meta_path.write_text(json.dumps({
     "rid": RID, "wid": wid, "status": "complete",
     "started_at": time.time() - 12.5, "finished_at": time.time(), "ok": True,
-}, indent=2))
-run_log_path.write_text("\n".join(run_log))
+}, indent=2), encoding="utf-8")
+run_log_path.write_text("\n".join(run_log), encoding="utf-8")
 os.chmod(str(run_meta_path), 0o600)
 os.chmod(str(run_log_path), 0o600)
 

@@ -248,7 +248,7 @@ def _run_cli(*args):
     return subprocess.run(
         [sys.executable, str(REPO / "corvin_operator/bridges/shared/ldd.py"),
          *args],
-        capture_output=True, text=True, env={**os.environ},
+        capture_output=True, text=True, env={**os.environ}, encoding="utf-8", errors="replace",
     )
 
 

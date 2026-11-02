@@ -46,7 +46,7 @@ def test_relative_anchor_key_creates_nothing_in_cwd(relative_key, tmp_path, capl
     assert list(relative_key.iterdir()) == [], "anchor material written into cwd"
     assert se._anchor_key() is None
     assert se._ANCHOR_KEY_REFUSED == "relative_path"
-    assert "mac" not in json.loads(chain.read_text().splitlines()[-1])
+    assert "mac" not in json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])
     assert any("relative path" in r.getMessage() for r in caplog.records)
 
 
@@ -74,5 +74,5 @@ def test_absolute_anchor_key_still_works(tmp_path, monkeypatch):
     chain.parent.mkdir()
     se.write_event(chain, "consent.granted", details={"granted_by": "operator"})
     assert key.exists() and len(key.read_bytes()) == 32
-    assert "mac" in json.loads(chain.read_text().splitlines()[-1])
+    assert "mac" in json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])
     assert se.verify_chain(chain) == (True, [])

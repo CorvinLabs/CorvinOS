@@ -172,10 +172,10 @@ def _expire_peer_catalog():
     from core.federation.peer_catalog import PeerCatalog
 
     ledger = PeerCatalog("_default")._ledger_path
-    recs = [json.loads(line) for line in ledger.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
     for rec in recs:
         rec["fetched_at"] = 0.0
-    ledger.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
 
 
 def test_ask_peer_refreshes_an_expired_catalog_instead_of_failing(thread):
@@ -219,7 +219,7 @@ def test_talk_without_agent_is_refused_until_auto_register_is_set(thread):
 
     cfg = corvin_home() / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text(yaml.safe_dump({"spec": {"federation": {"auto_register_default_agent": True}}}))
+    cfg.write_text(yaml.safe_dump({"spec": {"federation": {"auto_register_default_agent": True}}}), encoding="utf-8")
     r = _cmd(c, h, "/ask @mine hello")
     assert r.json().get("executed") is True, r.text
     ids = [a["agent_id"] for a in c.get(f"{FED_BASE}/agents", headers=h).json()["agents"]]

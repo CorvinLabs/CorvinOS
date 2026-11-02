@@ -123,7 +123,7 @@ def configure_sync(tenant: str, repo: str, branch: str, enable_sync: bool, push_
     }
 
     try:
-        with open(config_file, "w") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
         click.echo(f"✅ GitHub sync configured")
@@ -149,7 +149,7 @@ def sync_status(tenant: str):
         return
 
     try:
-        with open(config_file) as f:
+        with open(config_file, encoding="utf-8") as f:
             config = json.load(f)
 
         click.echo(f"📊 GitHub Sync Status\n")

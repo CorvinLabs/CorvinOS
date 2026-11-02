@@ -183,7 +183,7 @@ class VideoAssemblerWorker:
                 return False
 
             # Simplest approach: concatenate audio files and fade with first screenshot
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
                 # Create FFmpeg concat demuxer file
                 for audio_file in audio_files:
                     f.write(_concat_line(audio_file))
@@ -203,7 +203,7 @@ class VideoAssemblerWorker:
                     concat_audio_path,
                 ]
 
-                result = subprocess.run(cmd_concat, capture_output=True, text=True, timeout=60)
+                result = subprocess.run(cmd_concat, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
                 if result.returncode != 0:
                     print(f"Audio concatenation failed: {result.stderr}")
                     return False
@@ -294,7 +294,7 @@ class VideoAssemblerWorker:
                         output_path,
                     ])
 
-                    result = subprocess.run(cmd_mux, capture_output=True, text=True, timeout=120)
+                    result = subprocess.run(cmd_mux, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
                     if result.returncode != 0:
                         print(f"Video muxing failed: {result.stderr}")
                         return False
@@ -311,7 +311,7 @@ class VideoAssemblerWorker:
                         output_path,
                     ]
 
-                    result = subprocess.run(cmd_audio_only, capture_output=True, text=True, timeout=120)
+                    result = subprocess.run(cmd_audio_only, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
                     return result.returncode == 0
 
             finally:
@@ -543,7 +543,7 @@ class VideoAssemblerWorker:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 audio_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
             if result.returncode == 0 and result.stdout.strip():
                 return float(result.stdout.strip())
         except Exception as e:
@@ -571,7 +571,7 @@ class VideoAssemblerWorker:
                 video_path,
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 bit_rate_str = result.stdout.strip()

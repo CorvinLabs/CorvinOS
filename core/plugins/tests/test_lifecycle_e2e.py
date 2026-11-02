@@ -121,7 +121,7 @@ class TestPluginLifecycleE2E(unittest.TestCase):
         proc = subprocess.run(
             [str(cli), "plugin", "new", "audit_backend", plugin_id,
              "-o", str(self.workdir)],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
         )
         self.assertEqual(
             proc.returncode, 0,

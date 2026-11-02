@@ -49,7 +49,7 @@ def get_commit_sha() -> str:
             cwd=os.getcwd(),
             capture_output=True,
             text=True,
-            check=True,
+            check=True, encoding="utf-8", errors="replace",
         )
         return result.stdout.strip()[:12]  # Shortened SHA
     except subprocess.CalledProcessError as e:
@@ -72,7 +72,7 @@ def get_commit_message() -> str:
             cwd=os.getcwd(),
             capture_output=True,
             text=True,
-            check=True,
+            check=True, encoding="utf-8", errors="replace",
         )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
@@ -92,7 +92,7 @@ def get_changed_files() -> list:
             cwd=os.getcwd(),
             capture_output=True,
             text=True,
-            check=True,
+            check=True, encoding="utf-8", errors="replace",
         )
         return result.stdout.strip().split("\n") if result.stdout.strip() else []
     except subprocess.CalledProcessError as e:
@@ -169,7 +169,7 @@ def validate_artifact(artifact_id: str, tenant_id: str = "_default") -> Dict[str
             cwd=os.getcwd(),
             capture_output=True,
             text=True,
-            timeout=5.0,
+            timeout=5.0, encoding="utf-8", errors="replace",
         )
 
         if result.returncode == 0:
@@ -230,7 +230,7 @@ def publish_event_to_api(
             cwd=os.getcwd(),
             capture_output=True,
             text=True,
-            timeout=3.0,
+            timeout=3.0, encoding="utf-8", errors="replace",
         )
 
         if result.returncode == 0:

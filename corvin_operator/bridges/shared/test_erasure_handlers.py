@@ -123,7 +123,7 @@ class TestL33ArtifactHandler(unittest.TestCase):
                 # Two files + a manifest entry
                 (art_dir / "report.pdf").write_bytes(b"x" * 100)
                 (art_dir / ".manifest.jsonl").write_text(
-                    '{"name":"report.pdf"}\n'
+                    '{"name":"report.pdf"}\n', encoding="utf-8"
                 )
 
                 handler = L33ArtifactHandler()
@@ -452,9 +452,9 @@ class TestStubHandlers(unittest.TestCase):
         t = self._home()
         (t / "skill-forge" / "skills").mkdir(parents=True)
         (t / "skills").mkdir(parents=True)
-        (t / "skill-forge" / "user_42.json").write_text(json.dumps({"user_id": "user_42"}))
-        (t / "skills" / "s.json").write_text(json.dumps({"created_by": "user_42"}))
-        (t / "skills" / "keep.json").write_text(json.dumps({"created_by": "user_99"}))
+        (t / "skill-forge" / "user_42.json").write_text(json.dumps({"user_id": "user_42"}), encoding="utf-8")
+        (t / "skills" / "s.json").write_text(json.dumps({"created_by": "user_42"}), encoding="utf-8")
+        (t / "skills" / "keep.json").write_text(json.dumps({"created_by": "user_99"}), encoding="utf-8")
 
         r = L7SkillForgeHandler(tenant_id="_default").purge("user_42", "er-test")
         self.assertEqual(r.status, LayerStatus.APPLIED, r.reason)
@@ -472,8 +472,8 @@ class TestStubHandlers(unittest.TestCase):
     def test_l24_erases_a_snapshot_manifest_naming_the_subject(self):
         t = self._home()
         (t / "global" / "data").mkdir(parents=True)
-        (t / "global" / "data" / "snap.json").write_text(json.dumps({"chat_key": "user_42"}))
-        (t / "global" / "data" / "keep.json").write_text(json.dumps({"chat_key": "user_99"}))
+        (t / "global" / "data" / "snap.json").write_text(json.dumps({"chat_key": "user_42"}), encoding="utf-8")
+        (t / "global" / "data" / "keep.json").write_text(json.dumps({"chat_key": "user_99"}), encoding="utf-8")
 
         r = L24DataSnapshotHandler(tenant_id="_default").purge("user_42", "er-test")
         self.assertEqual(r.status, LayerStatus.APPLIED, r.reason)
@@ -555,7 +555,7 @@ class TestWebChatHandler(unittest.TestCase):
         (vdir / "deadbeefdeadbeef-f00.ogg").write_bytes(b"OggS" + b"\0" * 96)
         turns = Path(td) / "tenants" / "_default" / "global" / "web_chat" / "sessions"
         turns.mkdir(parents=True)
-        (turns / f"{sid}.turns.jsonl").write_text('{"role":"assistant"}\n')
+        (turns / f"{sid}.turns.jsonl").write_text('{"role":"assistant"}\n', encoding="utf-8")
         return vdir, turns / f"{sid}.turns.jsonl"
 
     def test_purge_removes_voice_archive_and_turn_log(self):
@@ -585,9 +585,9 @@ class TestWebChatHandler(unittest.TestCase):
                 _, turns = self._seed(td)
                 store = turns.parent
                 meta = store / "abc123.json"
-                meta.write_text('{"title": "Wie lese ich meinen Befund vom 3.7.?"}')
+                meta.write_text('{"title": "Wie lese ich meinen Befund vom 3.7.?"}', encoding="utf-8")
                 meta_tmp = store / "abc123.json.tmp"
-                meta_tmp.write_text('{"title": "Wie lese ich"}')
+                meta_tmp.write_text('{"title": "Wie lese ich"}', encoding="utf-8")
                 result = WebChatHandler().purge("web:abc123", "er-test")
                 self.assertEqual(result.status, LayerStatus.APPLIED)
                 self.assertFalse(meta.exists(), "session meta (PII title) survived erasure")
@@ -613,9 +613,9 @@ class TestWebChatHandler(unittest.TestCase):
                 inbox = workdir / "compute_inbox"
                 (inbox / "processed").mkdir(parents=True)
                 (inbox / "t1_result.json").write_text(
-                    '{"description": "Analysiere meinen Befund vom 3.7."}')
+                    '{"description": "Analysiere meinen Befund vom 3.7."}', encoding="utf-8")
                 (inbox / "processed" / "t0_result.json").write_text(
-                    '{"description": "alte Task-Beschreibung"}')
+                    '{"description": "alte Task-Beschreibung"}', encoding="utf-8")
                 result = WebChatHandler().purge("web:abc123", "er-test")
                 self.assertEqual(result.status, LayerStatus.APPLIED)
                 self.assertEqual(result.count, 3)
@@ -637,7 +637,7 @@ class TestWebChatHandler(unittest.TestCase):
                 briefs = workdir / "cel-briefs"
                 briefs.mkdir(parents=True)
                 (briefs / "9f2bdeadbeef.txt").write_text(
-                    "## Context brief\nRelevant past memory: patient Befund vom 3.7.")
+                    "## Context brief\nRelevant past memory: patient Befund vom 3.7.", encoding="utf-8")
                 result = WebChatHandler().purge("web:abc123", "er-test")
                 self.assertEqual(result.status, LayerStatus.APPLIED)
                 self.assertFalse(briefs.exists(), "cel-briefs/ survived erasure")
@@ -697,11 +697,11 @@ class TestFilenameIsAttribution(unittest.TestCase):
                 root = Path(td) / "tenants" / "_default" / "vibe" / "checkpoints"
                 root.mkdir(parents=True)
                 # Payload never names the subject — only the filename does.
-                (root / "subj-42.json").write_text('{"state": "opaque"}')
-                (root / "snapshot_subj-42.jsonl").write_text('{"a":1}\n')
+                (root / "subj-42.json").write_text('{"state": "opaque"}', encoding="utf-8")
+                (root / "snapshot_subj-42.jsonl").write_text('{"a":1}\n', encoding="utf-8")
                 # A DIFFERENT subject whose id merely CONTAINS ours must survive.
-                (root / "subj-421.json").write_text('{"state": "other"}')
-                (root / "unrelated.json").write_text('{"state": "keep"}')
+                (root / "subj-421.json").write_text('{"state": "other"}', encoding="utf-8")
+                (root / "unrelated.json").write_text('{"state": "keep"}', encoding="utf-8")
 
                 result = VibeCheckpointHandler().purge("subj-42", "er-test")
                 self.assertEqual(result.status, LayerStatus.APPLIED, result.reason)
@@ -736,7 +736,7 @@ class TestErasureRewritesAreCrashAtomic(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="erasure-atomic-") as td:
             target = Path(td) / "index.json"
-            target.write_text('["old"]')
+            target.write_text('["old"]', encoding="utf-8")
             seen = {}
             real_fsync = os.fsync
 
@@ -749,7 +749,7 @@ class TestErasureRewritesAreCrashAtomic(unittest.TestCase):
                 EH._atomic_replace_text(target, '["new"]')
             finally:
                 os.fsync = real_fsync
-            self.assertEqual(target.read_text(), '["new"]')
+            self.assertEqual(target.read_text(encoding="utf-8"), '["new"]')
             # file + directory
             self.assertGreaterEqual(seen.get("fsync", 0), 1)
             self.assertEqual(sorted(x.name for x in Path(td).iterdir()), ["index.json"])
@@ -759,7 +759,7 @@ class TestErasureRewritesAreCrashAtomic(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="erasure-atomic2-") as td:
             target = Path(td) / "index.json"
-            target.write_text('["old"]')
+            target.write_text('["old"]', encoding="utf-8")
 
             real_replace = os.replace
 
@@ -772,5 +772,5 @@ class TestErasureRewritesAreCrashAtomic(unittest.TestCase):
                     EH._atomic_replace_text(target, '["new"]')
             finally:
                 os.replace = real_replace
-            self.assertEqual(target.read_text(), '["old"]')
+            self.assertEqual(target.read_text(encoding="utf-8"), '["old"]')
             self.assertEqual(sorted(x.name for x in Path(td).iterdir()), ["index.json"])

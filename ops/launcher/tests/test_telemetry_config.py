@@ -76,7 +76,7 @@ class TelemetryConfigSetTests(unittest.TestCase):
 
         launcher_config = Path.home() / ".config" / "corvin-launcher" / "config.json"
         if launcher_config.exists():
-            self.assertNotIn("telemetry", launcher_config.read_text())
+            self.assertNotIn("telemetry", launcher_config.read_text(encoding="utf-8"))
 
     def test_accepts_various_falsy_string_forms(self) -> None:
         from corvin_operator.forge.forge.paths import corvin_home

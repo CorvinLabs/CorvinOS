@@ -80,25 +80,25 @@ def home(tmp_path, monkeypatch) -> Path:
 def _seed(h: Path) -> None:
     tele = h / "aco" / "telemetry"
     (tele / "outbox").mkdir(parents=True)
-    (tele / "last_ping").write_text("x")
+    (tele / "last_ping").write_text("x", encoding="utf-8")
     os.utime(tele / "last_ping", (time.time() - 3600, time.time() - 3600))
-    (tele / ".telemetry_token").write_text("t" * 64)
-    (tele / "htrace-token.txt").write_text("i" * 64)
-    (tele / "active_engine").write_text("claude_code")
+    (tele / ".telemetry_token").write_text("t" * 64, encoding="utf-8")
+    (tele / "htrace-token.txt").write_text("i" * 64, encoding="utf-8")
+    (tele / "active_engine").write_text("claude_code", encoding="utf-8")
     (tele / "heartbeat_state.json").write_text(json.dumps({
         "attempts": 12, "successes": 11, "consecutive_failures": 1,
         "last_attempt": "2026-09-20T10:00:00Z", "last_success": "2026-09-20T09:55:00Z", "last_detail": "http 502",
-    }))
+    }), encoding="utf-8")
     for i, stamp in enumerate((1789600000, 1789600100, 1789600200)):
-        (tele / "outbox" / f"report-{stamp}.json").write_text(json.dumps(REPORT))
+        (tele / "outbox" / f"report-{stamp}.json").write_text(json.dumps(REPORT), encoding="utf-8")
     (h / "telemetry").mkdir()
-    (h / "telemetry" / "feature_snapshot.json").write_text(json.dumps({"bridges_connected": 1, "ldd_enabled": True}))
+    (h / "telemetry" / "feature_snapshot.json").write_text(json.dumps({"bridges_connected": 1, "ldd_enabled": True}), encoding="utf-8")
     ht = h / "healing-traces"
     (ht / "sent").mkdir(parents=True)
-    (ht / "2026-09-20.jsonl").write_text("\n".join(json.dumps(HTRACE) for _ in range(3)) + "\n")
+    (ht / "2026-09-20.jsonl").write_text("\n".join(json.dumps(HTRACE) for _ in range(3)) + "\n", encoding="utf-8")
     with gzip.open(ht / "sent" / "2026-09-19.jsonl.gz", "wb") as f:
         f.write(b"{}\n")
-    (ht / ".last_upload").write_text("2026-09-19,1")
+    (ht / ".last_upload").write_text("2026-09-19,1", encoding="utf-8")
 
 
 @pytest.fixture
@@ -178,7 +178,7 @@ def test_seeded_install_reports_each_channel_from_its_own_state(client, home):
 def test_opt_outs_in_tenant_yaml_disable_the_channels(client, home):
     _seed(home)
     (home / "tenants" / "_default" / "global" / "tenant.corvin.yaml").write_text(
-        "spec:\n  telemetry:\n    ping_enabled: false\n    healing_traces: false\n    error_traces: false\n    geo_tracking_tier: 1\n"
+        "spec:\n  telemetry:\n    ping_enabled: false\n    healing_traces: false\n    error_traces: false\n    geo_tracking_tier: 1\n", encoding="utf-8"
     )
     ch = _by_id(client.get(URL).json())
     assert ch["ping"]["status"] == "disabled" and ch["ping"]["enabled"] is False

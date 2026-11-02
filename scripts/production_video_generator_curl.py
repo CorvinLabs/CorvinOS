@@ -196,7 +196,7 @@ class ProductionVideoGenerator:
                     "-o", audio_path
                 ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
 
                 if result.returncode != 0:
                     print(f"❌ curl error")
@@ -301,7 +301,7 @@ class ProductionVideoGenerator:
                     output_path
                 ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
                 if result.returncode == 0:
                     screenshots.append(output_path)
 
@@ -331,7 +331,7 @@ class ProductionVideoGenerator:
         try:
             # Step 1: Concatenate audio files
             concat_file = f"{self.output_dir}/{self.job_id}_concat.txt"
-            with open(concat_file, "w") as f:
+            with open(concat_file, "w", encoding="utf-8") as f:
                 for audio_file in audio_files:
                     f.write(f"file '{audio_file}'\n")
 
@@ -346,7 +346,7 @@ class ProductionVideoGenerator:
                 concat_audio_path
             ]
 
-            result = subprocess.run(cmd_concat, capture_output=True, text=True)
+            result = subprocess.run(cmd_concat, capture_output=True, text=True, encoding="utf-8", errors="replace")
             if result.returncode != 0:
                 print(f"  ✗ Audio concat failed")
                 return False
@@ -380,7 +380,7 @@ class ProductionVideoGenerator:
                 output_path
             ]
 
-            result = subprocess.run(cmd_mux, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd_mux, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
             if result.returncode != 0:
                 print(f"  ✗ FFmpeg mux failed")
                 return False
@@ -404,7 +404,7 @@ class ProductionVideoGenerator:
                 audio_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             if result.returncode == 0:
                 return float(result.stdout.strip())
         except:
@@ -443,7 +443,7 @@ class ProductionVideoGenerator:
                 video_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 data = json.loads(result.stdout)

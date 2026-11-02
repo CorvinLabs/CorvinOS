@@ -28,7 +28,7 @@ def test_charter_event_lands_in_tenant_chain_without_forge_preloaded(tmp_path):
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     env["CORVIN_HOME"] = str(tmp_path / "home")
     r = subprocess.run([sys.executable, "-c", code], env=env, cwd=tmp_path,
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr[-2000:]
     chain = tmp_path / "home" / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
     assert chain.is_file(), r.stderr[-2000:]

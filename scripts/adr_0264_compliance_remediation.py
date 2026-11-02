@@ -109,7 +109,7 @@ docs: []
 
         # Migrate + backfill remaining ADRs
         for adr_file in sorted(ADR_REPO.glob("*.md")):
-            with open(adr_file, 'r') as f:
+            with open(adr_file, 'r', encoding="utf-8") as f:
                 content = f.read()
 
             original = content
@@ -127,7 +127,7 @@ docs: []
 
             # Step 3: Write if --fix
             if not self.dry_run and content != original:
-                with open(adr_file, 'w') as f:
+                with open(adr_file, 'w', encoding="utf-8") as f:
                     f.write(content)
 
         print("\n" + "=" * 50)

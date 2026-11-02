@@ -118,7 +118,7 @@ async def test_resume_loads_checkpoint(cli):
             }
         }
 
-        checkpoint_file.write_text(json.dumps(checkpoint_data))
+        checkpoint_file.write_text(json.dumps(checkpoint_data), encoding="utf-8")
 
         with patch('pathlib.Path.expanduser') as mock_expand:
             mock_expand.return_value = checkpoint_dir
@@ -136,7 +136,7 @@ async def test_resume_invalid_json(cli):
     with TemporaryDirectory() as tmpdir:
         checkpoint_dir = Path(tmpdir)
         checkpoint_file = checkpoint_dir / "test_001_ckpt.json"
-        checkpoint_file.write_text("{ invalid json }")
+        checkpoint_file.write_text("{ invalid json }", encoding="utf-8")
 
         with patch('pathlib.Path.expanduser') as mock_expand:
             mock_expand.return_value = checkpoint_dir

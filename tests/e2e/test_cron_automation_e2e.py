@@ -73,7 +73,7 @@ def setup_tenant(temp_corvin_home):
         }
         events.append(event)
 
-    with open(audit_file, "w") as f:
+    with open(audit_file, "w", encoding="utf-8") as f:
         for event in events:
             f.write(json.dumps(event) + "\n")
 
@@ -98,7 +98,7 @@ def test_e2e_cron_detects_loss_triggers_forge(
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     config = {"autonomous_forge": {"enabled": True}}
-    with open(config_path, "w") as f:
+    with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f)
 
     # Run cron poll
@@ -123,7 +123,7 @@ def test_e2e_cron_detects_loss_triggers_forge(
     )
     assert trigger_file.exists()
 
-    with open(trigger_file, "r") as f:
+    with open(trigger_file, "r", encoding="utf-8") as f:
         trigger_data = json.load(f)
     assert trigger_data["skill_id"] == "os.delegation_router"
 
@@ -131,7 +131,7 @@ def test_e2e_cron_detects_loss_triggers_forge(
     audit_file = (
         temp_corvin_home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     )
-    with open(audit_file, "r") as f:
+    with open(audit_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     # Find cron trigger events
@@ -163,7 +163,7 @@ def test_e2e_cron_respects_autonomous_disabled_flag(
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     config = {"autonomous_forge": {"enabled": False}}
-    with open(config_path, "w") as f:
+    with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f)
 
     # Run cron poll
@@ -190,7 +190,7 @@ def test_e2e_cron_respects_autonomous_disabled_flag(
     audit_file = (
         temp_corvin_home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     )
-    with open(audit_file, "r") as f:
+    with open(audit_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     cron_events = [
@@ -317,7 +317,7 @@ def test_e2e_multiple_tenants_polled_independently(temp_corvin_home):
             "outcome_feedback": {"correct": False},
         })
 
-    with open(default_dir / "audit.jsonl", "w") as f:
+    with open(default_dir / "audit.jsonl", "w", encoding="utf-8") as f:
         for event in default_events:
             f.write(json.dumps(event) + "\n")
 
@@ -338,7 +338,7 @@ def test_e2e_multiple_tenants_polled_independently(temp_corvin_home):
             "outcome_feedback": {"correct": True},
         })
 
-    with open(tenant1_dir / "audit.jsonl", "w") as f:
+    with open(tenant1_dir / "audit.jsonl", "w", encoding="utf-8") as f:
         for event in tenant1_events:
             f.write(json.dumps(event) + "\n")
 

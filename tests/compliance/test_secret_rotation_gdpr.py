@@ -40,7 +40,7 @@ rotation:
       storage: ~/.corvin/secrets/api_keys.json
       rotation_enabled: true
 """
-        with open(policy_path, "w") as f:
+        with open(policy_path, "w", encoding="utf-8") as f:
             f.write(policy_content)
 
         return policy_path
@@ -82,7 +82,7 @@ rotation:
 
         script = Path(__file__).resolve().parents[2] / "scripts" / "rotate_corvin_keys_gdpr.py"
         proc = subprocess.run([_sys.executable, str(script), str(rotation_policy_path)],
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
         assert proc.returncode == 2
         assert "defused" in proc.stderr
         assert "success" not in proc.stdout
@@ -97,7 +97,7 @@ rotation:
         old_state = {
             "last_rotation": "2026-06-01T00:00:00Z"  # ~90 days before test date 2026-09-17
         }
-        with open(state_file, "w") as f:
+        with open(state_file, "w", encoding="utf-8") as f:
             json.dump(old_state, f)
 
 
@@ -125,7 +125,7 @@ rotation:
         fresh_state = {
             "last_rotation": "2026-09-16T00:00:00Z"  # 1 day before test date 2026-09-17
         }
-        with open(state_file, "w") as f:
+        with open(state_file, "w", encoding="utf-8") as f:
             json.dump(fresh_state, f)
 
 
@@ -141,7 +141,7 @@ rotation:
     def _old_state(self, home):
         state_file = home / "tenants" / "_default" / "global" / ".secret_rotation_state"
         state_file.parent.mkdir(parents=True, exist_ok=True)
-        state_file.write_text(json.dumps({"last_rotation": "2026-06-01T00:00:00Z"}))
+        state_file.write_text(json.dumps({"last_rotation": "2026-06-01T00:00:00Z"}), encoding="utf-8")
 
     def test_unparseable_rotation_output_fails_closed(self, temp_corvin_home, rotation_policy_path):
         """Regression: unparseable script output used to be 'assumed success'."""

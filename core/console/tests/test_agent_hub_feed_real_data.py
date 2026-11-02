@@ -130,7 +130,7 @@ class AgentHubFeedRealDataTests(unittest.TestCase):
         now = time.time()
         def put(kind, pid, **cfg):
             key = "origin_id" if kind == "origins" else "endpoint_id"
-            (self.home / kind / f"{pid}.json").write_text(json.dumps({key: pid, "enabled": True, **cfg}))
+            (self.home / kind / f"{pid}.json").write_text(json.dumps({key: pid, "enabled": True, **cfg}), encoding="utf-8")
         for kind in ("origins", "endpoints"):
             put(kind, "stale-peer", state="UNREACHABLE", _last_check_at=now - 30, _last_ok_at=now - 650_000)
             put(kind, "live-peer", state="ACTIVE", _last_check_at=now - 20, _last_ok_at=now - 20)

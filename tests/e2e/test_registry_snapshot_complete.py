@@ -57,7 +57,7 @@ class TestRegistrySnapshotCompletion:
         }
 
         # Write mock registry to temp location
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding="utf-8") as f:
             json.dump(mock_registry, f)
             temp_registry = f.name
 
@@ -68,11 +68,11 @@ class TestRegistrySnapshotCompletion:
             test_snapshot = snapshot_dir / f"test-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.json"
 
             # Create test snapshot
-            with open(test_snapshot, 'w') as f:
+            with open(test_snapshot, 'w', encoding="utf-8") as f:
                 json.dump(mock_registry, f)
 
             # Verify it's valid JSON
-            with open(test_snapshot, 'r') as f:
+            with open(test_snapshot, 'r', encoding="utf-8") as f:
                 data = json.load(f)
             assert "tasks" in data
             assert len(data["tasks"]) > 0
@@ -93,7 +93,7 @@ class TestRegistrySnapshotCompletion:
         if snapshots:
             # Check latest snapshot
             latest = sorted(snapshots)[-1]
-            with open(latest, 'r') as f:
+            with open(latest, 'r', encoding="utf-8") as f:
                 data = json.load(f)
 
             # Should have tasks key
@@ -119,12 +119,12 @@ class TestRegistrySnapshotCompletion:
         assert timer_file.exists(), f"Timer file not found: {timer_file}"
 
         # Verify they're valid systemd files (basic check)
-        with open(service_file, 'r') as f:
+        with open(service_file, 'r', encoding="utf-8") as f:
             content = f.read()
             assert "[Unit]" in content, "Service file missing [Unit] section"
             assert "[Service]" in content, "Service file missing [Service] section"
 
-        with open(timer_file, 'r') as f:
+        with open(timer_file, 'r', encoding="utf-8") as f:
             content = f.read()
             assert "[Unit]" in content, "Timer file missing [Unit] section"
             assert "[Timer]" in content, "Timer file missing [Timer] section"
@@ -138,7 +138,7 @@ class TestRegistrySnapshotCompletion:
         adr_path = Path("/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0864-git-tracked-registry-snapshots.md")
 
         if adr_path.exists():
-            with open(adr_path, 'r') as f:
+            with open(adr_path, 'r', encoding="utf-8") as f:
                 content = f.read()
             # Should mention compliance
             assert "GDPR" in content or "compliance" in content or "audit" in content, \
@@ -154,7 +154,7 @@ class TestRegistrySnapshotCompletion:
 
         assert readme.exists(), f"Systemd README not found: {readme}"
 
-        with open(readme, 'r') as f:
+        with open(readme, 'r', encoding="utf-8") as f:
             content = f.read()
 
         # Should contain installation instructions
@@ -183,7 +183,7 @@ class TestRegistrySnapshotIntegration:
                 ["git", "log", "--oneline", "--grep=Task Registry Snapshot", "-n", "5"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5, encoding="utf-8", errors="replace"
             )
 
             # If there are any snapshot commits, verify format
@@ -231,7 +231,7 @@ class TestRegistrySnapshotFailureModes:
         script = repo_root / "scripts/commit_registry_snapshot.sh"
 
         # Script should have error handling for missing registry
-        with open(script, 'r') as f:
+        with open(script, 'r', encoding="utf-8") as f:
             content = f.read()
 
         # Should check for existence
@@ -246,7 +246,7 @@ class TestRegistrySnapshotFailureModes:
         repo_root = Path(__file__).parent.parent.parent
         script = repo_root / "scripts/commit_registry_snapshot.sh"
 
-        with open(script, 'r') as f:
+        with open(script, 'r', encoding="utf-8") as f:
             content = f.read()
 
         # Should check JSON validity
@@ -261,7 +261,7 @@ class TestRegistrySnapshotFailureModes:
         repo_root = Path(__file__).parent.parent.parent
         script = repo_root / "scripts/commit_registry_snapshot.sh"
 
-        with open(script, 'r') as f:
+        with open(script, 'r', encoding="utf-8") as f:
             content = f.read()
 
         # Should check if git has changes before committing

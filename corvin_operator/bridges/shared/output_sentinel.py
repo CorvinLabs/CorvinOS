@@ -367,7 +367,7 @@ def _spawn_judge(prompt: str, output: str, *,
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True,
-            timeout=timeout_s, check=False,
+            timeout=timeout_s, check=False, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         return ("", "claude-binary-missing")

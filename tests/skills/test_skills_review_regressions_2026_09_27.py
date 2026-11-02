@@ -90,7 +90,7 @@ def test_installer_stale_temp_dir_not_merged(tmp_path):
     installer = SkillInstaller(tmp_path / "root")
     stale = tmp_path / "root" / "good-skill" / ".1.0.0_tmp"
     stale.mkdir(parents=True)
-    (stale / "leftover.py").write_text("x")
+    (stale / "leftover.py").write_text("x", encoding="utf-8")
     ok, msg = _install(installer, tmp_path, "good-skill", "1.0.0")
     assert ok, msg
     assert not (tmp_path / "root" / "good-skill" / "1.0.0" / "leftover.py").exists()
@@ -143,7 +143,7 @@ def _events(chain: Path, event_type: str) -> list[dict]:
     out = []
     if not chain.exists():
         return out
-    for line in chain.read_text().splitlines():
+    for line in chain.read_text(encoding="utf-8").splitlines():
         rec = json.loads(line)
         if rec.get("event_type") == event_type:
             out.append(rec.get("details") or rec)
@@ -293,7 +293,7 @@ def test_workflow_optimizer_imports_and_chains_content_free(tmp_path, monkeypatc
         d = opt.route_task(RoutingInput(task_id="t1", task_content=secret, tenant_id="_default"))
     assert d.complexity == TaskComplexity.COMPLEX  # was unreachable
     assert "ABC-SECRET-123" not in caplog.text
-    raw = chain.read_text()
+    raw = chain.read_text(encoding="utf-8")
     assert "ABC-SECRET-123" not in raw
     recs = _events(chain, "workflow_routing_decision")
     assert recs and recs[-1]["complexity"] == "complex"
@@ -314,7 +314,7 @@ def test_video_producer_audit_writer_resolves_in_a_fresh_process():
         [sys.executable, "-c",
          "import forge; from core.skills.os_skills.video_producer.audit import _core_write_event;"
          "fn = _core_write_event(); print(fn.__module__)"],
-        cwd=str(repo), env=env, capture_output=True, text=True, timeout=60,
+        cwd=str(repo), env=env, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr[-1500:]
     assert proc.stdout.strip() == "forge.security_events"

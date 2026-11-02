@@ -70,7 +70,7 @@ def list_skills(tenant: str, scope: str, format: str):
             if skill_dir.is_dir() and not skill_dir.name.startswith('.'):
                 meta_path = skill_dir / "meta.json"
                 if meta_path.exists():
-                    with open(meta_path) as f:
+                    with open(meta_path, encoding="utf-8") as f:
                         meta = json.load(f)
                     skills.append({
                         "id": meta["id"],
@@ -111,7 +111,7 @@ def skill_info(skill_id: str, tenant: str, scope: str):
         # scripts chaining `corvin skill info` must be able to branch on it.
         raise click.ClickException(f"Skill not found: {scope}/{skill_id}")
 
-    with open(meta_path) as f:
+    with open(meta_path, encoding="utf-8") as f:
         metadata = json.load(f)
 
     click.echo(f"\n📦 {metadata['id']}@{metadata['version']}")

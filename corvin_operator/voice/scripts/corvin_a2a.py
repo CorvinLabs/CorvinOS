@@ -892,7 +892,7 @@ def _register_peer_server_side(
             )
             key_file = corvin_home / "global" / "license.key"
             if key_file.exists():
-                license_token = key_file.read_text().strip()
+                license_token = key_file.read_text(encoding="utf-8").strip()
         if not api_key or not license_token:
             return
 

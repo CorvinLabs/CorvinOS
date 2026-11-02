@@ -317,7 +317,7 @@ class BaselineMetrics:
     def save_json(self, filename: str = "baseline_results.json") -> Path:
         """Save baseline metrics to JSON file."""
         output_path = self.output_dir / filename
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(self.baselines, f, indent=2)
         return output_path
 

@@ -57,7 +57,7 @@ print("RESULTS=" + repr(results))
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=30, encoding="utf-8", errors="replace",
         )
         assert proc.returncode == 0, f"stderr: {proc.stderr}"
         assert "RESULTS=" in proc.stdout, proc.stdout
@@ -98,7 +98,7 @@ print(f"RESULT={{(ok, reason)!r}}")
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=30, encoding="utf-8", errors="replace",
         )
         assert proc.returncode == 0, f"stderr: {proc.stderr}"
         assert "RESULT=(False, 'wrong-pin')" in proc.stdout, (

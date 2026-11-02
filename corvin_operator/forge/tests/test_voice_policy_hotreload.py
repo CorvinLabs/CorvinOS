@@ -72,7 +72,7 @@ def _audit_events(root: Path) -> list[dict]:
     p = root / "audit.jsonl"
     if not p.exists():
         return []
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 # ---------- (1) — forbidden_tool_names flip ------------------------------
@@ -94,7 +94,7 @@ def test_forbidden_tool_names_flip_takes_effect_live():
             # Operator writes a tightening policy
             (td / "policy.json").write_text(json.dumps({
                 "forbidden_tool_names": ["shell.*", "csv.*"],
-            }))
+            }), encoding="utf-8")
             _bump_mtime(td / "policy.json")
 
             # csv.count name is now forbidden — call should be denied
@@ -142,7 +142,7 @@ def test_rate_limit_tightening_propagates_to_existing_limiter():
                 "rate_limit": {"default_calls_per_minute": 1},
                 # disable circuit breaker noise for this scenario
                 "circuit_breaker": {"enabled": False},
-            }))
+            }), encoding="utf-8")
             _bump_mtime(td / "policy.json")
 
             r2 = client.request("tools/call",
@@ -178,7 +178,7 @@ def test_malformed_policy_keeps_old_and_logs_failure():
         # Start with a known-good restrictive policy
         (td / "policy.json").write_text(json.dumps({
             "forbidden_tool_names": ["shell.*"],
-        }))
+        }), encoding="utf-8")
         _bump_mtime(td / "policy.json")
 
         client = MCPClient(td, permission_mode="yes")
@@ -190,7 +190,7 @@ def test_malformed_policy_keeps_old_and_logs_failure():
               r1["result"].get("isError") is False)
 
             # Operator botches an edit (truncated JSON)
-            (td / "policy.json").write_text("{ this is broken")
+            (td / "policy.json").write_text("{ this is broken", encoding="utf-8")
             _bump_mtime(td / "policy.json")
 
             # Server should NOT crash — old policy still in effect →

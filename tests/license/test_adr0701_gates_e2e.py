@@ -25,7 +25,7 @@ def _chain_decisions(home: Path) -> list[dict]:
     chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    return [r for r in map(json.loads, chain.read_text().splitlines())
+    return [r for r in map(json.loads, chain.read_text(encoding="utf-8").splitlines())
             if r.get("event_type") == "license.capability_decision"]
 
 
@@ -85,7 +85,7 @@ class TestG1E2E:
             out = subprocess.run(
                 [sys.executable, "-c", probe.format(first=first, second=second),
                  str(tmp_path / f"r{len(first)}")],
-                cwd=repo, capture_output=True, text=True, timeout=120,
+                cwd=repo, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
             )
             assert out.stdout.strip().splitlines()[-1] == "DENIED", out.stderr[-2000:]
 

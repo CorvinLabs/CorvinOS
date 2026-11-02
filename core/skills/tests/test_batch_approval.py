@@ -212,7 +212,7 @@ class TestBatchPersistence:
 
         # Verify file exists and contains data
         assert batch_manager.batches_file.exists()
-        with open(batch_manager.batches_file, "r") as f:
+        with open(batch_manager.batches_file, "r", encoding="utf-8") as f:
             line = f.readline()
             data = json.loads(line)
             assert data["batch_id"] == "batch_123"

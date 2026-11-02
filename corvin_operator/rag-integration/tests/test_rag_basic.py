@@ -104,7 +104,7 @@ def test_rag_basic_smoke():
             f"Manifest file not created at {manifest_file}"
         )
 
-        saved_content = manifest_file.read_text()
+        saved_content = manifest_file.read_text(encoding="utf-8")
         assert "test-provider" in saved_content, (
             "Saved manifest missing provider ID"
         )

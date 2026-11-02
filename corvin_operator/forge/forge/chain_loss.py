@@ -113,7 +113,7 @@ def acknowledge_chain_loss(
     frozen: Path | None = None
     if canonical.exists() and canonical.stat().st_size > 0:
         frozen = canonical.with_name(f"{canonical.name}.postloss-{stamp}")
-        with canonical.open("a") as fh:
+        with canonical.open("a", encoding="utf-8") as fh:
             se._lock_chain(fh)
             try:
                 os.replace(canonical, frozen)

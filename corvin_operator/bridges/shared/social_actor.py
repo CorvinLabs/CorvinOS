@@ -131,7 +131,7 @@ def check_keypair_mode(tenant_id: str | None = None) -> bool:
     if not path.exists():
         return True
     file_stat = path.stat()
-    if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+    if sys.platform != "win32" and file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
         audit_event(
             "social.keypair_world_readable",
             severity="CRITICAL",

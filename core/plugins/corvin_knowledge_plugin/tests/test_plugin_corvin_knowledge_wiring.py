@@ -81,7 +81,7 @@ def temp_repo():
             }
         ]
 
-        with open(entities_file, "w") as f:
+        with open(entities_file, "w", encoding="utf-8") as f:
             for entity in test_entities:
                 f.write(json.dumps(entity) + "\n")
 
@@ -92,10 +92,10 @@ def temp_repo():
             "schema_version": "1",
             "sync_ts": "2026-09-18T16:55:22.545054",
             "entity_count": len(test_entities)
-        }))
+        }), encoding="utf-8")
 
         # Create README (minimal)
-        (repo_path / "README.md").write_text("# Test Knowledge Repository\n")
+        (repo_path / "README.md").write_text("# Test Knowledge Repository\n", encoding="utf-8")
 
         # Commit everything
         subprocess.run(["git", "add", "."], cwd=str(repo_path), capture_output=True)
@@ -127,7 +127,7 @@ class TestPluginManifest:
         manifest_path = Path(__file__).parent.parent.parent / "core/plugins/corvin_knowledge_plugin/manifest.json"
         assert manifest_path.exists(), "manifest.json not found"
 
-        with open(manifest_path) as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
 
         assert manifest["id"] == "corvin-knowledge"
@@ -260,7 +260,7 @@ class TestConsistencyValidation:
         """Consistency check detects duplicate IDs (fail-closed)"""
         # Corrupt entities.jsonl with duplicate ID
         entities_file = temp_repo / "graph/entities.jsonl"
-        with open(entities_file, "a") as f:
+        with open(entities_file, "a", encoding="utf-8") as f:
             f.write(json.dumps({"id": "ADR-0568", "type": "decision", "title": "Duplicate"}) + "\n")
 
         plugin = CorvinKnowledgePlugin(plugin_config)
@@ -274,7 +274,7 @@ class TestConsistencyValidation:
         """consistency_level=strict aborts sync on validation errors"""
         # Corrupt JSON
         entities_file = temp_repo / "graph/entities.jsonl"
-        with open(entities_file, "a") as f:
+        with open(entities_file, "a", encoding="utf-8") as f:
             f.write("{invalid json\n")
 
         plugin = CorvinKnowledgePlugin(plugin_config)
@@ -286,7 +286,7 @@ class TestConsistencyValidation:
         """consistency_level=warn logs but continues"""
         # Corrupt JSON
         entities_file = temp_repo / "graph/entities.jsonl"
-        with open(entities_file, "a") as f:
+        with open(entities_file, "a", encoding="utf-8") as f:
             f.write("{invalid json\n")
 
         plugin = CorvinKnowledgePlugin(plugin_config)

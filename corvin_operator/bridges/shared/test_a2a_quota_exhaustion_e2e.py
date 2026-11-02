@@ -108,7 +108,7 @@ def _run() -> dict:
         "CORVIN_HOME": home, "XDG_CONFIG_HOME": os.path.join(home, "xdg"),
         "FORGE_ROOT": os.path.join(home, "forge"), "CORVIN_AUDIT_ANCHOR_KEY": os.path.join(home, "anchor.key"),
     }
-    out = subprocess.run([sys.executable, "-c", _SCRIPT], env=env, capture_output=True, text=True, timeout=240)
+    out = subprocess.run([sys.executable, "-c", _SCRIPT], env=env, capture_output=True, text=True, timeout=240, encoding="utf-8", errors="replace")
     line = next((ln for ln in out.stdout.splitlines() if ln.startswith("FACTS=")), None)
     assert line, f"no result\nSTDOUT:\n{out.stdout[-1500:]}\nSTDERR:\n{out.stderr[-2500:]}"
     return json.loads(line[len("FACTS="):])

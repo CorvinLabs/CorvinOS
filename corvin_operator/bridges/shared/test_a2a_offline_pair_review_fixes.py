@@ -63,7 +63,7 @@ class LedgerUnit(unittest.TestCase):
         for t in ts:
             t.join()
         self.assertEqual(errs, [])
-        rows = json.loads(self.led.read_text())["fingerprints"]
+        rows = json.loads(self.led.read_text(encoding="utf-8"))["fingerprints"]
         self.assertEqual(len(rows), n, "no record lost")
         for i, fp in enumerate(fps):
             self.assertTrue(oob.fingerprint_used(fp, self.led))
@@ -78,7 +78,7 @@ class LedgerUnit(unittest.TestCase):
         for bad in ({"fp": [{"fingerprint": oob.normalise(fp)}]},
                     [{"fingerprint": oob.normalise(fp)}],
                     {"fingerprints": "x"}):
-            self.led.write_text(json.dumps(bad))
+            self.led.write_text(json.dumps(bad), encoding="utf-8")
             with self.assertRaises(oob.OfflinePairError) as cm:
                 oob.fingerprint_used(fp, self.led)
             self.assertEqual(cm.exception.reason, "ledger_unreadable", bad)
@@ -111,18 +111,18 @@ class ReviewFindingsE2E(_PairHarness):
         self._pending_pair()
         for d, name in ((self.a.origins, "peer-b"), (self.b.endpoints, "to-a")):
             p = d / f"{name}.json"
-            cfg = json.loads(p.read_text())
+            cfg = json.loads(p.read_text(encoding="utf-8"))
             cfg.pop("oob_state")
             cfg["enabled"] = True
-            p.write_text(json.dumps(cfg))
+            p.write_text(json.dumps(cfg), encoding="utf-8")
             p.chmod(0o600)
         self._serve_a()
         self._assert_sender_refused(self._send())
         # the receiving side on its own: B's endpoint confirmed properly, A's origin still edited
         p = self.b.endpoints / "to-a.json"
-        cfg = json.loads(p.read_text())
+        cfg = json.loads(p.read_text(encoding="utf-8"))
         cfg["oob_state"] = "confirmed"
-        p.write_text(json.dumps(cfg))
+        p.write_text(json.dumps(cfg), encoding="utf-8")
         p.chmod(0o600)
         self._assert_receiver_refused(self._send(), "origin_offline_pair_unconfirmed")
 
@@ -138,9 +138,9 @@ class ReviewFindingsE2E(_PairHarness):
         self.assertEqual(recv[0].get("attestation"), "attested_out_of_band")
         # a tampered confirmed origin is refused even though the envelope carries a block
         p = self.a.origins / "peer-b.json"
-        o = json.loads(p.read_text())
+        o = json.loads(p.read_text(encoding="utf-8"))
         o["oob_fingerprint"] = "FFFF-FFFF-FFFF-FFFF-FFFF"
-        p.write_text(json.dumps(o))
+        p.write_text(json.dumps(o), encoding="utf-8")
         p.chmod(0o600)
         res = self.b.cli("send", "to-a", "hello", "--timeout", "30", CORVIN_LICENSE_KEY=_RS256_TOKEN)
         self._assert_receiver_refused(res, "out_of_band_attestation_invalid")
@@ -149,21 +149,21 @@ class ReviewFindingsE2E(_PairHarness):
         imp = self._pending_pair()
         led = self.a.home / "tenants" / "_default" / "global" / "a2a" / "offline_pair_fingerprints.json"
         led.parent.mkdir(parents=True, exist_ok=True)
-        led.write_text(json.dumps({"fp": []}))
+        led.write_text(json.dumps({"fp": []}), encoding="utf-8")
         r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("ledger", r.stderr)
-        self.assertEqual(json.loads((self.a.origins / "peer-b.json").read_text())["oob_state"], "pending")
+        self.assertEqual(json.loads((self.a.origins / "peer-b.json").read_text(encoding="utf-8"))["oob_state"], "pending")
 
     def test_f9_a_replayed_endpoint_file_under_another_instance_id_is_refused_by_key_id(self):
         self._full_pair()
-        old = json.loads((self.b.endpoints / "to-a.json").read_text())
+        old = json.loads((self.b.endpoints / "to-a.json").read_text(encoding="utf-8"))
         replay = dict(old, enabled=False, oob_state="pending", instance_id="iid-somebody-else",
                       endpoint_id="to-x")
         for k in ("attestation", "oob_fingerprint", "oob_confirmed_at"):
             replay.pop(k, None)
         f = self.b.root / "replay.json"
-        f.write_text(json.dumps(replay))
+        f.write_text(json.dumps(replay), encoding="utf-8")
         r = self.b.cli("pair-import", str(f), "--json")
         self.assertNotEqual(r.returncode, 0, r.stdout)
         self.assertIn("already used", r.stderr)
@@ -175,7 +175,7 @@ class ReviewFindingsE2E(_PairHarness):
             r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertNotEqual(r.returncode, 0, "a held config lock must not be ignored")
         self.assertIn("busy", r.stderr.lower())
-        self.assertEqual(json.loads((self.a.origins / "peer-b.json").read_text())["oob_state"], "pending")
+        self.assertEqual(json.loads((self.a.origins / "peer-b.json").read_text(encoding="utf-8"))["oob_state"], "pending")
         # and nothing was spent: the same confirm succeeds once the lock is free
         r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
@@ -183,25 +183,25 @@ class ReviewFindingsE2E(_PairHarness):
     def test_f10_a_confirm_interrupted_after_the_ledger_row_can_be_completed(self):
         imp = self._pending_pair()
         p = self.a.origins / "peer-b.json"
-        pending = p.read_text()
+        pending = p.read_text(encoding="utf-8")
         r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         # as if the process died between the ledger reservation and the file write: the file
         # is still pending and the row still `reserved` (round 3: only such a row resumes)
-        p.write_text(pending)
+        p.write_text(pending, encoding="utf-8")
         p.chmod(0o600)
         led_p = self.a.home / "tenants" / "_default" / "global" / "a2a" / "offline_pair_fingerprints.json"
-        led = json.loads(led_p.read_text())
+        led = json.loads(led_p.read_text(encoding="utf-8"))
         led["fingerprints"][0]["status"] = "reserved"
-        led_p.write_text(json.dumps(led))
+        led_p.write_text(json.dumps(led), encoding="utf-8")
         r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr[-2000:])
-        self.assertEqual(json.loads(p.read_text())["oob_state"], "confirmed")
+        self.assertEqual(json.loads(p.read_text(encoding="utf-8"))["oob_state"], "confirmed")
         # the resume is for THIS pair only: another peer name with the same keys is still a reuse
         other = json.loads(pending)
         other["origin_id"] = "peer-c"
         q = self.a.origins / "peer-c.json"
-        q.write_text(json.dumps(other))
+        q.write_text(json.dumps(other), encoding="utf-8")
         q.chmod(0o600)
         r = self.a.cli("pair-confirm", "peer-c", "--peer-instance-id", imp["instance_id"],
                        "--fingerprint", imp["fingerprint"])
@@ -221,7 +221,7 @@ class RefutationRoundE2E(_PairHarness):
         self.assertEqual(res.returncode, 0, res.stderr[-2000:])
         printed = _json_tail(res.stdout)
         f = self.b.root / "ep.json"
-        f.write_text(json.dumps(printed))
+        f.write_text(json.dumps(printed), encoding="utf-8")
         r = self.b.cli("pair-import", str(f), "--json")
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         imp = _json_tail(r.stdout)
@@ -232,12 +232,12 @@ class RefutationRoundE2E(_PairHarness):
         target.unlink()
         r = self.b.cli("pair-import", str(f), "--force")
         self.assertNotEqual(r.returncode, 0, "re-import of a used file is refused")
-        target.write_text(json.dumps(printed))          # the printed file is already `pending`
+        target.write_text(json.dumps(printed), encoding="utf-8")          # the printed file is already `pending`
         target.chmod(0o600)
         r = self.b.cli("pair-confirm", ep_id, "--fingerprint", fp)
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("already used", r.stderr)
-        cfg = json.loads(target.read_text())
+        cfg = json.loads(target.read_text(encoding="utf-8"))
         self.assertEqual(cfg["oob_state"], "pending")
         self.assertFalse(cfg["enabled"])
         refused = self.b.records("a2a.offline_pair_refused")
@@ -249,25 +249,25 @@ class RefutationRoundE2E(_PairHarness):
     def test_a_reserved_row_resumes_and_a_completed_row_does_not(self):
         imp = self._pending_pair()
         p = self.a.origins / "peer-b.json"
-        pending = p.read_text()
+        pending = p.read_text(encoding="utf-8")
         r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-        rows = json.loads(self._ledger().read_text())["fingerprints"]
+        rows = json.loads(self._ledger().read_text(encoding="utf-8"))["fingerprints"]
         self.assertEqual([row["status"] for row in rows], ["completed"])
         # crash AFTER the completed mark: putting the pending file back is a replay, not a resume
-        p.write_text(pending)
+        p.write_text(pending, encoding="utf-8")
         p.chmod(0o600)
         r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("already used", r.stderr)
         # crash BETWEEN reserve and the file write: the row is `reserved` -> resumable
-        led = json.loads(self._ledger().read_text())
+        led = json.loads(self._ledger().read_text(encoding="utf-8"))
         led["fingerprints"][0]["status"] = "reserved"
-        self._ledger().write_text(json.dumps(led))
+        self._ledger().write_text(json.dumps(led), encoding="utf-8")
         r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr[-2000:])
-        self.assertEqual(json.loads(p.read_text())["oob_state"], "confirmed")
-        rows = json.loads(self._ledger().read_text())["fingerprints"]
+        self.assertEqual(json.loads(p.read_text(encoding="utf-8"))["oob_state"], "confirmed")
+        rows = json.loads(self._ledger().read_text(encoding="utf-8"))["fingerprints"]
         self.assertEqual([row["status"] for row in rows], ["completed"])
 
     def test_an_unavailable_ledger_lock_refuses_the_confirm(self):
@@ -277,7 +277,7 @@ class RefutationRoundE2E(_PairHarness):
         r = self._a_confirms(imp["instance_id"], imp["fingerprint"])
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("lock", r.stderr)
-        cfg = json.loads((self.a.origins / "peer-b.json").read_text())
+        cfg = json.loads((self.a.origins / "peer-b.json").read_text(encoding="utf-8"))
         self.assertEqual(cfg["oob_state"], "pending")
         self.assertFalse(cfg["enabled"])
 

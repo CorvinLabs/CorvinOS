@@ -246,7 +246,7 @@ def _get_tenant_key(tenant_id: str) -> bytes:
             )
             tmp = Path(tmp_name)
             try:
-                with os.fdopen(fd, "w") as fh:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(secrets.token_hex(32))
                     fh.flush()
                     os.fsync(fh.fileno())
@@ -261,7 +261,7 @@ def _get_tenant_key(tenant_id: str) -> bytes:
                 f"cannot create checkpoint signing key for {tenant_id!r}: {exc}"
             ) from exc
     try:
-        material = key_path.read_text().strip()
+        material = key_path.read_text(encoding="utf-8").strip()
     except OSError as exc:
         raise CheckpointKeyUnavailable(
             f"cannot read checkpoint signing key for {tenant_id!r}: {exc}"
@@ -688,7 +688,7 @@ class CheckpointManager:
             CheckpointIntegrityError: If Merkle root or tenant signature invalid
         """
         try:
-            json_str = filepath.read_text()
+            json_str = filepath.read_text(encoding="utf-8")
             checkpoint = self.deserialize(json_str)
             # Defense in depth: even a file that leaked into this directory
             # is refused when it belongs to another tenant.

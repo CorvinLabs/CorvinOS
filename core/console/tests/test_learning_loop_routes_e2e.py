@@ -141,20 +141,20 @@ def _sandbox(tmp_path: Path, *, grant_feedback_consent: bool = True, seed_execut
 def _events_on_disk(home: Path, tenant_id: str) -> list[dict]:
     out: list[dict] = []
     for f in sorted((home / "tenants" / tenant_id / "learning" / "events").glob("*.jsonl")):
-        out += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+        out += [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
     return out
 
 
 def _chain(chain: Path) -> list[dict]:
     if not chain.exists():
         return []
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def _console_chain(home: Path, tenant_id: str) -> list[dict]:
     out: list[dict] = []
     for f in (home / "tenants" / tenant_id).rglob("audit.jsonl"):
-        out += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+        out += [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
     return out
 
 
@@ -223,7 +223,7 @@ class LearningLoopRoutesE2E(unittest.TestCase):
             # the optimizer epoch was persisted under the TENANT home (never ~/.corvin)
             cfg = home / "tenants" / tenant_id / "skills" / "os_delegation_router_config.json"
             self.assertTrue(cfg.is_file(), cfg)
-            self.assertEqual(json.loads(cfg.read_text())["optimizer"]["epoch"], 4)  # 1 + 3 hypotheses
+            self.assertEqual(json.loads(cfg.read_text(encoding="utf-8"))["optimizer"]["epoch"], 4)  # 1 + 3 hypotheses
 
     def test_feedback_the_trust_gate_rejects_never_reaches_the_optimizer(self):
         """ADR-0534 on the live route: no matching execution → 422, nothing learned.
@@ -234,7 +234,7 @@ class LearningLoopRoutesE2E(unittest.TestCase):
         """
         with _sandbox(Path(self._tmp), seed_execution=False) as (client, home, tenant_id, emitter, chain):
             cfg = home / "tenants" / tenant_id / "skills" / "os_delegation_router_config.json"
-            epoch_before = json.loads(cfg.read_text())["optimizer"]["epoch"] if cfg.is_file() else 0
+            epoch_before = json.loads(cfg.read_text(encoding="utf-8"))["optimizer"]["epoch"] if cfg.is_file() else 0
             r = client.post(
                 "/v1/console/learning/feedback",
                 json={"task_id": "task-1", "outcome_quality": "excellent", "would_repeat": True,
@@ -250,11 +250,11 @@ class LearningLoopRoutesE2E(unittest.TestCase):
             # nothing became learnable state ...
             self.assertEqual([e for e in _events_on_disk(home, tenant_id) if e["event_type"] == "feedback"], [])
             # ... and the optimizer never spent an epoch on it
-            epoch_after = json.loads(cfg.read_text())["optimizer"]["epoch"] if cfg.is_file() else 0
+            epoch_after = json.loads(cfg.read_text(encoding="utf-8"))["optimizer"]["epoch"] if cfg.is_file() else 0
             self.assertEqual(epoch_after, epoch_before)
             # the decision is on the record: gate ledger and console chain
             ledger = home / "tenants" / tenant_id / "learning" / "feedback_gate" / "decisions.jsonl"
-            self.assertIn('"rejected"', ledger.read_text())
+            self.assertIn('"rejected"', ledger.read_text(encoding="utf-8"))
             denied = [c for c in _console_chain(home, tenant_id) if "feedback_rejected" in json.dumps(c)]
             self.assertGreaterEqual(len(denied), 1)
 

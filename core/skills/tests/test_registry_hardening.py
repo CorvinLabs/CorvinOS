@@ -38,7 +38,7 @@ def _chain() -> list[dict]:
     path = Path(os.environ["VOICE_AUDIT_PATH"])
     if not path.exists():
         return []
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 class _Boom(Skill):
@@ -80,7 +80,7 @@ class TestLomRequired:
         r = registry.execute("os.capabilities", {"tenant_id": "_default", "gated_flags": ["x"]}, lom=LOM)
         assert r.status == "success"
         import ast
-        text = Path(__file__).read_text()
+        text = Path(__file__).read_text(encoding="utf-8")
         node = next(n for n in ast.walk(ast.parse(text))
                     if isinstance(n, ast.FunctionDef) and n.name == "_chain")
         expected = hashlib.sha256(ast.get_source_segment(text, node).encode()).hexdigest()

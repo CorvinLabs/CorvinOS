@@ -206,7 +206,7 @@ def load(force: bool = False) -> dict[str, Any]:
         if not force and _cache is not None and st.st_mtime == _cache_mtime:
             return _cache
         try:
-            _cache = json.loads(PROFILE_FILE.read_text())
+            _cache = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             # Corrupt — keep last good copy if any, otherwise empty.
             _cache = _cache or {}
@@ -237,7 +237,7 @@ def save(data: dict[str, Any]) -> None:
     called directly, from another process, or the lock is bypassed."""
     PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = PROFILE_FILE.with_suffix(f".json.tmp.{os.getpid()}.{threading.get_ident()}")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     shutil.move(str(tmp), str(PROFILE_FILE))
     try:
         PROFILE_FILE.chmod(0o600)

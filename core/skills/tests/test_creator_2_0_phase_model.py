@@ -264,4 +264,4 @@ class TestPlaceholderWalEntry:
         assert all(not e["errors"] for e in events), [e for e in events if e["errors"]]
         assert all(e["phase_num"] >= 0 for e in events)
         wal = skill.orchestrator.wal
-        assert wal.wal_file.read_text().strip() == "", "a successful run must leave the WAL empty"
+        assert wal.wal_file.read_text(encoding="utf-8").strip() == "", "a successful run must leave the WAL empty"

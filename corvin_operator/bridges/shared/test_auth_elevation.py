@@ -126,7 +126,7 @@ def case_2_hook_denies_when_not_elevated() -> None:
              "CORVIN_HOME": str(sb),
              "CORVIN_HOME": str(sb),
              "CORVIN_CHANNEL_ID": "discord:c-deny",
-             "CORVIN_CHANNEL_ID": "discord:c-deny"},
+             "CORVIN_CHANNEL_ID": "discord:c-deny"}, encoding="utf-8", errors="replace",
     )
     _eq(proc.returncode, 2, "hook exits with 2 (deny)")
     if proc.returncode == 2:
@@ -158,7 +158,7 @@ def case_3_hook_allows_when_elevated() -> None:
                  "CORVIN_HOME": str(sb),
                  "CORVIN_HOME": str(sb),
                  "CORVIN_CHANNEL_ID": "discord:c-ok",
-                 "CORVIN_CHANNEL_ID": "discord:c-ok"},
+                 "CORVIN_CHANNEL_ID": "discord:c-ok"}, encoding="utf-8", errors="replace",
         )
         _eq(proc.returncode, 0, "hook exits with 0 (allow) when elevated")
         _eq(proc.stderr, "", "no deny message on allow")
@@ -182,7 +182,7 @@ def case_4_fail_open_no_channel_id() -> None:
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, encoding="utf-8", errors="replace",
     )
     _eq(proc.returncode, 0,
         "no CORVIN_CHANNEL_ID → fail-open (bare CLI use)")
@@ -206,7 +206,7 @@ def case_5_non_destructive_tool_always_allowed() -> None:
              "CORVIN_HOME": str(sb),
              "CORVIN_HOME": str(sb),
              "CORVIN_CHANNEL_ID": "discord:c-any",
-             "CORVIN_CHANNEL_ID": "discord:c-any"},
+             "CORVIN_CHANNEL_ID": "discord:c-any"}, encoding="utf-8", errors="replace",
     )
     _eq(proc.returncode, 0, "non-destructive tool not gated")
     shutil.rmtree(sb, ignore_errors=True)
@@ -231,7 +231,7 @@ def case_6_audit_chain_records_events() -> None:
         if not audit_path.exists():
             _bad(f"audit.jsonl not created at {audit_path}")
             return
-        events = [json.loads(line) for line in audit_path.read_text().splitlines()
+        events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()
                   if line.strip()]
         types = [e.get("event_type") for e in events]
         _ok("audit.elevation_required emitted") \
@@ -360,7 +360,7 @@ class TestPinLockout(unittest.TestCase):
             )
             events = [
                 json.loads(line)
-                for line in audit_path.read_text().splitlines()
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
             event_types = [e.get("event_type") for e in events]

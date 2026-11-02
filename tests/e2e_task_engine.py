@@ -147,7 +147,7 @@ class TestEventLogRotation:
             events_path = tasks_dir / f"{task_id}.events.jsonl"
             (tasks_dir / f"{task_id}.events.jsonl.1").touch()
             (tasks_dir / f"{task_id}.events.jsonl.2").touch()
-            events_path.write_text("{}\n")
+            events_path.write_text("{}\n", encoding="utf-8")
 
             # Cleanup should remove all
             deleted = tm.cleanup_tasks(chat_key)

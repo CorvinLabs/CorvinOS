@@ -69,11 +69,11 @@ def test_verify_detects_field_tamper():
             write_event(p, ev, tool="x")
         # Tamper line 2: change tool from "x" to "y" in the body but leave
         # the hash untouched
-        lines = p.read_text().splitlines()
+        lines = p.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[1])
         rec["tool"] = "y"  # dishonest edit
         lines[1] = json.dumps(rec)
-        p.write_text("\n".join(lines) + "\n")
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         ok, problems = verify_chain(p)
         t("verify reports NOT ok", ok is False)
         t("at least one problem", len(problems) >= 1)
@@ -92,11 +92,11 @@ def test_verify_detects_deleted_record():
         p = Path(td) / "audit.jsonl"
         for ev in ("tool.created", "tool.created", "tool.created", "tool.deleted"):
             write_event(p, ev, tool="x")
-        lines = p.read_text().splitlines()
+        lines = p.read_text(encoding="utf-8").splitlines()
         # Drop record 2 — record 3's prev_hash now points at the hash of
         # the OLD record 2, which is no longer present.
         del lines[1]
-        p.write_text("\n".join(lines) + "\n")
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         ok, problems = verify_chain(p)
         t("verify NOT ok after delete", ok is False)
         t("broken_chain on (now-)line 2",
@@ -110,7 +110,7 @@ def test_verify_detects_appended_fake():
         p = Path(td) / "audit.jsonl"
         write_event(p, "tool.created", tool="x")
         # Append a record that pretends to be chained but has no hash
-        with p.open("a") as fh:
+        with p.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "ts": time.time(), "event_type": "tool.created",
                 "severity": "INFO", "tool": "ghost",
@@ -129,7 +129,7 @@ def test_invalid_json_line_does_not_crash_verifier():
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "audit.jsonl"
         write_event(p, "tool.created", tool="x")
-        with p.open("a") as fh:
+        with p.open("a", encoding="utf-8") as fh:
             fh.write("this is not json\n")
         write_event(p, "tool.deleted", tool="x")
         ok, problems = verify_chain(p)
@@ -151,11 +151,11 @@ def test_non_dict_json_line_does_not_crash_verifier():
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "audit.jsonl"
             write_event(p, "tool.created", tool="x")
-            with p.open("a") as fh:
+            with p.open("a", encoding="utf-8") as fh:
                 fh.write(bad_line + "\n")
             # A hand-crafted tampered record AFTER the bad line -- this must
             # still be reached and reported, not swallowed by an aborted scan.
-            with p.open("a") as fh:
+            with p.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps({
                     "ts": time.time(), "event_type": "tool.created",
                     "severity": "INFO", "tool": "ghost",
@@ -216,7 +216,7 @@ def _cli(root: Path, *args: str) -> tuple[int, str]:
     proc = subprocess.run(
         [sys.executable, str(ROOT / "forge.py"),
          "--root", str(root), *args],
-        capture_output=True, text=True, cwd=str(ROOT),
+        capture_output=True, text=True, cwd=str(ROOT), encoding="utf-8", errors="replace",
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -258,11 +258,11 @@ def test_mcp_audit_detects_tamper():
 
         # Edit one line in audit.jsonl
         audit_path = td / "audit.jsonl"
-        lines = audit_path.read_text().splitlines()
+        lines = audit_path.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[1])
         rec["tool"] = "alpha-evil"
         lines[1] = json.dumps(rec)
-        audit_path.write_text("\n".join(lines) + "\n")
+        audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         rc, out = _cli(td, "audit-verify")
         t("rc != 0", rc != 0)
@@ -294,7 +294,7 @@ def test_security_event_appears_in_chain():
         t("verify still ok after the security event", rc == 0)
         # Confirm the event_type is in the file
         events = [json.loads(l) for l in
-                   (td / "audit.jsonl").read_text().splitlines()]
+                   (td / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
         types = [e["event_type"] for e in events]
         t("policy.import_denied present in audit",
           "policy.import_denied" in types)
@@ -321,7 +321,7 @@ def test_last_hash_reads_backwards_and_matches_a_forward_scan():
         if not path.exists():
             return ""
         last = ""
-        with path.open("r") as fh:
+        with path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -364,7 +364,7 @@ def test_last_hash_reads_backwards_and_matches_a_forward_scan():
     with tempfile.TemporaryDirectory() as td:
         for label, body in cases:
             path = Path(td) / "chain.jsonl"
-            path.write_text(body)
+            path.write_text(body, encoding="utf-8")
             expected = forward_scan(path)
             got = se_mod._last_hash(path)
             t(f"{label}: {expected!r}", got == expected,
@@ -377,7 +377,7 @@ def test_last_hash_reads_backwards_and_matches_a_forward_scan():
             write_event(path, "tool.created", tool=f"t{i}")
         ok, problems = verify_chain(path)
         t("25 real write_event() records still verify", ok, detail=str(problems[:2]))
-        recs = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
         t("last record's hash is what _last_hash returns",
           se_mod._last_hash(path) == recs[-1]["hash"])
         t("each record's prev_hash is its predecessor's hash",
@@ -440,7 +440,7 @@ def test_last_dna_in_chain_reads_backwards_and_matches_a_forward_scan():
     with tempfile.TemporaryDirectory() as td:
         for label, body in cases:
             path = Path(td) / "dna.jsonl"
-            path.write_text(body)
+            path.write_text(body, encoding="utf-8")
             expected = forward_scan(path)
             got = dna_mod.last_dna_in_chain(path)
             t(f"{label}: {expected}", got == expected,
@@ -453,7 +453,7 @@ def test_last_dna_in_chain_reads_backwards_and_matches_a_forward_scan():
         ok, problems = verify_chain(path)
         t("20 real records still verify (hash chain)", ok, detail=str(problems[:2]))
         dna, h = dna_mod.last_dna_in_chain(path)
-        recs = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
         t("returned hash is the newest DNA-bearing record's hash",
           h == recs[-1]["hash"])
         t("returned dna matches that record's details.chain_dna",

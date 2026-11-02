@@ -55,7 +55,7 @@ def extract_metadata(video_path: str) -> Dict[str, Any]:
     """Extract video metadata using ffprobe (returns raw text parsing)"""
     try:
         cmd = ["ffprobe", "-v", "error", "-show_format", "-show_streams", video_path]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
 
         metadata = {
             "has_video": False,
@@ -160,7 +160,7 @@ def detect_solid_color(video_path: str) -> bool:
         # Use identify (ImageMagick) if available, else use a simple heuristic
         try:
             identify_cmd = ["identify", "-format", "%[fx:entropy]", temp_png]
-            result = subprocess.run(identify_cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(identify_cmd, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             entropy = float(result.stdout.strip())
             # Entropy < 0.3 means low color variation (solid color)
             is_solid = entropy < 0.3

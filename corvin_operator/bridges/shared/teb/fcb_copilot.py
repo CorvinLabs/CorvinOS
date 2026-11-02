@@ -313,7 +313,7 @@ class ToolResultInjector:
         # Write to btw_queue.jsonl (append-only)
         btw_queue_path = session_path / "btw_queue.jsonl"
         try:
-            with open(btw_queue_path, "a") as f:
+            with open(btw_queue_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry) + "\n")
             logger.debug(f"Tool result queued: {tool_name} ({status})")
         except IOError as e:

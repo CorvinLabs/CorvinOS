@@ -50,20 +50,20 @@ def section_corvin_home() -> None:
             # supply_chain.yaml at corvin-home root → protected
             p = Path(tmp) / "global" / "supply_chain.yaml"
             p.parent.mkdir(parents=True)
-            p.write_text("k: v")
+            p.write_text("k: v", encoding="utf-8")
             t("supply_chain.yaml protected",
               pg.is_protected_path(str(p)))
 
             # subdir under global/supply_chain/ → protected
             cache = Path(tmp) / "global" / "supply_chain" / "last_critical.json"
             cache.parent.mkdir(exist_ok=True)
-            cache.write_text("{}")
+            cache.write_text("{}", encoding="utf-8")
             t("supply_chain/<file> protected",
               pg.is_protected_path(str(cache)))
 
             # Non-supply-chain file under global/ → NOT protected
             ok_file = Path(tmp) / "global" / "harmless.txt"
-            ok_file.write_text("ok")
+            ok_file.write_text("ok", encoding="utf-8")
             t("harmless file under global not protected",
               not pg.is_protected_path(str(ok_file)))
         finally:

@@ -59,7 +59,7 @@ class TestRollbackManager:
     def test_begin_writes_fsynced_wal(self, rm):
         tx, err = rm.begin_transaction(TENANT, "cfg.a", {"v": 1}, {"v": 2})
         assert err is None
-        wal = json.loads((rm.wal_dir / f"{tx}.json").read_text())
+        wal = json.loads((rm.wal_dir / f"{tx}.json").read_text(encoding="utf-8"))
         assert wal["status"] == TransactionStatus.PREPARED.value and wal["new_state"] == {"v": 2}
 
     def test_commit_is_keyed_and_chained(self, rm):
@@ -67,7 +67,7 @@ class TestRollbackManager:
         tx1 = _commit(rm, {"v": 1}, {"v": 2})
         tx, err = rm.begin_transaction(TENANT, "cfg.a", {"v": 2}, {"v": 3})
         rm.commit_transaction(tx, TENANT, "cfg.a", {"v": 2}, {"v": 3}, audit_callback=_callback(events))
-        entries = [json.loads(l) for l in rm.log_file.read_text().splitlines()]
+        entries = [json.loads(l) for l in rm.log_file.read_text(encoding="utf-8").splitlines()]
         assert [e["status"] for e in entries] == ["committed", "committed"]
         assert entries[0]["prev_mac"] == "" and entries[1]["prev_mac"] == entries[0]["mac"]
         assert len(entries[1]["mac"]) == 64
@@ -85,7 +85,7 @@ class TestRollbackManager:
         tx, _ = rm.begin_transaction(TENANT, "cfg.a", {"v": 1}, {"v": 2})
         ok, err = rm.commit_transaction(tx, TENANT, "cfg.a", {"v": 1}, {"v": 999})
         assert not ok and "does not match WAL" in err
-        entries = [json.loads(l) for l in rm.log_file.read_text().splitlines()]
+        entries = [json.loads(l) for l in rm.log_file.read_text(encoding="utf-8").splitlines()]
         assert entries[-1]["status"] == "failed" and len(entries[-1]["mac"]) == 64
         # a FAILED entry is a full chain link, not a gap
         _commit(rm, {"v": 1}, {"v": 2})
@@ -93,22 +93,22 @@ class TestRollbackManager:
 
     def test_tamper_detected_even_with_recomputed_sha(self, rm):
         _commit(rm, {"v": 1}, {"v": 2})
-        entries = [json.loads(l) for l in rm.log_file.read_text().splitlines()]
+        entries = [json.loads(l) for l in rm.log_file.read_text(encoding="utf-8").splitlines()]
         entries[0]["new_state"] = {"v": 42}
-        rm.log_file.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        rm.log_file.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
         ok, err = rm.verify_chain_integrity(TENANT)
         assert not ok and "MAC mismatch" in err
 
     def test_foreign_key_cannot_forge(self, home, rm):
         _commit(rm, {"v": 1}, {"v": 2})
         other = CryptoBinding()
-        entries = [json.loads(l) for l in rm.log_file.read_text().splitlines()]
+        entries = [json.loads(l) for l in rm.log_file.read_text(encoding="utf-8").splitlines()]
         body = {k: v for k, v in entries[0].items() if k != "mac"}
         body["new_state"] = {"v": 42}
         from core.infinite_session.crypto_binding import canonical_json
         forged_mac, _ = other.hmac_bytes("tenant_b", canonical_json(body))
         body["mac"] = forged_mac
-        rm.log_file.write_text(json.dumps(body) + "\n")
+        rm.log_file.write_text(json.dumps(body) + "\n", encoding="utf-8")
         assert rm.verify_chain_integrity(TENANT)[0] is False
 
     def test_rollback_creates_revert(self, rm):
@@ -154,7 +154,7 @@ class TestRollbackManager:
         # WAL, hit a JSON error and DELETED it; that commit then failed with
         # "WAL entry not found". A young unreadable WAL must be left alone.
         torn = rm.wal_dir / "00000000-0000-4000-8000-000000000000.json"
-        torn.write_text('{"transaction_id": "0000')
+        torn.write_text('{"transaction_id": "0000', encoding="utf-8")
         RollbackManager(TENANT)  # construction runs recover_pending()
         assert torn.exists()
         # ...but a stale unreadable one is still garbage-collected.

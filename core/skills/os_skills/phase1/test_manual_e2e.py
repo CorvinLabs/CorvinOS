@@ -19,7 +19,7 @@ def test_e2e_health_monitor():
     """E2E Test 1: Health Monitor reachable and audited."""
     print("\n[TEST 1] Health Monitor E2E")
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         audit_file = Path(f.name)
 
     try:
@@ -59,7 +59,7 @@ def test_e2e_context_bridge():
     """E2E Test 2: Context Bridge reachable and makes split decisions."""
     print("\n[TEST 2] Context Bridge E2E")
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         audit_file = Path(f.name)
 
     try:
@@ -111,7 +111,7 @@ def test_e2e_orchestrator_composition():
     """E2E Test 3: Orchestrator composes Health Monitor and Context Bridge."""
     print("\n[TEST 3] Orchestrator Composition E2E")
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         audit_file = Path(f.name)
 
     try:
@@ -172,7 +172,7 @@ def test_audit_chain_integrity():
     """E2E Test 4: Audit trail maintains hash-chain integrity."""
     print("\n[TEST 4] Audit Chain Integrity E2E")
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         audit_file = Path(f.name)
 
     try:
@@ -209,7 +209,7 @@ def test_tenant_isolation():
     """Adversarial Test 5: Audit trail maintains tenant isolation."""
     print("\n[TEST 5] Tenant Isolation E2E")
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         audit_file = Path(f.name)
 
     try:

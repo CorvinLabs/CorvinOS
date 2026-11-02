@@ -46,7 +46,7 @@ def _run_summarize_metapher(text: str, lang: str = "de", model: str = "claude-ha
             input=text,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=30, encoding="utf-8", errors="replace",
         )
         return result.stdout.strip()
     except subprocess.TimeoutExpired:

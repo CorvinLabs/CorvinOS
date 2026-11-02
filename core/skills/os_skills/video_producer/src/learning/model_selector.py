@@ -121,7 +121,7 @@ class ModelSelector:
         """Load or initialize model selector state."""
         if self.state_file.exists():
             try:
-                data = json.loads(self.state_file.read_text())
+                data = json.loads(self.state_file.read_text(encoding="utf-8"))
                 state = ModelSelectorState(
                     skill_id=data.get("skill_id", "os.model_selector"),
                     tenant_id=data.get("tenant_id", self.tenant_id),
@@ -181,7 +181,7 @@ class ModelSelector:
                     "last_used": perf.last_used,
                 }
 
-        self.state_file.write_text(json.dumps(data, indent=2))
+        self.state_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def select_model(self, video_duration_seconds: float) -> Model:
         """Select model for video using epsilon-greedy algorithm.

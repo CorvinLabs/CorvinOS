@@ -72,23 +72,23 @@ def _seed_learning(home: Path) -> Path:
         asyncio.run(store.write_event(ev, tenant_id="_default"))
     side = home / "tenants" / "_default" / "learning" / "decisions.jsonl"
     side.write_text(json.dumps({"user_id": SUBJECT, "decision": "a"}) + "\n"
-                    + json.dumps({"user_id": OTHER, "decision": "b"}) + "\n")
+                    + json.dumps({"user_id": OTHER, "decision": "b"}) + "\n", encoding="utf-8")
     return store.events_dir
 
 
 def _seed_infinite_session(home: Path) -> None:
     isr = home / "tenants" / "_default" / "infinite_session"
     (isr / "snapshots" / SUBJECT).mkdir(parents=True)
-    (isr / "snapshots" / SUBJECT / "phase-1.json").write_text(json.dumps({"session_id": SUBJECT, "state": {}}))
+    (isr / "snapshots" / SUBJECT / "phase-1.json").write_text(json.dumps({"session_id": SUBJECT, "state": {}}), encoding="utf-8")
     (isr / "snapshots" / "task-x").mkdir(parents=True)
-    (isr / "snapshots" / "task-x" / "phase-1.json").write_text(json.dumps({"session_id": SUBJECT, "state": {}}))
-    (isr / "snapshots" / "task-x" / "phase-2.json").write_text(json.dumps({"session_id": OTHER, "state": {}}))
+    (isr / "snapshots" / "task-x" / "phase-1.json").write_text(json.dumps({"session_id": SUBJECT, "state": {}}), encoding="utf-8")
+    (isr / "snapshots" / "task-x" / "phase-2.json").write_text(json.dumps({"session_id": OTHER, "state": {}}), encoding="utf-8")
     (isr / "rollback").mkdir(parents=True)
     (isr / "rollback" / "log.jsonl").write_text(
-        json.dumps({"session_id": SUBJECT, "op": 1}) + "\n" + json.dumps({"session_id": OTHER, "op": 2}) + "\n")
+        json.dumps({"session_id": SUBJECT, "op": 1}) + "\n" + json.dumps({"session_id": OTHER, "op": 2}) + "\n", encoding="utf-8")
     ck = home / "tenants" / "_default" / "sessions" / SUBJECT / "checkpoints"
     ck.mkdir(parents=True)
-    (ck / "c1.json").write_text("{}")
+    (ck / "c1.json").write_text("{}", encoding="utf-8")
 
 
 def test_learning_handler_erases_subject_only(home):
@@ -97,9 +97,9 @@ def test_learning_handler_erases_subject_only(home):
 
     r = LearningEventHandler(tenant_id="_default").purge(SUBJECT, "er-test")
     assert r.status.value == "applied" and r.count >= 3, r
-    text = "\n".join(p.read_text() for p in events_dir.glob("*.jsonl"))
+    text = "\n".join(p.read_text(encoding="utf-8") for p in events_dir.glob("*.jsonl"))
     assert SUBJECT not in text and OTHER in text
-    side = (home / "tenants" / "_default" / "learning" / "decisions.jsonl").read_text()
+    side = (home / "tenants" / "_default" / "learning" / "decisions.jsonl").read_text(encoding="utf-8")
     assert SUBJECT not in side and OTHER in side
     assert LearningEventHandler(tenant_id="_default").purge(SUBJECT, "er-2").status.value == "skipped"
 
@@ -114,7 +114,7 @@ def test_infinite_session_handler_erases_subject_only(home):
     assert not (isr / "snapshots" / SUBJECT).exists()
     assert not (isr / "snapshots" / "task-x" / "phase-1.json").exists()
     assert (isr / "snapshots" / "task-x" / "phase-2.json").exists()
-    log = (isr / "rollback" / "log.jsonl").read_text()
+    log = (isr / "rollback" / "log.jsonl").read_text(encoding="utf-8")
     assert SUBJECT not in log and OTHER in log
     assert not (home / "tenants" / "_default" / "sessions" / SUBJECT).exists()
 
@@ -145,7 +145,7 @@ def test_ccc_erase_dispatch_runs_the_real_orchestrator(home):
     trail = home / "tenants" / "_default" / "global" / "erasure" / f"{result.entity_id}.json"
     assert trail.exists()
     chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-    types = [json.loads(l)["event_type"] for l in chain.read_text().splitlines()]
+    types = [json.loads(l)["event_type"] for l in chain.read_text(encoding="utf-8").splitlines()]
     assert "erasure.requested" in types and "erasure.completed" in types
     from forge import security_events as se
     ok, problems = se.verify_chain(chain)
@@ -320,7 +320,7 @@ def _boot_real_writers(home: Path) -> None:
     conn = (DataSourceRegistry(corvin_home=home)._home / "tenants" / "_default"
             / "datasource_connections")
     conn.mkdir(parents=True, exist_ok=True)
-    (conn / "ds1.json").write_text(json.dumps({"name": "ds1", "owner": SUBJECT}))
+    (conn / "ds1.json").write_text(json.dumps({"name": "ds1", "owner": SUBJECT}), encoding="utf-8")
 
     # 6. CEL load-bearing anchor store — the REAL writer (R4-F1). This is the
     #    store that held the operator's verbatim conversation text through a
@@ -340,7 +340,7 @@ def _boot_real_writers(home: Path) -> None:
         "run_id": "acs-guard-1", "status": "success",
         "run_dir": str(home / "tenants" / "_default" / "sessions" / SUBJECT
                        / "acs" / "runs" / "acs-guard-1"),
-    }))
+    }), encoding="utf-8")
 
 
 def _classified() -> dict[str, set[str]]:
@@ -456,18 +456,18 @@ def _plant(entry: str, subject: str, other: str) -> tuple[Path, Path]:
     if entry.endswith(".jsonl"):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"user_id": subject, "n": 1}) + "\n"
-                        + json.dumps({"user_id": other, "n": 2}) + "\n")
+                        + json.dumps({"user_id": other, "n": 2}) + "\n", encoding="utf-8")
         return path, path
     if entry.endswith(".json"):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({subject: {"user_id": subject},
-                                    other: {"user_id": other}}))
+                                    other: {"user_id": other}}), encoding="utf-8")
         return path, path
     path.mkdir(parents=True, exist_ok=True)
     sp = path / f"{subject}.json"
-    sp.write_text(json.dumps({"user_id": subject, "note": "synthetic guard record"}))
+    sp.write_text(json.dumps({"user_id": subject, "note": "synthetic guard record"}), encoding="utf-8")
     op = path / "keep-other.json"
-    op.write_text(json.dumps({"user_id": other, "note": "synthetic guard record"}))
+    op.write_text(json.dumps({"user_id": other, "note": "synthetic guard record"}), encoding="utf-8")
     return sp, op
 
 
@@ -504,7 +504,7 @@ class TestEveryCoveredEntryActuallyErases:
             f"COVERED_DIRS claims {entry!r} but the real chain left the subject's "
             f"record at {subject_path} — either implement the purge or drop the claim"
         )
-        assert other_path.exists() and OTHER in other_path.read_text(), (
+        assert other_path.exists() and OTHER in other_path.read_text(encoding="utf-8"), (
             f"erasing one subject destroyed another's data in {entry!r} — "
             "over-matching is its own GDPR Art. 5 breach"
         )
@@ -523,7 +523,7 @@ def test_unattributable_store_is_reported_not_silently_completed(home):
     entry = sorted(UNATTRIBUTABLE_DIRS)[0]
     path = _entry_path("_default", entry)
     path.mkdir(parents=True, exist_ok=True)
-    (path / ".corvin-sysprompt-guard.txt").write_text("synthetic prompt body")
+    (path / ".corvin-sysprompt-guard.txt").write_text("synthetic prompt body", encoding="utf-8")
 
     r = UnattributableStoreHandler(tenant_id="_default").purge(SUBJECT, "er-un")
     assert r.status.value == "skipped"
@@ -542,7 +542,7 @@ def test_unattributable_layer_reaches_the_real_erase_route(home):
     entry = sorted(UNATTRIBUTABLE_DIRS)[0]
     path = _entry_path("_default", entry)
     path.mkdir(parents=True, exist_ok=True)
-    (path / ".corvin-sysprompt-guard.txt").write_text("synthetic prompt body")
+    (path / ".corvin-sysprompt-guard.txt").write_text("synthetic prompt body", encoding="utf-8")
 
     plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": SUBJECT}, confidence=1.0)
     # /erase asks for a one-time code first; take the one the router would have shown the user.
@@ -573,7 +573,7 @@ def test_every_covered_entry_survives_nothing_through_the_real_erase_route(home)
         f"subject's data survived in {survivors}"
     )
     lost = sorted(e for e, (_sp, op) in planted.items()
-                  if not (op.exists() and OTHER in op.read_text()))
+                  if not (op.exists() and OTHER in op.read_text(encoding="utf-8")))
     assert not lost, f"another subject's data was destroyed in {lost}"
 
 
@@ -591,11 +591,11 @@ class TestTheNewHandlersActuallyErase:
 
         wf = home / "tenants" / "_default" / "workflows"
         (wf / "other.chat.jsonl").write_text(
-            json.dumps({"role": "user", "content": "keep", "speaker": OTHER}) + "\n")
+            json.dumps({"role": "user", "content": "keep", "speaker": OTHER}) + "\n", encoding="utf-8")
         r = WorkflowChatHandler(tenant_id="_default").purge(SUBJECT, "er-wf")
         assert r.status.value == "applied", r
         assert not (wf / "wf-guard.chat.jsonl").exists()
-        assert OTHER in (wf / "other.chat.jsonl").read_text()
+        assert OTHER in (wf / "other.chat.jsonl").read_text(encoding="utf-8")
 
     def test_browser_profile_is_erased(self, home):
         _boot_real_writers(home)
@@ -615,14 +615,14 @@ class TestTheNewHandlersActuallyErase:
         r = VibeCheckpointHandler(tenant_id="_default").purge(SUBJECT, "er-vibe")
         assert r.status.value == "applied", r
         left = list((home / "tenants" / "_default" / "vibe").rglob("*.json"))
-        assert all(SUBJECT not in p.read_text() for p in left)
+        assert all(SUBJECT not in p.read_text(encoding="utf-8") for p in left)
 
     def test_datasource_manifest_is_erased(self, home):
         _boot_real_writers(home)
         from erasure_handlers import DatasourceConnectionHandler
 
         conn = home / "tenants" / "_default" / "datasource_connections"
-        (conn / "ds2.json").write_text(json.dumps({"name": "ds2", "owner": OTHER}))
+        (conn / "ds2.json").write_text(json.dumps({"name": "ds2", "owner": OTHER}), encoding="utf-8")
         r = DatasourceConnectionHandler(tenant_id="_default").purge(SUBJECT, "er-ds")
         assert r.status.value == "applied", r
         assert not (conn / "ds1.json").exists()
@@ -644,7 +644,7 @@ def _seam_records(home: Path) -> list[dict]:
     (tenant-scoped vs the resolver default) is not what this test is about."""
     out: list[dict] = []
     for chain in home.rglob("audit.jsonl"):
-        for line in chain.read_text().splitlines():
+        for line in chain.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
@@ -665,19 +665,19 @@ class TestInfiniteSessionIndexAndSeam:
         isr = home / "tenants" / "_default" / "infinite_session" / "snapshots" / "task-x"
         isr.mkdir(parents=True)
         snap = isr / "s1.json"
-        snap.write_text(json.dumps({"session_id": SUBJECT, "state": {}}))
+        snap.write_text(json.dumps({"session_id": SUBJECT, "state": {}}), encoding="utf-8")
         keep = isr / "s2.json"
-        keep.write_text(json.dumps({"session_id": OTHER, "state": {}}))
+        keep.write_text(json.dumps({"session_id": OTHER, "state": {}}), encoding="utf-8")
         (isr / "index.json").write_text(json.dumps([
             {"snapshot_id": "s1", "seq": 1, "file_path": str(snap), "session_id": SUBJECT},
             {"snapshot_id": "s2", "seq": 2, "file_path": str(keep), "session_id": OTHER},
-        ]))
+        ]), encoding="utf-8")
 
         from erasure_handlers import InfiniteSessionHandler
 
         r = InfiniteSessionHandler(tenant_id="_default").purge(SUBJECT, "er-is")
         assert r.status.value == "applied", r
-        index = json.loads((isr / "index.json").read_text())
+        index = json.loads((isr / "index.json").read_text(encoding="utf-8"))
         ids = [m["snapshot_id"] for m in index]
         assert ids == ["s2"], index
         assert not snap.exists()
@@ -691,10 +691,10 @@ class TestInfiniteSessionIndexAndSeam:
         isr = home / "tenants" / "_default" / "infinite_session" / "snapshots" / "task-y"
         isr.mkdir(parents=True)
         snap = isr / "s1.json"
-        snap.write_text(json.dumps({"session_id": SUBJECT}))
+        snap.write_text(json.dumps({"session_id": SUBJECT}), encoding="utf-8")
         (isr / "index.json").write_text(json.dumps([
             {"snapshot_id": "s1", "seq": 1, "file_path": str(snap), "session_id": SUBJECT},
-        ]))
+        ]), encoding="utf-8")
         from erasure_handlers import InfiniteSessionHandler
 
         InfiniteSessionHandler(tenant_id="_default").purge(SUBJECT, "er-is2")
@@ -731,7 +731,7 @@ def test_live_llm_reply_captured_by_cel_anchor_is_erased(home):
     # set it through the real console overlay, not by patching the gate.
     overlay = home / "tenants" / "_default" / "global" / "features.json"
     overlay.parent.mkdir(parents=True, exist_ok=True)
-    overlay.write_text(json.dumps({"flags": {"cel_load_bearing_anchor": True}}))
+    overlay.write_text(json.dumps({"flags": {"cel_load_bearing_anchor": True}}), encoding="utf-8")
 
     proc = subprocess.run(
         ["claude", "-p",
@@ -741,7 +741,7 @@ def test_live_llm_reply_captured_by_cel_anchor_is_erased(home):
          "Option 1: deploy on Friday\n"
          "Option 2: deploy on Monday",
          "--model", "haiku"],
-        capture_output=True, text=True, timeout=180,
+        capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr[-800:]
     reply = proc.stdout.strip()
@@ -755,7 +755,7 @@ def test_live_llm_reply_captured_by_cel_anchor_is_erased(home):
     written = list(store.glob("*.jsonl"))
     assert written, "the real CEL writer produced no store"
     probe = entry["text"].splitlines()[0][:40]
-    assert any(probe in f.read_text() for f in written)
+    assert any(probe in f.read_text(encoding="utf-8") for f in written)
 
     plan = EntityPlan(entity_type="erasure_request",
                       slots={"subject_id": SUBJECT}, confidence=1.0)
@@ -768,5 +768,5 @@ def test_live_llm_reply_captured_by_cel_anchor_is_erased(home):
 
     survivors = [p for p in home.rglob("*")
                  if p.is_file() and p.suffix in (".json", ".jsonl", ".txt", ".md")
-                 and probe in p.read_text(errors="ignore")]
+                 and probe in p.read_text(errors="ignore", encoding="utf-8")]
     assert not survivors, f"model-authored text survived the erasure in {survivors}"

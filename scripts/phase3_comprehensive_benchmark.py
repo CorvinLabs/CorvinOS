@@ -85,28 +85,28 @@ class Phase3ReportGenerator:
         # Load baseline runs
         baseline_file = PHASE2_BENCHMARK_DIR / "artifacts" / "baseline_runs.jsonl"
         if baseline_file.exists():
-            with open(baseline_file) as f:
+            with open(baseline_file, encoding="utf-8") as f:
                 phase2_results["baseline_runs"] = [json.loads(line) for line in f]
             logger.info(f"  ✓ Loaded {len(phase2_results['baseline_runs'])} baseline runs")
 
         # Load Phase 2 routing runs
         routing_file = PHASE2_BENCHMARK_DIR / "artifacts" / "routing_runs.jsonl"
         if routing_file.exists():
-            with open(routing_file) as f:
+            with open(routing_file, encoding="utf-8") as f:
                 phase2_results["routing_runs"] = [json.loads(line) for line in f]
             logger.info(f"  ✓ Loaded {len(phase2_results['routing_runs'])} Phase 2 routing runs")
 
         # Load quality scores
         quality_file = PHASE2_BENCHMARK_DIR / "artifacts" / "quality_scores.jsonl"
         if quality_file.exists():
-            with open(quality_file) as f:
+            with open(quality_file, encoding="utf-8") as f:
                 phase2_results["quality_scores"] = [json.loads(line) for line in f]
             logger.info(f"  ✓ Loaded {len(phase2_results['quality_scores'])} quality scores")
 
         # Load tasks
         tasks_file = PHASE2_BENCHMARK_DIR / "artifacts" / "tasks.jsonl"
         if tasks_file.exists():
-            with open(tasks_file) as f:
+            with open(tasks_file, encoding="utf-8") as f:
                 phase2_results["tasks"] = [json.loads(line) for line in f]
             logger.info(f"  ✓ Loaded {len(phase2_results['tasks'])} tasks")
 
@@ -120,7 +120,7 @@ class Phase3ReportGenerator:
         edge_cases = []
 
         if edge_cases_file.exists():
-            with open(edge_cases_file) as f:
+            with open(edge_cases_file, encoding="utf-8") as f:
                 edge_cases = [json.loads(line) for line in f]
             logger.info(f"  ✓ Loaded {len(edge_cases)} edge case tasks")
 
@@ -573,7 +573,7 @@ Phase 3 successfully improves upon Phase 2 by introducing ComplexityJudge-based 
 """
 
         # Write report to file
-        output_file.write_text(report)
+        output_file.write_text(report, encoding="utf-8")
         logger.info(f"✓ Report written to {output_file}")
 
         return report
@@ -699,20 +699,20 @@ Phase 3 successfully improves upon Phase 2 by introducing ComplexityJudge-based 
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         # Save runs
-        with open(artifacts_dir / "phase2_routing_runs_230.jsonl", "w") as f:
+        with open(artifacts_dir / "phase2_routing_runs_230.jsonl", "w", encoding="utf-8") as f:
             for run in phase2_runs:
                 f.write(json.dumps(run) + "\n")
 
-        with open(artifacts_dir / "phase3_routing_runs_230.jsonl", "w") as f:
+        with open(artifacts_dir / "phase3_routing_runs_230.jsonl", "w", encoding="utf-8") as f:
             for run in phase3_runs:
                 f.write(json.dumps(run) + "\n")
 
-        with open(artifacts_dir / "baseline_opus_runs_230.jsonl", "w") as f:
+        with open(artifacts_dir / "baseline_opus_runs_230.jsonl", "w", encoding="utf-8") as f:
             for run in baseline_runs:
                 f.write(json.dumps(run) + "\n")
 
         # Save metrics
-        with open(self.output_dir / "metrics.json", "w") as f:
+        with open(self.output_dir / "metrics.json", "w", encoding="utf-8") as f:
             json.dump(metrics.to_dict(), f, indent=2)
 
         logger.info(f"  ✓ Artifacts saved to {artifacts_dir}")

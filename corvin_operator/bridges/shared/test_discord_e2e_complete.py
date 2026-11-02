@@ -89,7 +89,7 @@ def main() -> int:
             [sys.executable, str(worker_script), str(spec_file)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         print(f"  ✓ Worker spawned (pid={proc.pid})")
 
@@ -120,7 +120,7 @@ def main() -> int:
             print(f"    Outbox contents: {list(outbox.iterdir())}")
             return 1
 
-        envelope = json.loads(outbox_files[0].read_text())
+        envelope = json.loads(outbox_files[0].read_text(encoding="utf-8"))
         print(f"  ✓ Envelope found: {outbox_files[0].name}")
 
         # Stage 6: Validate envelope structure

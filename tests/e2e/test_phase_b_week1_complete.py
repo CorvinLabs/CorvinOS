@@ -49,30 +49,30 @@ class TestSkillForgePhase3Packaging:
                 "entry_point": "src.skill:TestSkill.execute",
                 "input_schema": {"request": "dict"},
                 "output_schema": {"route": "str"},
-            }, indent=2))
+            }, indent=2), encoding="utf-8")
 
             # Create src files (Phase 2 output)
             (skill_dir / "src" / "skill.py").write_text("""
 class TestSkill:
     def execute(self, input_data):
         return {"route": "success"}
-""")
-            (skill_dir / "src" / "__init__.py").write_text("")
+""", encoding="utf-8")
+            (skill_dir / "src" / "__init__.py").write_text("", encoding="utf-8")
 
             # Create test file
             (skill_dir / "tests" / "test_skill.py").write_text("""
 def test_skill_executes():
     assert True
-""")
+""", encoding="utf-8")
 
             # Create README
-            (skill_dir / "README.md").write_text("# Test Skill\n\nA test skill for E2E testing.")
+            (skill_dir / "README.md").write_text("# Test Skill\n\nA test skill for E2E testing.", encoding="utf-8")
 
             # Create hook examples
             (skill_dir / "hooks" / "pre_execute.py").write_text("""
 def pre_execute(ctx):
     return ctx
-""")
+""", encoding="utf-8")
 
             yield skill_dir
 
@@ -90,7 +90,7 @@ def pre_execute(ctx):
             packager = SkillPackager(Path(output_dir))
 
             # Load manifest
-            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text())
+            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text(encoding="utf-8"))
             manifest = SkillManifestV2.from_dict(manifest_data)
 
             # Package skill
@@ -114,7 +114,7 @@ def pre_execute(ctx):
 
         with tempfile.TemporaryDirectory() as output_dir:
             packager = SkillPackager(Path(output_dir))
-            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text())
+            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text(encoding="utf-8"))
             manifest = SkillManifestV2.from_dict(manifest_data)
 
             zip_path, _, _ = packager.package(sample_skill_dir, manifest)
@@ -153,7 +153,7 @@ def pre_execute(ctx):
 
         with tempfile.TemporaryDirectory() as output_dir:
             packager = SkillPackager(Path(output_dir))
-            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text())
+            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text(encoding="utf-8"))
             manifest = SkillManifestV2.from_dict(manifest_data)
 
             zip_path, _, _ = packager.package(sample_skill_dir, manifest)
@@ -163,7 +163,7 @@ def pre_execute(ctx):
             assert checksum_path.exists(), "Checksum file not created"
 
             # Read checksums
-            checksums = checksum_path.read_text().strip().split('\n')
+            checksums = checksum_path.read_text(encoding="utf-8").strip().split('\n')
             assert len(checksums) > 0, "No checksums found"
 
             # Verify checksum format
@@ -185,7 +185,7 @@ def pre_execute(ctx):
 
         with tempfile.TemporaryDirectory() as output_dir:
             packager = SkillPackager(Path(output_dir))
-            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text())
+            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text(encoding="utf-8"))
             manifest = SkillManifestV2.from_dict(manifest_data)
 
             zip_path, _, metadata = packager.package(sample_skill_dir, manifest)
@@ -219,7 +219,7 @@ def pre_execute(ctx):
 
         with tempfile.TemporaryDirectory() as output_dir:
             packager = SkillPackager(Path(output_dir))
-            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text())
+            manifest_data = json.loads((sample_skill_dir / "skill.json").read_text(encoding="utf-8"))
             manifest = SkillManifestV2.from_dict(manifest_data)
 
             zip_path, _, metadata = packager.package(sample_skill_dir, manifest)
@@ -517,14 +517,14 @@ class TestPhaseBAIntegration:
                 "entry_point": "src.skill:TestSkill.execute",
                 "input_schema": {},
                 "output_schema": {},
-            }))
-            (skill_dir / "src" / "skill.py").write_text("class TestSkill: pass")
-            (skill_dir / "README.md").write_text("# Test")
+            }), encoding="utf-8")
+            (skill_dir / "src" / "skill.py").write_text("class TestSkill: pass", encoding="utf-8")
+            (skill_dir / "README.md").write_text("# Test", encoding="utf-8")
 
             # Package skill
             with tempfile.TemporaryDirectory() as pkg_dir:
                 packager = SkillPackager(Path(pkg_dir))
-                manifest_data = json.loads((skill_dir / "skill.json").read_text())
+                manifest_data = json.loads((skill_dir / "skill.json").read_text(encoding="utf-8"))
                 manifest = SkillManifestV2.from_dict(manifest_data)
                 zip_path, zip_hash, _ = packager.package(skill_dir, manifest)
 

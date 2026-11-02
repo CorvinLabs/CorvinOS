@@ -274,7 +274,7 @@ class HotReloadTests(unittest.TestCase):
                 "set_at": 0.0,
                 "set_by_uid": "external",
                 "channel": "discord",
-            }))
+            }), encoding="utf-8")
             # No restart — next current() picks it up.
             self.assertEqual(
                 engine_switch.current("discord", "chat-1")["engine"],
@@ -285,7 +285,7 @@ class HotReloadTests(unittest.TestCase):
         with _Sandbox() as sb:
             path = sb.home / "global" / "engine_pref" / "discord__chat_1.json"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("{ not valid json")
+            path.write_text("{ not valid json", encoding="utf-8")
             self.assertIsNone(engine_switch.current("discord", "chat-1"))
 
     def test_engine_outside_whitelist_treated_as_absent(self):
@@ -298,7 +298,7 @@ class HotReloadTests(unittest.TestCase):
                 "set_at": 0.0,
                 "set_by_uid": "",
                 "channel": "discord",
-            }))
+            }), encoding="utf-8")
             self.assertIsNone(engine_switch.current("discord", "chat-1"))
 
 
@@ -331,7 +331,7 @@ class AuditContractTests(unittest.TestCase):
             )
             chain = self._chain_path(sb)
             self.assertTrue(chain.exists(), "audit chain should exist")
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
             self.assertTrue(any(
                 rec.get("event_type") == "engine.pref_switched"
                 and rec.get("details", {}).get("action") == "set"
@@ -347,7 +347,7 @@ class AuditContractTests(unittest.TestCase):
             )
             engine_switch.clear_preference("discord", "chat-1", uid="u")
             chain = self._chain_path(sb)
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
             cleared = [rec for rec in lines
                        if rec.get("event_type") == "engine.pref_switched"
                        and rec.get("details", {}).get("action") == "cleared"]
@@ -364,7 +364,7 @@ class AuditContractTests(unittest.TestCase):
             engine_switch.clear_preference("discord", "chat-1", uid="u")
             chain = self._chain_path(sb)
             allowed = engine_switch._AUDIT_ALLOWED
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
             # Keys injected by write_event() infrastructure (e.g. ADR-0132 chain_dna)
             # are NOT controlled by engine_switch and must be excluded from the check.
             _INFRA_KEYS = frozenset({"chain_dna"})
@@ -474,7 +474,7 @@ class CLITests(unittest.TestCase):
         cli = HERE / "engine_switch.py"
         return subprocess.run(
             ["python3", str(cli), *args],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True, env=env, encoding="utf-8", errors="replace",
         )
 
     def test_aliases_subcommand(self):
@@ -524,7 +524,7 @@ class CLITests(unittest.TestCase):
             path = sb.home / "global" / "engine_pref" / "discord__chat_9.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"engine": "hermes",
-                                        "model": "hermes-fast"}))
+                                        "model": "hermes-fast"}), encoding="utf-8")
             self.assertEqual(engine_switch.current("discord", "chat-9"),
                              {"engine": "claude_code", "model": ""})
             # set_preference with a legacy id maps too (never raises).
@@ -554,7 +554,7 @@ class NoSdkImportContractTests(unittest.TestCase):
                  "vertexai", "cohere"}
 
     def test_no_forbidden_import(self):
-        src = (HERE / "engine_switch.py").read_text()
+        src = (HERE / "engine_switch.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         offenders: list[str] = []
         for node in ast.walk(tree):

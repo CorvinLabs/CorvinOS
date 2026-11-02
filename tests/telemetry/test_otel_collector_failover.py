@@ -226,7 +226,7 @@ class TestHighVolumeExport:
 
         # Verify all records were written
         fallback_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
-        with open(fallback_file) as f:
+        with open(fallback_file, encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == export_count
@@ -263,7 +263,7 @@ class TestHighVolumeExport:
 
         # Verify all records were written
         fallback_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
-        with open(fallback_file) as f:
+        with open(fallback_file, encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == export_count
@@ -430,7 +430,7 @@ class TestPartialFailures:
 
         # Verify all signals were written to JSON fallback
         fallback_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
-        with open(fallback_file) as f:
+        with open(fallback_file, encoding="utf-8") as f:
             lines = f.readlines()
 
         # Should have 3 records (one per export)

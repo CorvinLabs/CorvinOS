@@ -25,7 +25,7 @@ needs_blender = pytest.mark.skipif(shutil.which("blender") is None, reason="blen
 
 
 def _cli(*args: str, timeout: int = 600) -> tuple[int, dict | None, str]:
-    p = subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
     try:
         return p.returncode, json.loads(p.stdout), p.stderr
     except json.JSONDecodeError:
@@ -54,7 +54,7 @@ def test_invalid_concepts_are_rejected(raw, msg):
 
 def test_bad_yaml_fails_before_blender_runs(tmp_path):
     bad = tmp_path / "bad.yaml"
-    bad.write_text("name: x\nscenes:\n  - template: teapot\n")
+    bad.write_text("name: x\nscenes:\n  - template: teapot\n", encoding="utf-8")
     code, _, err = _cli("build", str(bad), "--out", str(tmp_path / "out"))
     assert code == 2 and "template" in err
     assert not (tmp_path / "out").exists()

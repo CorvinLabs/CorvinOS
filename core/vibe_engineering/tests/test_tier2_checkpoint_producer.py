@@ -23,7 +23,7 @@ def test_finding_2_checkpointmanager_imported():
     source_file = Path(__file__).parents[2] / 'console/corvin_console/routes/task_graph_api.py'
     assert source_file.exists(), f"task_graph_api.py not found at {source_file}"
 
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Verify CheckpointManager is imported
     assert 'CheckpointManager' in source_code, \
@@ -44,7 +44,7 @@ def test_finding_2_vibe_orchestrator_imported():
     Expected: Source file contains 'VibeOrchestrator' import for checkpoint production
     """
     source_file = Path(__file__).parents[2] / 'console/corvin_console/routes/task_graph_api.py'
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Verify VibeOrchestrator is imported
     assert 'VibeOrchestrator' in source_code, \
@@ -65,7 +65,7 @@ def test_finding_2_checkpointmanager_has_methods():
     source_file = Path(__file__).parent / '../checkpoint_manager.py'
     assert source_file.exists(), f"checkpoint_manager.py not found at {source_file}"
 
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     required_methods = [
         'def create_checkpoint',
@@ -135,7 +135,7 @@ def test_finding_2_producer_integration():
     Expected: Module contains logic to call CheckpointManager
     """
     source_file = Path(__file__).parents[2] / 'console/corvin_console/routes/task_graph_api.py'
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Verify that checkpoints are created or saved in the code
     checkpoint_actions = (

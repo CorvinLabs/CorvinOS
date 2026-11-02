@@ -9,11 +9,15 @@ Resource limits via cgroups (Linux) or resource module (Unix).
 from __future__ import annotations
 
 import subprocess
-import resource
 import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
+
+try:
+    import resource  # POSIX-only; absent on Windows
+except ImportError:  # pragma: no cover - Windows
+    resource = None  # type: ignore[assignment]
 
 
 class IsolationPolicy(Enum):
@@ -102,19 +106,24 @@ class SubprocessBoundary:
 
             # Spawn subprocess with isolation (preexec applies limits in child)
             # Note: preexec_fn is Unix only; Windows uses job objects
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    preexec_fn=_apply_resource_limits,  # type: ignore
-                )
-                pid = proc.pid
-            except TypeError:
+            # Windows rejects preexec_fn with ValueError (not TypeError) before
+            # spawning anything, so the platform is checked up front.
+            proc = None
+            if os.name != "nt" and resource is not None:
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        preexec_fn=_apply_resource_limits,  # type: ignore
+                    )
+                except TypeError:
+                    proc = None
+            if proc is None:
                 # preexec_fn not supported on this platform (e.g., Windows)
                 # Fall back to simple spawn without resource limits
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                pid = proc.pid
+            pid = proc.pid
 
             process = IsolatedProcess(
                 process_id=pid,
@@ -157,8 +166,15 @@ class SubprocessBoundary:
 
         # Verify process still exists and hasn't been tampered with
         try:
-            # Try to send signal 0 (no-op signal) to verify process exists
-            os.kill(process.process_id, 0)
+            # Try to send signal 0 (no-op signal) to verify process exists.
+            # Not on Windows: signal 0 is CTRL_C_EVENT there, no existence probe.
+            if os.name == "nt":
+                from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415
+
+                if not _os_pid_exists(process.process_id):
+                    raise ProcessLookupError(process.process_id)
+            else:
+                os.kill(process.process_id, 0)
             # Process exists and is running under our control
             return True
         except (OSError, ProcessLookupError):

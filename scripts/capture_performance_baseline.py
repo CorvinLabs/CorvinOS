@@ -262,7 +262,7 @@ def main():
     output_file = Path(__file__).parent.parent / "docs" / "baseline.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_file, "w") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(baseline, f, indent=2)
 
     print(f"\n✓ Baseline saved to {output_file}")
@@ -272,7 +272,7 @@ def main():
     detailed_file = (
         Path(__file__).parent.parent / "docs" / "baseline_detailed_metrics.json"
     )
-    with open(detailed_file, "w") as f:
+    with open(detailed_file, "w", encoding="utf-8") as f:
         json.dump(
             {
                 "version": "0.3.1",

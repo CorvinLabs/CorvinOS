@@ -38,7 +38,7 @@ def chain(tmp_path, monkeypatch):
 
 
 def _records(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_event_is_registered_in_both_tables():
@@ -146,7 +146,7 @@ def test_answer_text_is_dropped_not_stored(chain):
             "answer": "GEHEIMER-ANTWORTTEXT",
         },
     )
-    raw = chain.read_text()
+    raw = chain.read_text(encoding="utf-8")
     assert "GEHEIMER-ANTWORTTEXT" not in raw
     rec = [r for r in _records(chain) if r.get("event_type") == EVENT][-1]
     assert "answer" in rec["details"].get("_dropped_fields", [])

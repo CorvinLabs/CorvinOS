@@ -64,7 +64,7 @@ class TestHealthMonitorE2E:
     @pytest.fixture
     def audit_trail(self):
         """Create temporary audit trail for this test."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
             audit_file = Path(f.name)
 
         trail = MockAuditTrail(audit_file)
@@ -120,7 +120,7 @@ class TestContextBridgeE2E:
     @pytest.fixture
     def audit_trail(self):
         """Create temporary audit trail for this test."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
             audit_file = Path(f.name)
 
         trail = MockAuditTrail(audit_file)
@@ -190,7 +190,7 @@ class TestOrchestratorE2E:
     @pytest.fixture
     def audit_trail(self):
         """Create temporary audit trail."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
             audit_file = Path(f.name)
 
         trail = MockAuditTrail(audit_file)
@@ -274,7 +274,7 @@ class TestAdversarialPhase1:
     @pytest.fixture
     def audit_trail(self):
         """Create temporary audit trail."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
             audit_file = Path(f.name)
 
         trail = MockAuditTrail(audit_file)

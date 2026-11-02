@@ -87,7 +87,7 @@ def test_inbound_a2a_task_answers_on_real_claude_and_is_priced(tmp_path: Path, m
     assert res.status == "ok", res.error
     assert "PONG" in str(res.parsed_output.get("output", "")).upper(), res.parsed_output
 
-    events = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    events = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     print(f"[live] tenant chain: {[e.get('event_type') for e in events]}")
     ends = [e.get("details") or {} for e in events if e.get("event_type") == "engine.span.end"
             and (e.get("details") or {}).get("role") == "worker"]
@@ -103,4 +103,4 @@ def test_inbound_a2a_task_answers_on_real_claude_and_is_priced(tmp_path: Path, m
     rows = {m["model_id"]: m for m in model_usage("_default")["models"]}
     row = rows.get(end["model_id"])
     assert row and row["roles"].get("worker", 0) >= 1 and row["output_tokens"] > 0, rows
-    assert "single word PONG" not in chain.read_text(), "instruction text leaked into the chain"
+    assert "single word PONG" not in chain.read_text(encoding="utf-8"), "instruction text leaked into the chain"

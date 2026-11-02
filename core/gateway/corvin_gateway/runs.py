@@ -277,7 +277,7 @@ def _read_record(tenant_id: str, run_id: str) -> RunRecord:
     except OSError as e:
         raise RunStoreMalformed(f"stat failed for {p}: {e}") from e
     mode = st.st_mode & 0o777
-    if mode != _REQUIRED_MODE:
+    if sys.platform != "win32" and mode != _REQUIRED_MODE:  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
         raise RunStoreMalformed(f"{p}: mode 0o{mode:o}, want 0o{_REQUIRED_MODE:o}")
     try:
         data = json.loads(p.read_text(encoding="utf-8"))

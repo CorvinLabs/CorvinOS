@@ -423,7 +423,7 @@ class LearnedThresholdStore:
                 logger.debug(f"Store file not found: {self._path}")
                 return
 
-            with open(self._path, "r") as f:
+            with open(self._path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             if data.get("version") != "1":
@@ -454,7 +454,7 @@ class LearnedThresholdStore:
 
             # Write to temp file first (atomic)
             temp_path = self._path.with_suffix(".tmp")
-            with open(temp_path, "w") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 data = {
                     "version": "1",
                     "tenant_id": self.tenant_id,

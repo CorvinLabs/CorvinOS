@@ -493,7 +493,7 @@ class BayesianGateTuner:
         # Write checkpoint to disk (append-only: never overwrite)
         try:
             checkpoint_with_hash = {**checkpoint_data, "hash": checkpoint_hash}
-            with open(checkpoint_path, 'w') as f:
+            with open(checkpoint_path, 'w', encoding="utf-8") as f:
                 json.dump(checkpoint_with_hash, f, indent=2)
             self._checkpoint_count += 1
         except Exception as e:
@@ -1016,7 +1016,7 @@ class BayesianGateTuner:
         }
         
         try:
-            with open(export_path, 'w') as f:
+            with open(export_path, 'w', encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2)
             logger.info(f"Exported model to {export_path}")
         except Exception as e:

@@ -58,7 +58,7 @@ class ConfigLoader:
             return SkillConfig(**defaults)
 
         try:
-            with open(config_file) as f:
+            with open(config_file, encoding="utf-8") as f:
                 config_data = yaml.safe_load(f) or {}
 
             # Navigate to spec.skills
@@ -92,7 +92,7 @@ class ConfigLoader:
             return SkillPreferences(**defaults)
 
         try:
-            with open(prefs_file) as f:
+            with open(prefs_file, encoding="utf-8") as f:
                 prefs_data = json.load(f)
 
             return SkillPreferences(
@@ -116,7 +116,7 @@ class ConfigLoader:
                 "skill_aliases": prefs.skill_aliases,
                 "tool_cost_limits": prefs.tool_cost_limits
             }
-            with open(prefs_file, "w") as f:
+            with open(prefs_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             return True
         except Exception as e:

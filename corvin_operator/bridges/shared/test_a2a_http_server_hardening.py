@@ -64,7 +64,7 @@ class _Env(unittest.TestCase):
         for oid in ("peer1", "peer2"):
             p = self.origins / f"{oid}.json"
             p.write_text(json.dumps({"enabled": True, "hmac_key": self.hk,
-                                     "recv_key": self.rk}))
+                                     "recv_key": self.rk}), encoding="utf-8")
             p.chmod(0o600)
         self.se = _SE()
         self.recv = rtr.RemoteTriggerReceiver(

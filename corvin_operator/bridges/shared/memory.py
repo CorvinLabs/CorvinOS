@@ -104,7 +104,7 @@ def read_topic(topic: str) -> str:
     """Return the full body of a topic file, or "" if it doesn't exist."""
     p = topic_path(topic)
     try:
-        return p.read_text()
+        return p.read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
 
@@ -116,11 +116,11 @@ def write_topic(topic: str, content: str, *, append: bool = False) -> Path:
     p = topic_path(topic)
     body = (content or "").rstrip() + "\n"
     if append and p.exists():
-        existing = p.read_text().rstrip()
+        existing = p.read_text(encoding="utf-8").rstrip()
         body = existing + "\n\n" + body
     # Atomic write: tmp + rename.
     tmp = p.with_suffix(".md.tmp")
-    tmp.write_text(body)
+    tmp.write_text(body, encoding="utf-8")
     shutil.move(str(tmp), str(p))
     try:
         p.chmod(0o600)
@@ -179,13 +179,13 @@ def rebuild_index() -> Path:
         lines.append("")
         for t in topics:
             try:
-                summary = first_line_summary(topic_path(t).read_text())
+                summary = first_line_summary(topic_path(t).read_text(encoding="utf-8"))
             except OSError:
                 summary = ""
             lines.append(f"- `{t}` — {summary}" if summary else f"- `{t}`")
     body = "\n".join(lines).rstrip() + "\n"
     tmp = INDEX_FILE.with_suffix(".md.tmp")
-    tmp.write_text(body)
+    tmp.write_text(body, encoding="utf-8")
     shutil.move(str(tmp), str(INDEX_FILE))
     try:
         INDEX_FILE.chmod(0o600)
@@ -203,7 +203,7 @@ def for_system_prompt() -> str:
     lines = []
     for t in topics:
         try:
-            summary = first_line_summary(topic_path(t).read_text())
+            summary = first_line_summary(topic_path(t).read_text(encoding="utf-8"))
         except OSError:
             summary = ""
         lines.append(f"  - `{t}`" + (f" — {summary}" if summary else ""))

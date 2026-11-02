@@ -47,7 +47,7 @@ def _entry(prev: str, idx: int, ts_base: float = 1_700_000_000.0) -> dict:
 def _write_chain(path: Path, n: int, *, start_prev: str = "",
                  ts_offset: float = 0.0) -> str:
     prev = start_prev
-    with path.open("w") as fh:
+    with path.open("w", encoding="utf-8") as fh:
         for i in range(n):
             rec = _entry(prev, i, ts_base=1_700_000_000.0 + ts_offset)
             fh.write(json.dumps(rec) + "\n")
@@ -79,7 +79,7 @@ class TestFirstPrevHash(unittest.TestCase):
                 "prev_hash": tail,
                 "hash": "deadbeefcafebabe",
             }
-            p.write_text(json.dumps(rec) + "\n")
+            p.write_text(json.dumps(rec) + "\n", encoding="utf-8")
             self.assertEqual(voice_audit._first_prev_hash(p), tail)
 
     def test_missing_file(self):
@@ -194,11 +194,11 @@ class TestVerifySealedSegments(unittest.TestCase):
             seg = d / "audit.2025-01-01T120000Z.jsonl"
             _write_chain(seg, 3)
             # Tamper: corrupt the second line
-            lines = seg.read_text().splitlines()
+            lines = seg.read_text(encoding="utf-8").splitlines()
             rec = json.loads(lines[1])
             rec["details"]["tampered"] = "yes"
             lines[1] = json.dumps(rec)
-            seg.write_text("\n".join(lines) + "\n")
+            seg.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
             live = d / "audit.jsonl"
             _write_chain(live, 2)

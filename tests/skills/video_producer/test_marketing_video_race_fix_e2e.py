@@ -66,8 +66,8 @@ def test_job_scoped_dir_prevents_cross_process_collision():
         "print(job_scoped_dir('shared_fixed_job_id_e2e_test'))"
     ) % CORVINOS_ROOT
 
-    proc1 = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=10)
-    proc2 = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=10)
+    proc1 = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
+    proc2 = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
 
     assert proc1.returncode == 0, proc1.stderr
     assert proc2.returncode == 0, proc2.stderr
@@ -145,7 +145,7 @@ def test_marketing_video_e2e_renders_through_real_pipeline(tmp_path, monkeypatch
         ["ffprobe", "-v", "error", "-show_entries",
          "format=duration,bit_rate:stream=codec_name,codec_type",
          "-of", "json", final_video],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
     )
     assert probe.returncode == 0, probe.stderr
 

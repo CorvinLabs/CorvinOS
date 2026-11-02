@@ -131,7 +131,7 @@ def test_each_media_type_through_a_real_worker(tmp_path):
     for d, name, cfg in ((origins, "req", {
             "origin_id": "req", "hmac_key": k_hmac, "recv_key": k_recv, "enabled": True, "max_ttl_s": 300,
             "allowed_personas": [], "spawn_worker": True, "allow_read_files": True}),):
-        (d / f"{name}.json").write_text(json.dumps(cfg))
+        (d / f"{name}.json").write_text(json.dumps(cfg), encoding="utf-8")
         (d / f"{name}.json").chmod(0o600)
     import unittest.mock as mock
     se = mock.MagicMock()
@@ -143,7 +143,7 @@ def test_each_media_type_through_a_real_worker(tmp_path):
         h, p = server.server_address[:2]
         ep = {"endpoint_id": "peer", "url": f"http://{h}:{p}/v1/a2a/receive", "hmac_key": k_hmac, "recv_key": k_recv,
               "instance_id": "iid-media-receiver", "enabled": True, "default_ttl_s": 240, "our_origin_id": "req"}
-        (endpoints / "peer.json").write_text(json.dumps(ep))
+        (endpoints / "peer.json").write_text(json.dumps(ep), encoding="utf-8")
         (endpoints / "peer.json").chmod(0o600)
         sender = rts.RemoteTriggerSender(endpoints_dir=endpoints, instance_id="iid-media-sender", forge_se=se)
         results = []

@@ -44,7 +44,7 @@ def _run_cli(home: Path, *args):
     env.pop("CORVIN_TENANT_ID", None)
     result = subprocess.run(
         [sys.executable, str(CLI), "--tenant", TENANT, *args],
-        capture_output=True, text=True, timeout=120, env=env
+        capture_output=True, text=True, timeout=120, env=env, encoding="utf-8", errors="replace"
     )
     return result
 
@@ -55,7 +55,7 @@ def _lf_events(home: Path) -> list[dict]:
     if not chain.exists():
         return []
     return [
-        json.loads(l) for l in chain.read_text().splitlines()
+        json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines()
         if l.strip() and "layer_forge." in l
     ]
 
@@ -316,7 +316,7 @@ class TestConsoleGateThresholdRoute:
         assert chain.exists(), "Audit chain must be created"
 
         events = [
-            json.loads(l) for l in chain.read_text().splitlines()
+            json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines()
             if l.strip() and "gate_threshold_applied" in l
         ]
         assert len(events) >= 1, "gate_threshold_applied event must be in audit chain"

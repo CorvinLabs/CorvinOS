@@ -32,7 +32,7 @@ def _load_tenant_spec() -> dict:
         return {"preset": "standard"}
 
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         return data.get("spec", {})
     except Exception:
@@ -46,7 +46,7 @@ def _save_tenant_spec(spec: dict) -> None:
 
     # Load existing YAML or create new
     if path.exists():
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     else:
         data = {}
@@ -55,7 +55,7 @@ def _save_tenant_spec(spec: dict) -> None:
     data["spec"] = spec
 
     # Write back with restricted permissions (GDPR Art. 32)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
     os.chmod(path, 0o600)
 

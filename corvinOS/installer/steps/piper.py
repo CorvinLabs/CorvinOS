@@ -520,7 +520,7 @@ def _write_bin_env(voice_config_dir: Path, piper_bin: str) -> None:
 
     lines: list[str] = []
     if env_file.exists():
-        lines = [l for l in env_file.read_text().splitlines()
+        lines = [l for l in env_file.read_text(encoding="utf-8").splitlines()
                  if not l.startswith("PIPER_BIN=") and not l.startswith("FFMPEG_BIN=")]
 
     lines.append(f"PIPER_BIN={piper_bin}")
@@ -529,7 +529,7 @@ def _write_bin_env(voice_config_dir: Path, piper_bin: str) -> None:
     if ffmpeg_bin:
         lines.append(f"FFMPEG_BIN={ffmpeg_bin}")
 
-    env_file.write_text("\n".join(lines) + "\n")
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if sys.platform != "win32":
         env_file.chmod(0o600)
     print(f"  ✓ PIPER_BIN={piper_bin} written to service.env")

@@ -104,7 +104,7 @@ class MockAuditTrail(AuditTrail):
                 event_dict["hash"] = event_hash
 
                 # Append to file
-                with open(self.audit_file, "a") as f:
+                with open(self.audit_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(event_dict) + "\n")
 
                 # Update last hash
@@ -150,7 +150,7 @@ class MockAuditTrail(AuditTrail):
                 event_hash = hashlib.sha256(payload.encode()).hexdigest()
                 event_dict["hash"] = event_hash
 
-                with open(self.audit_file, "a") as f:
+                with open(self.audit_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(event_dict) + "\n")
 
                 self._last_hash = event_hash
@@ -173,7 +173,7 @@ class MockAuditTrail(AuditTrail):
         events = []
 
         try:
-            with open(self.audit_file, "r") as f:
+            with open(self.audit_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)
@@ -199,7 +199,7 @@ class MockAuditTrail(AuditTrail):
         events = []
 
         try:
-            with open(self.audit_file, "r") as f:
+            with open(self.audit_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)
@@ -233,7 +233,7 @@ class MockAuditTrail(AuditTrail):
     def _reload_last_hash(self) -> None:
         """Load last event hash from file (for chain continuity)."""
         try:
-            with open(self.audit_file, "r") as f:
+            with open(self.audit_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
                 if lines:
                     last_event = json.loads(lines[-1])

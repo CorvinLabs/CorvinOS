@@ -53,7 +53,7 @@ def test_processes_sharing_one_config_lose_no_update_and_no_version(sandbox):
         done = pool.starmap(_worker, [(str(home), anchor, PER_PROC)] * PROCS)
     assert sum(done) == PROCS * PER_PROC
 
-    data = json.loads(skill_config_path(SKILL, TENANT).read_text())
+    data = json.loads(skill_config_path(SKILL, TENANT).read_text(encoding="utf-8"))
     ids = [v["version_id"] for v in data["versions"]]
     total = PROCS * PER_PROC
     assert len(ids) == len(set(ids)), f"two writers produced the same version id: {sorted(ids)}"

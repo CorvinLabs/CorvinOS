@@ -147,7 +147,7 @@ def _make_fake_claude(tmp: Path, behaviour: str) -> Path:
         ''')
     else:
         raise ValueError(behaviour)
-    script.write_text(body)
+    script.write_text(body, encoding="utf-8")
     script.chmod(0o755)
     return bin_dir
 
@@ -394,7 +394,7 @@ def test_settings_json_stream_idle_timeout_overrides_env() -> None:
         import json as _json
         ch_dir.mkdir(parents=True, exist_ok=True)
         (ch_dir / "settings.json").write_text(
-            _json.dumps({"stream_idle_timeout_seconds": 2})
+            _json.dumps({"stream_idle_timeout_seconds": 2}), encoding="utf-8"
         )
 
         bin_dir = _make_fake_claude(tmp, "short_hang_then_ok")

@@ -134,7 +134,7 @@ class TestIngestMemory:
             },
         ]
 
-        with open(memory_file, "w") as f:
+        with open(memory_file, "w", encoding="utf-8") as f:
             for item in test_data:
                 f.write(json.dumps(item) + "\n")
 
@@ -175,7 +175,7 @@ class TestIngestMemory:
             },
         ]
 
-        with open(memory_file, "w") as f:
+        with open(memory_file, "w", encoding="utf-8") as f:
             for item in test_data:
                 f.write(json.dumps(item) + "\n")
 
@@ -197,7 +197,7 @@ class TestIngestMemory:
         memory_file = memory_dir / "tier2_memory.jsonl"
 
         # Write mixed valid and invalid JSON
-        with open(memory_file, "w") as f:
+        with open(memory_file, "w", encoding="utf-8") as f:
             f.write(json.dumps({"id": "valid-1", "content": "Good"}) + "\n")
             f.write("This is not valid JSON\n")
             f.write(json.dumps({"id": "valid-2", "content": "Also good"}) + "\n")
@@ -264,7 +264,7 @@ class TestIngestRag:
             },
         ]
 
-        with open(embeddings_file, "w") as f:
+        with open(embeddings_file, "w", encoding="utf-8") as f:
             for item in test_data:
                 f.write(json.dumps(item) + "\n")
 
@@ -286,7 +286,7 @@ class TestIngestRag:
         embeddings_file = rag_dir / "embeddings.jsonl"
 
         # Write 10 items
-        with open(embeddings_file, "w") as f:
+        with open(embeddings_file, "w", encoding="utf-8") as f:
             for i in range(10):
                 f.write(
                     json.dumps({
@@ -353,7 +353,7 @@ class TestIngestMcp:
             },
         ]
 
-        with open(resource_file, "w") as f:
+        with open(resource_file, "w", encoding="utf-8") as f:
             json.dump(test_data, f)
 
         with mock.patch.object(ingester, "_corvin_home", tmp_path):
@@ -384,7 +384,7 @@ class TestIngestFiles:
         """ingest_files reads .txt files."""
         ingester = DataSourceIngestor()
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
             f.write("This is test content\nMultiple lines\n")
             temp_path = f.name
 
@@ -405,7 +405,7 @@ class TestIngestFiles:
         ingester = DataSourceIngestor()
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
         ) as f:
             json.dump({"key": "value", "data": [1, 2, 3]}, f)
             temp_path = f.name
@@ -426,7 +426,7 @@ class TestIngestFiles:
         """ingest_files reads .md files."""
         ingester = DataSourceIngestor()
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
             f.write("# Header\nSome markdown content")
             temp_path = f.name
 
@@ -445,7 +445,7 @@ class TestIngestFiles:
         """ingest_files reads .py files."""
         ingester = DataSourceIngestor()
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
             f.write("def hello():\n    return 'world'")
             temp_path = f.name
 
@@ -476,7 +476,7 @@ class TestIngestFiles:
         ingester = DataSourceIngestor()
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
         ) as f:
             temp_path = f.name
 
@@ -496,7 +496,7 @@ class TestIngestFiles:
         ingester = DataSourceIngestor()
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".xyz", delete=False
+            mode="w", suffix=".xyz", delete=False, encoding="utf-8"
         ) as f:
             f.write("content")
             temp_path = f.name
@@ -532,7 +532,7 @@ class TestIngestFiles:
         files = []
         for i, ext in enumerate([".txt", ".md", ".json"]):
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=ext, delete=False
+                mode="w", suffix=ext, delete=False, encoding="utf-8"
             ) as f:
                 f.write(f"Content {i}")
                 files.append(f.name)
@@ -776,7 +776,7 @@ class TestIntegration:
         memory_dir.mkdir(parents=True, exist_ok=True)
         memory_file = memory_dir / "tier2_memory.jsonl"
 
-        with open(memory_file, "w") as f:
+        with open(memory_file, "w", encoding="utf-8") as f:
             f.write(json.dumps({
                 "id": "m1",
                 "content": "memory content",

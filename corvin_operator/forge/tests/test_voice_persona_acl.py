@@ -117,7 +117,7 @@ class _AllowlistMCPClient(MCPClient):
              "--permission-mode", "yes"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1,
-            cwd=str(TEST_ROOT), env=env,
+            cwd=str(TEST_ROOT), env=env, encoding="utf-8", errors="replace",
         )
         self._next_id = 0
         self._buffered: list[dict] = []
@@ -164,7 +164,7 @@ def test_allowlist_filters_list_and_gates_call():
             client.close()
 
         # Audit on disk records the denial
-        audit = (td / "audit.jsonl").read_text().splitlines()
+        audit = (td / "audit.jsonl").read_text(encoding="utf-8").splitlines()
         events = [json.loads(l) for l in audit]
         types = [e["event_type"] for e in events]
         t("acl.persona_denied event recorded",
@@ -214,7 +214,7 @@ def test_resolver_injects_allowed_forged_tools_via_template_var():
     }
     cfg_path = resolver.materialize_mcp(persona)
     t("materialize returned a path", isinstance(cfg_path, str))
-    cfg = json.loads(Path(cfg_path).read_text())
+    cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
     server = cfg["mcpServers"]["forge"]
     env = server.get("env", {})
     t("FORGE_ROOT expanded (HOME)",
@@ -240,7 +240,7 @@ def test_resolver_empty_allowlist_yields_empty_env_value():
         # no allowed_forged_tools field
     }
     cfg_path = resolver.materialize_mcp(persona)
-    cfg = json.loads(Path(cfg_path).read_text())
+    cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
     env = cfg["mcpServers"]["forge"]["env"]
     t("FORGE_ALLOWED_TOOLS = '' (empty string)",
       env.get("FORGE_ALLOWED_TOOLS") == "")

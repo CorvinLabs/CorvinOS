@@ -91,9 +91,9 @@ class TestExchangeRecordsBothSides(_Harness):
 
     def test_unauthenticated_envelope_never_reaches_the_store(self):
         cfg_path = self.endpoints_dir / f"{h.ENDPOINT_ID}.json"
-        cfg = json.loads(cfg_path.read_text())
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         cfg["hmac_key"] = "3" * 64  # receiver does not know this key
-        cfg_path.write_text(json.dumps(cfg))
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
         cfg_path.chmod(0o600)
 
         result = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir).send(
@@ -106,7 +106,7 @@ class TestExchangeRecordsBothSides(_Harness):
 
     def test_broken_store_never_breaks_a_send(self):
         blocker = Path(self._tmp.name) / "not-a-dir"
-        blocker.write_text("x")
+        blocker.write_text("x", encoding="utf-8")
         os.environ["CORVIN_A2A_FEED_DIR"] = str(blocker)
         result = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir).send(h.ENDPOINT_ID, "still works")
         self.assertTrue(result.ok)
@@ -131,10 +131,10 @@ class TestRetention(unittest.TestCase):
                               text="old", attachments=[_png_att()])
         a2a_feed.record(direction="in", kind="task", peer_id="p", task_id="new", text="new")
         root = Path(self._tmp.name)
-        lines = (root / "messages.jsonl").read_text().splitlines()
+        lines = (root / "messages.jsonl").read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[0])
         rec["ts"] = time.time() - (a2a_feed.RETENTION_DAYS + 1) * 86400
-        (root / "messages.jsonl").write_text(json.dumps(rec) + "\n" + lines[1] + "\n")
+        (root / "messages.jsonl").write_text(json.dumps(rec) + "\n" + lines[1] + "\n", encoding="utf-8")
 
         self.assertEqual([m["task_id"] for m in a2a_feed.read(limit=0)], ["new"])
         removed, blobs = a2a_feed.compact(root)
@@ -286,7 +286,7 @@ class TestLegacyAndBlobBudget(TestConcurrentStore):
                              "kind": "task", "peer_id": "p", "task_id": f"l{i}", "text": str(i),
                              "attachments": []}) for i in range(30)]
         root.mkdir(parents=True, exist_ok=True)
-        (root / "messages.jsonl").write_text("\n".join(lines) + "\n")
+        (root / "messages.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
         newest, more = a2a_feed.read_page(limit=10)
         self.assertTrue(more)
         seen = [m["id"] for m in newest]
@@ -381,7 +381,7 @@ class TestRound4SeqOverrides(TestConcurrentStore):
         self.assertEqual(sorted(m["seq"] for m in page), [m["seq"] for m in page])
         # compaction folds the sidecar into the records
         a2a_feed.compact(Path(self._tmp.name))
-        lines = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        lines = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
         self.assertTrue(all(r.get("seq") for r in lines))
 
 
@@ -390,7 +390,7 @@ class TestRound5ReaderStraddlingCompaction(TestConcurrentStore):
         root = Path(self._tmp.name)
         a2a_feed._last_compact[str(root)] = time.time()
         a2a_feed.record(direction="out", kind="task", peer_id="p", task_id="t1", text="A")
-        with open(root / "messages.jsonl", "a") as fh:
+        with open(root / "messages.jsonl", "a", encoding="utf-8") as fh:
             fh.write(json.dumps({"id": "x-legacy", "ts": time.time(), "direction": "in", "kind": "task",
                                  "peer_id": "p", "task_id": "tx", "text": "X", "attachments": []}) + "\n")
         a2a_feed.read_page()                       # assigns X an override seq

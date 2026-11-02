@@ -80,7 +80,7 @@ def test_counts_tenant_directories(tmp_path):
 
 def test_files_in_the_tenants_dir_are_not_tenants(tmp_path):
     home = _home(tmp_path, ["_default"])
-    (home / "tenants" / "README.md").write_text("not a tenant")
+    (home / "tenants" / "README.md").write_text("not a tenant", encoding="utf-8")
     assert tenant_scope.count_tenants(home) == 1
 
 

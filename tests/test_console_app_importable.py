@@ -91,7 +91,7 @@ def test_console_app_imports_in_a_fresh_interpreter(tmp_path: Path) -> None:
     env["CORVIN_HOME"] = str(tmp_path / "home")  # never the operator's live home
     proc = subprocess.run(
         [_service_python(), "-c", PROBE],
-        cwd=REPO, env=env, capture_output=True, text=True, timeout=240,
+        cwd=REPO, env=env, capture_output=True, text=True, timeout=240, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, (
         "corvin_console.app failed to import — the gateway would boot WITHOUT the "

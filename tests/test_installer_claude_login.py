@@ -30,7 +30,7 @@ from corvinOS.installer.steps import dependencies as deps_mod
 
 def test_already_logged_in_short_circuits(monkeypatch, tmp_path):
     cred = tmp_path / ".credentials.json"
-    cred.write_text("{}")
+    cred.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(deps_mod, "find_claude_creds", lambda: cred)
     popen_spy = mock.Mock()
     monkeypatch.setattr(deps_mod.subprocess, "Popen", popen_spy)

@@ -60,13 +60,13 @@ class SecretsStore:
         """Create secrets.yaml if it doesn't exist."""
         if not self.secrets_path.exists():
             self.secrets_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.secrets_path, "w") as f:
+            with open(self.secrets_path, "w", encoding="utf-8") as f:
                 yaml.dump({"repositories": {}}, f)
 
     def _load_secrets(self) -> Dict[str, Any]:
         """Load and parse secrets.yaml."""
         try:
-            with open(self.secrets_path, "r") as f:
+            with open(self.secrets_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
                 return data.get("repositories", {})
         except Exception as e:
@@ -75,7 +75,7 @@ class SecretsStore:
     def _save_secrets(self, secrets: Dict[str, Any]) -> None:
         """Save secrets to secrets.yaml."""
         try:
-            with open(self.secrets_path, "w") as f:
+            with open(self.secrets_path, "w", encoding="utf-8") as f:
                 yaml.dump({"repositories": secrets}, f)
         except Exception as e:
             raise SecretsStoreError(f"Failed to save secrets.yaml: {e}")

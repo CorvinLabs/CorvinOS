@@ -79,7 +79,7 @@ def _store_raw(store: EventStore, ev: LearningEvent) -> None:
     """
     import json
     f = store.events_dir / (ev.timestamp[:10] + ".jsonl")
-    with open(f, "a") as fh:
+    with open(f, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(ev.to_dict()) + "\n")
 
 

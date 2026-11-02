@@ -129,12 +129,12 @@ def test_checkpoint_checksum_validation():
 
         # Load and corrupt the checkpoint
         latest = daemon._find_latest_checkpoint()
-        with open(latest, "r") as f:
+        with open(latest, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         # Corrupt the checksum
         data["checksum"] = "corrupted_checksum"
-        with open(latest, "w") as f:
+        with open(latest, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
         # Load should fail

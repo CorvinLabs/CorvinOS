@@ -104,7 +104,7 @@ def _run_pipeline() -> None:
             [sys.executable, str(worker_script), str(spec_file)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         print(f"  ✓ Worker spawned (pid={proc.pid})")
 
@@ -126,7 +126,7 @@ def _run_pipeline() -> None:
         if qdir.exists():
             records = list(qdir.glob("*.json"))
             if records:
-                record = json.loads(records[0].read_text())
+                record = json.loads(records[0].read_text(encoding="utf-8"))
                 state = record.get("state")
                 print(f"  ✓ Record state: {state}")
                 if state != "delivered":
@@ -141,7 +141,7 @@ def _run_pipeline() -> None:
             f"no envelope in outbox (deliver_ready() was not called); "
             f"outbox={outbox} contents={list(outbox.iterdir())}")
 
-        envelope = json.loads(outbox_files[0].read_text())
+        envelope = json.loads(outbox_files[0].read_text(encoding="utf-8"))
         print(f"  ✓ Found envelope: {outbox_files[0].name}")
         print(f"    - channel: {envelope.get('channel')}")
         print(f"    - chat_id: {envelope.get('chat_id')}")

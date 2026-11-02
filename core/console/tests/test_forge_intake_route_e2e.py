@@ -57,7 +57,7 @@ def test_unknown_foreign_deleted_and_altered_attachments_fail_the_request(tmp_pa
         assert client.post(GEN, json=body(["../etc/passwd"])).status_code == 404
         rep = _up(client, "a.csv", CSV).json()
         f = next((client.home / "tenants/_default/global/forge_intake/uploads" / rep["item_id"]).glob("data.csv"))
-        f.write_text(CSV + "tampered,row,1\n")
+        f.write_text(CSV + "tampered,row,1\n", encoding="utf-8")
         assert client.post(GEN, json=body([rep["item_id"]])).status_code == 409
         rep2 = _up(client, "b.csv", CSV).json()
         assert client.delete(f"/v1/console/forge-intake/attachments/{rep2['item_id']}").status_code == 200
@@ -76,7 +76,7 @@ def test_a_document_reaches_the_skill_and_plugin_forge_redacted_and_survives_a_s
         s = client.post("/v1/console/skill-creator/generate", json={"user_request": "a skill that follows the attached runbook",
                                                                      "attachment_ids": [rep["item_id"]]})
         assert s.status_code == 202, s.text
-        rec = json.loads((client.home / "tenants/_default/global/forge_runs" / f"{s.json()['run_id']}.json").read_text())
+        rec = json.loads((client.home / "tenants/_default/global/forge_runs" / f"{s.json()['run_id']}.json").read_text(encoding="utf-8"))
         pack = rec["resume"]["attachment_pack"]
         assert "anna.schmidt" not in json.dumps(pack) and "Runbook" in json.dumps(pack), "the resume payload carries the REDACTED pack"
         # a resumed run builds its engine request from that stored pack
@@ -130,7 +130,7 @@ def test_uploads_age_out_unused_after_24h_and_used_after_14d_and_foreign_names_a
         b = _up(client, "b.csv", CSV).json()["item_id"]
         root = client.home / "tenants/_default/global/forge_intake/uploads"
         meta = root / b / "meta.json"
-        m = json.loads(meta.read_text()); m["used"] = True; meta.write_text(json.dumps(m))
+        m = json.loads(meta.read_text(encoding="utf-8")); m["used"] = True; meta.write_text(json.dumps(m), encoding="utf-8")
         stranger = root / "notes"; stranger.mkdir()
         for d, age in ((root / a, 2 * 86400), (root / b, 2 * 86400), (stranger, 40 * 86400)):
             t = time.time() - age
@@ -163,8 +163,8 @@ def test_an_own_forged_tool_can_be_attached_by_name_and_goes_through_the_same_st
     with console(tmp_path, ScriptedEngine(plan=tool_plan(GOOD_IMPL))) as client:
         tools = client.home / "tenants/_default/forge/tools"
         tools.mkdir(parents=True, exist_ok=True)
-        (tools / "assistant.word_count.py").write_text("import json, sys\n# owner: ops.team@example.org\nprint(json.dumps({'words': 1}))\n")
-        (tools / "assistant.leaky.py").write_text("KEY = 'AKIAIOSFODNN7EXAMPLE'\n")
+        (tools / "assistant.word_count.py").write_text("import json, sys\n# owner: ops.team@example.org\nprint(json.dumps({'words': 1}))\n", encoding="utf-8")
+        (tools / "assistant.leaky.py").write_text("KEY = 'AKIAIOSFODNN7EXAMPLE'\n", encoding="utf-8")
         ok = client.post("/v1/console/forge-intake/references", json={"kind": "tool", "name": "assistant.word_count"})
         assert ok.status_code == 201, ok.text
         rep = ok.json()

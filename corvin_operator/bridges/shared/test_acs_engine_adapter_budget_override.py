@@ -92,7 +92,7 @@ def test_valid_numeric_budget_override_still_populates_manifest_fields(tmp_path)
         )
     assert out["status"] == "success"
     import json
-    manifest = json.loads((tmp_path / "run-fake-2" / "manifest.json").read_text())
+    manifest = json.loads((tmp_path / "run-fake-2" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["max_loops"] == 42
 
 

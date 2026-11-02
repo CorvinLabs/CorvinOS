@@ -21,7 +21,7 @@ REQUEST = "count the words in a text, the secret project name is Bluebird"
 def _log(client, run_id: str) -> list[dict]:
     p = client.home / "tenants" / "_default" / "global" / "forge_runs" / run_id / "events.jsonl"
     assert p.is_file(), f"no event log at {p}"
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_a_tool_run_leaves_an_ordered_log_of_what_it_did_and_never_its_prompt(tmp_path):
@@ -72,7 +72,7 @@ def test_the_envelope_is_complete_for_tool_and_plugin_runs(tmp_path, kind, reque
         run_id = start(client, kind, request_text)
         body = poll(client, run_id)
         assert body["status"] == "success"
-        rec = json.loads((client.home / "tenants/_default/global/forge_runs" / f"{run_id}.json").read_text())
+        rec = json.loads((client.home / "tenants/_default/global/forge_runs" / f"{run_id}.json").read_text(encoding="utf-8"))
         for field in ("started_at", "ended_at", "engine", "model", "artifact_ref", "request_digest"):
             assert rec.get(field) not in (None, ""), (field, rec)
         assert rec["model"] == "scripted-model", "the model the engine REPORTED, not a guess"

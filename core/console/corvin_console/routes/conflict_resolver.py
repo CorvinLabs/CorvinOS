@@ -173,7 +173,7 @@ class ConflictResolver:
                 "event_type": "conflict_detected",
                 **details
             }
-            with open(self.conflict_log, 'a') as f:
+            with open(self.conflict_log, 'a', encoding="utf-8") as f:
                 f.write(json.dumps(event) + '\n')
             logger.info(f"Conflict logged: {details['skill_id']}")
         except Exception as e:

@@ -27,7 +27,7 @@ def parse_todo_file():
     endpoints_by_file = {}
     current_file = None
 
-    with open(TODO_FILE, 'r') as f:
+    with open(TODO_FILE, 'r', encoding="utf-8") as f:
         for line in f:
             line = line.rstrip('\n')
 

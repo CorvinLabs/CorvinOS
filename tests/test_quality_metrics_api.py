@@ -22,7 +22,7 @@ def mock_metrics_dir(tmp_path):
         {"iteration": 1, "quality_score": 0.65, "dod_score": 0.7, "hallucin_score": 0.60, "loss": 0.35, "timestamp": "2026-09-15T20:05:00"},
         {"iteration": 2, "quality_score": 0.85, "dod_score": 0.85, "hallucin_score": 0.85, "loss": 0.15, "timestamp": "2026-09-15T20:10:00"},
     ]
-    with open(metrics_dir / "convergence_history.json", "w") as f:
+    with open(metrics_dir / "convergence_history.json", "w", encoding="utf-8") as f:
         json.dump(history, f)
 
     # spec.json
@@ -33,7 +33,7 @@ def mock_metrics_dir(tmp_path):
             {"name": "domain_fact.test", "type": "domain_fact", "weight": 0.7, "version": 2, "source": "learned"},
         ]
     }
-    with open(metrics_dir / "spec.json", "w") as f:
+    with open(metrics_dir / "spec.json", "w", encoding="utf-8") as f:
         json.dump(spec, f)
 
     return metrics_dir

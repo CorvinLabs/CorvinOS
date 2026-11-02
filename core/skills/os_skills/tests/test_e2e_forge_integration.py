@@ -100,7 +100,7 @@ class TestForgeE2E:
         def decisions() -> list[dict]:
             if not chain.exists():
                 return []
-            recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+            recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
             return [r for r in recs if r.get("event_type") == "learning.daemon_decision"]
 
         before = len(decisions())

@@ -195,7 +195,7 @@ class DemoVideoGenerator:
         try:
             # Create FFmpeg concat script for audio
             concat_audio_script = self.output_dir / "concat_audio.txt"
-            with open(concat_audio_script, "w") as f:
+            with open(concat_audio_script, "w", encoding="utf-8") as f:
                 for audio_path, _ in audio_files:
                     f.write(f"file '{audio_path.absolute()}'\n")
 

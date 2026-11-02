@@ -68,7 +68,7 @@ class TestSessionScope:
         activate.activate(TID, "tool-a", "session", session_key="discord:123")
         path = activate._session_active_path(TID, "discord:123")
         assert path.is_file()
-        items = json.loads(path.read_text())
+        items = json.loads(path.read_text(encoding="utf-8"))
         assert "tool-a" in items
 
     def test_activate_session_requires_session_key(self, tmp_corvin):
@@ -89,7 +89,7 @@ class TestSessionScope:
         removed = activate.deactivate(TID, "tool-a", "session", session_key="discord:123")
         assert removed is True
         path = activate._session_active_path(TID, "discord:123")
-        items = json.loads(path.read_text())
+        items = json.loads(path.read_text(encoding="utf-8"))
         assert "tool-a" not in items
 
     def test_deactivate_session_missing_returns_false(self, tmp_corvin):
@@ -137,7 +137,7 @@ class TestProjectScope:
         activate.activate(TID, "tool-a", "project", project_dir=project_dir)
         path = activate._project_active_path(project_dir)
         assert path.is_file()
-        items = json.loads(path.read_text())
+        items = json.loads(path.read_text(encoding="utf-8"))
         assert "tool-a" in items
 
     def test_activate_project_requires_project_dir(self, tmp_corvin):
@@ -153,7 +153,7 @@ class TestProjectScope:
         removed = activate.deactivate(TID, "tool-a", "project", project_dir=project_dir)
         assert removed is True
         path = activate._project_active_path(project_dir)
-        items = json.loads(path.read_text())
+        items = json.loads(path.read_text(encoding="utf-8"))
         assert "tool-a" not in items
 
     def test_project_scope_isolated_per_project_dir(self, tmp_corvin, tmp_path):
@@ -621,7 +621,7 @@ class TestBuiltinManifests:
         """Each manifest must have id, name, description, source, tags, compliance."""
         d = self._manifests_dir()
         for manifest_file in d.glob("*.json"):
-            data = json.loads(manifest_file.read_text())
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
             assert "id" in data, f"{manifest_file.name} missing 'id'"
             assert "name" in data, f"{manifest_file.name} missing 'name'"
             assert "description" in data, f"{manifest_file.name} missing 'description'"

@@ -92,7 +92,7 @@ def main() -> int:
 
     # ── from_file: valid file ────────────────────────────────────────
     with tempfile.NamedTemporaryFile(suffix=".json", mode="w",
-                                     delete=False) as f:
+                                     delete=False, encoding="utf-8") as f:
         json.dump({"default_engine": "claude_code"}, f)
         tmp = f.name
     p3 = ep.EnginePolicy.from_file(tmp)

@@ -131,12 +131,12 @@ class MarketplaceIndexCache:
 
     def _read_cache(self) -> Dict[str, Any]:
         """Read cache file."""
-        with open(self.cache_file) as f:
+        with open(self.cache_file, encoding="utf-8") as f:
             return json.load(f)
 
     def _write_cache(self, index: Dict[str, Any]) -> None:
         """Write cache file."""
-        with open(self.cache_file, "w") as f:
+        with open(self.cache_file, "w", encoding="utf-8") as f:
             json.dump(index, f)
 
     async def _fetch_fresh(self) -> Dict[str, Any]:

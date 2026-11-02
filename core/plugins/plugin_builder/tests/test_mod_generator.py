@@ -139,10 +139,10 @@ def test_write_refuses_a_non_empty_directory_and_path_traversal(tmp_path):
     files = generate_mod_files(mod_name="ok", version="0.1.0", description="d", cards=_cards(), info=False)
     out = tmp_path / "out"
     out.mkdir()
-    (out / "keep.txt").write_text("x")
+    (out / "keep.txt").write_text("x", encoding="utf-8")
     with pytest.raises(ModSpecError):
         write_mod(files, out)
-    assert (out / "keep.txt").read_text() == "x"
+    assert (out / "keep.txt").read_text(encoding="utf-8") == "x"
     with pytest.raises(ModSpecError):
         write_mod({"../escape.txt": "x"}, tmp_path / "fresh")
     assert not (tmp_path / "escape.txt").exists()
@@ -161,7 +161,7 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONPATH": str(_CORE_PLUGINS)}
     return subprocess.run(
         [sys.executable, "-W", "error::RuntimeWarning", "-m", "plugin_builder.generators.mod_cli", *args],
-        capture_output=True, text=True, env=env, timeout=60,
+        capture_output=True, text=True, env=env, timeout=60, encoding="utf-8", errors="replace",
     )
 
 
@@ -185,12 +185,12 @@ def test_cli_output_is_accepted_by_claude_code(tmp_path):
     summary = json.loads(proc.stdout)
     assert summary["skills"] == 3 and summary["cards"] == 3
 
-    validate = subprocess.run([_CLAUDE, "plugin", "validate", str(out)], capture_output=True, text=True, timeout=120)
+    validate = subprocess.run([_CLAUDE, "plugin", "validate", str(out)], capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert "Validation passed" in validate.stdout, validate.stdout + validate.stderr
     assert "$.mcp.call (via callTool)" in validate.stdout
     assert "CORVIN_CHANNEL_ID" not in validate.stdout, "the adapter marker must not be read any more"
 
-    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
+    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out, encoding="utf-8", errors="replace")
     assert test.returncode == 0, test.stdout + test.stderr
     assert "0 fail" in test.stdout and "29 pass" in test.stdout  # 16 quiz + 13 skill-info tests
 
@@ -208,9 +208,9 @@ def test_info_only_mod_for_a_store_without_any_quiz_is_complete_and_tested(tmp_p
     js = (out / "hooks" / "register.js").read_text(encoding="utf-8")
     assert "command: 'quiz'" not in js and "skill-info" in js
 
-    validate = subprocess.run([_CLAUDE, "plugin", "validate", str(out)], capture_output=True, text=True, timeout=120)
+    validate = subprocess.run([_CLAUDE, "plugin", "validate", str(out)], capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert "Validation passed" in validate.stdout, validate.stdout + validate.stderr
-    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
+    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out, encoding="utf-8", errors="replace")
     assert test.returncode == 0, test.stdout + test.stderr
     assert "0 fail" in test.stdout and "13 pass" in test.stdout
 
@@ -224,7 +224,7 @@ def _mutated_output_fails(tmp_path, old: str, new: str, *, expect_failing: list[
     text = js.read_text(encoding="utf-8")
     assert old in text, f"the mutation target {old!r} is not in the generated mod"
     js.write_text(text.replace(old, new), encoding="utf-8")
-    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out)
+    test = subprocess.run([_CLAUDE, "plugin", "test", str(out)], capture_output=True, text=True, timeout=180, cwd=out, encoding="utf-8", errors="replace")
     assert test.returncode != 0
     failed = [ln for ln in test.stdout.splitlines() if ln.startswith("(fail)")]
     assert failed, test.stdout

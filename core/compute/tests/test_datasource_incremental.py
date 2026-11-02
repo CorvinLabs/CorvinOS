@@ -71,7 +71,7 @@ class TestReadCheckpoint(unittest.TestCase):
                 "watermark": "2024-06-01T00:00:00Z",
                 "last_successful_run_id": "run-abc",
                 "last_advanced_at": "2024-06-01T01:00:00Z",
-            }))
+            }), encoding="utf-8")
             result = read_checkpoint(path)
             self.assertEqual(result["watermark"], "2024-06-01T00:00:00Z")
             self.assertEqual(result["last_successful_run_id"], "run-abc")
@@ -79,7 +79,7 @@ class TestReadCheckpoint(unittest.TestCase):
     def test_returns_defaults_on_corrupt_json(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "ckpt.json"
-            path.write_text("not valid json")
+            path.write_text("not valid json", encoding="utf-8")
             result = read_checkpoint(path)
             self.assertIsNone(result["watermark"])
 
@@ -144,7 +144,7 @@ class TestWriteCheckpoint(unittest.TestCase):
             watermark = "2024-06-15T08:30:00Z"
             write_checkpoint(path, watermark=watermark, run_id="r1", audit_fn=audit_fn)
 
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["watermark"], watermark)
 
     def test_checkpoint_file_mode_0600(self):
@@ -160,7 +160,7 @@ class TestWriteCheckpoint(unittest.TestCase):
             path = Path(td) / "ckpt.json"
             _, audit_fn = self._make_audit_list()
             write_checkpoint(path, watermark="ts1", run_id="my-run-id", audit_fn=audit_fn)
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["last_successful_run_id"], "my-run-id")
 
     def test_watermark_not_advanced_on_failure(self):
@@ -174,7 +174,7 @@ class TestWriteCheckpoint(unittest.TestCase):
 
             # Simulate a failed job — we do NOT call write_checkpoint
             # The checkpoint should still have the original watermark
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["watermark"], "ts_initial")
 
     def test_successful_run_advances_watermark(self):
@@ -185,7 +185,7 @@ class TestWriteCheckpoint(unittest.TestCase):
             write_checkpoint(path, watermark="ts_v1", run_id="r1", audit_fn=audit_fn)
             write_checkpoint(path, watermark="ts_v2", run_id="r2", audit_fn=audit_fn)
 
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["watermark"], "ts_v2")
 
     def test_rows_read_in_audit_event(self):

@@ -145,7 +145,7 @@ orchestration:
         })])
         audit_path = self.home / "tenants" / "_default" / "audit.jsonl"
         self.assertTrue(audit_path.exists())
-        self.assertIn("workflow.run.started", audit_path.read_text())
+        self.assertIn("workflow.run.started", audit_path.read_text(encoding="utf-8"))
 
     def test_workflow_run_rejects_unknown_workflow_id(self):
         server = self._server()

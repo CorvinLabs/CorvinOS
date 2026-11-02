@@ -24,7 +24,7 @@ def test_finding_1_require_session_imported():
     source_file = Path(__file__).parent / '../corvin_console/routes/task_graph_api.py'
     assert source_file.exists(), f"task_graph_api.py not found at {source_file}"
 
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Verify import
     assert 'require_session' in source_code, \
@@ -43,7 +43,7 @@ def test_finding_1_task_graph_api_uses_auth():
     Expected: Source file contains require_session usage in route parameters
     """
     source_file = Path(__file__).parent / '../corvin_console/routes/task_graph_api.py'
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Verify Depends(require_session) is used
     assert 'Depends(require_session)' in source_code, \
@@ -66,7 +66,7 @@ def test_finding_1_sessionrecord_parameter():
     Expected: Routes define a SessionRecord parameter with require_session dependency
     """
     source_file = Path(__file__).parent / '../corvin_console/routes/task_graph_api.py'
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Verify SessionRecord is imported or used
     assert 'SessionRecord' in source_code, \
@@ -91,7 +91,7 @@ def test_finding_1_require_session_function():
     Expected: require_session can be found and referenced as a dependency
     """
     source_file = Path(__file__).parent / '../corvin_console/routes/task_graph_api.py'
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Verify it's actually used as a Depends() argument
     assert 'Depends(require_session)' in source_code, \
@@ -106,7 +106,7 @@ def test_finding_1_multiple_protected_routes():
     Expected: At least 3 routes in task_graph_api.py use Depends(require_session)
     """
     source_file = Path(__file__).parent / '../corvin_console/routes/task_graph_api.py'
-    source_code = source_file.read_text()
+    source_code = source_file.read_text(encoding="utf-8")
 
     # Count occurrences
     count = source_code.count('Depends(require_session)')

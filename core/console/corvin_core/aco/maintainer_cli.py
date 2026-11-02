@@ -62,7 +62,7 @@ def cmd_keygen(args) -> int:
         except BaseException:
             os.close(fd)
             raise
-        with os.fdopen(fd, "w") as fh:   # fdopen now owns + closes fd
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:   # fdopen now owns + closes fd
             fh.write(_b64(priv) + "\n")
         print(f"private key → {p} (mode 0600, KEEP SECRET, never commit)")
     else:
@@ -126,7 +126,7 @@ def _file_patch_source(patch_path: str):
 
 def _pytest_gate(test_cmd: list[str], repo: str):
     def g() -> tuple[bool, str]:
-        p = subprocess.run(test_cmd, cwd=repo, capture_output=True, text=True, timeout=1800)
+        p = subprocess.run(test_cmd, cwd=repo, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
         return (p.returncode == 0, (p.stdout + p.stderr)[-1200:])
     return g
 
@@ -236,7 +236,7 @@ def _append_rotating(path: Path, line: str, *, cap_bytes: int = 4 * 1024 * 1024)
 
 def _git_q(repo, *args: str) -> tuple[int, str]:
     p = subprocess.run(["git", "-C", str(repo), *args],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
     return p.returncode, (p.stdout + p.stderr).strip()
 
 
@@ -344,19 +344,22 @@ def _release(repo: Path, *, dry_run: bool = False) -> dict:
     pyproj.write_text(_re.sub(r'^version = "[^"]+"', f'version = "{new}"', text, count=1,
                               flags=_re.M), encoding="utf-8")
     spa = repo / "core" / "console" / "corvin_console" / "web-next"
-    subprocess.run(["npm", "run", "build"], cwd=spa, capture_output=True, text=True, timeout=900)
     import shutil as _sh
+    # shutil.which: on Windows npm is npm.cmd, which CreateProcess never finds
+    # from the bare name (no PATHEXT) -> FileNotFoundError after the bump above.
+    subprocess.run([_sh.which("npm") or "npm", "run", "build"], cwd=spa,
+                   capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace")
     for d in ("dist", "build"):
         _sh.rmtree(repo / d, ignore_errors=True)
     b = subprocess.run([sys.executable, "-m", "build"], cwd=repo,
-                       capture_output=True, text=True, timeout=900)
+                       capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace")
     if b.returncode != 0:
         _git_q(repo, "checkout", "--", "pyproject.toml")  # revert bump on failure
         return {"released": False, "reason": "build failed", "detail": b.stderr[-300:]}
     arts = [str(p) for p in (repo / "dist").glob(f"corvinos-{new}*")]
     up = subprocess.run([sys.executable, "-m", "twine", "upload", "--non-interactive",
                          "-u", "__token__", "-p", token, *arts],
-                        cwd=repo, capture_output=True, text=True, timeout=900)
+                        cwd=repo, capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace")
     if up.returncode != 0:
         _git_q(repo, "checkout", "--", "pyproject.toml")
         return {"released": False, "reason": "upload failed", "detail": up.stderr[-300:]}
@@ -479,7 +482,7 @@ def cmd_nightly(args) -> int:
                 pr = subprocess.run(
                     ["gh", "pr", "create", "--repo", args.gh_repo, "--base", "main",
                      "--head", branch, "--title", f"fix(aco-l6): {diag.get('summary', did)}"[:120],
-                     "--body", _pr_body(diag, r)], capture_output=True, text=True)
+                     "--body", _pr_body(diag, r)], capture_output=True, text=True, encoding="utf-8", errors="replace")
                 dj.rename(done / dj.name)
                 results.append({"id": did, "status": "pr_opened",
                                 "pr": pr.stdout.strip() or pr.stderr.strip()[:200]})
@@ -552,7 +555,7 @@ def cmd_healing_traces(args) -> int:
             print(f"  Local bundles   : {len(bundles)}")
             dropped_p = d / "dropped.count"
             if dropped_p.exists():
-                print(f"  Dropped records : {dropped_p.read_text().strip()}")
+                print(f"  Dropped records : {dropped_p.read_text(encoding="utf-8").strip()}")
         return 0
 
     if action == "upload":

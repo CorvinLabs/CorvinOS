@@ -45,7 +45,7 @@ CLOUDFLARE_API_TOKEN=test_cf_token_123
 PYPI_TOKEN=pypi-test-token-123
 RESEND_API_KEY=re_test_key_123
 """
-        with open(env_file, "w") as f:
+        with open(env_file, "w", encoding="utf-8") as f:
             f.write(env_content)
         env_file.chmod(0o600)
 
@@ -161,7 +161,7 @@ RESEND_API_KEY=re_test_key_123
             "HETZNER_API_TOKEN": "test_token_123",
             "HETZNER_SSH_KEY_NAME": "test_key_name",
         }
-        with open(secrets_file, "w") as f:
+        with open(secrets_file, "w", encoding="utf-8") as f:
             json.dump(secrets_data, f)
 
         data = phase1._load_json_file(secrets_file)
@@ -209,7 +209,7 @@ class TestPhase2Preparation:
     def test_phase2_has_pre_checks(self):
         """Verify Phase 2 has pre-checks function."""
         script = Path(__file__).parent.parent / "scripts" / "rotate_corvin_keys_phase2.py"
-        content = script.read_text()
+        content = script.read_text(encoding="utf-8")
         assert "phase_1_5_pre_checks" in content, "Phase 1.5 pre-checks missing"
         assert "rotate_credentials_phase2" in content, "Phase 2 rotation function missing"
         print("✓ Phase 2 has pre-checks and rotation functions")
@@ -217,7 +217,7 @@ class TestPhase2Preparation:
     def test_phase2_dry_run_support(self):
         """Verify Phase 2 supports --dry-run flag."""
         script = Path(__file__).parent.parent / "scripts" / "rotate_corvin_keys_phase2.py"
-        content = script.read_text()
+        content = script.read_text(encoding="utf-8")
         assert "--dry-run" in content, "Dry-run flag missing"
         assert "dry_run" in content, "Dry-run parameter missing"
         print("✓ Phase 2 supports --dry-run flag")
@@ -225,7 +225,7 @@ class TestPhase2Preparation:
     def test_phase2_backup_restore(self):
         """Verify Phase 2 has backup and restore functions."""
         script = Path(__file__).parent.parent / "scripts" / "rotate_corvin_keys_phase2.py"
-        content = script.read_text()
+        content = script.read_text(encoding="utf-8")
         assert "backup_credentials" in content, "Backup function missing"
         assert "restore_credentials" in content, "Restore function missing"
         assert "BACKUP_DIR" in content, "Backup directory missing"
@@ -234,7 +234,7 @@ class TestPhase2Preparation:
     def test_phase2_credential_list(self):
         """Verify Phase 2 knows about all 14 credentials."""
         script = Path(__file__).parent.parent / "scripts" / "rotate_corvin_keys_phase2.py"
-        content = script.read_text()
+        content = script.read_text(encoding="utf-8")
 
         # Check for known credentials
         credentials = [
@@ -255,7 +255,7 @@ class TestPhase2Preparation:
     def test_phase2_placeholder_generation(self):
         """Verify Phase 2 generates placeholders with timestamps."""
         script = Path(__file__).parent.parent / "scripts" / "rotate_corvin_keys_phase2.py"
-        content = script.read_text()
+        content = script.read_text(encoding="utf-8")
         assert "PLACEHOLDER" in content, "Placeholder generation missing"
         assert "timestamp" in content, "Timestamp substitution missing"
         print("✓ Phase 2 generates timestamped placeholders")
@@ -310,8 +310,8 @@ class TestCredentialRotationIntegration:
         assert phase2_script.exists()
 
         # Phase 2 should reference the same credentials as Phase 1
-        phase1_content = phase1_script.read_text()
-        phase2_content = phase2_script.read_text()
+        phase1_content = phase1_script.read_text(encoding="utf-8")
+        phase2_content = phase2_script.read_text(encoding="utf-8")
 
         # Both should know about GITHUB_TOKEN
         assert "GITHUB_TOKEN" in phase1_content
@@ -326,7 +326,7 @@ class TestCredentialRotationIntegration:
         # Phase 2 uses dual-write (Phase 1.5), so no service should be down
         # This is documented in the rotation scripts
         script = Path(__file__).parent.parent / "scripts" / "rotate_corvin_keys_phase2.py"
-        content = script.read_text()
+        content = script.read_text(encoding="utf-8")
 
         # Should have pre-checks before rotation
         assert "phase_1_5_pre_checks" in content, "Pre-checks missing"
@@ -345,7 +345,7 @@ class TestCredentialRotationIntegration:
 
         for script in scripts:
             if script.exists():
-                content = script.read_text()
+                content = script.read_text(encoding="utf-8")
                 # Should have audit trail / logging
                 assert "audit" in content.lower() or "log" in content.lower(), f"No audit/logging in {script.name}"
 

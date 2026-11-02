@@ -54,7 +54,7 @@ class CompletionValidator:
                 cwd=str(ADR_REPO),
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30, encoding="utf-8", errors="replace"
             )
 
             # Parse JSON output
@@ -85,7 +85,7 @@ class CompletionValidator:
             return False, {"error": "CI/CD gate YAML not found"}
 
         # Check content
-        with open(gate_file) as f:
+        with open(gate_file, encoding="utf-8") as f:
             content = f.read()
 
         required = [
@@ -114,7 +114,7 @@ class CompletionValidator:
             return False, {"error": "Commit traceability script not found"}
 
         # Check for key functions
-        with open(audit_script) as f:
+        with open(audit_script, encoding="utf-8") as f:
             content = f.read()
 
         required_methods = [
@@ -142,7 +142,7 @@ class CompletionValidator:
 
         for adr_file in sorted(ADR_REPO.glob("ADR-*.md"))[:20]:  # Sample 20
             missing = []
-            with open(adr_file) as f:
+            with open(adr_file, encoding="utf-8") as f:
                 for line in f:
                     if line.startswith("---") and checked > 0:
                         break
@@ -174,7 +174,7 @@ class CompletionValidator:
                 cwd=str(CORVINOS_REPO),
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=60, encoding="utf-8", errors="replace",
             )
 
             # Parse output
@@ -240,7 +240,7 @@ class CompletionValidator:
 
         # Save report
         report_file = AUDIT_DIR / f"completion_plan_final_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(report_file, 'w') as f:
+        with open(report_file, 'w', encoding="utf-8") as f:
             json.dump(self.results, f, indent=2)
         print(f"[OK] Report saved: {report_file}")
 

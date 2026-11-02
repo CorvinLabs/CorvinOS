@@ -360,7 +360,7 @@ def _spawn_probe(probe_text: str, *,
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            check=False,
+            check=False, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         return ("", "claude-binary-missing")
@@ -415,7 +415,7 @@ def _save_scores_dict(d: dict) -> None:
     p = _scores_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(d, indent=2, sort_keys=True))
+    tmp.write_text(json.dumps(d, indent=2, sort_keys=True), encoding="utf-8")
     os.chmod(tmp, 0o600)
     tmp.replace(p)
 

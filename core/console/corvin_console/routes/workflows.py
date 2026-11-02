@@ -125,6 +125,16 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
             "unguarded `claude -p` payload"
         )
 
+# Windows: CreateProcess applies no PATHEXT, so a bare "claude" / "copilot"
+# that is an npm *.cmd shim raises FileNotFoundError; resolve_cli_argv
+# resolves it and routes .cmd shims through the cmd.exe-safe quoting.
+# POSIX: identity.
+try:  # pragma: no cover - import shape
+    from agents._win_shim import resolve_cli_argv as _cli_argv  # type: ignore  # noqa: E402
+except Exception:  # pragma: no cover
+    def _cli_argv(argv):  # type: ignore[misc]
+        return argv
+
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
@@ -188,7 +198,7 @@ def _bounded_flock(lock_path: Path, what: str, *, timeout: float | None = None):
     """
     limit = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
     _ensure_dir(lock_path.parent)
-    with open(lock_path, "a") as lock_fh:
+    with open(lock_path, "a", encoding="utf-8") as lock_fh:
         deadline = time.monotonic() + limit
         while True:
             try:
@@ -319,6 +329,16 @@ _MAX_YAML_BYTES = 256 * 1024   # 256 KiB
 _MAX_GRAPH_NODES = 200
 _STALE_RUN_S = 2 * 3600
 _MAX_CHAT_MSG_CHARS = 4000
+
+def _has_path_sep(v: str) -> bool:
+    """True when a URL path id would name more than one path component.
+
+    ``/`` everywhere; on Windows also the backslash (a separator there - a
+    ``%5C`` in the URL arrives decoded) and ``:`` (a drive-qualified id is
+    absolute and replaces the base in ``base / v``; ``x:y`` opens an NTFS
+    stream). POSIX unchanged."""
+    return "/" in v or (os.name == "nt" and ("\\" in v or ":" in v))
+
 
 router = APIRouter()
 
@@ -614,7 +634,7 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
             span_open = True
             _ec.emit_resolution(tenant, meta, prompt, span_id)
         result = subprocess.run(
-            cmd,
+            _cli_argv(cmd),
             # R4: whole-payload guard - workflow node instructions are authored
             # in the console and can embed forwarded chat/mail content. STDIN is
             # expanded by the CLI exactly like a positional prompt. Reply
@@ -622,7 +642,7 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
             input=guarded,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=180, encoding="utf-8", errors="replace",
         )
         if result.returncode == 0:
             if _ec is None:
@@ -2769,7 +2789,7 @@ def list_run_media(
 ) -> dict[str, Any]:
     """List media artifacts for a workflow run (ADR-0091 M1)."""
     for v in (wid, rid):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid id")
 
     tid = rec.tenant_id
@@ -2818,7 +2838,7 @@ def serve_run_media(
     import re as _re
 
     for v in (wid, rid):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid id")
     if not _re.fullmatch(r"[A-Za-z0-9_.\-]{1,128}", filename):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid filename")
@@ -2900,7 +2920,7 @@ def list_run_tables(
 ) -> dict[str, Any]:
     """List tabular data artifacts for a workflow run."""
     for v in (wid, rid):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid id")
 
     tid = rec.tenant_id
@@ -2944,7 +2964,7 @@ def serve_run_table(
     """Serve a run table artifact with sort/filter/pagination (same DuckDB engine as compute)."""
     import re as _re
     for v in (wid, rid):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid id")
     if not _re.fullmatch(r"[A-Za-z0-9_.\-]{1,128}", filename):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid filename")
@@ -2985,13 +3005,26 @@ def _is_safe_output_path(resolved: "Path") -> bool:
     outside of /tmp-like dirs) are explicitly blocked.
     """
     import tempfile as _tf
-    s = str(resolved)
+
+    def _k(p) -> str:
+        # Windows: one spelling per location (NTFS is case-insensitive, and
+        # %TEMP% / CORVIN_HOME may hold an 8.3 short or differently-cased form
+        # that a resolved target never prefix-matches). POSIX: str() as before.
+        if os.name != "nt":
+            return str(p)
+        try:
+            p = Path(p).resolve()
+        except (OSError, RuntimeError):
+            pass
+        return os.path.normcase(str(p))
+
+    s = _k(resolved)
     # Block any path containing corvin config, system dirs, or home dot-files.
     _BLOCKED_PREFIXES = (
-        str(_forge_paths.corvin_home()),
-        str(Path.home() / ".config"),
-        str(Path.home() / ".ssh"),
-        str(Path.home() / ".gnupg"),
+        _k(_forge_paths.corvin_home()),
+        _k(Path.home() / ".config"),
+        _k(Path.home() / ".ssh"),
+        _k(Path.home() / ".gnupg"),
         "/etc/",
         "/proc/",
         "/sys/",
@@ -3006,7 +3039,7 @@ def _is_safe_output_path(resolved: "Path") -> bool:
             return False
     # Allow: /tmp and other system-temp dirs, explicit workflow output dirs
     _ALLOWED_PREFIXES = (
-        _tf.gettempdir(),
+        _k(_tf.gettempdir()),
         "/tmp",
     )
     for prefix in _ALLOWED_PREFIXES:
@@ -3016,7 +3049,7 @@ def _is_safe_output_path(resolved: "Path") -> bool:
     try:
         from .. import auth as _auth_mod  # noqa: PLC0415
         home = _forge_paths.corvin_home()
-        if s.startswith(str(home / "tenants")) and "workflows" in s:
+        if s.startswith(_k(home / "tenants")) and "workflows" in s:
             return True
     except Exception:
         pass
@@ -4467,10 +4500,11 @@ def explain_workflow(
     )
     try:
         result = subprocess.run(
+            _cli_argv(
             ["claude", "-p", "--max-turns", "1", "--tools", "", "--model", _explain_model(),
              # R4: the workflow YAML is user-authored and rides POSITIONALLY
              # in argv. Reply contract unaffected: stdout is the explanation.
-             "--system-prompt", system, _guard_prompt_head(yaml_text)],
+             "--system-prompt", system, _guard_prompt_head(yaml_text)]),
             capture_output=True, text=True, timeout=30, encoding="utf-8",
         )
         explanation = result.stdout.strip() or "Erklärung nicht verfügbar."
@@ -4722,13 +4756,13 @@ def _run_claude_for_design(prompt: str) -> str:
             # "read <file> and copy it into the description" made it read a host file and print the
             # content into the chat reply (live test ad21_file_read). Same tool-less form as every other
             # text-only call (TDE workers, the summariser, the skill creator, the output judge).
-            ["claude", "-p", "--output-format", "text", "--disallowedTools", "*"],
+            _cli_argv(["claude", "-p", "--output-format", "text", "--disallowedTools", "*"]),
             # R4: the design-chat prompt is the operator's live conversation.
             # Reply contract unaffected: stdout is returned verbatim.
             input=_guard_prompt_head(prompt),
             capture_output=True,
             text=True,
-            timeout=90,
+            timeout=90, encoding="utf-8", errors="replace",
         )
         return result.stdout.strip() if result.returncode == 0 else ""
     except FileNotFoundError:

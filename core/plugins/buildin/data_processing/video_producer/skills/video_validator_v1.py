@@ -77,7 +77,7 @@ def get_ffprobe_json(video_path: str) -> Dict[str, Any]:
     """Get ffprobe output as JSON"""
     try:
         cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", video_path]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
         return json.loads(result.stdout)
     except json.JSONDecodeError:
         logger.warning("JSON parse failed, returning empty")

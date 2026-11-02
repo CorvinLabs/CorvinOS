@@ -107,7 +107,7 @@ def _resolve_target(self_path):
 
 def _ptrace_scope():
     try:
-        with open("/proc/sys/kernel/yama/ptrace_scope") as fh:
+        with open("/proc/sys/kernel/yama/ptrace_scope", encoding="utf-8") as fh:
             return fh.read().strip()
     except OSError:
         return "n/a"
@@ -144,7 +144,7 @@ def _fail_open(wlog, target, args, reason):
 
 def _tracee_pids(strace_pid):
     try:
-        with open(f"/proc/{strace_pid}/task/{strace_pid}/children") as fh:
+        with open(f"/proc/{strace_pid}/task/{strace_pid}/children", encoding="utf-8") as fh:
             return [int(x) for x in fh.read().split()]
     except OSError:
         return []

@@ -348,7 +348,7 @@ class DeprecatedAPIAuditor:
 
     def export_csv(self, output_path: Path):
         """Export call sites to CSV."""
-        with open(output_path, "w", newline="") as f:
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
@@ -375,7 +375,7 @@ class DeprecatedAPIAuditor:
         report = self.generate_audit_report()
         report["call_sites"] = [cs.to_dict() for cs in self.call_sites]
 
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         logger.info(f"Exported audit report to {output_path}")
 

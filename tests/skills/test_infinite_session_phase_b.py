@@ -200,9 +200,9 @@ class TestAdversarialSessionBridger:
         s1, s2 = _chain(store)
         bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s2, "p1", metadata={"role": "user"})
         path = bridger._bridge_file("task_1", bridge.bridge_id)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         data[field] = value
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(data), encoding="utf-8")
         state, err = bridger.resume_from_bridge(TENANT, "task_1", bridge.bridge_id)
         assert state is None and "Signature verification failed" in err
 
@@ -219,9 +219,9 @@ class TestAdversarialSessionBridger:
         s1, = _chain(store, n=1)
         bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s1, "p0")
         path = bridger._bridge_file("task_1", bridge.bridge_id)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         data["tenant_id"] = "tenant_b"
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(data), encoding="utf-8")
         assert bridger.resume_from_bridge(TENANT, "task_1", bridge.bridge_id)[0] is None
 
 
@@ -249,11 +249,11 @@ class TestAuditVerifier:
         bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s2, "p1")
         v = AuditVerifier(store, crypto, bridger)
         path = bridger._bridge_file("task_1", bridge.bridge_id)
-        data = json.loads(path.read_text()); data["phase_completed"] = "x"; path.write_text(json.dumps(data))
+        data = json.loads(path.read_text(encoding="utf-8")); data["phase_completed"] = "x"; path.write_text(json.dumps(data), encoding="utf-8")
         result, _ = v.verify_task_chain(TENANT, "task_1")
         assert result.status == VerificationStatus.FAIL_SIGNATURE_MISMATCH
         index = store.root_dir / "task_1" / "index.json"
-        data = json.loads(index.read_text()); data[0]["content_hash"] = "0" * 64; index.write_text(json.dumps(data))
+        data = json.loads(index.read_text(encoding="utf-8")); data[0]["content_hash"] = "0" * 64; index.write_text(json.dumps(data), encoding="utf-8")
         result, _ = v.verify_task_chain(TENANT, "task_1")
         assert result.status == VerificationStatus.FAIL_CHAIN_BROKEN and len(result.errors) >= 2
 

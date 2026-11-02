@@ -115,7 +115,7 @@ class CohortManager:
             return []
 
         try:
-            with open(cohort_file) as f:
+            with open(cohort_file, encoding="utf-8") as f:
                 data = json.load(f)
             return data.get("tenants", [])
         except Exception as e:
@@ -286,7 +286,7 @@ async def main():
     # Load custom tenant file if provided
     if args.tenant_file:
         try:
-            with open(args.tenant_file) as f:
+            with open(args.tenant_file, encoding="utf-8") as f:
                 stages = json.load(f)
         except Exception as e:
             print(f"Failed to load tenant file: {e}")

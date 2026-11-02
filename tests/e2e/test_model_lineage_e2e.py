@@ -48,7 +48,7 @@ def home(tmp_path):
     cfg.mkdir(parents=True)
     y = cfg / "tenant.corvin.yaml"
     y.write_text("spec:\n  engine_models:\n    claude_code:\n"
-                 "      worker_model: claude-opus-5\n")
+                 "      worker_model: claude-opus-5\n", encoding="utf-8")
     y.chmod(0o600)
     previous = os.environ.get("CORVIN_HOME")
     os.environ["CORVIN_HOME"] = str(h)
@@ -120,7 +120,7 @@ def test_a_newer_version_ranks_with_its_family(home):
 
 def test_a_saved_tier_is_a_pin_not_upgraded(home):
     cfg = home / "tenants" / "_default" / "global" / "model_selection_config.json"
-    cfg.write_text(json.dumps({"models": {"COMPLEX": {"selected_model": RETIRED}}}))
+    cfg.write_text(json.dumps({"models": {"COMPLEX": {"selected_model": RETIRED}}}), encoding="utf-8")
     assert _resolve("schreib eine ADR für X") == RETIRED
 
 
@@ -187,9 +187,9 @@ else:
 @pytest.fixture
 def fake_cli(tmp_path, monkeypatch):
     script = tmp_path / "fake_cli.py"
-    script.write_text(FAKE_CLI)
+    script.write_text(FAKE_CLI, encoding="utf-8")
     shim = tmp_path / "claude"
-    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
     shim.chmod(0o755)
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("LINEAGE_ARGV_LOG", str(log))
@@ -198,7 +198,7 @@ def fake_cli(tmp_path, monkeypatch):
 
 def _models_launched(log: Path) -> list[str]:
     out = []
-    for line in log.read_text().splitlines():
+    for line in log.read_text(encoding="utf-8").splitlines():
         argv = json.loads(line)
         out.append(argv[argv.index("--model") + 1])
     return out

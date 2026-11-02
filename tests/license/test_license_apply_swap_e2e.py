@@ -152,7 +152,7 @@ def test_G_license_successful_apply_keeps_the_new_key_at_0600(con):
             r = _post(con)
     assert r.status_code == 200, r.text
     assert r.json()["loaded"] is True and r.json()["tier"] == "member"
-    assert _key_path(con).read_text().strip() == NEW_TOKEN
+    assert _key_path(con).read_text(encoding="utf-8").strip() == NEW_TOKEN
     assert stat.S_IMODE(_key_path(con).stat().st_mode) == 0o600
     applied = [e for e in con.audit_events() if e.get("event_type") == "console.action_performed"
                and e.get("details", {}).get("action") == "license.key_apply"]

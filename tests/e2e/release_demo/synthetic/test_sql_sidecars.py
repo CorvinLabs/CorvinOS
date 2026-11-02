@@ -43,7 +43,7 @@ def _free_port() -> int:
 
 
 def _run(cmd: list, env: dict, check: bool = True):
-    done = subprocess.run([str(c) for c in cmd], env=env, capture_output=True, text=True, timeout=180)
+    done = subprocess.run([str(c) for c in cmd], env=env, capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
     if not check:
         return done.returncode, done.stderr
     assert done.returncode == 0, f"{cmd[0]} exit {done.returncode}: {done.stderr[-2000:]}"
@@ -105,7 +105,7 @@ def mysql(tmp_path_factory, dataset):
         deadline = time.monotonic() + 90
         while subprocess.run([str(admin), "--no-defaults", "-h127.0.0.1", f"-P{port}", "-uroot", "ping"],
                              env=env, capture_output=True).returncode != 0:
-            assert proc.poll() is None, (root / "server.err").read_text(errors="replace")[-2000:]
+            assert proc.poll() is None, (root / "server.err").read_text(errors="replace", encoding="utf-8")[-2000:]
             assert time.monotonic() < deadline, "mysqld did not come up"
             time.sleep(0.5)
         _run(base + ["-e", "CREATE DATABASE charts CHARACTER SET utf8mb4"], env)

@@ -23,6 +23,7 @@ ADR:
 
 import re
 import subprocess
+import sys
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -233,13 +234,15 @@ class CallGraphRouter:
 
                 try:
                     file_path = str((self.repo_root / f).resolve())
-                    result = subprocess.run(
-                        ["grep", "-h", "^from\\|^import", file_path],
-                        capture_output=True,
-                        text=True,
-                        timeout=2,
-                    )
-                    for line in result.stdout.splitlines()[:5]:  # limit per file
+                    # In-process equivalent of `grep -h '^from\|^import'`:
+                    # Windows has no grep, so the subprocess raised and the
+                    # import walk silently found nothing there.
+                    with open(file_path, encoding="utf-8", errors="replace") as fh:
+                        import_lines = [
+                            ln for ln in fh.read().splitlines()
+                            if ln.startswith(("from", "import"))
+                        ]
+                    for line in import_lines[:5]:  # limit per file
                         # Extract module name
                         match = re.search(r"(?:from|import)\s+([\w.]+)", line)
                         if match:
@@ -451,7 +454,9 @@ class ADRGraphRouter:
             # Use subprocess to load graph and output as JSON
             result = subprocess.run(
                 [
-                    "python3",
+                    # sys.executable: "python3" is absent (or the MS Store
+                    # stub) on Windows and is not the product venv anyway.
+                    sys.executable,
                     str(adr_graph_file),
                     "--adr",
                     "0001",
@@ -460,7 +465,7 @@ class ADRGraphRouter:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=5, encoding="utf-8", errors="replace",
             )
 
             if result.returncode != 0:
@@ -597,7 +602,7 @@ class LayerGraphRouter:
 
             import yaml
 
-            with open(manifest_file, "r") as f:
+            with open(manifest_file, "r", encoding="utf-8") as f:
                 self._manifest_cache = yaml.safe_load(f)
             return self._manifest_cache
         except Exception as e:

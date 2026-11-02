@@ -66,7 +66,7 @@ class InitiativesRouteTest(unittest.TestCase):
 
     def _write(self, home: Path, data: dict, tenant: str = "_default") -> Path:
         p = home / "tenants" / tenant / "global" / "initiatives.json"
-        p.write_text(json.dumps(data))
+        p.write_text(json.dumps(data), encoding="utf-8")
         return p
 
     def test_missing_file_is_empty_board_not_sample_data(self):
@@ -163,11 +163,11 @@ class InitiativesRouteTest(unittest.TestCase):
         from unittest import mock
         repo = self._tmp / "repo"
         (repo / "t").mkdir(parents=True)
-        (repo / "t" / "test_ok.py").write_text("def test_a():\n    assert True\n")
+        (repo / "t" / "test_ok.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
         (repo / "t" / "test_bad.py").write_text(
             "import os\ndef test_b():\n    assert False\n"
-            "def test_home_is_sandboxed():\n    assert 'corvin-initiatives-verify-' in os.environ['CORVIN_HOME']\n")
-        (repo / "present.txt").write_text("x")
+            "def test_home_is_sandboxed():\n    assert 'corvin-initiatives-verify-' in os.environ['CORVIN_HOME']\n", encoding="utf-8")
+        (repo / "present.txt").write_text("x", encoding="utf-8")
         now = datetime.now(timezone.utc)
         data = _fixture(now)
         tasks = data["initiatives"][0]["tasks"]
@@ -179,7 +179,7 @@ class InitiativesRouteTest(unittest.TestCase):
             with mock.patch.object(iv, "REPO", repo):
                 summary = iv.verify("_default")
             self.assertEqual((summary["verified"], summary["green"], summary["red"]), (2, 1, 1))
-            stored = json.loads(path.read_text())["initiatives"][0]["tasks"]
+            stored = json.loads(path.read_text(encoding="utf-8"))["initiatives"][0]["tasks"]
             ok, bad = stored[0]["verification"], stored[1]["verification"]
             self.assertEqual((ok["passed"], ok["paths_present"]), (1, 1))
             self.assertIsNotNone(ok["first_ok_at"])
@@ -223,7 +223,7 @@ class InitiativesRouteTest(unittest.TestCase):
                 self.assertEqual(iv.needs_run("_default"), (True, "last run older than max age"))
                 iv.verify("_default")
                 self.assertEqual(iv.needs_run("_default"), (False, "unchanged"))
-                (repo / "gen.py").write_text("x")           # the evidence path appears
+                (repo / "gen.py").write_text("x", encoding="utf-8")           # the evidence path appears
                 self.assertEqual(iv.needs_run("_default"), (True, "repo or evidence changed"))
                 iv.verify("_default")
                 self.assertEqual(iv.needs_run("_default")[0], False)

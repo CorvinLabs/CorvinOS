@@ -92,7 +92,7 @@ def temp_repo():
             }
         ]
 
-        with open(entities_file, "w") as f:
+        with open(entities_file, "w", encoding="utf-8") as f:
             for entity in test_entities:
                 f.write(json.dumps(entity) + "\n")
 
@@ -103,10 +103,10 @@ def temp_repo():
             "schema_version": "1",
             "sync_ts": "2026-09-18T16:55:22.545054",
             "entity_count": len(test_entities)
-        }))
+        }), encoding="utf-8")
 
         # Create README (minimal)
-        (repo_path / "README.md").write_text("# Test Knowledge Repository\n")
+        (repo_path / "README.md").write_text("# Test Knowledge Repository\n", encoding="utf-8")
 
         # Commit everything
         subprocess.run(["git", "add", "."], cwd=str(repo_path), capture_output=True)
@@ -150,7 +150,7 @@ class TestPluginManifest:
         manifest_path = Path(__file__).parent.parent.parent / "core/plugins/corvin_knowledge_plugin/manifest.json"
         assert manifest_path.exists(), "manifest.json not found"
 
-        with open(manifest_path) as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
 
         assert manifest["id"] == "corvin-knowledge"
@@ -271,7 +271,7 @@ class TestMeshSync:
         subprocess.run(["git", "clone", "-b", "main", str(origin), str(other)], capture_output=True, check=True)
         for k, v in (("user.email", "o@example.invalid"), ("user.name", "Other")):
             subprocess.run(["git", "config", k, v], cwd=str(other), capture_output=True, check=True)
-        (other / "NEW.md").write_text("pushed elsewhere\n")
+        (other / "NEW.md").write_text("pushed elsewhere\n", encoding="utf-8")
         subprocess.run(["git", "add", "NEW.md"], cwd=str(other), capture_output=True, check=True)
         subprocess.run(["git", "commit", "-m", "remote change"], cwd=str(other), capture_output=True, check=True)
         subprocess.run(["git", "push", "origin", "main"], cwd=str(other), capture_output=True, check=True)
@@ -279,7 +279,7 @@ class TestMeshSync:
         result = CorvinKnowledgePlugin(plugin_config).handle_sync(pull=True, push=False)
 
         assert result["status"] == "success", result
-        assert (temp_repo / "NEW.md").read_text() == "pushed elsewhere\n"
+        assert (temp_repo / "NEW.md").read_text(encoding="utf-8") == "pushed elsewhere\n"
 
     def test_sync_without_remote_reports_error(self, temp_repo, plugin_config):
         """No reachable origin → an honest ``error``, never ``success``."""
@@ -308,7 +308,7 @@ class TestConsistencyValidation:
         """Consistency check detects duplicate IDs (fail-closed)"""
         # Corrupt entities.jsonl with duplicate ID
         entities_file = temp_repo / "graph/entities.jsonl"
-        with open(entities_file, "a") as f:
+        with open(entities_file, "a", encoding="utf-8") as f:
             f.write(json.dumps({"id": "ADR-0568", "type": "decision", "title": "Duplicate"}) + "\n")
 
         plugin = CorvinKnowledgePlugin(plugin_config)
@@ -322,7 +322,7 @@ class TestConsistencyValidation:
         """consistency_level=strict aborts sync on validation errors"""
         # Corrupt JSON
         entities_file = temp_repo / "graph/entities.jsonl"
-        with open(entities_file, "a") as f:
+        with open(entities_file, "a", encoding="utf-8") as f:
             f.write("{invalid json\n")
 
         plugin = CorvinKnowledgePlugin(plugin_config)
@@ -334,7 +334,7 @@ class TestConsistencyValidation:
         """consistency_level=warn logs but continues"""
         # Corrupt JSON
         entities_file = temp_repo / "graph/entities.jsonl"
-        with open(entities_file, "a") as f:
+        with open(entities_file, "a", encoding="utf-8") as f:
             f.write("{invalid json\n")
 
         plugin = CorvinKnowledgePlugin(plugin_config)
@@ -376,7 +376,7 @@ class TestPluginConfiguration:
             }, config)
 
             assert result["status"] == "configured"
-            written = json.loads((Path(fake_home) / ".claude" / "plugins" / "corvin-knowledge.json").read_text())
+            written = json.loads((Path(fake_home) / ".claude" / "plugins" / "corvin-knowledge.json").read_text(encoding="utf-8"))
             assert written["remote_url"] == "https://test.git"
 
     @pytest.mark.asyncio

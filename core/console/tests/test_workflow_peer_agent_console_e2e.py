@@ -70,15 +70,15 @@ def env(tmp_path, monkeypatch):
         from forge import paths as _fp
         d = _fp.tenant_home(tid) / "workflows"
         d.mkdir(parents=True, exist_ok=True)
-        (d / "peerwf.meta.json").write_text(json.dumps({"id": "peerwf", "name": "peerwf", "phase": "ready"}))
-        (d / "peerwf.awp.yaml").write_text(_WF)
+        (d / "peerwf.meta.json").write_text(json.dumps({"id": "peerwf", "name": "peerwf", "phase": "ready"}), encoding="utf-8")
+        (d / "peerwf.awp.yaml").write_text(_WF, encoding="utf-8")
         yield client, home, tid, sender
 
 
 def _chain(tid):
     from forge import paths as _fp
     p = _fp.tenant_home(tid) / "global" / "forge" / "audit.jsonl"
-    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
 def test_console_run_delegates_and_streams_node_events(env):
@@ -138,8 +138,8 @@ def test_a_workflow_made_only_of_a_peer_node_is_run_by_the_dag_engine(env):
         "orchestration": {"engine": "dag", "graph": [
             {"id": "ask", "type": "peer_agent", "depends_on": [], "endpoint_id": "ep_acme",
              "agent_id": "reviewer", "instruction": "Please review this public text."}]}}, sort_keys=False)
-    (d / "peeronly.meta.json").write_text(json.dumps({"id": "peeronly", "name": "peeronly", "phase": "ready"}))
-    (d / "peeronly.awp.yaml").write_text(only)
+    (d / "peeronly.meta.json").write_text(json.dumps({"id": "peeronly", "name": "peeronly", "phase": "ready"}), encoding="utf-8")
+    (d / "peeronly.awp.yaml").write_text(only, encoding="utf-8")
     events: list = []
     with client.stream("POST", f"{BASE}/peeronly/runs", json={"inputs": {}, "dry_run": False}) as r:
         for line in r.iter_lines():

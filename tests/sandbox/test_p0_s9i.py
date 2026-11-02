@@ -101,7 +101,7 @@ def test_P_S9i_c_verify_is_not_reported_connected(server, sandbox, session_for):
     assert r.status_code < 500, r.text[:300]
     if r.status_code == 200:
         assert r.json().get("connected") is not True, f"/verify claims connected: {r.text[:300]}"
-    saved = json.loads((sandbox.tenant_home(sess.tenant) / "github-config.json").read_text())
+    saved = json.loads((sandbox.tenant_home(sess.tenant) / "github-config.json").read_text(encoding="utf-8"))
     assert saved.get("verified") is False, f"saved config must carry verified=false: {saved}"
 
 

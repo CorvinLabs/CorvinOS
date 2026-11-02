@@ -35,9 +35,9 @@ class RunnerBackoff(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.src = self.tmp / "src"
         self.src.mkdir()
-        (self.src / "__init__.py").write_text("")
-        (self.src / "storage.py").write_text(_FAKE_STORAGE)
-        (self.src / "models.py").write_text(_FAKE_MODELS)
+        (self.src / "__init__.py").write_text("", encoding="utf-8")
+        (self.src / "storage.py").write_text(_FAKE_STORAGE, encoding="utf-8")
+        (self.src / "models.py").write_text(_FAKE_MODELS, encoding="utf-8")
         keys = ("VideoJob", "_get_storage", "get_runner", "PLUGIN_SOURCE", "_PLUGIN_SRC", "_LOADED_AT",
                 "_LOADED_COMPLETE", "_runner_retry_s", "_runner_missing_warned")
         saved = {k: getattr(vpa, k) for k in keys if hasattr(vpa, k)}
@@ -116,8 +116,8 @@ class RunnerBackoff(unittest.TestCase):
         self.now += 31
         self._loads()                                   # one failed retry: wait is 60 now
         self.assertEqual(vpa._runner_retry_s, 60.0)
-        (self.src / "async_runner.py").write_text(_FAKE_RUNNER)
-        (self.src / "job_main.py").write_text("")
+        (self.src / "async_runner.py").write_text(_FAKE_RUNNER, encoding="utf-8")
+        (self.src / "job_main.py").write_text("", encoding="utf-8")
         self.now += 30
         self.assertEqual(self._loads(), 0)              # not before the wait is over
         self.now += 31
@@ -131,8 +131,8 @@ class RunnerBackoff(unittest.TestCase):
 
     def test_a_complete_load_whose_source_vanishes_reloads_at_once_with_a_warning(self):
         vpa = self.vpa
-        (self.src / "async_runner.py").write_text(_FAKE_RUNNER)
-        (self.src / "job_main.py").write_text("")
+        (self.src / "async_runner.py").write_text(_FAKE_RUNNER, encoding="utf-8")
+        (self.src / "job_main.py").write_text("", encoding="utf-8")
         self._loads()
         self.assertEqual(vpa.get_runner(), "process-runner")
         other = self.tmp / "other" / "src"
@@ -147,7 +147,7 @@ class RunnerBackoff(unittest.TestCase):
 
     def test_a_source_without_the_job_entry_point_has_no_process_runner_and_is_retried_not_relooped(self):
         vpa = self.vpa
-        (self.src / "async_runner.py").write_text(_FAKE_RUNNER)   # importable, but no job_main.py to spawn
+        (self.src / "async_runner.py").write_text(_FAKE_RUNNER, encoding="utf-8")   # importable, but no job_main.py to spawn
         self.assertEqual(self._loads(), 1)
         self.assertIsNone(vpa.get_runner, "a process runner for a missing job_main.py spawns a dead path")
         self.now += 5

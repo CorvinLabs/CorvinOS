@@ -55,7 +55,7 @@ class NoFabricationTest(unittest.TestCase):
             d = home / "tenants" / "_default" / "skill-forge" / "os.example_skill" / "1.0.0"
             d.mkdir(parents=True)
             (d / "skill.json").write_text(json.dumps({"id": "os.example_skill", "version": "1.0.0",
-                                                      "description": "on disk"}))
+                                                      "description": "on disk"}), encoding="utf-8")
             r = client.get(f"{BASE}/manifest/os.example_skill/1.0.0")
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(r.json()["skill_json"]["description"], "on disk")

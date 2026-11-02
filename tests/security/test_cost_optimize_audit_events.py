@@ -64,7 +64,7 @@ def home(tmp_path, monkeypatch):
     sc._reset_notes()
     (tmp_path / "tenants" / "_default" / "global").mkdir(parents=True)
     (tmp_path / "tenants" / "_default" / "global" / "cost_optimize.json").write_text(
-        json.dumps({"floor_usd": 0.01}))
+        json.dumps({"floor_usd": 0.01}), encoding="utf-8")
     yield tmp_path
     sm.reset_cache()
     sc._reset_notes()
@@ -132,7 +132,7 @@ def test_the_chain_stays_intact_after_the_events(home):
     from forge import security_events as se
     # Only the records written through write_event carry hashes; the seeded
     # os_turn lines are plain test input, so verify the tail the product wrote.
-    written = [json.loads(l) for l in _chain().read_text().splitlines()
+    written = [json.loads(l) for l in _chain().read_text(encoding="utf-8").splitlines()
                if '"cost.optimize_capped"' in l]
     rec = written[0]
     assert rec.get("hash") and "prev_hash" in rec
@@ -140,5 +140,5 @@ def test_the_chain_stays_intact_after_the_events(home):
 
 def test_the_completeness_verifier_passes():
     r = subprocess.run([sys.executable, str(_REPO / "scripts" / "verify_audit_event_completeness.py")],
-                       capture_output=True, text=True, cwd=str(_REPO), timeout=240)
+                       capture_output=True, text=True, cwd=str(_REPO), timeout=240, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]

@@ -243,7 +243,7 @@ class TestTimerProvider(unittest.TestCase):
         """Enforcement: timer_provider must not import anthropic (CI AST lint rule)."""
         import ast
         src = Path(_SHARED) / "timer_provider.py"
-        tree = ast.parse(src.read_text())
+        tree = ast.parse(src.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = (
@@ -315,7 +315,7 @@ class TestSandboxProviderNoAnthropicImport(unittest.TestCase):
     def test_no_anthropic_import(self):
         import ast
         src = Path(_FORGE) / "forge" / "sandbox_provider.py"
-        tree = ast.parse(src.read_text())
+        tree = ast.parse(src.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = (

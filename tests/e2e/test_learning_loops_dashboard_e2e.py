@@ -22,7 +22,7 @@ class TestLearningLoopsConsoleSpeechIntegration:
         mounts that Flask blueprint. The real path is
         ``/v1/console/learning-loops/list`` (routes/learning_analytics.py).
         """
-        hook = (_REPO / "core/console/corvin_console/web-next/src/hooks/use-learning-loops.ts").read_text()
+        hook = (_REPO / "core/console/corvin_console/web-next/src/hooks/use-learning-loops.ts").read_text(encoding="utf-8")
         assert '"/v1/console/learning-loops/list"' in hook
 
         from fastapi import FastAPI

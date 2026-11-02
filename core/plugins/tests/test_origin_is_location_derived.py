@@ -126,7 +126,7 @@ def _run(tmp_path: Path, *, tenants: list[str], origin: str) -> dict:
     env.pop("PYTEST_CURRENT_TEST", None)
     env.pop("FORGE_ROOT", None)
     proc = subprocess.run([sys.executable, "-c", _CHILD], env=env, cwd=str(_REPO),
-                          capture_output=True, text=True, timeout=300)
+                          capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
     out = proc.stdout + "\n" + proc.stderr
     line = next((l for l in out.splitlines() if l.startswith("RESULT ")), None)
     assert line, out[-4000:]
@@ -230,7 +230,7 @@ class TestProvenanceProbeExecutesNothing:
                     "MARKER": str(marker), "CLASS_PATH": class_path})
         env.pop("PYTEST_CURRENT_TEST", None)
         proc = subprocess.run([sys.executable, "-c", self._PROBE], env=env,
-                              cwd=str(_REPO), capture_output=True, text=True, timeout=300)
+                              cwd=str(_REPO), capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
         out = proc.stdout + "\n" + proc.stderr
         line = next((l for l in out.splitlines() if l.startswith("RESULT ")), None)
         assert line, out[-4000:]

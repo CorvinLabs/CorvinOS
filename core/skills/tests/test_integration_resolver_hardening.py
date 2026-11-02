@@ -25,7 +25,7 @@ class TestResolverWithRateLimiter:
             manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "test_skill", "metadata": {}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening(rate_limit_per_minute=2)
@@ -53,7 +53,7 @@ class TestResolverWithRateLimiter:
             manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "test_skill", "metadata": {}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening(rate_limit_per_minute=1)
@@ -130,7 +130,7 @@ class TestResolverWithCircuitBreaker:
             manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "test_skill", "metadata": {}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
 
@@ -172,7 +172,7 @@ class TestCacheInvalidationWithResolver:
             manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest1 = {"skills": [{"name": "skill_a", "metadata": {"v": 1}}]}
-            manifest_path.write_text(json.dumps(manifest1))
+            manifest_path.write_text(json.dumps(manifest1), encoding="utf-8")
 
             resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             stats1 = resolver.stats()
@@ -189,7 +189,7 @@ class TestCacheInvalidationWithResolver:
 
             # Simulate manifest update
             manifest2 = {"skills": [{"name": "skill_a", "metadata": {"v": 2}}]}
-            manifest_path.write_text(json.dumps(manifest2))
+            manifest_path.write_text(json.dumps(manifest2), encoding="utf-8")
 
             # Invalidate cache (as registry.create() would do)
             resolver.invalidate()
@@ -218,7 +218,7 @@ class TestFullE2EFlow:
                     {"name": "skill_b", "metadata": {"type": "installed"}},
                 ]
             }
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             # Create resolver and hardening
             resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
@@ -272,7 +272,7 @@ class TestFullE2EFlow:
             manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "skill_a", "metadata": {}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening()
@@ -297,7 +297,7 @@ class TestErrorHandling:
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            manifest_path.write_text("INVALID JSON {{{")
+            manifest_path.write_text("INVALID JSON {{{", encoding="utf-8")
 
             resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening()
@@ -318,7 +318,7 @@ class TestErrorHandling:
             manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "skill_a", "metadata": {}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening()

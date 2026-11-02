@@ -150,7 +150,7 @@ class TestManualRefreshEgressGate(unittest.TestCase):
 
                 audit_path = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
                 self.assertTrue(audit_path.exists(), "no audit chain was written at all")
-                lines = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()]
+                lines = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
                 events = {rec.get("event_type") for rec in lines}
                 # Either the console-level denial or the L35 gate's own
                 # egress.blocked event (or both) must be present.
@@ -247,7 +247,7 @@ class TestBackgroundRefreshEgressGate(unittest.TestCase):
 
                 audit_path = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
                 self.assertTrue(audit_path.exists())
-                lines = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()]
+                lines = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
                 events = {rec.get("event_type") for rec in lines}
                 denial_events = {
                     e for e in events

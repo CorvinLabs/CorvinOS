@@ -285,7 +285,7 @@ class AuthorityServer:
         }
 
         try:
-            with open(self.ledger_file, "a") as f:
+            with open(self.ledger_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
         except Exception as e:
             logger.error(f"Failed to record delegation usage: {e}")
@@ -402,7 +402,7 @@ class AuthorityServer:
         }
 
         try:
-            with open(self.ledger_file, "a") as f:
+            with open(self.ledger_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
         except Exception as e:
             logger.error(f"Failed to audit issuance: {e}")
@@ -417,7 +417,7 @@ class AuthorityServer:
         }
 
         try:
-            with open(self.ledger_file, "a") as f:
+            with open(self.ledger_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
         except Exception as e:
             logger.error(f"Failed to audit renewal: {e}")
@@ -433,7 +433,7 @@ class AuthorityServer:
         }
 
         try:
-            with open(self.ledger_file, "a") as f:
+            with open(self.ledger_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
         except Exception as e:
             logger.error(f"Failed to audit downgrade: {e}")
@@ -449,7 +449,7 @@ class AuthorityServer:
         }
 
         try:
-            with open(self.ledger_file, "a") as f:
+            with open(self.ledger_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
         except Exception as e:
             logger.error(f"Failed to audit revocation: {e}")

@@ -590,7 +590,7 @@ class SkillRegistry:
         directory.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(directory))
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -606,7 +606,7 @@ class SkillRegistry:
 
     def _load(self) -> dict[str, dict]:
         try:
-            text = self.manifest_path.read_text() or "{}"
+            text = self.manifest_path.read_text(encoding="utf-8") or "{}"
             return json.loads(text)
         except json.JSONDecodeError as e:
             raise RuntimeError(
@@ -685,7 +685,7 @@ class SkillRegistry:
             self._save(data)
             meta_path = self.root / self.SKILLS_DIR / name / "meta.json"
             if meta_path.exists():
-                meta = json.loads(meta_path.read_text())
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 meta["grades"] = clean
                 self._atomic_write_text(
                     meta_path, json.dumps(meta, indent=2) + "\n"
@@ -706,7 +706,7 @@ class SkillRegistry:
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
             return None
-        return skill_md.read_text()
+        return skill_md.read_text(encoding="utf-8")
 
     # ADR-0052 F9 — content hash binding ─────────────────────────────────────
 
@@ -735,7 +735,7 @@ class SkillRegistry:
             meta_path = skill_dir / "meta.json"
             if meta_path.exists():
                 try:
-                    meta = json.loads(meta_path.read_text())
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
                     meta["content_hash_sha256"] = h
                     self._atomic_write_text(meta_path, json.dumps(meta, indent=2) + "\n")
                 except Exception:
@@ -819,7 +819,7 @@ class SkillRegistry:
             except OSError:
                 pass
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as fh:
+        with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "ts": time.time(),
                 "event_type": event_type,
@@ -997,7 +997,7 @@ class SkillRegistry:
             skill_dir = self.root / self.SKILLS_DIR / name
             meta_path = skill_dir / "meta.json"
             if meta_path.exists():
-                meta = json.loads(meta_path.read_text())
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 meta["grades"] = grades
                 self._atomic_write_text(
                     meta_path, json.dumps(meta, indent=2) + "\n"
@@ -1083,7 +1083,7 @@ class SkillRegistry:
                 pass
         # Fallback when forge isn't on PYTHONPATH at all.
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as fh:
+        with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "ts": time.time(),
                 "event_type": action,

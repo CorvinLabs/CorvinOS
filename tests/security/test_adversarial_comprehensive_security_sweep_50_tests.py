@@ -912,7 +912,7 @@ class TestPathTraversal:
         try:
             # Attempt to open with null byte
             # Python will raise ValueError
-            open(path, 'r')
+            open(path, 'r', encoding="utf-8")
             assert False, "Should have rejected null byte"
         except (ValueError, OSError) as e:
             # Expected: null byte not allowed

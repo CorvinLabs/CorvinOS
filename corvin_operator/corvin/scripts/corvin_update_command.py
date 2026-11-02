@@ -50,7 +50,7 @@ class VersionStatus:
 def _git(checkout: Path, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(checkout), *args],
-        capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace",
     )
 
 

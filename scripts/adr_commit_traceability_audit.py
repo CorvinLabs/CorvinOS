@@ -26,7 +26,7 @@ class ADRCommitAudit:
 
     def scan_adr_files(self):
         for adr_file in sorted(ADR_REPO.glob("*.md")):
-            with open(adr_file, 'r') as f:
+            with open(adr_file, 'r', encoding="utf-8") as f:
                 content = f.read()
             id_match = re.search(r'^id:\s*([A-Z0-9-]+)$', content, re.MULTILINE)
             if not id_match:
@@ -51,7 +51,7 @@ class ADRCommitAudit:
         for repo in [CORVIN_OS, ADR_REPO.parent]:
             result = subprocess.run(
                 ["git", "log", "--all", "--oneline", "--format=%H %s"],
-                cwd=repo, capture_output=True, text=True, timeout=30
+                cwd=repo, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace"
             )
             for line in result.stdout.split('\n'):
                 if not line.strip(): continue

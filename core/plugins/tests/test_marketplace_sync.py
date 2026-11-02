@@ -218,7 +218,7 @@ class ResolveBuiltinDirSyncRetryTests(unittest.TestCase):
 
         def fake_sync(**_kw):
             plugin_dir.mkdir(parents=True, exist_ok=True)
-            (plugin_dir / "plugin.yaml").write_text("plugin_id: foo\n")
+            (plugin_dir / "plugin.yaml").write_text("plugin_id: foo\n", encoding="utf-8")
 
         with mock.patch.object(self.mr, "_plugins_roots", side_effect=fake_roots), \
              mock.patch.object(self.mr._bootstrap, "ensure_marketplace_source", side_effect=fake_sync) as sync:

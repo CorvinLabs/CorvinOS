@@ -101,7 +101,7 @@ class ProductionVideoGenerator:
         ]
 
         print(f"  [Audio] Scene {scene.idx}: Generating {scene.duration_seconds}s at {scene.audio_freq_hz} Hz")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"    ERROR: {result.stderr}")
@@ -138,7 +138,7 @@ class ProductionVideoGenerator:
         ]
 
         print(f"  [Video] Scene {scene.idx}: Generating {scene.duration_seconds}s video (bg={scene.bg_color})")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"    ERROR: {result.stderr}")
@@ -176,7 +176,7 @@ class ProductionVideoGenerator:
         ]
 
         print(f"  [Merge] Merging scene_{scene_idx} audio + video (re-encoding for proper bitrates)")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"    ERROR: {result.stderr}")
@@ -192,7 +192,7 @@ class ProductionVideoGenerator:
         """
         # Create concat demuxer file
         concat_file = self.output_dir / "concat_list.txt"
-        with open(concat_file, "w") as f:
+        with open(concat_file, "w", encoding="utf-8") as f:
             for merged_file in merged_files:
                 f.write(f"file '{merged_file}'\n")
 
@@ -216,7 +216,7 @@ class ProductionVideoGenerator:
         ]
 
         print(f"  [Concat] Concatenating {len(merged_files)} scenes (re-encoding for proper bitrates)")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"    ERROR: {result.stderr}")
@@ -241,7 +241,7 @@ class ProductionVideoGenerator:
             video_path
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             return VerificationResult(
@@ -327,7 +327,7 @@ class ProductionVideoGenerator:
         output_file = outputs_dir / "corvinos_real_working_demo.mp4"
 
         cmd = ["cp", video_path, str(output_file)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"  ERROR: Failed to copy to outputs: {result.stderr}")

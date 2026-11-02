@@ -57,7 +57,7 @@ class DashboardGenerator:
     def load_metrics(self) -> None:
         """Load existing metrics from file"""
         if self.metrics_file.exists():
-            data = json.loads(self.metrics_file.read_text())
+            data = json.loads(self.metrics_file.read_text(encoding="utf-8"))
             self.metrics = [TestMetrics(**m) for m in data]
 
     def record_run(self, metrics: TestMetrics) -> None:
@@ -68,7 +68,7 @@ class DashboardGenerator:
     def _save_metrics(self) -> None:
         """Save metrics to file"""
         data = [asdict(m) for m in self.metrics]
-        self.metrics_file.write_text(json.dumps(data, indent=2))
+        self.metrics_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def generate_dashboard_html(self) -> str:
         """Generate HTML dashboard"""
@@ -355,7 +355,7 @@ class DashboardGenerator:
     def save_dashboard(self) -> None:
         """Save dashboard to HTML file"""
         html = self.generate_dashboard_html()
-        self.dashboard_file.write_text(html)
+        self.dashboard_file.write_text(html, encoding="utf-8")
         print(f"✓ Dashboard saved: {self.dashboard_file}")
 
 

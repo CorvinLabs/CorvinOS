@@ -157,7 +157,7 @@ class OrgStore:
         path = self._dir / "keypair.json"
         if not path.exists():
             return True
-        if path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        if os.name != "nt" and path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
             audit_event(
                 "org.keypair_world_readable",
                 severity="CRITICAL",

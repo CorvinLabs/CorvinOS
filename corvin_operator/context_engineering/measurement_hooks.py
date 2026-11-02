@@ -121,7 +121,7 @@ class MeasurementCollector:
             # MEDIUM FIX M4 + K=7 FIX: Verify directory is actually writable (no path leaks)
             test_file = self.queue_dir / ".write_test"
             try:
-                test_file.write_text("")
+                test_file.write_text("", encoding="utf-8")
                 test_file.unlink()
             except PermissionError as perm_err:
                 # K=8 Polish: Specific exception ordering (PermissionError before OSError)
@@ -271,7 +271,7 @@ class MeasurementCollector:
     def _append_jsonl(self, filepath: Path, record_dict: Dict) -> None:
         """Append record to JSONL file (durable write with fsync)."""
         try:
-            with open(filepath, "a") as f:
+            with open(filepath, "a", encoding="utf-8") as f:
                 json.dump(record_dict, f)
                 f.write("\n")
                 f.flush()

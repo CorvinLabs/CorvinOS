@@ -435,4 +435,4 @@ class CoverageReporter:
             "results": detailed_results,
         }
 
-        Path(output_file).write_text(json.dumps(report, indent=2))
+        Path(output_file).write_text(json.dumps(report, indent=2), encoding="utf-8")

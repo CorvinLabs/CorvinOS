@@ -23,7 +23,7 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
     return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, check=check, env=env)
+                          capture_output=True, text=True, check=check, env=env, encoding="utf-8", errors="replace")
 
 
 @pytest.fixture()
@@ -44,13 +44,13 @@ def _commit(repo: Path, message: str) -> subprocess.CompletedProcess:
            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
     return subprocess.run(["git", "-C", str(repo), "commit", "-m", message],
-                          capture_output=True, text=True, env=env)
+                          capture_output=True, text=True, env=env, encoding="utf-8", errors="replace")
 
 
 def _stage(repo: Path, name: str, body: str = "x = 1\n") -> None:
     p = repo / name
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(body)
+    p.write_text(body, encoding="utf-8")
     _git(repo, "add", name)
 
 
@@ -132,7 +132,7 @@ def test_reference_to_a_missing_adr_is_blocked(repo: Path):
 
 
 def test_reference_to_an_existing_adr_passes(repo: Path):
-    (repo.parent / "adr" / "decisions" / "ADR-9999-thing.md").write_text("id: ADR-9999\n")
+    (repo.parent / "adr" / "decisions" / "ADR-9999-thing.md").write_text("id: ADR-9999\n", encoding="utf-8")
     _stage(repo, "core/mod.py")
     r = _commit(repo, "feat(core): thing [ADR-9999]")
     assert r.returncode == 0, r.stderr

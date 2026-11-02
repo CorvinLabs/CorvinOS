@@ -149,7 +149,7 @@ class TestLeaveFlow(unittest.TestCase):
         social_d = social_actor.social_dir()
         fake_db = social_d / "posts.db"
         fake_db.parent.mkdir(parents=True, exist_ok=True)
-        fake_db.write_text("fake db content")
+        fake_db.write_text("fake db content", encoding="utf-8")
         social_consent.leave()
         # posts.db must still exist — L36 handler deletes it separately
         self.assertTrue(fake_db.exists())

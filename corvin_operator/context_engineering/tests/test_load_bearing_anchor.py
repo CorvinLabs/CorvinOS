@@ -435,7 +435,7 @@ def test_pending_goal_names_its_sender_and_is_erased_with_them(isolated, monkeyp
     brief = SimpleNamespace(raw_input=task, memory_context=None, related_decisions=[])
     _pipeline._maybe_apply_anchor(task, "_default", sess, brief, {})
     pending = _anchor._pending_path("_default", sess.sid)
-    assert pending.is_file() and "owner-7" in pending.read_text()
+    assert pending.is_file() and "owner-7" in pending.read_text(encoding="utf-8")
     eh.CELAnchorHandler(tenant_id="_default").purge("owner-7", "r")
     assert not pending.exists()
 

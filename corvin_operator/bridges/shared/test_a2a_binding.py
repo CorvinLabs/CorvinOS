@@ -79,7 +79,7 @@ class TestBoundPairingNeedsTheBindingSecret(unittest.TestCase):
         a_pub = self.keys.pub("A")
         for d, cfg in ((self.O, ft.to_origin_dict(tok)), (self.E, ft.to_endpoint_dict(tok))):
             cfg.update(_peer_instance_id=A_IID, _peer_bind_pub=a_pub)
-            (d / f"{tok.kid}.json").write_text(json.dumps(cfg))
+            (d / f"{tok.kid}.json").write_text(json.dumps(cfg), encoding="utf-8")
         for target, value in (("_audit_pairing_event", lambda *a, **k: None),
                               ("_ack_ping_back_and_respond", lambda **k: (200, {"ok": True}))):
             p = mock.patch.object(ft, target, value)
@@ -108,7 +108,7 @@ class TestBoundPairingNeedsTheBindingSecret(unittest.TestCase):
                                                      endpoints_dir=self.E)
 
     def url(self):
-        return json.loads((self.E / f"{self.tok.kid}.json").read_text())["url"]
+        return json.loads((self.E / f"{self.tok.kid}.json").read_text(encoding="utf-8"))["url"]
 
     def test_token_holder_claiming_the_public_instance_id_cannot_repoint(self):
         # The round-4 repro, against a pairing that exchanged binding keys.
@@ -158,8 +158,8 @@ class TestReconnectNeedsBinding(unittest.TestCase):
         self.O, self.E = self.tmp / "o", self.tmp / "e"
         self.O.mkdir(); self.E.mkdir()
         self.kid = "kid-reconnect-1"
-        (self.O / f"{self.kid}.json").write_text(json.dumps({"origin_id": self.kid}))
-        (self.E / f"{self.kid}.json").write_text(json.dumps({"endpoint_id": self.kid}))
+        (self.O / f"{self.kid}.json").write_text(json.dumps({"origin_id": self.kid}), encoding="utf-8")
+        (self.E / f"{self.kid}.json").write_text(json.dumps({"endpoint_id": self.kid}), encoding="utf-8")
         self.rec = rtr.RemoteTriggerReceiver(origins_dir=self.O, nonce_store=rtr.NonceStore(),
                                              instance_id=B_IID, forge_se=mock.MagicMock())
         self.rec._endpoints_dir = lambda: self.E
@@ -173,7 +173,7 @@ class TestReconnectNeedsBinding(unittest.TestCase):
     def _bind(self, **fields):
         for d in (self.O, self.E):
             p = d / f"{self.kid}.json"
-            p.write_text(json.dumps({**json.loads(p.read_text()), **fields}))
+            p.write_text(json.dumps({**json.loads(p.read_text(encoding="utf-8")), **fields}), encoding="utf-8")
 
     def test_unbound_mismatched_reflected_and_unproven_pushes_are_refused(self):
         url = "http://192.168.1.66:8775"
@@ -248,29 +248,29 @@ class TestTokenAnchorsTheIssuerKey(unittest.TestCase):
         # the token and the first ack.
         tmp = Path(tempfile.mkdtemp())
         e = tmp / "endpoints"; e.mkdir()
-        (e / "k1.json").write_text(json.dumps({"_friendship": True, "_peer_instance_id": A_IID}))
+        (e / "k1.json").write_text(json.dumps({"_friendship": True, "_peer_instance_id": A_IID}), encoding="utf-8")
         with mock.patch.object(ft, "_local_instance_id", return_value=B_IID):
             for via in ("relay", "direct"):
                 ft.remember_peer_instance_id("k1", A_IID, endpoints_dir=e,
                                              peer_bind_pub="ab" * 32, via=via)
-        self.assertNotIn("_peer_bind_pub", json.loads((e / "k1.json").read_text()))
+        self.assertNotIn("_peer_bind_pub", json.loads((e / "k1.json").read_text(encoding="utf-8")))
 
     def test_pin_on_the_endpoint_protects_the_origin_too(self):
         tmp = Path(tempfile.mkdtemp())
         o, e = tmp / "origins", tmp / "endpoints"
         o.mkdir(); e.mkdir()
-        (e / "k3.json").write_text(json.dumps({"_friendship": True, "instance_id": A_IID}))
-        (o / "k3.json").write_text(json.dumps({"_friendship": True}))
+        (e / "k3.json").write_text(json.dumps({"_friendship": True, "instance_id": A_IID}), encoding="utf-8")
+        (o / "k3.json").write_text(json.dumps({"_friendship": True}), encoding="utf-8")
         with mock.patch.object(ft, "_local_instance_id", return_value=B_IID):
             ft.remember_peer_instance_id("k3", C_IID, endpoints_dir=e, origins_dir=o)
-        self.assertNotIn("_peer_instance_id", json.loads((o / "k3.json").read_text()))
+        self.assertNotIn("_peer_instance_id", json.loads((o / "k3.json").read_text(encoding="utf-8")))
 
     def test_instance_pin_blocks_binding_a_different_instance(self):
         tmp = Path(tempfile.mkdtemp())
         e = tmp / "endpoints"; e.mkdir()
-        (e / "k2.json").write_text(json.dumps({"_friendship": True, "instance_id": A_IID}))
+        (e / "k2.json").write_text(json.dumps({"_friendship": True, "instance_id": A_IID}), encoding="utf-8")
         with mock.patch.object(ft, "_local_instance_id", return_value=B_IID):
             ft.remember_peer_instance_id("k2", C_IID, endpoints_dir=e, peer_bind_pub="cd" * 32, via="direct")
-        cfg = json.loads((e / "k2.json").read_text())
+        cfg = json.loads((e / "k2.json").read_text(encoding="utf-8"))
         self.assertNotIn("_peer_instance_id", cfg)
         self.assertNotIn("_peer_bind_pub", cfg)

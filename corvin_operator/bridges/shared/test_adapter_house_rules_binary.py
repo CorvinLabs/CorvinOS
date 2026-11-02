@@ -48,7 +48,7 @@ def test_resolve_helper_claude_bin_uses_fallback_under_stripped_path(monkeypatch
     real binary (the production systemd failure mode)."""
     adapter = _fresh_adapter()
     fake = tmp_path / "claude"
-    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake.chmod(0o755)
     monkeypatch.delenv("CORVIN_CLAUDE_BIN", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent")

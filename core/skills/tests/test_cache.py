@@ -22,7 +22,7 @@ class TestSkillCacheLRU:
                     for i in range(300)
                 ]
             }
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -49,7 +49,7 @@ class TestSkillCacheLRU:
                     {"name": "skill_1", "metadata": {}},
                 ]
             }
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -78,7 +78,7 @@ class TestSkillCacheTTL:
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
             manifest = {"skills": [{"name": "skill_a", "metadata": {}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -114,7 +114,7 @@ class TestSkillCacheInvalidation:
                     {"name": "skill_y", "metadata": {}},
                 ]
             }
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -147,7 +147,7 @@ class TestSkillCacheThreadSafety:
                     for i in range(100)
                 ]
             }
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -186,7 +186,7 @@ class TestSkillCacheStats:
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
             manifest = {"skills": [{"name": "skill_a", "metadata": {}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -208,7 +208,7 @@ class TestSkillCacheStats:
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
             manifest = {"skills": [{"name": "skill_a", "metadata": {}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -231,7 +231,7 @@ class TestSkillCacheFallback:
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
             manifest = {"skills": [{"name": "skill_z", "metadata": {"ver": 1}}]}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -250,7 +250,7 @@ class TestSkillCacheFallback:
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
             manifest = {"skills": []}
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -266,7 +266,7 @@ class TestSkillCacheFallback:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
-            manifest_path.write_text("INVALID JSON {{{")
+            manifest_path.write_text("INVALID JSON {{{", encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",
@@ -287,7 +287,7 @@ class TestSkillCacheIntegration:
             manifest = {
                 "skills": [{"name": f"skill_{i}", "metadata": {}} for i in range(100)]
             }
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             cache = SkillCache(
                 tenant_id="test_tenant",

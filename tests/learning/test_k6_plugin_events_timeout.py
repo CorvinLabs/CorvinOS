@@ -49,7 +49,7 @@ class TestDrainTimeout:
         assert len(drained) == 10  # ten distinct plugins → ten records
         assert elapsed < 5.0
         chain = forge_paths.tenant_audit_chain("_default")
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         loaded = [r for r in recs if r["event_type"] == "plugin.lifecycle_loaded"]
         assert sorted(r["details"]["plugin_id"] for r in loaded) == [f"plugin-{i}" for i in range(10)]
         assert temp_queue.stats().pending_count == 0
@@ -103,7 +103,7 @@ class TestTripwireSuccess:
             assert result.error is None
         assert temp_queue.stats().pending_count == 0
         chain = forge_paths.tenant_audit_chain("_default")
-        types = [json.loads(l)["event_type"] for l in chain.read_text().splitlines() if l.strip()]
+        types = [json.loads(l)["event_type"] for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert types.count("plugin.lifecycle_executed") == 5
 
     def test_tripwire_denies_turn_when_chain_write_fails(self, temp_queue):

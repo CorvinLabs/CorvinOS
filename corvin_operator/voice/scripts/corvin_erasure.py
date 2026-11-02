@@ -306,7 +306,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         rows = []
         for t in trails:
             try:
-                data = json.loads(t.read_text())
+                data = json.loads(t.read_text(encoding="utf-8"))
                 rows.append({
                     "request_id": data["request"]["request_id"],
                     "subject_id": data["request"]["subject_id"],
@@ -323,7 +323,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         print("  ".join(["─" * 18, "─" * 10, "─" * 16, "─" * 10]))
         for t in trails:
             try:
-                data = json.loads(t.read_text())
+                data = json.loads(t.read_text(encoding="utf-8"))
                 ts = time.strftime("%Y-%m-%d",
                                    time.localtime(data["started_at"]))
                 print(f"{data['request']['request_id']:18s}  "
@@ -343,7 +343,7 @@ def cmd_show(args: argparse.Namespace) -> int:
     if not trail.is_file():
         print(f"no trail file at {trail}", file=sys.stderr)
         return 2
-    print(trail.read_text())
+    print(trail.read_text(encoding="utf-8"))
     return 0
 
 

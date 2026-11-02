@@ -228,7 +228,7 @@ def _run_haiku(prompt: str, timeout_s: float, site: str = "") -> str:
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            check=False,
+            check=False, encoding="utf-8", errors="replace",
         )
         return proc.stdout or ""
     except subprocess.TimeoutExpired:

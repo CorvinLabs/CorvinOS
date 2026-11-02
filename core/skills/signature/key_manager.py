@@ -211,7 +211,7 @@ class OperatorKeyManager:
         """Load keypair metadata from file."""
         if self.metadata_file.exists():
             try:
-                with open(self.metadata_file, "r") as f:
+                with open(self.metadata_file, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
                 logger.warning(f"Failed to load metadata: {e}")
@@ -221,7 +221,7 @@ class OperatorKeyManager:
     def _save_metadata(self, metadata: dict) -> None:
         """Save keypair metadata to file."""
         try:
-            with open(self.metadata_file, "w") as f:
+            with open(self.metadata_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2, default=str)
             self.metadata_file.chmod(0o600)
         except Exception as e:

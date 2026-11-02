@@ -23,7 +23,7 @@ def _tenant_chain(sb) -> list[dict]:
     chain = sb.tenant_home / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    return [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _records(sb, name: str) -> list[dict]:

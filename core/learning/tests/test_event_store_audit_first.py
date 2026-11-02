@@ -33,7 +33,7 @@ def _event(**signal) -> LearningEvent:
 def _chain_lines(monkeypatch_env_path: Path) -> list[dict]:
     if not monkeypatch_env_path.exists():
         return []
-    return [json.loads(l) for l in monkeypatch_env_path.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in monkeypatch_env_path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 class TestAuditFirst:
@@ -57,7 +57,7 @@ class TestAuditFirst:
         # 2. the disk record carries the audit_ref that joins it to the chain
         files = list((tmp_path / "tenant" / "learning" / "events").glob("*.jsonl"))
         assert len(files) == 1
-        disk = json.loads(files[0].read_text().splitlines()[0])
+        disk = json.loads(files[0].read_text(encoding="utf-8").splitlines()[0])
         assert disk["event_id"] == ev.event_id
         assert disk["audit_ref"] and disk["audit_ref"] == details.get("audit_ref")
 

@@ -21,7 +21,7 @@ MANIFEST_FILE = REPO_ROOT / "docs" / "layer-manifest.yaml"
 def manifest():
     """Load and parse layer-manifest.yaml."""
     assert MANIFEST_FILE.is_file(), f"Manifest not found: {MANIFEST_FILE}"
-    with open(MANIFEST_FILE, "r") as f:
+    with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     assert isinstance(data, dict), "Manifest must be a dict"
     assert "layers" in data, "Manifest must have 'layers' key"

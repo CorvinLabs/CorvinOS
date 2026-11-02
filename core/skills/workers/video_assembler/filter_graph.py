@@ -41,7 +41,7 @@ def _drawtext_available() -> bool:
     try:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-filters"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         return "drawtext" in result.stdout
     except Exception:  # noqa: BLE001 -- absent/broken ffmpeg is handled elsewhere
@@ -184,7 +184,7 @@ class FilterGraph:
         caption_dir = self.slides_dir.parent / "captions"
         caption_dir.mkdir(parents=True, exist_ok=True)
         caption_path = caption_dir / f"{scene_id}.txt"
-        caption_path.write_text(text)
+        caption_path.write_text(text, encoding="utf-8")
 
         escaped_path = str(caption_path).replace("\\", "\\\\").replace(":", "\\:")
         return (

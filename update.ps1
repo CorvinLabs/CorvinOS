@@ -112,6 +112,12 @@ $LogFile = Join-Path $LogDir "update.log"
 # Corporate TLS-inspecting proxies: see install.ps1. Process scope only.
 if (-not $env:UV_NATIVE_TLS)      { $env:UV_NATIVE_TLS = "1" }
 if (-not $env:NODE_USE_SYSTEM_CA) { $env:NODE_USE_SYSTEM_CA = "1" }
+# Python UTF-8 mode for every Corvin Python process this script starts (and,
+# by inheritance, every bridge/worker/hook those spawn): without it open() /
+# read_text() without encoding= use the ANSI code page (cp1252 on a German
+# Windows) for files Linux, Node and the other processes write as UTF-8, and a
+# piped stdout raises UnicodeEncodeError on the first non-cp1252 character.
+if (-not $env:PYTHONUTF8)         { $env:PYTHONUTF8 = "1" }
 
 # -----------------------------------------------------------------------------
 # Output and native-command helpers
@@ -908,7 +914,13 @@ function New-HiddenConsoleAction {
     $vbsPath = Join-Path $vbsDir "$TaskName.vbs"
     $targetCmd = "`"$ExePath`" --no-browser --port $ServePort"
     $vbsEscaped = $targetCmd.Replace('"', '""')
-    Set-Content -LiteralPath $vbsPath -Value "CreateObject(""WScript.Shell"").Run ""$vbsEscaped"", 0, False" -Encoding ASCII
+    # PYTHONUTF8=1 into wscript's process env, inherited by the console it
+    # starts (same as install.ps1's wrapper).
+    $vbs = @(
+        "CreateObject(""WScript.Shell"").Environment(""PROCESS"")(""PYTHONUTF8"") = ""1""",
+        "CreateObject(""WScript.Shell"").Run ""$vbsEscaped"", 0, False"
+    )
+    Set-Content -LiteralPath $vbsPath -Value $vbs -Encoding Unicode
     return New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$vbsPath`""
 }
 
@@ -952,10 +964,13 @@ function Install-ConsoleWatchdog {
             'if ($me) { exit 0 }   # a console that is still starting (cold start is slow)',
             'Start-Process -FilePath $serve -ArgumentList @("--no-browser", "--port", "$port") -WindowStyle Hidden'
         )
-        Set-Content -LiteralPath $ps1 -Value $body -Encoding ASCII
+        # Unicode (UTF-16 LE + BOM) for both generated files: ASCII turns a
+        # non-ASCII profile path into '?', and wscript.exe / PowerShell 5.1
+        # read a BOM-less file as ANSI.
+        Set-Content -LiteralPath $ps1 -Value $body -Encoding Unicode
         $vbs = Join-Path $binDir "$($Task.TaskName).vbs"
         $cmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$ps1"""
-        Set-Content -LiteralPath $vbs -Value ("CreateObject(""WScript.Shell"").Run """ + $cmd.Replace('"', '""') + """, 0, False") -Encoding ASCII
+        Set-Content -LiteralPath $vbs -Value ("CreateObject(""WScript.Shell"").Run """ + $cmd.Replace('"', '""') + """, 0, False") -Encoding Unicode
         $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$vbs`""
         $logon  = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
         $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)

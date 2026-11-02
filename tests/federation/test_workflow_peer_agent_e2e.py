@@ -89,7 +89,7 @@ def _run(nodes, run_id=None):
 
 
 def _hashes(path: Path) -> set[str]:
-    return {json.loads(x)["hash"] for x in path.read_text().splitlines() if x.strip()}
+    return {json.loads(x)["hash"] for x in path.read_text(encoding="utf-8").splitlines() if x.strip()}
 
 
 def test_workflow_delegates_to_the_peer_agent_and_both_chains_hold_the_hop(two):
@@ -113,13 +113,13 @@ def test_workflow_delegates_to_the_peer_agent_and_both_chains_hold_the_hop(two):
     assert out["our_chain_tail"] and out["peer_chain_tail"]
     assert out["peer_chain_tail"] in _hashes(two["chain_b"]), "the peer's anchor is a record of B's own chain"
     assert out["our_chain_tail"] in _hashes(a_chain), "the anchor A sent is a record of A's own chain"
-    b_events = [json.loads(x)["event_type"] for x in two["chain_b"].read_text().splitlines() if x.strip()]
+    b_events = [json.loads(x)["event_type"] for x in two["chain_b"].read_text(encoding="utf-8").splitlines() if x.strip()]
     assert "federation.task_received" in b_events and "federation.task_completed" in b_events
     for chain in (a_chain, two["chain_b"]):
         ok, problems = real_se.verify_chain(chain)
         assert ok, problems
-    assert "Please review this public contract" not in a_chain.read_text(), "no instruction text in A's chain"
-    assert "Please review this public contract" not in two["chain_b"].read_text()
+    assert "Please review this public contract" not in a_chain.read_text(encoding="utf-8"), "no instruction text in A's chain"
+    assert "Please review this public contract" not in two["chain_b"].read_text(encoding="utf-8")
 
 
 def test_peer_refusal_fails_the_node_and_fail_branch_continues_the_rest(two):
@@ -146,7 +146,7 @@ def test_classified_instruction_never_reaches_the_peer(two):
     run = _run([_peer(instr="[class:confidential] the customer list")], run_id="e2erun0003")
     assert run.state == "failed" and "classified_above_public" in run.error
     assert _RecordingEngine.spawns == [] and not two["chain_b"].exists() or \
-        "task_received" not in two["chain_b"].read_text()
+        "task_received" not in two["chain_b"].read_text(encoding="utf-8")
     ev = [e.get("event_type") for e in _chain_events(two["home"])]
     assert "workflow.peer_refused" in ev and "federation.task_delegated" not in ev
 
@@ -197,5 +197,5 @@ def test_the_sandbox_contacted_only_the_local_peer(two, monkeypatch):
 
     ids = rts.RemoteEndpointRegistry(two["sender"]._registry._dir).list_ids()
     assert ids == ["peer-B"]
-    url = json.loads((two["sender"]._registry._dir / "peer-B.json").read_text())["url"]
+    url = json.loads((two["sender"]._registry._dir / "peer-B.json").read_text(encoding="utf-8"))["url"]
     assert url.startswith("http://127.0.0.1:")

@@ -85,7 +85,7 @@ class AuditComplianceChecker:
             return
 
         try:
-            with open(self.audit_path, 'r') as f:
+            with open(self.audit_path, 'r', encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -247,7 +247,7 @@ class AuditComplianceChecker:
         other_tenant_ids = set()
 
         try:
-            with open(self.audit_path, 'r') as f:
+            with open(self.audit_path, 'r', encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

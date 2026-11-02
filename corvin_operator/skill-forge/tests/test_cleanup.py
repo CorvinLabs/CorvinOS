@@ -72,7 +72,7 @@ def test_tasks_prune():
 
     r = subprocess.run(
         [sys.executable, str(SCRIPT), "tasks", "--ttl-hours", "1"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
     )
     t("script exit 0", r.returncode == 0,
       detail=f"stdout={r.stdout!r} stderr={r.stderr!r}")
@@ -100,7 +100,7 @@ def test_sessions_dry_run():
             [sys.executable, str(SCRIPT), "--dry-run", "sessions",
              "--ttl-days", "30"],
             capture_output=True, text=True, check=False,
-            env={**os.environ, "CORVIN_HOME": td},
+            env={**os.environ, "CORVIN_HOME": td}, encoding="utf-8", errors="replace",
         )
         t("dry-run exit 0", r.returncode == 0,
           detail=f"stderr={r.stderr!r}")
@@ -119,14 +119,14 @@ def test_sessions_actual_rm():
         young_chan = sess_root / "discord:test-young" / "skill-forge"
         old_chan.mkdir(parents=True)
         young_chan.mkdir(parents=True)
-        (old_chan / "skills_registry.json").write_text("{}")
+        (old_chan / "skills_registry.json").write_text("{}", encoding="utf-8")
         _set_old_mtime(old_chan, 86400 * 60)
         _set_old_mtime(young_chan, 86400 * 1)
 
         r = subprocess.run(
             [sys.executable, str(SCRIPT), "sessions", "--ttl-days", "30"],
             capture_output=True, text=True, check=False,
-            env={**os.environ, "CORVIN_HOME": td},
+            env={**os.environ, "CORVIN_HOME": td}, encoding="utf-8", errors="replace",
         )
         t("exit 0", r.returncode == 0)
         t("old skill-forge removed", not old_chan.exists())
@@ -153,15 +153,15 @@ def test_ungraded_mode():
         old_age = time.time() - 86400 * 8
         import json
         man = sess_dir / "skills_registry.json"
-        data = json.loads(man.read_text())
+        data = json.loads(man.read_text(encoding="utf-8"))
         data["old.ungraded"]["created_at"] = old_age
         data["old.graded"]["created_at"] = old_age
-        man.write_text(json.dumps(data))
+        man.write_text(json.dumps(data), encoding="utf-8")
 
         r = subprocess.run(
             [sys.executable, str(SCRIPT), "ungraded", "--ttl-days", "7"],
             capture_output=True, text=True, check=False,
-            env={**os.environ, "CORVIN_HOME": td},
+            env={**os.environ, "CORVIN_HOME": td}, encoding="utf-8", errors="replace",
         )
         t("exit 0", r.returncode == 0,
           detail=f"stderr={r.stderr!r}")
@@ -188,14 +188,14 @@ def test_user_scope_never_pruned():
         # Make it 30 days old
         import json
         man = user_dir / "skills_registry.json"
-        data = json.loads(man.read_text())
+        data = json.loads(man.read_text(encoding="utf-8"))
         data["user.ancient"]["created_at"] = time.time() - 86400 * 30
-        man.write_text(json.dumps(data))
+        man.write_text(json.dumps(data), encoding="utf-8")
 
         r = subprocess.run(
             [sys.executable, str(SCRIPT), "ungraded", "--ttl-days", "7"],
             capture_output=True, text=True, check=False,
-            env={**os.environ, "CORVIN_HOME": td},
+            env={**os.environ, "CORVIN_HOME": td}, encoding="utf-8", errors="replace",
         )
         t("exit 0", r.returncode == 0)
         reg2 = SkillRegistry(user_dir)

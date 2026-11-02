@@ -108,7 +108,7 @@ def run_all_gates() -> dict:
 
     # Write report
     report_path = "/home/shumway/projects/CorvinOS/docs/implementation/PHASE_C_GATES_REPORT.json"
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         report = {
             "timestamp": datetime.now().isoformat(),
             "overall_passed": all_passed,

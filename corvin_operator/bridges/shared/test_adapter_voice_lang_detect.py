@@ -47,7 +47,7 @@ def _install_fake_summarizer(tmp: Path) -> tuple[Path, Path]:
         "argv = sys.argv[1:]\n"
         "if '--appendix-mode' not in argv and '--metapher-mode' not in argv:\n"
         f"    open({json.dumps(str(argv_dump))}, 'w').write(json.dumps(argv))\n"
-        "print('FAKE_SUMMARY_OUTPUT')\n"
+        "print('FAKE_SUMMARY_OUTPUT')\n", encoding="utf-8"
     )
     fake_summarize.chmod(0o755)
 
@@ -55,7 +55,7 @@ def _install_fake_summarizer(tmp: Path) -> tuple[Path, Path]:
     fake_stripper.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        "sys.stdout.write(sys.stdin.read())\n"
+        "sys.stdout.write(sys.stdin.read())\n", encoding="utf-8"
     )
     fake_stripper.chmod(0o755)
 
@@ -182,7 +182,7 @@ def test_build_voice_summary_with_de_preference_uses_de_flag(
     result = adapter.build_voice_summary(long_text, max_chars=400)
     assert result, "build_voice_summary returned empty"
 
-    argv = json.loads(argv_dump.read_text())
+    argv = json.loads(argv_dump.read_text(encoding="utf-8"))
     assert "--lang" in argv
     idx = argv.index("--lang")
     assert argv[idx + 1] == "de", "User's de preference is authoritative"
@@ -201,7 +201,7 @@ def test_build_voice_summary_no_preference_detects_language(
     result = adapter.build_voice_summary(long_german_text, max_chars=400)
     assert result, "build_voice_summary returned empty"
 
-    argv = json.loads(argv_dump.read_text())
+    argv = json.loads(argv_dump.read_text(encoding="utf-8"))
     assert "--lang" in argv
     idx = argv.index("--lang")
     # Auto-detected as German, so base language is de
@@ -226,7 +226,7 @@ def test_build_voice_summary_with_zh_preference_uses_zh_flag(
     result = adapter.build_voice_summary(long_german_text, max_chars=400)
     assert result, "build_voice_summary returned empty"
 
-    argv = json.loads(argv_dump.read_text())
+    argv = json.loads(argv_dump.read_text(encoding="utf-8"))
     # zh-Hans preference is set, so --output-language should be present
     assert "--output-language" in argv, (
         f"User preference zh-Hans must set --output-language: argv={argv}"

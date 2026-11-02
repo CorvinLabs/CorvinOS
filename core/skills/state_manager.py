@@ -39,7 +39,7 @@ class StateManager:
         run_dir = self.runs_dir / run_id
         state_file = run_dir / 'run_state.json'
 
-        with open(state_file) as f:
+        with open(state_file, encoding="utf-8") as f:
             state_dict = json.load(f)
 
         state_dict['phase_completed'] = phase
@@ -49,7 +49,7 @@ class StateManager:
 
         # Atomic write: .tmp -> rename
         tmp_file = state_file.with_suffix('.tmp')
-        with open(tmp_file, 'w') as f:
+        with open(tmp_file, 'w', encoding="utf-8") as f:
             json.dump(state_dict, f)
         tmp_file.replace(state_file)
 
@@ -92,14 +92,14 @@ class RunState:
         }
 
         tmp_file = self.state_file.with_suffix('.tmp')
-        with open(tmp_file, 'w') as f:
+        with open(tmp_file, 'w', encoding="utf-8") as f:
             json.dump(state_dict, f, indent=2)
         tmp_file.replace(self.state_file)
 
     @staticmethod
     def load(state_file: Path) -> 'RunState':
         """Load state from file."""
-        with open(state_file) as f:
+        with open(state_file, encoding="utf-8") as f:
             d = json.load(f)
 
         state = RunState(

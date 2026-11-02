@@ -29,7 +29,7 @@ _URL = "/v1/console/video/web-slides/install"
 def _events(home: Path, prefix: str = "video_producer.web_slides_install") -> list:
     out = []
     for f in home.rglob("audit.jsonl"):
-        for line in f.read_text().splitlines():
+        for line in f.read_text(encoding="utf-8").splitlines():
             try:
                 rec = json.loads(line)
             except ValueError:

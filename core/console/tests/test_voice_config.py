@@ -119,8 +119,8 @@ class TestVoiceConfigManager:
 
         legacy_dir.mkdir(parents=True)
         new_dir.mkdir(parents=True)
-        (legacy_dir / "profile.json").write_text("{}")
-        (new_dir / "profile.json").write_text('{"test": "new"}')
+        (legacy_dir / "profile.json").write_text("{}", encoding="utf-8")
+        (new_dir / "profile.json").write_text('{"test": "new"}', encoding="utf-8")
 
         monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
         monkeypatch.setenv("VOICE_CONFIG_DIR", str(legacy_dir))
@@ -129,14 +129,14 @@ class TestVoiceConfigManager:
         path = manager.profile_path()
 
         assert "tenants/_default/voice" in str(path)
-        assert json.loads(path.read_text())["test"] == "new"
+        assert json.loads(path.read_text(encoding="utf-8"))["test"] == "new"
 
     def test_profile_path_falls_back_to_legacy(self, monkeypatch, tmp_path):
         """profile_path() should fall back to legacy location."""
         corvin_home = tmp_path / "corvin"
         legacy_dir = tmp_path / "legacy-voice"
         legacy_dir.mkdir(parents=True)
-        (legacy_dir / "profile.json").write_text('{"test": "legacy"}')
+        (legacy_dir / "profile.json").write_text('{"test": "legacy"}', encoding="utf-8")
 
         monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
         monkeypatch.setenv("VOICE_CONFIG_DIR", str(legacy_dir))
@@ -145,7 +145,7 @@ class TestVoiceConfigManager:
         path = manager.profile_path()
 
         assert "legacy-voice" in str(path)
-        assert json.loads(path.read_text())["test"] == "legacy"
+        assert json.loads(path.read_text(encoding="utf-8"))["test"] == "legacy"
 
     def test_profile_path_default_to_new_when_none_exist(self, monkeypatch, tmp_path):
         """profile_path() should default to new location when nothing exists."""
@@ -210,11 +210,11 @@ class TestVoiceConfigManager:
         legacy_dir.mkdir(parents=True)
 
         # Create test files
-        (legacy_dir / "profile.json").write_text('{"name": "Test"}')
+        (legacy_dir / "profile.json").write_text('{"name": "Test"}', encoding="utf-8")
         (legacy_dir / "vault").mkdir()
         (legacy_dir / "vault" / "secret.json.gpg").write_bytes(b"encrypted")
         (legacy_dir / "memory").mkdir()
-        (legacy_dir / "memory" / "notes.json").write_text('{"note": "data"}')
+        (legacy_dir / "memory" / "notes.json").write_text('{"note": "data"}', encoding="utf-8")
 
         monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
         monkeypatch.setenv("VOICE_CONFIG_DIR", str(legacy_dir))
@@ -240,7 +240,7 @@ class TestVoiceConfigManager:
         corvin_home = tmp_path / "corvin"
         legacy_dir = tmp_path / "legacy-voice"
         legacy_dir.mkdir(parents=True)
-        (legacy_dir / "profile.json").write_text("{}")
+        (legacy_dir / "profile.json").write_text("{}", encoding="utf-8")
 
         monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
         monkeypatch.setenv("VOICE_CONFIG_DIR", str(legacy_dir))
@@ -283,12 +283,12 @@ class TestVoiceConfigManager:
         new_dir.mkdir(parents=True)
 
         # Create conflicting files
-        (legacy_dir / "profile.json").write_text('{"source": "legacy"}')
-        (new_dir / "profile.json").write_text('{"source": "new"}')
+        (legacy_dir / "profile.json").write_text('{"source": "legacy"}', encoding="utf-8")
+        (new_dir / "profile.json").write_text('{"source": "new"}', encoding="utf-8")
 
         # Create non-conflicting file (must be on the migration allow-list --
         # "other.json" used to be used here and is now correctly NOT migrated)
-        (legacy_dir / "config.json").write_text("{}")
+        (legacy_dir / "config.json").write_text("{}", encoding="utf-8")
 
         monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
         monkeypatch.setenv("VOICE_CONFIG_DIR", str(legacy_dir))
@@ -301,7 +301,7 @@ class TestVoiceConfigManager:
         assert result.migrated_items == 1
 
         # Verify the existing file was not overwritten
-        existing_data = json.loads((new_dir / "profile.json").read_text())
+        existing_data = json.loads((new_dir / "profile.json").read_text(encoding="utf-8"))
         assert existing_data["source"] == "new"
 
     def test_get_voice_config_manager_caches_instances(self, monkeypatch, tmp_path):
@@ -351,12 +351,12 @@ class TestVoiceConfigManagerIntegration:
         # Set up legacy structure with realistic content
         legacy_dir.mkdir(parents=True)
         (legacy_dir / "profile.json").write_text(
-            json.dumps({"name": "Test User", "display_language": "de"})
+            json.dumps({"name": "Test User", "display_language": "de"}), encoding="utf-8"
         )
         (legacy_dir / "vault").mkdir()
-        (legacy_dir / "vault" / "INDEX.json").write_text("{}")
+        (legacy_dir / "vault" / "INDEX.json").write_text("{}", encoding="utf-8")
         (legacy_dir / "memory").mkdir()
-        (legacy_dir / "memory" / "session.json").write_text("{}")
+        (legacy_dir / "memory" / "session.json").write_text("{}", encoding="utf-8")
 
         monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
         monkeypatch.setenv("VOICE_CONFIG_DIR", str(legacy_dir))
@@ -375,7 +375,7 @@ class TestVoiceConfigManagerIntegration:
         assert "tenants/_default/voice" in str(manager.memory_dir())
 
         # Verify content
-        profile = json.loads(manager.profile_path().read_text())
+        profile = json.loads(manager.profile_path().read_text(encoding="utf-8"))
         assert profile["name"] == "Test User"
 
 
@@ -392,35 +392,35 @@ class TestMigrationAllowList:
         legacy_dir.mkdir(parents=True)
 
         # Real configuration (must migrate)
-        (legacy_dir / "profile.json").write_text('{"name": "Test User"}')
-        (legacy_dir / "config.json").write_text('{"tts": "piper"}')
-        (legacy_dir / "service.env").write_text("FOO=bar\n")
+        (legacy_dir / "profile.json").write_text('{"name": "Test User"}', encoding="utf-8")
+        (legacy_dir / "config.json").write_text('{"tts": "piper"}', encoding="utf-8")
+        (legacy_dir / "service.env").write_text("FOO=bar\n", encoding="utf-8")
         (legacy_dir / "vault").mkdir()
-        (legacy_dir / "vault" / "INDEX.json").write_text("{}")
+        (legacy_dir / "vault" / "INDEX.json").write_text("{}", encoding="utf-8")
         (legacy_dir / "piper-models").mkdir()
         (legacy_dir / "piper-models" / "de.onnx").write_bytes(b"model")
 
         # Runtime / audit / build state (must NOT migrate)
-        (legacy_dir / "audit.jsonl").write_text('{"hash": "deadbeef"}\n')
+        (legacy_dir / "audit.jsonl").write_text('{"hash": "deadbeef"}\n', encoding="utf-8")
         (legacy_dir / "audit_anchor.key").write_bytes(b"\x00" * 32)
-        (legacy_dir / "audit_mac_active").write_text('{"since": 1.0}')
-        (legacy_dir / "voice.log").write_text("noise\n")
-        (legacy_dir / "current.pgid").write_text("1234")
-        (legacy_dir / "tts.lock").write_text("")
-        (legacy_dir / "maintainer.key").write_text("secret")
+        (legacy_dir / "audit_mac_active").write_text('{"since": 1.0}', encoding="utf-8")
+        (legacy_dir / "voice.log").write_text("noise\n", encoding="utf-8")
+        (legacy_dir / "current.pgid").write_text("1234", encoding="utf-8")
+        (legacy_dir / "tts.lock").write_text("", encoding="utf-8")
+        (legacy_dir / "maintainer.key").write_text("secret", encoding="utf-8")
         markers = legacy_dir / "mac_active_chains"
         markers.mkdir()
         for i in range(50):
-            (markers / f"{i:032x}").write_text('{"since": 1.0}')
+            (markers / f"{i:032x}").write_text('{"since": 1.0}', encoding="utf-8")
         (legacy_dir / "chain_tails").mkdir()
-        (legacy_dir / "chain_tails" / "g-abc").write_text("tail")
+        (legacy_dir / "chain_tails" / "g-abc").write_text("tail", encoding="utf-8")
         (legacy_dir / "forge").mkdir()
-        (legacy_dir / "forge" / "audit.jsonl").write_text('{"hash": "x"}\n')
+        (legacy_dir / "forge" / "audit.jsonl").write_text('{"hash": "x"}\n', encoding="utf-8")
         (legacy_dir / "google").mkdir()
         (legacy_dir / "google" / "venv").mkdir()
-        (legacy_dir / "google" / "venv" / "pyvenv.cfg").write_text("home=/usr")
+        (legacy_dir / "google" / "venv" / "pyvenv.cfg").write_text("home=/usr", encoding="utf-8")
         (legacy_dir / "whatsapp").mkdir()
-        (legacy_dir / "whatsapp" / "daemon.pid").write_text("99")
+        (legacy_dir / "whatsapp" / "daemon.pid").write_text("99", encoding="utf-8")
         return legacy_dir
 
     def test_real_operator_upgrade_still_migrates_configuration(
@@ -439,7 +439,7 @@ class TestMigrationAllowList:
 
         assert result.success is True, result.errors
         new_dir = manager.voice_home()
-        assert json.loads((new_dir / "profile.json").read_text())["name"] == "Test User"
+        assert json.loads((new_dir / "profile.json").read_text(encoding="utf-8"))["name"] == "Test User"
         assert (new_dir / "config.json").exists()
         assert (new_dir / "service.env").exists()
         assert (new_dir / "vault" / "INDEX.json").exists()
@@ -487,7 +487,7 @@ class TestLegacySourceIsolation:
     ):
         fake_xdg = tmp_path / "xdg"
         (fake_xdg / "corvin-voice").mkdir(parents=True)
-        (fake_xdg / "corvin-voice" / "profile.json").write_text('{"who": "operator"}')
+        (fake_xdg / "corvin-voice" / "profile.json").write_text('{"who": "operator"}', encoding="utf-8")
 
         monkeypatch.delenv("VOICE_CONFIG_DIR", raising=False)
         monkeypatch.setenv("XDG_CONFIG_HOME", str(fake_xdg))
@@ -515,7 +515,7 @@ class TestLegacySourceIsolation:
     ):
         legacy_dir = tmp_path / "explicit-legacy"
         legacy_dir.mkdir()
-        (legacy_dir / "profile.json").write_text("{}")
+        (legacy_dir / "profile.json").write_text("{}", encoding="utf-8")
 
         monkeypatch.setenv("VOICE_CONFIG_DIR", str(legacy_dir))
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "isolated-home"))
@@ -536,7 +536,7 @@ class TestLegacySourceIsolation:
         """
         xdg = tmp_path / "xdg"
         (xdg / "corvin-voice").mkdir(parents=True)
-        (xdg / "corvin-voice" / "profile.json").write_text('{"who": "operator"}')
+        (xdg / "corvin-voice" / "profile.json").write_text('{"who": "operator"}', encoding="utf-8")
 
         monkeypatch.delenv("VOICE_CONFIG_DIR", raising=False)
         monkeypatch.delenv("CORVIN_HOME", raising=False)
@@ -554,5 +554,5 @@ class TestLegacySourceIsolation:
         assert result.success is True, result.errors
         assert result.migrated_items == 1
         assert json.loads(
-            (manager.voice_home() / "profile.json").read_text()
+            (manager.voice_home() / "profile.json").read_text(encoding="utf-8")
         )["who"] == "operator"

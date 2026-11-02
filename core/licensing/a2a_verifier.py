@@ -52,7 +52,7 @@ class RevocationList:
         """Load revocation list from disk."""
         if self.crl_file.exists():
             try:
-                with open(self.crl_file) as f:
+                with open(self.crl_file, encoding="utf-8") as f:
                     data = json.load(f)
                 self.revoked = data.get("revoked", {})
                 self._loaded_mtime = self.crl_file.stat().st_mtime
@@ -78,7 +78,7 @@ class RevocationList:
     def _save(self) -> None:
         """Save revocation list to disk."""
         try:
-            with open(self.crl_file, "w") as f:
+            with open(self.crl_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "revoked": self.revoked,
@@ -384,7 +384,7 @@ class A2ADelegationVerifier:
         }
 
         try:
-            with open(self.audit_file, "a") as f:
+            with open(self.audit_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
         except Exception as e:
             logger.error(f"Failed to write audit: {e}")
@@ -399,7 +399,7 @@ class A2ADelegationVerifier:
         }
 
         try:
-            with open(self.audit_file, "a") as f:
+            with open(self.audit_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
         except Exception as e:
             logger.error(f"Failed to write revocation audit: {e}")
@@ -420,7 +420,7 @@ class A2ADelegationVerifier:
         """
         events = []
         try:
-            with open(self.audit_file) as f:
+            with open(self.audit_file, encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)

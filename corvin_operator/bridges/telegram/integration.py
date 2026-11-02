@@ -118,7 +118,7 @@ def format_orchestration_for_telegram(
         filename = outbox / f"orchestration_{int(time.time())}_{batch_id[:8]}.json"
         try:
             temp_path = filename.with_suffix(".json.tmp")
-            with open(str(temp_path), "w") as f:
+            with open(str(temp_path), "w", encoding="utf-8") as f:
                 json.dump(envelope, f, indent=2, default=str)
             temp_path.replace(filename)
 
@@ -143,7 +143,7 @@ def format_orchestration_for_telegram(
             )
             try:
                 temp_path = filename.with_suffix(".json.tmp")
-                with open(str(temp_path), "w") as f:
+                with open(str(temp_path), "w", encoding="utf-8") as f:
                     json.dump(envelope_chat, f, indent=2, default=str)
                 temp_path.replace(filename)
 

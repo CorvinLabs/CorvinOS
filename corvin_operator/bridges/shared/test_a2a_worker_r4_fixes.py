@@ -75,7 +75,7 @@ class TestWorkerTimeoutStatus(unittest.TestCase):
         from agents.claude_code import ClaudeCodeEngine
         tmp = Path(tempfile.mkdtemp(prefix="a2a-timeout-"))
         fake = tmp / "fakeclaude"
-        fake.write_text(_FAKE.format(py=sys.executable))
+        fake.write_text(_FAKE.format(py=sys.executable), encoding="utf-8")
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
         t0 = time.monotonic()
         with mock.patch.dict(os.environ, {"ADAPTER_FAKE_CLAUDE": ""}):

@@ -74,7 +74,7 @@ def _write_tenant_config(tmp: Path, *, et_block: dict[str, Any] | None) -> None:
     if et_block is not None:
         body["spec"]["engine_trust"] = et_block
     import yaml as _y
-    p.write_text(_y.safe_dump(body))
+    p.write_text(_y.safe_dump(body), encoding="utf-8")
 
 
 def _write_scores(tmp: Path, engine_id: str, klass: str,
@@ -83,7 +83,7 @@ def _write_scores(tmp: Path, engine_id: str, klass: str,
     p = tmp / "global" / "engine_canary" / "scores.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     data = {engine_id: {klass: [r.__dict__ for r in records]}}
-    p.write_text(json.dumps(data, indent=2))
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.chmod(p, 0o600)
 
 
@@ -202,7 +202,7 @@ def section_emit_drift_event() -> None:
             t("audit chain file created", audit_p.exists())
             if audit_p.exists():
                 lines = [json.loads(line) for line in
-                         audit_p.read_text().splitlines() if line]
+                         audit_p.read_text(encoding="utf-8").splitlines() if line]
                 t("chain has one entry", len(lines) == 1)
                 ev_rec = lines[0]
                 d = ev_rec["details"]
@@ -320,12 +320,12 @@ def section_evaluate_drift_for_spawn() -> None:
                        "forge" / "audit.jsonl")
             # reset for clean count
             if audit_p.exists():
-                prior = len(audit_p.read_text().splitlines())
+                prior = len(audit_p.read_text(encoding="utf-8").splitlines())
             else:
                 prior = 0
             _write_scores(Path(tmp), "claude_code", "harmful_content", recs)
             et.evaluate_drift_for_spawn("claude_code")
-            after = (len(audit_p.read_text().splitlines())
+            after = (len(audit_p.read_text(encoding="utf-8").splitlines())
                      if audit_p.exists() else 0)
             t("drift audit emission per spawn",
               after > prior,

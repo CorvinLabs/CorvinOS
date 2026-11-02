@@ -14,7 +14,7 @@ def test_spa_mount_auto_build_success(tmp_path):
     app = FastAPI()
     dist_dir = tmp_path / "web-next" / "dist"
     dist_dir.mkdir(parents=True)
-    (dist_dir / "index.html").write_text("<html></html>")
+    (dist_dir / "index.html").write_text("<html></html>", encoding="utf-8")
 
     with patch("corvin_console.app._NEXT_DIST_DIR", dist_dir):
         with patch("corvin_console.app.headless_enabled", return_value=False):

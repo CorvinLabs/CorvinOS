@@ -84,7 +84,7 @@ def main() -> int:
     proc = subprocess.Popen(
         ["python3", str(ADAPTER)],
         env=env,
-        stdout=open(LOG_FILE, "w"),
+        stdout=open(LOG_FILE, "w", encoding="utf-8"),
         stderr=subprocess.STDOUT,
     )
     failures = 0
@@ -100,7 +100,7 @@ def main() -> int:
         (INBOX / "longturn.json").write_text(json.dumps({
             "id": "longturn", "channel": "discord", "chat_id": "chatL",
             "from": "sender-L", "text": "simulate a long-running turn",
-        }))
+        }), encoding="utf-8")
 
         deadline = time.monotonic() + WAIT_TIMEOUT
         while time.monotonic() < deadline:
@@ -118,7 +118,7 @@ def main() -> int:
             proc.kill()
             proc.wait()
 
-    log_text = LOG_FILE.read_text() if LOG_FILE.exists() else ""
+    log_text = LOG_FILE.read_text(encoding="utf-8") if LOG_FILE.exists() else ""
 
     print("test_adapter_in_flight")
     check((PROCESSED / "longturn.json").exists(),

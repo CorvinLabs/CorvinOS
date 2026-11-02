@@ -209,7 +209,7 @@ class TestSecretsStoreMigration:
         # Create legacy .env in tmp_path directly
         env_file = tmp_path / ".env"
         env_file.write_text(
-            "ANTHROPIC_API_KEY=sk-ant-123\nOPENAI_API_KEY=sk-org-456\n"
+            "ANTHROPIC_API_KEY=sk-ant-123\nOPENAI_API_KEY=sk-org-456\n", encoding="utf-8"
         )
 
         store = SecretsStore()
@@ -245,7 +245,7 @@ class TestSecretsStoreMigration:
 
         env_file = tmp_path / ".env"
         env_file.write_text(
-            'QUOTED_SINGLE=\'value1\'\nQUOTED_DOUBLE="value2"\nUNQUOTED=value3\n'
+            'QUOTED_SINGLE=\'value1\'\nQUOTED_DOUBLE="value2"\nUNQUOTED=value3\n', encoding="utf-8"
         )
 
         store = SecretsStore()
@@ -263,7 +263,7 @@ class TestSecretsStoreMigration:
 
         env_file = tmp_path / ".env"
         env_file.write_text(
-            "# This is a comment\nKEY1=value1\n# Another comment\nKEY2=value2\n"
+            "# This is a comment\nKEY1=value1\n# Another comment\nKEY2=value2\n", encoding="utf-8"
         )
 
         store = SecretsStore()
@@ -296,7 +296,7 @@ class TestSecretsStoreErrors:
 
         store = SecretsStore()
         store.secrets_path.parent.mkdir(parents=True, exist_ok=True)
-        store.secrets_path.write_text("{ invalid json }")
+        store.secrets_path.write_text("{ invalid json }", encoding="utf-8")
 
         with pytest.raises(ValueError, match="invalid secrets.enc format"):
             store.decrypt_secrets()
@@ -308,7 +308,7 @@ class TestSecretsStoreErrors:
         store = SecretsStore()
         store.secrets_path.parent.mkdir(parents=True, exist_ok=True)
         envelope = {"version": "1.0", "encrypted_at": "2026-07-27T00:00:00Z"}
-        store.secrets_path.write_text(json.dumps(envelope))
+        store.secrets_path.write_text(json.dumps(envelope), encoding="utf-8")
 
         with pytest.raises(Exception):  # Could be KeyError or ValueError
             store.decrypt_secrets()
@@ -393,7 +393,7 @@ class TestSecretsStoreIntegrationWithResolver:
 
         # Set only in service.env
         service_env = tmp_path / "service.env"
-        service_env.write_text("OPENAI_API_KEY=sk-from-service-env\n")
+        service_env.write_text("OPENAI_API_KEY=sk-from-service-env\n", encoding="utf-8")
 
         # store.save_secret does not exist yet
         result = resolve_key("openai_api_key")
@@ -435,7 +435,7 @@ class TestSecretsStoreIntegrationWithResolver:
 
         # The REAL dedicated STT key lives in service.env (lower precedence).
         (tmp_path / "service.env").write_text(
-            "CORVIN_STT_OPENAI_KEY=sk-real-stt-key-1234\n")
+            "CORVIN_STT_OPENAI_KEY=sk-real-stt-key-1234\n", encoding="utf-8")
         # A GENERIC placeholder pollutes secrets.enc (higher precedence).
         SecretsStore().save_secret("OPENAI_API_KEY", "placeholder-enc")
 
@@ -444,7 +444,7 @@ class TestSecretsStoreIntegrationWithResolver:
         # Same for TTS (also parents to openai_api_key).
         (tmp_path / "service.env").write_text(
             "CORVIN_TTS_OPENAI_KEY=sk-real-tts-key-5678\n"
-            "CORVIN_STT_OPENAI_KEY=sk-real-stt-key-1234\n")
+            "CORVIN_STT_OPENAI_KEY=sk-real-stt-key-1234\n", encoding="utf-8")
         assert resolve_key("tts_openai_api_key") == "sk-real-tts-key-5678"
         # A bare openai_api_key lookup (no dedicated) still sees the placeholder —
         # that is correct; the fix is about specificity, not about hiding a value.
@@ -460,7 +460,7 @@ class TestSecretsStoreLoad:
 
         store = SecretsStore()
         store.secrets_path.parent.mkdir(parents=True, exist_ok=True)
-        store.secrets_path.write_text("{ invalid }")
+        store.secrets_path.write_text("{ invalid }", encoding="utf-8")
 
         # Should not raise, just return default
         result = store.load_secret("KEY", default="fallback")
@@ -472,7 +472,7 @@ class TestSecretsStoreLoad:
 
         store = SecretsStore()
         store.secrets_path.parent.mkdir(parents=True, exist_ok=True)
-        store.secrets_path.write_text("{ invalid }")
+        store.secrets_path.write_text("{ invalid }", encoding="utf-8")
 
         result = store.list_secrets()
         assert result == []

@@ -221,7 +221,7 @@ def render_intro(
             ["ffmpeg", "-y", "-sseof", f"-{duration_s:.3f}", "-i", webm_path, "-t", f"{duration_s:.3f}",
              "-c:v", "libx264", "-preset", "medium",
              "-crf", "18", "-pix_fmt", "yuv420p", "-an", mp4_path],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             raise IntroRenderError(f"webm->mp4 conversion failed: {result.stderr}")
@@ -279,7 +279,7 @@ def prepend_intro_with_fade(
     main_duration = _probe_duration(main_video_path)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=max(120.0, 3.0 * main_duration + 60.0))
+                                timeout=max(120.0, 3.0 * main_duration + 60.0), encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired as e:
         raise IntroRenderError(f"intro+main crossfade timed out: {e}") from e
     if result.returncode != 0:
@@ -292,7 +292,7 @@ def _probe_duration(path: str) -> float:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())

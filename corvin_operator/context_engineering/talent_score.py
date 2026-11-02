@@ -32,7 +32,7 @@ class TalentScoreCalculator:
             return records
 
         try:
-            with open(filepath, "r") as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line:

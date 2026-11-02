@@ -740,9 +740,9 @@ class TestSharedKidAckOverRealRelay(unittest.TestCase):
             token, token_str = ft.create_friendship_token(url="http://issuer.invalid", label="A")
             ft.save_pending_friendship(token, pending_dir=dirs["a"]["pending"])
             redeemed = ft.parse_and_verify(token_str)
-            (dirs["b"]["origins"] / f"{token.kid}.json").write_text(json.dumps(ft.to_origin_dict(redeemed)))
+            (dirs["b"]["origins"] / f"{token.kid}.json").write_text(json.dumps(ft.to_origin_dict(redeemed)), encoding="utf-8")
             b_endpoint = ft.to_endpoint_dict(redeemed)
-            (dirs["b"]["endpoints"] / f"{token.kid}.json").write_text(json.dumps(b_endpoint))
+            (dirs["b"]["endpoints"] / f"{token.kid}.json").write_text(json.dumps(b_endpoint), encoding="utf-8")
 
             listeners = []
 

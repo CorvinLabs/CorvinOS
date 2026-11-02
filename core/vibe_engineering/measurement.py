@@ -34,7 +34,7 @@ class MeasurementCollector:
     def record_sample(self, sample: MeasurementSample):
         """Record one measurement to JSONL."""
         record = asdict(sample)
-        with open(self.measurement_file, "a") as f:
+        with open(self.measurement_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
     def record_session_renewal_latency(self, task_id: str, latency_ms: float):
@@ -79,7 +79,7 @@ class MeasurementCollector:
             return {}
 
         samples = []
-        with open(self.measurement_file, "r") as f:
+        with open(self.measurement_file, "r", encoding="utf-8") as f:
             for line in f:
                 samples.append(json.loads(line))
 

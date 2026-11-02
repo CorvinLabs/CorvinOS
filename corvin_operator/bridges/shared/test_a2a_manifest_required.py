@@ -28,7 +28,7 @@ def _origin(tmp: Path, *, manifest_required: bool):
         "origin_id": _ORIGIN, "hmac_key": _HMAC_KEY, "recv_key": _RECV_KEY,
         "enabled": True, "max_ttl_s": 300, "allowed_personas": ["assistant"],
         "a2a_manifest_required": manifest_required,
-    }))
+    }), encoding="utf-8")
     p.chmod(0o600)
 
 

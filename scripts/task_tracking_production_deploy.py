@@ -83,7 +83,7 @@ def phase2_run_tests():
             result = subprocess.run(
                 [sys.executable, "-m", "pytest", test_file, "-v", "--tb=short"],
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
 
             # Parse results

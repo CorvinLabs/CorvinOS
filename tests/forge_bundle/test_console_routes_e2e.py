@@ -211,9 +211,9 @@ def test_R2B_5_a_corrupt_store_answers_503_not_500(console_client, tmp_corvin_ho
     client, _csrf = console_client
     broken = tmp_corvin_home / "skills_gen" / "broken"
     broken.mkdir(parents=True)
-    (broken / "skill.json").write_text("[]")
+    (broken / "skill.json").write_text("[]", encoding="utf-8")
     from core.orchestration.layer_forge.orchestrator import layer_forge_home
-    (layer_forge_home(T) / "registry" / "x@1.0.0.json").write_text("{not json")
+    (layer_forge_home(T) / "registry" / "x@1.0.0.json").write_text("{not json", encoding="utf-8")
     r = client.get(f"{BASE}/exportable")
     assert r.status_code == 503
 
@@ -264,12 +264,12 @@ def test_R2B_11_cli_refuses_a_directory_as_output(cli_runner, make_tool, chain_e
 def test_R2B_12_cli_never_follows_a_planted_temp_symlink(cli_runner, make_tool, tmp_path):
     make_tool("csv.count")
     victim = tmp_path / "victim.txt"
-    victim.write_text("keep me")
+    victim.write_text("keep me", encoding="utf-8")
     (tmp_path / ".b.zip.tmp").symlink_to(victim)
     proc = cli_runner(["export", "--id", "b", "--version", "1.0.0",
                        "--output", str(tmp_path / "b.zip"), "--tool", "csv.count@0.2.0"])
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert victim.read_text() == "keep me"
+    assert victim.read_text(encoding="utf-8") == "keep me"
     assert (tmp_path / "b.zip").read_bytes()[:2] == b"PK"
 
 
@@ -320,7 +320,7 @@ def test_R3B_6_inventory_refusal_has_one_shape_on_both_routes(console_client, tm
     bundle = _export(client, csrf, [{"kind": "tool", "id": "csv.count", "version": "0.2.0"}]).content
     reg = tmp_corvin_home / "skills_installed" / "skills_registry.json"
     reg.parent.mkdir(parents=True, exist_ok=True)
-    reg.write_text("[]")
+    reg.write_text("[]", encoding="utf-8")
     for path in ("validate", "import"):
         r = _upload(client, csrf, path, bundle)
         assert r.status_code == 503 and r.json()["detail"]["stage"] == "inventory", (path, r.text)
@@ -441,9 +441,9 @@ def test_R4_A9_2_an_unreadable_record_does_not_lock_a_plugin_out(make_plugin_pac
     uid = "0123456789abcdef"
     m.decisions_root.mkdir(parents=True, exist_ok=True)
     for body in ("", "{not json", '{"decision": "banana"}', "[]"):
-        (m.decisions_root / f"{uid}.json").write_text(body)
+        (m.decisions_root / f"{uid}.json").write_text(body, encoding="utf-8")
         assert m.get_decision(uid) is None, body
-    (m.decisions_root / f"{uid}.json").write_text('{"decision": "rejected"}')   # positive control
+    (m.decisions_root / f"{uid}.json").write_text('{"decision": "rejected"}', encoding="utf-8")   # positive control
     assert m.get_decision(uid) == "rejected"
     assert m.clear_decision(uid) is True and m.clear_decision(uid) is False
     assert m.get_decision(uid) is None

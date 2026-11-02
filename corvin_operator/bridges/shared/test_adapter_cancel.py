@@ -177,7 +177,7 @@ def test_process_one_cancel_no_running() -> None:
             "ts": time.time(),
         }
         in_file = inbox / "msg-cancel-1.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
 
         adapter.process_one(in_file, settings={"whitelist": ["u123", "u999"]})
 
@@ -187,7 +187,7 @@ def test_process_one_cancel_no_running() -> None:
 
         out_files = list(outbox.glob("msg-cancel-1_*.json"))
         assert len(out_files) == 1, f"expected 1 outbox ack, got {len(out_files)}"
-        ack = json.loads(out_files[0].read_text())
+        ack = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert ack["channel"] == "sandbox-cancel"
         assert ack["to"] == "u123"
         assert ack["chat_id"] == "chat-456"
@@ -223,14 +223,14 @@ def test_process_one_cancel_with_running() -> None:
             "ts": time.time(),
         }
         in_file = inbox / "msg-cancel-2.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
 
         adapter.process_one(in_file, settings={"whitelist": ["u123", "u999"]})
 
         assert proc.poll() is not None, "subproc not killed by _cancel envelope"
         out_files = list(outbox.glob("msg-cancel-2_*.json"))
         assert len(out_files) == 1, f"expected 1 outbox ack, got {len(out_files)}"
-        ack = json.loads(out_files[0].read_text())
+        ack = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert "aborted" in ack["text"], f"unexpected ack: {ack['text']!r}"
         print(f"PASS: running-task cancel kills proc + writes ACK: {ack['text']!r}")
 
@@ -338,14 +338,14 @@ def test_process_one_cancel_engine_only_running() -> None:
             "ts": time.time(),
         }
         in_file = inbox / "msg-cancel-opencode.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
 
         adapter.process_one(in_file, settings={"whitelist": ["u123", "u999"]})
 
         assert engine.cancelled, "OpenCode-class engine was never cancelled by /stop"
         out_files = list(outbox.glob("msg-cancel-opencode_*.json"))
         assert len(out_files) == 1, f"expected 1 outbox ack, got {len(out_files)}"
-        ack = json.loads(out_files[0].read_text())
+        ack = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert "No task was running" not in ack["text"], (
             f"WA-10 regression: /stop falsely reported nothing running: {ack['text']!r}"
         )
@@ -391,7 +391,7 @@ def test_killed_turn_leaves_inbox_file_for_rerun() -> None:
         in_file.write_text(json.dumps({
             "id": "msg-killed", "channel": "sandbox", "from": "u1",
             "chat_id": "c1", "text": "hi", "ts": time.time(),
-        }))
+        }), encoding="utf-8")
         # Simulate the kill: the turn never reached the PROCESSED-move.
         # The file is still in INBOX → the next poll would re-submit it.
         assert in_file.exists(), "precondition"
@@ -431,13 +431,13 @@ def test_process_one_cancel_during_race_window_before_registration() -> None:
             "ts": time.time(),
         }
         in_file = inbox / "msg-cancel-race.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
 
         adapter.process_one(in_file, settings={"whitelist": ["u123", "u999"]})
 
         out_files = list(outbox.glob("msg-cancel-race_*.json"))
         assert len(out_files) == 1, f"expected 1 outbox ack, got {len(out_files)}"
-        ack = json.loads(out_files[0].read_text())
+        ack = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert "No task was running" not in ack["text"], (
             f"WA-10 regression: /stop lied about a genuinely active turn: {ack['text']!r}"
         )

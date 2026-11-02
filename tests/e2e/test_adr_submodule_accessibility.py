@@ -30,7 +30,7 @@ class TestADRSubmoduleIntegration:
 
         assert gitmodules_path.exists(), ".gitmodules file not found"
 
-        content = gitmodules_path.read_text()
+        content = gitmodules_path.read_text(encoding="utf-8")
         assert "corvin_decisions" in content, "corvin_decisions submodule not in .gitmodules"
         assert "Corvin-Knowledge.git" in content, "Corvin-Knowledge repository URL not configured"
 
@@ -56,14 +56,14 @@ class TestADRSubmoduleIntegration:
 
         # Read first and last ADR to verify they're valid
         for adr_file in [adr_files[0], adr_files[-1]]:
-            content = adr_file.read_text()
+            content = adr_file.read_text(encoding="utf-8")
             assert len(content) > 0, f"{adr_file} is empty"
             assert "id: ADR-" in content, f"{adr_file} missing ADR id"
 
     def test_submodule_tracks_upstream_branch(self, repo_root):
         """Verify submodule is configured to track main branch"""
         gitmodules_path = repo_root / ".gitmodules"
-        content = gitmodules_path.read_text()
+        content = gitmodules_path.read_text(encoding="utf-8")
 
         # Check for branch = main configuration
         assert "branch = main" in content or "branch=main" in content.replace(" ", ""), \
@@ -82,7 +82,7 @@ class TestADRSubmoduleIntegration:
                 # Check for deprecation notice in README
                 readme_path = dir_path / "README.md"
                 if readme_path.exists():
-                    content = readme_path.read_text()
+                    content = readme_path.read_text(encoding="utf-8")
                     assert "deprecated" in content.lower() or "corvin_decisions" in content, \
                         f"No deprecation notice in {readme_path}"
 
@@ -107,7 +107,7 @@ class TestADRSubmoduleIntegration:
         """Verify submodule points to correct Corvin-Knowledge repository"""
         # Read .gitmodules
         gitmodules_path = repo_root / ".gitmodules"
-        content = gitmodules_path.read_text()
+        content = gitmodules_path.read_text(encoding="utf-8")
 
         # Extract URL
         assert "url = https://github.com/CorvinLabs/Corvin-Knowledge.git" in content or \
@@ -122,7 +122,7 @@ class TestADRSubmoduleIntegration:
             workflow_files = list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml"))
 
             for workflow_file in workflow_files:
-                content = workflow_file.read_text()
+                content = workflow_file.read_text(encoding="utf-8")
 
                 # Check for submodule initialization in build workflows
                 if "build" in workflow_file.name.lower() or "test" in workflow_file.name.lower():

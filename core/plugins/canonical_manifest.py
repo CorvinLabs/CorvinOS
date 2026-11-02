@@ -107,7 +107,7 @@ class CanonicalManifestManager:
             # Present: forget the absence so a later disappearance is reported
             # at INFO again instead of staying DEBUG for the process lifetime.
             _ABSENCE_REPORTED.discard(self.manifest_url)
-            with open(self.manifest_url, "r") as f:
+            with open(self.manifest_url, "r", encoding="utf-8") as f:
                 manifest_dict = json.load(f)
 
             # Reconstruct manifest from dict
@@ -169,7 +169,7 @@ class CanonicalManifestManager:
 
             # Write atomically: temp → replace
             temp_path = f"{self.manifest_url}.tmp"
-            with open(temp_path, "w") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(manifest.to_dict(), f, indent=2)
 
             os.replace(temp_path, self.manifest_url)

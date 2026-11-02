@@ -43,8 +43,10 @@ class _Sandbox:
             "VOICE_AUDIT_PATH": "",
         })
         self.env_patch.start()
-        self.session_root = (self.root / "tenants" / "_default"
-                             / "sessions" / self.session_key / "artifacts")
+        # fs_safe_component: ``test_hook-chat`` on Windows (':' is illegal there)
+        from forge.paths import fs_safe_component  # type: ignore
+        self.session_root = (self.root / "tenants" / "_default" / "sessions"
+                             / fs_safe_component(self.session_key) / "artifacts")
         self.session_root.mkdir(parents=True)
         self.events: list[tuple[str, str, dict]] = []
         # Patch `_emit` to capture events synchronously in the parent.
@@ -68,19 +70,19 @@ class PayloadParsingTests(unittest.TestCase):
     def test_write_payload_extracts_file_path(self) -> None:
         p = hook._extract_output_path("Write",
                                       {"tool_input": {"file_path": "/tmp/x.pdf"}})
-        self.assertEqual(p, Path("/tmp/x.pdf"))
+        self.assertEqual(p, Path("/tmp/x.pdf").resolve())
 
     def test_edit_payload_extracts_file_path(self) -> None:
         p = hook._extract_output_path("Edit",
                                       {"tool_input": {"file_path": "/tmp/y.csv"}})
-        self.assertEqual(p, Path("/tmp/y.csv"))
+        self.assertEqual(p, Path("/tmp/y.csv").resolve())
 
     def test_notebook_payload_prefers_notebook_path(self) -> None:
         p = hook._extract_output_path(
             "NotebookEdit",
             {"tool_input": {"notebook_path": "/tmp/n.ipynb",
                             "file_path": "/tmp/wrong"}})
-        self.assertEqual(p, Path("/tmp/n.ipynb"))
+        self.assertEqual(p, Path("/tmp/n.ipynb").resolve())
 
     def test_unknown_tool_returns_none(self) -> None:
         p = hook._extract_output_path("Read", {"tool_input": {"file_path": "/x"}})
@@ -130,7 +132,7 @@ class AutoRegisterPredicateTests(unittest.TestCase):
     def test_path_convention_triggers(self) -> None:
         with _Sandbox() as sbx:
             f = sbx.session_root / "report.txt"
-            f.write_text("hi")
+            f.write_text("hi", encoding="utf-8")
             ok, reason = hook._should_auto_register(f, sbx.session_root)
             self.assertTrue(ok)
             self.assertEqual(reason, "path-convention")
@@ -146,7 +148,7 @@ class AutoRegisterPredicateTests(unittest.TestCase):
     def test_non_artifact_mime_skipped(self) -> None:
         with _Sandbox() as sbx:
             f = sbx.root / "code.py"
-            f.write_text("print('hi')\n")
+            f.write_text("print('hi')\n", encoding="utf-8")
             ok, _reason = hook._should_auto_register(f, sbx.session_root)
             self.assertFalse(ok)
 
@@ -210,7 +212,7 @@ class DoRegisterTests(unittest.TestCase):
             # Manifest line was written.
             manifest = sbx.session_root / ".manifest.jsonl"
             self.assertTrue(manifest.exists())
-            entry = json.loads(manifest.read_text().splitlines()[0])
+            entry = json.loads(manifest.read_text(encoding="utf-8").splitlines()[0])
             self.assertEqual(entry["mime"], "application/pdf")
             self.assertEqual(entry["by_tool"], "tool.Write")
             self.assertIn(entry["description"], (
@@ -260,7 +262,7 @@ class MainEntryTests(unittest.TestCase):
     def test_tool_error_skips_register(self) -> None:
         with _Sandbox() as sbx:
             f = sbx.session_root / "would_register.txt"
-            f.write_text("hi")
+            f.write_text("hi", encoding="utf-8")
             payload = json.dumps({
                 "tool_name": "Write",
                 "tool_input": {"file_path": str(f)},

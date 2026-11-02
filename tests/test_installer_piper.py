@@ -86,7 +86,7 @@ def test_setup_model_skips_download_when_a_model_already_exists(tmp_path: Path) 
     # escapes, so config_file.read_text() -> json.loads() raised
     # JSONDecodeError on Windows CI, was swallowed by _find_existing_model's
     # broad `except Exception: pass`, and _download_model got called anyway.
-    config_file.write_text(json.dumps({"piper_model_de": str(model_file)}))
+    config_file.write_text(json.dumps({"piper_model_de": str(model_file)}), encoding="utf-8")
 
     with mock.patch.object(piper_mod, "_download_model") as m_download:
         piper_mod._setup_model(voice_config_dir, interactive=False)
@@ -184,7 +184,7 @@ def test_save_model_config_never_fails_when_profile_write_is_unavailable(
 
     piper_mod._save_model_config(config_file, "de", "/fake/model/path.onnx")
 
-    assert json.loads(config_file.read_text())["piper_model_de"] == "/fake/model/path.onnx"
+    assert json.loads(config_file.read_text(encoding="utf-8"))["piper_model_de"] == "/fake/model/path.onnx"
 
 
 # ── ensure_piper: end-to-end orchestration ──────────────────────────────────
@@ -388,7 +388,7 @@ def test_seeds_language_from_prefetched_model(tmp_path, monkeypatch) -> None:
     it must still seed display_language from config.json's lang_default."""
     vc = tmp_path / "vc"; vc.mkdir()
     (vc / "config.json").write_text(json.dumps({"lang_default": "de",
-                                                 "piper_model_de": "/x/de.onnx"}))
+                                                 "piper_model_de": "/x/de.onnx"}), encoding="utf-8")
     seeded = _patch_setup(monkeypatch, detected="en", existing=(vc / "fake.onnx"))
     piper_mod._setup_model(vc, interactive=True)
     assert seeded == ["de"], "prefetched-model path must seed from config lang_default, not the OS locale"
@@ -402,7 +402,7 @@ def test_seed_writes_normalised_display_language(tmp_path, monkeypatch) -> None:
     for m in ("profile", "corvin_console.profile", "i18n"):
         sys.modules.pop(m, None)
     piper_mod._seed_profile_display_language("zh")
-    prof = json.loads((vc / "profile.json").read_text())
+    prof = json.loads((vc / "profile.json").read_text(encoding="utf-8"))
     assert prof.get("display_language") == "zh-Hans", prof
     for m in ("profile", "corvin_console.profile", "i18n"):
         sys.modules.pop(m, None)

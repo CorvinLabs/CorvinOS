@@ -42,7 +42,7 @@ boot_layer: installed
 class_path: my_plugin.backend:MyBackend
 config:
   setting1: value1
-"""
+""", encoding="utf-8"
         )
 
         meta = plugin_cmd.extract_plugin_metadata(str(plugin_dir))
@@ -68,7 +68,7 @@ setup(
     version="2.0.0",
     packages=["legacy_plugin"],
 )
-"""
+""", encoding="utf-8"
         )
 
         meta = plugin_cmd.extract_plugin_metadata(str(plugin_dir))
@@ -211,7 +211,7 @@ id: test.idempotent
 name: Test Plugin
 plugin_type: data_connector
 version: 1.0.0
-""")
+""", encoding="utf-8")
 
         # Mock tenant config that already has the plugin
         config = {
@@ -246,7 +246,7 @@ name: Community Plugin
 plugin_type: data_connector
 version: 1.0.0
 origin: community
-""")
+""", encoding="utf-8")
 
         config = {"spec": {"plugins": {"installed": []}}}
 
@@ -274,7 +274,7 @@ name: Force Plugin
 plugin_type: data_connector
 version: 1.0.0
 origin: community
-""")
+""", encoding="utf-8")
 
         config = {"spec": {"plugins": {"installed": []}}}
 

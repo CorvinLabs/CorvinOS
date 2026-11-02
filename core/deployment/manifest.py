@@ -54,7 +54,7 @@ class ManifestManager:
                 ["git", "rev-parse", "HEAD"],
                 cwd=str(REPO_ROOT),
                 text=True,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace",
             ).strip()
         except Exception as e:
             raise RuntimeError(f"Cannot get git SHA: {e}")
@@ -67,7 +67,7 @@ class ManifestManager:
                 ["git", "describe", "--tags", "--always"],
                 cwd=str(REPO_ROOT),
                 text=True,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace",
             ).strip()
         except Exception:
             return "0.unknown"

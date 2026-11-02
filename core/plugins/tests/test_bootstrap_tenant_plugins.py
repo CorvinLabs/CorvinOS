@@ -80,10 +80,10 @@ class Plugin:
     def health_check(self):
         return HealthStatus(ok=True)
 '''
-        (plugin_dir / "plugin.py").write_text(plugin_code)
+        (plugin_dir / "plugin.py").write_text(plugin_code, encoding="utf-8")
 
         # Create manifest.json
-        (plugin_dir / "manifest.json").write_text('{"id": "%s", "version": "1.0.0"}' % plugin_id)
+        (plugin_dir / "manifest.json").write_text('{"id": "%s", "version": "1.0.0"}' % plugin_id, encoding="utf-8")
 
         return plugin_dir
 
@@ -101,7 +101,7 @@ def setup(context):
     """Plugin setup hook."""
     pass
 '''
-        (plugin_dir / "plugin.py").write_text(plugin_code)
+        (plugin_dir / "plugin.py").write_text(plugin_code, encoding="utf-8")
 
         return plugin_dir
 
@@ -194,7 +194,7 @@ def setup(context):
             / "plugins" / "installed" / "bad-plugin"
         )
         bad_dir.mkdir(parents=True, exist_ok=True)
-        (bad_dir / "plugin.py").write_text("import nonexistent_module_xyz")
+        (bad_dir / "plugin.py").write_text("import nonexistent_module_xyz", encoding="utf-8")
 
         # Bootstrap should load good, skip bad
         result = bootstrap.bootstrap_tenant(
@@ -270,7 +270,7 @@ def setup(context):
         tenant_dir = self.corvin_home / "tenants" / self.tenant_id
         plugins_dir = tenant_dir / "plugins"
         plugins_dir.mkdir(parents=True, exist_ok=True)
-        (plugins_dir / "registry.yaml").write_text("invalid: [yaml: content: {")
+        (plugins_dir / "registry.yaml").write_text("invalid: [yaml: content: {", encoding="utf-8")
 
         # Bootstrap should degrade (not raise)
         result = bootstrap.bootstrap_tenant(

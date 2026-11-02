@@ -104,7 +104,7 @@ def test_a_real_worker_gives_its_engine_child_the_24h_defaults(box, monkeypatch)
     assert p.returncode == 0, (out[-400:], err[-400:])
 
     assert dump.exists(), "the engine child never ran, so nothing was proven"
-    inherited = dict(line.split("=", 1) for line in dump.read_text().splitlines() if "=" in line)
+    inherited = dict(line.split("=", 1) for line in dump.read_text(encoding="utf-8").splitlines() if "=" in line)
     assert inherited.get("CORVIN_BG_CHILD_MAX") == "86400", inherited
     assert inherited.get("ADAPTER_TOOL_IDLE_TIMEOUT") == "86400", inherited
     # Neither was set by the test process, so both values came from the worker's main().
@@ -166,7 +166,7 @@ def _start_without_forced_idle(box, spec, fixture, *, speedup=1.0, extra_env=Non
                 "PYTHONPATH": os.pathsep.join([str(HERE), str(HERE.parents[1] / "forge")]),
                 **(extra_env or {})})
     return subprocess.Popen([sys.executable, str(runner)], env=env, cwd=str(HERE),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
 
 
 def test_a_real_worker_runs_its_engine_with_a_one_hour_stream_idle_limit(box, monkeypatch):
@@ -185,7 +185,7 @@ def test_a_real_worker_runs_its_engine_with_a_one_hour_stream_idle_limit(box, mo
                                    extra_env={"CORVIN_CLAUDE_BIN": str(wrapper)})
     out, err = p.communicate(timeout=240)
     assert p.returncode == 0, (out[-300:], err[-300:])
-    assert dump.read_text().strip() == "ADAPTER_STREAM_IDLE_TIMEOUT=3600"
+    assert dump.read_text(encoding="utf-8").strip() == "ADAPTER_STREAM_IDLE_TIMEOUT=3600"
 
 
 def test_a_worker_cut_off_by_the_idle_watchdog_is_a_failed_attempt_not_a_finished_task(box, monkeypatch):
@@ -315,7 +315,7 @@ def test_a_stale_failure_flag_from_before_the_call_does_not_fail_a_healthy_run(b
                 "PYTHONPATH": os.pathsep.join([str(HERE), str(HERE.parents[1] / "forge")])})
     env.pop("ADAPTER_STREAM_IDLE_TIMEOUT", None)
     proc = subprocess.run([sys.executable, str(runner)], env=env, cwd=str(HERE), capture_output=True,
-                          text=True, timeout=240)
+                          text=True, timeout=240, encoding="utf-8", errors="replace")
     assert proc.returncode == 0, proc.stderr[-300:]
     last = _run_record(box, spec)["attempt_log"][-1]
     assert last["ok"] is True, last

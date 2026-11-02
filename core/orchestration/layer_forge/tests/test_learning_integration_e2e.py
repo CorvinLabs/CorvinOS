@@ -50,7 +50,7 @@ def _read_learning_events(home: Path) -> list[dict]:
 
     events = []
     for jsonl_file in learning_dir.glob("events_*.jsonl"):
-        for line in jsonl_file.read_text().splitlines():
+        for line in jsonl_file.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 try:
                     events.append(json.loads(line))
@@ -64,7 +64,7 @@ def _read_audit_events(home: Path) -> list[dict]:
     chain = home / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return recs
 
 

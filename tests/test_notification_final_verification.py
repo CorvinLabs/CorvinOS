@@ -24,7 +24,7 @@ def verify_adapter_fix():
     print("="*70)
 
     adapter_file = Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared" / "adapter.py"
-    content = adapter_file.read_text()
+    content = adapter_file.read_text(encoding="utf-8")
 
     # Suche nach dem spezifischen Fix bei Self-Delegation
     search_terms = [
@@ -60,7 +60,7 @@ def verify_bg_task_worker_integration():
     print("="*70)
 
     worker_file = Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared" / "bg_task_worker.py"
-    content = worker_file.read_text()
+    content = worker_file.read_text(encoding="utf-8")
 
     # Überprüfe, dass worker outbox_dir aus spec liest
     search_terms = [
@@ -101,7 +101,7 @@ def verify_notification_router():
     print(f"✅ Router script exists: {router_file}")
 
     # Überprüfe, dass der Router die erwarteten Funktionen hat
-    content = router_file.read_text()
+    content = router_file.read_text(encoding="utf-8")
 
     search_terms = [
         'monitor_completion_events',
@@ -135,7 +135,7 @@ def verify_systemd_service():
 
     print(f"✅ Service file exists: {service_file}")
 
-    content = service_file.read_text()
+    content = service_file.read_text(encoding="utf-8")
 
     # Überprüfe Service-Struktur
     required_fields = [

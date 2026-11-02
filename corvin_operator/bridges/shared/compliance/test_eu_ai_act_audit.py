@@ -54,7 +54,7 @@ def test_l10_path_gate_import_uses_bare_module_not_dotted():
     # Only real code lines count — the fix's own explanatory comments
     # deliberately quote the old broken form as documentation.
     import re
-    src = (Path(__file__).resolve().parent / "eu_ai_act_audit.py").read_text()
+    src = (Path(__file__).resolve().parent / "eu_ai_act_audit.py").read_text(encoding="utf-8")
     code_lines = [
         line for line in src.splitlines() if not line.strip().startswith("#")
     ]

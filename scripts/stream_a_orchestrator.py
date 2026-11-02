@@ -225,13 +225,13 @@ class StreamAOrchestrator:
 
         # Save comprehensive report
         report_file = Path("stream_a_session3_report.json")
-        report_file.write_text(json.dumps(self.results, indent=2))
+        report_file.write_text(json.dumps(self.results, indent=2), encoding="utf-8")
         print(f"\nFull report saved to: {report_file}")
 
         # Also save human-readable version
         human_report = self._generate_human_readable_report()
         human_report_file = Path("stream_a_session3_report.md")
-        human_report_file.write_text(human_report)
+        human_report_file.write_text(human_report, encoding="utf-8")
         print(f"Human-readable report: {human_report_file}")
 
         return overall_pass

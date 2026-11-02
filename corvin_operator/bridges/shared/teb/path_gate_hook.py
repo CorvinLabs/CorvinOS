@@ -35,6 +35,7 @@ Design constraints:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -68,7 +69,28 @@ _READ_ONLY_TOOLS: frozenset[str] = frozenset({
 
 
 def _looks_like_path(value: object) -> bool:
-    return isinstance(value, str) and "/" in value
+    # Windows: ``C:\Users\...\forge\x`` carries no "/" and was never inspected.
+    return isinstance(value, str) and ("/" in value or (_IS_WIN and "\\" in value))
+
+
+_IS_WIN = os.name == "nt"
+
+
+def _win_fold(path_str: str) -> str:
+    """Windows only: the spelling NTFS actually opens. Separators to "/",
+    case-folded, and per component the trailing dots/spaces and ``:stream``
+    suffix Win32 drops (``AUDIT.JSONL.``, ``policy.json::$DATA`` and
+    an upper-case ``FORGE`` dir all name the protected entry there)."""
+    s = path_str.replace("\\", "/").lower()
+    drive = ""
+    if len(s) >= 2 and s[1] == ":" and s[0].isalpha():
+        drive, s = s[:2], s[2:]
+    parts = []
+    for c in s.split("/"):
+        if c not in (".", ".."):
+            c = c.split(":", 1)[0].rstrip(" .") or c
+        parts.append(c)
+    return drive + "/".join(parts)
 
 
 def _is_protected(path_str: str) -> tuple[bool, str]:
@@ -77,6 +99,8 @@ def _is_protected(path_str: str) -> tuple[bool, str]:
     Fails CLOSED on any exception: an unreadable path is treated as
     potentially protected so it is denied rather than silently allowed.
     """
+    if _IS_WIN:
+        path_str = _win_fold(path_str)
     try:
         p = PurePosixPath(path_str)
     except Exception as exc:

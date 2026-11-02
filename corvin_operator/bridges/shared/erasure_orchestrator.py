@@ -636,7 +636,7 @@ class ErasureOrchestrator:
         fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            with open(tmp, "w", opener=lambda p, f: os.open(p, f, 0o600)) as fh:
+            with open(tmp, "w", opener=lambda p, f: os.open(p, f, 0o600), encoding="utf-8") as fh:
                 fh.write(json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n")
             os.replace(tmp, path)
         finally:

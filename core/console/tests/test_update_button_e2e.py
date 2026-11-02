@@ -24,9 +24,9 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="fake updater is
 def _tree(tmp_path: Path, script_body: str, version: str = "1.0.0") -> Path:
     src = tmp_path / "src"
     src.mkdir()
-    (src / "pyproject.toml").write_text(f'[project]\nname = "corvinos"\nversion = "{version}"\n')
-    (src / "update.sh").write_text(script_body)
-    (src / "update.ps1").write_text("")
+    (src / "pyproject.toml").write_text(f'[project]\nname = "corvinos"\nversion = "{version}"\n', encoding="utf-8")
+    (src / "update.sh").write_text(script_body, encoding="utf-8")
+    (src / "update.ps1").write_text("", encoding="utf-8")
     return src
 
 
@@ -70,7 +70,7 @@ async def test_start_update_runs_script_and_records_last_update(tmp_path, monkey
         res = mgr.start_update("sidfp")
         assert res["success"] is True
         await _wait_unlocked(mgr)
-    assert (src / "ran.txt").read_text().strip() == "ran"
+    assert (src / "ran.txt").read_text(encoding="utf-8").strip() == "ran"
     last = mgr.last_update("1.0.0")
     # exit 0 alone proves nothing: the script reported no delivery / UI build / verification
     assert last["status"] == "unverified" and before <= last["at"] <= time.time()
@@ -103,7 +103,7 @@ async def test_second_start_while_running_is_refused(tmp_path, monkeypatch):
 
 def test_run_cut_off_by_restart_is_never_called_a_success_from_the_version(tmp_path):
     state = tmp_path / "state.json"
-    state.write_text(json.dumps({"status": "running", "started_at": 1000.0, "version_before": "1.0.0"}))
+    state.write_text(json.dumps({"status": "running", "started_at": 1000.0, "version_before": "1.0.0"}), encoding="utf-8")
     mgr = UpdateManager("_default", state_path=state)
     # a changed version number is no proof any more - nothing was verified
     assert mgr.last_update("2.0.0", tmp_path)["status"] == "interrupted"
@@ -114,9 +114,9 @@ def test_verification_that_lands_after_the_cut_off_verdict_is_folded_in(tmp_path
     state = tmp_path / "state.json"
     state.write_text(json.dumps({
         "status": "interrupted", "phase": "failed", "started_at": 1000.0, "finished_at": 1100.0,
-        "exit_code": None, "steps": {"verification": {"status": "running", "at": 1100.0, "detail": None}}}))
+        "exit_code": None, "steps": {"verification": {"status": "running", "at": 1100.0, "detail": None}}}), encoding="utf-8")
     (tmp_path / "update_progress.jsonl").write_text(
-        json.dumps({"phase": "verification", "status": "ok", "detail": "", "ts": 1103}) + "\n")
+        json.dumps({"phase": "verification", "status": "ok", "detail": "", "ts": 1103}) + "\n", encoding="utf-8")
     last = UpdateManager("_default", state_path=state).last_update("2.0.0", tmp_path)
     assert last["steps"]["verification"]["status"] == "ok"
     assert last["checks"]["verified"] is True
@@ -164,7 +164,7 @@ def client(tmp_path, monkeypatch):
 def test_route_check_reports_last_update(client, tmp_path):
     (tmp_path / "state.json").write_text(json.dumps(
         {"status": "success", "started_at": 1.0, "finished_at": 1700000000.0,
-         "version_before": "1.0.0", "version_after": "1.1.0"}))
+         "version_before": "1.0.0", "version_after": "1.1.0"}), encoding="utf-8")
     r = client.get("/settings/update/check")
     assert r.status_code == 200
     body = r.json()
@@ -189,7 +189,7 @@ class TestAutoUpdateDefault:
 
     def test_default_is_true_when_key_absent(self, client, tmp_path):
         cfg = tmp_path / "c.json"
-        cfg.write_text("{}")
+        cfg.write_text("{}", encoding="utf-8")
         with patch("corvin_console.routes.settings._launcher_config_path", return_value=cfg):
             assert client.get("/settings/auto-update").json()["enabled"] is True
 

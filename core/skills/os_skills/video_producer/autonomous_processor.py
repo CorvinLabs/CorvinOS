@@ -68,7 +68,7 @@ def _ffprobe(path: str) -> Dict[str, Any]:
     proc = subprocess.run(
         ["ffprobe", "-v", "error", "-print_format", "json",
          "-show_format", "-show_streams", str(path)],
-        capture_output=True, text=True, timeout=_PROBE_TIMEOUT_S, check=False,
+        capture_output=True, text=True, timeout=_PROBE_TIMEOUT_S, check=False, encoding="utf-8", errors="replace",
     )
     if proc.returncode != 0:
         raise RuntimeError(f"ffprobe exited {proc.returncode}")

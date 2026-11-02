@@ -204,7 +204,7 @@ class MinimalFlowRunner:
         """SSH to Hetzner worker — simulates A2A TaskEnvelope dispatch."""
         safe_task = task.replace("'", "'\\''")[:200]
         cmd = HETZNER_SSH + [f"echo '[hetzner-eu] processed: {safe_task}'"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace")
         if result.returncode != 0:
             raise RuntimeError(f"Remote execution failed: {result.stderr}")
         return result.stdout.strip()
@@ -452,7 +452,7 @@ class TestFlowRunManifest:
             step_id="a",
             output_sha256_prefix=_sha256_prefix(secret_output),
         )
-        raw = m._path.read_text()
+        raw = m._path.read_text(encoding="utf-8")
         assert secret_output not in raw
         assert _sha256_prefix(secret_output) in raw
 
@@ -603,7 +603,7 @@ class TestHetznerTwoNodeFlow:
         """Precondition: SSH to Hetzner worker succeeds."""
         result = subprocess.run(
             HETZNER_SSH + ["echo corvin-ok"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, f"SSH failed: {result.stderr}"
         assert "corvin-ok" in result.stdout
@@ -703,7 +703,7 @@ class TestHetznerTwoNodeFlow:
         remote_cmd = f"echo {b64} | base64 -d | python3"
         result = subprocess.run(
             HETZNER_SSH + [remote_cmd],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, f"Remote check failed: {result.stderr}"
         assert "PASS" in result.stdout, f"Remote enforcement failed: {result.stdout}"

@@ -39,7 +39,7 @@ class GitHubCache:
             return None
 
         try:
-            data = json.load(open(path))
+            data = json.load(open(path, encoding="utf-8"))
             cached_at = data.get("_cached_at", 0)
             age_seconds = time.time() - cached_at
 
@@ -63,7 +63,7 @@ class GitHubCache:
             "manifest": manifest
         }
         try:
-            json.dump(data, open(path, "w"), indent=2)
+            json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
             logger.info(f"GitHub cache WRITE: {repo}")
         except Exception as e:
             logger.warning(f"Cache write error: {e}")

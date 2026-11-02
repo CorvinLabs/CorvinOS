@@ -326,7 +326,7 @@ class ComplianceDriftAttackVector:
             # Check CLAUDE.md rules still enforced
             claudemd_path = Path("/home/shumway/projects/CorvinOS/CLAUDE.md")
             if claudemd_path.exists():
-                content = claudemd_path.read_text()
+                content = claudemd_path.read_text(encoding="utf-8")
 
                 # Look for critical compliance rules
                 rules = [

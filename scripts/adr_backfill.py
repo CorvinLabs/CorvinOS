@@ -134,7 +134,7 @@ def _has_frontmatter(text: str) -> bool:
 def _dirty_paths(repo: Path) -> set[str]:
     proc = subprocess.run(
         ["git", "status", "--short", "decisions/"],
-        cwd=repo, capture_output=True, text=True, timeout=10,
+        cwd=repo, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
     )
     dirty = set()
     for line in proc.stdout.splitlines():
@@ -191,7 +191,7 @@ def _extract_commits(adr_id: str, corvin_repo: Path) -> list[str]:
         proc = subprocess.run(
             ["git", "log", f"--grep={adr_id}", "--fixed-strings",
              "--format=%H", "--max-count=20"],
-            cwd=corvin_repo, capture_output=True, text=True, timeout=15,
+            cwd=corvin_repo, capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []

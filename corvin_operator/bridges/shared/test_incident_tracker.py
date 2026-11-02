@@ -94,7 +94,7 @@ class TestOpenIncident:
         p = tmp_corvin_home / "tenants" / "test_tenant" / "global" / "incidents" / f"{r.incident_id}.json"
         assert p.exists()
         assert oct(p.stat().st_mode & 0o777) == oct(0o600)
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
         assert data["incident_id"] == r.incident_id
         assert data["status"] == "open"
         assert data["severity"] == "serious"
@@ -109,7 +109,7 @@ class TestOpenIncident:
         )
         audit_path = tmp_corvin_home / "audit.jsonl"
         if audit_path.exists():
-            content = audit_path.read_text()
+            content = audit_path.read_text(encoding="utf-8")
             assert "SENSITIVE DESCRIPTION" not in content
 
     def test_hash_truncated(self, tracker, tmp_corvin_home):

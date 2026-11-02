@@ -155,7 +155,7 @@ class TestVibeDashboardIntegration:
         )
 
         # Verify component exists and contains endpoint
-        with open(tab_path, 'r') as f:
+        with open(tab_path, 'r', encoding="utf-8") as f:
             content = f.read()
             assert "/v1/licensing/audit-events" in content
             assert "fetch" in content
@@ -168,7 +168,7 @@ class TestVibeDashboardIntegration:
             "../../core/console/corvin_console/web-next/src/pages/vibe-engineering/tabs/MonitoringTab.tsx"
         )
 
-        with open(tab_path, 'r') as f:
+        with open(tab_path, 'r', encoding="utf-8") as f:
             content = f.read()
             assert "/v1/monitoring/metrics" in content
 
@@ -180,7 +180,7 @@ class TestVibeDashboardIntegration:
             "../../core/console/corvin_console/web-next/src/pages/vibe-engineering/tabs/ModelsTab.tsx"
         )
 
-        with open(tab_path, 'r') as f:
+        with open(tab_path, 'r', encoding="utf-8") as f:
             content = f.read()
             assert "/v1/models/available" in content
 

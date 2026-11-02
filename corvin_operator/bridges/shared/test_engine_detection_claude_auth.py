@@ -56,7 +56,7 @@ class ClaudeCodeAuthDetectionTests(unittest.TestCase):
 
     def _write_settings_env(self, env: dict) -> None:
         os.environ["CLAUDE_CONFIG_DIR"] = self._tmp.name
-        Path(self._tmp.name, "settings.json").write_text(json.dumps({"env": env}))
+        Path(self._tmp.name, "settings.json").write_text(json.dumps({"env": env}), encoding="utf-8")
 
     def _probe(self):
         # probe_claude_code() first requires the `claude` binary to be

@@ -178,7 +178,7 @@ class TestYouTubeUploaderPhase4a:
             record_path = uploader.upload_dir / f"{task_id}.json"
             assert record_path.exists()
 
-            with open(record_path) as f:
+            with open(record_path, encoding="utf-8") as f:
                 record = json.load(f)
 
             assert record["task_id"] == task_id
@@ -221,7 +221,7 @@ class TestYouTubeUploaderPhase4a:
             }
 
             record_path = uploader.upload_dir / f"{task_id}.json"
-            with open(record_path, "w") as f:
+            with open(record_path, "w", encoding="utf-8") as f:
                 json.dump(record, f)
 
             # Clear active_uploads to force disk read
@@ -397,7 +397,7 @@ class TestYouTubeUploaderPhase4a:
             record_path = uploader.upload_dir / f"{task_id}.json"
             assert record_path.exists()
 
-            with open(record_path) as f:
+            with open(record_path, encoding="utf-8") as f:
                 record = json.load(f)
 
             assert record["status"] == "completed"

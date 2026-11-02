@@ -25,7 +25,7 @@ def load_existing_keys() -> dict[str, str]:
     result: dict[str, str] = {}
     if not ENV_FILE.is_file() or ENV_FILE.stat().st_size == 0:
         return result
-    for line in ENV_FILE.read_text().splitlines():
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         if "=" not in line or line.startswith("#"):
             continue
         key, _, val = line.partition("=")
@@ -153,7 +153,7 @@ def _validate_openai_key(key: str) -> int:
             ],
             capture_output=True,
             text=True,
-            check=False,
+            check=False, encoding="utf-8", errors="replace",
         )
         http = result.stdout.strip()
         if http == "200":
@@ -198,6 +198,6 @@ def _ensure_restrictive_mode(path: Path) -> None:
 def _upsert(path: Path, key: str, value: str) -> None:
     """Set or replace KEY=VALUE in an env file, atomically."""
     _ensure_restrictive_mode(path)
-    existing = [l for l in path.read_text().splitlines() if not l.startswith(f"{key}=")]
+    existing = [l for l in path.read_text(encoding="utf-8").splitlines() if not l.startswith(f"{key}=")]
     existing.append(f"{key}={value}")
-    path.write_text("\n".join(existing) + "\n")
+    path.write_text("\n".join(existing) + "\n", encoding="utf-8")

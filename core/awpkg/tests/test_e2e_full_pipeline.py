@@ -359,7 +359,7 @@ class TestFullPipelineInstall:
         for skill_name in ("data_analysis", "report_writing", "quality_assessment"):
             meta_file = sf_root / skill_name / "meta.json"
             assert meta_file.exists(), f"meta.json missing for {skill_name}"
-            meta = json.loads(meta_file.read_text())
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
             assert meta["scope"] == "user"
             assert "com.corvin.sales-report-generator" in meta["source"]
 
@@ -380,7 +380,7 @@ class TestWorkflowSimulator:
         pkg = _build_fixture_pkg(tmp_path)
         installed = _install_and_register(pkg, home)
         tool_file = installed.install_dir / "tools" / "code_csv_stats.json"
-        code = json.loads(tool_file.read_text())["code"]
+        code = json.loads(tool_file.read_text(encoding="utf-8"))["code"]
         result = _exec_tool(code, {"csv_data": SAMPLE_CSV})
         assert result["row_count"] == 5
         assert "units" in result["stats"]
@@ -397,7 +397,7 @@ class TestWorkflowSimulator:
             "revenue": {"count": 5, "mean": 3015.0, "min": 750.0, "max": 6000.0, "total": 15075.0},
         }
         tool_file = installed.install_dir / "tools" / "code_md_report.json"
-        code = json.loads(tool_file.read_text())["code"]
+        code = json.loads(tool_file.read_text(encoding="utf-8"))["code"]
         result = _exec_tool(code, {"stats": stats, "row_count": 5})
         md = result["markdown"]
         assert "# Sales Report" in md
@@ -411,7 +411,7 @@ class TestWorkflowSimulator:
         installed = _install_and_register(pkg, home)
         md = "# Sales Report\n\n## Column Statistics\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n## Summary\n\nFive records."
         tool_file = installed.install_dir / "tools" / "code_score_report.json"
-        code = json.loads(tool_file.read_text())["code"]
+        code = json.loads(tool_file.read_text(encoding="utf-8"))["code"]
         result = _exec_tool(code, {"markdown": md})
         assert result["score"] >= 70
         assert result["passed"] is True
@@ -549,8 +549,8 @@ class TestSelfContainedRoundTrip:
             file_a = home_a / "forge" / "tools" / "user" / tool_name / "tool.json"
             file_b = home_b / "forge" / "tools" / "user" / tool_name / "tool.json"
             assert file_a.exists() and file_b.exists()
-            data_a = json.loads(file_a.read_text())
-            data_b = json.loads(file_b.read_text())
+            data_a = json.loads(file_a.read_text(encoding="utf-8"))
+            data_b = json.loads(file_b.read_text(encoding="utf-8"))
             assert data_a["code"] == data_b["code"], (
                 f"{tool_name}: tool code differs between home_a and home_b"
             )
@@ -572,7 +572,7 @@ class TestSelfContainedRoundTrip:
             file_a = home_a / "skill-forge" / "skills" / "user" / skill_name / "SKILL.md"
             file_b = home_b / "skill-forge" / "skills" / "user" / skill_name / "SKILL.md"
             assert file_a.exists() and file_b.exists()
-            assert file_a.read_text() == file_b.read_text(), (
+            assert file_a.read_text(encoding="utf-8") == file_b.read_text(encoding="utf-8"), (
                 f"{skill_name}: SKILL.md content differs between home_a and home_b"
             )
 

@@ -55,7 +55,7 @@ class TestSaveKeysPermissions:
     def test_narrows_mode_of_a_preexisting_permissive_file_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / "service.env"
-            env_file.write_text("")
+            env_file.write_text("", encoding="utf-8")
             env_file.chmod(0o644)  # simulate a leftover permissive file
             assert _mode(env_file) == 0o644
 
@@ -69,7 +69,7 @@ class TestSaveKeysPermissions:
             repo_root = Path(tmp) / "repo"
             repo_root.mkdir()
             example = repo_root / ".env.example"
-            example.write_text("OPENAI_API_KEY=\n")
+            example.write_text("OPENAI_API_KEY=\n", encoding="utf-8")
             example.chmod(0o644)
 
             env_file = Path(tmp) / "service.env"

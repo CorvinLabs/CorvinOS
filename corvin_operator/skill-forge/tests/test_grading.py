@@ -159,7 +159,7 @@ def test_grade_audit_chain():
         r.grade("z", "r1", 0.6, organic=True)
         r.grade("z", "r2", 0.8, organic=True)
         audit = r.audit_path()
-        events = [json.loads(l) for l in audit.read_text().splitlines() if l.strip()]
+        events = [json.loads(l) for l in audit.read_text(encoding="utf-8").splitlines() if l.strip()]
         actions = [e["event_type"] for e in events]
         t("create + 2 grade events present",
           actions.count("skill.create") == 1 and actions.count("skill.grade") == 2,
@@ -176,7 +176,7 @@ def test_grade_meta_json_synced():
                  description="d", claim={})
         r.grade("m", "r1", 0.3, notes="needs work", organic=True)
         meta_path = Path(td) / "skill-forge" / "skills" / "m" / "meta.json"
-        meta = json.loads(meta_path.read_text())
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
         t("meta.json contains grade",
           len(meta["grades"]) == 1 and meta["grades"][0]["run_id"] == "r1")
         t("notes round-trip", meta["grades"][0]["notes"] == "needs work")

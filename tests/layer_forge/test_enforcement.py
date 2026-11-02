@@ -9,7 +9,7 @@ def test_no_host_awareness_declared_is_skipped(tmp_path):
 
 
 def test_source_tree_path_exists_passes_when_no_cross_check(tmp_path):
-    (tmp_path / "real_file.py").write_text("x = 1")
+    (tmp_path / "real_file.py").write_text("x = 1", encoding="utf-8")
     manifest = {
         "host_awareness": {
             "source_tree": {"paths": ["real_file.py"]},
@@ -37,7 +37,7 @@ def test_source_tree_path_missing_fails(tmp_path):
 def test_cross_check_without_runtime_host_is_skipped_not_passed(tmp_path):
     """Load-bearing: on a repo-only checkout (no /opt/corvin), the runtime half
     of the cross-check must be SKIPPED, never silently treated as PASS."""
-    (tmp_path / "real_file.py").write_text("x = 1")
+    (tmp_path / "real_file.py").write_text("x = 1", encoding="utf-8")
     manifest = {
         "host_awareness": {
             "source_tree": {"paths": ["real_file.py"]},
@@ -55,7 +55,7 @@ def test_gate_with_no_collected_tests_is_error_not_pass(tmp_path):
     from core.orchestration.layer_forge.gate_runner import QualityGateRunner
 
     (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_empty.py").write_text("x = 1\n")
+    (tmp_path / "tests" / "test_empty.py").write_text("x = 1\n", encoding="utf-8")
     verdict = QualityGateRunner(tmp_path).run_gate("g", "tests/test_empty.py")
     assert verdict.status == "ERROR"
     assert verdict.detail == "pytest exit 5"

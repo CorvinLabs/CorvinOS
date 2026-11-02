@@ -54,7 +54,7 @@ def _chain(tenant="_default"):
     path = fp.tenant_audit_chain(tenant)
     if not path.exists():
         return [], (True, []), path
-    recs = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return recs, se.verify_chain(path), path
 
 
@@ -149,9 +149,9 @@ class TestF002StatePersistence:
         orch = MasterRolloutOrchestrator()
         orch.state.base_state.day_number = 10
         assert orch._save_state()
-        data = json.loads(orch.STATE_FILE.read_text())
+        data = json.loads(orch.STATE_FILE.read_text(encoding="utf-8"))
         data["base_state"]["phase"] = "PHASE_2B_SKILL_PRIMARY"  # forged promotion
-        orch.STATE_FILE.write_text(json.dumps(data))
+        orch.STATE_FILE.write_text(json.dumps(data), encoding="utf-8")
 
         orch2 = MasterRolloutOrchestrator()
         assert orch2.state.base_state.phase == Phase.PHASE_1_SHADOW
@@ -176,11 +176,11 @@ class TestF009TenantChain:
         orch.advance_day(_metrics())
         orch.advance_day(_metrics())
         _, _, path = _chain()
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[-2])
         rec["details"]["day"] = 99
         lines[-2] = json.dumps(rec)
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         ok, issues = orch.verify_audit_chain()
         assert not ok and issues
 

@@ -36,7 +36,7 @@ class TestDeadCodeDetector:
 import os  # Unused
 import sys  # Used
 print(sys.version)
-"""
+""", encoding="utf-8"
             )
 
             # File 2: Unreachable function
@@ -49,7 +49,7 @@ def unused_function():
     return 99
 
 result = called_function()
-"""
+""", encoding="utf-8"
             )
 
             # File 3: Orphaned class
@@ -62,7 +62,7 @@ class UnusedClass:
     pass
 
 obj = UsedClass()
-"""
+""", encoding="utf-8"
             )
 
             # File 4: Unused variable
@@ -71,7 +71,7 @@ obj = UsedClass()
 used_var = 42
 unused_var = 99
 print(used_var)
-"""
+""", encoding="utf-8"
             )
 
             # File 5: Complex patterns (private names shouldn't be reported)
@@ -91,7 +91,7 @@ def used_public_func():
     return 42
 
 result = used_public_func()
-"""
+""", encoding="utf-8"
             )
 
             yield tmpdir_path
@@ -216,7 +216,7 @@ result = used_public_func()
                 """
 def broken_function(
     # Missing closing paren and function body
-"""
+""", encoding="utf-8"
             )
 
             detector = DeadCodeDetector(tmpdir_path)
@@ -244,7 +244,7 @@ def broken_function(
             # Create a large file
             large_code = "\n".join([f"var_{i} = {i}" for i in range(1000)])
             large_code += "\nprint(var_0)\n"
-            (tmpdir_path / "large.py").write_text(large_code)
+            (tmpdir_path / "large.py").write_text(large_code, encoding="utf-8")
 
             detector = DeadCodeDetector(tmpdir_path)
             report = detector.scan()
@@ -284,7 +284,7 @@ used_var = 99
 obj = MyClass()
 result = my_function()
 print(sys.version, used_var, result, obj)
-"""
+""", encoding="utf-8"
             )
 
             detector = DeadCodeDetector(tmpdir_path)
@@ -350,7 +350,7 @@ def func2():
 
 x = func2()
 print(x)
-"""
+""", encoding="utf-8"
             )
 
             detector = DeadCodeDetector(tmpdir_path)
@@ -375,7 +375,7 @@ print(x)
         """Parametrized test for various dead code patterns."""
         with TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-            (tmpdir_path / "test.py").write_text(code)
+            (tmpdir_path / "test.py").write_text(code, encoding="utf-8")
 
             detector = DeadCodeDetector(tmpdir_path)
             report = detector.scan()

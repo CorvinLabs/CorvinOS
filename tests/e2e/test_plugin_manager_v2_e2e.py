@@ -71,7 +71,7 @@ class TestPluginManagerE2ELifecycle:
         assert plugin_path.exists()
 
         manifest_path = plugin_path / "manifest.json"
-        with open(manifest_path, "r") as f:
+        with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
             assert manifest["plugin_id"] == "marketplace.acme.example-plugin"
             assert manifest["enabled"] is True

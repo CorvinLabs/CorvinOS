@@ -60,7 +60,7 @@ def _tmpfile() -> Path:
 
 
 def _read_last(path: Path) -> dict:
-    lines = [l.strip() for l in path.read_text().splitlines() if l.strip()]
+    lines = [l.strip() for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
     return json.loads(lines[-1])
 
 
@@ -322,7 +322,7 @@ class TestM3VerifyChainSigChecks(unittest.TestCase):
         self._write_signed_event()
 
         # Tamper with the sig: flip one char
-        lines = self.path.read_text().splitlines()
+        lines = self.path.read_text(encoding="utf-8").splitlines()
         last = json.loads(lines[-1])
         self.assertIn("instance_sig", last,
                       "instance_sig must be present in written record")
@@ -334,7 +334,7 @@ class TestM3VerifyChainSigChecks(unittest.TestCase):
         bad_first = "B" if orig_first != "B" else "C"
         bad_sig = bad_first + last["instance_sig"][1:]
         last["instance_sig"] = bad_sig
-        self.path.write_text("\n".join(lines[:-1] + [json.dumps(last)]) + "\n")
+        self.path.write_text("\n".join(lines[:-1] + [json.dumps(last)]) + "\n", encoding="utf-8")
 
         # Set the flag directly on the active module object to avoid stale-reference issues.
         se._VERIFY_SIGS = True
@@ -355,10 +355,10 @@ class TestM3VerifyChainSigChecks(unittest.TestCase):
         self._write_signed_event()
 
         # Corrupt the sig — verify_chain should not catch it when flag is off
-        lines = self.path.read_text().splitlines()
+        lines = self.path.read_text(encoding="utf-8").splitlines()
         last = json.loads(lines[-1])
         last["instance_sig"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        self.path.write_text("\n".join(lines[:-1] + [json.dumps(last)]) + "\n")
+        self.path.write_text("\n".join(lines[:-1] + [json.dumps(last)]) + "\n", encoding="utf-8")
 
         set_verify_sigs(False)
         with mock.patch.dict("sys.modules", {
@@ -376,10 +376,10 @@ class TestM3VerifyChainSigChecks(unittest.TestCase):
         self._write_signed_event()
 
         # Replace instance_id with a foreign one so verify cannot look up the pubkey
-        lines = self.path.read_text().splitlines()
+        lines = self.path.read_text(encoding="utf-8").splitlines()
         last = json.loads(lines[-1])
         last["instance_id"] = "foreign-instance-id-9999"
-        self.path.write_text("\n".join(lines[:-1] + [json.dumps(last)]) + "\n")
+        self.path.write_text("\n".join(lines[:-1] + [json.dumps(last)]) + "\n", encoding="utf-8")
 
         set_verify_sigs(True)
         with mock.patch.dict("sys.modules", {

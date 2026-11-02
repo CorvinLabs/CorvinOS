@@ -54,7 +54,7 @@ class InstanceRegistry:
         """Load instances from registry file."""
         if self.registry_path.exists():
             try:
-                with open(self.registry_path) as f:
+                with open(self.registry_path, encoding="utf-8") as f:
                     data = json.load(f)
                     for inst_data in data.get("instances", []):
                         inst = CorvinInstance(**inst_data)
@@ -66,7 +66,7 @@ class InstanceRegistry:
     def _save_instances(self):
         """Persist instances to registry file."""
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.registry_path, "w") as f:
+        with open(self.registry_path, "w", encoding="utf-8") as f:
             json.dump({
                 "updated_at": datetime.utcnow().isoformat(),
                 "instances": [asdict(inst) for inst in self._instances.values()],

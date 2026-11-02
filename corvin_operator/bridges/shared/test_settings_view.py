@@ -61,7 +61,7 @@ class _SettingsTestBase(unittest.TestCase):
         self._settings_path = self._chan_dir / "settings.json"
         # Write a minimal non-empty settings file so _read_channel_settings
         # returns a truthy dict and the bridge shows as ✓ in _bridges_summary.
-        self._settings_path.write_text(json.dumps({"enabled": True}))
+        self._settings_path.write_text(json.dumps({"enabled": True}), encoding="utf-8")
         # Seed persona dir + minimal coder + research persona.
         self._persona_dir = Path(self._tmp) / "personas-test"
         self._persona_dir.mkdir()
@@ -70,14 +70,14 @@ class _SettingsTestBase(unittest.TestCase):
             "description": "default engineering persona",
             "permission_mode": "bypassPermissions",
             "add_dirs": ["/home/test/projects/foo"],
-        }))
+        }), encoding="utf-8")
         (self._persona_dir / "research.json").write_text(json.dumps({
             "name": "research",
             "permission_mode": "default",
             "working_dir": "/home/test/research",
             "add_dirs": ["/home/test/research/a", "/home/test/research/b",
                          "/home/test/research/c", "/home/test/research/d"],
-        }))
+        }), encoding="utf-8")
         self._orig_persona_files = settings_view._persona_files
         settings_view._persona_files = lambda: [self._persona_dir]
 
@@ -215,7 +215,7 @@ class SystemBlockTests(_SettingsTestBase):
             legacy.mkdir(parents=True, exist_ok=True)
             # Write a non-empty dict — _read_channel_settings returns {} for
             # empty/falsy dicts, which would mark the bridge as ✗.
-            legacy_settings.write_text(json.dumps({"enabled": True}))
+            legacy_settings.write_text(json.dumps({"enabled": True}), encoding="utf-8")
         try:
             lines = settings_view.render_system_block(lang="de")
             self.assertIn("WA ✓", "\n".join(lines))
@@ -250,7 +250,7 @@ class SystemBlockTests(_SettingsTestBase):
     def test_audit_chain_present(self):
         chain = paths.tenant_global_dir() / "forge"
         chain.mkdir(parents=True, exist_ok=True)
-        (chain / "audit.jsonl").write_text('{"a":1}\n')
+        (chain / "audit.jsonl").write_text('{"a":1}\n', encoding="utf-8")
         lines = settings_view.render_system_block(lang="de")
         self.assertIn("present", "\n".join(lines))
 
@@ -303,7 +303,7 @@ class CliTests(_SettingsTestBase):
         r = subprocess.run(
             [sys.executable, str(script), "render", CHANNEL, CHAT,
              "--lang", "de"],
-            env=env, capture_output=True, text=True, timeout=20,
+            env=env, capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace",
         )
         self.assertEqual(r.returncode, 0,
                          f"CLI failed: {r.stderr}")
@@ -314,7 +314,7 @@ class CliTests(_SettingsTestBase):
         script = Path(settings_view.__file__).resolve()
         r = subprocess.run(
             [sys.executable, str(script), "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         self.assertEqual(r.returncode, 0)
         self.assertIn("usage:", r.stdout)
@@ -323,7 +323,7 @@ class CliTests(_SettingsTestBase):
         script = Path(settings_view.__file__).resolve()
         r = subprocess.run(
             [sys.executable, str(script), "render"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         self.assertNotEqual(r.returncode, 0)
 
@@ -334,7 +334,7 @@ class CliTests(_SettingsTestBase):
         r = subprocess.run(
             [sys.executable, str(script), "render", CHANNEL, CHAT,
              "--lang", "klingon"],
-            env=env, capture_output=True, text=True, timeout=20,
+            env=env, capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace",
         )
         self.assertEqual(r.returncode, 0)
         self.assertIn("━━ WORKING / PFADE ━━", r.stdout)

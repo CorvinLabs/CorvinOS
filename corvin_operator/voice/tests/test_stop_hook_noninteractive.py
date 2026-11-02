@@ -23,7 +23,7 @@ _HOOK = Path(__file__).resolve().parents[1] / "hooks" / "stop_hook.sh"
 def _run(tmp_path: Path, entrypoint: str | None) -> str:
     cfg = tmp_path / "corvin-voice"
     cfg.mkdir()
-    (cfg / "config.json").write_text(json.dumps({"enabled": True}))
+    (cfg / "config.json").write_text(json.dumps({"enabled": True}), encoding="utf-8")
     transcript = tmp_path / "t.jsonl"  # never reached when the guard fires
     env = {
         "PATH": os.environ["PATH"],
@@ -35,10 +35,10 @@ def _run(tmp_path: Path, entrypoint: str | None) -> str:
     proc = subprocess.run(
         ["bash", str(_HOOK)],
         input=json.dumps({"transcript_path": str(transcript)}),
-        env=env, capture_output=True, text=True, timeout=30,
+        env=env, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0
-    return (cfg / "voice.log").read_text()
+    return (cfg / "voice.log").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("entrypoint", ["sdk-cli", "sdk-ts", "sdk-py"])
@@ -62,12 +62,12 @@ def test_voice_cfg_honours_an_explicit_false(tmp_path, value, expected):
     """jq's ``// empty`` read ``false`` as unset, so the default ``true`` won."""
     cfg = tmp_path / "corvin-voice"
     cfg.mkdir()
-    (cfg / "config.json").write_text('{"enabled": %s}' % value)
+    (cfg / "config.json").write_text('{"enabled": %s}' % value, encoding="utf-8")
     out = subprocess.run(
         ["bash", "-c", f'source "{_LIB}"; voice_cfg .enabled true'],
         env={"PATH": os.environ["PATH"], "HOME": str(tmp_path),
              "XDG_CONFIG_HOME": str(tmp_path)},
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
     )
     assert out.stdout == expected
 
@@ -76,14 +76,14 @@ def test_voice_cfg_honours_an_explicit_false(tmp_path, value, expected):
 def test_disabled_voice_never_launches_the_pipeline(tmp_path):
     cfg = tmp_path / "corvin-voice"
     cfg.mkdir()
-    (cfg / "config.json").write_text(json.dumps({"enabled": False}))
+    (cfg / "config.json").write_text(json.dumps({"enabled": False}), encoding="utf-8")
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path),
            "XDG_CONFIG_HOME": str(tmp_path), "CLAUDE_CODE_ENTRYPOINT": "cli"}
     proc = subprocess.run(
         ["bash", str(_HOOK)], input=json.dumps({"transcript_path": str(tmp_path / "t")}),
-        env=env, capture_output=True, text=True, timeout=30,
+        env=env, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0
-    log = (cfg / "voice.log").read_text()
+    log = (cfg / "voice.log").read_text(encoding="utf-8")
     assert "voice disabled, skipping" in log
     assert "launched pipeline" not in log

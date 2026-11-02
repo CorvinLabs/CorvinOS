@@ -350,9 +350,15 @@ def _write_hidden_launch_vbs(task_name: str, program: str, arguments: list[str])
     vbs_path = vbs_dir / f"{task_name}.vbs"
     target_cmd = " ".join([f'"{program}"', *arguments])
     vbs_escaped = target_cmd.replace('"', '""')
+    # UTF-16 with BOM: wscript.exe reads a BOM-less script as ANSI, and
+    # "ascii" raised UnicodeEncodeError for any non-ASCII profile path.
+    # PYTHONUTF8=1 goes into wscript's PROCESS environment (inherited by the
+    # child), same as install.ps1's wrapper: the service and everything it
+    # spawns must not fall back to the ANSI code page for text files.
     vbs_path.write_text(
+        'CreateObject("WScript.Shell").Environment("PROCESS")("PYTHONUTF8") = "1"' "\r\n"
         f'CreateObject("WScript.Shell").Run "{vbs_escaped}", 0, False',
-        encoding="ascii",
+        encoding="utf-16",
     )
     return vbs_path
 

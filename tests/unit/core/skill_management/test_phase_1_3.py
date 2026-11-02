@@ -36,7 +36,7 @@ def temp_tenant_with_skills(tmp_path, monkeypatch):
             "last_modified": datetime.now().isoformat(),
             "dependencies": deps.get("dependencies", [])
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
     return tenant_path
@@ -83,7 +83,7 @@ class TestDependencyResolver:
             "last_modified": datetime.now().isoformat(),
             "dependencies": [{"id": "nonexistent", "scope": "_shared"}]
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
         resolver = SkillDependencyResolver()
@@ -119,7 +119,7 @@ class TestDependencyResolver:
             "last_modified": datetime.now().isoformat(),
             "dependencies": [{"id": "skill-b", "scope": "_shared"}]
         }
-        with open(skill_a_dir / "meta.json", "w") as f:
+        with open(skill_a_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(meta_a, f)
 
         # B -> A (cycle)
@@ -133,7 +133,7 @@ class TestDependencyResolver:
             "last_modified": datetime.now().isoformat(),
             "dependencies": [{"id": "skill-a", "scope": "_shared"}]
         }
-        with open(skill_b_dir / "meta.json", "w") as f:
+        with open(skill_b_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(meta_b, f)
 
         resolver = SkillDependencyResolver()
@@ -166,7 +166,7 @@ class TestDependencyResolver:
                 "last_modified": datetime.now().isoformat(),
                 "dependencies": deps
             }
-            with open(skill_dir / "meta.json", "w") as f:
+            with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
                 json.dump(metadata, f)
 
         resolver = SkillDependencyResolver()
@@ -239,7 +239,7 @@ class TestDependencyResolver:
                 "last_modified": datetime.now().isoformat(),
                 "dependencies": deps
             }
-            with open(skill_dir / "meta.json", "w") as f:
+            with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
                 json.dump(metadata, f)
 
         resolver = SkillDependencyResolver()

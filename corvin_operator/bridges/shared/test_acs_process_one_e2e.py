@@ -100,7 +100,7 @@ def _send(adapter, inbox: Path, text: str):
     env = {"id": "msg-acs-1", "channel": "sandbox-acs", "from": "u_acs", "chat_id": "chat_acs",
            "text": text, "ts": time.time()}
     f = inbox / "msg-acs-1.json"
-    f.write_text(json.dumps(env))
+    f.write_text(json.dumps(env), encoding="utf-8")
     adapter.process_one(f, settings={"whitelist": ["u_acs"], "progress_updates": True})
 
 
@@ -143,7 +143,7 @@ def test_process_one_streams_acs_steps_to_the_outbox_and_ends_with_the_summary(s
         # /delegate forces ACS even in native mode, so the routing is not under test here.
         _send(adapter, sandbox["inbox"], "/delegate Vergleiche die Strompreise in zwei Ländern")
 
-    status_texts = [json.loads(f.read_text())["text"]
+    status_texts = [json.loads(f.read_text(encoding="utf-8"))["text"]
                     for f in sorted(sandbox["outbox"].glob("msg-acs-1_s*.json"))]
     assert any(t.startswith("🧭 Iteration 1: Manager teilt in 2 Teilaufgaben") for t in status_texts), status_texts
     assert sum(t.startswith("🤖 Worker") for t in status_texts) == 2, status_texts
@@ -155,7 +155,7 @@ def test_process_one_streams_acs_steps_to_the_outbox_and_ends_with_the_summary(s
     assert all(t.startswith(icon("done") + " Gate") for t in gate), gate
     assert not any(t.startswith(icon("failed")) for t in gate), gate
 
-    finals = [json.loads(f.read_text()) for f in sorted(sandbox["outbox"].glob("msg-acs-1_0*.json"))]
+    finals = [json.loads(f.read_text(encoding="utf-8")) for f in sorted(sandbox["outbox"].glob("msg-acs-1_0*.json"))]
     assert finals, f"no final message in {[p.name for p in sandbox['outbox'].iterdir()]}"
     body = " ".join(f.get("text", "") for f in finals)
     assert WORKER_TEXT[:40] in body
@@ -225,8 +225,8 @@ def _drive_big_data(monkeypatch, sandbox, *, parity: bool):
          patch.object(rt, "_write_audit", side_effect=lambda *a, **k: None), \
          _module_overrides(**{"license.compute_quota": quota, "acs_runtime": rt}):
         _send(adapter, sandbox["inbox"], BIG)
-    status = [json.loads(f.read_text())["text"] for f in sorted(sandbox["outbox"].glob("msg-acs-1_s*.json"))]
-    body = " ".join(json.loads(f.read_text()).get("text", "") for f in sorted(sandbox["outbox"].glob("msg-acs-1_0*.json")))
+    status = [json.loads(f.read_text(encoding="utf-8"))["text"] for f in sorted(sandbox["outbox"].glob("msg-acs-1_s*.json"))]
+    body = " ".join(json.loads(f.read_text(encoding="utf-8")).get("text", "") for f in sorted(sandbox["outbox"].glob("msg-acs-1_0*.json")))
     return status, body
 
 

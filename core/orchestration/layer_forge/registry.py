@@ -124,13 +124,13 @@ class LayerRegistry:
         path = self._path_for(entry_id, version)
         if not path.exists():
             raise LayerNotFoundError(f"{entry_id}@{version}")
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def _latest_version_manifest(self, entry_id: str) -> dict | None:
         versions = self._all_versions_of(entry_id)
         if not versions:
             return None
-        return json.loads(versions[-1].read_text())
+        return json.loads(versions[-1].read_text(encoding="utf-8"))
 
     def promote(self, entry_id: str, version: str, to_status: str) -> dict:
         self.check_transition(entry_id, version, to_status)
@@ -141,4 +141,4 @@ class LayerRegistry:
         return record
 
     def list_all(self) -> list[dict]:
-        return [json.loads(p.read_text()) for p in sorted(self.root.glob("*.json"))]
+        return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(self.root.glob("*.json"))]

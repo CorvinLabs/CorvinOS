@@ -65,7 +65,7 @@ def _install_fakes(tmp: Path, stripper_mode: str = "normal") -> tuple[Path, Path
         )
 
     fake_stripper = scripts_dir / "strip_for_tts.py"
-    fake_stripper.write_text(fake_stripper_code)
+    fake_stripper.write_text(fake_stripper_code, encoding="utf-8")
     fake_stripper.chmod(0o755)
 
     # Fake summarize.py
@@ -81,7 +81,7 @@ def _install_fakes(tmp: Path, stripper_mode: str = "normal") -> tuple[Path, Path
         f"    open({json.dumps(str(argv_dump))}, 'w').write(json.dumps(argv))\n"
         "input_text = sys.stdin.read()\n"
         "# Echo first 100 chars of input to prove it was received\n"
-        "print(f'SUMMARY[{len(input_text)} bytes]: {input_text[:100]}')\n"
+        "print(f'SUMMARY[{len(input_text)} bytes]: {input_text[:100]}')\n", encoding="utf-8"
     )
     fake_summarize.chmod(0o755)
 
@@ -114,7 +114,7 @@ def test_stripper_empty_fallback() -> None:
         assert "Test" in result, "Result should contain part of input text"
 
         # Verify summarize.py received the raw text, not empty
-        argv = json.loads(argv_dump.read_text())
+        argv = json.loads(argv_dump.read_text(encoding="utf-8"))
         # The fake summarize prints the first 100 chars and bytecount
         print(f"  Result snippet: {result[:100]}...")
         print(f"  Summarizer argv: {argv[:4]}")  # --lang de --max-chars 400
@@ -155,7 +155,7 @@ def test_summarizer_empty_fallback() -> None:
             "import json, sys\n"
             f"open({json.dumps(str(argv_dump))}, 'w').write("
             "json.dumps(sys.argv[1:]))\n"
-            "sys.stdout.write('')  # return empty\n"
+            "sys.stdout.write('')  # return empty\n", encoding="utf-8"
         )
         fake_summarize.chmod(0o755)
 
@@ -192,7 +192,7 @@ def test_degraded_fallback_marker_is_logged() -> None:
             "print('[summarize] degraded: both LLM backends unavailable — "
             "using naive_truncate (near-verbatim) structural fallback', "
             "file=sys.stderr)\n"
-            "print(input_text)  # near-verbatim passthrough, like naive_truncate\n"
+            "print(input_text)  # near-verbatim passthrough, like naive_truncate\n", encoding="utf-8"
         )
         fake_summarize.chmod(0o755)
 

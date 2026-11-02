@@ -108,7 +108,7 @@ class PauseResumeTests(unittest.TestCase):
             "workflow": {"name": "confirm_flow", "description": "test"},
             "inputs": {"chat_id": {"type": "string"}},
             "orchestration": {"engine": "dag", "graph": graph},
-        }))
+        }), encoding="utf-8")
         self.addCleanup(lambda: shutil.rmtree(tmpdir, ignore_errors=True))
         return str(path)
 
@@ -160,7 +160,7 @@ class PauseResumeTests(unittest.TestCase):
         written = set(glob.glob(str(_outbox_dir() / "wf_msg_*.json"))) - self._outbox_before
         self.assertEqual(len(written), 1, "ask_human must write exactly one outbox message")
         import json
-        envelope = json.loads(Path(next(iter(written))).read_text())
+        envelope = json.loads(Path(next(iter(written))).read_text(encoding="utf-8"))
         self.assertEqual(envelope["chat_id"], "999")
         self.assertEqual(envelope["text"], "Proceed?")
         self.assertTrue(envelope["_workflow_ask_human"])

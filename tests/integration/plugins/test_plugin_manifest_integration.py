@@ -28,7 +28,7 @@ class TestPluginManifestRegistration:
         manifest_file = plugin_dir / "manifest.json"
 
         import json
-        manifest_file.write_text(json.dumps(valid))
+        manifest_file.write_text(json.dumps(valid), encoding="utf-8")
         assert manifest_file.exists()
 
     def test_invalid_manifest_rejected(self, isolated_plugin_env, plugin_manifest_factory):
@@ -45,7 +45,7 @@ class TestPluginManifestRegistration:
         manifest_file = plugin_dir / "manifest.json"
 
         import json
-        manifest_file.write_text(json.dumps(invalid))
+        manifest_file.write_text(json.dumps(invalid), encoding="utf-8")
 
         # Validation should fail (missing required fields)
         required_fields = ["version", "plugin_type", "display_name", "entry_point"]

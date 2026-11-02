@@ -157,7 +157,7 @@ class DataRegistry:
         directory = path.parent
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(directory))
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -225,7 +225,7 @@ class DataRegistry:
         if not path.exists():
             raise HandleNotFound(handle)
         try:
-            raw = json.loads(path.read_text())
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise HandleStoreError(
                 f"handle store entry {handle!r} is corrupt: {exc}"
@@ -261,7 +261,7 @@ class DataRegistry:
             if not f.is_file() or not f.name.endswith(".json"):
                 continue
             try:
-                raw = json.loads(f.read_text())
+                raw = json.loads(f.read_text(encoding="utf-8"))
                 out.append(DataHandle(**raw))
             except (json.JSONDecodeError, TypeError):
                 continue

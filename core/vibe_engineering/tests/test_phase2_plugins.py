@@ -38,7 +38,7 @@ def test_plugin_dir():
             }
         }
 
-        with open(tmpdir / "plugin.json", "w") as f:
+        with open(tmpdir / "plugin.json", "w", encoding="utf-8") as f:
             json.dump(manifest, f)
 
         # Create skills module
@@ -46,7 +46,7 @@ def test_plugin_dir():
 async def test_skill_func(context):
     return {"result": "test"}
 '''
-        with open(tmpdir / "skills.py", "w") as f:
+        with open(tmpdir / "skills.py", "w", encoding="utf-8") as f:
             f.write(skills_code)
 
         yield tmpdir
@@ -84,7 +84,7 @@ async def test_plugin_load_invalid_manifest(plugin_registry, tmp_path):
     bad_dir.mkdir()
 
     # Write invalid JSON
-    (bad_dir / "plugin.json").write_text("{ invalid json")
+    (bad_dir / "plugin.json").write_text("{ invalid json", encoding="utf-8")
 
     plugin = await plugin_registry.load_plugin(bad_dir)
 
@@ -120,7 +120,7 @@ async def test_plugin_skill_load_error_isolation(plugin_registry, tmp_path):
         }
     }
 
-    with open(plugin_dir / "plugin.json", "w") as f:
+    with open(plugin_dir / "plugin.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f)
 
     # Create skills module
@@ -130,7 +130,7 @@ async def good_skill(context):
 
 async def good_skill2(context):
     return {"ok": True}
-''')
+''', encoding="utf-8")
 
     plugin = await plugin_registry.load_plugin(plugin_dir)
 

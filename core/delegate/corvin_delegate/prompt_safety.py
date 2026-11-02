@@ -199,7 +199,7 @@ def _real_classifier_runner(prompt: str, timeout_s: float) -> tuple[bool, str]:
              _guard_prompt_head(prompt)],
             capture_output=True,
             text=True,
-            timeout=timeout_s,
+            timeout=timeout_s, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         return False, f"claude binary not found: {binary}"

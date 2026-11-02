@@ -99,7 +99,7 @@ class EnsureAdapterDetachedTests(unittest.TestCase):
                     pid = first["pid"]
                     pidfile = home / "run" / "adapter.pid"
                     self.assertTrue(pidfile.exists(), "pidfile must be written")
-                    self.assertEqual(pidfile.read_text().strip(), str(pid))
+                    self.assertEqual(pidfile.read_text(encoding="utf-8").strip(), str(pid))
 
                     second = bm.ensure_adapter_detached()
                     self.assertTrue(second.get("already_running"),

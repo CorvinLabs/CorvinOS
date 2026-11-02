@@ -131,7 +131,7 @@ class MaterialiseTests(unittest.TestCase):
         # Inbox file exists with the right shape.
         files = list(self.inbox.glob("*.json"))
         self.assertEqual(len(files), 1)
-        env = json.loads(files[0].read_text())
+        env = json.loads(files[0].read_text(encoding="utf-8"))
         self.assertEqual(env["channel"], "telegram")
         self.assertEqual(env["text"], "ping")
         self.assertTrue(env["_scheduled"])
@@ -273,7 +273,7 @@ class WorkflowOutboxTargetTests(unittest.TestCase):
                 reports = list(shared.glob("sched_wf_wf1_*.json"))
                 self.assertEqual(len(reports), 1,
                                  f"report not in shared outbox: {list(shared.iterdir())}")
-                env = json.loads(reports[0].read_text())
+                env = json.loads(reports[0].read_text(encoding="utf-8"))
                 self.assertEqual(env["channel"], "discord")
                 self.assertEqual(env["chat_id"], "123456")
                 # EU AI Act Art. 50 §4 — autonomous AI notification must be marked.

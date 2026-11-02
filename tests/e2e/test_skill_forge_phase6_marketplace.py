@@ -104,7 +104,7 @@ def sample_registry(temp_registry_dir):
     }
 
     registry_file = temp_registry_dir / "registry.json"
-    with open(registry_file, 'w') as f:
+    with open(registry_file, 'w', encoding="utf-8") as f:
         json.dump(registry, f)
 
     return registry_file
@@ -478,7 +478,7 @@ class TestMarketplaceEdgeCases:
     def test_empty_registry(self, temp_registry_dir):
         """Handles empty registry."""
         empty_registry = temp_registry_dir / "empty.json"
-        with open(empty_registry, 'w') as f:
+        with open(empty_registry, 'w', encoding="utf-8") as f:
             json.dump({"skills": []}, f)
 
         index = SkillMarketplaceIndex(registry_path=empty_registry)
@@ -490,7 +490,7 @@ class TestMarketplaceEdgeCases:
     def test_malformed_registry(self, temp_registry_dir):
         """Handles malformed registry gracefully."""
         bad_registry = temp_registry_dir / "bad.json"
-        with open(bad_registry, 'w') as f:
+        with open(bad_registry, 'w', encoding="utf-8") as f:
             f.write("{invalid json")
 
         index = SkillMarketplaceIndex(registry_path=bad_registry)

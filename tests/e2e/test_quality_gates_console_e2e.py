@@ -91,7 +91,7 @@ def _git(*a: str, cwd: Path) -> None:
 
 def _kb(root: Path, *a: str) -> dict:
     r = subprocess.run([sys.executable, str(root / "scripts" / "kb.py"), "--repo", str(root), *a],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, f"kb {a}: {r.stdout}{r.stderr}"
     return json.loads(r.stdout)
 
@@ -104,9 +104,9 @@ def adr_root(tmp_path, monkeypatch) -> Path:
         shutil.copy(_kb_scripts() / f, root / "scripts" / f)
     for d in ("decisions", "concepts", "implementation-plans", "ideas", "kb/_meta"):
         (root / d).mkdir(parents=True, exist_ok=True)
-    (root / "kb/_meta/sources.yaml").write_text(_SOURCES)
-    (root / "kb/audit.jsonl").write_text("")
-    (root / ".gitignore").write_text("kb/.lock\nkb/graph/\n.kb-cache/\nscripts/__pycache__/\n")
+    (root / "kb/_meta/sources.yaml").write_text(_SOURCES, encoding="utf-8")
+    (root / "kb/audit.jsonl").write_text("", encoding="utf-8")
+    (root / ".gitignore").write_text("kb/.lock\nkb/graph/\n.kb-cache/\nscripts/__pycache__/\n", encoding="utf-8")
     _git("init", "-q", "-b", "main", cwd=root)
     _git("add", "-A", cwd=root)
     _git("commit", "-q", "-m", "init", cwd=root)
@@ -114,7 +114,7 @@ def adr_root(tmp_path, monkeypatch) -> Path:
     _kb(root, "new", "decision", "--title", "A proposed decision")
     _kb(root, "new", "concept", "--title", "A working method")
     _kb(root, "new", "plan", "--title", "A plan")
-    (root / "decisions" / "ADR-0009-bad-status.md").write_text(BAD_STATUS_ADR)
+    (root / "decisions" / "ADR-0009-bad-status.md").write_text(BAD_STATUS_ADR, encoding="utf-8")
     monkeypatch.setenv("CORVIN_ADR_ROOT", str(root))
     return root
 
@@ -217,11 +217,11 @@ def test_every_verdict_equals_the_kb_checks_own_severity(client, adr_root, home)
     _wait(client, client.post(f"{BASE}/run/all").json()["run_id"])
     ref_file = adr_root.parent / "ref.json"
     subprocess.run([sys.executable, str(adr_root / "scripts" / "kb.py"), "--repo", str(adr_root),
-                    "check", "--json", str(ref_file)], capture_output=True, text=True)
-    ref = json.loads(ref_file.read_text())
+                    "check", "--json", str(ref_file)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    ref = json.loads(ref_file.read_text(encoding="utf-8"))
     rules = json.loads(subprocess.run(
         [sys.executable, "-c", "import json, kb; print(json.dumps({k: v[0] for k, v in kb.RULES.items()}))"],
-        cwd=adr_root / "scripts", capture_output=True, text=True, check=True).stdout)
+        cwd=adr_root / "scripts", capture_output=True, text=True, check=True, encoding="utf-8", errors="replace").stdout)
     sev: dict[str, set] = {}
     for rule, items in ref["issues"].items():
         for x in items:

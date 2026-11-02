@@ -334,7 +334,7 @@ class TestTrainingLoopNoAwait:
     def test_oracle_module_has_no_await_in_put_or_get(self):
         """AST check: _OracleQueue.put_nowait and _SteerQueue.get_nowait_or_none have no await."""
         oracle_src = Path(__file__).parent.parent / "corvin_compute" / "fabric" / "oracle" / "oracle.py"
-        source = oracle_src.read_text()
+        source = oracle_src.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         forbidden_awaits_in_sync_methods = []

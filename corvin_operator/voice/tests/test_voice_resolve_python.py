@@ -28,7 +28,7 @@ def fake_repo(tmp_path):
     console.mkdir(parents=True)
     calls = tmp_path / "bootstrap_calls.log"
     # A bootstrap that always fails (offline host) and counts its runs.
-    (console / "bootstrap.sh").write_text(f"echo run >> '{calls}'\nexit 1\n")
+    (console / "bootstrap.sh").write_text(f"echo run >> '{calls}'\nexit 1\n", encoding="utf-8")
     return scripts / "voice_lib.sh", calls, tmp_path
 
 
@@ -37,11 +37,11 @@ def _run(lib: Path, tmp: Path, body: str, **env) -> subprocess.CompletedProcess:
     base = {"PATH": "/usr/bin:/bin", "HOME": str(tmp), "XDG_CONFIG_HOME": str(tmp / "xdg")}
     base.update(env)
     return subprocess.run(["bash", "-c", script], env=base, capture_output=True,
-                          text=True, timeout=60)
+                          text=True, timeout=60, encoding="utf-8", errors="replace")
 
 
 def _count(calls: Path) -> int:
-    return len(calls.read_text().splitlines()) if calls.exists() else 0
+    return len(calls.read_text(encoding="utf-8").splitlines()) if calls.exists() else 0
 
 
 def test_bootstrap_runs_at_most_once_across_probes(fake_repo):
@@ -72,7 +72,7 @@ def test_no_script_resolves_python_in_a_subshell():
     offenders = [
         f"{p.name}:{i}"
         for p in sorted(scripts.glob("*.sh"))
-        for i, line in enumerate(p.read_text().splitlines(), 1)
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
         if "$(voice_resolve_python)" in line and not line.lstrip().startswith("#")
     ]
     assert offenders == []

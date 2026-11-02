@@ -35,7 +35,7 @@ _ENV = ("PATH", "ADAPTER_INBOX", "ADAPTER_OUTBOX", "CORVIN_HOME", "VOICE_AUDIT_P
 
 def _tasks(home: Path, chat: str) -> list[dict]:
     d = home / "tenants" / "_default" / "sessions" / "voice" / "discord" / chat / "tasks"
-    return [json.loads(p.read_text()) for p in d.glob("*.json")]
+    return [json.loads(p.read_text(encoding="utf-8")) for p in d.glob("*.json")]
 
 
 def test_operator_flag_reaches_the_task_list() -> None:
@@ -52,11 +52,11 @@ def test_operator_flag_reaches_the_task_list() -> None:
         os.environ["CLAUDE_CONFIG_DIR"] = str(tmp / "claude")
         bridges = tmp / "bridges"
         (bridges / "discord").mkdir(parents=True)
-        (bridges / "discord" / "settings.json").write_text(json.dumps({"whitelist": [OWNER]}))
+        (bridges / "discord" / "settings.json").write_text(json.dumps({"whitelist": [OWNER]}), encoding="utf-8")
         os.environ["ADAPTER_BRIDGES_DIR"] = str(bridges)
         # the console reads the daemon's canonical file under CORVIN_HOME
         (home / "bridges" / "discord").mkdir(parents=True)
-        (home / "bridges" / "discord" / "settings.json").write_text(json.dumps({"whitelist": [OWNER]}))
+        (home / "bridges" / "discord" / "settings.json").write_text(json.dumps({"whitelist": [OWNER]}), encoding="utf-8")
         adapter = _fresh_adapter()
 
         adapter.call_claude_streaming("rebuild the release notes", channel="discord",

@@ -84,7 +84,7 @@ def verify_audio_real(audio_files):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=5, encoding="utf-8", errors="replace",
             )
 
             if result.returncode != 0:
@@ -149,7 +149,7 @@ def create_subtitles(audio_files, narration, job_id):
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=5,
+                    timeout=5, encoding="utf-8", errors="replace",
                 )
 
                 duration = 5.0
@@ -209,7 +209,7 @@ def create_simple_video(audio_files, output_path, job_id):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=5, encoding="utf-8", errors="replace",
             )
 
             if result.returncode == 0:
@@ -220,7 +220,7 @@ def create_simple_video(audio_files, output_path, job_id):
         # Concatenate audio files using ffmpeg
         concat_file = f"/tmp/{job_id}_concat.txt"
 
-        with open(concat_file, "w") as f:
+        with open(concat_file, "w", encoding="utf-8") as f:
             for audio_file in audio_files:
                 f.write(f"file '{audio_file}'\n")
 
@@ -243,7 +243,7 @@ def create_simple_video(audio_files, output_path, job_id):
         ]
 
         print(f"  Running FFmpeg...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"  ✗ FFmpeg failed: {result.stderr[:200]}")
@@ -268,7 +268,7 @@ def create_simple_video(audio_files, output_path, job_id):
             ],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=5, encoding="utf-8", errors="replace",
         )
 
         if result.returncode == 0:
@@ -363,7 +363,7 @@ def main():
             ],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=10, encoding="utf-8", errors="replace",
         )
 
         if result.returncode == 0:

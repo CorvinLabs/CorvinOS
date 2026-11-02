@@ -69,11 +69,11 @@ class LearnerAuditFirstTests(unittest.TestCase):
 
     def _history_file(self, tenant: str = "_default") -> dict:
         p = CP._stats_path(tenant)
-        return json.loads(p.read_text()) if p.exists() else {}
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
     def _chain_lines(self, tenant: str = "_default") -> int:
         p = Path(self._tmp.name) / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
-        return sum(1 for _ in p.open()) if p.exists() else 0
+        return sum(1 for _ in p.open(encoding="utf-8")) if p.exists() else 0
 
     # ── happy path: the chain gets the record, then the learner persists ──
 

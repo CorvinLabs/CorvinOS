@@ -51,7 +51,7 @@ def test_ttl_is_clamped():
 
 
 def test_corrupt_store_is_failclosed(tmp_path):
-    ac._path("_default").write_text("{not json")
+    ac._path("_default").write_text("{not json", encoding="utf-8")
     assert ac.active("_default") is False
 
 
@@ -96,14 +96,14 @@ def test_attach_consent_reclamps_crafted_far_future_expiry(tmp_path):
     import json, time as _t
     # far-future expiry but granted_at well past the 12h ceiling → dead.
     ac._path("_default").write_text(json.dumps(
-        {"expires_at": 9e12, "granted_at": _t.time() - (13 * 3600), "revoked": False}))
+        {"expires_at": 9e12, "granted_at": _t.time() - (13 * 3600), "revoked": False}), encoding="utf-8")
     assert ac.active("_default") is False
     # no granted_at at all → cannot prove it is within the ceiling → fail-closed.
-    ac._path("_default").write_text(json.dumps({"expires_at": 9e12, "revoked": False}))
+    ac._path("_default").write_text(json.dumps({"expires_at": 9e12, "revoked": False}), encoding="utf-8")
     assert ac.active("_default") is False
     # a fresh grant with far-future expiry is capped but still active.
     ac._path("_default").write_text(json.dumps(
-        {"expires_at": 9e12, "granted_at": _t.time(), "revoked": False}))
+        {"expires_at": 9e12, "granted_at": _t.time(), "revoked": False}), encoding="utf-8")
     st = ac.status("_default")
     assert st["active"] is True and 0 < st["remaining_s"] <= ac.MAX_TTL_S
 
@@ -141,7 +141,7 @@ def test_confirm_each_reverts_watch():
 
 def test_corrupt_confirm_mode_store_is_failclosed_to_ask():
     from corvin_console.browser import confirm_mode as cm
-    cm._path("_default").write_text("{bad")
+    cm._path("_default").write_text("{bad", encoding="utf-8")
     assert cm.should_auto_approve("_default") is False
 
 
@@ -214,7 +214,7 @@ def test_confirm_mode_crafted_far_future_without_set_at_is_failclosed(tmp_path):
     fail-closed to confirm-each: it cannot prove it is within the 30-min ceiling."""
     import json
     from corvin_console.browser import confirm_mode as cm
-    cm._path("_default", "u").write_text(json.dumps({"mode": "watch", "expires_at": 9e12}))
+    cm._path("_default", "u").write_text(json.dumps({"mode": "watch", "expires_at": 9e12}), encoding="utf-8")
     st = cm.status("_default", "u")
     assert st["mode"] == "confirm-each"
     assert st["remaining_s"] == 0
@@ -229,12 +229,12 @@ def test_confirm_mode_reclamps_far_future_expiry_against_set_at(tmp_path):
     from corvin_console.browser import confirm_mode as cm
     # set_at an hour ago (> 30-min ceiling) + a far-future expiry → must be dead.
     cm._path("_default", "u").write_text(json.dumps(
-        {"mode": "watch", "expires_at": 9e12, "set_at": _t.time() - 3600}))
+        {"mode": "watch", "expires_at": 9e12, "set_at": _t.time() - 3600}), encoding="utf-8")
     st = cm.status("_default", "u")
     assert st["mode"] == "confirm-each" and st["remaining_s"] == 0
     # A fresh set_at with far-future expiry is capped to the ceiling, still active.
     cm._path("_default", "u").write_text(json.dumps(
-        {"mode": "watch", "expires_at": 9e12, "set_at": _t.time()}))
+        {"mode": "watch", "expires_at": 9e12, "set_at": _t.time()}), encoding="utf-8")
     st2 = cm.status("_default", "u")
     assert st2["mode"] == "watch"
     assert 0 < st2["remaining_s"] <= cm.WATCH_MAX_TTL_S
@@ -243,7 +243,7 @@ def test_confirm_mode_reclamps_far_future_expiry_against_set_at(tmp_path):
 def test_confirm_mode_non_numeric_expiry_is_failclosed(tmp_path):
     import json
     from corvin_console.browser import confirm_mode as cm
-    cm._path("_default", "u").write_text(json.dumps({"mode": "watch", "expires_at": "abc"}))
+    cm._path("_default", "u").write_text(json.dumps({"mode": "watch", "expires_at": "abc"}), encoding="utf-8")
     assert cm.should_auto_approve("_default", "u") is False   # no longer raises
 
 

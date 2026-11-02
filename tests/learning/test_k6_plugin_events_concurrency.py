@@ -18,7 +18,7 @@ def _chain_records(tenant_id="_default"):
     chain = forge_paths.tenant_audit_chain(tenant_id)
     if not chain.exists():
         return []
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 class TestConcurrentEmission:

@@ -166,7 +166,7 @@ def render_blender_intro(
 
     frame_dir = tempfile.mkdtemp(prefix="blender_intro_")
     script_path = os.path.join(frame_dir, "render.py")
-    with open(script_path, "w") as f:
+    with open(script_path, "w", encoding="utf-8") as f:
         f.write(_BLENDER_SCRIPT_TEMPLATE)
 
     cmd = [
@@ -174,7 +174,7 @@ def render_blender_intro(
         "--", title_text, frame_dir, str(num_frames), str(num_nodes), str(int(resolution_percentage)),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
         return BlenderRenderResult(
             available=True, success=False, output_path=None,
@@ -203,7 +203,7 @@ def render_blender_intro(
         "-pix_fmt", "yuv420p",
         output_video_path,
     ]
-    ff_result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=60)
+    ff_result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
     if ff_result.returncode != 0:
         return BlenderRenderResult(
             available=True, success=False, output_path=None,

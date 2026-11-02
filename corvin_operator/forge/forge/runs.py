@@ -96,7 +96,7 @@ def begin_run(
         ),
         "budget": budget or {},
     }
-    (rdir / "run_manifest.json").write_text(json.dumps(manifest, indent=2))
+    (rdir / "run_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return RunContext(
         id=rid,
         dir=rdir,
@@ -128,7 +128,7 @@ def _scan_artifacts(adir: Path) -> list[dict[str, Any]]:
         }
         if 0 < stat.st_size <= 4096:
             try:
-                rec["preview"] = p.read_text(errors="replace")[:512]
+                rec["preview"] = p.read_text(errors="replace", encoding="utf-8")[:512]
             except Exception:
                 pass
         out.append(rec)
@@ -158,15 +158,15 @@ def end_run(
         "artifacts": artifacts,
         "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    ctx.completion_path.write_text(json.dumps(completion, indent=2))
+    ctx.completion_path.write_text(json.dumps(completion, indent=2), encoding="utf-8")
 
     if stdout_data is None:
-        ctx.stdout_path.write_text("null\n")
+        ctx.stdout_path.write_text("null\n", encoding="utf-8")
     else:
-        ctx.stdout_path.write_text(json.dumps(stdout_data, indent=2) + "\n")
+        ctx.stdout_path.write_text(json.dumps(stdout_data, indent=2) + "\n", encoding="utf-8")
 
     if stderr_text:
-        (ctx.dir / "stderr.txt").write_text(stderr_text)
+        (ctx.dir / "stderr.txt").write_text(stderr_text, encoding="utf-8")
 
     short_summary = summary.strip()
     if len(short_summary) > 800:
@@ -181,7 +181,7 @@ def end_run(
     )
     if short_summary:
         md += f"\n{short_summary}\n"
-    ctx.summary_path.write_text(md)
+    ctx.summary_path.write_text(md, encoding="utf-8")
     return completion
 
 
@@ -199,12 +199,12 @@ def list_runs(workspace_root: Path) -> list[dict[str, Any]]:
         rec: dict[str, Any] = {"run_id": d.name, "dir": str(d)}
         try:
             if mpath.exists():
-                m = json.loads(mpath.read_text())
+                m = json.loads(mpath.read_text(encoding="utf-8"))
                 rec.update({"tool": m.get("tool"),
                             "tool_sha": m.get("tool_sha"),
                             "started_at": m.get("started_at")})
             if cpath.exists():
-                c = json.loads(cpath.read_text())
+                c = json.loads(cpath.read_text(encoding="utf-8"))
                 rec.update({"status": c.get("status"),
                             "duration_s": c.get("duration_s"),
                             "sandbox": c.get("sandbox"),
@@ -230,11 +230,11 @@ def show_run(workspace_root: Path, run_id: str | None = None) -> dict[str, Any]:
     rdir = Path(rec["dir"])
     out = dict(rec)
     if (rdir / "run_manifest.json").exists():
-        out["manifest"] = json.loads((rdir / "run_manifest.json").read_text())
+        out["manifest"] = json.loads((rdir / "run_manifest.json").read_text(encoding="utf-8"))
     if (rdir / "run_completion.json").exists():
-        out["completion"] = json.loads((rdir / "run_completion.json").read_text())
+        out["completion"] = json.loads((rdir / "run_completion.json").read_text(encoding="utf-8"))
     if (rdir / "RUN_SUMMARY.md").exists():
-        out["summary_md"] = (rdir / "RUN_SUMMARY.md").read_text()
+        out["summary_md"] = (rdir / "RUN_SUMMARY.md").read_text(encoding="utf-8")
     return out
 
 

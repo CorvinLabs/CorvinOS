@@ -36,7 +36,7 @@ def test_config_event_keeps_tenant_chain_verifiable(tmp_path, monkeypatch):
 
     ok, problems = se.verify_chain(chain)
     assert ok, problems
-    lines = chain.read_text().splitlines()
+    lines = chain.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 3 and '"config.set_rejected"' in lines[1]
 
 

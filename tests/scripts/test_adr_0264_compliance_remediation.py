@@ -24,8 +24,8 @@ def mod(tmp_path, monkeypatch):
     decisions.mkdir()
     monkeypatch.setattr(m, "ADR_REPO", decisions)
     monkeypatch.setattr(m, "ARCHIVE_DIR", tmp_path / "archive")
-    (decisions / "ADR-0030-plugin-system.md").write_text("# ADR-0030 Plugin system\n")
-    (decisions / "ADR-0001-x.md").write_text("---\nid: ADR-0001\n---\nbody\n")
+    (decisions / "ADR-0030-plugin-system.md").write_text("# ADR-0030 Plugin system\n", encoding="utf-8")
+    (decisions / "ADR-0001-x.md").write_text("---\nid: ADR-0001\n---\nbody\n", encoding="utf-8")
     return m, decisions
 
 
@@ -36,13 +36,13 @@ def _run(m, monkeypatch, *argv):
 
 def test_bare_invocation_changes_nothing(mod, monkeypatch):
     m, decisions = mod
-    before = {p.name: p.read_text() for p in decisions.iterdir()}
+    before = {p.name: p.read_text(encoding="utf-8") for p in decisions.iterdir()}
     _run(m, monkeypatch)
-    assert {p.name: p.read_text() for p in decisions.iterdir()} == before
+    assert {p.name: p.read_text(encoding="utf-8") for p in decisions.iterdir()} == before
 
 
 def test_fix_keeps_legacy_named_adrs_in_decisions(mod, monkeypatch):
     m, decisions = mod
     _run(m, monkeypatch, "--fix")
     assert (decisions / "ADR-0030-plugin-system.md").exists()
-    assert "status:" in (decisions / "ADR-0001-x.md").read_text()
+    assert "status:" in (decisions / "ADR-0001-x.md").read_text(encoding="utf-8")

@@ -90,8 +90,8 @@ class _RelayConfigTestBase(unittest.TestCase):
             "origin_id_for_send": kid, "enabled": True, "state": "UNREACHABLE",
             "_friendship": True,
         }
-        (self.dir / "origins" / f"{kid}.json").write_text(json.dumps(origin))
-        (self.dir / "endpoints" / f"{kid}.json").write_text(json.dumps(endpoint))
+        (self.dir / "origins" / f"{kid}.json").write_text(json.dumps(origin), encoding="utf-8")
+        (self.dir / "endpoints" / f"{kid}.json").write_text(json.dumps(endpoint), encoding="utf-8")
 
 
 class TestRelayUrlRoutes(_RelayConfigTestBase):
@@ -256,7 +256,7 @@ class TestRecheckAckDeadlock(_RelayConfigTestBase):
         self.assertTrue(result["reachable"])
         self.assertTrue(result["peer_knows_us"])
         self.assertEqual(result["via"], "direct")
-        stored = json.loads((self.dir / "endpoints" / "peerA.json").read_text())
+        stored = json.loads((self.dir / "endpoints" / "peerA.json").read_text(encoding="utf-8"))
         self.assertTrue(stored["_peer_knows_us"])
         self.assertEqual(stored["state"], "ACTIVE")
 
@@ -273,8 +273,8 @@ class TestRecheckAckDeadlock(_RelayConfigTestBase):
     def test_confirmed_peer_is_not_re_acked(self):
         self._write_friendship("peerA")
         ep = self.dir / "endpoints" / "peerA.json"
-        cfg = json.loads(ep.read_text()); cfg["_peer_knows_us"] = True
-        ep.write_text(json.dumps(cfg))
+        cfg = json.loads(ep.read_text(encoding="utf-8")); cfg["_peer_knows_us"] = True
+        ep.write_text(json.dumps(cfg), encoding="utf-8")
         with mock.patch("remote_trigger_sender.RemoteTriggerSender.ping",
                          return_value=_FakePingResult(True)), \
              mock.patch.object(ft, "retry_friendship_ack") as retry:

@@ -51,7 +51,7 @@ print("RESULT=" + repr(result))
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=30, encoding="utf-8", errors="replace",
         )
         assert proc.returncode == 0, f"stderr: {proc.stderr}"
         result_lines = [l for l in proc.stdout.splitlines() if l.startswith("RESULT=")]
@@ -87,7 +87,7 @@ print("RESULT=" + repr(result))
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=30, encoding="utf-8", errors="replace",
         )
         assert proc.returncode == 0, f"stderr: {proc.stderr}"
         result_lines = [l for l in proc.stdout.splitlines() if l.startswith("RESULT=")]

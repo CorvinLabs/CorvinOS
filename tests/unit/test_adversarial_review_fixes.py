@@ -60,10 +60,10 @@ async def test_checkpoint_integrity_verified_on_load():
 
         # Now corrupt the checkpoint file directly
         checkpoint_file = Path(tmpdir) / "test_1.json"
-        data = json.loads(checkpoint_file.read_text())
+        data = json.loads(checkpoint_file.read_text(encoding="utf-8"))
         # Modify the phase without updating hash (tampering)
         data["phase"] = "final_export"  # Changed!
-        checkpoint_file.write_text(json.dumps(data))
+        checkpoint_file.write_text(json.dumps(data), encoding="utf-8")
 
         # Load again - should fail due to hash mismatch
         loaded = await mgr.load_checkpoint("test_1")
@@ -322,7 +322,7 @@ async def test_cleanup_is_called_on_init():
         # Create old checkpoint files
         checkpoint_dir = Path(tmpdir)
         old_checkpoint = checkpoint_dir / "old.json"
-        old_checkpoint.write_text('{"session_id": "old"}')
+        old_checkpoint.write_text('{"session_id": "old"}', encoding="utf-8")
 
         # Set its mtime to 30 days ago
         import time

@@ -148,7 +148,7 @@ def _parse_audit_chain(
         if not chain_path.exists():
             return events
 
-        with open(chain_path, "r") as f:
+        with open(chain_path, "r", encoding="utf-8") as f:
             for line in f:
                 if not line.strip():
                     continue

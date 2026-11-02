@@ -345,7 +345,7 @@ class DataSourceRegistry:
             encoding="utf-8",
         )
         tmp_path.chmod(0o600)
-        tmp_path.rename(manifest_path)
+        tmp_path.replace(manifest_path)  # rename() raises FileExistsError on Windows
 
         return manifest
 

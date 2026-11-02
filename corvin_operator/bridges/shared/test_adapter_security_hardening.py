@@ -45,7 +45,7 @@ def _write_channel_settings(channel: str, settings: dict) -> Path:
     chan_dir = ROOT.parent / channel
     chan_dir.mkdir(parents=True, exist_ok=True)
     settings_file = chan_dir / "settings.json"
-    settings_file.write_text(json.dumps(settings))
+    settings_file.write_text(json.dumps(settings), encoding="utf-8")
     return settings_file
 
 
@@ -53,7 +53,7 @@ def _restore_channel_settings(settings_file: Path, original: str | None) -> None
     if original is None:
         settings_file.unlink(missing_ok=True)
     else:
-        settings_file.write_text(original)
+        settings_file.write_text(original, encoding="utf-8")
 
 
 def _fresh_adapter():
@@ -68,7 +68,7 @@ def _read_audit_events(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -87,7 +87,7 @@ def test_inbox_revalidation_drift_drop() -> None:
     _section("C/1: drift drop — sender removed from whitelist after write")
     tmp = Path(tempfile.mkdtemp(prefix="security-c1-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         # Daemon would have accepted "evil-user" only if it was in the
@@ -100,7 +100,7 @@ def test_inbox_revalidation_drift_drop() -> None:
         msg = {"id": "drift_01", "channel": "telegram",
                "from": "evil-user", "chat_id": 99, "text": "hi"}
         inbox_path = Path(adapter.INBOX) / "drift_01.json"
-        inbox_path.write_text(json.dumps(msg))
+        inbox_path.write_text(json.dumps(msg), encoding="utf-8")
 
         adapter.process_one(inbox_path, {})
 
@@ -127,7 +127,7 @@ def test_inbox_revalidation_passes_when_in_whitelist() -> None:
     _section("C/2: pass — sender currently in whitelist")
     tmp = Path(tempfile.mkdtemp(prefix="security-c2-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         _write_channel_settings("telegram", {"whitelist": ["good-user"]})
@@ -157,7 +157,7 @@ def test_inbox_revalidation_passes_when_audience_all() -> None:
     _section("C/3: pass — audience='all' bypasses whitelist on this chat")
     tmp = Path(tempfile.mkdtemp(prefix="security-c3-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         _write_channel_settings("telegram", {
@@ -197,7 +197,7 @@ def test_inbox_revalidation_drops_read_only_drift() -> None:
     _section("C2/1: drift drop — sender moved to read_only after write")
     tmp = Path(tempfile.mkdtemp(prefix="security-c2drift-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         # Operator demoted "demoted-user" from whitelist to read_only between
@@ -212,7 +212,7 @@ def test_inbox_revalidation_drops_read_only_drift() -> None:
         msg = {"id": "drift_ro_01", "channel": "telegram",
                "from": "demoted-user", "chat_id": 99, "text": "rm -rf /"}
         inbox_path = Path(adapter.INBOX) / "drift_ro_01.json"
-        inbox_path.write_text(json.dumps(msg))
+        inbox_path.write_text(json.dumps(msg), encoding="utf-8")
 
         adapter.process_one(inbox_path, {})
 
@@ -241,7 +241,7 @@ def test_observer_envelope_appends_to_buffer_and_drift_drop() -> None:
     _section("C3/1: observer envelope appends to per-chat buffer")
     tmp = Path(tempfile.mkdtemp(prefix="security-c3a-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         _write_channel_settings("telegram", {
@@ -262,7 +262,7 @@ def test_observer_envelope_appends_to_buffer_and_drift_drop() -> None:
                "_observer": True, "text": "I'd suggest 30s timeout",
                "ts": 1700000000.0}
         inbox_path = Path(adapter.INBOX) / "obs_01.json"
-        inbox_path.write_text(json.dumps(msg))
+        inbox_path.write_text(json.dumps(msg), encoding="utf-8")
 
         adapter.process_one(inbox_path, {})
 
@@ -275,7 +275,7 @@ def test_observer_envelope_appends_to_buffer_and_drift_drop() -> None:
         # Buffer present with one entry
         buf_path = adapter._observer_buffer_path("telegram", "555")
         assert buf_path.exists(), f"buffer not written at {buf_path}"
-        lines = [l for l in buf_path.read_text().splitlines() if l.strip()]
+        lines = [l for l in buf_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert len(lines) == 1, f"expected 1 buffer line, got {len(lines)}"
         entry = json.loads(lines[0])
         assert entry["text"] == "I'd suggest 30s timeout", entry
@@ -302,7 +302,7 @@ def test_observer_envelope_drift_drop_when_promoted_or_removed() -> None:
     _section("C3/2: observer drift drop — sender not on read_only any more")
     tmp = Path(tempfile.mkdtemp(prefix="security-c3b-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         # Operator removed the user from read_only between daemon-write
@@ -319,12 +319,12 @@ def test_observer_envelope_drift_drop_when_promoted_or_removed() -> None:
                "from": "ex-observer", "chat_id": "777",
                "_observer": True, "text": "stale", "ts": 1700000001.0}
         inbox_path = Path(adapter.INBOX) / "obs_drift.json"
-        inbox_path.write_text(json.dumps(msg))
+        inbox_path.write_text(json.dumps(msg), encoding="utf-8")
 
         adapter.process_one(inbox_path, {})
 
         buf_path = adapter._observer_buffer_path("telegram", "777")
-        assert not buf_path.exists() or buf_path.read_text().strip() == "", \
+        assert not buf_path.exists() or buf_path.read_text(encoding="utf-8").strip() == "", \
             "buffer must stay empty on drift drop"
         events = _read_audit_events(Path(os.environ["VOICE_AUDIT_PATH"]))
         drift = [e for e in events
@@ -343,7 +343,7 @@ def test_observer_buffer_cap_drops_oldest() -> None:
     _section("C3/3: observer buffer cap — oldest entries fall out")
     tmp = Path(tempfile.mkdtemp(prefix="security-c3c-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         _write_channel_settings("telegram", {
@@ -365,11 +365,11 @@ def test_observer_buffer_cap_drops_oldest() -> None:
                    "from": "mit-leser", "chat_id": "333",
                    "_observer": True, "text": f"line-{i}", "ts": 1700000100.0 + i}
             p = Path(adapter.INBOX) / f"obs_{i:02d}.json"
-            p.write_text(json.dumps(msg))
+            p.write_text(json.dumps(msg), encoding="utf-8")
             adapter.process_one(p, {})
 
         buf_path = adapter._observer_buffer_path("telegram", "333")
-        lines = [json.loads(l) for l in buf_path.read_text().splitlines() if l.strip()]
+        lines = [json.loads(l) for l in buf_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert len(lines) == 3, f"buffer cap = 3, got {len(lines)}"
         # Oldest (line-0, line-1) should have been dropped; line-2,3,4 kept.
         kept = [e["text"] for e in lines]
@@ -386,7 +386,7 @@ def test_observer_transcript_consumed_on_owner_turn() -> None:
     _section("C3/4: owner turn consumes buffer + prepends framed block")
     tmp = Path(tempfile.mkdtemp(prefix="security-c3d-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         _write_channel_settings("telegram", {
@@ -407,7 +407,7 @@ def test_observer_transcript_consumed_on_owner_turn() -> None:
                "_observer": True, "text": "translate to english please",
                "ts": 1700000200.0}
         p1 = Path(adapter.INBOX) / "obs_pre.json"
-        p1.write_text(json.dumps(obs))
+        p1.write_text(json.dumps(obs), encoding="utf-8")
         adapter.process_one(p1, {})
 
         buf_path = adapter._observer_buffer_path("telegram", "444")
@@ -426,7 +426,7 @@ def test_observer_transcript_consumed_on_owner_turn() -> None:
                      "text": "summarize the discussion",
                      "ts": time.time()}
         p2 = Path(adapter.INBOX) / "owner_01.json"
-        p2.write_text(json.dumps(owner_msg))
+        p2.write_text(json.dumps(owner_msg), encoding="utf-8")
         adapter.process_one(p2, {})
 
         assert captured, "fake claude should have been called"
@@ -444,7 +444,7 @@ def test_observer_transcript_consumed_on_owner_turn() -> None:
             f"framing order wrong: block={block_pos} owner={owner_pos}"
 
         # Buffer cleared
-        assert not buf_path.exists() or buf_path.read_text().strip() == "", \
+        assert not buf_path.exists() or buf_path.read_text(encoding="utf-8").strip() == "", \
             "buffer must be cleared after consumption"
 
         # Audit event for consumption
@@ -465,7 +465,7 @@ def test_inbox_revalidation_whitelist_beats_read_only_collision() -> None:
     _section("C2/2: collision — whitelist beats read_only on the same uid")
     tmp = Path(tempfile.mkdtemp(prefix="security-c2-collision-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         # Operator typo'd the same uid into both lists. Whitelist must win
@@ -496,7 +496,7 @@ def test_btw_audit_includes_body_snippet() -> None:
     _section("G: /btw audit event carries text_len only (no verbatim body)")
     tmp = Path(tempfile.mkdtemp(prefix="security-g-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         _write_channel_settings("telegram", {"whitelist": ["good-user"]})
@@ -508,7 +508,7 @@ def test_btw_audit_includes_body_snippet() -> None:
                "from": "good-user", "chat_id": 42,
                "_btw": True, "text": body}
         inbox_path = Path(adapter.INBOX) / "btw_01.json"
-        inbox_path.write_text(json.dumps(msg))
+        inbox_path.write_text(json.dumps(msg), encoding="utf-8")
 
         adapter.process_one(inbox_path, {})
 
@@ -530,7 +530,7 @@ def test_btw_audit_includes_body_snippet() -> None:
                 "from": "good-user", "chat_id": 42,
                 "_btw": True, "text": long_body}
         inbox_path2 = Path(adapter.INBOX) / "btw_02.json"
-        inbox_path2.write_text(json.dumps(msg2))
+        inbox_path2.write_text(json.dumps(msg2), encoding="utf-8")
 
         adapter.process_one(inbox_path2, {})
         events2 = _read_audit_events(Path(os.environ["VOICE_AUDIT_PATH"]))
@@ -619,11 +619,11 @@ def test_audit_health_check_tampered_chain() -> None:
         )
         # Tamper: rewrite line 2's user field but leave the hash intact.
         # verify_chain MUST detect the mismatch.
-        lines = audit_path.read_text().splitlines()
+        lines = audit_path.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[1])
         rec["user"] = "intruder"
         lines[1] = json.dumps(rec)
-        audit_path.write_text("\n".join(lines) + "\n")
+        audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         ok, count = audit.audit_health_check()
         assert not ok, "tampered chain should fail integrity check"
@@ -660,7 +660,7 @@ def test_observer_newline_injection_escaped() -> None:
     _section("V-005: observer newline injection escaped in framing block")
     tmp = Path(tempfile.mkdtemp(prefix="security-v005-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         _write_channel_settings("telegram", {
@@ -681,7 +681,7 @@ def test_observer_newline_injection_escaped() -> None:
                "_observer": True, "text": injected_text,
                "ts": 1700000300.0}
         p1 = Path(adapter.INBOX) / "v005_obs.json"
-        p1.write_text(json.dumps(msg))
+        p1.write_text(json.dumps(msg), encoding="utf-8")
         adapter.process_one(p1, {})
 
         captured: list[str] = []
@@ -696,7 +696,7 @@ def test_observer_newline_injection_escaped() -> None:
                      "text": "what did they say?",
                      "ts": time.time()}
         p2 = Path(adapter.INBOX) / "v005_owner.json"
-        p2.write_text(json.dumps(owner_msg))
+        p2.write_text(json.dumps(owner_msg), encoding="utf-8")
         adapter.process_one(p2, {})
 
         assert captured, "fake claude should have been called"
@@ -727,7 +727,7 @@ def test_consent_module_none_read_only_drops_message() -> None:
     _section("V-002: consent=None + read_only configured => drop observer message")
     tmp = Path(tempfile.mkdtemp(prefix="security-v002-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         _write_channel_settings("telegram", {
@@ -749,14 +749,14 @@ def test_consent_module_none_read_only_drops_message() -> None:
                "_observer": True, "text": "drop me",
                "ts": 1700000400.0}
         p = Path(adapter.INBOX) / "v002_obs.json"
-        p.write_text(json.dumps(msg))
+        p.write_text(json.dumps(msg), encoding="utf-8")
         adapter.process_one(p, {})
 
         # Message must be moved (not lingering in inbox)
         assert not p.exists(), "inbox file should have been moved"
         # No buffer entry created
         buf_path = adapter._observer_buffer_path("telegram", "v002chat")
-        assert not buf_path.exists() or buf_path.read_text().strip() == "", \
+        assert not buf_path.exists() or buf_path.read_text(encoding="utf-8").strip() == "", \
             "buffer must stay empty when consent gate unavailable + read_only set"
         # Audit event emitted
         events = _read_audit_events(Path(os.environ["VOICE_AUDIT_PATH"]))
@@ -784,7 +784,7 @@ def test_whitelist_missing_logs_warning() -> None:
     _section("V-012: missing whitelist => WARNING log emitted")
     tmp = Path(tempfile.mkdtemp(prefix="security-v012-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp, "telegram", {})
         # Settings with no whitelist key at all

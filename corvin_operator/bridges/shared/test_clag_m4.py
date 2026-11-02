@@ -76,7 +76,7 @@ def _write_origin(tmpdir: Path, *, spawn_worker: bool = False) -> Path:
         "spawn_worker": spawn_worker,
     }
     p = tmpdir / f"{ORIGIN_ID}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
     return p
 

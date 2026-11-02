@@ -1402,6 +1402,12 @@ def start_channel_detached(
         # in-chat commands shell out to by walking up from __dirname.
         # See _adapter_queue_env's note and bridge_paths.js::operatorRoot.
         env.setdefault("CORVIN_BRIDGE_OPERATOR_ROOT", str(_BRIDGE_DIR.parent))
+        if os.name == "nt":
+            # Windows has no service.env baking CORVIN_PYTHON in, so
+            # python_bin.js picked a bare `python3` on PATH (the Python
+            # install manager's, without CorvinOS' packages) over the tool
+            # venv -- pin the interpreter this console itself runs on.
+            env.setdefault("CORVIN_PYTHON", sys.executable)
         if port:
             env.setdefault("WA_HTTP_PORT", str(port))
         cmd = [node, str(daemon)] + list(extra_args or [])

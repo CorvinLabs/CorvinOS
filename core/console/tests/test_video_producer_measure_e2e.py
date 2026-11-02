@@ -41,13 +41,13 @@ def _chain(home: Path, tenant: str) -> Path:
 
 
 def _all_chains(home: Path) -> str:
-    return "\n".join(f.read_text() for f in home.rglob("audit.jsonl"))
+    return "\n".join(f.read_text(encoding="utf-8") for f in home.rglob("audit.jsonl"))
 
 
 def _events(home: Path, tenant: str, prefix: str = "video_producer.measure_") -> list:
     p = _chain(home, tenant)
     out = []
-    for line in (p.read_text().splitlines() if p.exists() else []):
+    for line in (p.read_text(encoding="utf-8").splitlines() if p.exists() else []):
         r = json.loads(line)
         if str(r.get("event_type") or "").startswith(prefix):
             out.append((r["event_type"], r.get("details") or {}))
@@ -143,7 +143,7 @@ class MeasureE2E(unittest.TestCase):
             q = ca.get(f"{V}/jobs/{JOB}/quality-metrics").json()["report"]
             ca_sig = {s["id"]: s for s in q["signals"]}["cue_alignment"]
             self.assertEqual((ca_sig["value"], ca_sig["verdict"]), (1.04, "warn"))
-            self.assertIn("posthoc_at", json.loads((job_dir / "report.json").read_text()))
+            self.assertIn("posthoc_at", json.loads((job_dir / "report.json").read_text(encoding="utf-8")))
 
             ev = _events(home, "tenant_a")
             self.assertEqual([e for e, _ in ev], ["video_producer.measure_started", "video_producer.measure_completed"])
@@ -152,7 +152,7 @@ class MeasureE2E(unittest.TestCase):
                              (JOB, "video_producer_openai", "classified", 2))
             self.assertEqual((done["verdict"], done["matched"], done["items"], done["median_ms"], done["p90_ms"], done["stored"]),
                              ("warn", 9, 9, 1040, 5320, True))
-            chain = _chain(home, "tenant_a").read_text()
+            chain = _chain(home, "tenant_a").read_text(encoding="utf-8")
             for sc in FIXTURE["storyboard"]["scenes"]:
                 self.assertNotIn(sc["narration_text"][:30], chain)
             self.assertEqual(_events(home, "tenant_b"), [])
@@ -173,7 +173,7 @@ class MeasureE2E(unittest.TestCase):
             self.assertEqual((sig["verdict"], sig["value"], sig["reason"]),
                              ("skip", None, "refused by the pre-spawn gates (L44/L34/L35)"))
             self.assertEqual(calls, [])
-            stored = {s["id"]: s for s in json.loads((job_dir / "report.json").read_text())["signals"]}
+            stored = {s["id"]: s for s in json.loads((job_dir / "report.json").read_text(encoding="utf-8"))["signals"]}
             self.assertEqual(stored["cue_alignment"]["verdict"], "skip")
             ev = _events(home, "_default")
             self.assertEqual([e for e, _ in ev], ["video_producer.measure_refused"])

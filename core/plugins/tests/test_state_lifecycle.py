@@ -96,7 +96,7 @@ class _Base(unittest.TestCase):
         return TenantRegistry.load(tenant_id="_default", corvin_home_path=self.home)
 
     def _audit_text(self) -> str:
-        return self._audit_path.read_text() if self._audit_path.exists() else ""
+        return self._audit_path.read_text(encoding="utf-8") if self._audit_path.exists() else ""
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────
@@ -131,14 +131,14 @@ class TestPersistence(_Base):
     def test_corrupt_registry_fails_closed(self):
         path = registry_path(tenant_id="_default", corvin_home_path=self.home)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{ this is not: valid: yaml: [")
+        path.write_text("{ this is not: valid: yaml: [", encoding="utf-8")
         with self.assertRaises(RegistryCorrupt):
             self._reg()
 
     def test_non_mapping_registry_fails_closed(self):
         path = registry_path(tenant_id="_default", corvin_home_path=self.home)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("- just\n- a\n- list\n")
+        path.write_text("- just\n- a\n- list\n", encoding="utf-8")
         with self.assertRaises(RegistryCorrupt):
             self._reg()
 
@@ -147,10 +147,10 @@ class TestPersistence(_Base):
         path = registry_path(tenant_id="_default", corvin_home_path=self.home)
         path.parent.mkdir(parents=True, exist_ok=True)
         original = "plugins: {broken"
-        path.write_text(original)
+        path.write_text(original, encoding="utf-8")
         with self.assertRaises(RegistryCorrupt):
             self.lc.install(_record(), installed_by="operator")
-        self.assertEqual(path.read_text(), original, "the bad file must be left alone")
+        self.assertEqual(path.read_text(encoding="utf-8"), original, "the bad file must be left alone")
 
     def test_record_from_a_newer_version_fails_closed(self):
         path = registry_path(tenant_id="_default", corvin_home_path=self.home)
@@ -162,7 +162,7 @@ class TestPersistence(_Base):
             "    version: 1.0.0\n"
             "    display_name: Acme\n"
             "    plugin_type: notification_backend\n"
-            "    future_field: 42\n"
+            "    future_field: 42\n", encoding="utf-8"
         )
         with self.assertRaises(PluginError):
             self._reg()
@@ -359,7 +359,7 @@ class TestDisableUninstall(_Base):
     def test_uninstall_removes_record_and_state(self):
         self.lc.install(_record(), installed_by="operator")
         state = instance_dir("acme-notify", tenant_id="_default", corvin_home_path=self.home)
-        (state / "cache.json").write_text("{}")
+        (state / "cache.json").write_text("{}", encoding="utf-8")
         self.lc.uninstall("acme-notify")
         self.assertFalse(self._reg().has("acme-notify"))
         self.assertFalse(state.exists())

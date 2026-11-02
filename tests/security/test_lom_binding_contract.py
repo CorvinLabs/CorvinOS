@@ -79,7 +79,7 @@ def test_written_record_distinguishes_bound_from_unbound(tmp_path, monkeypatch):
                    details={"lom": "core/skills/boot.py:boot_skills"})
     se.write_event(chain, "tool.created", tool="b",
                    details={"lom": "totally/made/up.py:fabricated"})
-    recs = [json.loads(l)["details"] for l in chain.read_text().splitlines()]
+    recs = [json.loads(l)["details"] for l in chain.read_text(encoding="utf-8").splitlines()]
 
     assert recs[0]["lom_bound"] is True
     assert recs[0]["lom_hash"] == se.lom_hash_for("core/skills/boot.py:boot_skills")
@@ -92,7 +92,7 @@ def test_written_record_distinguishes_bound_from_unbound(tmp_path, monkeypatch):
 def test_lom_is_not_a_hash_oracle_over_arbitrary_files(tmp_path):
     """A LoM outside the repo, or a non-.py file, is refused BEFORE it is read."""
     outside = tmp_path / "secret.py"
-    outside.write_text("def root(): return 1\n")
+    outside.write_text("def root(): return 1\n", encoding="utf-8")
     assert se.lom_hash_for(f"{outside}:root") is None
     assert se.lom_hash_for("README.md:anything") is None
     assert se.lom_hash_for("../etc/passwd:root") is None

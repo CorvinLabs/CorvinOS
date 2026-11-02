@@ -222,7 +222,7 @@ class TestNoAnthropicImport(unittest.TestCase):
     """entity_extract.py MUST NOT import anthropic (CI AST lint rule)."""
 
     def test_no_anthropic_import(self):
-        src = (_HERE / "entity_extract.py").read_text()
+        src = (_HERE / "entity_extract.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

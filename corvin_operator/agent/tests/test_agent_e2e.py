@@ -166,7 +166,7 @@ class TestBYOKPipeline:
         # Verify vault file was written.
         vault_file = vault_dir / "vault" / "anthropic_api_key.json"
         assert vault_file.exists(), f"Expected vault file at {vault_file}"
-        stored = json.loads(vault_file.read_text())
+        stored = json.loads(vault_file.read_text(encoding="utf-8"))
         assert stored["value"] == plaintext
 
     def test_apply_byok_custom_key(self, tmp_path):

@@ -318,7 +318,7 @@ class TestAuditChainWriter:
             assert hash1 != hash2
 
             # Read chain and verify linking
-            with open(chain_path, "r") as f:
+            with open(chain_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             assert len(lines) >= 2
@@ -353,7 +353,7 @@ class TestAuditChainWriter:
             writer.write_event(event)
 
             # Read immediately (should be durable)
-            with open(chain_path, "r") as f:
+            with open(chain_path, "r", encoding="utf-8") as f:
                 line = f.readline()
                 data = json.loads(line)
 
@@ -443,9 +443,9 @@ class TestTenantIsolation:
             assert chain_b.exists()
 
             # Chains are separate
-            with open(chain_a, "r") as f:
+            with open(chain_a, "r", encoding="utf-8") as f:
                 data_a = json.loads(f.readline())
-            with open(chain_b, "r") as f:
+            with open(chain_b, "r", encoding="utf-8") as f:
                 data_b = json.loads(f.readline())
 
             assert data_a["task_id"] == "task-a"
@@ -511,12 +511,12 @@ class TestChainVerification:
             writer.write_event(event)
 
             # Tamper with the chain_hash
-            with open(chain_path, "r") as f:
+            with open(chain_path, "r", encoding="utf-8") as f:
                 data = json.loads(f.readline())
 
             data["chain_hash"] = "tampered_hash"
 
-            with open(chain_path, "w") as f:
+            with open(chain_path, "w", encoding="utf-8") as f:
                 json.dump(data, f)
 
             # Verify should fail
@@ -553,14 +553,14 @@ class TestChainVerification:
 
             # Tamper with second event's prior_hash
             lines = []
-            with open(chain_path, "r") as f:
+            with open(chain_path, "r", encoding="utf-8") as f:
                 for line in f:
                     lines.append(line)
 
             data2 = json.loads(lines[1])
             data2["prior_hash"] = "wrong_prior_hash"
 
-            with open(chain_path, "w") as f:
+            with open(chain_path, "w", encoding="utf-8") as f:
                 f.write(lines[0])
                 json.dump(data2, f)
                 f.write("\n")
@@ -584,7 +584,7 @@ class TestChainVerification:
                 timestamp="2026-09-27T12:00:00Z",
             )
 
-            with open(chain_path, "w") as f:
+            with open(chain_path, "w", encoding="utf-8") as f:
                 data = asdict(event)
                 data["chain_hash"] = event.compute_hash()
                 json.dump(data, f)

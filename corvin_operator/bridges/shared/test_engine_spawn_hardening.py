@@ -374,7 +374,7 @@ class GrandchildLeakTests(unittest.TestCase):
 
     def _make_fake_claude(self) -> str:
         script_path = os.path.join(self._tmp.name, "fake_claude.sh")
-        with open(script_path, "w") as fh:
+        with open(script_path, "w", encoding="utf-8") as fh:
             fh.write(_FAKE_CLAUDE_WITH_GRANDCHILD)
         os.chmod(script_path, 0o755)
         return script_path
@@ -384,7 +384,7 @@ class GrandchildLeakTests(unittest.TestCase):
         while time.time() < deadline:
             if os.path.exists(pidfile):
                 try:
-                    content = open(pidfile).read().strip()
+                    content = open(pidfile, encoding="utf-8").read().strip()
                 except OSError:
                     content = ""
                 if content:
@@ -529,7 +529,7 @@ class CopilotTimeoutGrandchildLeakTests(unittest.TestCase):
 
     def _make_fake_copilot(self) -> str:
         script_path = os.path.join(self._tmp.name, "fake_copilot.sh")
-        with open(script_path, "w") as fh:
+        with open(script_path, "w", encoding="utf-8") as fh:
             fh.write(_FAKE_COPILOT_WITH_GRANDCHILD)
         os.chmod(script_path, 0o755)
         return script_path
@@ -539,7 +539,7 @@ class CopilotTimeoutGrandchildLeakTests(unittest.TestCase):
         while time.time() < deadline:
             if os.path.exists(pidfile):
                 try:
-                    content = open(pidfile).read().strip()
+                    content = open(pidfile, encoding="utf-8").read().strip()
                 except OSError:
                     content = ""
                 if content:

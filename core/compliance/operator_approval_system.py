@@ -152,7 +152,7 @@ class OperatorApprovalGate:
 
         # Store request file (fail-closed: an unstored request cannot be decided)
         try:
-            with open(self._requests_file(tenant_id), 'a') as f:
+            with open(self._requests_file(tenant_id), 'a', encoding="utf-8") as f:
                 f.write(json.dumps({
                     "request_id": request_id,
                     "tenant_id": tenant_id,
@@ -218,7 +218,7 @@ class OperatorApprovalGate:
 
         # Store decision
         try:
-            with open(self._decisions_file(tenant_id), 'a') as f:
+            with open(self._decisions_file(tenant_id), 'a', encoding="utf-8") as f:
                 f.write(json.dumps(decision.__dict__) + "\n")
         except Exception as e:
             logger.error("Failed to store approval decision: %s", type(e).__name__)
@@ -272,7 +272,7 @@ class OperatorApprovalGate:
 
         # Store decision
         try:
-            with open(self._decisions_file(tenant_id), 'a') as f:
+            with open(self._decisions_file(tenant_id), 'a', encoding="utf-8") as f:
                 f.write(json.dumps(decision.__dict__) + "\n")
         except Exception as e:
             logger.error("Failed to store rejection decision: %s", type(e).__name__)
@@ -353,7 +353,7 @@ class OperatorApprovalGate:
         if not path.exists():
             return []
         out = []
-        with open(path, 'r') as f:
+        with open(path, 'r', encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     out.append(json.loads(line))
@@ -388,7 +388,7 @@ class OperatorApprovalGate:
                 req["status"] = status
                 req["updated_at"] = datetime.now(timezone.utc).isoformat()
         tmp = path.with_suffix(".jsonl.tmp")
-        with open(tmp, 'w') as f:
+        with open(tmp, 'w', encoding="utf-8") as f:
             for req in requests:
                 f.write(json.dumps(req) + "\n")
         tmp.replace(path)

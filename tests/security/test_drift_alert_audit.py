@@ -26,13 +26,13 @@ def test_drift_alert_is_written_to_the_tenant_chain():
                         "manifest mismatch on host alice@example.com",
                         "inst-1", "MANIFEST_HASH_MISMATCH")
     chain = forge_paths.tenant_audit_chain("_default")
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     rec = [r for r in recs if r["event_type"] == "deployment.drift_alert"][-1]
     assert rec["details"]["instance_id"] == "inst-1"
     assert rec["details"]["drift_type"] == "MANIFEST_HASH_MISMATCH"
     assert rec["details"]["severity"] == "CRITICAL"
     assert rec["severity"] == "WARNING"
-    assert "alice@example.com" not in chain.read_text()  # message never enters the chain
+    assert "alice@example.com" not in chain.read_text(encoding="utf-8")  # message never enters the chain
     assert "_dropped_fields" not in rec["details"]
     assert security_events.verify_chain(chain)[0]
 

@@ -325,15 +325,15 @@ class TestAuditTrailPerTenant:
 
             # Simulate audit writes for Tenant A
             event_a = {"type": "skill_create", "skill_id": "a1", "tenant_id": "tenant_a"}
-            audit_a.write_text(json.dumps(event_a) + "\n")
+            audit_a.write_text(json.dumps(event_a) + "\n", encoding="utf-8")
 
             # Simulate audit writes for Tenant B
             event_b = {"type": "skill_create", "skill_id": "b1", "tenant_id": "tenant_b"}
-            audit_b.write_text(json.dumps(event_b) + "\n")
+            audit_b.write_text(json.dumps(event_b) + "\n", encoding="utf-8")
 
             # Verify isolation
-            events_a = [json.loads(line) for line in audit_a.read_text().split("\n") if line]
-            events_b = [json.loads(line) for line in audit_b.read_text().split("\n") if line]
+            events_a = [json.loads(line) for line in audit_a.read_text(encoding="utf-8").split("\n") if line]
+            events_b = [json.loads(line) for line in audit_b.read_text(encoding="utf-8").split("\n") if line]
 
             assert len(events_a) == 1
             assert len(events_b) == 1
@@ -353,9 +353,9 @@ class TestAuditTrailPerTenant:
                 audit_file = audit_dir / "audit.jsonl"
 
                 event = {"type": "test", "tenant_id": tenant_id}
-                audit_file.write_text(json.dumps(event) + "\n")
+                audit_file.write_text(json.dumps(event) + "\n", encoding="utf-8")
 
-                recorded_event = json.loads(audit_file.read_text().strip())
+                recorded_event = json.loads(audit_file.read_text(encoding="utf-8").strip())
                 assert recorded_event["tenant_id"] == tenant_id
 
 
@@ -368,12 +368,12 @@ class TestSkillRegistryPerTenant:
             # Tenant A skills
             skills_a_dir = Path(tmpdir) / "tenant_a" / "skill-forge" / "skills"
             skills_a_dir.mkdir(parents=True)
-            (skills_a_dir / "processor.json").write_text('{"id": "processor", "tenant_id": "tenant_a"}')
+            (skills_a_dir / "processor.json").write_text('{"id": "processor", "tenant_id": "tenant_a"}', encoding="utf-8")
 
             # Tenant B skills
             skills_b_dir = Path(tmpdir) / "tenant_b" / "skill-forge" / "skills"
             skills_b_dir.mkdir(parents=True)
-            (skills_b_dir / "analyzer.json").write_text('{"id": "analyzer", "tenant_id": "tenant_b"}')
+            (skills_b_dir / "analyzer.json").write_text('{"id": "analyzer", "tenant_id": "tenant_b"}', encoding="utf-8")
 
             # Load and verify isolation
             skills_a = list(skills_a_dir.glob("*.json"))
@@ -397,12 +397,12 @@ class TestToolForgePerTenant:
             # Tenant A tools
             tools_a_dir = Path(tmpdir) / "tenant_a" / "forge" / "tools"
             tools_a_dir.mkdir(parents=True)
-            (tools_a_dir / "http_get.py").write_text("def http_get(): pass")
+            (tools_a_dir / "http_get.py").write_text("def http_get(): pass", encoding="utf-8")
 
             # Tenant B tools
             tools_b_dir = Path(tmpdir) / "tenant_b" / "forge" / "tools"
             tools_b_dir.mkdir(parents=True)
-            (tools_b_dir / "db_query.py").write_text("def db_query(): pass")
+            (tools_b_dir / "db_query.py").write_text("def db_query(): pass", encoding="utf-8")
 
             # Verify Tenant B cannot load Tenant A's tool
             assert (tools_a_dir / "http_get.py").exists()
@@ -421,7 +421,7 @@ class TestLearningEventsPerTenant:
             events_a_file = learn_a_dir / "events.jsonl"
 
             event_a = {"type": "outcome_feedback", "skill_id": "s1", "tenant_id": "tenant_a"}
-            events_a_file.write_text(json.dumps(event_a) + "\n")
+            events_a_file.write_text(json.dumps(event_a) + "\n", encoding="utf-8")
 
             # Learning events for Tenant B
             learn_b_dir = Path(tmpdir) / "tenant_b" / "learning"
@@ -429,11 +429,11 @@ class TestLearningEventsPerTenant:
             events_b_file = learn_b_dir / "events.jsonl"
 
             event_b = {"type": "outcome_feedback", "skill_id": "s2", "tenant_id": "tenant_b"}
-            events_b_file.write_text(json.dumps(event_b) + "\n")
+            events_b_file.write_text(json.dumps(event_b) + "\n", encoding="utf-8")
 
             # Verify isolation
-            events_a = [json.loads(line) for line in events_a_file.read_text().split("\n") if line]
-            events_b = [json.loads(line) for line in events_b_file.read_text().split("\n") if line]
+            events_a = [json.loads(line) for line in events_a_file.read_text(encoding="utf-8").split("\n") if line]
+            events_b = [json.loads(line) for line in events_b_file.read_text(encoding="utf-8").split("\n") if line]
 
             assert len(events_a) == 1
             assert len(events_b) == 1
@@ -451,17 +451,17 @@ class TestBridgeStatePerTenant:
             bridge_a = Path(tmpdir) / "tenant_a" / "bridges" / "discord"
             bridge_a.mkdir(parents=True)
             state_a = bridge_a / "state.json"
-            state_a.write_text('{"channel_id": 123, "tenant_id": "tenant_a"}')
+            state_a.write_text('{"channel_id": 123, "tenant_id": "tenant_a"}', encoding="utf-8")
 
             # Bridge state for Tenant B, Discord channel
             bridge_b = Path(tmpdir) / "tenant_b" / "bridges" / "discord"
             bridge_b.mkdir(parents=True)
             state_b = bridge_b / "state.json"
-            state_b.write_text('{"channel_id": 456, "tenant_id": "tenant_b"}')
+            state_b.write_text('{"channel_id": 456, "tenant_id": "tenant_b"}', encoding="utf-8")
 
             # Verify isolation
-            state_a_data = json.loads(state_a.read_text())
-            state_b_data = json.loads(state_b.read_text())
+            state_a_data = json.loads(state_a.read_text(encoding="utf-8"))
+            state_b_data = json.loads(state_b.read_text(encoding="utf-8"))
 
             assert state_a_data["channel_id"] == 123
             assert state_b_data["channel_id"] == 456
@@ -476,15 +476,15 @@ class TestMemoryPerTenant:
         with tempfile.TemporaryDirectory() as tmpdir:
             mem_a = Path(tmpdir) / "tenant_a" / "memory" / "recall.json"
             mem_a.parent.mkdir(parents=True)
-            mem_a.write_text('{"user": "alice", "tenant_id": "tenant_a"}')
+            mem_a.write_text('{"user": "alice", "tenant_id": "tenant_a"}', encoding="utf-8")
 
             mem_b = Path(tmpdir) / "tenant_b" / "memory" / "recall.json"
             mem_b.parent.mkdir(parents=True)
-            mem_b.write_text('{"user": "bob", "tenant_id": "tenant_b"}')
+            mem_b.write_text('{"user": "bob", "tenant_id": "tenant_b"}', encoding="utf-8")
 
             # Verify isolation
-            assert json.loads(mem_a.read_text())["user"] == "alice"
-            assert json.loads(mem_b.read_text())["user"] == "bob"
+            assert json.loads(mem_a.read_text(encoding="utf-8"))["user"] == "alice"
+            assert json.loads(mem_b.read_text(encoding="utf-8"))["user"] == "bob"
 
 
 # ============================================================================
@@ -504,17 +504,17 @@ class TestMultiTenantE2E:
 
             # Tenant A operations
             skill_a = Path(tmpdir) / "tenant_a" / "skill-forge" / "skills" / "processor.json"
-            skill_a.write_text('{"id": "processor", "body": "print(\'A\')", "tenant_id": "tenant_a"}')
+            skill_a.write_text('{"id": "processor", "body": "print(\'A\')", "tenant_id": "tenant_a"}', encoding="utf-8")
 
             audit_a = Path(tmpdir) / "tenant_a" / "audit.jsonl"
-            audit_a.write_text('{"type": "skill_create", "skill_id": "processor", "tenant_id": "tenant_a"}\n')
+            audit_a.write_text('{"type": "skill_create", "skill_id": "processor", "tenant_id": "tenant_a"}\n', encoding="utf-8")
 
             # Tenant B operations (different skills)
             skill_b = Path(tmpdir) / "tenant_b" / "skill-forge" / "skills" / "analyzer.json"
-            skill_b.write_text('{"id": "analyzer", "body": "print(\'B\')", "tenant_id": "tenant_b"}')
+            skill_b.write_text('{"id": "analyzer", "body": "print(\'B\')", "tenant_id": "tenant_b"}', encoding="utf-8")
 
             audit_b = Path(tmpdir) / "tenant_b" / "audit.jsonl"
-            audit_b.write_text('{"type": "skill_create", "skill_id": "analyzer", "tenant_id": "tenant_b"}\n')
+            audit_b.write_text('{"type": "skill_create", "skill_id": "analyzer", "tenant_id": "tenant_b"}\n', encoding="utf-8")
 
             # Verify complete isolation
             skills_a_dir = Path(tmpdir) / "tenant_a" / "skill-forge" / "skills"
@@ -529,8 +529,8 @@ class TestMultiTenantE2E:
             assert skills_b[0].name == "analyzer.json"
 
             # Audit trails separate
-            audit_a_events = [json.loads(line) for line in audit_a.read_text().split("\n") if line]
-            audit_b_events = [json.loads(line) for line in audit_b.read_text().split("\n") if line]
+            audit_a_events = [json.loads(line) for line in audit_a.read_text(encoding="utf-8").split("\n") if line]
+            audit_b_events = [json.loads(line) for line in audit_b.read_text(encoding="utf-8").split("\n") if line]
 
             assert len(audit_a_events) == 1
             assert len(audit_b_events) == 1
@@ -656,16 +656,16 @@ class TestAdversarialRegistryCollision:
             skills_a.parent.mkdir(parents=True)
             skills_b.parent.mkdir(parents=True)
 
-            skills_a.write_text('{"id": "processor", "body": "print(\'A\')", "tenant_id": "tenant_a"}')
-            skills_b.write_text('{"id": "processor", "body": "print(\'B\')", "tenant_id": "tenant_b"}')
+            skills_a.write_text('{"id": "processor", "body": "print(\'A\')", "tenant_id": "tenant_a"}', encoding="utf-8")
+            skills_b.write_text('{"id": "processor", "body": "print(\'B\')", "tenant_id": "tenant_b"}', encoding="utf-8")
 
             # Both exist, but in separate directories
             assert skills_a.exists()
             assert skills_b.exists()
 
             # Loading tenant_a's registry only finds processor from tenant_a
-            data_a = json.loads(skills_a.read_text())
-            data_b = json.loads(skills_b.read_text())
+            data_a = json.loads(skills_a.read_text(encoding="utf-8"))
+            data_b = json.loads(skills_b.read_text(encoding="utf-8"))
 
             assert data_a["tenant_id"] == "tenant_a"
             assert data_b["tenant_id"] == "tenant_b"
@@ -709,17 +709,17 @@ class TestAdversarialAuditChainTampering:
             event2["hash"] = event2_hash
 
             # Write both events
-            audit_file.write_text(json.dumps(event1) + "\n" + json.dumps(event2) + "\n")
+            audit_file.write_text(json.dumps(event1) + "\n" + json.dumps(event2) + "\n", encoding="utf-8")
 
             # Tamper with event1
-            lines = audit_file.read_text().split("\n")
+            lines = audit_file.read_text(encoding="utf-8").split("\n")
             tampered_event1 = json.loads(lines[0])
             tampered_event1["skill_id"] = "s2"  # Change data
             lines[0] = json.dumps(tampered_event1)
-            audit_file.write_text("\n".join(lines))
+            audit_file.write_text("\n".join(lines), encoding="utf-8")
 
             # Verify chain fails
-            lines = audit_file.read_text().split("\n")
+            lines = audit_file.read_text(encoding="utf-8").split("\n")
             event1_read = json.loads(lines[0])
             event2_read = json.loads(lines[1])
 
@@ -754,10 +754,10 @@ class TestAdversarialAuditChainTampering:
                 prev_hash = event_hash
 
             # Write original chain
-            audit_file.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+            audit_file.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
 
             # Inject fake event between event1 and event2
-            lines = audit_file.read_text().split("\n")
+            lines = audit_file.read_text(encoding="utf-8").split("\n")
             fake_event = {
                 "seq": 1.5,
                 "type": "injected",
@@ -769,11 +769,11 @@ class TestAdversarialAuditChainTampering:
             fake_event["hash"] = fake_hash
 
             lines.insert(1, json.dumps(fake_event))
-            audit_file.write_text("\n".join(lines))
+            audit_file.write_text("\n".join(lines), encoding="utf-8")
 
             # Verify injection detection: the original event2's hash_prev chain is broken
             # After injection: event1 → fake → [original event2, which still points to event1's hash]
-            new_lines = audit_file.read_text().split("\n")
+            new_lines = audit_file.read_text(encoding="utf-8").split("\n")
             event1_read = json.loads(new_lines[0])
             fake_read = json.loads(new_lines[1])
             event2_read = json.loads(new_lines[2])
@@ -796,12 +796,12 @@ class TestAdversarialBridgeCredentialTheft:
             # Bridge config for Tenant A (contains sensitive token)
             bridge_a = Path(tmpdir) / "tenant_a" / "bridges" / "discord" / "config.json"
             bridge_a.parent.mkdir(parents=True)
-            bridge_a.write_text('{"token": "secret_token_a", "tenant_id": "tenant_a"}')
+            bridge_a.write_text('{"token": "secret_token_a", "tenant_id": "tenant_a"}', encoding="utf-8")
 
             # Bridge config for Tenant B
             bridge_b = Path(tmpdir) / "tenant_b" / "bridges" / "discord" / "config.json"
             bridge_b.parent.mkdir(parents=True)
-            bridge_b.write_text('{"token": "secret_token_b", "tenant_id": "tenant_b"}')
+            bridge_b.write_text('{"token": "secret_token_b", "tenant_id": "tenant_b"}', encoding="utf-8")
 
             # Verify Tenant B cannot read Tenant A's config
             assert bridge_a.exists()
@@ -823,26 +823,26 @@ class TestAdversarialTelemetryManipulation:
             # Consent file for Tenant A (opted out)
             consent_a = Path(tmpdir) / "tenant_a" / "telemetry_consent.json"
             consent_a.parent.mkdir(parents=True)
-            consent_a.write_text('{"opted_in": false, "tenant_id": "tenant_a"}')
+            consent_a.write_text('{"opted_in": false, "tenant_id": "tenant_a"}', encoding="utf-8")
 
             # Consent file for Tenant B (opted in)
             consent_b = Path(tmpdir) / "tenant_b" / "telemetry_consent.json"
             consent_b.parent.mkdir(parents=True)
-            consent_b.write_text('{"opted_in": true, "tenant_id": "tenant_b"}')
+            consent_b.write_text('{"opted_in": true, "tenant_id": "tenant_b"}', encoding="utf-8")
 
             # Verify independence
-            data_a = json.loads(consent_a.read_text())
-            data_b = json.loads(consent_b.read_text())
+            data_a = json.loads(consent_a.read_text(encoding="utf-8"))
+            data_b = json.loads(consent_b.read_text(encoding="utf-8"))
 
             assert data_a["opted_in"] == False
             assert data_b["opted_in"] == True
 
             # T1's opt-out doesn't change T2's setting
             data_a["opted_in"] = False
-            consent_a.write_text(json.dumps(data_a))
+            consent_a.write_text(json.dumps(data_a), encoding="utf-8")
 
             # Re-read T2's setting (should be unchanged)
-            data_b_after = json.loads(consent_b.read_text())
+            data_b_after = json.loads(consent_b.read_text(encoding="utf-8"))
             assert data_b_after["opted_in"] == True
 
 
@@ -855,16 +855,16 @@ class TestAdversarialInstanceRegistryPoisoning:
             # Instance registry for Tenant A
             registry_a = Path(tmpdir) / "tenant_a" / "registry.json"
             registry_a.parent.mkdir(parents=True)
-            registry_a.write_text('{"instances": {"skill_a": {"cost": 100}}, "tenant_id": "tenant_a"}')
+            registry_a.write_text('{"instances": {"skill_a": {"cost": 100}}, "tenant_id": "tenant_a"}', encoding="utf-8")
 
             # Instance registry for Tenant B
             registry_b = Path(tmpdir) / "tenant_b" / "registry.json"
             registry_b.parent.mkdir(parents=True)
-            registry_b.write_text('{"instances": {"skill_b": {"cost": 50}}, "tenant_id": "tenant_b"}')
+            registry_b.write_text('{"instances": {"skill_b": {"cost": 50}}, "tenant_id": "tenant_b"}', encoding="utf-8")
 
             # Verify isolation
-            data_a = json.loads(registry_a.read_text())
-            data_b = json.loads(registry_b.read_text())
+            data_a = json.loads(registry_a.read_text(encoding="utf-8"))
+            data_b = json.loads(registry_b.read_text(encoding="utf-8"))
 
             assert "skill_a" in data_a["instances"]
             assert "skill_b" in data_b["instances"]
@@ -975,13 +975,13 @@ class TestOriginalFindingsFixed:
             audit_b.parent.mkdir(parents=True)
 
             # Write events
-            audit_a.write_text('{"type": "test", "tenant_id": "tenant_a"}\n')
-            audit_b.write_text('{"type": "test", "tenant_id": "tenant_b"}\n')
+            audit_a.write_text('{"type": "test", "tenant_id": "tenant_a"}\n', encoding="utf-8")
+            audit_b.write_text('{"type": "test", "tenant_id": "tenant_b"}\n', encoding="utf-8")
 
             # Verify no split-brain
             assert audit_a != audit_b
-            events_a = [json.loads(line) for line in audit_a.read_text().split("\n") if line]
-            events_b = [json.loads(line) for line in audit_b.read_text().split("\n") if line]
+            events_a = [json.loads(line) for line in audit_a.read_text(encoding="utf-8").split("\n") if line]
+            events_b = [json.loads(line) for line in audit_b.read_text(encoding="utf-8").split("\n") if line]
             assert all(e["tenant_id"] == "tenant_a" for e in events_a)
             assert all(e["tenant_id"] == "tenant_b" for e in events_b)
 
@@ -994,7 +994,7 @@ class TestOriginalFindingsFixed:
             tools_a.mkdir(parents=True)
             tools_b.mkdir(parents=True)
 
-            (tools_a / "tool_a.py").write_text("pass")
+            (tools_a / "tool_a.py").write_text("pass", encoding="utf-8")
 
             assert (tools_a / "tool_a.py").exists()
             assert not (tools_b / "tool_a.py").exists()
@@ -1008,7 +1008,7 @@ class TestOriginalFindingsFixed:
             skills_a.mkdir(parents=True)
             skills_b.mkdir(parents=True)
 
-            (skills_a / "skill_a.json").write_text('{}')
+            (skills_a / "skill_a.json").write_text('{}', encoding="utf-8")
 
             assert list(skills_a.glob("*.json"))
             assert len(list(skills_b.glob("*.json"))) == 0
@@ -1022,11 +1022,11 @@ class TestOriginalFindingsFixed:
             metrics_a.parent.mkdir(parents=True)
             metrics_b.parent.mkdir(parents=True)
 
-            metrics_a.write_text('{"instances": 10}')
-            metrics_b.write_text('{"instances": 5}')
+            metrics_a.write_text('{"instances": 10}', encoding="utf-8")
+            metrics_b.write_text('{"instances": 5}', encoding="utf-8")
 
-            assert json.loads(metrics_a.read_text())["instances"] == 10
-            assert json.loads(metrics_b.read_text())["instances"] == 5
+            assert json.loads(metrics_a.read_text(encoding="utf-8"))["instances"] == 10
+            assert json.loads(metrics_b.read_text(encoding="utf-8"))["instances"] == 5
 
     def test_c5_bridge_credentials_cross_tenant_fixed(self):
         """C5: Bridge Credentials Cross-Tenant — FIXED."""
@@ -1037,11 +1037,11 @@ class TestOriginalFindingsFixed:
             config_a.parent.mkdir(parents=True)
             config_b.parent.mkdir(parents=True)
 
-            config_a.write_text('{"token": "secret_a"}')
-            config_b.write_text('{"token": "secret_b"}')
+            config_a.write_text('{"token": "secret_a"}', encoding="utf-8")
+            config_b.write_text('{"token": "secret_b"}', encoding="utf-8")
 
-            assert json.loads(config_a.read_text())["token"] == "secret_a"
-            assert json.loads(config_b.read_text())["token"] == "secret_b"
+            assert json.loads(config_a.read_text(encoding="utf-8"))["token"] == "secret_a"
+            assert json.loads(config_b.read_text(encoding="utf-8"))["token"] == "secret_b"
             assert not (config_b.parent / "secret_a").exists()
 
     def test_h1_telemetry_consent_not_tenant_scoped_fixed(self):
@@ -1053,12 +1053,12 @@ class TestOriginalFindingsFixed:
             consent_a.parent.mkdir(parents=True)
             consent_b.parent.mkdir(parents=True)
 
-            consent_a.write_text('{"opted_in": false}')
-            consent_b.write_text('{"opted_in": true}')
+            consent_a.write_text('{"opted_in": false}', encoding="utf-8")
+            consent_b.write_text('{"opted_in": true}', encoding="utf-8")
 
             # T1 opt-out doesn't affect T2
-            a_opted = json.loads(consent_a.read_text())["opted_in"]
-            b_opted = json.loads(consent_b.read_text())["opted_in"]
+            a_opted = json.loads(consent_a.read_text(encoding="utf-8"))["opted_in"]
+            b_opted = json.loads(consent_b.read_text(encoding="utf-8"))["opted_in"]
             assert a_opted == False
             assert b_opted == True
 
@@ -1071,12 +1071,12 @@ class TestOriginalFindingsFixed:
             state_a.parent.mkdir(parents=True)
             state_b.parent.mkdir(parents=True)
 
-            state_a.write_text('{"id": "a"}')
-            state_b.write_text('{"id": "b"}')
+            state_a.write_text('{"id": "a"}', encoding="utf-8")
+            state_b.write_text('{"id": "b"}', encoding="utf-8")
 
             assert state_a != state_b
-            assert json.loads(state_a.read_text())["id"] == "a"
-            assert json.loads(state_b.read_text())["id"] == "b"
+            assert json.loads(state_a.read_text(encoding="utf-8"))["id"] == "a"
+            assert json.loads(state_b.read_text(encoding="utf-8"))["id"] == "b"
 
     def test_h3_scope_root_requires_tenant_id_parameter_fixed(self):
         """H3: scope_root() Missing tenant_id — FIXED."""
@@ -1109,7 +1109,7 @@ class TestMultiTenantSkillCRUD:
             skills_b.mkdir(parents=True)
 
             # T1 creates skill "analyzer"
-            (skills_a / "analyzer.json").write_text('{"id": "analyzer"}')
+            (skills_a / "analyzer.json").write_text('{"id": "analyzer"}', encoding="utf-8")
 
             # T2 tries to load - should not find it
             assert (skills_a / "analyzer.json").exists()
@@ -1124,11 +1124,11 @@ class TestMultiTenantSkillCRUD:
 
             # T1 has 3 skills
             for i in range(3):
-                (Path(tmpdir) / "tenant_a" / "skills" / f"skill_{i}.json").write_text('{}')
+                (Path(tmpdir) / "tenant_a" / "skills" / f"skill_{i}.json").write_text('{}', encoding="utf-8")
 
             # T2 has 2 skills
             for i in range(2):
-                (Path(tmpdir) / "tenant_b" / "skills" / f"skill_{i}.json").write_text('{}')
+                (Path(tmpdir) / "tenant_b" / "skills" / f"skill_{i}.json").write_text('{}', encoding="utf-8")
 
             # Verify listings don't cross-contaminate
             t1_skills = list((Path(tmpdir) / "tenant_a" / "skills").glob("*.json"))
@@ -1146,8 +1146,8 @@ class TestMultiTenantSkillCRUD:
             skill_a = Path(tmpdir) / "tenant_a" / "skills" / "shared_name.json"
             skill_b = Path(tmpdir) / "tenant_b" / "skills" / "shared_name.json"
 
-            skill_a.write_text('{"id": "a"}')
-            skill_b.write_text('{"id": "b"}')
+            skill_a.write_text('{"id": "a"}', encoding="utf-8")
+            skill_b.write_text('{"id": "b"}', encoding="utf-8")
 
             # Delete T1's skill
             skill_a.unlink()
@@ -1167,7 +1167,7 @@ class TestMultiTenantToolCRUD:
                 (Path(tmpdir) / tid / "tools").mkdir(parents=True)
 
             tool_a = Path(tmpdir) / "tenant_a" / "tools" / "http_get.py"
-            tool_a.write_text("def http_get(): pass")
+            tool_a.write_text("def http_get(): pass", encoding="utf-8")
 
             assert tool_a.exists()
             assert not (Path(tmpdir) / "tenant_b" / "tools" / "http_get.py").exists()
@@ -1179,11 +1179,11 @@ class TestMultiTenantToolCRUD:
                 (Path(tmpdir) / tid / "tools").mkdir(parents=True)
 
             # T1 has 2 tools
-            (Path(tmpdir) / "tenant_a" / "tools" / "tool1.py").write_text("pass")
-            (Path(tmpdir) / "tenant_a" / "tools" / "tool2.py").write_text("pass")
+            (Path(tmpdir) / "tenant_a" / "tools" / "tool1.py").write_text("pass", encoding="utf-8")
+            (Path(tmpdir) / "tenant_a" / "tools" / "tool2.py").write_text("pass", encoding="utf-8")
 
             # T2 has 1 tool
-            (Path(tmpdir) / "tenant_b" / "tools" / "tool1.py").write_text("pass")
+            (Path(tmpdir) / "tenant_b" / "tools" / "tool1.py").write_text("pass", encoding="utf-8")
 
             t1_tools = list((Path(tmpdir) / "tenant_a" / "tools").glob("*.py"))
             t2_tools = list((Path(tmpdir) / "tenant_b" / "tools").glob("*.py"))
@@ -1204,16 +1204,16 @@ class TestAuditTrailTenantIsolation:
             audit_b.parent.mkdir(parents=True)
 
             # Initial events
-            audit_a.write_text('{"seq": 1, "tenant_id": "tenant_a"}\n')
-            audit_b.write_text('{"seq": 1, "tenant_id": "tenant_b"}\n')
+            audit_a.write_text('{"seq": 1, "tenant_id": "tenant_a"}\n', encoding="utf-8")
+            audit_b.write_text('{"seq": 1, "tenant_id": "tenant_b"}\n', encoding="utf-8")
 
             # Append to T1
-            with open(audit_a, "a") as f:
+            with open(audit_a, "a", encoding="utf-8") as f:
                 f.write('{"seq": 2, "tenant_id": "tenant_a"}\n')
 
             # T2 unchanged
-            lines_a = audit_a.read_text().split("\n")
-            lines_b = audit_b.read_text().split("\n")
+            lines_a = audit_a.read_text(encoding="utf-8").split("\n")
+            lines_b = audit_b.read_text(encoding="utf-8").split("\n")
 
             assert len([l for l in lines_a if l]) == 2
             assert len([l for l in lines_b if l]) == 1
@@ -1224,15 +1224,15 @@ class TestAuditTrailTenantIsolation:
             for tid in ["tenant_a", "tenant_b"]:
                 audit = Path(tmpdir) / tid / "audit.jsonl"
                 audit.parent.mkdir(parents=True)
-                audit.write_text("")  # Initialize file
+                audit.write_text("", encoding="utf-8")  # Initialize file
 
                 # Write 5 events per tenant
                 for i in range(5):
                     event = {"seq": i, "type": "test", "tenant_id": tid}
-                    audit.write_text(audit.read_text() + json.dumps(event) + "\n")
+                    audit.write_text(audit.read_text(encoding="utf-8") + json.dumps(event) + "\n", encoding="utf-8")
 
                 # Verify all events have correct tenant_id
-                events = [json.loads(line) for line in audit.read_text().split("\n") if line]
+                events = [json.loads(line) for line in audit.read_text(encoding="utf-8").split("\n") if line]
                 assert all(e["tenant_id"] == tid for e in events)
 
 
@@ -1245,17 +1245,17 @@ class TestConsentManagementPerTenant:
             for tid in ["tenant_a", "tenant_b"]:
                 consent = Path(tmpdir) / tid / "consent.json"
                 consent.parent.mkdir(parents=True)
-                consent.write_text('{"opted_in": true}')
+                consent.write_text('{"opted_in": true}', encoding="utf-8")
 
             # T1 opts out
             consent_a = Path(tmpdir) / "tenant_a" / "consent.json"
-            data = json.loads(consent_a.read_text())
+            data = json.loads(consent_a.read_text(encoding="utf-8"))
             data["opted_in"] = False
-            consent_a.write_text(json.dumps(data))
+            consent_a.write_text(json.dumps(data), encoding="utf-8")
 
             # Verify T2 unchanged
             consent_b = Path(tmpdir) / "tenant_b" / "consent.json"
-            data_b = json.loads(consent_b.read_text())
+            data_b = json.loads(consent_b.read_text(encoding="utf-8"))
             assert data_b["opted_in"] == True
 
     def test_consent_file_separate_per_tenant(self):
@@ -1382,7 +1382,7 @@ class TestAdversarialFilePermissions:
 
             # Create file with setuid bit (in practice, would fail without root)
             setuid_file = tenant_dir / "setuid_binary"
-            setuid_file.write_text("#!/bin/bash\necho admin")
+            setuid_file.write_text("#!/bin/bash\necho admin", encoding="utf-8")
 
             # Even if created, it's contained within tenant directory
             assert str(setuid_file).startswith(str(tenant_dir))
@@ -1429,13 +1429,13 @@ class TestMultiTenantE2EWorkflows:
             t1_skills = Path(tmpdir) / "tenant_a" / "skills"
             for i in range(3):
                 skill = t1_skills / f"skill_{i}.json"
-                skill.write_text(json.dumps({"id": f"skill_{i}", "version": 1}))
+                skill.write_text(json.dumps({"id": f"skill_{i}", "version": 1}), encoding="utf-8")
 
             # Update skill_0
             skill_0 = t1_skills / "skill_0.json"
-            data = json.loads(skill_0.read_text())
+            data = json.loads(skill_0.read_text(encoding="utf-8"))
             data["version"] = 2
-            skill_0.write_text(json.dumps(data))
+            skill_0.write_text(json.dumps(data), encoding="utf-8")
 
             # Delete skill_2
             (t1_skills / "skill_2.json").unlink()
@@ -1444,7 +1444,7 @@ class TestMultiTenantE2EWorkflows:
             t2_skills = Path(tmpdir) / "tenant_b" / "skills"
             for i in range(2):
                 skill = t2_skills / f"analyzer_{i}.json"
-                skill.write_text(json.dumps({"id": f"analyzer_{i}"}))
+                skill.write_text(json.dumps({"id": f"analyzer_{i}"}), encoding="utf-8")
 
             # Verify T1 has 2 skills (1 original + 1 updated, 1 deleted)
             t1_list = list(t1_skills.glob("*.json"))
@@ -1459,7 +1459,7 @@ class TestMultiTenantE2EWorkflows:
             assert all("analyzer" in str(s) for s in t2_list)
 
             # Verify version update in T1
-            skill_0_updated = json.loads(skill_0.read_text())
+            skill_0_updated = json.loads(skill_0.read_text(encoding="utf-8"))
             assert skill_0_updated["version"] == 2
 
     def test_e2e_concurrent_operations_per_tenant(self):
@@ -1474,12 +1474,12 @@ class TestMultiTenantE2EWorkflows:
                 t1_file = Path(tmpdir) / "tenant_a" / "data" / f"record_{i}.json"
                 t2_file = Path(tmpdir) / "tenant_b" / "data" / f"record_{i}.json"
 
-                t1_file.write_text(json.dumps({"id": i, "tenant": "a"}))
-                t2_file.write_text(json.dumps({"id": i, "tenant": "b"}))
+                t1_file.write_text(json.dumps({"id": i, "tenant": "a"}), encoding="utf-8")
+                t2_file.write_text(json.dumps({"id": i, "tenant": "b"}), encoding="utf-8")
 
             # Verify no corruption or mixing
-            t1_records = [json.loads((Path(tmpdir) / "tenant_a" / "data" / f"record_{i}.json").read_text()) for i in range(10)]
-            t2_records = [json.loads((Path(tmpdir) / "tenant_b" / "data" / f"record_{i}.json").read_text()) for i in range(10)]
+            t1_records = [json.loads((Path(tmpdir) / "tenant_a" / "data" / f"record_{i}.json").read_text(encoding="utf-8")) for i in range(10)]
+            t2_records = [json.loads((Path(tmpdir) / "tenant_b" / "data" / f"record_{i}.json").read_text(encoding="utf-8")) for i in range(10)]
 
             assert all(r["tenant"] == "a" for r in t1_records)
             assert all(r["tenant"] == "b" for r in t2_records)
@@ -1499,17 +1499,17 @@ class TestMultiTenantE2EWorkflows:
                 {"seq": 2, "type": "skill_update", "skill_id": "s1", "tenant_id": "tenant_a"},
                 {"seq": 3, "type": "skill_delete", "skill_id": "s1", "tenant_id": "tenant_a"},
             ]
-            audit_a.write_text("\n".join(json.dumps(e) for e in events_a))
+            audit_a.write_text("\n".join(json.dumps(e) for e in events_a), encoding="utf-8")
 
             # T2 audit trail: different operations
             events_b = [
                 {"seq": 1, "type": "tool_create", "tool_id": "t1", "tenant_id": "tenant_b"},
             ]
-            audit_b.write_text("\n".join(json.dumps(e) for e in events_b))
+            audit_b.write_text("\n".join(json.dumps(e) for e in events_b), encoding="utf-8")
 
             # Verify audit trails are separate
-            audit_a_events = [json.loads(line) for line in audit_a.read_text().split("\n")]
-            audit_b_events = [json.loads(line) for line in audit_b.read_text().split("\n")]
+            audit_a_events = [json.loads(line) for line in audit_a.read_text(encoding="utf-8").split("\n")]
+            audit_b_events = [json.loads(line) for line in audit_b.read_text(encoding="utf-8").split("\n")]
 
             assert len(audit_a_events) == 3
             assert len(audit_b_events) == 1
@@ -1534,7 +1534,7 @@ class TestBridgeMultiTenantE2E:
                 "messages": [
                     {"id": 1, "text": "hello from T1"},
                 ]
-            }))
+            }), encoding="utf-8")
 
             # T2 Discord bridge
             bridge_b = Path(tmpdir) / "tenant_b" / "bridges" / "discord"
@@ -1547,11 +1547,11 @@ class TestBridgeMultiTenantE2E:
                 "messages": [
                     {"id": 1, "text": "hello from T2"},
                 ]
-            }))
+            }), encoding="utf-8")
 
             # Verify bridges are isolated
-            data_a = json.loads(state_a.read_text())
-            data_b = json.loads(state_b.read_text())
+            data_a = json.loads(state_a.read_text(encoding="utf-8"))
+            data_b = json.loads(state_b.read_text(encoding="utf-8"))
 
             assert data_a["channel_id"] != data_b["channel_id"]
             assert data_a["messages"][0]["text"] == "hello from T1"
@@ -1626,7 +1626,7 @@ class TestComprehensiveTenantIsolation:
 
                 for fname in shared_names:
                     fpath = tenant_dir / fname
-                    fpath.write_text(json.dumps({"tenant_id": tid}))
+                    fpath.write_text(json.dumps({"tenant_id": tid}), encoding="utf-8")
 
             # Verify files are separate
             for fname in shared_names:
@@ -1634,8 +1634,8 @@ class TestComprehensiveTenantIsolation:
                 file_b = Path(tmpdir) / "tenant_b" / fname
 
                 assert file_a != file_b
-                data_a = json.loads(file_a.read_text())
-                data_b = json.loads(file_b.read_text())
+                data_a = json.loads(file_a.read_text(encoding="utf-8"))
+                data_b = json.loads(file_b.read_text(encoding="utf-8"))
                 assert data_a["tenant_id"] == "tenant_a"
                 assert data_b["tenant_id"] == "tenant_b"
 

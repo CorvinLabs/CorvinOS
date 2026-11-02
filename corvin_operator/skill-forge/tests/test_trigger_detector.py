@@ -372,7 +372,7 @@ def test_invalid_json_in_audit_file():
         # Create an audit file with invalid JSON
         audit_path = temp_audit_dir / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
         audit_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(audit_path, "w") as f:
+        with open(audit_path, "w", encoding="utf-8") as f:
             f.write('{"valid": "json"}\n')
             f.write('{"invalid json\n')  # Invalid!
 
@@ -532,7 +532,7 @@ def test_empty_audit_file():
         # Create empty audit file
         audit_path = temp_audit_dir / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
         audit_path.parent.mkdir(parents=True, exist_ok=True)
-        audit_path.write_text("")
+        audit_path.write_text("", encoding="utf-8")
 
         with patch.object(trigger_detector_module, "tenant_audit_chain") as mock_chain:
             mock_chain.return_value = audit_path

@@ -202,7 +202,7 @@ class TestUnitWorkflowOptimizer:
         config_dir = Path(temp_config_dir)
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / "workflow_optimizer_config_corrupted.json"
-        config_file.write_text("{ invalid json }")
+        config_file.write_text("{ invalid json }", encoding="utf-8")
 
         # Should fall back to defaults
         config = optimizer.load_config("corrupted")

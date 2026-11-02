@@ -74,7 +74,7 @@ def _write_origin(d: Path, origin: str = ORIGIN, *, spawn_worker: bool = True) -
     p = d / f"{origin}.json"
     p.write_text(json.dumps({
         "origin_id": origin, "hmac_key": HMAC_KEY, "recv_key": RECV_KEY, "enabled": True,
-        "max_ttl_s": 300, "allowed_personas": ["assistant"], "spawn_worker": spawn_worker}))
+        "max_ttl_s": 300, "allowed_personas": ["assistant"], "spawn_worker": spawn_worker}), encoding="utf-8")
     p.chmod(0o600)
 
 
@@ -200,7 +200,7 @@ class TestStateMachine(_Base):
 
     def test_store_is_content_free(self):
         ats.record_stage("o", "t", "completed")
-        raw = (Path(os.environ["CORVIN_A2A_FEED_DIR"]) / "task_state.jsonl").read_text()
+        raw = (Path(os.environ["CORVIN_A2A_FEED_DIR"]) / "task_state.jsonl").read_text(encoding="utf-8")
         self.assertEqual(set(json.loads(raw.splitlines()[-1])),
                          {"origin_id", "task_id", "stage", "stage_seq", "updated_at", "reason"})
         mode = (Path(os.environ["CORVIN_A2A_FEED_DIR"]) / "task_state.jsonl").stat().st_mode & 0o777
@@ -265,7 +265,7 @@ class TestLifecycleThroughReceiver(_Base):
         for env in (bad, stranger, replay_old, {"junk": 1}, {}):
             self.assertEqual(recv.receive(env).status, "rejected")
         feed = Path(os.environ["CORVIN_A2A_FEED_DIR"]) / "task_state.jsonl"
-        self.assertFalse(feed.exists() and feed.read_text().strip(),
+        self.assertFalse(feed.exists() and feed.read_text(encoding="utf-8").strip(),
                          "rejections before `delivered` must leave no stage record")
         for t in ("bad-sig", "stranger", "stale"):
             self.assertEqual(ats.lookup(ORIGIN, t)["stage"], "unknown")
@@ -505,7 +505,7 @@ class TestRefusalReasonTravelsToTheSender(_Base):
         ep.write_text(json.dumps({
             "endpoint_id": "ep-1", "url": "http://peer.invalid/v1/a2a/receive",
             "hmac_key": HMAC_KEY, "recv_key": RECV_KEY, "instance_id": "", "enabled": True,
-            "default_ttl_s": 60, "origin_id_for_send": ORIGIN}))
+            "default_ttl_s": 60, "origin_id_for_send": ORIGIN}), encoding="utf-8")
         ep.chmod(0o600)
         sender = rts.RemoteTriggerSender(eps, rts.RemoteEndpointRegistry(eps), instance_id=instance)
         # the real receiver answers; only the network hop is replaced
@@ -604,7 +604,7 @@ class TestRefusalReasonTravelsToTheSender(_Base):
         for text in rts._WORKER_REFUSAL_TEXT.values():
             self.assertEqual(rts._sanitize_error(text), text, "text must pass the audit template gate")
         self.assertTrue(codes <= set(ats.REASONS), codes - set(ats.REASONS))
-        src = Path(a2a_worker.__file__).read_text()
+        src = Path(a2a_worker.__file__).read_text(encoding="utf-8")
         import re as _re
         used = set(_re.findall(r'reason_code="([a-z_]+)"', src))
         self.assertTrue(used and used <= codes, f"worker emits codes with no text: {used - codes}")
@@ -630,7 +630,7 @@ class TestPlatformIndependence(_Base):
 
     def test_task_state_persists_without_o_nofollow(self):
         ats.record_stage("o", "t", "completed")
-        raw = (Path(os.environ["CORVIN_A2A_FEED_DIR"]) / "task_state.jsonl").read_text()
+        raw = (Path(os.environ["CORVIN_A2A_FEED_DIR"]) / "task_state.jsonl").read_text(encoding="utf-8")
         self.assertIn('"stage": "completed"', raw)
         ats._reset_for_tests()
         self.assertEqual(ats.lookup("o", "t")["stage"], "completed")   # and survives a restart

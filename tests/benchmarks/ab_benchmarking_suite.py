@@ -474,7 +474,7 @@ async def run_ab_benchmark() -> Dict[str, Any]:
 
     # Save report
     report_path = Path(__file__).parent / "ab_benchmark_results.json"
-    report_path.write_text(json.dumps(report, indent=2, default=str))
+    report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
 
     logger.info(f"A/B benchmark report saved to {report_path}")
 

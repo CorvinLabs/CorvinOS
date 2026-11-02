@@ -33,7 +33,7 @@ def _send(sb: Path, chat: str, text: str, n: int) -> None:
     inbox = sb / "inbox"
     inbox.mkdir(parents=True, exist_ok=True)
     item = {"id": f"a{n}", "channel": h.CHANNEL, "chat_id": chat, "from": chat, "text": text}
-    (inbox / f"a{n}.json").write_text(json.dumps(item))
+    (inbox / f"a{n}.json").write_text(json.dumps(item), encoding="utf-8")
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         if len(list((sb / "processed").glob("*.json"))) >= n:
@@ -52,13 +52,13 @@ def main() -> int:
     chats = ("anchor-chat-a", "anchor-chat-b")
     (sb / "bridges" / h.CHANNEL).mkdir(parents=True)
     (sb / "bridges" / h.CHANNEL / "settings.json").write_text(
-        json.dumps({"chat_profiles": {c: {} for c in chats}}))
+        json.dumps({"chat_profiles": {c: {} for c in chats}}), encoding="utf-8")
     overlay = sb / "home" / "tenants" / "_default" / "global" / "features.json"
     overlay.parent.mkdir(parents=True, exist_ok=True)
     overlay.write_text(json.dumps({"flags": {"vibe_engineering": True,
-                                             "cel_load_bearing_anchor": True}}))
+                                             "cel_load_bearing_anchor": True}}), encoding="utf-8")
     proc = subprocess.Popen([sys.executable, str(h.ADAPTER)], env=env,
-                            stdout=open(sb / "adapter.log", "a"), stderr=subprocess.STDOUT)
+                            stdout=open(sb / "adapter.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
     failures: list[str] = []
 
     def check(cond: bool, msg: str) -> None:
@@ -76,39 +76,39 @@ def main() -> int:
         check(any(chats[0] in s for s in st) and any(chats[1] in s for s in st),
               "each chat has its own anchor store")
         a = next((p for p in (sb / "home").rglob(f"cel_anchors/*{chats[0]}*.jsonl")), None)
-        b_txt = "".join(p.read_text() for p in (sb / "home").rglob(f"cel_anchors/*{chats[1]}*.jsonl"))
-        check(a is not None and "billing export" in a.read_text(), "chat A's goal is in chat A's store")
+        b_txt = "".join(p.read_text(encoding="utf-8") for p in (sb / "home").rglob(f"cel_anchors/*{chats[1]}*.jsonl"))
+        check(a is not None and "billing export" in a.read_text(encoding="utf-8"), "chat A's goal is in chat A's store")
         check("billing export" not in b_txt, "chat A's goal never reaches chat B's store")
 
         r = subprocess.run([sys.executable, str(h.RESET), "--channel", h.CHANNEL, "--chat-id",
-                            chats[0], "--reason", "timeout"], env=env, capture_output=True, text=True)
+                            chats[0], "--reason", "timeout"], env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
         check(r.returncode == 0, "timeout reset ran")
         _send(sb, chats[0], "continue with the export", 3)
         st2 = _stores(sb)
         # The anchored goal of turn 1 (promoted once turn 1 was answered) must
         # reach the WORKER prompt of this turn — deterministic CEL path.
-        calls = [json.loads(l) for l in (sb / "args.jsonl").read_text().splitlines() if l.strip()]
+        calls = [json.loads(l) for l in (sb / "args.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
         a_calls = [c for c in calls if c.get("chat_key") == chats[0]]
         args = a_calls[-1]["args"]
         sp = (args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args
-              else Path(args[args.index("--append-system-prompt-file") + 1]).read_text())
+              else Path(args[args.index("--append-system-prompt-file") + 1]).read_text(encoding="utf-8"))
         check("migrate the billing export to Parquet" in sp.split("Load-bearing facts", 1)[-1]
               if "Load-bearing facts" in sp else False,
               "chat A's anchored goal reaches the worker's system prompt")
         b_calls = [c for c in calls if c.get("chat_key") == chats[1]]
         b_args = b_calls[-1]["args"]
         b_sp = (b_args[b_args.index("--append-system-prompt") + 1] if "--append-system-prompt" in b_args
-                else Path(b_args[b_args.index("--append-system-prompt-file") + 1]).read_text())
+                else Path(b_args[b_args.index("--append-system-prompt-file") + 1]).read_text(encoding="utf-8"))
         check("billing export" not in b_sp, "chat A's goal never reaches chat B's worker")
         check(st2 == st, f"an unwanted reset keeps the same store: {st2}")
 
         # /new needs a session to wipe; the fake engine leaves none, so mark one.
         led = next(p.parent for p in (sb / "home").rglob("session_ledger/*/*/ledger.jsonl")
-                   if json.loads(p.read_text().splitlines()[0])["chat_key"] == chats[0])
+                   if json.loads(p.read_text(encoding="utf-8").splitlines()[0])["chat_key"] == chats[0])
         wd = led.parents[2] / "sessions" / "voice" / led.parent.name / led.name
         (wd / ".session_started").touch()
         r = subprocess.run([sys.executable, str(h.RESET), "--channel", h.CHANNEL, "--chat-id",
-                            chats[0], "--reason", "manual"], env=env, capture_output=True, text=True)
+                            chats[0], "--reason", "manual"], env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
         check(r.returncode == 0, "/new ran")
         _send(sb, chats[0], "Goal for this chat: write release notes", 4)
         st3 = _stores(sb)
@@ -118,7 +118,7 @@ def main() -> int:
               and new[0][len(f"telegram_{chats[0]}_"):-len(".jsonl")].isdigit(),
               f"/new starts a new epoch store: {new}")
         if new:
-            fresh = next((sb / "home").rglob(f"cel_anchors/{new[0]}")).read_text()
+            fresh = next((sb / "home").rglob(f"cel_anchors/{new[0]}")).read_text(encoding="utf-8")
             check("billing export" not in fresh and "release notes" in fresh,
                   "the new epoch does not inherit the old goal")
     finally:

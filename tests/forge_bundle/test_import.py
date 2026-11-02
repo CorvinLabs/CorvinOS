@@ -183,7 +183,7 @@ def test_existing_tool_satisfies_a_versioned_requirement(make_tool):
 def test_A9_C10_unreadable_inventory_is_a_recorded_refusal(tool_bundle, tmp_corvin_home, chain_events):
     reg = tmp_corvin_home / "skills_installed" / "skills_registry.json"
     reg.parent.mkdir(parents=True, exist_ok=True)
-    reg.write_text("[1, 2, 3]")
+    reg.write_text("[1, 2, 3]", encoding="utf-8")
     with pytest.raises(BundleImportError) as exc:
         _import(tool_bundle)
     assert exc.value.stage == "inventory"
@@ -291,7 +291,7 @@ def test_C5_a_travelling_review_flag_is_dropped(make_layer):
 
     data = _layer_bundle(make_layer, lambda m: m.update(review_flagged=True, review_flags=["x"], status="deployed"))
     assert _import(data).outcomes[0].status == "forged"
-    stored = json.loads((layer_forge_home(T) / "registry" / "acme.audit-l34@1.0.0.json").read_text())
+    stored = json.loads((layer_forge_home(T) / "registry" / "acme.audit-l34@1.0.0.json").read_text(encoding="utf-8"))
     assert "review_flagged" not in stored and stored["status"] != "deployed"
 
 
@@ -376,9 +376,9 @@ def test_S8_a_tampered_meta_file_cannot_redirect_the_impl_read(tool_bundle):
     qid = _qid(_import(tool_bundle))
     q = ToolQuarantine(T)
     meta_path = q.root / qid / "meta.json"
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["impl_filename"] = "../../../../etc/passwd"
-    meta_path.write_text(json.dumps(meta))
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
     with pytest.raises(QuarantineError, match="inconsistent"):
         tq.accept(T, qid, actor="test")
 
@@ -386,7 +386,7 @@ def test_S8_a_tampered_meta_file_cannot_redirect_the_impl_read(tool_bundle):
 def test_implementation_changed_on_disk_is_refused_at_accept(tool_bundle):
     qid = _qid(_import(tool_bundle))
     q = ToolQuarantine(T)
-    (q.root / qid / q.get(qid).impl_filename).write_text("import os\nos.system('id')\n")
+    (q.root / qid / q.get(qid).impl_filename).write_text("import os\nos.system('id')\n", encoding="utf-8")
     with pytest.raises(QuarantineError, match="changed on disk"):
         tq.accept(T, qid, actor="test")
     assert _registry_tool("csv.count") is None
@@ -573,7 +573,7 @@ def test_R2B_1_a_layer_written_before_layer_forges_audit_failed_counts_as_landed
 def test_R2B_4_an_unreadable_forged_skill_is_an_inventory_refusal(tool_bundle, tmp_corvin_home):
     broken = tmp_corvin_home / "skills_gen" / "broken"
     broken.mkdir(parents=True)
-    (broken / "skill.json").write_text("{not json")
+    (broken / "skill.json").write_text("{not json", encoding="utf-8")
     with pytest.raises(BundleImportError) as exc:
         _import(tool_bundle)
     assert exc.value.stage == "inventory"
@@ -724,9 +724,9 @@ def test_R3A_9_a_concurrent_writers_layer_is_not_reported_as_ours(make_layer, mo
 
     def someone_else_wins(self, entry_id, version, to_status):
         path = self.registry._path_for(entry_id, version)
-        stored = json.loads(path.read_text())
+        stored = json.loads(path.read_text(encoding="utf-8"))
         stored["targets"] = [{"layer_id": "L99"}]      # different content under the same key
-        path.write_text(json.dumps(stored))
+        path.write_text(json.dumps(stored), encoding="utf-8")
         raise orch_mod.audit.LayerForgeAuditError("chain down")
 
     monkeypatch.setattr(orch_mod.LayerForgeOrchestrator, "_transition_locked", someone_else_wins)

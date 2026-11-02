@@ -20,7 +20,7 @@ def load_installation_defaults() -> Dict[str, Any]:
             "ldd": {"enabled": True, "quality_ldd_enabled": True}
         }
 
-    with open(defaults_file) as f:
+    with open(defaults_file, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 def get_quality_skills_for_task(task_type: str, task_size: str) -> list:

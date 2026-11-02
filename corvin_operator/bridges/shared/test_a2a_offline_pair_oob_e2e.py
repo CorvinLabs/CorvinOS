@@ -98,20 +98,20 @@ class _Install:
 
     def cli(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, str(CLI), *args], capture_output=True, text=True,
-                              timeout=180, env=self.env(**extra), cwd=str(self.root))
+                              timeout=180, env=self.env(**extra), cwd=str(self.root), encoding="utf-8", errors="replace")
 
     def iid(self) -> str:
         """This installation's instance id, created on first use as on a real install."""
         res = subprocess.run([sys.executable, "-c",
                               "import instance_identity as i; print(i.get_instance_id())"],
-                             capture_output=True, text=True, timeout=60, env=self.env())
+                             capture_output=True, text=True, timeout=60, env=self.env(), encoding="utf-8", errors="replace")
         assert res.returncode == 0, res.stderr[-2000:]
         return res.stdout.strip()
 
     def records(self, event: str) -> list[dict]:
         if not self.chain.exists():
             return []
-        rows = [json.loads(l) for l in self.chain.read_text().splitlines() if l.strip()]
+        rows = [json.loads(l) for l in self.chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         return [r for r in rows if r.get("event_type") == event]
 
     def as_this(self):
@@ -215,7 +215,7 @@ class _PairHarness(unittest.TestCase):
         url = self._serve_a()
         res = self.a.cli("pair", "peer-b", url, "--offline-pair", "--local-endpoint-id", "to-a")
         self.assertEqual(res.returncode, 0, res.stderr[-3000:])
-        origin = json.loads((self.a.origins / "peer-b.json").read_text())
+        origin = json.loads((self.a.origins / "peer-b.json").read_text(encoding="utf-8"))
         self.assertEqual(origin["oob_state"], "pending")
         self.assertFalse(origin["enabled"], "a pending offline pair is not usable")
         handoff = _json_tail(res.stdout)
@@ -224,11 +224,11 @@ class _PairHarness(unittest.TestCase):
 
     def _step2_b_imports(self, handoff: dict, name: str = "handoff.json", *extra: str) -> dict:
         f = self.b.root / name
-        f.write_text(json.dumps(handoff))
+        f.write_text(json.dumps(handoff), encoding="utf-8")
         res = self.b.cli("pair-import", str(f), "--json", *extra)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr[-3000:])
         out = _json_tail(res.stdout)
-        ep = json.loads((self.b.endpoints / "to-a.json").read_text())
+        ep = json.loads((self.b.endpoints / "to-a.json").read_text(encoding="utf-8"))
         self.assertEqual(ep["oob_state"], "pending")
         self.assertFalse(ep["enabled"])
         return out
@@ -261,7 +261,7 @@ class OfflinePairE2E(_PairHarness):
     # ── tests ─────────────────────────────────────────────────────────────
     def test_both_confirm_then_accepted_after_the_grace_period(self):
         fp, b_iid = self._full_pair()
-        origin = json.loads((self.a.origins / "peer-b.json").read_text())
+        origin = json.loads((self.a.origins / "peer-b.json").read_text(encoding="utf-8"))
         self.assertEqual(origin["attestation"], "attested_out_of_band")
         self.assertEqual(origin["sender_instance_id_pin"], b_iid)
         self.assertTrue(origin["enabled"])
@@ -281,7 +281,7 @@ class OfflinePairE2E(_PairHarness):
         r = self._a_confirms(imp["instance_id"], wrong)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("fingerprint", r.stderr.lower())
-        origin = json.loads((self.a.origins / "peer-b.json").read_text())
+        origin = json.loads((self.a.origins / "peer-b.json").read_text(encoding="utf-8"))
         self.assertEqual(origin["oob_state"], "pending")
         self.assertFalse(origin["enabled"])
         self.assertEqual(self._b_confirms(imp["fingerprint"]).returncode, 0)
@@ -297,7 +297,7 @@ class OfflinePairE2E(_PairHarness):
         self.assertEqual(self._a_confirms(imp["instance_id"], imp["fingerprint"]).returncode, 0)
         r = self._b_confirms("ABCD-ABCD-ABCD-ABCD-ABCD")
         self.assertNotEqual(r.returncode, 0)
-        ep = json.loads((self.b.endpoints / "to-a.json").read_text())
+        ep = json.loads((self.b.endpoints / "to-a.json").read_text(encoding="utf-8"))
         self.assertEqual(ep["oob_state"], "pending")
         self._serve_a()
         self._assert_sender_refused(self._send())
@@ -313,9 +313,9 @@ class OfflinePairE2E(_PairHarness):
         self._assert_sender_refused(res)  # B never confirmed: B must not be able to send
         # flipping `enabled` by hand does not complete a pair either
         p = self.b.endpoints / "to-a.json"
-        ep = json.loads(p.read_text())
+        ep = json.loads(p.read_text(encoding="utf-8"))
         ep["enabled"] = True
-        p.write_text(json.dumps(ep))
+        p.write_text(json.dumps(ep), encoding="utf-8")
         p.chmod(0o600)
         self._assert_sender_refused(self._send())  # pending is refused on oob_state alone
 
@@ -325,9 +325,9 @@ class OfflinePairE2E(_PairHarness):
         fp_a = self._a_shows(imp["instance_id"])
         self.assertEqual(self._b_confirms(fp_a).returncode, 0)
         p = self.a.origins / "peer-b.json"
-        o = json.loads(p.read_text())
+        o = json.loads(p.read_text(encoding="utf-8"))
         o["enabled"] = True       # by hand, without pair-confirm
-        p.write_text(json.dumps(o))
+        p.write_text(json.dumps(o), encoding="utf-8")
         p.chmod(0o600)
         self._serve_a()
         res = self._send()
@@ -335,11 +335,11 @@ class OfflinePairE2E(_PairHarness):
 
     def test_a_fingerprint_from_a_previous_pairing_is_refused(self):
         old_fp, b_iid = self._full_pair()
-        old_handoff = json.loads((self.b.endpoints / "to-a.json").read_text())
+        old_handoff = json.loads((self.b.endpoints / "to-a.json").read_text(encoding="utf-8"))
         # replaying the old endpoint file on B: its fingerprint is already used
         f = self.b.root / "old.json"
         old_handoff = dict(old_handoff, enabled=False, oob_state="pending")
-        f.write_text(json.dumps(old_handoff))
+        f.write_text(json.dumps(old_handoff), encoding="utf-8")
         r = self.b.cli("pair-import", str(f), "--force", "--json")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("already used", r.stderr)
@@ -351,15 +351,15 @@ class OfflinePairE2E(_PairHarness):
         self.assertNotEqual(imp["fingerprint"], old_fp, "new keys, new fingerprint")
         r = self._a_confirms(b_iid, old_fp)
         self.assertNotEqual(r.returncode, 0)
-        self.assertEqual(json.loads((self.a.origins / "peer-b.json").read_text())["oob_state"], "pending")
+        self.assertEqual(json.loads((self.a.origins / "peer-b.json").read_text(encoding="utf-8"))["oob_state"], "pending")
 
     def test_legacy_unconfirmed_offline_pair_keeps_todays_grace_behaviour(self):
         self._full_pair()
         p = self.a.origins / "peer-b.json"
-        o = json.loads(p.read_text())
+        o = json.loads(p.read_text(encoding="utf-8"))
         for k in ("oob_state", "attestation", "oob_fingerprint", "oob_confirmed_at", "pairing_mode"):
             o.pop(k, None)                         # an offline pair from before ADR-2295
-        p.write_text(json.dumps(o))
+        p.write_text(json.dumps(o), encoding="utf-8")
         p.chmod(0o600)
         self._serve_a()
         self.assertTrue(self._sent_ok(self._send()), "inside the grace period: accepted")
@@ -369,9 +369,9 @@ class OfflinePairE2E(_PairHarness):
     def test_a_tampered_confirmed_origin_is_not_attested(self):
         self._full_pair()
         p = self.a.origins / "peer-b.json"
-        o = json.loads(p.read_text())
+        o = json.loads(p.read_text(encoding="utf-8"))
         o["oob_fingerprint"] = "FFFF-FFFF-FFFF-FFFF-FFFF"
-        p.write_text(json.dumps(o))
+        p.write_text(json.dumps(o), encoding="utf-8")
         p.chmod(0o600)
         self._serve_a()
         self._manifest = GRACE_OVER
@@ -407,9 +407,9 @@ class OfflinePairE2E(_PairHarness):
         for r in conf_a + conf_b:
             self.assertEqual(r["details"]["actor"], "operator")
         # no key material, no full fingerprint, in either chain
-        origin = json.loads((self.a.origins / "peer-b.json").read_text())
+        origin = json.loads((self.a.origins / "peer-b.json").read_text(encoding="utf-8"))
         for inst in (self.a, self.b):
-            blob = inst.chain.read_text()
+            blob = inst.chain.read_text(encoding="utf-8")
             for secret in (origin["hmac_key"], origin["recv_key"], fp, fp.replace("-", "")):
                 self.assertNotIn(secret, blob)
             ok, problems = inst.verify()

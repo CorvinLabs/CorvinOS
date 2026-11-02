@@ -276,7 +276,7 @@ class TestNegotiationHaikuModel(unittest.TestCase):
         import ast
 
         # Check this test file itself (the stub negotiate_backend above)
-        this_source = Path(__file__).read_text()
+        this_source = Path(__file__).read_text(encoding="utf-8")
         tree = ast.parse(this_source)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

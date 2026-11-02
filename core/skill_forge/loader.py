@@ -206,7 +206,7 @@ class SkillRegistry:
         # Walk directory looking for manifest.json
         for manifest_file in bundled_path.glob("**/manifest.json"):
             try:
-                with open(manifest_file, "r") as f:
+                with open(manifest_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 manifest = SkillManifest.from_dict(data)
                 discovered.append(manifest)
@@ -243,7 +243,7 @@ class SkillRegistry:
         # Walk directory looking for manifest.json
         for manifest_file in installed_path.glob("**/manifest.json"):
             try:
-                with open(manifest_file, "r") as f:
+                with open(manifest_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 manifest = SkillManifest.from_dict(data)
                 discovered.append(manifest)

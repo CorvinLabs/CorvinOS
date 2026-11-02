@@ -106,7 +106,7 @@ def test_engine_generated_patch_is_never_auto_merged(tmp_path, monkeypatch):
     assert r.status == "pr_ready" and r.requires_ack is True, r
     # main is UNCHANGED — the engine patch never reached it
     head = subprocess.run(["git", "-C", str(repo), "show", "main:app.py"],
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     assert head == "x = 1\n"
 
 
@@ -131,7 +131,7 @@ def test_engine_source_rejects_symlink_escape(tmp_path):
     if os.name == "nt":
         pytest.skip("symlink semantics differ on Windows")
     repo = tmp_path / "repo"; repo.mkdir()
-    secret = tmp_path / "outside_secret"; secret.write_text("TOPSECRET")
+    secret = tmp_path / "outside_secret"; secret.write_text("TOPSECRET", encoding="utf-8")
     (repo / "link").symlink_to(secret)         # in-repo name → out-of-repo target
     src = PG.engine_patch_source(repo_dir=repo, llm=lambda p: pytest.fail("should not reach llm"))
     assert src({"id": "d", "file": "link"}) is None   # refused before prompting

@@ -54,7 +54,7 @@ class TestOrchestratorPhase3Integration:
             orchestrator._save_analysis(analysis)
 
             assert orchestrator.analysis_path.exists()
-            with open(orchestrator.analysis_path) as f:
+            with open(orchestrator.analysis_path, encoding="utf-8") as f:
                 data = json.load(f)
 
             assert data["metadata"]["test"] == "data"
@@ -71,7 +71,7 @@ class TestOrchestratorPhase3Integration:
             orchestrator._save_storyboard(storyboard)
 
             assert orchestrator.storyboard_path.exists()
-            with open(orchestrator.storyboard_path) as f:
+            with open(orchestrator.storyboard_path, encoding="utf-8") as f:
                 data = json.load(f)
 
             assert len(data["scenes"]) == 1

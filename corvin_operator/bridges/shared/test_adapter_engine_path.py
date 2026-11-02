@@ -221,7 +221,7 @@ def _setup_fake(name: str, script: str) -> tuple[Path, Path]:
     fake_dir = work / "bin"
     fake_dir.mkdir()
     fake_claude = fake_dir / "claude"
-    fake_claude.write_text(script)
+    fake_claude.write_text(script, encoding="utf-8")
     fake_claude.chmod(0o755)
     return work, fake_dir
 
@@ -625,7 +625,7 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
     _abs_shebang_script = _FAKE_ECHO_SCRIPT.replace(
         "#!/usr/bin/env python3", f"#!{sys.executable}", 1
     )
-    fake_claude.write_text(_abs_shebang_script)
+    fake_claude.write_text(_abs_shebang_script, encoding="utf-8")
     fake_claude.chmod(0o755)
     saved = {
         k: os.environ.get(k)

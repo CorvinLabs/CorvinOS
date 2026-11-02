@@ -151,8 +151,9 @@ async def test_stop_forceful_sends_sigkill(process_manager):
     mock_process.poll.return_value = None  # Still running
     # SIGKILL is not ignorable: after it the process reports an exit code —
     # stop() waits for exactly that (a never-exiting mock would time out).
-    mock_process.send_signal.side_effect = (
-        lambda sig: setattr(mock_process.poll, "return_value", -int(sig))
+    # Popen.kill() == SIGKILL on POSIX; signal.SIGKILL does not exist on Windows.
+    mock_process.kill.side_effect = (
+        lambda: setattr(mock_process.poll, "return_value", -9)
     )
     process_manager._process = mock_process
     process_manager._state = PluginProcessState.HEALTHY
@@ -161,7 +162,8 @@ async def test_stop_forceful_sends_sigkill(process_manager):
     await process_manager.stop(graceful=False, timeout_sec=1)
 
     assert process_manager._state == PluginProcessState.STOPPED
-    mock_process.send_signal.assert_called_once_with(signal.SIGKILL)
+    mock_process.kill.assert_called_once_with()
+    mock_process.send_signal.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -46,19 +46,19 @@ def _fake_live_checkout(base: Path) -> "tuple[Path, Path, Path]":
     live = base / "fake_live"
     (live / "corvin_operator" / "forge" / "forge").mkdir(parents=True)
     (live / "corvin_operator" / "bridges" / "shared").mkdir(parents=True)
-    (live / ".corvin_repo").write_text("")
-    (live / "corvin_operator" / "__init__.py").write_text("")
-    (live / "corvin_operator" / "forge" / "forge" / "__init__.py").write_text("")
+    (live / ".corvin_repo").write_text("", encoding="utf-8")
+    (live / "corvin_operator" / "__init__.py").write_text("", encoding="utf-8")
+    (live / "corvin_operator" / "forge" / "forge" / "__init__.py").write_text("", encoding="utf-8")
     shutil.copy(_REPO / "corvin_operator" / "forge" / "forge" / "paths.py",
                 live / "corvin_operator" / "forge" / "forge" / "paths.py")
     writer = live / "corvin_operator" / "bridges" / "shared" / "writer.py"
-    writer.write_text(_WRITER)
+    writer.write_text(_WRITER, encoding="utf-8")
     home = live / ".corvin"
     (home / "global").mkdir(parents=True)
-    (home / "global" / "instance_id.json").write_text(json.dumps({"instance_id": _LIVE_IID}))
+    (home / "global" / "instance_id.json").write_text(json.dumps({"instance_id": _LIVE_IID}), encoding="utf-8")
     chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     chain.parent.mkdir(parents=True)
-    chain.write_text(json.dumps({"event_type": "boot", "instance_id": _LIVE_IID}) + "\n")
+    chain.write_text(json.dumps({"event_type": "boot", "instance_id": _LIVE_IID}) + "\n", encoding="utf-8")
     return live, writer, chain
 
 
@@ -76,7 +76,7 @@ def test_inherited_env_keeps_subprocess_out_of_live_home(tmp_path):
     # Positive control: with the env scrubbed the writer DOES resolve the
     # repo-marker home — otherwise the assertion below would be vacuous.
     r = subprocess.run([sys.executable, str(writer)], env=_scrubbed_env(home),
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert Path(r.stdout.strip()) == chain
     chain.write_bytes(before)  # fake live only — reset for the real assertion
@@ -86,7 +86,7 @@ def test_inherited_env_keeps_subprocess_out_of_live_home(tmp_path):
     assert os.environ["CORVIN_HOME"] and not os.environ["CORVIN_HOME"].startswith(str(_live))
     r = subprocess.run([sys.executable, str(writer)],
                        env={**os.environ, "HOME": str(home)},
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert Path(r.stdout.strip()).is_relative_to(Path(os.environ["CORVIN_HOME"]))
     assert chain.read_bytes() == before, "live chain changed"
@@ -96,15 +96,15 @@ def _nested_session(tmp_path: Path, body: str, live: Path, extra_env: "dict | No
     proj = tmp_path / "nested"
     proj.mkdir()
     shutil.copy(_REPO / "conftest.py", proj / "conftest.py")
-    (proj / "pytest.ini").write_text("[pytest]\n")
-    (proj / "test_nested.py").write_text(textwrap.dedent(body))
+    (proj / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (proj / "test_nested.py").write_text(textwrap.dedent(body), encoding="utf-8")
     env = {**os.environ,
            "CORVIN_TEST_PROTECTED_HOMES": str(live / ".corvin"),
            "PYTHONPATH": os.pathsep.join([str(_REPO), os.environ.get("PYTHONPATH", "")])}
     env.update(extra_env or {})
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-v", "-p", "no:cacheprovider", "-o", "addopts=", str(proj)],
-        cwd=proj, env=env, capture_output=True, text=True, timeout=300)
+        cwd=proj, env=env, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
 
 
 def test_scrubbed_subprocess_write_stops_the_session_naming_the_test(tmp_path):

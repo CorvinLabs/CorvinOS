@@ -146,7 +146,7 @@ Write-Output ("REGISTERED: " + ($Global:RegisterCalls -join ","))
         try:
             return subprocess.run(
                 ["pwsh", "-NoProfile", "-File", str(path)],
-                capture_output=True, text=True, timeout=15, env=env,
+                capture_output=True, text=True, timeout=15, env=env, encoding="utf-8", errors="replace",
             )
         finally:
             path.unlink(missing_ok=True)

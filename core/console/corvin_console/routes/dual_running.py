@@ -110,7 +110,7 @@ class DualRunningRouter:
         }
 
         try:
-            with open(cohort_file, "w") as f:
+            with open(cohort_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
             self._cohort_cache[tenant_id] = cohort
             _log.info(f"Enrolled tenant {tenant_id} in cohort {cohort.value}")
@@ -125,7 +125,7 @@ class DualRunningRouter:
             return Cohort.CONTROL
 
         try:
-            with open(cohort_file, "r") as f:
+            with open(cohort_file, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
             cohort_str = metadata.get("cohort", Cohort.CONTROL.value)
             return Cohort(cohort_str)
@@ -142,7 +142,7 @@ class DualRunningRouter:
         cohorts = {}
         for cohort_file in self.config_dir.glob("*.cohort.json"):
             try:
-                with open(cohort_file, "r") as f:
+                with open(cohort_file, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
                 tenant_id = metadata.get("tenant_id")
                 cohort_str = metadata.get("cohort", Cohort.CONTROL.value)

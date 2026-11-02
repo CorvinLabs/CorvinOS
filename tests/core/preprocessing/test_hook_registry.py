@@ -23,7 +23,7 @@ def simple_hook_file(tmp_path):
 def my_hook(ctx):
     ctx.turn['modified_by_hook'] = True
     ctx.metadata['hook_ran'] = True
-"""
+""", encoding="utf-8"
     )
     return hook_file
 
@@ -39,7 +39,7 @@ import asyncio
 async def my_async_hook(ctx):
     await asyncio.sleep(0)
     ctx.turn['async_hook_ran'] = True
-"""
+""", encoding="utf-8"
     )
     return hook_file
 
@@ -53,7 +53,7 @@ def rejecting_hook_file(tmp_path):
 def reject_hook(ctx):
     if ctx.turn.get('block_me'):
         ctx.reject('Blocked by policy')
-"""
+""", encoding="utf-8"
     )
     return hook_file
 
@@ -178,7 +178,7 @@ class TestHookExecution:
             """
 def bad_hook(ctx):
     raise ValueError("Hook failed!")
-"""
+""", encoding="utf-8"
         )
 
         hook = HookDefinition(
@@ -271,7 +271,7 @@ class TestHookLoading:
     def test_load_missing_hook_function(self, registry, tmp_path):
         """Loading missing hook function should raise."""
         hook_file = tmp_path / "hook.py"
-        hook_file.write_text("def other_func(): pass")
+        hook_file.write_text("def other_func(): pass", encoding="utf-8")
 
         hook = HookDefinition(
             id="bad_func",

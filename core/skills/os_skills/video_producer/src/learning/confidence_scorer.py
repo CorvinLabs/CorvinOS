@@ -107,7 +107,7 @@ class ConfidenceScorer:
             return profiles
 
         try:
-            data = json.loads(self.state_file.read_text())
+            data = json.loads(self.state_file.read_text(encoding="utf-8"))
             for worker_id, profile_data in data.items():
                 profile = WorkerConfidenceProfile(worker_id=worker_id)
                 for metric_name, metric_data in profile_data.get("metrics", {}).items():
@@ -144,7 +144,7 @@ class ConfidenceScorer:
                 "convergence_rate": profile.convergence_rate,
             }
 
-        self.state_file.write_text(json.dumps(data, indent=2))
+        self.state_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def update_confidence(
         self,

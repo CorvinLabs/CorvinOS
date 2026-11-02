@@ -109,10 +109,10 @@ class TestPackageBuilder(unittest.TestCase):
         self.assertTrue((self.plugin_dir / "pyproject.toml").exists())
 
         # Check content
-        setup_content = (self.plugin_dir / "setup.py").read_text()
+        setup_content = (self.plugin_dir / "setup.py").read_text(encoding="utf-8")
         self.assertIn("test-plugin", setup_content)
 
-        pyproject_content = (self.plugin_dir / "pyproject.toml").read_text()
+        pyproject_content = (self.plugin_dir / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn("test-plugin", pyproject_content)
 
 

@@ -871,7 +871,7 @@ def _read_tpm_pcr0() -> str:
         import subprocess
         out = subprocess.run(
             ["tpm2_pcrread", "sha256:0"],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True, text=True, timeout=5, check=False, encoding="utf-8", errors="replace",
         )
         if out.returncode == 0:
             for line in out.stdout.splitlines():
@@ -919,7 +919,7 @@ def compute_hardware_fp() -> str:
     try:
         import glob as _glob
         for block_dev in sorted(_glob.glob("/sys/block/*/device/serial")):
-            serial = Path(block_dev).read_text().strip()
+            serial = Path(block_dev).read_text(encoding="utf-8").strip()
             if serial:
                 disk_serial = serial[:32]
                 break

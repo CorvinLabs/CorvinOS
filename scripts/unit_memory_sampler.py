@@ -34,7 +34,7 @@ def unit_procs_file(unit: str) -> Path | None:
     try:
         cg = subprocess.run(
             ["systemctl", "--user", "show", f"{unit}.service", "-p", "ControlGroup", "--value"],
-            capture_output=True, text=True, timeout=10, check=False).stdout.strip()
+            capture_output=True, text=True, timeout=10, check=False, encoding="utf-8", errors="replace").stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
     if not cg:

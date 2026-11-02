@@ -1,4 +1,4 @@
-# cross_platform_install_repair.ps1 — CorvinOS Installation Repair (Windows)
+﻿# cross_platform_install_repair.ps1 — CorvinOS Installation Repair (Windows)
 # Fixes platform-specific issues with the operator→corvin_operator rename (2026-09-17)
 #
 # Purpose: Ensure the installation works on Windows despite:

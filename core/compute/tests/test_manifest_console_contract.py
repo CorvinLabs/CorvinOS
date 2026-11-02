@@ -27,7 +27,7 @@ def test_hac_manifest_has_the_keys_the_console_reads(tmp_path):
         fluid_reallocation=True,
     )
     HACStore(tmp_path, "_default", "hac_x").write_manifest(m)
-    data = json.loads((tmp_path / "tenants" / "_default" / "compute" / "hac" / "hac_x" / "manifest.json").read_text())
+    data = json.loads((tmp_path / "tenants" / "_default" / "compute" / "hac" / "hac_x" / "manifest.json").read_text(encoding="utf-8"))
 
     assert [sm["manager_id"] for sm in data["sub_managers"]] == ["market_us", "market_gb"]
     assert data["sub_managers"][0]["stage_ids"] == ["fc_us"]
@@ -41,6 +41,6 @@ def test_pipeline_manifest_records_started_at(tmp_path):
     m = PipelineManifest(pipeline_id="pipeline_x", tenant_id="_default",
                          stages=[StageSpec(stage_id="s1", tool_name="t")])
     PipelineStore(tmp_path, "_default", "pipeline_x").write_manifest(m)
-    data = json.loads((tmp_path / "tenants" / "_default" / "compute" / "pipelines" / "pipeline_x" / "manifest.json").read_text())
+    data = json.loads((tmp_path / "tenants" / "_default" / "compute" / "pipelines" / "pipeline_x" / "manifest.json").read_text(encoding="utf-8"))
     assert isinstance(data["started_at"], float)
     assert data["stages"][0]["stage_id"] == "s1"

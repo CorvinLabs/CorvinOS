@@ -117,7 +117,7 @@ class LinuxServiceManager(ServiceManager):
     def _run_systemctl(self, *args: str) -> None:
         """Run systemctl --user command."""
         cmd = ["systemctl", "--user"] + list(args)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode != 0:
             raise RuntimeError(f"systemctl failed: {result.stderr}")
         # Reload after unit changes
@@ -141,13 +141,13 @@ class LinuxServiceManager(ServiceManager):
         try:
             check = subprocess.run(
                 ["loginctl", "show-user", user],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
             if check.returncode == 0 and "Linger=yes" in check.stdout:
                 return  # already enabled
             subprocess.run(
                 ["loginctl", "enable-linger", user],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
         except OSError:
             # `loginctl` doesn't exist at all (no systemd-logind — minimal
@@ -224,7 +224,7 @@ class LinuxServiceManager(ServiceManager):
             "WantedBy=default.target",
         ]
 
-        unit_file.write_text("\n".join(unit_lines) + "\n")
+        unit_file.write_text("\n".join(unit_lines) + "\n", encoding="utf-8")
         unit_file.chmod(0o644)
 
         self._run_systemctl("daemon-reload")
@@ -269,7 +269,7 @@ class LinuxServiceManager(ServiceManager):
         result = subprocess.run(
             ["systemctl", "--user", "is-active", f"corvin-{name}.service"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         return result.stdout.strip()
 
@@ -375,7 +375,7 @@ class DarwinServiceManager(ServiceManager):
         """Create and load a launchd plist."""
         plist_file = self._plist_path(name)
         plist_content = self._generate_plist(name, command, description, env_vars, pre_exec)
-        plist_file.write_text(plist_content)
+        plist_file.write_text(plist_content, encoding="utf-8")
         plist_file.chmod(0o644)
 
         # M4: create the launchd log dir — launchd does not mkdir intermediate
@@ -454,7 +454,7 @@ class DarwinServiceManager(ServiceManager):
         result = subprocess.run(
             ["launchctl", "list"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         if f"com.corvin.{name}" in result.stdout:
             return "loaded"
@@ -465,7 +465,7 @@ class DarwinServiceManager(ServiceManager):
         result = subprocess.run(
             ["launchctl", "list"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         return f"com.corvin.{name}" in result.stdout
 
@@ -493,7 +493,7 @@ class WindowsServiceManager(ServiceManager):
     def _run_schtasks(self, *args: str) -> None:
         """Run schtasks.exe command."""
         cmd = ["schtasks"] + list(args)
-        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding="utf-8", errors="replace")
         if result.returncode != 0:
             raise RuntimeError(f"schtasks failed: {result.stderr}")
 
@@ -607,7 +607,7 @@ class WindowsServiceManager(ServiceManager):
             ["schtasks", "/query", "/tn", task_name],
             shell=True,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         if "Ready" in result.stdout:
             return "ready"

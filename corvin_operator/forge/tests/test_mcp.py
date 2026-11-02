@@ -130,7 +130,7 @@ class MCPClient:
             text=True,
             bufsize=1,
             cwd=str(ROOT),
-            env=_workspace_env(root),
+            env=_workspace_env(root), encoding="utf-8", errors="replace",
         )
         self._next_id = 0
         self._buffered: list[dict[str, Any]] = []
@@ -549,7 +549,7 @@ def test_tamper_over_mcp(client: MCPClient, root: Path) -> None:
     forge_resp = _forge(client, "echo")
     impl_path = Path(forge_resp["result"]["structuredContent"]["impl_path"])
     # mutate impl behind the registry's back
-    impl_path.write_text(ECHO_IMPL + "\n# evil\n")
+    impl_path.write_text(ECHO_IMPL + "\n# evil\n", encoding="utf-8")
     resp = client.request("tools/call", {
         "name": "echo",
         "arguments": {"msg": "x"},
@@ -679,7 +679,7 @@ def test_promote_from_session_makes_skill(client: MCPClient, root: Path) -> None
     impl_copy = root / "skills" / "echo" / "echo.py"
     t("SKILL.md exists", skill_md.exists())
     t("impl copied alongside SKILL.md", impl_copy.exists())
-    body = skill_md.read_text() if skill_md.exists() else ""
+    body = skill_md.read_text(encoding="utf-8") if skill_md.exists() else ""
     t("SKILL.md frontmatter starts with name:",
       body.startswith("---\nname: echo"))
 

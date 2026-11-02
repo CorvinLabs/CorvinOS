@@ -169,7 +169,7 @@ def audit(event: str, name: str, *, source: str = "?", ok: bool = True,
         if extra:
             line += f" {extra}"
         log_file = _log_file()
-        with log_file.open("a") as f:
+        with log_file.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
         try:
             log_file.chmod(0o600)
@@ -198,7 +198,7 @@ def read_audit(n: int = 20) -> list[str]:
     if not log_file.exists():
         return []
     try:
-        lines = log_file.read_text().splitlines()
+        lines = log_file.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
     return lines[-n:]
@@ -208,7 +208,7 @@ def read_audit(n: int = 20) -> list[str]:
 
 def _load_index() -> list[dict[str, Any]]:
     try:
-        return json.loads(_index_file().read_text())
+        return json.loads(_index_file().read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return []
 
@@ -217,7 +217,7 @@ def _save_index(items: list[dict[str, Any]]) -> None:
     _ensure_dirs()
     index_file = _index_file()
     tmp = index_file.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(items, indent=2, ensure_ascii=False))
+    tmp.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
     shutil.move(str(tmp), str(index_file))
     try:
         index_file.chmod(0o600)
@@ -252,7 +252,7 @@ def _index_get(name: str) -> dict[str, Any] | None:
 
 def _load_unlocks() -> dict[str, float]:
     try:
-        return json.loads(_unlock_file().read_text())
+        return json.loads(_unlock_file().read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
@@ -261,7 +261,7 @@ def _save_unlocks(d: dict[str, float]) -> None:
     unlock_file = _unlock_file()
     unlock_file.parent.mkdir(parents=True, exist_ok=True)
     tmp = unlock_file.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(d))
+    tmp.write_text(json.dumps(d), encoding="utf-8")
     shutil.move(str(tmp), str(unlock_file))
     try:
         unlock_file.chmod(0o600)
@@ -344,7 +344,7 @@ def set_item(name: str, value: Any, *,
             pass
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(payload)
         except Exception:
             try:
@@ -425,13 +425,13 @@ def get_item(name: str, *, source: str = "?") -> Any:
             # silently served — fail-closed like the forge vault's _check_mode,
             # never return a world-readable cleartext credential.
             _mode = p.stat().st_mode & 0o777
-            if _mode & 0o077:
+            if sys.platform != "win32" and _mode & 0o077:  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
                 audit("get", n, source=source, ok=False, extra="insecure-mode")
                 raise PermissionError(
                     f"vault item {n!r} file mode {oct(_mode)} is not 0600 "
                     f"(group/other access) — refusing to read plaintext secret"
                 )
-            payload = p.read_text()
+            payload = p.read_text(encoding="utf-8")
         except FileNotFoundError:
             audit("get", n, source=source, ok=False, extra="file-missing")
             raise KeyError(f"vault item {n!r} index entry exists but file is gone")

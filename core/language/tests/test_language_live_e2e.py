@@ -34,7 +34,7 @@ def test_real_llm_german_response_resolves_to_german() -> None:
             "Was ist eine Datei in einem Betriebssystem?",
             "--model", "haiku",
         ],
-        capture_output=True, text=True, timeout=180,
+        capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, f"claude -p failed: {proc.stderr[:400]}"
     answer = proc.stdout.strip()

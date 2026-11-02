@@ -178,7 +178,7 @@ class RateLimitTests(unittest.TestCase):
                 self.assertEqual(r.json()["detail"]["reason"], "rate-limited")
             # Audit event landed
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             limited = [e for e in lines if e["event_type"] == "gateway.rate_limited"]
             self.assertEqual(len(limited), 1)
 
@@ -277,7 +277,7 @@ class GrpcProtoTests(unittest.TestCase):
             / "grpc" / "corvin.proto"
         )
         self.assertTrue(proto.exists())
-        text = proto.read_text()
+        text = proto.read_text(encoding="utf-8")
         for token in (
             'syntax = "proto3"',
             "package corvin.gateway.v1",

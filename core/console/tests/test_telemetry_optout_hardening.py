@@ -176,7 +176,7 @@ class TestProvisionLockReentrancy:
 
         lock_path = hc._ping_lock_path(home)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        holder = lock_path.open("w")
+        holder = lock_path.open("w", encoding="utf-8")
         fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             with patch("urllib.request.OpenerDirector.open", return_value=_Resp()):
@@ -186,8 +186,8 @@ class TestProvisionLockReentrancy:
             holder.close()
 
         assert ok is True
-        assert hc._instance_token_path(home).read_text() == "i"
-        assert hc._telemetry_token_path(home).read_text() == "t"
+        assert hc._instance_token_path(home).read_text(encoding="utf-8") == "i"
+        assert hc._telemetry_token_path(home).read_text(encoding="utf-8") == "t"
 
 
 # ── F11 — repo-root anchoring (no substring smuggling) ────────────────────────

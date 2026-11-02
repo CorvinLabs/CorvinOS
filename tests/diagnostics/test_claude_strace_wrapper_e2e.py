@@ -58,7 +58,7 @@ def sandbox(tmp_path):
     anchor = tmp_path / "anchor.key"
     anchor.write_bytes(os.urandom(32))
     fake = tmp_path / "claude-fake"
-    fake.write_text(FAKE_CLAUDE)
+    fake.write_text(FAKE_CLAUDE, encoding="utf-8")
     fake.chmod(0o755)
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -105,7 +105,7 @@ def test_resolution_pins_wrapper_via_helper_model(sandbox):
     res = subprocess.run(
         [sys.executable, "-c",
          "from corvin_operator.bridges.shared.helper_model import resolve_claude_bin as r; print(r())"],
-        cwd=str(REPO), env=env, capture_output=True, text=True, timeout=60,
+        cwd=str(REPO), env=env, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
     )
     assert res.returncode == 0, res.stderr
     assert res.stdout.strip() == str(WRAPPER)
@@ -153,7 +153,7 @@ def test_sigterm_child_kill_and_exit_events_logged_with_sender_pid(sandbox):
     fake_pid = int(out.splitlines()[0].split("=")[1])
 
     strace_logs, wrapper_logs = _logs(sandbox)
-    text = strace_logs[0].read_text()
+    text = strace_logs[0].read_text(encoding="utf-8")
     # kill(child, SIGTERM) issued by the fake itself: sender PID == fake_pid.
     kill_lines = [l for l in text.splitlines() if " kill(" in l and "SIGTERM" in l]
     assert kill_lines, text
@@ -165,7 +165,7 @@ def test_sigterm_child_kill_and_exit_events_logged_with_sender_pid(sandbox):
     for needle in ("execve(", " kill(", "exit_group(", "+++ "):
         assert needle not in out
         assert needle not in res.stderr.decode()
-    assert "start wrapper_pid=" in wrapper_logs[0].read_text()
+    assert "start wrapper_pid=" in wrapper_logs[0].read_text(encoding="utf-8")
 
 
 def test_signal_sent_to_wrapper_is_forwarded_with_sender_pid(sandbox):
@@ -182,10 +182,10 @@ def test_signal_sent_to_wrapper_is_forwarded_with_sender_pid(sandbox):
     rc = proc.wait(timeout=60)
     assert rc == -15, f"CLI death not passed through: rc={rc}"
     strace_logs, wrapper_logs = _logs(sandbox)
-    wlog = wrapper_logs[0].read_text()
+    wlog = wrapper_logs[0].read_text(encoding="utf-8")
     assert f"SIGTERM from pid={os.getpid()}" in wlog
     assert "forwarded to pid=" in wlog
-    assert "SIGTERM, si_code=SI_USER" in strace_logs[0].read_text()
+    assert "SIGTERM, si_code=SI_USER" in strace_logs[0].read_text(encoding="utf-8")
 
 
 def test_fail_open_when_strace_missing(sandbox):
@@ -196,13 +196,13 @@ def test_fail_open_when_strace_missing(sandbox):
     assert res.stderr == b""
     strace_logs, wrapper_logs = _logs(sandbox)
     assert strace_logs == []
-    assert "WARN strace inactive" in wrapper_logs[0].read_text()
+    assert "WARN strace inactive" in wrapper_logs[0].read_text(encoding="utf-8")
 
 
 def test_fail_open_when_ptrace_refused(sandbox):
     refusing = sandbox["tmp"] / "strace-refusing"
     refusing.write_text(
-        "#!/bin/sh\necho 'strace: ptrace(PTRACE_TRACEME, ...): Operation not permitted' >&2\nexit 1\n"
+        "#!/bin/sh\necho 'strace: ptrace(PTRACE_TRACEME, ...): Operation not permitted' >&2\nexit 1\n", encoding="utf-8"
     )
     refusing.chmod(0o755)
     direct = _run_direct(sandbox, "exit", 1)
@@ -212,6 +212,6 @@ def test_fail_open_when_ptrace_refused(sandbox):
     assert res.stderr == b"", "strace's refusal leaked into the CLI's stderr"
     strace_logs, wrapper_logs = _logs(sandbox)
     assert strace_logs == []
-    wlog = wrapper_logs[0].read_text()
+    wlog = wrapper_logs[0].read_text(encoding="utf-8")
     assert "WARN strace inactive (probe rc=1" in wlog
     assert "Operation not permitted" in wlog

@@ -39,7 +39,7 @@ class TestEvidenceCheck:
             )
 
         try:
-            with open(test_output_file, "r") as f:
+            with open(test_output_file, "r", encoding="utf-8") as f:
                 output = f.read()
 
             # Check for success indicators

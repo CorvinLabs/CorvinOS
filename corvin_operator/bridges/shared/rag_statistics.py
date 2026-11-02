@@ -71,7 +71,7 @@ class RAGStatisticsAggregator:
             # Load registry for provider stats
             registry_file = self.registry_dir / "registry.json"
             if registry_file.exists():
-                with open(registry_file) as f:
+                with open(registry_file, encoding="utf-8") as f:
                     registry = json.load(f)
 
                 # Aggregate per-provider stats
@@ -105,7 +105,7 @@ class RAGStatisticsAggregator:
                 cache_hits = 0
                 total_audit_queries = 0
 
-                with open(self.audit_file) as f:
+                with open(self.audit_file, encoding="utf-8") as f:
                     for line in f:
                         try:
                             event = json.loads(line)

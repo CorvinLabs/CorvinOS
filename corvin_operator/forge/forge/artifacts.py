@@ -165,7 +165,7 @@ def load_config(tenant_id: str | None = None) -> dict[str, Any]:
     path = _config_path(tenant_id)
     if path.exists():
         try:
-            override = json.loads(path.read_text())
+            override = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(override, dict):
                 cfg.update(override)
         except (OSError, json.JSONDecodeError):
@@ -252,7 +252,7 @@ class _ManifestLock:
 
     def __enter__(self) -> "_ManifestLock":
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = self.lock_path.open("a+")
+        self._fh = self.lock_path.open("a+", encoding="utf-8")
         deadline = time.monotonic() + (self.timeout_ms / 1000.0)
         while True:
             try:
@@ -418,7 +418,7 @@ def _append_manifest(artifacts_root: Path, entry: ArtifactEntry,
         with _ManifestLock(_lock_path(artifacts_root),
                            int(cfg["manifest_lock_timeout_ms"])):
             manifest = _manifest_path(artifacts_root)
-            with manifest.open("a") as fh:
+            with manifest.open("a", encoding="utf-8") as fh:
                 fh.write(line)
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -430,7 +430,7 @@ def _iter_manifest(artifacts_root: Path) -> Iterator[ArtifactEntry]:
     if not manifest.exists():
         return iter(())
     def _gen() -> Iterator[ArtifactEntry]:
-        with manifest.open("r") as fh:
+        with manifest.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -616,7 +616,7 @@ def reconcile_manifest(artifacts_root: Path,
     artifacts_root.mkdir(parents=True, exist_ok=True)
     manifest = _manifest_path(artifacts_root)
     if manifest.exists():
-        manifest.rename(manifest.with_suffix(".jsonl.bak"))
+        manifest.replace(manifest.with_suffix(".jsonl.bak"))  # overwrite old .bak on Windows too
     count = 0
     for shard in sorted(artifacts_root.glob("[0-9a-f][0-9a-f]")):
         if not shard.is_dir():

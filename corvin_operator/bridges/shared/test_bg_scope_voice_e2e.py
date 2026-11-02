@@ -65,11 +65,11 @@ def _turn(monkeypatch, box_, fixture, *, speedup=4, env=None, settings=None, tts
     adapter.synthesize_voice_note = tts.synth
     f = Path(os.environ["ADAPTER_INBOX"]) / f"{msg_id}.json"
     f.write_text(json.dumps({"id": msg_id, "channel": "sandbox-bg", "from": "u42",
-                             "chat_id": "chan-1", "text": "please do it", "ts": 0}))
+                             "chat_id": "chan-1", "text": "please do it", "ts": 0}), encoding="utf-8")
     adapter.process_one(f, settings={"whitelist": ["u42"], "voice_summary_mode": "always",
                                      **(settings or {})})
     files = sorted(Path(os.environ["ADAPTER_OUTBOX"]).glob(f"{msg_id}_*.json"))
-    return [(p.name, json.loads(p.read_text())) for p in files], tts
+    return [(p.name, json.loads(p.read_text(encoding="utf-8"))) for p in files], tts
 
 
 def _voiced(msgs):

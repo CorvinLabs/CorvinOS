@@ -63,7 +63,7 @@ def test_G_compliance_layer_registered_before_a_restart_still_emits(sandbox, ser
     layer = "sbxlegacy"
     (layers / f"{layer}.json").write_text(json.dumps({
         "layer_id": layer, "display_name": "Legacy", "event_types": [f"{layer}.ping"],
-        "allowed_fields": ["shard_id"], "description": "", "created_at": time.time(), "updated_at": time.time()}))
+        "allowed_fields": ["shard_id"], "description": "", "created_at": time.time(), "updated_at": time.time()}), encoding="utf-8")
     e = harness.fetch(server, sess, "/audit/emit", method="POST",
                       json_body={"layer_id": layer, "event_type": f"{layer}.ping", "details": {"shard_id": "s7"}})
     assert e.status_code == 200, e.text[:300]
@@ -87,10 +87,10 @@ def test_G_compliance_roles_card_reads_the_pre_tenancy_stores_for_the_default_te
                        ("disclosure", {"u1": {"seen": True}})):
         d = legacy / kind
         d.mkdir(parents=True, exist_ok=True)
-        (d / "discord__sbxlegacychat.json").write_text(json.dumps(body))
+        (d / "discord__sbxlegacychat.json").write_text(json.dumps(body), encoding="utf-8")
     own = sandbox.tenant_home("sbxm") / "global" / "roles"
     own.mkdir(parents=True, exist_ok=True)
-    (own / "discord__sbxmchat.json").write_text(json.dumps({"m1": {"bundle": "member"}}))
+    (own / "discord__sbxmchat.json").write_text(json.dumps({"m1": {"bundle": "member"}}), encoding="utf-8")
 
     default = harness.fetch(server, session_for("_default"), "/members").json()
     keys = {c["chat_key"]: c for c in default["chats"]}

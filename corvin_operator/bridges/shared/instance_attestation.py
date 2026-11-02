@@ -238,7 +238,7 @@ def load_attestation(corvin_home: Path | str | None = None) -> dict | None:
         return None
     try:
         mode = path.stat().st_mode
-        if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        if os.name != "nt" and mode & (stat.S_IRWXG | stat.S_IRWXO):  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
             return None  # world-readable — treat as absent, log elsewhere
         return json.loads(path.read_text("utf-8"))
     except Exception:  # noqa: BLE001

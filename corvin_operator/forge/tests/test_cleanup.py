@@ -49,7 +49,7 @@ def test_tasks_prune_old_keep_young():
         # Run cleanup with default 1h TTL
         r = subprocess.run(
             [sys.executable, str(SCRIPT), "tasks", "--ttl-hours", "1"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
         )
         t("script exit 0", r.returncode == 0,
           detail=f"stdout={r.stdout!r} stderr={r.stderr!r}")
@@ -76,7 +76,7 @@ def test_sessions_dry_run():
             [sys.executable, str(SCRIPT), "--dry-run", "sessions",
              "--ttl-days", "30"],
             capture_output=True, text=True, check=False,
-            env={**os.environ, "CORVIN_HOME": td},
+            env={**os.environ, "CORVIN_HOME": td}, encoding="utf-8", errors="replace",
         )
         t("dry-run exit 0", r.returncode == 0,
           detail=f"stderr={r.stderr!r}")
@@ -96,14 +96,14 @@ def test_sessions_actual_rm():
         young_chan = sess_root / "discord:test-young"
         old_chan.mkdir(parents=True); young_chan.mkdir(parents=True)
         # Add a file so we know rmtree works
-        (old_chan / "tool.json").write_text("{}")
+        (old_chan / "tool.json").write_text("{}", encoding="utf-8")
         _set_old_mtime(old_chan, 86400 * 60)
         _set_old_mtime(young_chan, 86400 * 1)
 
         r = subprocess.run(
             [sys.executable, str(SCRIPT), "sessions", "--ttl-days", "30"],
             capture_output=True, text=True, check=False,
-            env={**os.environ, "CORVIN_HOME": td},
+            env={**os.environ, "CORVIN_HOME": td}, encoding="utf-8", errors="replace",
         )
         t("exit 0", r.returncode == 0)
         t("old chan removed", not old_chan.exists())

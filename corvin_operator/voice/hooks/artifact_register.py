@@ -93,7 +93,22 @@ _DEFAULT_MIMES = {
 # ── Payload parsing ────────────────────────────────────────────────────────
 
 
+def _utf8_stdio() -> None:
+    """Claude Code speaks UTF-8 on the hook's stdin/stdout/stderr. On Windows
+    without UTF-8 mode those streams use the ANSI code page: a non-ASCII path
+    in the payload is mis-decoded, and a deny reason containing one raises
+    UnicodeEncodeError -> exit 1, a NON-blocking hook error (fail-open). No-op
+    where the streams are already UTF-8 (Linux/macOS, PYTHONUTF8=1)."""
+    for _s in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            if _s is not None and (_s.encoding or "").replace("-", "").lower() != "utf8":
+                _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _read_payload() -> dict:
+    _utf8_stdio()
     try:
         raw = sys.stdin.read()
     except Exception:
@@ -251,7 +266,7 @@ def _generate_description(path: Path, mime: str) -> str:
     if mime.startswith("text/") or mime in ("application/json",
                                             "application/xml"):
         try:
-            with path.open("r", errors="replace") as fh:
+            with path.open("r", errors="replace", encoding="utf-8") as fh:
                 head = fh.read(4096)
         except OSError:
             head = ""
@@ -276,7 +291,11 @@ def _generate_description(path: Path, mime: str) -> str:
         )
 
     try:
-        argv = ["claude", "-p", "--max-turns", "1", "--tools", ""]
+        # Windows: an npm-installed claude is claude.cmd, which CreateProcess
+        # never finds from the bare name (no PATHEXT). Args are fixed flags;
+        # the untrusted prompt travels on stdin.
+        claude = (shutil.which("claude") or "claude") if os.name == "nt" else "claude"
+        argv = [claude, "-p", "--max-turns", "1", "--tools", ""]
         argv.extend(claude_args("artifact_describe"))
         # R4: whole-payload guard - the describe prompt embeds an artifact
         # FILENAME chosen by whoever produced the artifact, which is exactly a
@@ -285,7 +304,7 @@ def _generate_description(path: Path, mime: str) -> str:
         r = subprocess.run(
             argv, input=_guard_prompt_head(prompt),
             capture_output=True, text=True,
-            timeout=20,
+            timeout=20, encoding="utf-8", errors="replace",
         )
         if r.returncode != 0:
             return ""
@@ -363,9 +382,12 @@ def _do_register(*, source: Path, session_root: Path | None,
         # the adapter sets CORVIN_SESSION_KEY before the engine spawns.
         try:
             from corvin_operator.forge.forge.tenants import current_tenant  # type: ignore
-            from corvin_operator.forge.forge.paths import tenant_sessions_dir  # type: ignore
+            from corvin_operator.forge.forge.paths import (  # type: ignore
+                fs_safe_component, tenant_sessions_dir)
+            # fs_safe_component: ':' is illegal in a Windows path component
+            # (WinError 123); POSIX keeps the ``adhoc:<pid>`` name.
             session_root = (tenant_sessions_dir(current_tenant())
-                            / f"adhoc:{os.getpid()}" / "artifacts")
+                            / fs_safe_component(f"adhoc:{os.getpid()}") / "artifacts")
         except Exception:
             return
 

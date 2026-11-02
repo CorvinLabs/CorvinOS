@@ -198,7 +198,7 @@ def _detect_brew(info: PlatformInfo) -> PkgMgr:
                     [brew_bin, "--prefix"],
                     capture_output=True,
                     text=True,
-                    check=True,
+                    check=True, encoding="utf-8", errors="replace",
                 )
                 info.brew_prefix = result.stdout.strip()
                 brew_path = f"{info.brew_prefix}/bin"
@@ -215,7 +215,7 @@ def _arch() -> str:
         import platform as _platform
         return _platform.machine().lower()  # e.g. "amd64" or "arm64"
     try:
-        result = subprocess.run(["uname", "-m"], capture_output=True, text=True, check=False)
+        result = subprocess.run(["uname", "-m"], capture_output=True, text=True, check=False, encoding="utf-8", errors="replace")
         return result.stdout.strip()
     except Exception:
         return ""

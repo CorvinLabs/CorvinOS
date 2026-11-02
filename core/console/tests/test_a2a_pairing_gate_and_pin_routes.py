@@ -83,7 +83,7 @@ def _write_endpoint(tmp: Path, eid: str, **extra) -> Path:
            "recv_key": "b" * 64, "instance_id": "iid-" + eid, "_peer_instance_id": "iid-" + eid,
            "_peer_bind_pub": "c" * 64, "enabled": True, **extra}
     p = tmp / "e" / f"{eid}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
     return p
 
@@ -92,7 +92,7 @@ def _write_origin(tmp: Path, eid: str, **extra) -> Path:
     cfg = {"origin_id": eid, "hmac_key": "a" * 64, "recv_key": "b" * 64, "enabled": True,
            "_peer_instance_id": "iid-" + eid, **extra}
     p = tmp / "o" / f"{eid}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
     return p
 
@@ -108,7 +108,7 @@ class ResetInstancePinTest(unittest.TestCase):
         with _sandbox(self.tmp) as (client, csrf, home, _):
             r = client.patch(f"{_EP}/oob", headers={"X-CSRF-Token": csrf}, json={"reset_instance_pin": True})
             self.assertEqual(r.status_code, 409, r.text)
-        cfg = json.loads(ep.read_text())
+        cfg = json.loads(ep.read_text(encoding="utf-8"))
         self.assertEqual(cfg["instance_id"], "iid-oob")
         self.assertEqual(cfg["_peer_bind_pub"], "c" * 64)
 
@@ -118,7 +118,7 @@ class ResetInstancePinTest(unittest.TestCase):
         with _sandbox(self.tmp) as (client, csrf, home, _):
             r = client.patch(f"{_EP}/oob2", headers={"X-CSRF-Token": csrf}, json={"reset_instance_pin": True})
             self.assertEqual(r.status_code, 409, r.text)
-        self.assertEqual(json.loads(ep.read_text())["instance_id"], "iid-oob2")
+        self.assertEqual(json.loads(ep.read_text(encoding="utf-8"))["instance_id"], "iid-oob2")
 
     def test_ordinary_pairing_resets_and_the_audit_names_the_reset(self):
         ep = _write_endpoint(self.tmp, "plain")
@@ -127,7 +127,7 @@ class ResetInstancePinTest(unittest.TestCase):
                              json={"reset_instance_pin": True, "label": "New"})
             self.assertEqual(r.status_code, 200, r.text)
             ev = [e for e in _audit_events(home) if "a2a.endpoint.updated" in json.dumps(e)]
-        cfg = json.loads(ep.read_text())
+        cfg = json.loads(ep.read_text(encoding="utf-8"))
         self.assertNotIn("instance_id", cfg)
         self.assertNotIn("_peer_bind_pub", cfg)
         self.assertTrue(ev, "no a2a.endpoint.updated record")

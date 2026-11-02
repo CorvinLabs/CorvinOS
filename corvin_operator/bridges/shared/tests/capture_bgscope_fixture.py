@@ -101,7 +101,7 @@ def capture(prompt: str, timeout: int) -> list[dict]:
              "--output-format", "stream-json", "--verbose", "--model", "haiku",
              "--permission-mode", "bypassPermissions", "--max-turns", "6"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, cwd=cwd)
+            text=True, cwd=cwd, encoding="utf-8", errors="replace")
         threading.Timer(timeout, p.kill).start()
         p.stdin.write(json.dumps({"type": "user",
                                   "message": {"role": "user", "content": prompt}}) + "\n")

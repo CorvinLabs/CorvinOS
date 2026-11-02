@@ -10,7 +10,7 @@ def check_wrapper_implementation():
     wrapper_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/chat_learning_wrapper.py")
     assert wrapper_file.exists()
 
-    content = wrapper_file.read_text()
+    content = wrapper_file.read_text(encoding="utf-8")
 
     checks = {
         "stream_turn_with_learning method": "async def stream_turn_with_learning" in content,
@@ -34,7 +34,7 @@ def check_learning_integration_api():
     api_file = Path("/home/shumway/projects/CorvinOS/core/learning/integration.py")
     assert api_file.exists()
 
-    content = api_file.read_text()
+    content = api_file.read_text(encoding="utf-8")
 
     checks = {
         "execute_method_with_learning": "def execute_method_with_learning" in content,
@@ -59,7 +59,7 @@ def check_console_routes():
     route_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/routes/learning.py")
     assert route_file.exists()
 
-    content = route_file.read_text()
+    content = route_file.read_text(encoding="utf-8")
 
     checks = {
         "GET /learning/nodes endpoint": "def get_learning_nodes" in content,
@@ -81,7 +81,7 @@ def check_console_app_wiring():
     print("\n📦 Checking console app.py wiring...")
 
     app_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/app.py")
-    content = app_file.read_text()
+    content = app_file.read_text(encoding="utf-8")
 
     checks = {
         "Learning route import": "from .routes import learning" in content or "import learning" in content,
@@ -111,7 +111,7 @@ def check_frontend_dashboard():
     page_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/pages/learning.tsx")
     assert page_file.exists()
 
-    content = page_file.read_text()
+    content = page_file.read_text(encoding="utf-8")
 
     checks = {
         "LearningDashboard component": "LearningDashboard" in content or "Dashboard" in content,
@@ -135,7 +135,7 @@ def check_migration_complete():
     store_file = Path("/home/shumway/projects/CorvinOS/core/learning/storage.py")
     assert store_file.exists()
 
-    store_content = store_file.read_text()
+    store_content = store_file.read_text(encoding="utf-8")
 
     checks = {
         "EventStore exists": "class LearningEventStore" in store_content,
@@ -156,7 +156,7 @@ def check_audit_trail():
     audit_file = Path("/home/shumway/projects/CorvinOS/core/learning/audit.py")
     assert audit_file.exists()
 
-    content = audit_file.read_text()
+    content = audit_file.read_text(encoding="utf-8")
 
     checks = {
         "AuditTrail class": "class AuditTrail" in content,

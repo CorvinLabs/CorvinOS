@@ -106,7 +106,7 @@ def fake_cli(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     claude = bindir / "claude"
-    claude.write_text(FAKE_CLAUDE)
+    claude.write_text(FAKE_CLAUDE, encoding="utf-8")
     claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "calls.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
@@ -119,8 +119,8 @@ def _make(tid: str, wid: str, text: str) -> None:
     from forge import paths as fp
     d = fp.tenant_home(tid) / "workflows"
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"{wid}.meta.json").write_text(json.dumps({"id": wid, "name": wid, "phase": "ready"}))
-    (d / f"{wid}.awp.yaml").write_text(text)
+    (d / f"{wid}.meta.json").write_text(json.dumps({"id": wid, "name": wid, "phase": "ready"}), encoding="utf-8")
+    (d / f"{wid}.awp.yaml").write_text(text, encoding="utf-8")
 
 
 def _run(client, wid: str) -> list[dict]:
@@ -138,7 +138,7 @@ def _run(client, wid: str) -> list[dict]:
 
 def _calls(log: Path) -> list[dict]:
     """Node spawns only; the gates' classifier calls (``--max-turns``) are not nodes."""
-    rows = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in rows if "--max-turns" not in r["argv"]]
 
 
@@ -157,7 +157,7 @@ def _chain_events(tid: str, name: str) -> list[dict]:
     path = Path(fp.tenant_audit_chain(tid))
     if not path.exists():
         return []
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r["details"] for r in rows if r.get("event_type") == name]
 
 

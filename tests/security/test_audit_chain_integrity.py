@@ -84,7 +84,7 @@ def _make_event(
 def _write_chain(audit_path: Path, events: list[dict]) -> None:
     """Write a chain of events to an audit file (one JSON per line)."""
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(audit_path, "w") as f:
+    with open(audit_path, "w", encoding="utf-8") as f:
         for event in events:
             f.write(json.dumps(event) + "\n")
 
@@ -214,7 +214,7 @@ def test_empty_chain_valid(
 
     # Create empty file
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    audit_path.write_text("")
+    audit_path.write_text("", encoding="utf-8")
 
     # Validate
     result = validator.validate_chain(audit_path)
@@ -254,7 +254,7 @@ def test_chain_file_permission_error(
 
     # Create a file and make it unreadable
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    audit_path.write_text("test")
+    audit_path.write_text("test", encoding="utf-8")
     audit_path.chmod(0o000)
 
     try:
@@ -288,7 +288,7 @@ def test_invalid_json_line_rejects_chain(
 
     # Write first event + invalid JSON line
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(audit_path, "w") as f:
+    with open(audit_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(event1) + "\n")
         f.write('{"invalid": json line with no closing brace\n')
 
@@ -400,7 +400,7 @@ def test_blank_lines_skipped(
 
     # Write with blank lines
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(audit_path, "w") as f:
+    with open(audit_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(event1) + "\n")
         f.write("\n")  # Blank line
         f.write("\n")  # Another blank line

@@ -393,7 +393,7 @@ class ResourceFiber(NerveFiber):
             mi = Path("/proc/meminfo")
             if mi.is_file():
                 kv = {}
-                for line in mi.read_text().splitlines():
+                for line in mi.read_text(encoding="utf-8").splitlines():
                     k, _, v = line.partition(":")
                     kv[k.strip()] = v.strip()
                 avail = int(kv.get("MemAvailable", "0 kB").split()[0]) // 1024
@@ -684,7 +684,7 @@ def _load_wiring_manifests() -> list[dict]:
         if not mpath.is_file():
             continue
         try:
-            data = yaml.safe_load(mpath.read_text()) or {}
+            data = yaml.safe_load(mpath.read_text(encoding="utf-8")) or {}
         except Exception as exc:  # noqa: BLE001
             logger.debug("[WiringIntegrityFiber] %s unreadable: %s", mpath, exc)
             continue

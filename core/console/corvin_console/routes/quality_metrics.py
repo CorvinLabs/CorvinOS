@@ -36,7 +36,7 @@ async def get_quality_metrics(task_id: str):
         history_file = task_dir / "convergence_history.json"
         convergence_history = []
         if history_file.exists():
-            with open(history_file) as f:
+            with open(history_file, encoding="utf-8") as f:
                 convergence_history = json.load(f)
 
         # Load spec
@@ -44,7 +44,7 @@ async def get_quality_metrics(task_id: str):
         spec_constraints = []
         spec_version = 1
         if spec_file.exists():
-            with open(spec_file) as f:
+            with open(spec_file, encoding="utf-8") as f:
                 spec_data = json.load(f)
                 spec_constraints = spec_data.get("constraints", [])
                 spec_version = spec_data.get("version", 1)

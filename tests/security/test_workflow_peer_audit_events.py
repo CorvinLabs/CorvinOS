@@ -49,6 +49,6 @@ def test_all_four_events_chain_and_verify(tmp_path, monkeypatch):
     chain = tenant_audit_chain("_default")
     ok, problems = se.verify_chain(chain)
     assert ok, problems
-    recs = [json.loads(x) for x in chain.read_text().splitlines() if x.strip()]
+    recs = [json.loads(x) for x in chain.read_text(encoding="utf-8").splitlines() if x.strip()]
     assert [r["event_type"] for r in recs[-4:]] == list(EVENTS)
     assert all(r["details"]["tenant_id"] == "_default" and r["details"]["node_id"] == "n" for r in recs[-4:])

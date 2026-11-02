@@ -63,8 +63,23 @@ def build_cmd_c_line(argv: list[str]) -> str:
 
     ``argv[0]`` is the program (typically the ``.cmd`` shim path); the rest are
     its arguments. Every element is quoted with :func:`cmd_quote`.
+
+    The whole line is wrapped in ONE extra pair of quotes and run with ``/s``.
+    Plain ``cmd /c`` applies its legacy rule "more than two quotes -> strip the
+    FIRST and the LAST quote", which for ``cmd /c "C:\\x.cmd" "--flag"`` eats
+    the program's opening quote and flips the quote parity of every following
+    token. Measured on Windows 11: EVERY shim spawn failed with
+    ``'C:\\x.cmd" "--flag' is not recognized``, and an argument ``x" & echo PWN``
+    executed ``echo PWN`` -- the exact breakout this module exists to close.
+    With ``/s`` cmd strips exactly the outer pair added here, so the per-token
+    quoting survives intact. ``/d`` skips registry AutoRun commands (they
+    would run before the shim and can pollute the child's stdout).
+
+    Limitation: cmd ends a command line at a newline, so an argument holding
+    a line break is truncated there (no injection -- the rest is dropped).
+    Pass multi-line text via stdin or a file (``--append-system-prompt-file``).
     """
-    return "cmd /c " + " ".join(cmd_quote(a) for a in argv)
+    return 'cmd /d /s /c "' + " ".join(cmd_quote(a) for a in argv) + '"'
 
 
 def _is_windows_cmd_shim(argv: list[str]) -> bool:
@@ -90,6 +105,30 @@ def windows_shim_command(argv: list[str]):
     if _is_windows_cmd_shim(argv):
         return build_cmd_c_line(argv)
     return argv
+
+
+def resolve_cli_argv(argv: list[str]):
+    """Spawn-ready form of ``argv`` for an external CLI (npm, claude, ...).
+
+    * POSIX: returns ``argv`` unchanged (Linux/macOS behaviour identical).
+    * Windows: a bare ``argv[0]`` is resolved through ``shutil.which`` first --
+      ``CreateProcess`` only appends ``.exe`` and never consults ``PATHEXT``,
+      so a bare ``"npm"`` / ``"npx"`` / npm-installed ``claude`` (``*.cmd``
+      shims) raises ``FileNotFoundError`` although it works in every shell.
+      The result then goes through :func:`windows_shim_command`, so a
+      ``.cmd``/``.bat`` target becomes the cmd.exe-safe command string
+      (BatBadBut-class injection closed) and an ``.exe`` stays a list.
+      An unresolvable name is kept so ``Popen`` raises ``FileNotFoundError``.
+    """
+    if os.name != "nt" or not argv:
+        return argv
+    exe = argv[0]
+    if isinstance(exe, str) and not os.path.dirname(exe):
+        import shutil  # noqa: PLC0415 - only needed on the Windows branch
+        found = shutil.which(exe)
+        if found:
+            argv = [found, *argv[1:]]
+    return windows_shim_command(list(argv))
 
 
 def no_console_window_flags() -> int:

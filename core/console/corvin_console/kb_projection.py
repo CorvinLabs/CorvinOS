@@ -189,7 +189,7 @@ def ensure_tenant_kb(tenant_id: str) -> dict[str, Any]:
                                               "error": "the installed Knowledge Graph plugin predates kb_init.py — update it"})
     try:
         r = subprocess.run([sys.executable, str(init), "--target", str(tenant_kb_path(tenant_id))],
-                           capture_output=True, text=True, timeout=120, env=_env("kb-init"))
+                           capture_output=True, text=True, timeout=120, env=_env("kb-init"), encoding="utf-8", errors="replace")
     except (subprocess.TimeoutExpired, OSError) as exc:
         return _kg_failed_outcome(tenant_id, {"status": "error", "error": f"kb_init did not finish: {type(exc).__name__}"})
     try:
@@ -254,7 +254,7 @@ def _uncommitted_work(repo: Path) -> list[str]:
     edit would reach the board without the state machine (a hand-set `status: done`)."""
     r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall", "--",
                         "kb/initiatives", "kb/epics", "kb/tasks"],
-                       capture_output=True, text=True, env=_env("sync:kb"))
+                       capture_output=True, text=True, env=_env("sync:kb"), encoding="utf-8", errors="replace")
     # exactly what `kb export` reads (direct *.md children) — a scratch file is no work item
     return [p for p in (ln[3:].strip('"') for ln in r.stdout.splitlines() if ln.strip())
             if _WORK_FILE.match(p.split(" -> ")[-1])]
@@ -263,7 +263,7 @@ def _uncommitted_work(repo: Path) -> list[str]:
 def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120) -> tuple[int, Any]:
     env = _env(actor)
     r = subprocess.run([sys.executable, str(repo / "scripts" / "kb.py"), "--repo", str(repo), *args],
-                       capture_output=True, text=True, timeout=timeout, env=env)
+                       capture_output=True, text=True, timeout=timeout, env=env, encoding="utf-8", errors="replace")
     out = r.stdout.strip() or r.stderr.strip()
     try:
         data = json.loads(out) if out else {}
@@ -275,7 +275,7 @@ def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120) -> 
 
 
 def fingerprint(repo: Path) -> str:
-    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
     parts = [head]
     for d in ("initiatives", "epics", "tasks"):
         base = repo / "kb" / d
@@ -300,7 +300,7 @@ def _save(tenant_id: str, st: dict[str, Any]) -> None:
         p = _state_path(tenant_id)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(st, indent=1, default=str))
+        tmp.write_text(json.dumps(st, indent=1, default=str), encoding="utf-8")
         os.replace(tmp, p)
     except OSError:
         log.debug("kb projection state not persisted", exc_info=True)
@@ -310,7 +310,7 @@ def status(tenant_id: str) -> dict[str, Any]:
     if tenant_id in _state:
         return {**_state[tenant_id], "code": code_state()}
     try:
-        return {**json.loads(_state_path(tenant_id).read_text()), "code": code_state()}
+        return {**json.loads(_state_path(tenant_id).read_text(encoding="utf-8")), "code": code_state()}
     except (OSError, ValueError):
         return {"state": "off" if kb_repo() is None else "idle", "code": code_state()}
 

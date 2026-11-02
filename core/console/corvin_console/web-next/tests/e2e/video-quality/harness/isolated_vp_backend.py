@@ -34,7 +34,7 @@ JOB_REPORT, JOB_OLD, JOB_OTHER = "job_5e1a0001", "job_01d00002", "job_0b0b0003"
 def _main_checkout() -> Path:
     try:
         common = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                                capture_output=True, text=True, timeout=10).stdout.strip()
+                                capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace").stdout.strip()
         if common.endswith(".git"):
             return Path(common).parent
     except (OSError, subprocess.SubprocessError):
@@ -50,9 +50,9 @@ def _reset_home() -> None:
     for t in ("_default", "tenant_b"):
         (HOME / "tenants" / t / "global" / "forge").mkdir(parents=True, exist_ok=True)
     (HOME / "xdg").mkdir(parents=True, exist_ok=True)
-    (HOME / MARKER).write_text("throwaway CORVIN_HOME for the video-quality Playwright spec\n")
+    (HOME / MARKER).write_text("throwaway CORVIN_HOME for the video-quality Playwright spec\n", encoding="utf-8")
     yml = HOME / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
-    yml.write_text("spec:\n  telemetry:\n    ping_enabled: false\n    healing_traces: false\n")
+    yml.write_text("spec:\n  telemetry:\n    ping_enabled: false\n    healing_traces: false\n", encoding="utf-8")
     os.chmod(yml, 0o600)
 
 
@@ -137,7 +137,7 @@ def main() -> None:
     _sandbox_env()
     for t in ("_default", "tenant_b"):
         _install_plugin(t)
-    (HOME / "seed.json").write_text(json.dumps(_seed(), indent=1))
+    (HOME / "seed.json").write_text(json.dumps(_seed(), indent=1), encoding="utf-8")
 
     import uvicorn
     from corvin_gateway.app import app

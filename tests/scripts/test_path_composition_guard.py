@@ -441,6 +441,6 @@ def test_real_tree_matches_committed_baseline():
     """Drift gate in the normal test run: the canonical pipeline over the real
     tracked list must agree with scripts/path_composition_baseline.json."""
     proc = subprocess.run(["bash", str(REPO / "scripts" / "path_composition_guard.sh"), "--check"],
-                          cwd=REPO, capture_output=True, text=True, timeout=300)
+                          cwd=REPO, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
     assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-4000:]
     assert "check OK" in proc.stdout

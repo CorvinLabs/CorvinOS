@@ -111,7 +111,7 @@ def plugin_scaffold_dir() -> Generator[Path, None, None]:
                     "description": "Test plugin for E2E testing",
                     "version": "1.0.0",
                 }
-            )
+            ), encoding="utf-8"
         )
 
         # Create basic plugin.py
@@ -135,7 +135,7 @@ class TestPlugin:
     def on_execute(self, input_data):
         '''Execute the plugin.'''
         return {"status": "success", "data": input_data}
-"""
+""", encoding="utf-8"
         )
 
         # Create tests directory
@@ -146,7 +146,7 @@ class TestPlugin:
 def test_plugin_loads():
     '''Test basic plugin loading.'''
     assert True
-"""
+""", encoding="utf-8"
         )
 
         # Create setup.py
@@ -159,7 +159,7 @@ setup(
     version="1.0.0",
     py_modules=["plugin"],
 )
-"""
+""", encoding="utf-8"
         )
 
         yield plugin_dir

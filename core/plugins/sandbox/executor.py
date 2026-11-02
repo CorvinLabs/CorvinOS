@@ -176,12 +176,12 @@ class SandboxExecutor:
         plugin_src = self.plugin_cache_dir / plugin_id / "plugin.py"
         if plugin_src.exists():
             plugin_dst = plugin_dir / "plugin.py"
-            plugin_dst.write_text(plugin_src.read_text())
+            plugin_dst.write_text(plugin_src.read_text(encoding="utf-8"), encoding="utf-8")
             plugin_dst.chmod(0o444)  # Read-only
 
         # Write seccomp profile
         profile_path = jail_root / "seccomp_profile.json"
-        profile_path.write_text(profile.to_json())
+        profile_path.write_text(profile.to_json(), encoding="utf-8")
         profile_path.chmod(0o444)
 
         # Write execution config
@@ -194,7 +194,7 @@ class SandboxExecutor:
             },
         }
         config_path = jail_root / "config.json"
-        config_path.write_text(json.dumps(config, indent=2))
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         config_path.chmod(0o444)
 
     async def _build_command(

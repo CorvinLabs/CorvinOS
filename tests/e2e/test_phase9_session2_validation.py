@@ -66,7 +66,7 @@ class Phase9Validator:
             self.log("FAIL", "app.py not found")
             return False
 
-        content = app_py.read_text()
+        content = app_py.read_text(encoding="utf-8")
 
         required_imports = [
             "intents as intents_route",
@@ -210,7 +210,7 @@ class Phase9Validator:
                 ["git", "status", "--porcelain"],
                 cwd=self.repo_root,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
 
             if result.returncode == 0:

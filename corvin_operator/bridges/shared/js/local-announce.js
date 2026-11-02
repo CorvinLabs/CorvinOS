@@ -20,18 +20,23 @@ function makeAnnouncer({ pluginRoot, channelLabel, currentSettings, logger }) {
     const mode = currentSettings().local_announce_inbound || 'off';
     if (mode === 'off') return;
     const snippet = (payload.text || payload.caption || '').slice(0, 200) || `[${kind}]`;
+    // A missing program (notify-send / speak.sh on Windows, a stale python
+    // path) is reported ASYNCHRONOUSLY as an 'error' event, not thrown -- and
+    // an unhandled 'error' event crashed the whole daemon on the next inbound
+    // message. Every spawn here therefore gets an error listener.
+    const fire = (cmd, args) => {
+      const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+      child.on('error', (e) => { if (logger) logger(`announce failed: ${e.message}`); });
+      child.unref();
+    };
     try {
       if (mode === 'earcon') {
-        spawn(require('./python_bin').pythonBin(), [path.join(pluginRoot, 'scripts', 'earcon.py'), 'play', 'tool'],
-          { detached: true, stdio: 'ignore' }).unref();
+        fire(require('./python_bin').pythonBin(), [path.join(pluginRoot, 'scripts', 'earcon.py'), 'play', 'tool']);
       } else if (mode === 'voice') {
         const intro = `${channelLabel}-message: ${snippet}`;
-        spawn(path.join(pluginRoot, 'scripts', 'speak.sh'),
-              ['--lang', 'de', '--text', intro],
-              { detached: true, stdio: 'ignore' }).unref();
+        fire(path.join(pluginRoot, 'scripts', 'speak.sh'), ['--lang', 'de', '--text', intro]);
       } else if (mode === 'text') {
-        spawn('notify-send', ['-a', channelLabel, String(payload.from), snippet],
-          { detached: true, stdio: 'ignore' }).unref();
+        fire('notify-send', ['-a', channelLabel, String(payload.from), snippet]);
       }
     } catch (e) {
       if (logger) logger(`announce failed: ${e.message}`);

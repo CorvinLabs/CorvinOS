@@ -142,9 +142,9 @@ def _write_incident(record: IncidentRecord) -> None:
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{record.incident_id}.json"
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(record.to_dict(), indent=2, ensure_ascii=False))
+    tmp.write_text(json.dumps(record.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.chmod(0o600)
-    tmp.rename(p)
+    tmp.replace(p)  # rename() raises FileExistsError on Windows on update
     p.chmod(0o600)
 
 

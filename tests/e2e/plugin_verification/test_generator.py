@@ -21,7 +21,7 @@ class TestTemplateGenerator:
             inventory_path: Path to test_inventory.json
         """
         self.inventory_path = inventory_path
-        self.inventory = json.loads(inventory_path.read_text())
+        self.inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
 
     def generate_for_plugin(self, plugin_id: str, output_dir: Path) -> Dict[str, Path]:
         """
@@ -149,7 +149,7 @@ class TestPluginLifecyclE2E:
         pytest.skip("Plugin class not yet implemented")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_features_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -183,7 +183,7 @@ class TestPluginFeatures:
         pytest.skip("Implement based on plugin features")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_hooks_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -225,7 +225,7 @@ class TestPluginHooks:
         pytest.skip("Implement based on plugin hooks")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_integration_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -266,7 +266,7 @@ class TestPluginIntegration:
         pytest.skip("Implement based on plugin system integration")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_cleanup_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -308,7 +308,7 @@ class TestPluginCleanup:
         pytest.skip("Implement based on plugin isolation")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_load_order_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -345,7 +345,7 @@ class TestPluginLoadOrder:
         pytest.skip("Implement based on dependency graph")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_hot_reload_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -382,7 +382,7 @@ class TestPluginHotReload:
         pytest.skip("Implement based on plugin hooks")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_fault_injection_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -419,7 +419,7 @@ class TestPluginFaultInjection:
         pytest.skip("Implement based on fault isolation")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_sandbox_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -456,7 +456,7 @@ class TestPluginSandbox:
         pytest.skip("Implement based on plugin resources")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def _generate_resource_limits_test(self, plugin_id: str, output_dir: Path) -> Path:
@@ -493,7 +493,7 @@ class TestPluginResourceLimits:
         pytest.skip("Implement based on plugin resources")
 '''
 
-        output_file.write_text(content)
+        output_file.write_text(content, encoding="utf-8")
         return output_file
 
     def generate_all(self, output_base_dir: Path) -> Dict[str, Dict[str, Path]]:

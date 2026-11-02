@@ -30,11 +30,11 @@ def _forge(tmp_path: Path) -> Path:
     for name in ("cel_b_skill", "cel_a_skill"):
         d = root / name
         d.mkdir(parents=True)
-        (d / "SKILL.md").write_text(f"---\nname: {name}\n---\nbody of {name}\n")
-        (d / "meta.json").write_text(json.dumps({"name": name, "type": "learned-experience"}))
+        (d / "SKILL.md").write_text(f"---\nname: {name}\n---\nbody of {name}\n", encoding="utf-8")
+        (d / "meta.json").write_text(json.dumps({"name": name, "type": "learned-experience"}), encoding="utf-8")
     (root / "no_skill_here").mkdir()  # a directory without SKILL.md is not a skill
-    (root / "legacy-flat.md").write_text("# flat\n")
-    (root / "notes.txt").write_text("ignored")
+    (root / "legacy-flat.md").write_text("# flat\n", encoding="utf-8")
+    (root / "notes.txt").write_text("ignored", encoding="utf-8")
     return root
 
 
@@ -53,7 +53,7 @@ def test_real_sync_replaces_the_tree_and_tags_only_on_change(tmp_path):
     root = _forge(tmp_path)
     work = tmp_path / "clone"
     (work / "skills" / "stale_skill").mkdir(parents=True)
-    (work / "skills" / "stale_skill" / "SKILL.md").write_text("gone locally")
+    (work / "skills" / "stale_skill" / "SKILL.md").write_text("gone locally", encoding="utf-8")
 
     def fake_enter(self):
         self.work_dir = work
@@ -71,9 +71,9 @@ def test_real_sync_replaces_the_tree_and_tags_only_on_change(tmp_path):
     assert result["tag"] == "release-x" and tag.call_count == 1
     assert "skills/cel_a_skill/SKILL.md" in result["files_written"]
     assert "skills/cel_a_skill/meta.json" in result["files_written"]
-    assert (work / "skills" / "cel_b_skill" / "meta.json").read_text() == json.dumps({"name": "cel_b_skill", "type": "learned-experience"})
+    assert (work / "skills" / "cel_b_skill" / "meta.json").read_text(encoding="utf-8") == json.dumps({"name": "cel_b_skill", "type": "learned-experience"})
     assert not (work / "skills" / "stale_skill").exists(), "a skill deleted locally must leave the repository"
-    manifest = json.loads((work / "skills" / "manifest.json").read_text())
+    manifest = json.loads((work / "skills" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["skills_count"] == 3 and manifest["source"] == "skill-forge"
     assert "synced_at" not in manifest and "generated_at" not in manifest
     assert manifest["skills"][0] == {
@@ -100,8 +100,8 @@ def test_repo_sync_reads_the_tenants_skill_forge_dir(tmp_path, monkeypatch):
     tenant = tmp_path / "tenants" / "_default"
     _forge(tenant)
     (tenant / "skills").mkdir()
-    (tenant / "skills" / "registry.yaml").write_text("plugins: []\n")  # config, not a skill
-    (tenant / "github-config.json").write_text(json.dumps({"url": "https://github.com/example/tenant", "auto_sync": True}))
+    (tenant / "skills" / "registry.yaml").write_text("plugins: []\n", encoding="utf-8")  # config, not a skill
+    (tenant / "github-config.json").write_text(json.dumps({"url": "https://github.com/example/tenant", "auto_sync": True}), encoding="utf-8")
     monkeypatch.setattr(rs, "_tenant_path", lambda tid: tenant, raising=False)
     monkeypatch.setattr("core.console.corvin_console.routes.github_sync._tenant_path", lambda tid: tenant)
 

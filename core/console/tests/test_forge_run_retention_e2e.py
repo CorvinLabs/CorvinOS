@@ -30,12 +30,12 @@ def _put(client, run_id: str, *, age_days: float, with_dir: bool = False, **fiel
     d = client.home / "tenants" / "_default" / "global" / "forge_runs"
     d.mkdir(parents=True, exist_ok=True)
     f = d / f"{run_id}.json"
-    f.write_text(json.dumps(rec))
+    f.write_text(json.dumps(rec), encoding="utf-8")
     old = time.time() - age_days * DAY
     os.utime(f, (old, old))
     if with_dir:
         (d / run_id).mkdir(exist_ok=True)
-        (d / run_id / "events.jsonl").write_text('{"seq": 1}\n')
+        (d / run_id / "events.jsonl").write_text('{"seq": 1}\n', encoding="utf-8")
     return f
 
 
@@ -54,7 +54,7 @@ def test_a_running_record_with_a_live_owner_survives_the_prune_however_old(tmp_p
     with console(tmp_path, ScriptedEngine()) as client:
         f = _put(client, "run-cccccccccccc", age_days=40, status="running", heartbeat_at=time.time())
         forge_runs.prune("_default")
-        assert f.exists() and json.loads(f.read_text())["status"] == "running"
+        assert f.exists() and json.loads(f.read_text(encoding="utf-8"))["status"] == "running"
 
 
 def test_a_dead_owners_running_record_is_first_marked_interrupted_and_pruned_a_ttl_later(tmp_path):
@@ -62,7 +62,7 @@ def test_a_dead_owners_running_record_is_first_marked_interrupted_and_pruned_a_t
         f = _put(client, "run-dddddddddddd", age_days=30, status="running", heartbeat_at=0)
         forge_runs.prune("_default")
         assert f.exists(), "it is not deleted in the same pass"
-        rec = json.loads(f.read_text())
+        rec = json.loads(f.read_text(encoding="utf-8"))
         assert rec["status"] == "failed" and rec["failure_code"] == "interrupted"
         assert (time.time() - f.stat().st_mtime) < DAY, "marking it makes it a fresh finished record"
         forge_runs.prune("_default")
@@ -78,7 +78,7 @@ def test_the_prune_ignores_foreign_files_and_traversal_shaped_names(tmp_path):
         d = client.home / "tenants" / "_default" / "global" / "forge_runs"
         d.mkdir(parents=True, exist_ok=True)
         keep = d / "notes.txt"
-        keep.write_text("not a run")
+        keep.write_text("not a run", encoding="utf-8")
         os.utime(keep, (1, 1))
         outside = client.home / "outside_dir"
         outside.mkdir()
@@ -100,7 +100,7 @@ def test_a_fresh_console_boot_prunes_every_tenant_even_one_that_never_starts_a_r
     runs_dir = home / "tenants" / "quiet_tenant" / "global" / "forge_runs"
     runs_dir.mkdir(parents=True)
     old = runs_dir / "run-ffffffffffff.json"
-    old.write_text(json.dumps({"tenant_id": "quiet_tenant", "kind": "tool", "status": "failed", "boot_id": "x"}))
+    old.write_text(json.dumps({"tenant_id": "quiet_tenant", "kind": "tool", "status": "failed", "boot_id": "x"}), encoding="utf-8")
     t = time.time() - 30 * DAY
     os.utime(old, (t, t))
     repo = Path(__file__).resolve().parents[3]
@@ -109,6 +109,6 @@ def test_a_fresh_console_boot_prunes_every_tenant_even_one_that_never_starts_a_r
            "PYTHONPATH": os.pathsep.join(str(repo / p) for p in ("core/console", ".", "corvin_operator", "corvin_operator/forge"))}
     code = ("import time, corvin_console.forge_runs as f\n"
             "for _ in range(50):\n    time.sleep(0.1)\n    if f.boot_prune_done(): break\n")
-    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr[-800:]
     assert not old.exists(), "a tenant that never starts a run must still be pruned at boot"

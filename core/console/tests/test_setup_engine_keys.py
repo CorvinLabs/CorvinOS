@@ -134,7 +134,7 @@ def _audit_events(ctx) -> list[dict]:
     chain = ctx["audit_chain"]
     if not chain.exists():
         return []
-    return [json.loads(ln) for ln in chain.read_text().splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in chain.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 class UpdateEngineKeyReauthTests(unittest.TestCase):

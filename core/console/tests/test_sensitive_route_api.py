@@ -131,7 +131,7 @@ class SensitiveRouteApiTests(unittest.TestCase):
 
     def test_declaring_twice_replaces_and_keeps_other_sections(self) -> None:
         self.path.write_text(yaml.safe_dump({"spec": {"egress": {"enabled": True},
-                                                      "engine_models": {"claude_code": {"os_model": "x"}}}}))
+                                                      "engine_models": {"claude_code": {"os_model": "x"}}}}), encoding="utf-8")
         self.path.chmod(0o600)
         self.assertEqual(self.declare().status_code, 200)
         self.assertEqual(self.declare(locality="local", network_egress="local").status_code, 200)
@@ -251,7 +251,7 @@ class SensitiveRouteApiTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), CORRUPT, "the corrupt policy file was rewritten")
 
     def test_a_policy_section_of_the_wrong_shape_is_refused_not_overwritten(self) -> None:
-        self.path.write_text("spec:\n  data_classification: [not, a, mapping]\n")
+        self.path.write_text("spec:\n  data_classification: [not, a, mapping]\n", encoding="utf-8")
         before = self.path.read_bytes()
         r = self.declare()
         self.assertEqual((r.status_code, r.json()["detail"]["code"]), (422, "policy_invalid"))

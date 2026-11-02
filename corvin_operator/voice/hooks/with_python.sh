@@ -15,7 +15,20 @@
 here="$(cd "$(dirname "$0")" && pwd)"
 script="$1"; shift
 _py=""
+# Windows: %LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe exists on a fresh
+# Windows 11 even without any Python — the App Execution Alias stub, which
+# only prints "Python was not found ... Microsoft Store" and exits 9009.
+# `command -v` finds it, so every hook (incl. the fail-closed L10 path gate)
+# failed instead of falling through to the corvinos tool venv. Only that
+# alias is probed; every other python3 is taken as before.
+_py3_ok=0
 if command -v python3 >/dev/null 2>&1; then
+    _py3_ok=1
+    case "$(command -v python3)" in
+        *[Ww]indows[Aa]pps*) python3 -c 'import sys' >/dev/null 2>&1 || _py3_ok=0 ;;
+    esac
+fi
+if [ "$_py3_ok" = 1 ]; then
     _py="python3"
 elif [ -n "${CORVIN_PYTHON:-}" ] && [ -x "${CORVIN_PYTHON}" ]; then
     _py="${CORVIN_PYTHON}"
@@ -35,4 +48,12 @@ if [ -z "$_py" ]; then
     echo "corvin hooks: no Python 3 found (python3, CORVIN_PYTHON, the corvinos tool venv) — $script did not run" >&2
     exit 1
 fi
+# Windows (Git Bash / MSYS): run the hook in Python UTF-8 mode. Claude Code
+# sends the hook payload as UTF-8; under the ANSI code page (cp1252 on a German
+# Windows) a non-ASCII path in it is mis-decoded and a deny reason containing
+# one raises UnicodeEncodeError on stderr -> exit 1, which Claude Code treats as
+# a NON-blocking hook error (the denied call would proceed). No-op elsewhere.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) PYTHONUTF8="${PYTHONUTF8:-1}"; export PYTHONUTF8 ;;
+esac
 exec "$_py" "$here/$script" "$@"

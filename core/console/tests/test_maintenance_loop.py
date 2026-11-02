@@ -40,7 +40,7 @@ def git_repo(tmp_path):
     repo.mkdir()
     def g(*a):
         subprocess.run(["git", "-C", str(repo), *a], check=True,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     g("init", "-b", "main")
     g("config", "user.email", "t@t.t")
     g("config", "user.name", "t")
@@ -152,7 +152,7 @@ def test_low_risk_green_direct_main_merges(git_repo, valid_cap):
     assert r.status == "merged", r.detail
     # main now has the change
     head = subprocess.run(["git", "-C", str(git_repo), "show", "main:app.py"],
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     assert "x = 99" in head
 
 
@@ -170,7 +170,7 @@ def test_direct_main_refused_without_repro_runner(git_repo, valid_cap):
     assert r.telemetry.get("direct_main_refused") == "no_repro_runner"
     # main must NOT carry the change (still the initial content)
     head = subprocess.run(["git", "-C", str(git_repo), "show", "main:app.py"],
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     assert "x = 77" not in head
 
 

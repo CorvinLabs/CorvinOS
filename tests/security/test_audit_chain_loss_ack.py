@@ -85,7 +85,7 @@ def _run(tmp_path: Path, mode: str) -> dict:
     env["PYTHONPATH"] = f"{FORGE}{os.pathsep}{env.get('PYTHONPATH', '')}"
     proc = subprocess.run(
         [sys.executable, "-c", SCENARIO, str(tmp_path), mode],
-        env=env, capture_output=True, text=True, timeout=120,
+        env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     return json.loads(proc.stdout.strip().splitlines()[-1])

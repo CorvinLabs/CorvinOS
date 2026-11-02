@@ -470,7 +470,7 @@ class TestSkillCompilation:
                 "scope": "local_development",
             }
             
-            with open(skill_dir / "manifest.yaml", "w") as f:
+            with open(skill_dir / "manifest.yaml", "w", encoding="utf-8") as f:
                 yaml.dump(manifest, f)
             
             # Create skill.py
@@ -481,7 +481,7 @@ from corvin.skills import SkillRuntime
 def execute(input_data):
     return {"result": "test"}
 """
-            with open(skill_dir / "skill.py", "w") as f:
+            with open(skill_dir / "skill.py", "w", encoding="utf-8") as f:
                 f.write(skill_code)
             
             yield skill_dir
@@ -543,7 +543,7 @@ def execute(input_data):
                 "scope": "local_development",
             }
             
-            with open(skill_dir / "manifest.yaml", "w") as f:
+            with open(skill_dir / "manifest.yaml", "w", encoding="utf-8") as f:
                 yaml.dump(manifest, f)
             
             # Create skill.py with forbidden import
@@ -553,7 +553,7 @@ from corvin.skills.brain_loader import infer  # Forbidden!
 def execute(input_data):
     return infer(input_data)
 """
-            with open(skill_dir / "skill.py", "w") as f:
+            with open(skill_dir / "skill.py", "w", encoding="utf-8") as f:
                 f.write(skill_code)
             
             compiler = SkillCompiler()
@@ -603,7 +603,7 @@ class TestIntegration:
                 "scope": "local_development",
             }
             
-            with open(manifest_path, "w") as f:
+            with open(manifest_path, "w", encoding="utf-8") as f:
                 yaml.dump(manifest, f)
             
             report = validate_skill_manifest(manifest_path)
@@ -649,10 +649,10 @@ class TestIntegration:
                 "scope": "local_development",
             }
             
-            with open(skill_dir / "manifest.yaml", "w") as f:
+            with open(skill_dir / "manifest.yaml", "w", encoding="utf-8") as f:
                 yaml.dump(manifest, f)
             
-            with open(skill_dir / "skill.py", "w") as f:
+            with open(skill_dir / "skill.py", "w", encoding="utf-8") as f:
                 f.write("def execute(input_data): return {'result': 'ok'}")
             
             # 2. Validate

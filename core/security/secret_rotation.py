@@ -189,12 +189,12 @@ class RotationDaemon:
                 return False
 
             if file_path.name.endswith(".json"):
-                with open(file_path) as f:
+                with open(file_path, encoding="utf-8") as f:
                     data = json.load(f)
                     return key_name in data
             else:
                 # .env format: KEY=VALUE
-                with open(file_path) as f:
+                with open(file_path, encoding="utf-8") as f:
                     return any(line.startswith(f"{key_name}=") for line in f)
         except Exception as e:
             logger.warning(f"Error checking key {key_name} in {file_path}: {e}")
@@ -374,25 +374,25 @@ class RotationDaemon:
         try:
             if file_path.name.endswith(".json"):
                 # JSON file
-                with open(file_path) as f:
+                with open(file_path, encoding="utf-8") as f:
                     data = json.load(f)
                 for key, placeholder in replacements.items():
                     if key in data:
                         data[key] = placeholder
                         count += 1
-                with open(file_path, "w") as f:
+                with open(file_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
             else:
                 # .env format
                 lines = []
-                with open(file_path) as f:
+                with open(file_path, encoding="utf-8") as f:
                     for line in f:
                         for key, placeholder in replacements.items():
                             if line.startswith(f"{key}="):
                                 line = f"{key}={placeholder}\n"
                                 count += 1
                         lines.append(line)
-                with open(file_path, "w") as f:
+                with open(file_path, "w", encoding="utf-8") as f:
                     f.writelines(lines)
             logger.debug(f"Rotated {count} credentials in {file_path}")
         except Exception as e:
@@ -411,7 +411,7 @@ class RotationDaemon:
             file_path = Path(file_spec).expanduser()
             if file_path.exists():
                 try:
-                    with open(file_path) as f:
+                    with open(file_path, encoding="utf-8") as f:
                         count += f.read().count("PLACEHOLDER")
                 except Exception as e:
                     logger.warning(f"Error verifying {file_path}: {e}")

@@ -68,13 +68,13 @@ class ConsoleSandbox:
         """Every ADR-0314 learning event persisted under the sandbox tenant."""
         out: list[dict[str, Any]] = []
         for f in sorted((self.tenant_home / "learning" / "events").glob("*.jsonl")):
-            out.extend(json.loads(line) for line in f.read_text().splitlines() if line.strip())
+            out.extend(json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line.strip())
         return out
 
     def chain_records(self) -> list[dict[str, Any]]:
         if not self.chain.exists():
             return []
-        return [json.loads(line) for line in self.chain.read_text().splitlines() if line.strip()]
+        return [json.loads(line) for line in self.chain.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 @contextmanager

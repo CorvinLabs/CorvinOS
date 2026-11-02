@@ -197,7 +197,7 @@ def setup_monitoring():
     
     # Write monitoring config
     config_path = Path("/home/shumway/projects/CorvinOS/monitoring/production_config.json")
-    config_path.write_text(json.dumps(config, indent=2))
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     
     print("📊 Monitoring Configuration")
     print("="*70)
@@ -292,7 +292,7 @@ def create_dashboard_definitions():
     }
     
     dashboard_path = Path("/home/shumway/projects/CorvinOS/monitoring/grafana_dashboard.json")
-    dashboard_path.write_text(json.dumps(dashboard, indent=2))
+    dashboard_path.write_text(json.dumps(dashboard, indent=2), encoding="utf-8")
     
     print(f"✅ Dashboard saved to: {dashboard_path}")
     print(f"✅ Panels: {len(dashboard['dashboard']['panels'])}")
@@ -348,10 +348,10 @@ def create_alert_rules():
     rules_path = Path("/home/shumway/projects/CorvinOS/monitoring/alert_rules.yml")
     import yaml
     try:
-        rules_path.write_text(yaml.dump(alert_rules, default_flow_style=False))
+        rules_path.write_text(yaml.dump(alert_rules, default_flow_style=False), encoding="utf-8")
     except:
         # Fallback if yaml not available
-        rules_path.write_text(json.dumps(alert_rules, indent=2))
+        rules_path.write_text(json.dumps(alert_rules, indent=2), encoding="utf-8")
     
     print(f"✅ Alert rules saved to: {rules_path}")
     print(f"✅ Alert groups: 1")

@@ -79,7 +79,7 @@ class TestIR001NotifyReturnsFailure(unittest.TestCase):
     """IR-001: notify() returns False if ANY channel fails"""
 
     def setUp(self):
-        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8")
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
         self.notifier = IncidentNotifier(start_dlq_worker=False)
@@ -122,7 +122,7 @@ class TestIR002SMTPWithRetries(unittest.TestCase):
     """IR-002: Email sent via SMTP with 3 retries"""
 
     def setUp(self):
-        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8")
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
         self.notifier = IncidentNotifier(start_dlq_worker=False)
@@ -176,7 +176,7 @@ class TestIR003RateLimiting(unittest.TestCase):
     """IR-003: Rate limiting (10 alerts/min)"""
 
     def setUp(self):
-        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8")
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
         self.notifier = IncidentNotifier(start_dlq_worker=False)
@@ -230,7 +230,7 @@ class TestIR004FallbackChain(unittest.TestCase):
     """IR-004: Fallback chain when Slack fails"""
 
     def setUp(self):
-        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8")
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
         self.notifier = IncidentNotifier(start_dlq_worker=False)
@@ -275,7 +275,7 @@ class TestIR005DeadLetterQueue(unittest.TestCase):
     """IR-005: Dead letter queue for failed notifications"""
 
     def setUp(self):
-        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+        self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8")
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
         self.notifier = IncidentNotifier(start_dlq_worker=False)

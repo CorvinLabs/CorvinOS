@@ -148,7 +148,7 @@ class EventQueue:
     def _persist_event(self, event: WebhookEvent):
         """Write event to persistent log."""
         try:
-            with open(self.event_log, 'a') as f:
+            with open(self.event_log, 'a', encoding="utf-8") as f:
                 f.write(event.to_json() + '\n')
         except Exception as e:
             logger.error(f"Failed to persist event: {e}")
@@ -157,7 +157,7 @@ class EventQueue:
         """Move event to dead-letter queue."""
         try:
             dlq_file = self.dead_letter_dir / f"{event.event_id}.dlq"
-            with open(dlq_file, 'w') as f:
+            with open(dlq_file, 'w', encoding="utf-8") as f:
                 json.dump({
                     "event": event.to_dict(),
                     "reason": reason,

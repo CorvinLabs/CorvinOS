@@ -77,7 +77,7 @@ def test_bridge_events_chain_verifies_clean():
             )
 
             t("audit file exists", audit_path.exists())
-            lines = audit_path.read_text().splitlines()
+            lines = audit_path.read_text(encoding="utf-8").splitlines()
             t("3 events written", len(lines) == 3)
             recs = [json.loads(l) for l in lines]
             types = [r["event_type"] for r in recs]
@@ -101,7 +101,7 @@ def test_bridge_events_chain_verifies_clean():
             proc = subprocess.run(
                 [sys.executable, str(cli_path), "--path",
                  str(audit_path), "verify"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
             t("CLI rc=0", proc.returncode == 0)
             t("CLI says 'audit OK'", "audit OK" in proc.stdout)
@@ -110,7 +110,7 @@ def test_bridge_events_chain_verifies_clean():
             proc = subprocess.run(
                 [sys.executable, str(cli_path), "--path",
                  str(audit_path), "tail", "--limit", "5"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
             t("tail rc=0", proc.returncode == 0)
             t("tail mentions all three event types",
@@ -138,17 +138,17 @@ def test_tampered_audit_fails_verify():
                     user="u", persona="coder",
                 )
             # Tamper line 2: change persona, leave hash alone
-            lines = audit_path.read_text().splitlines()
+            lines = audit_path.read_text(encoding="utf-8").splitlines()
             rec = json.loads(lines[1])
             rec["details"]["persona"] = "evil_persona"
             lines[1] = json.dumps(rec)
-            audit_path.write_text("\n".join(lines) + "\n")
+            audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
             cli = REPO_ROOT / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
             proc = subprocess.run(
                 [sys.executable, str(cli), "--path",
                  str(audit_path), "verify"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
             t("CLI rc=1", proc.returncode == 1)
             t("stderr says INTEGRITY VIOLATION",
@@ -219,19 +219,19 @@ def _load_audit_copy(tmp_root: Path, *, forge_present_but_broken: bool, name: st
     """
     import importlib.util
 
-    audit_src = (Path(__file__).resolve().parent / "audit.py").read_text()
+    audit_src = (Path(__file__).resolve().parent / "audit.py").read_text(encoding="utf-8")
     shared_dir = tmp_root / "corvin_operator" / "bridges" / "shared"
     shared_dir.mkdir(parents=True, exist_ok=True)
     audit_copy = shared_dir / "audit.py"
-    audit_copy.write_text(audit_src)
+    audit_copy.write_text(audit_src, encoding="utf-8")
 
     if forge_present_but_broken:
         forge_pkg = tmp_root / "corvin_operator" / "forge" / "forge"
         forge_pkg.mkdir(parents=True, exist_ok=True)
-        (forge_pkg / "__init__.py").write_text("")
+        (forge_pkg / "__init__.py").write_text("", encoding="utf-8")
         (forge_pkg / "security_events.py").write_text(
             "raise RuntimeError("
-            "'simulated packaging regression: broken transitive dependency')\n"
+            "'simulated packaging regression: broken transitive dependency')\n", encoding="utf-8"
         )
     # else: leave tmp_root/operator/forge entirely absent -> genuine absence
 
@@ -401,7 +401,7 @@ def test_writer_loads_when_forge_prebound_as_namespace_package(tmp_path):
     env.pop("FORGE_ROOT", None)
     env.pop("VOICE_AUDIT_PATH", None)
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                       env=env, cwd=str(tmp_path), timeout=60)
+                       env=env, cwd=str(tmp_path), timeout=60, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr[-2000:]
     assert "WRITER True" in r.stdout, r.stdout + r.stderr[-2000:]
     assert "corvin_operator/forge/forge/security_events.py" in r.stdout, r.stdout
@@ -409,6 +409,6 @@ def test_writer_loads_when_forge_prebound_as_namespace_package(tmp_path):
 
 def test_broken_writer_import_is_logged_at_error_level():
     """A failed writer import drops every bridge record: it must be loud."""
-    src = (Path(__file__).resolve().parent / "audit.py").read_text()
+    src = (Path(__file__).resolve().parent / "audit.py").read_text(encoding="utf-8")
     block = src[src.index("# Optional forge dependency"):src.index("def writer_available")]
     assert ".error(" in block and ".warning(" not in block, block

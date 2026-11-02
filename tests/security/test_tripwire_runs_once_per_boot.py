@@ -72,7 +72,7 @@ def _run(host: str, home: Path) -> dict:
     })
     env.pop("PYTEST_CURRENT_TEST", None)
     proc = subprocess.run([sys.executable, "-c", _BOOT], env=env, cwd=str(_REPO),
-                          capture_output=True, text=True, timeout=600)
+                          capture_output=True, text=True, timeout=600, encoding="utf-8", errors="replace")
     out = proc.stdout + "\n" + proc.stderr
     line = next((l for l in out.splitlines() if l.startswith("RESULT ")), None)
     assert line, out[-4000:]
@@ -118,7 +118,7 @@ def test_failure_is_never_recorded_as_asserted(tmp_path, monkeypatch):
     # A chain that cannot verify: one record whose hash is simply wrong.
     rec = {"ts": 1.0, "event_type": "test.event", "severity": "INFO", "run_id": "",
            "tool": "", "details": {}, "prev_hash": "", "hash": "deadbeefdeadbeef"}
-    (home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").write_text(json.dumps(rec) + "\n")
+    (home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
     (tmp_path / "anchor.key").write_bytes(b"A" * 32)
     os.chmod(tmp_path / "anchor.key", 0o644)  # F-A14 → current-state failure
 

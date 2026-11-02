@@ -82,7 +82,7 @@ def _rules_for_layers(layers: set[str]) -> list[dict]:
             fpath = manifest_dir / fname
             if not fpath.exists():
                 continue
-            data = yaml.safe_load(fpath.read_text())
+            data = yaml.safe_load(fpath.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 all_rules.extend(data.get("rules", []))
     except Exception:

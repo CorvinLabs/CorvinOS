@@ -224,7 +224,7 @@ class FullStackTests(unittest.TestCase):
             files = sorted(iter_dir.glob("*.json"))
             self.assertGreater(len(files), 0)
             for f in files:
-                data = json.loads(f.read_text())
+                data = json.loads(f.read_text(encoding="utf-8"))
                 self.assertIn("api_endpoint", data["params"])
                 self.assertTrue(
                     data["params"]["api_endpoint"].startswith("<hash:"),

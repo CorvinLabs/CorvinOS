@@ -93,7 +93,7 @@ def test_build_audit_head_signed() -> None:
             "enabled": True,
             "hmac_key": "cd" * 32,
             "recv_key": key_hex,
-        }))
+        }), encoding="utf-8")
         of.chmod(0o600)
         p = root / "audit.jsonl"
         _write_chain(p, 2)

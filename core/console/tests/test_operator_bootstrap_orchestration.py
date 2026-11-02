@@ -37,8 +37,8 @@ def test_vendored_orchestration_lands_on_syspath(tmp_path, monkeypatch):
     root = tmp_path / "corvin_console"
     orch = root / "_vendor" / "corvin_operator" / "orchestration"
     (orch / "tde").mkdir(parents=True)
-    (orch / "__init__.py").write_text("")
-    (orch / "tde" / "__init__.py").write_text("MARK = 42\n")
+    (orch / "__init__.py").write_text("", encoding="utf-8")
+    (orch / "tde" / "__init__.py").write_text("MARK = 42\n", encoding="utf-8")
     ob.__file__ = str(root / "_operator_bootstrap.py")
 
     monkeypatch.syspath_prepend(str(orch))  # ensure cleanup of sys.path noise

@@ -27,11 +27,11 @@ class TestPluginRegistryOperations:
 
         # Write manifest
         manifest_file = plugin_dir / "manifest.json"
-        manifest_file.write_text(json.dumps(manifest))
+        manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
 
         # Verify it exists
         assert manifest_file.exists()
-        assert json.loads(manifest_file.read_text())["plugin_id"] == "registry-test-1"
+        assert json.loads(manifest_file.read_text(encoding="utf-8"))["plugin_id"] == "registry-test-1"
 
     def test_unregister_plugin_removes_from_registry(self, isolated_plugin_env, plugin_manifest_factory):
         """Unregister a plugin from the registry"""
@@ -42,7 +42,7 @@ class TestPluginRegistryOperations:
         plugin_dir = registry_path / "registry-test-2"
         plugin_dir.mkdir(parents=True)
         manifest_file = plugin_dir / "manifest.json"
-        manifest_file.write_text(json.dumps(manifest))
+        manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
         assert manifest_file.exists()
 
         # Unregister (remove directory)
@@ -63,7 +63,7 @@ class TestPluginRegistryOperations:
             manifest = plugin_manifest_factory.make_valid(plugin_id)
             plugin_dir = registry_path / plugin_id
             plugin_dir.mkdir(parents=True)
-            (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+            (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # List all
         registered = [d.name for d in registry_path.iterdir() if d.is_dir()]
@@ -81,10 +81,10 @@ class TestPluginRegistryOperations:
         plugin_dir = registry_path / "metadata-test"
         plugin_dir.mkdir(parents=True)
         manifest_file = plugin_dir / "manifest.json"
-        manifest_file.write_text(json.dumps(manifest))
+        manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
 
         # Read back
-        loaded = json.loads(manifest_file.read_text())
+        loaded = json.loads(manifest_file.read_text(encoding="utf-8"))
         assert loaded["plugin_id"] == "metadata-test"
         assert loaded["custom_field"] == "custom_value"
         assert loaded["tags"] == ["compute", "ai"]
@@ -102,7 +102,7 @@ class TestPluginDiscovery:
 
         plugin_dir = registry_path / "discovery-test"
         plugin_dir.mkdir(parents=True)
-        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Discover by ID
         expected_manifest_file = registry_path / "discovery-test" / "manifest.json"
@@ -117,7 +117,7 @@ class TestPluginDiscovery:
             manifest = plugin_manifest_factory.make_valid(f"plugin-{i}")
             plugin_dir = registry_path / f"plugin-{i}"
             plugin_dir.mkdir(parents=True)
-            (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+            (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Discover all
         plugins_found = []
@@ -125,7 +125,7 @@ class TestPluginDiscovery:
             if plugin_dir.is_dir():
                 manifest_file = plugin_dir / "manifest.json"
                 if manifest_file.exists():
-                    manifest = json.loads(manifest_file.read_text())
+                    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
                     plugins_found.append(manifest["plugin_id"])
 
         assert len(plugins_found) == 3
@@ -148,14 +148,14 @@ class TestPluginDiscovery:
         for manifest in [compute_manifest, audit_manifest]:
             plugin_dir = registry_path / manifest["plugin_id"]
             plugin_dir.mkdir(parents=True)
-            (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+            (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Filter by type
         compute_plugins = []
         for plugin_dir in registry_path.iterdir():
             manifest_file = plugin_dir / "manifest.json"
             if manifest_file.exists():
-                manifest = json.loads(manifest_file.read_text())
+                manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
                 if manifest.get("plugin_type") == "compute_engine":
                     compute_plugins.append(manifest["plugin_id"])
 
@@ -173,14 +173,14 @@ class TestPluginDiscovery:
         for manifest in [bundled, installed]:
             plugin_dir = registry_path / manifest["plugin_id"]
             plugin_dir.mkdir(parents=True)
-            (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+            (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Discover bundled
         bundled_plugins = []
         for plugin_dir in registry_path.iterdir():
             manifest_file = plugin_dir / "manifest.json"
             if manifest_file.exists():
-                manifest = json.loads(manifest_file.read_text())
+                manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
                 if manifest.get("boot_layer") == "bundled":
                     bundled_plugins.append(manifest["plugin_id"])
 
@@ -201,11 +201,11 @@ class TestRegistryStatePersistence:
         plugin_dir = registry_path / "persist-test"
         plugin_dir.mkdir(parents=True)
         manifest_file = plugin_dir / "manifest.json"
-        manifest_file.write_text(json.dumps(manifest))
+        manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
 
         # Simulate restart by re-reading
         assert manifest_file.exists()
-        loaded = json.loads(manifest_file.read_text())
+        loaded = json.loads(manifest_file.read_text(encoding="utf-8"))
         assert loaded["plugin_id"] == "persist-test"
 
     def test_registry_state_isolation_per_tenant(self, isolated_plugin_env, plugin_manifest_factory):
@@ -216,7 +216,7 @@ class TestRegistryStatePersistence:
         manifest = plugin_manifest_factory.make_valid("tenant-test")
         plugin_dir = registry_path / "tenant-test"
         plugin_dir.mkdir(parents=True)
-        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         # Verify location is tenant-scoped
         assert "tenants" in str(registry_path)
@@ -233,13 +233,13 @@ class TestRegistryStatePersistence:
         # Write manifest atomically
         manifest_file = plugin_dir / "manifest.json"
         temp_file = manifest_file.with_suffix(".tmp")
-        temp_file.write_text(json.dumps(manifest))
+        temp_file.write_text(json.dumps(manifest), encoding="utf-8")
         temp_file.replace(manifest_file)
 
         # Verify final state is complete
         assert manifest_file.exists()
         assert not temp_file.exists()
-        loaded = json.loads(manifest_file.read_text())
+        loaded = json.loads(manifest_file.read_text(encoding="utf-8"))
         assert loaded["plugin_id"] == "atomic-test"
 
 
@@ -255,7 +255,7 @@ class TestRegistryErrorHandling:
         manifest1 = plugin_manifest_factory.make_valid("duplicate-test")
         plugin_dir = registry_path / "duplicate-test"
         plugin_dir.mkdir(parents=True)
-        (plugin_dir / "manifest.json").write_text(json.dumps(manifest1))
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest1), encoding="utf-8")
 
         # Try to register second (should fail or update)
         # In most registry implementations, this either raises or updates
@@ -269,19 +269,19 @@ class TestRegistryErrorHandling:
         # Create valid plugin
         valid_dir = registry_path / "valid-plugin"
         valid_dir.mkdir(parents=True)
-        (valid_dir / "manifest.json").write_text(json.dumps({"plugin_id": "valid-plugin"}))
+        (valid_dir / "manifest.json").write_text(json.dumps({"plugin_id": "valid-plugin"}), encoding="utf-8")
 
         # Create invalid plugin (bad JSON)
         invalid_dir = registry_path / "invalid-plugin"
         invalid_dir.mkdir(parents=True)
-        (invalid_dir / "manifest.json").write_text("{ invalid json }")
+        (invalid_dir / "manifest.json").write_text("{ invalid json }", encoding="utf-8")
 
         # Discovery should handle gracefully
         discovered = []
         for plugin_dir in registry_path.iterdir():
             manifest_file = plugin_dir / "manifest.json"
             try:
-                manifest = json.loads(manifest_file.read_text())
+                manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
                 discovered.append(manifest)
             except json.JSONDecodeError:
                 pass  # Skip invalid
@@ -301,6 +301,6 @@ class TestRegistryErrorHandling:
         for d in registry_path.iterdir():
             manifest_file = d / "manifest.json"
             if manifest_file.exists():
-                discovered.append(json.loads(manifest_file.read_text()))
+                discovered.append(json.loads(manifest_file.read_text(encoding="utf-8")))
 
         assert len(discovered) == 0

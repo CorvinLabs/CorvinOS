@@ -224,7 +224,7 @@ class TestInstanceLocator:
         assert cache_file.exists()
 
         # Read and verify
-        with open(cache_file, "r") as f:
+        with open(cache_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
         assert len(lines) == 1
         record = json.loads(lines[0])

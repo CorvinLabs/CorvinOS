@@ -181,7 +181,7 @@ def test_ensure_requirements_concurrent_processes_serialize_pip():
         target = cache_root / "req_cache" / key
         assert (target / ".installed").exists()
 
-        result_lines = [l for l in results_path.read_text().splitlines() if l]
+        result_lines = [l for l in results_path.read_text(encoding="utf-8").splitlines() if l]
         assert len(result_lines) == n
         assert all(line == str(target) for line in result_lines), (
             "every concurrent caller must observe the same completed target path"
@@ -192,7 +192,7 @@ def test_ensure_requirements_concurrent_processes_serialize_pip():
 
 def _dummy_impl(tmp: Path) -> Path:
     p = tmp / "tool.py"
-    p.write_text("print('hello')")
+    p.write_text("print('hello')", encoding="utf-8")
     return p
 
 

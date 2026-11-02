@@ -70,7 +70,7 @@ def _read_audit_events(p: Path) -> list[dict]:
     if not p.exists():
         return []
     out = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

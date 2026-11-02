@@ -169,7 +169,7 @@ class ZoneTests(unittest.TestCase):
             self.assertIn("us-east", got.json()["error"])
             self.assertIn("eu-west", got.json()["error"])
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             denials = [e for e in lines if e["event_type"] == "gateway.zone_denied"]
             self.assertEqual(len(denials), 1)
             self.assertEqual(denials[0]["details"]["engine_zone"], "us-east")

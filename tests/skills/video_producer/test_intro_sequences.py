@@ -66,7 +66,7 @@ def test_render_intro_produces_valid_mp4(tmp_path):
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
          "-of", "default=noprint_wrappers=1:nokey=1", path],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert "video" in result.stdout
 
@@ -87,7 +87,7 @@ def test_prepend_intro_with_fade_produces_combined_video(tmp_path):
         ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=blue:s=640x360:d=2",
          "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "2",
          "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", main_path],
-        capture_output=True, text=True, timeout=30, check=True,
+        capture_output=True, text=True, timeout=30, check=True, encoding="utf-8", errors="replace",
     )
 
     output_path = str(tmp_path / "combined.mp4")
@@ -97,7 +97,7 @@ def test_prepend_intro_with_fade_produces_combined_video(tmp_path):
     duration_check = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", output_path],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     combined_duration = float(duration_check.stdout.strip())
     # intro(~2s) + main(2s) - fade(0.5s) ~= 3.5s, allow slack for Playwright's

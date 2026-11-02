@@ -58,7 +58,7 @@ def _audit_events(tmp: Path, tenant: str = "_default") -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -110,7 +110,7 @@ def case_save_load_round_trip() -> None:
         assert loaded.goals == original.goals
         assert loaded.distill_count == 3
         # On-disk shape is canonical
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
         assert raw["apiVersion"] == "corvin/v1"
         assert raw["kind"] == "UserModel"
         assert raw["metadata"]["chat_key"] == "c1"
@@ -140,7 +140,7 @@ def case_forget_removes_file() -> None:
         m.save(m.UserModel.empty("d", "c1"))
         assert m.load("d", "c1") is not None
         # Wipe audit so forget event is the only new entry
-        (tmp / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").write_text("")
+        (tmp / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").write_text("", encoding="utf-8")
         ok = m.forget("d", "c1")
         assert ok is True
         assert m.load("d", "c1") is None
@@ -493,7 +493,7 @@ def case_per_tenant_isolation() -> None:
 def case_no_anthropic_sdk_import() -> None:
     _section("L28.2/18: cost contract — no anthropic SDK import")
     src = Path(__file__).resolve().parent / "user_model.py"
-    body = src.read_text()
+    body = src.read_text(encoding="utf-8")
     for line in body.splitlines():
         stripped = line.strip()
         if stripped.startswith("#"):

@@ -77,7 +77,7 @@ def write_inbox(item_id: str, channel: str, chat: str) -> None:
         "from":    f"sender-{chat}",
         "text":    f"hello from {item_id}",
     }
-    (INBOX / f"{item_id}.json").write_text(json.dumps(payload))
+    (INBOX / f"{item_id}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def wait_for_processed(n_expected: int, timeout: float) -> list[Path]:
@@ -105,7 +105,7 @@ def main() -> int:
     # test's discord senders get SPG-dropped as private (same contamination
     # class ADAPTER_BRIDGES_DIR was introduced for in test_adapter_btw).
     settings = SANDBOX / "settings.json"
-    settings.write_text("{}")
+    settings.write_text("{}", encoding="utf-8")
     env["ADAPTER_SETTINGS"]      = str(settings)
     env["ADAPTER_BRIDGES_DIR"]   = str(SANDBOX / "bridges")
     env["ADAPTER_FAKE_CLAUDE"]   = "1"
@@ -121,7 +121,7 @@ def main() -> int:
     proc = subprocess.Popen(
         ["python3", str(ADAPTER)],
         env=env,
-        stdout=open(LOG_FILE, "w"),
+        stdout=open(LOG_FILE, "w", encoding="utf-8"),
         stderr=subprocess.STDOUT,
     )
     try:
@@ -166,7 +166,7 @@ def main() -> int:
         print(f"FAIL: elapsed {elapsed:.2f}s too close to sequential floor "
               f"{SEQ_FLOOR:.2f}s — parallelism didn't kick in")
         print(f"--- adapter log ---")
-        print(LOG_FILE.read_text())
+        print(LOG_FILE.read_text(encoding="utf-8"))
         return 1
     print(f"PASS: elapsed {elapsed:.2f}s < {target:.2f}s "
           f"(beats sequential floor by {(1 - elapsed/SEQ_FLOOR)*100:.0f}%)")
@@ -199,7 +199,7 @@ def main() -> int:
     # --- 3. Adapter log shows fake-claude calls covering all items ------
     # Default-path ist call_claude_streaming → loggt [fake-stream] sleep;
     # Legacy-path call_claude → [fake] sleep. Beide zählen.
-    log_text = LOG_FILE.read_text()
+    log_text = LOG_FILE.read_text(encoding="utf-8")
     fakes = [ln for ln in log_text.splitlines()
              if "[fake] sleep" in ln or "[fake-stream] sleep" in ln]
     if len(fakes) != len(ITEMS):

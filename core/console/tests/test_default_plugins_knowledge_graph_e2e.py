@@ -112,7 +112,7 @@ class KnowledgeGraphIsProvisionedAndEnabledByBoot(unittest.TestCase):
             env = {**os.environ, "KB_ACTOR": "human:operator"}
 
             def run(*a):
-                r = subprocess.run([*kbpy, *map(str, a)], capture_output=True, text=True, env=env)
+                r = subprocess.run([*kbpy, *map(str, a)], capture_output=True, text=True, env=env, encoding="utf-8", errors="replace")
                 self.assertEqual(r.returncode, 0, f"{a}\n{r.stdout}\n{r.stderr}")
 
             run("new", "initiative", "--title", "Onboarding")
@@ -126,7 +126,7 @@ class KnowledgeGraphIsProvisionedAndEnabledByBoot(unittest.TestCase):
             self.assertEqual(items, {"I-01", "E-001", "T-0001"})
             check = self.tmp / "check.json"
             subprocess.run([*kbpy, "check", "--json", str(check)], capture_output=True)
-            gates = {k for k in json.loads(check.read_text())["issues"] if k.startswith("G")}
+            gates = {k for k in json.loads(check.read_text(encoding="utf-8"))["issues"] if k.startswith("G")}
             self.assertNotIn("G1_no_concept", gates)        # the concept gate holds
             self.assertIn("G2_no_backedge", gates)          # a gate that reports, not a stub
 

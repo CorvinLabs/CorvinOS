@@ -165,10 +165,10 @@ def run_code_tests(code, tests, timeout=8, sandbox="auto"):
         Path(d, "run.py").write_text(_RUNNER, encoding="utf-8")
         try:
             if use_bwrap:
-                cp = subprocess.run(_bwrap_argv(d), capture_output=True, text=True, timeout=timeout, preexec_fn=_limits)
+                cp = subprocess.run(_bwrap_argv(d), capture_output=True, text=True, timeout=timeout, preexec_fn=_limits, encoding="utf-8", errors="replace")
             else:
                 cp = subprocess.run([sys.executable, "-I", "run.py"], cwd=d, capture_output=True, text=True, timeout=timeout,
-                                    env={"PATH": os.environ.get("PATH", ""), "PYTHONHASHSEED": "0"}, preexec_fn=_limits)
+                                    env={"PATH": os.environ.get("PATH", ""), "PYTHONHASHSEED": "0"}, preexec_fn=_limits, encoding="utf-8", errors="replace")
             out = json.loads(cp.stdout.strip().splitlines()[-1])
             return int(out["ok"]), int(out["n"])
         except Exception:
@@ -280,7 +280,7 @@ class ClaudeCliRunner:
         t0 = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="abb-live-") as d:  # neutral cwd: no repo CLAUDE.md in the context
             try:
-                cp = subprocess.run(cmd, input=task["prompt"], capture_output=True, text=True, timeout=self.timeout, cwd=d)
+                cp = subprocess.run(cmd, input=task["prompt"], capture_output=True, text=True, timeout=self.timeout, cwd=d, encoding="utf-8", errors="replace")
             except subprocess.TimeoutExpired:
                 return {"tier": tier, "model": model_id, "text": "", "input": 0, "output": 0, "cache_read": 0, "cache_write": 0,
                         "cost_usd": None, "latency_s": round(time.monotonic() - t0, 3), "error": "timeout"}
@@ -627,7 +627,7 @@ def cmd_run(a):
     claude_version = None
     if a.runner == "claude":
         try:
-            claude_version = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+            claude_version = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace").stdout.strip()
         except Exception:
             claude_version = "unknown"
     man = {"run_id": run_id, "runner": a.runner, "seed": a.seed, "reps": a.reps, "models": models["pins"], "python": sys.version.split()[0],

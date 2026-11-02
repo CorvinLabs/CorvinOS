@@ -166,7 +166,7 @@ def test_image_without_citation_is_refused():
 
 def test_research_result_pointing_at_non_image_fails(tmp_path):
     bogus = tmp_path / "notes.txt"
-    bogus.write_text("not an image")
+    bogus.write_text("not an image", encoding="utf-8")
     job = SimpleNamespace(
         job_id="test_bogus_research", diagram_specs=_SPEC,
         research_result={"images": {"graph": {"local_path": str(bogus), "citation": "c"}}},

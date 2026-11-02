@@ -37,7 +37,7 @@ def _read_jsonl(p: Path) -> list[dict]:
     out: list[dict] = []
     if not p.exists():
         return out
-    with p.open() as fh:
+    with p.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -106,13 +106,13 @@ class SaveFromBodyTests(_Base):
         )
         self.assertEqual(t.name, "me.doubler")
         # Registry has the entry
-        reg = json.loads(pt._registry_path(corvin_home=self.tmp).read_text())
+        reg = json.loads(pt._registry_path(corvin_home=self.tmp).read_text(encoding="utf-8"))
         self.assertIn("me.doubler", reg)
         self.assertEqual(reg["me.doubler"]["scope"], "user")
         self.assertEqual(reg["me.doubler"]["meta"]["personal"], True)
         # Body landed
         body_path = pt._tools_dir(corvin_home=self.tmp) / "me.doubler.py"
-        self.assertEqual(body_path.read_text(), body)
+        self.assertEqual(body_path.read_text(encoding="utf-8"), body)
 
     def test_overwrite_required_for_replacement(self) -> None:
         body = "def run():\n    return {'k': 1}\n"
@@ -170,7 +170,7 @@ class SaveFromScopeTests(_Base):
         )
         (task_forge / "tools").mkdir(parents=True, exist_ok=True)
         impl = task_forge / "tools" / f"{name}.py"
-        impl.write_text(body)
+        impl.write_text(body, encoding="utf-8")
         reg = task_forge / "registry.json"
         reg.write_text(json.dumps({
             name: {
@@ -179,7 +179,7 @@ class SaveFromScopeTests(_Base):
                 "scope": "task", "created_at": time.time(),
                 "sha256": "deadbeef",
             }
-        }))
+        }), encoding="utf-8")
         return task_forge
 
     def test_copies_body_and_creates_personal(self) -> None:
@@ -193,7 +193,7 @@ class SaveFromScopeTests(_Base):
         self.assertEqual(t.saved_from_scope, "task")
         # Body is byte-identical
         body_path = pt._tools_dir(corvin_home=self.tmp) / "me.poke_api.py"
-        self.assertEqual(body_path.read_text(), body)
+        self.assertEqual(body_path.read_text(encoding="utf-8"), body)
 
     def test_explicit_alias(self) -> None:
         self._seed_task_tool(
@@ -242,9 +242,9 @@ class ListGetRemoveTests(_Base):
                           corvin_home=self.tmp)
         # Inject a non-personal tool into the registry
         reg_path = pt._registry_path(corvin_home=self.tmp)
-        reg = json.loads(reg_path.read_text())
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
         reg["public.foo"] = {"description": "shared", "scope": "user"}
-        reg_path.write_text(json.dumps(reg))
+        reg_path.write_text(json.dumps(reg), encoding="utf-8")
 
         items = pt.list_personal(corvin_home=self.tmp)
         names = {t.name for t in items}
@@ -259,9 +259,9 @@ class ListGetRemoveTests(_Base):
                           corvin_home=self.tmp)
         # Stamp last_used_at on "recent"
         reg_path = pt._registry_path(corvin_home=self.tmp)
-        reg = json.loads(reg_path.read_text())
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
         reg["me.recent"]["last_used_at"] = time.time()
-        reg_path.write_text(json.dumps(reg))
+        reg_path.write_text(json.dumps(reg), encoding="utf-8")
 
         items = pt.list_personal(corvin_home=self.tmp)
         self.assertEqual(items[0].name, "me.recent")
@@ -320,9 +320,9 @@ class InjectBlockTests(_Base):
                           corvin_home=self.tmp)
         # Set last_used_at to 100 days ago
         reg_path = pt._registry_path(corvin_home=self.tmp)
-        reg = json.loads(reg_path.read_text())
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
         reg["me.stale"]["last_used_at"] = time.time() - 100 * 86400
-        reg_path.write_text(json.dumps(reg))
+        reg_path.write_text(json.dumps(reg), encoding="utf-8")
 
         block = pt.format_inject_block(corvin_home=self.tmp)
         self.assertIn("unused 100d", block)

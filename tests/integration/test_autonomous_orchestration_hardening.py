@@ -245,7 +245,7 @@ async def test_one_corrupt_line_does_not_hide_every_task(registry, tmp_path):
         task_id="good-1", title="Good", status=TaskStatus.RUNNING,
         phases={"p": PhaseMetadata(phase_id="p", status=PhaseStatus.PENDING)},
     ))
-    with open(registry.registry_path, "a") as f:
+    with open(registry.registry_path, "a", encoding="utf-8") as f:
         f.write("{this is not json\n")
     await registry.append_task(TaskMetadata(
         task_id="good-2", title="Good", status=TaskStatus.RUNNING,
@@ -272,7 +272,7 @@ async def test_compaction_collapses_the_log_without_losing_state(registry):
     assert await registry.compact() == 1
     task = await registry.get_task("t")
     assert task.phases["p"].retry_count == 19, "latest state must survive"
-    assert len(registry.registry_path.read_text().splitlines()) == 1
+    assert len(registry.registry_path.read_text(encoding="utf-8").splitlines()) == 1
 
 
 # ── the notification transport must survive its own first send ───────────

@@ -108,7 +108,7 @@ def _run_helper(home: Path, slot: Path, code: str, *args: str,
     )
     r = subprocess.run(
         [sys.executable, "-c", full, *args],
-        env=env, capture_output=True, text=True, check=True,
+        env=env, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace",
     )
     return r.stdout
 
@@ -157,7 +157,7 @@ def _call_reset(home: Path, slot: Path, *, channel: str,
     r = subprocess.run(
         [sys.executable, str(SESSION_RESET_PY),
          "--channel", channel, "--chat-id", chat_id, "--reason", reason],
-        env=env, capture_output=True, text=True, check=True,
+        env=env, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace",
     )
     return json.loads(r.stdout.strip())
 
@@ -201,7 +201,7 @@ def _voice_state_dir(home: Path, channel: str, chat_id: str) -> Path:
     env.pop("CORVIN_TENANT_ID", None)
     out = subprocess.run(
         [sys.executable, "-c", code, channel, safe_chat],
-        env=env, capture_output=True, text=True, check=True,
+        env=env, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace",
     ).stdout.strip()
     return Path(out)
 
@@ -209,11 +209,11 @@ def _voice_state_dir(home: Path, channel: str, chat_id: str) -> Path:
 def _seed_voice_state(home: Path, channel: str, chat_id: str) -> Path:
     d = _voice_state_dir(home, channel, chat_id)
     d.mkdir(parents=True, exist_ok=True)
-    (d / ".claude.json").write_text('{"sessionId":"abc"}')
+    (d / ".claude.json").write_text('{"sessionId":"abc"}', encoding="utf-8")
     (d / ".session_started").touch()
     sub = d / ".claude"
     sub.mkdir(exist_ok=True)
-    (sub / "history.jsonl").write_text('{"role":"user"}\n')
+    (sub / "history.jsonl").write_text('{"role":"user"}\n', encoding="utf-8")
     return d
 
 
@@ -420,7 +420,7 @@ def case_07_timeout_sweep() -> None:
     env = _child_env(home, slot)
     r = subprocess.run(
         [sys.executable, str(TIMEOUT_SWEEP_PY), "--ttl-days", "7"],
-        env=env, capture_output=True, text=True, check=True,
+        env=env, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace",
     )
     out = r.stdout.strip()
     eq(stale_dir.exists(), False, "stale session purged")
@@ -479,7 +479,7 @@ def case_08_engine_e2e() -> None:
         ["claude", "-p", "What is RESET-PROOF-XYZ?",
          "--append-system-prompt", pre_block,
          "--permission-mode", "default"],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace",
     )
     pre_stdout = (pre_run.stdout or "")
     print(f"PRE-RESET stdout: {pre_stdout[:200]!r}")
@@ -500,7 +500,7 @@ def case_08_engine_e2e() -> None:
         ["claude", "-p", "What is RESET-PROOF-XYZ?",
          "--append-system-prompt", "",
          "--permission-mode", "default"],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace",
     )
     post_stdout = (post_run.stdout or "")
     print(f"POST-RESET stdout: {post_stdout[:200]!r}")

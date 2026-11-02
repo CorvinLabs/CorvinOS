@@ -44,7 +44,7 @@ class _Pair(unittest.TestCase):
             self.addCleanup(p.stop)
 
     def origin(self):
-        return json.loads((self.O / f"{self.tok.kid}.json").read_text())
+        return json.loads((self.O / f"{self.tok.kid}.json").read_text(encoding="utf-8"))
 
     def hello(self, sender="issuer-iid-0001", url="http://192.168.1.10:8775"):
         hk = self.origin()["hmac_key"]
@@ -96,7 +96,7 @@ class TestInboundAckNeverBinds(_Pair):
         # Unbound (e.g. CLI import whose ack failed): an attacker with the token
         # repeats the stored URL, then tries to move it.
         for path in (self.O / f"{self.tok.kid}.json", self.E / f"{self.tok.kid}.json"):
-            c = json.loads(path.read_text())
+            c = json.loads(path.read_text(encoding="utf-8"))
             c.pop("_peer_instance_id", None)
             c.update(enabled=True, state="ACTIVE")
             if "url" in c or path.parent == self.E:
@@ -105,7 +105,7 @@ class TestInboundAckNeverBinds(_Pair):
         self.assertEqual(self.hello(sender="attacker-iid-99")[0], 200)  # keep-alive only
         self.assertNotIn("_peer_instance_id", self.origin(), "an inbound ack must never bind")
         self.assertEqual(self.hello(sender="attacker-iid-99", url="http://192.168.1.66:8775")[0], 403)
-        ep = json.loads((self.E / f"{self.tok.kid}.json").read_text())
+        ep = json.loads((self.E / f"{self.tok.kid}.json").read_text(encoding="utf-8"))
         self.assertEqual(ep["url"], "http://192.168.1.10:8775/v1/a2a/receive")
 
 
@@ -146,7 +146,7 @@ class TestPeerWithoutSeatIsNamed(_Pair):
     def setUp(self):
         super().setUp()
         for d in (self.O, self.E):   # an ordinary, activated pairing
-            c = json.loads((d / f"{self.tok.kid}.json").read_text())
+            c = json.loads((d / f"{self.tok.kid}.json").read_text(encoding="utf-8"))
             c["state"], c["enabled"], c["url"] = "ACTIVE", True, "http://10.0.0.2:8775"
             ft._atomic_write(d / f"{self.tok.kid}.json", c)
 
@@ -159,11 +159,11 @@ class TestPeerWithoutSeatIsNamed(_Pair):
         res = self._refresh({"ok": False, "error": "http_403:license_required"})
         self.assertEqual((res["state"], res["peer_knows_us"]), ("UNREACHABLE", False))
         for d in (self.O, self.E):
-            c = json.loads((d / f"{self.tok.kid}.json").read_text())
+            c = json.loads((d / f"{self.tok.kid}.json").read_text(encoding="utf-8"))
             self.assertGreater(c["_peer_network_denied_at"], 0, d)
         self._refresh({"ok": True, "reachable": True, "via": "direct"})
         for d in (self.O, self.E):
-            self.assertNotIn("_peer_network_denied_at", json.loads((d / f"{self.tok.kid}.json").read_text()))
+            self.assertNotIn("_peer_network_denied_at", json.loads((d / f"{self.tok.kid}.json").read_text(encoding="utf-8")))
 
     def test_a_signed_ping_the_peer_answers_clears_it_too(self):
         self._refresh({"ok": False, "error": "http_403:license_required"})

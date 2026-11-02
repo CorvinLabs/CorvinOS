@@ -42,7 +42,7 @@ class WeightPersistence:
         try:
             if not self.storage_path.exists():
                 return empty
-            with open(self.storage_path, "r") as f:
+            with open(self.storage_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:  # noqa: BLE001 — a corrupt file falls back to the defaults
             print(f"[WARN] Failed to load weights: {e}")
@@ -84,7 +84,7 @@ class WeightPersistence:
                                        dir=str(self.storage_path.parent))
             if hasattr(os, "fchmod"):
                 os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp, self.storage_path)
             return True

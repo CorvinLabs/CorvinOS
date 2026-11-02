@@ -73,7 +73,7 @@ class TestAdversarialReview(unittest.TestCase):
 
             # Create a corrupted audio file
             corrupted_file = os.path.join(self.test_dir, "corrupted.mp3")
-            with open(corrupted_file, 'w') as f:
+            with open(corrupted_file, 'w', encoding="utf-8") as f:
                 f.write("This is not a valid MP3 file!")
 
             # Attempting to convert should fail gracefully
@@ -194,7 +194,7 @@ class TestAdversarialReview(unittest.TestCase):
 
         # Create malformed YAML
         bad_config = os.path.join(self.test_dir, "bad_config.yaml")
-        with open(bad_config, 'w') as f:
+        with open(bad_config, 'w', encoding="utf-8") as f:
             f.write("invalid: yaml: syntax: [[[")
 
         # Should load defaults gracefully
@@ -358,7 +358,7 @@ class TestOutputValidation(unittest.TestCase):
                 "-show_streams",
                 incomplete_file
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             # ffprobe should fail on incomplete file
             self.assertNotEqual(result.returncode, 0)
             print("✓ Incomplete video detected by ffprobe")

@@ -108,10 +108,10 @@ class StatusMarkerProcessOneE2E(unittest.TestCase):
             (cls.sb / d).mkdir(parents=True, exist_ok=True)
         (cls.sb / "bridges" / CHANNEL).mkdir(parents=True, exist_ok=True)
         (cls.sb / "bridges" / CHANNEL / "settings.json").write_text(
-            json.dumps({"chat_profiles": {CHAT: {}}}))
+            json.dumps({"chat_profiles": {CHAT: {}}}), encoding="utf-8")
         cls.proc = subprocess.Popen(
             _adapter_argv(), env=_env(cls.sb),
-            stdout=open(cls.sb / "adapter.log", "a"), stderr=subprocess.STDOUT)
+            stdout=open(cls.sb / "adapter.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
         cls._n = 0
 
     @classmethod
@@ -132,7 +132,7 @@ class StatusMarkerProcessOneE2E(unittest.TestCase):
         item_id = f"sm-{type(self)._n}"
         (self.sb / "inbox" / f"{item_id}.json").write_text(json.dumps({
             "id": item_id, "channel": CHANNEL, "chat_id": CHAT, "from": CHAT, "text": text,
-        }))
+        }), encoding="utf-8")
         return item_id
 
     def _wait_processed(self, item_id: str, timeout: float = 60.0) -> None:

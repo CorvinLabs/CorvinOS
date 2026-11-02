@@ -169,7 +169,7 @@ class VideoAssembler:
         timings_file = audio_dir.parent / "timings.json"
         if timings_file.exists():
             try:
-                with open(timings_file) as f:
+                with open(timings_file, encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
                 pass
@@ -185,7 +185,7 @@ class VideoAssembler:
                 proc = subprocess.run(
                     ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                      "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
-                    capture_output=True, text=True, timeout=60, check=True,
+                    capture_output=True, text=True, timeout=60, check=True, encoding="utf-8", errors="replace",
                 )
                 timings[audio_path.stem] = float(proc.stdout.strip()) * 1000
             except Exception as e:
@@ -268,7 +268,7 @@ class VideoAssembler:
                 check=True,
                 capture_output=True,
                 timeout=3600,  # 60 minutes
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
 
             # Verify output was created
@@ -309,7 +309,7 @@ class VideoAssembler:
                     capture_output=True,
                     timeout=10,
                     text=True,
-                    check=True,
+                    check=True, encoding="utf-8", errors="replace",
                 )
 
                 try:

@@ -76,7 +76,7 @@ class StructuralValidator:
 
         # Check 3: skill.json is valid JSON
         try:
-            with open(manifest_path) as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 manifest = json.load(f)
         except json.JSONDecodeError as e:
             errors.append(f"skill.json is invalid JSON: {e}")

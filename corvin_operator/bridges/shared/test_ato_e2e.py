@@ -52,7 +52,7 @@ def _classify(
             "data_classification": data_classification,
             "engine_id": engine_id,
         }),
-        capture_output=True, text=True, timeout=10,
+        capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         raise RuntimeError(f"intake tool failed: {result.stderr[:200]}")
@@ -580,7 +580,7 @@ class TestATOClassificationSubprocess(unittest.TestCase):
                 # Simulate the CC OS-turn context so M5/M6 delegation guard is active.
                 "engine_id": "claude_code",
             }),
-            capture_output=True, text=True, timeout=10, env=env,
+            capture_output=True, text=True, timeout=10, env=env, encoding="utf-8", errors="replace",
         )
         self.assertEqual(result.returncode, 0,
                          f"tool exited {result.returncode}: {result.stderr[:200]}")
@@ -863,7 +863,7 @@ class TestATOParitySubprocessVsModule(unittest.TestCase):
         result = subprocess.run(
             [sys.executable, str(_INTAKE_TOOL)],
             input=json.dumps({"task": "What is the token limit?", "engine_id": "opencode"}),
-            capture_output=True, text=True, timeout=10, env=dict(os.environ),
+            capture_output=True, text=True, timeout=10, env=dict(os.environ), encoding="utf-8", errors="replace",
         )
         self.assertEqual(result.returncode, 0, result.stderr[:200])
         out = json.loads(result.stdout)
@@ -1141,13 +1141,13 @@ except Exception as e:
             "CORVIN_AGENTS_SKIP_LIVE": "1",
             "CORVIN_INTEGRATION_TEST": "1",
         }
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
             f.write(self._HELPER)
             script = f.name
         try:
             proc = subprocess.run(
                 [sys.executable, script, prompt],
-                capture_output=True, text=True, timeout=15, env=env,
+                capture_output=True, text=True, timeout=15, env=env, encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired:
             return None  # adapter ran real engine (no M7 bypass) — skip
@@ -1208,7 +1208,7 @@ class TestATORealLLMSmokeTest(unittest.TestCase):
         result = subprocess.run(
             ["claude", "-p", "--no-tools", "--max-turns", "1", prompt],
             capture_output=True, text=True, timeout=timeout,
-            env={**os.environ, "CORVIN_ACS_HEURISTIC_ONLY": "1"},
+            env={**os.environ, "CORVIN_ACS_HEURISTIC_ONLY": "1"}, encoding="utf-8", errors="replace",
         )
         return result.stdout.strip()
 

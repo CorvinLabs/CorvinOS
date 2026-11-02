@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "create":
         try:
-            manifest = json.loads(Path(args.manifest_path).read_text())
+            manifest = json.loads(Path(args.manifest_path).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
             _print({"status": "FAILED", "error": f"cannot read manifest: {type(e).__name__}"})
             return 1

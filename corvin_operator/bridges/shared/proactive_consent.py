@@ -211,7 +211,7 @@ def _load_store(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
@@ -388,7 +388,7 @@ def _purge_proactive_envelopes(uid: str, outbox_dir: str | Path | None,
             return 0
         for f in outbox.glob("*.json"):
             try:
-                env = json.loads(f.read_text())
+                env = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, ValueError):
                 continue
             if _is_proactive_envelope(env) and _envelope_targets_uid(env, uid, chat_id):

@@ -147,7 +147,7 @@ def _run(tier: str, tmp_path: Path) -> dict:
     })
     (tmp_path / "userhome").mkdir()
     proc = subprocess.run([sys.executable, "-c", _CHILD, tier], cwd=str(tmp_path),
-                          env=env, capture_output=True, text=True, timeout=300)
+                          env=env, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
     lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT ")]
     assert lines, f"child failed (rc={proc.returncode}):\n{proc.stderr[-4000:]}"
     return json.loads(lines[-1][len("RESULT "):])

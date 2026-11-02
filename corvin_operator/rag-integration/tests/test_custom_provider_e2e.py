@@ -139,7 +139,7 @@ def test_import_manifest():
         assert manifest_file.exists(), f"Manifest file not created: {manifest_file}"
 
         # Verify content
-        with open(manifest_file) as f:
+        with open(manifest_file, encoding="utf-8") as f:
             saved_content = f.read()
             assert FORM_INPUT["provider_id"] in saved_content
 
@@ -291,7 +291,7 @@ def test_complete_e2e_flow():
         print("Step 5: Verify (like CLI would)...")
         manifest_file = registry_dir / f"{provider_id}.yaml"
         assert manifest_file.exists()
-        with open(manifest_file) as f:
+        with open(manifest_file, encoding="utf-8") as f:
             loaded = yaml.safe_load(f)
         assert loaded["metadata"]["name"] == provider_id
         print(f"  ✅ Verified: {manifest_file}\n")

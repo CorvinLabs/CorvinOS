@@ -183,7 +183,7 @@ class TestYouTubeUploader:
             assert record_path.exists()
 
             # Verify record contents
-            with open(record_path) as f:
+            with open(record_path, encoding="utf-8") as f:
                 record = json.load(f)
             assert record["task_id"] == task_id
             assert record["status"] == "queued"
@@ -371,7 +371,7 @@ Welcome to CorvinOS
 00:00:05,000 --> 00:00:10,000
 An agentic operating system
 """
-            srt_path.write_text(srt_content)
+            srt_path.write_text(srt_content, encoding="utf-8")
 
             uploader = _authed_uploader(project_dir)
 

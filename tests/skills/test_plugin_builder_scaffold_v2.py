@@ -217,7 +217,7 @@ def _scaffold_records(tenant_id: str = "_default") -> list:
     chain = Path(os.environ["VOICE_AUDIT_PATH"])
     if not chain.exists():
         return []
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return [r for r in recs if r.get("event_type") == "plugin_builder.scaffold"
             and (r.get("details") or {}).get("tenant_id") == tenant_id]
 
@@ -326,7 +326,7 @@ class TestPluginScaffoldGenerator:
             plugin_json_file = files["plugin_json"]
             assert plugin_json_file.exists()
 
-            plugin_json = json.loads(plugin_json_file.read_text())
+            plugin_json = json.loads(plugin_json_file.read_text(encoding="utf-8"))
             assert plugin_json["id"] == "test.plugin"
             assert plugin_json["name"] == "Test Plugin"
             assert plugin_json["type"] == "skill_plugin"
@@ -353,7 +353,7 @@ class TestPluginScaffoldGenerator:
             gitignore_file = files["gitignore"]
             assert gitignore_file.exists()
 
-            gitignore_content = gitignore_file.read_text()
+            gitignore_content = gitignore_file.read_text(encoding="utf-8")
             # Check for secrets protection patterns
             assert ".env" in gitignore_content
             assert "secrets.json" in gitignore_content
@@ -509,7 +509,7 @@ class TestLifecycleHookGeneration:
             files = generator.generate(tmpdir)
 
             # Check plugin.py contains all hooks
-            plugin_py = files["plugin"].read_text()
+            plugin_py = files["plugin"].read_text(encoding="utf-8")
             assert "def on_load" in plugin_py
             assert "def on_execute" in plugin_py
             assert "def on_unload" in plugin_py
@@ -534,7 +534,7 @@ class TestLifecycleHookGeneration:
             generator = PluginScaffoldGenerator(config)
             files = generator.generate(tmpdir)
 
-            plugin_py = files["plugin"].read_text()
+            plugin_py = files["plugin"].read_text(encoding="utf-8")
             assert "def on_load" in plugin_py
             assert "def on_execute" not in plugin_py  # Should be excluded
             assert "def on_unload" in plugin_py

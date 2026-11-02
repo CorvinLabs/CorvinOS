@@ -129,7 +129,7 @@ class SVGDiagramGenerator:
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
             if result.returncode != 0:
                 logger.error(f"FFmpeg error: {result.stderr[:200]}")
                 raise RuntimeError(f"{name} generation failed")

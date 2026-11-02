@@ -103,7 +103,7 @@ async def list_tasks(
             if not chain_path.exists():
                 continue
 
-            with chain_path.open("r") as f:
+            with chain_path.open("r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -156,7 +156,7 @@ def _load_context_from_audit(tenant_id: str, task_id: str) -> Dict[str, Any]:
             if not chain_path.exists():
                 continue
 
-            with chain_path.open("r") as f:
+            with chain_path.open("r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

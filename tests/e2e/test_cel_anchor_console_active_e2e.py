@@ -73,7 +73,7 @@ def run(tmp_path_factory):
     overlay.parent.mkdir(parents=True, exist_ok=True)
     overlay.write_text(json.dumps({"flags": {"vibe_engineering": True,
                                              "vibe_engineering_active": True,
-                                             "cel_load_bearing_anchor": True}}))
+                                             "cel_load_bearing_anchor": True}}), encoding="utf-8")
     try:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -95,7 +95,7 @@ def run(tmp_path_factory):
                     for _ in range(400):
                         if ws.receive_json().get("type") == "done":
                             break
-        return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     finally:
         for k, v in saved.items():
             if v is None:

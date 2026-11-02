@@ -77,10 +77,10 @@ def test_member_create_is_audited_in_the_tenant_chain(con):
 def test_downgrade_to_free_blocks_edits_but_keeps_the_skill(con):
     with member_tier():
         assert con.client.post(URL, json={"name": NAME, "body": BODY}, headers=con.h).status_code == 200
-    before = (_skill_dir(con) / "SKILL.md").read_text()
+    before = (_skill_dir(con) / "SKILL.md").read_text(encoding="utf-8")
     _assert_licence_refusal(con.client.put(
         f"{URL}/{NAME}", json={"body": "# changed\n\nnew body"}, headers=con.h))
-    assert (_skill_dir(con) / "SKILL.md").read_text() == before
+    assert (_skill_dir(con) / "SKILL.md").read_text(encoding="utf-8") == before
     assert [s["name"] for s in con.client.get(URL).json()["skills"]] == [NAME]
 
 

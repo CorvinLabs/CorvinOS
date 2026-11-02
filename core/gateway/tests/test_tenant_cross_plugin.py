@@ -164,11 +164,11 @@ class T2_CrossTenantChainIntegrity(_SandboxBase):
 
         # Tamper with acme's chain (overwrite a hash in line 2)
         acme_path = self._chain("acme")
-        lines = acme_path.read_text().splitlines()
+        lines = acme_path.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[1])
         rec["hash"] = "0" * 16  # bogus hash → integrity break
         lines[1] = json.dumps(rec)
-        acme_path.write_text("\n".join(lines) + "\n")
+        acme_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         ok_acme, problems_acme = _se.verify_chain(acme_path)
         ok_globex, problems_globex = _se.verify_chain(self._chain("globex"))
@@ -188,11 +188,11 @@ class T2_CrossTenantChainIntegrity(_SandboxBase):
 
         # Tamper acme
         p = self._chain("acme")
-        lines = p.read_text().splitlines()
+        lines = p.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[0])
         rec["hash"] = "deadbeefdeadbeef"
         lines[0] = json.dumps(rec)
-        p.write_text("\n".join(lines) + "\n")
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         audit_metrics.clear_cache()
 
         body_acme_broken = audit_metrics.render("acme")

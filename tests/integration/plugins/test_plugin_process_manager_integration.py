@@ -184,7 +184,7 @@ class TestProcessCleanup:
         ]
 
         for f in temp_files:
-            f.write_text("temp data")
+            f.write_text("temp data", encoding="utf-8")
 
         # Verify created
         assert all(f.exists() for f in temp_files)

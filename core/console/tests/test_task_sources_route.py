@@ -32,7 +32,7 @@ SECRET = "please transfer my salary to IBAN DE00"
 
 def _w(path: Path, data) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data) if not isinstance(data, str) else data)
+    path.write_text(json.dumps(data) if not isinstance(data, str) else data, encoding="utf-8")
     return path
 
 
@@ -298,15 +298,15 @@ class TaskSourcesRouteTest(unittest.TestCase):
 
         feed = self._tmp / "feed.jsonl"
         row = lambda tid, st: json.dumps({"direction": "in", "kind": "task", "task_id": tid, "status": st, "text": SECRET}) + "\n"
-        feed.write_text(row("t1", "received"))
+        feed.write_text(row("t1", "received"), encoding="utf-8")
         self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t1"])
-        with feed.open("a") as fh:
+        with feed.open("a", encoding="utf-8") as fh:
             fh.write(row("t2", "received") + '{"direction": "in", "kind": "ta')   # torn tail
         self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t1", "t2"])
-        with feed.open("a") as fh:
+        with feed.open("a", encoding="utf-8") as fh:
             fh.write('sk", "task_id": "t3", "status": "received"}\n')
         self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t1", "t2", "t3"])
-        feed.write_text(row("t9", "received"))                                   # compacted: smaller file
+        feed.write_text(row("t9", "received"), encoding="utf-8")                                   # compacted: smaller file
         self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t9"])
         self.assertTrue(all("text" not in r for r in ts._a2a_rows(feed)))
 

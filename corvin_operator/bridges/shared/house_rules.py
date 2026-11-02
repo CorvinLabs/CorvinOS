@@ -913,7 +913,7 @@ def _house_rules_classify_chunk_once(chunk: str, rules_block: str, auth_str: str
         proc = subprocess.run(
             [_resolve_helper_claude_bin(), "-p", "--max-turns", "1", "--tools", "",
              *model_args, "--output-format", "json", prompt],
-            capture_output=True, text=True, timeout=_HOUSE_RULES_ADJ_TIMEOUT_S,
+            capture_output=True, text=True, timeout=_HOUSE_RULES_ADJ_TIMEOUT_S, encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired as e:
         raise _HouseRulesClassifierError("timeout", str(e)) from e

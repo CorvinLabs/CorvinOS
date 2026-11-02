@@ -388,7 +388,7 @@ def _do_increment_and_check(
     # msvcrt.locking() range lock on the same lock file for cross-process safety.
     with _INCREMENT_LOCK:
         if _IS_WINDOWS and msvcrt is not None:
-            lf = open(lock_path, "a+")
+            lf = open(lock_path, "a+", encoding="utf-8")
             try:
                 lf.seek(0)
                 _locked = False
@@ -411,7 +411,7 @@ def _do_increment_and_check(
                         pass
                 lf.close()
         else:
-            with open(lock_path) as lf:
+            with open(lock_path, encoding="utf-8") as lf:
                 fcntl.flock(lf, fcntl.LOCK_EX)
                 try:
                     _read_modify_write()
@@ -454,7 +454,7 @@ def refund_one(
         lock_path.touch()
         with _INCREMENT_LOCK:
             if _IS_WINDOWS and msvcrt is not None:
-                lf = open(lock_path, "a+")
+                lf = open(lock_path, "a+", encoding="utf-8")
                 try:
                     lf.seek(0)
                     _locked = False
@@ -473,7 +473,7 @@ def refund_one(
                             pass
                     lf.close()
             else:
-                with open(lock_path) as lf:
+                with open(lock_path, encoding="utf-8") as lf:
                     fcntl.flock(lf, fcntl.LOCK_EX)
                     try:
                         _read_modify_write()

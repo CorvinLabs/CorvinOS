@@ -218,7 +218,7 @@ class TestFederatedAvgAggregator:
             Path(__file__).parent.parent
             / "corvin_compute" / "fabric" / "parallel" / "aggregation.py"
         )
-        source = agg_src.read_text()
+        source = agg_src.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         # Find FederatedAvgAggregator class

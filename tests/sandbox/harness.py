@@ -64,7 +64,7 @@ def main_checkout_root() -> Path:
     try:
         out = subprocess.run(
             ["git", "-C", str(REPO_ROOT), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, timeout=20, check=True,
+            capture_output=True, text=True, timeout=20, check=True, encoding="utf-8", errors="replace",
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return REPO_ROOT
@@ -109,7 +109,7 @@ def _listen_inodes(port: int) -> set[str]:
     inodes: set[str] = set()
     for table in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
-            lines = Path(table).read_text().splitlines()[1:]
+            lines = Path(table).read_text(encoding="utf-8").splitlines()[1:]
         except OSError:
             continue
         for line in lines:
@@ -425,7 +425,7 @@ class Sandbox:
 
     def run_child(self, code: str, *args: str) -> str:
         proc = subprocess.run([sys.executable, "-c", code, *args], env=self.env,
-                              cwd=str(self.root), capture_output=True, text=True, timeout=180)
+                              cwd=str(self.root), capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
         if proc.returncode != 0:
             raise RuntimeError(f"child failed rc={proc.returncode}\n{proc.stderr[-2000:]}")
         return proc.stdout

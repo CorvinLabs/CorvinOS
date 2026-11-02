@@ -120,14 +120,14 @@ def federation_pair(tmp_path, monkeypatch):
         "enabled": True, "max_ttl_s": 300, "allowed_personas": ["assistant"],
         "spawn_worker": True,
     }
-    (b_origins / "peer-A.json").write_text(json.dumps(origin))
+    (b_origins / "peer-A.json").write_text(json.dumps(origin), encoding="utf-8")
     (b_origins / "peer-A.json").chmod(0o600)
     endpoint = {
         "endpoint_id": "peer-B", "url": f"http://{host}:{port}/v1/a2a/receive",
         "hmac_key": hmac_key, "recv_key": recv_key, "instance_id": iid_b,
         "enabled": True, "default_ttl_s": 60, "our_origin_id": "peer-A",
     }
-    (a_endpoints / "peer-B.json").write_text(json.dumps(endpoint))
+    (a_endpoints / "peer-B.json").write_text(json.dumps(endpoint), encoding="utf-8")
     (a_endpoints / "peer-B.json").chmod(0o600)
     sender = rts.RemoteTriggerSender(endpoints_dir=a_endpoints, instance_id=iid_a, forge_se=se_a)
 
@@ -158,7 +158,7 @@ def _chain_events(home: Path) -> list[dict]:
     chain = tenant_audit_chain(TENANT)
     if not chain.exists():
         return []
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def _fed_events(se) -> list[dict]:
@@ -204,7 +204,7 @@ def test_origin_opt_out_refuses_catalog(federation_pair):
     from core.federation.peer_catalog import PeerCatalog, PeerCatalogError
 
     cfg = dict(federation_pair["origin"], allow_federation=False)
-    federation_pair["origin_path"].write_text(json.dumps(cfg))
+    federation_pair["origin_path"].write_text(json.dumps(cfg), encoding="utf-8")
     with pytest.raises(PeerCatalogError):
         PeerCatalog(TENANT).refresh("peer-B", sender=federation_pair["sender"])
     refused = [e for e in _fed_events(federation_pair["se_b"]) if e["event_type"] == "federation.catalog_refused"]
@@ -378,7 +378,7 @@ def test_origin_without_worker_rights_gets_no_federation(federation_pair):
     from core.federation.peer_catalog import PeerCatalog, PeerCatalogError
 
     cfg = dict(federation_pair["origin"], spawn_worker=False)
-    federation_pair["origin_path"].write_text(json.dumps(cfg))
+    federation_pair["origin_path"].write_text(json.dumps(cfg), encoding="utf-8")
     res = delegate(TENANT, instruction="x", endpoint_id="peer-B", agent_id="opus-code",
                    sender=federation_pair["sender"])
     assert not res.ok and res.error == "federation_no_worker"

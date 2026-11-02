@@ -121,7 +121,7 @@ def test_within_envelope_budget_passes_through():
                                 "output_bytes": 16777216,
                                 "artifact_bytes": 67108864},
             "forbidden_imports": ["socket", "subprocess"],
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()
@@ -150,7 +150,7 @@ def test_oversize_budget_gets_clamped():
             "max_budget": {"cpu_seconds": 5, "wall_seconds": 10,
                             "output_bytes": 1_000_000,
                             "artifact_bytes": 5_000_000},
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()
@@ -191,7 +191,7 @@ def test_no_meta_budget_uses_policy_default():
             "max_budget":      {"cpu_seconds": 30, "wall_seconds": 60,
                                 "output_bytes": 4_000_000,
                                 "artifact_bytes": 50_000_000},
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()
@@ -217,7 +217,7 @@ def test_cpu_budget_exceeded_kills_tool():
             "max_budget": {"cpu_seconds": 60, "wall_seconds": 60,
                             "output_bytes": 1_000_000,
                             "artifact_bytes": 1_000_000},
-        }))
+        }), encoding="utf-8")
         client = MCPClient(td)
         try:
             client.initialize()

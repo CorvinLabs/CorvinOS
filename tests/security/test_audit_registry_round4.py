@@ -60,7 +60,7 @@ def test_compute_gate_fields_survive_the_writer(tmp_path, monkeypatch):
         "allowed": True, "mode": "trial", "tier": "free",
         "fabric_allowed": False, "trial_remaining": 3,
     })
-    rec = json.loads(chain.read_text().splitlines()[-1])
+    rec = json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])
     assert rec["severity"] == "INFO"
     assert rec["details"]["fabric_allowed"] is False
     assert rec["details"]["trial_remaining"] == 3

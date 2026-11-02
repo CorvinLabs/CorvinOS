@@ -29,7 +29,7 @@ def test_oscillation_counts_versions_in_the_last_hour(tmp_path):
     def write(n):
         versions = [{"version_id": f"v{i}", "skill_id": "os.delegation_router",
                      "timestamp": _iso(NOW - 60 * (i + 1))} for i in range(n)]
-        (tmp_path / "os_delegation_router_config.json").write_text(json.dumps({"versions": versions}))
+        (tmp_path / "os_delegation_router_config.json").write_text(json.dumps({"versions": versions}), encoding="utf-8")
     write(3)
     assert m._oscillation_anomalies(tmp_path, NOW) == []
     write(4)

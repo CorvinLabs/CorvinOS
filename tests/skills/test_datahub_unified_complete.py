@@ -17,7 +17,7 @@ class TestPhase1DataHub:
 
     def test_ingest_json_data(self):
         """Ingest JSON data."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding="utf-8") as f:
             json.dump([{"id": 1, "name": "test"}], f)
             temp_path = f.name
 

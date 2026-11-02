@@ -159,7 +159,7 @@ class TestManualSkillsThroughRegistry(unittest.TestCase):
             self.assertEqual(client.delete("/v1/console/skills/manual/assistant.review.checklist").status_code, 404)
 
             chain = home / "tenants" / tid / "global" / "forge" / "audit.jsonl"
-            events = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+            events = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
             kinds = [e["event_type"] for e in events if e.get("tool") == "assistant.review.checklist"]
             self.assertIn("skill.create", kinds)
             self.assertIn("skill.delete", kinds)
@@ -199,7 +199,7 @@ class TestManualSkillsThroughRegistry(unittest.TestCase):
                     description="x", claim={},
                 )
             self.assertEqual(type(cm.exception).__name__, "NamespaceDenied", cm.exception)
-            chain = (home / "tenants" / tid / "global" / "forge" / "audit.jsonl").read_text()
+            chain = (home / "tenants" / tid / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn('"skill.namespace_denied"', chain)
 
     def test_non_manual_registry_skills_are_not_listed_or_deletable_here(self):

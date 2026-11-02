@@ -69,7 +69,7 @@ class DecisionStore:
         """Append decision to JSONL file."""
         line = json.dumps(record.to_dict()) + "\n"
         # Simulate atomic write (in reality, use file locking)
-        with open(self.path, "a") as f:
+        with open(self.path, "a", encoding="utf-8") as f:
             f.write(line)
 
     async def read_decisions(self) -> list[DecisionRecord]:
@@ -78,7 +78,7 @@ class DecisionStore:
             return []
 
         records = []
-        with open(self.path, "r") as f:
+        with open(self.path, "r", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     records.append(DecisionRecord.from_dict(json.loads(line)))
@@ -234,7 +234,7 @@ class TestMemoryUnavailable:
                     }
 
                 try:
-                    with open(self.templates_path) as f:
+                    with open(self.templates_path, encoding="utf-8") as f:
                         templates = json.load(f)
                     return templates.get(template_id, {})
                 except json.JSONDecodeError as e:
@@ -258,7 +258,7 @@ class TestMemoryUnavailable:
         # Test: corrupted JSON
         with tempfile.TemporaryDirectory() as tmpdir:
             corrupted_path = Path(tmpdir) / "templates.json"
-            corrupted_path.write_text("{invalid json")
+            corrupted_path.write_text("{invalid json", encoding="utf-8")
 
             coordinator = MemoryCoordinator(templates_path=corrupted_path)
             template = await coordinator.load_template("refactor")

@@ -119,7 +119,7 @@ def log(*args) -> None:
     try:
         log_file = CONFIG_DIR / "voice.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        with log_file.open("a") as fh:
+        with log_file.open("a", encoding="utf-8") as fh:
             fh.write(
                 f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] "
                 f"[notification_relay] " + " ".join(str(a) for a in args) + "\n"
@@ -135,7 +135,7 @@ def load_relay_config() -> dict | None:
     if not RELAY_CONFIG.exists():
         return None
     try:
-        cfg = json.loads(RELAY_CONFIG.read_text())
+        cfg = json.loads(RELAY_CONFIG.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         log(f"relay.json unreadable: {e}")
         return None
@@ -221,7 +221,7 @@ def write_outbox(channel: str, to: str, text: str,
     }
     out_file = SHARED_OUTBOX / f"{msg_id}.json"
     try:
-        out_file.write_text(json.dumps(envelope, ensure_ascii=False))
+        out_file.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
         log(f"forwarded → {channel}:{to} ({len(text)} chars)")
         return True
     except OSError as e:
@@ -235,7 +235,9 @@ def main() -> int:
         return 0  # Relay nicht aktiviert — still aussteigen.
 
     try:
-        payload = json.load(sys.stdin)
+        # Bytes + explicit UTF-8: Claude Code sends UTF-8; the text stdin is the
+        # ANSI code page on Windows without UTF-8 mode (umlauts mangled).
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     except (json.JSONDecodeError, ValueError) as e:
         log(f"stdin not JSON: {e}")
         return 0

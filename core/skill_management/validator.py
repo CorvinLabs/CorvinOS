@@ -51,7 +51,7 @@ class MetadataValidator:
             )
 
         try:
-            with open(meta_path) as f:
+            with open(meta_path, encoding="utf-8") as f:
                 metadata = json.load(f)
         except json.JSONDecodeError as e:
             return ValidationResult(
@@ -141,7 +141,7 @@ class MetadataValidator:
 
         # Exported skills must have all deps in _shared (not _local or _platform dependencies)
         meta_path = self.base_path / scope / "skills" / skill_id / "meta.json"
-        with open(meta_path) as f:
+        with open(meta_path, encoding="utf-8") as f:
             metadata = json.load(f)
 
         errors = []
@@ -187,7 +187,7 @@ class DependencyValidator:
             if not meta_path.exists():
                 continue
 
-            with open(meta_path) as f:
+            with open(meta_path, encoding="utf-8") as f:
                 metadata = json.load(f)
 
             skill_id = skill_dir.name
@@ -230,7 +230,7 @@ def validate_metadata_file(file_path: Path, metadata_type: str = "skill") -> Val
         )
 
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             metadata = json.load(f)
     except json.JSONDecodeError as e:
         return ValidationResult(

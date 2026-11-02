@@ -113,7 +113,7 @@ def run_turn(prompt: str, model: str, timeout: int = 180) -> dict:
     p = subprocess.run(
         ["claude", "-p", prompt, "--disallowedTools", "*", "--model", model,
          "--output-format", "json", "--max-turns", "1"],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace",
     )
     try:
         obj = json.loads(p.stdout)
@@ -205,7 +205,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.reaggregate:
-        raw = [json.loads(l) for l in Path(args.reaggregate).read_text().splitlines() if l.strip()]
+        raw = [json.loads(l) for l in Path(args.reaggregate).read_text(encoding="utf-8").splitlines() if l.strip()]
         rep = aggregate(raw, args.guardrail)
         print(json.dumps(rep, indent=2))
         return 0
@@ -215,8 +215,8 @@ def main() -> int:
     raw_path = HERE / "results" / f"raw-v2-{ts}.jsonl"
     out = HERE / "results" / f"report-v2-{ts}.json"
 
-    ans = json.loads(Path(args.answerable).read_text())["tasks"]
-    trp = json.loads(Path(args.traps).read_text())["tasks"]
+    ans = json.loads(Path(args.answerable).read_text(encoding="utf-8"))["tasks"]
+    trp = json.loads(Path(args.traps).read_text(encoding="utf-8"))["tasks"]
     if args.limit:
         ans, trp = ans[:args.limit], trp[:args.limit]
     for t in ans:
@@ -227,7 +227,7 @@ def main() -> int:
 
     total = len(ARMS) * len(tasks) * args.reps
     done, t0, raw = 0, time.time(), []
-    with raw_path.open("w") as rf:
+    with raw_path.open("w", encoding="utf-8") as rf:
         for arm in ARMS:
             for task in tasks:
                 for rep_i in range(args.reps):
@@ -249,7 +249,7 @@ def main() -> int:
     meta = {"model": args.model, "reps": args.reps, "n_tasks": len(tasks), "n_ans": len(ans),
             "n_trap": len(trp), "total_calls": total, "wall_s": round(time.time() - t0, 1)}
     rep["meta"] = meta
-    out.write_text(json.dumps(rep, indent=2))
+    out.write_text(json.dumps(rep, indent=2), encoding="utf-8")
     print_summary(rep, meta)
     print(f"report: {out}\nraw:    {raw_path}")
     return 0

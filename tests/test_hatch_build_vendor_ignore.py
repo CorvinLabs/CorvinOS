@@ -171,8 +171,8 @@ def test_load_git_tracked_files_returns_none_without_a_git_checkout(tmp_path):
 
 def test_load_git_tracked_files_lists_only_what_git_actually_tracks(tmp_path):
     _git("init", "-q", cwd=tmp_path)
-    (tmp_path / "tracked.py").write_text("x = 1\n")
-    (tmp_path / "stray_scratch.txt").write_text("scratch, never committed\n")
+    (tmp_path / "tracked.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "stray_scratch.txt").write_text("scratch, never committed\n", encoding="utf-8")
     _git("add", "tracked.py", cwd=tmp_path)
 
     tracked = hb._load_git_tracked_files(tmp_path)
@@ -193,11 +193,11 @@ def test_ignore_callback_excludes_untracked_file_and_untracked_dir(tmp_path):
     _git("init", "-q", cwd=tmp_path)
     pkg = tmp_path / "pkg"
     pkg.mkdir()
-    (pkg / "real.py").write_text("x = 1\n")
-    (pkg / "Testnachricht mit Nova.").write_text("fake-audio-bytes\n")
+    (pkg / "real.py").write_text("x = 1\n", encoding="utf-8")
+    (pkg / "Testnachricht mit Nova.").write_text("fake-audio-bytes\n", encoding="utf-8")
     stray_dir = pkg / "coworktest"
     stray_dir.mkdir()
-    (stray_dir / "settings.json").write_text("{}\n")
+    (stray_dir / "settings.json").write_text("{}\n", encoding="utf-8")
     _git("add", "pkg/real.py", cwd=tmp_path)
 
     tracked = hb._load_git_tracked_files(tmp_path)
@@ -226,8 +226,8 @@ def test_ignore_callback_without_tracked_kwargs_is_unchanged():
 
 def test_install_git_tracked_filter_only_tightens_never_loosens(tmp_path):
     _git("init", "-q", cwd=tmp_path)
-    (tmp_path / "real.py").write_text("x = 1\n")
-    (tmp_path / "stray.py").write_text("y = 2\n")
+    (tmp_path / "real.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "stray.py").write_text("y = 2\n", encoding="utf-8")
     _git("add", "real.py", cwd=tmp_path)
 
     class _FakeConfig:

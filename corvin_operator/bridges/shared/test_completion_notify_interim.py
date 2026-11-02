@@ -34,7 +34,7 @@ def test_an_interim_is_a_normal_message_with_routing_and_provenance(cn, tmp_path
     out = tmp_path / "out"
     assert cn.send_interim("t1", "Tick 1 arrived", out) is True
     (f,) = _files(out)
-    env = json.loads(f.read_text())
+    env = json.loads(f.read_text(encoding="utf-8"))
     assert env["text"] == "Tick 1 arrived"
     assert env["channel"] == "discord" and env["chat_id"] == "123456789012345678"   # string, never int
     assert "_final" not in env
@@ -51,10 +51,10 @@ def test_none_of_several_interims_replaces_another_and_all_sort_before_the_compl
     assert cn.deliver_ready(out) == 1
     names = [f.name for f in _files(out)]
     assert len(names) == 5
-    texts = [json.loads(f.read_text())["text"] for f in _files(out)]
+    texts = [json.loads(f.read_text(encoding="utf-8"))["text"] for f in _files(out)]
     assert texts[:4] == [f"update {i}" for i in range(4)], texts
     assert "all done" in texts[4]
-    assert json.loads(_files(out)[4].read_text())["_final"] is True
+    assert json.loads(_files(out)[4].read_text(encoding="utf-8"))["_final"] is True
 
 
 def test_only_a_pending_task_may_send_an_interim(cn, tmp_path):
@@ -70,5 +70,5 @@ def test_whatsapp_gets_its_jid_routing(cn, tmp_path):
     cn.register("t2", channel="whatsapp", chat_id="4912345@c.us", sender="u2", label="job")
     out = tmp_path / "out"
     assert cn.send_interim("t2", "hi", out)
-    env = json.loads(_files(out)[0].read_text())
+    env = json.loads(_files(out)[0].read_text(encoding="utf-8"))
     assert env["to"] == "4912345@c.us" and env["channel"] == "whatsapp"

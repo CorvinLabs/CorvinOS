@@ -54,7 +54,7 @@ def _run(home: Path, concept: Path, out: Path, budget: int) -> dict:
                                           str(REPO), os.environ.get("PYTHONPATH", "")])}
     p = subprocess.run([sys.executable, str(REPO / "tools/loop_a_pipeline.py"), "--concept", str(concept),
                         "--out", str(out), "--budget-s", str(budget), "--threads", "2"],
-                       capture_output=True, text=True, env=env, timeout=900)
+                       capture_output=True, text=True, env=env, timeout=900, encoding="utf-8", errors="replace")
     assert p.stdout.strip(), p.stderr[-2000:]
     return json.loads(p.stdout.strip().splitlines()[-1])
 
@@ -62,14 +62,14 @@ def _run(home: Path, concept: Path, out: Path, budget: int) -> dict:
 def test_mini_concept_runs_to_a_video_on_its_own(tmp_path):
     home = tmp_path / "home"
     concept = tmp_path / "mini.yaml"
-    concept.write_text(MINI)
+    concept.write_text(MINI, encoding="utf-8")
     out = tmp_path / "out"
 
     # Slice 1: zero render budget — TTS completes, rendering is left pending.
     r1 = _run(home, concept, out, budget=0)
     assert r1["state"] == "rendering"
     _no_task_store(home)
-    manifest = json.loads((out / "audio/manifest.json").read_text())
+    manifest = json.loads((out / "audio/manifest.json").read_text(encoding="utf-8"))
     assert manifest["chain"]["provider"] == "espeak-ng" and manifest["chain"]["duration_s"] > 1
     resolved = pipe.gen.load_concept(out / "concept.resolved.yaml")
     assert resolved["scenes"][0]["duration_s"] >= manifest["chain"]["duration_s"]  # fitted, never cut

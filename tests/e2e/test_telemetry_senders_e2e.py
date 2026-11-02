@@ -72,8 +72,8 @@ def home(tmp_path, monkeypatch) -> Path:
     tele = h / "aco" / "telemetry"
     (tele / "outbox").mkdir(parents=True)
     (h / "tenants" / "_default" / "global").mkdir(parents=True)
-    (tele / ".telemetry_token").write_text("t" * 64)
-    (tele / "htrace-token.txt").write_text("i" * 64)
+    (tele / ".telemetry_token").write_text("t" * 64, encoding="utf-8")
+    (tele / "htrace-token.txt").write_text("i" * 64, encoding="utf-8")
     monkeypatch.setenv("CORVIN_HOME", str(h))
     for k in ("CORVIN_TELEMETRY_URL", "CORVIN_TELEMETRY_OPTIN", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"):
         monkeypatch.delenv(k, raising=False)
@@ -93,7 +93,7 @@ REPORT = {
 
 def _seed_outbox(home: Path, n: int = 3) -> None:
     for i in range(n):
-        (home / "aco" / "telemetry" / "outbox" / f"report-{1789600000 + i}.json").write_text(json.dumps(REPORT))
+        (home / "aco" / "telemetry" / "outbox" / f"report-{1789600000 + i}.json").write_text(json.dumps(REPORT), encoding="utf-8")
 
 
 # ── 1. error signatures ──────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ def test_error_signature_batch_posts_once_and_consumes_the_outbox(home, intake, 
     assert body["span"]["from"] < body["span"]["to"]
     assert list((home / "aco" / "telemetry" / "outbox").glob("report-*.json")) == []
     batches = list((home / "aco" / "telemetry" / "sent").glob("batch-*.json"))
-    assert len(batches) == 1 and json.loads(batches[0].read_text())["reports_merged"] == 3
+    assert len(batches) == 1 and json.loads(batches[0].read_text(encoding="utf-8"))["reports_merged"] == 3
     st = tel.read_state(home)
     assert st["batches"] == 1 and st["reports_sent"] == 3 and st["last_detail"] == "http 200" and st["consecutive_failures"] == 0
 
@@ -180,7 +180,7 @@ def test_otlp_export_pushes_the_gauges_with_auth_and_falls_back_on_failure(home,
     st = ob.read_state(home)
     assert st["consecutive_failures"] == 1 and st["fallback_writes"] == 1
     fallback = list(ob.fallback_dir(home).glob("heartbeat-*.jsonl"))
-    assert len(fallback) == 1 and json.loads(fallback[0].read_text().splitlines()[0])["is_alive"] is True
+    assert len(fallback) == 1 and json.loads(fallback[0].read_text(encoding="utf-8").splitlines()[0])["is_alive"] is True
 
 
 def _push_otlp(home, intake, monkeypatch):
@@ -213,7 +213,7 @@ def test_otlp_request_omits_the_geo_tier_when_the_operator_opted_out(home, intak
 
     cfg = hc._tenant_cfg_path(home)
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text("spec:\n  telemetry:\n    geo_tracking_tier: 1\n")
+    cfg.write_text("spec:\n  telemetry:\n    geo_tracking_tier: 1\n", encoding="utf-8")
     assert "x-htrace-geo-tier" not in _push_otlp(home, intake, monkeypatch)["headers"]
 
 
@@ -253,7 +253,7 @@ def test_stability_digest_is_fed_by_flag_evaluations_and_posted_with_auth(home, 
     assert st["successes"] == 1 and st["last_flags"] >= 1
 
     # opt-out holds at send time
-    (home / "tenants" / "_default" / "global" / "tenant.corvin.yaml").write_text("spec:\n  telemetry:\n    ping_enabled: false\n")
+    (home / "tenants" / "_default" / "global" / "tenant.corvin.yaml").write_text("spec:\n  telemetry:\n    ping_enabled: false\n", encoding="utf-8")
     assert ss.send_digest(home, digest, url=f"{intake}/v1/telemetry/feature-stability") == 0
     assert len(_Intake.received) == 1
 
@@ -290,9 +290,9 @@ def test_console_channels_report_the_three_from_their_state_files(home, intake, 
     from core.console.corvin_console.routes import telemetry_overview as tv
 
     (home / "telemetry").mkdir(exist_ok=True)
-    ob.state_path(home).write_text(json.dumps({"last_success": "2026-09-20T10:00:00Z", "attempts": 4, "successes": 4, "transport": "otlp/http", "endpoint": "https://x/v1/telemetry/otlp/v1/metrics"}))
-    ss.state_path(home).write_text(json.dumps({"started_at": "2026-09-20T09:55:00Z", "last_success": "2026-09-20T10:00:00Z", "last_status": 200, "attempts": 1, "successes": 1}))
-    tel.state_path(home).write_text(json.dumps({"last_success": "2026-09-20T10:00:00Z", "batches": 1, "reports_sent": 10164, "attempts": 1, "last_detail": "http 200"}))
+    ob.state_path(home).write_text(json.dumps({"last_success": "2026-09-20T10:00:00Z", "attempts": 4, "successes": 4, "transport": "otlp/http", "endpoint": "https://x/v1/telemetry/otlp/v1/metrics"}), encoding="utf-8")
+    ss.state_path(home).write_text(json.dumps({"started_at": "2026-09-20T09:55:00Z", "last_success": "2026-09-20T10:00:00Z", "last_status": 200, "attempts": 1, "successes": 1}), encoding="utf-8")
+    tel.state_path(home).write_text(json.dumps({"last_success": "2026-09-20T10:00:00Z", "batches": 1, "reports_sent": 10164, "attempts": 1, "last_detail": "http 200"}), encoding="utf-8")
 
     app = FastAPI()
     app.include_router(tv.router, prefix="/v1/console")

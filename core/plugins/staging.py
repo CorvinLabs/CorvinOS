@@ -188,7 +188,7 @@ class StagingManager:
             }
 
             metadata_path = self.staging_root / f"{upload_id}.meta"
-            metadata_path.write_text(json.dumps(metadata, indent=2))
+            metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
             return staged_zip
 
@@ -205,7 +205,7 @@ class StagingManager:
             metadata_path = self.staging_root / f"{upload_id}.meta"
             if not metadata_path.exists():
                 return None
-            return json.loads(metadata_path.read_text())
+            return json.loads(metadata_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
 
@@ -229,7 +229,7 @@ class StagingManager:
         self.decisions_root.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self.decisions_root, prefix=".decision-", suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump({"upload_id": upload_id, "decision": decision,
                            "decided_at": datetime.now(timezone.utc).isoformat()}, fh)
             os.replace(tmp, self.decisions_root / f"{upload_id}.json")
@@ -248,7 +248,7 @@ class StagingManager:
         if not _UPLOAD_ID_RE.match(upload_id):
             return None
         try:
-            rec = json.loads((self.decisions_root / f"{upload_id}.json").read_text())
+            rec = json.loads((self.decisions_root / f"{upload_id}.json").read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
         except (OSError, ValueError):

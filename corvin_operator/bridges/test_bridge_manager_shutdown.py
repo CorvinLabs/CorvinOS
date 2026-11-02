@@ -97,7 +97,7 @@ class TestWindowsSimulatedShutdown(unittest.TestCase):
 
 class TestSourceHasCreateNewProcessGroupOnWindowsSpawn(unittest.TestCase):
     def test_start_fg_passes_creationflags_on_windows(self):
-        src = Path(bridge_manager.__file__).read_text()
+        src = Path(bridge_manager.__file__).read_text(encoding="utf-8")
         self.assertIn("CREATE_NEW_PROCESS_GROUP", src)
         self.assertIn('sys.platform.startswith("win")', src)
 

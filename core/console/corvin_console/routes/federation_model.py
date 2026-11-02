@@ -155,7 +155,7 @@ class FederationRegistry:
         """Load registry from disk."""
         try:
             if self.registry_file.exists():
-                with open(self.registry_file) as f:
+                with open(self.registry_file, encoding="utf-8") as f:
                     data = json.load(f)
                     for instance_data in data.get("instances", []):
                         instance = FederatedInstance(**instance_data)
@@ -172,7 +172,7 @@ class FederationRegistry:
                 "instances": [i.to_dict() for i in self.instances.values()],
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
-            with open(self.registry_file, 'w') as f:
+            with open(self.registry_file, 'w', encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save registry: {e}")
@@ -281,7 +281,7 @@ class CrossInstanceSync:
         # In production: load from secure storage
         token_file = self.tenant_path / 'federation-token.secure'
         if token_file.exists():
-            return token_file.read_text().strip()
+            return token_file.read_text(encoding="utf-8").strip()
         # Fallback: generate (should be replaced with real auth)
         import secrets
         token = secrets.token_urlsafe(32)

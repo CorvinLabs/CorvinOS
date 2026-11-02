@@ -124,12 +124,12 @@ def _send(adapter, base: Path, chat: str, text: str) -> None:
     envelope = {"id": msg_id, "channel": "discord", "from": SENDER, "chat_id": chat,
                 "text": text, "ts": time.time()}
     f = base / "inbox" / f"{msg_id}.json"
-    f.write_text(json.dumps(envelope))
+    f.write_text(json.dumps(envelope), encoding="utf-8")
     adapter.process_one(f, settings={"whitelist": [SENDER], "voice_summary_mode": "never"})
 
 
 def _last_system_prompt(base: Path) -> str:
-    lines = (base / "args.jsonl").read_text().splitlines()
+    lines = (base / "args.jsonl").read_text(encoding="utf-8").splitlines()
     args = json.loads(lines[-1])["args"]
     return Path(args[args.index("--append-system-prompt-file") + 1]).read_text(encoding="utf-8")
 
@@ -174,7 +174,7 @@ def _distill_records(home: Path, chat: str) -> list[dict]:
     chain = home / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
     if not chain.is_file():
         return []
-    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in recs if str(r.get("event_type", "")).startswith("memory.user_model_")
             and (r.get("details") or {}).get("chat_key") == chat]
 

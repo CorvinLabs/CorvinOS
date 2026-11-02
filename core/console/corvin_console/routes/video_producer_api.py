@@ -2859,7 +2859,7 @@ def _write_capture_switch(rec, enabled: bool) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"enabled": bool(enabled), "changed": _now_iso()}, f)
         os.chmod(tmp, 0o600)
         os.replace(tmp, p)

@@ -483,7 +483,7 @@ def _update_registry(instance_id: str, email: str, name: str) -> None:
             ).isoformat(timespec="seconds"),
         }
         tmp = registry_path.with_suffix(".tmp")
-        with open(tmp, "w", opener=lambda p, f: os.open(p, f, 0o600)) as fh:
+        with open(tmp, "w", opener=lambda p, f: os.open(p, f, 0o600), encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, sort_keys=True)
             fh.write("\n")
         os.replace(tmp, registry_path)

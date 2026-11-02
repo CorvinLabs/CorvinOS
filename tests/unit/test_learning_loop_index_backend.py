@@ -41,7 +41,7 @@ class TestKnowledgeGraphPackageImports(unittest.TestCase):
             [sys.executable, "-c", code],
             cwd=str(REPO_ROOT),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("ok", proc.stdout)

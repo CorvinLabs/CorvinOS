@@ -82,7 +82,7 @@ class PluginManager:
         """Load plugin registry from disk."""
         if self.registry_path.exists():
             try:
-                with open(self.registry_path) as f:
+                with open(self.registry_path, encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
                 logger.warning(f"Failed to load registry: {e}")
@@ -91,7 +91,7 @@ class PluginManager:
     def _save_registry(self) -> None:
         """Save plugin registry to disk."""
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.registry_path, "w") as f:
+        with open(self.registry_path, "w", encoding="utf-8") as f:
             json.dump(self.plugins, f, indent=2)
 
     def _validate_boot_layer(self, boot_layer: str) -> None:

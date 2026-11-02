@@ -274,7 +274,7 @@ class TestAcpHttpSurfaces(unittest.TestCase):
                 lines = [
                     json.loads(l)
                     for f in events_dir.glob("*.jsonl")
-                    for l in f.read_text().splitlines()
+                    for l in f.read_text(encoding="utf-8").splitlines()
                     if l.strip()
                 ]
                 if any(l.get("skill_id") == "os.delegation_router" for l in lines):

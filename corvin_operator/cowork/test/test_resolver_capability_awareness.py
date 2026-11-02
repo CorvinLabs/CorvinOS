@@ -79,7 +79,7 @@ def main() -> int:
 
     # ── 4. Persona WITHOUT capability_aware: no injection ─────────────────
     (user_dir / "personas" / "plain.json").write_text(
-        '{"name": "plain", "permission_mode": "bypassPermissions"}'
+        '{"name": "plain", "permission_mode": "bypassPermissions"}', encoding="utf-8"
     )
     for mod in [m for m in list(sys.modules) if m in ("resolver",)]:
         del sys.modules[mod]
@@ -92,7 +92,7 @@ def main() -> int:
     #    must not list Forge as available. ────────────────────────────────
     (user_dir / "personas" / "narrow.json").write_text(
         '{"name": "narrow", "permission_mode": "bypassPermissions", '
-        '"capability_aware": true}'
+        '"capability_aware": true}', encoding="utf-8"
     )
     for mod in [m for m in list(sys.modules) if m in ("resolver",)]:
         del sys.modules[mod]

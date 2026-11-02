@@ -344,7 +344,7 @@ class VariantCSelector(VariantBSelector):
             "last_reset": self.current_quota.last_reset.isoformat(),
             "worker_count_current": self.current_quota.worker_count_current,
         }
-        self.quota_store_path.write_text(json.dumps(data, indent=2))
+        self.quota_store_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def classify_with_budget(
         self,
@@ -488,7 +488,7 @@ class VariantDSelector(VariantCSelector):
             "success_rates": self.success_rates,
             "updated": datetime.utcnow().isoformat(),
         }
-        self.learning_store_path.write_text(json.dumps(data, indent=2))
+        self.learning_store_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def classify_with_learning(
         self,

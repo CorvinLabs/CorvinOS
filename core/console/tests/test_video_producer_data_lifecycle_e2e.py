@@ -41,7 +41,7 @@ def _records(home: Path, tenant: str, event: str) -> list:
     if not p.exists():
         return []
     out = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         if line.strip():
             r = json.loads(line)
             if (r.get("event") or r.get("event_type")) == event:
@@ -109,7 +109,7 @@ class DataLifecycleE2E(unittest.TestCase):
             a_dir = _store_dir(home, "tenant_a")
 
             # owners.json: job id -> the principal that created it (local-login = the tenant's owner)
-            owners = json.loads((a_dir / "owners.json").read_text())
+            owners = json.loads((a_dir / "owners.json").read_text(encoding="utf-8"))
             self.assertEqual(owners, {done: "console-owner:tenant_a", running: "console-owner:tenant_a"})
             self.assertEqual(oct((a_dir / "owners.json").stat().st_mode & 0o777), "0o600")
             self.assertEqual(vjs.owner_of(_store_dir(home, "tenant_b"), b_job), "console-owner:tenant_b")
@@ -147,8 +147,8 @@ class DataLifecycleE2E(unittest.TestCase):
             self.assertFalse((a_dir / "videos" / done).exists())
             self.assertFalse(any((a_dir / "jobs").glob(f"*{done}*")))
             # its sidecar entries are gone, the other job's owner entry stays, the revision link is dropped
-            self.assertEqual(json.loads((a_dir / "owners.json").read_text()), {running: "console-owner:tenant_a"})
-            self.assertEqual(json.loads((a_dir / "revisions.json").read_text()), {})
+            self.assertEqual(json.loads((a_dir / "owners.json").read_text(encoding="utf-8")), {running: "console-owner:tenant_a"})
+            self.assertEqual(json.loads((a_dir / "revisions.json").read_text(encoding="utf-8")), {})
             # the API agrees
             self.assertEqual(ca.get(f"{V}/jobs/{done}").status_code, 404)
             self.assertEqual({j["id"] for j in ca.get(f"{V}/jobs").json()["jobs"]}, {running})
@@ -275,9 +275,9 @@ class DataLifecycleE2E(unittest.TestCase):
             for kept in (unrelated, legacy):
                 self.assertTrue(all(p.exists() for p in arts[kept].values()), kept)
             self.assertEqual({j["id"] for j in ca.get(f"{V}/jobs").json()["jobs"]}, {unrelated, legacy})
-            owners = json.loads((a_dir / "owners.json").read_text())
+            owners = json.loads((a_dir / "owners.json").read_text(encoding="utf-8"))
             self.assertEqual(owners, {unrelated: "console-owner:tenant_a"})
-            self.assertEqual(json.loads((a_dir / "revisions.json").read_text()), {})
+            self.assertEqual(json.loads((a_dir / "revisions.json").read_text(encoding="utf-8")), {})
             # the other tenant's store is a different scope and stays
             self.assertTrue((b_dir / "jobs" / f"{other_tenant}.json").exists())
             self.assertEqual(vjs.owner_of(b_dir, other_tenant), subject)

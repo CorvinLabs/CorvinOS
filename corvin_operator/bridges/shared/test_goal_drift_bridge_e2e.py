@@ -33,7 +33,7 @@ def _send(sb: Path, chat: str, text: str, n: int) -> None:
     inbox = sb / "inbox"
     inbox.mkdir(parents=True, exist_ok=True)
     item = {"id": f"g{n}", "channel": h.CHANNEL, "chat_id": chat, "from": chat, "text": text}
-    (inbox / f"g{n}.json").write_text(json.dumps(item))
+    (inbox / f"g{n}.json").write_text(json.dumps(item), encoding="utf-8")
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         if len(list((sb / "processed").glob("*.json"))) >= n:
@@ -45,7 +45,7 @@ def _send(sb: Path, chat: str, text: str, n: int) -> None:
 def _audit_lines(sb: Path, event_type: str) -> list[dict]:
     out: list[dict] = []
     for p in (sb / "home").rglob("forge/audit.jsonl"):
-        for line in p.read_text().splitlines():
+        for line in p.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
@@ -62,12 +62,12 @@ def _run_sandbox(flags: dict) -> tuple[Path, subprocess.Popen]:
     env = h._env(sb)
     (sb / "bridges" / h.CHANNEL).mkdir(parents=True)
     (sb / "bridges" / h.CHANNEL / "settings.json").write_text(
-        json.dumps({"chat_profiles": {"gd-chat": {}}}))
+        json.dumps({"chat_profiles": {"gd-chat": {}}}), encoding="utf-8")
     overlay = sb / "home" / "tenants" / "_default" / "global" / "features.json"
     overlay.parent.mkdir(parents=True, exist_ok=True)
-    overlay.write_text(json.dumps({"flags": flags}))
+    overlay.write_text(json.dumps({"flags": flags}), encoding="utf-8")
     proc = subprocess.Popen([sys.executable, str(h.ADAPTER)], env=env,
-                            stdout=open(sb / "adapter.log", "a"), stderr=subprocess.STDOUT)
+                            stdout=open(sb / "adapter.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
     return sb, proc
 
 

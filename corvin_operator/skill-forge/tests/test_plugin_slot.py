@@ -117,7 +117,7 @@ def test_create_writes_slot():
             slot_md = slot_dir / "SKILL.md"
             t("slot SKILL.md exists", slot_md.exists(),
               detail=str(slot_md))
-            text = slot_md.read_text() if slot_md.exists() else ""
+            text = slot_md.read_text(encoding="utf-8") if slot_md.exists() else ""
             fm, body = _parse_front_matter(text)
             t("slot front-matter has name", fm.get("name") == "trading_score_reviews",
               detail=fm.get("name", "<missing>"))
@@ -156,7 +156,7 @@ def test_sanitization_dot_to_underscore():
             t("slot dir uses underscores", slot_dir.is_dir(),
               detail=str(slot_dir))
             slot_md = slot_dir / "SKILL.md"
-            text = slot_md.read_text() if slot_md.exists() else ""
+            text = slot_md.read_text(encoding="utf-8") if slot_md.exists() else ""
             fm, _ = _parse_front_matter(text)
             t("slot front-matter name is sanitized",
               fm.get("name") == "demo_foo_bar",
@@ -257,7 +257,7 @@ def test_promote_updates_slot():
             slot_md = slot / "p1" / "SKILL.md"
             t("slot exists after session→user promote",
               slot_md.exists(), detail=str(slot_md))
-            text = slot_md.read_text() if slot_md.exists() else ""
+            text = slot_md.read_text(encoding="utf-8") if slot_md.exists() else ""
             fm, body = _parse_front_matter(text)
             # promote-update: simplified — slot reflects last create()
             # i.e. the target-scope copy. The description carries through
@@ -325,7 +325,7 @@ def test_engine_compat_smoke():
                        "promote_after": "3 runs"},
             )
             slot_md = slot / "engine_smoke" / "SKILL.md"
-            text = slot_md.read_text()
+            text = slot_md.read_text(encoding="utf-8")
             fm, body = _parse_front_matter(text)
             # Engine wants exactly name + description in the FM block.
             t("name non-empty", bool(fm.get("name")))

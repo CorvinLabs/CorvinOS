@@ -32,7 +32,7 @@ def test_tcp_loopback_transport_bind_connect():
     sock, endpoint = transport.bind()
     port_file = socket_path.parent / "daemon.port"
     assert port_file.exists(), "Port file should exist after bind"
-    port_str = port_file.read_text().strip()
+    port_str = port_file.read_text(encoding="utf-8").strip()
     assert port_str.isdigit(), f"Port file should contain a number, got {port_str}"
     assert endpoint.startswith("127.0.0.1:"), f"Endpoint should start with 127.0.0.1:, got {endpoint}"
 
@@ -86,14 +86,14 @@ def test_stale_port_file_replaced():
     port_file = socket_path.parent / "daemon.port"
 
     # Create a stale port file
-    port_file.write_text("9999\n")
+    port_file.write_text("9999\n", encoding="utf-8")
     assert port_file.exists()
 
     # Bind should replace it with a valid port
     transport = TCPLoopbackTransport(socket_path)
     sock, endpoint = transport.bind()
 
-    new_port_str = port_file.read_text().strip()
+    new_port_str = port_file.read_text(encoding="utf-8").strip()
     assert new_port_str != "9999", "Port file should be updated"
     assert int(new_port_str) > 0, "Port should be valid"
     print("✓ Stale port file replacement test PASSED")

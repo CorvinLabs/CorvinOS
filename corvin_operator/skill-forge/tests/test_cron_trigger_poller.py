@@ -191,7 +191,7 @@ class TestWriteAuditEvent:
         audit_file = audit_dir / "audit.jsonl"
         assert audit_file.exists()
 
-        lines = audit_file.read_text().splitlines()
+        lines = audit_file.read_text(encoding="utf-8").splitlines()
         event = json.loads(lines[-1])
 
         # A CHAINED record written by the core writer — never a raw line.
@@ -250,7 +250,7 @@ class TestShouldTriggerForge:
 
         # Write YAML-like JSON (simplified for testing)
         config = {"autonomous_forge": {"enabled": True}}
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
         # Monkeypatch config path
@@ -270,7 +270,7 @@ class TestShouldTriggerForge:
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
         config = {"autonomous_forge": {"enabled": False}}
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
         poller._get_config_path = Mock(return_value=config_path)
@@ -311,7 +311,7 @@ class TestTriggerForge:
 
         assert trigger_file.exists()
 
-        with open(trigger_file, "r") as f:
+        with open(trigger_file, "r", encoding="utf-8") as f:
             trigger_data = json.load(f)
 
         assert trigger_data["skill_id"] == "os.delegation_router"
@@ -404,6 +404,6 @@ def test_audit_for_non_process_tenant_is_written(temp_corvin_home, monkeypatch):
         "trigger_time": trig.trigger_time.isoformat(),
     })
     chain = temp_corvin_home / "tenants" / "tenant-b" / "global" / "forge" / "audit.jsonl"
-    rec = json.loads(chain.read_text().splitlines()[-1])
+    rec = json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])
     assert rec["event_type"] == "skill_forge_triggered_by_cron"
 

@@ -69,7 +69,7 @@ def _fresh_adapter(env_overrides: dict[str, str]):
 def _audit_lines(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines()
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip()]
 
 
@@ -105,7 +105,7 @@ def test_message_received_event_emitted():
             "ts": time.time(),
         }
         in_file = inbox / "msg-test-recv-1.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(in_file, settings={"whitelist": ["u-sender-007"]})
 
         events = _audit_lines(audit_path)
@@ -163,7 +163,7 @@ def test_cancel_envelope_emits_bridge_cancel():
             "ts": time.time(),
         }
         in_file = inbox / "msg-cancel-99.json"
-        in_file.write_text(json.dumps(env))
+        in_file.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(in_file,
                              settings={"whitelist": ["u-cancel-007"]})
 
@@ -217,7 +217,7 @@ def test_chain_is_continuous_across_two_messages():
                 "ts": time.time(),
             }
             in_file = inbox / f"msg-chain-{i}.json"
-            in_file.write_text(json.dumps(env))
+            in_file.write_text(json.dumps(env), encoding="utf-8")
             adapter.process_one(in_file,
                                  settings={"whitelist": ["u-chain"]})
 
@@ -243,7 +243,7 @@ def test_chain_is_continuous_across_two_messages():
         cli = REPO_ROOT / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
         proc = subprocess.run(
             [sys.executable, str(cli), "--path", str(audit_path), "verify"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         t("voice-audit verify rc=0",
           proc.returncode == 0,

@@ -153,7 +153,7 @@ class LocalRelay:
 
 
 def write_json(path: Path, cfg: dict) -> None:
-    path.write_text(json.dumps(cfg))
+    path.write_text(json.dumps(cfg), encoding="utf-8")
     path.chmod(0o600)
 
 
@@ -216,7 +216,7 @@ class TwoInstances:
 
     def update_origin(self, kid: "str | None" = None, **changes: Any) -> None:
         p = self.origin_path(kid)
-        write_json(p, {**json.loads(p.read_text()), **changes})
+        write_json(p, {**json.loads(p.read_text(encoding="utf-8")), **changes})
 
     def close(self, loop: "asyncio.AbstractEventLoop | None" = None) -> None:
         if self.listener is not None and loop is not None:

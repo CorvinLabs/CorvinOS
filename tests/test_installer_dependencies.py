@@ -160,7 +160,7 @@ def test_pip_install_venv_fallback_creates_dedicated_venv_and_persists_py_bin(
     # resolved through the (monkeypatched) voice_config_dir SSOT.
     env_file = voice_config_dir / "service.env"
     assert env_file.is_file(), "service.env was not created by _persist_venv_python"
-    content = env_file.read_text()
+    content = env_file.read_text(encoding="utf-8")
     assert f"PY_BIN={expected_venv_python}" in content
 
 
@@ -176,12 +176,12 @@ def test_persist_venv_python_writes_py_bin_and_replaces_stale_entry(
     monkeypatch.setenv("VOICE_CONFIG_DIR", str(voice_config_dir))
     voice_config_dir.mkdir(parents=True)
     env_file = voice_config_dir / "service.env"
-    env_file.write_text("SOME_OTHER_VAR=keep-me\nPY_BIN=/stale/old/python3\n")
+    env_file.write_text("SOME_OTHER_VAR=keep-me\nPY_BIN=/stale/old/python3\n", encoding="utf-8")
 
     new_python = tmp_path / "venv" / "bin" / "python3"
     deps_mod._persist_venv_python(new_python)
 
-    lines = env_file.read_text().splitlines()
+    lines = env_file.read_text(encoding="utf-8").splitlines()
     assert "SOME_OTHER_VAR=keep-me" in lines
     py_bin_lines = [l for l in lines if l.startswith("PY_BIN=")]
     assert py_bin_lines == [f"PY_BIN={new_python}"]

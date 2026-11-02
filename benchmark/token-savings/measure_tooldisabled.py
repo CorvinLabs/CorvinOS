@@ -66,7 +66,7 @@ def run_turn(prompt: str, model: str) -> str:
     p = subprocess.run(
         ["claude", "-p", prompt, "--disallowedTools", "*", "--model", model,
          "--output-format", "text", "--max-turns", "1"],
-        capture_output=True, text=True, timeout=180,
+        capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace",
     )
     return (p.stdout or "").strip()
 
@@ -80,7 +80,7 @@ def main() -> int:
     ap.add_argument("--out", default=str(HERE / "results" / "tooldisabled.json"))
     args = ap.parse_args()
 
-    suite = json.loads(Path(args.tasks).read_text())
+    suite = json.loads(Path(args.tasks).read_text(encoding="utf-8"))
     # single-turn memory tasks only (multi-turn derive needs the turn-1 fact; single is the clean probe)
     tasks = [t for t in suite["tasks"] if not t.get("turns")]
     arms = {}
@@ -120,7 +120,7 @@ def main() -> int:
                                  "CEL brief now injects memory BODIES, not just titles",
                   "oracle": "the memory CONTENT injected -> proves the fact IS answerable when "
                             "actually injected (ceiling)"}}
-    Path(args.out).write_text(json.dumps({"report": report, "raw": raw}, indent=2))
+    Path(args.out).write_text(json.dumps({"report": report, "raw": raw}, indent=2), encoding="utf-8")
     print("\nSUMMARY (tool-disabled):", json.dumps(arms))
     print("report:", args.out)
     return 0

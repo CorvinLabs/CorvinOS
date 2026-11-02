@@ -313,7 +313,7 @@ class WorkflowOptimizer:
         try:
             config_file = self._get_config_file(tenant_id)
             if config_file.exists():
-                with open(config_file) as f:
+                with open(config_file, encoding="utf-8") as f:
                     data = json.load(f)
                     config = SkillConfig(**data)
                     self._config_cache[tenant_id] = config
@@ -350,7 +350,7 @@ class WorkflowOptimizer:
 
             # Write atomically: temp file → rename
             temp_file = config_file.with_suffix(".tmp")
-            with open(temp_file, "w") as f:
+            with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(asdict(config), f, indent=2)
             temp_file.replace(config_file)
 

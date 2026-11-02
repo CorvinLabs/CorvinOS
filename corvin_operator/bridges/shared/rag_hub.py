@@ -158,14 +158,14 @@ class RAGHub:
     def _load(self):
         """Load providers and reviews from disk."""
         if self.providers_file.exists():
-            with open(self.providers_file, "r") as f:
+            with open(self.providers_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         data = json.loads(line)
                         self.providers[data["id"]] = RAGHubProvider(**data)
 
         if self.reviews_file.exists():
-            with open(self.reviews_file, "r") as f:
+            with open(self.reviews_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         data = json.loads(line)
@@ -176,7 +176,7 @@ class RAGHub:
 
     def _save_provider(self, provider: RAGHubProvider):
         """Append provider to disk."""
-        with open(self.providers_file, "a") as f:
+        with open(self.providers_file, "a", encoding="utf-8") as f:
             f.write(json.dumps({
                 "id": provider.id,
                 "name": provider.name,
@@ -199,7 +199,7 @@ class RAGHub:
 
     def _save_review(self, review: RAGHubReview):
         """Append review to disk."""
-        with open(self.reviews_file, "a") as f:
+        with open(self.reviews_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(review.to_dict()) + "\n")
 
     # ── CRUD Operations ────────────────────────────────────────

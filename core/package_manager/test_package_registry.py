@@ -188,7 +188,7 @@ class TestPackageRegistryInstanceAPI:
             temp_corvin_home / "tenants" / "_default" / "packages" / "package_registry.json"
         )
         registry_path.parent.mkdir(parents=True, exist_ok=True)
-        registry_path.write_text("{ invalid json }")
+        registry_path.write_text("{ invalid json }", encoding="utf-8")
 
         # Should not raise, should start with empty registry
         registry = PackageRegistry("_default")
@@ -204,7 +204,7 @@ class TestPackageRegistryInstanceAPI:
             temp_corvin_home / "tenants" / "_default" / "packages" / "package_registry.json"
         )
         assert registry_path.exists()
-        with open(registry_path) as f:
+        with open(registry_path, encoding="utf-8") as f:
             data = json.load(f)
         assert "version" in data
         assert "packages" in data

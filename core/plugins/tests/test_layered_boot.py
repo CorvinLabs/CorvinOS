@@ -371,7 +371,7 @@ def _git_grep(pattern: str, *, skip_mechanism: bool = False) -> list[str]:
 
     out = subprocess.run(
         ["git", "grep", "-nE", pattern, "--", "core", "operator"],
-        cwd=str(_REPO), capture_output=True, text=True,
+        cwd=str(_REPO), capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).stdout.splitlines()
     keep = []
     for line in out:

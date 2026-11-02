@@ -235,7 +235,7 @@ class ConsoleBackgroundScopeE2E(unittest.TestCase):
         self.assertNotEqual(final[0]["text"].strip(), "gestartet")
         import forge.paths as fp  # type: ignore[import]
         import json
-        recs = [json.loads(l) for l in fp.tenant_audit_chain("_default").read_text().splitlines()
+        recs = [json.loads(l) for l in fp.tenant_audit_chain("_default").read_text(encoding="utf-8").splitlines()
                 if '"bgscope.' in l]
         types = [r["event_type"] for r in recs]
         self.assertIn("bgscope.cancelled", types)
@@ -254,7 +254,7 @@ class ConsoleBackgroundScopeE2E(unittest.TestCase):
         import forge.paths as fp  # type: ignore[import]
         import json
         chain = fp.tenant_audit_chain("_default")
-        types = [json.loads(l)["event_type"] for l in chain.read_text().splitlines()
+        types = [json.loads(l)["event_type"] for l in chain.read_text(encoding="utf-8").splitlines()
                  if '"bgscope.' in l]
         self.assertEqual(types, ["bgscope.child_started", "bgscope.waiting",
                                  "bgscope.child_finished", "bgscope.completed"], types)

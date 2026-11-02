@@ -53,7 +53,7 @@ class ReachabilityCheck:
                 cwd=cwd,
                 capture_output=True,
                 text=True,
-                shell=False,
+                shell=False, encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired:
             return CheckResult(passed=False, evidence=f"git grep timeout (>{timeout_s}s)")

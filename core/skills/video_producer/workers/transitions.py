@@ -36,7 +36,7 @@ def render_scene_clip(frame_path: str, duration: float, output_path: str,
         "-vf", f"scale={width}:{height}",
         output_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError(f"Scene clip render failed for {frame_path}: {result.stderr}")
     return output_path
@@ -103,7 +103,7 @@ def build_crossfade_chain(
         output_path,
     ])
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError(f"Crossfade chain assembly failed: {result.stderr}")
     return output_path
@@ -187,7 +187,7 @@ def build_av_crossfade_chain(
         "-movflags", "+faststart",
         output_path,
     ])
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError(f"A/V crossfade chain failed: {result.stderr[-2000:]}")
     return get_clip_duration(output_path)
@@ -199,7 +199,7 @@ def get_clip_duration(path: str) -> float:
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", path],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
     )
     if result.returncode == 0 and result.stdout.strip():
         return float(result.stdout.strip())

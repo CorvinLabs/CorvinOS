@@ -58,7 +58,7 @@ class TestQueueIntegrityMonitor:
             "prior_hash": "genesis",
             "self_hash": "abc123def456",
         }
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record, f)
             f.write("\n")
 
@@ -81,7 +81,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -110,7 +110,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:01Z",  # Older - disorder!
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -142,7 +142,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -157,7 +157,7 @@ class TestQueueIntegrityMonitor:
 
     def test_monitor_invalid_json(self, monitor, temp_queue):
         """Invalid JSON should be detected."""
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             f.write('{"event_type": "valid"}\n')
             f.write("{ invalid json ]}\n")  # Invalid
             f.write('{"event_type": "valid"}\n')
@@ -178,7 +178,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:00Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record_missing_hash, f)
             f.write("\n")
 
@@ -204,7 +204,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -229,7 +229,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -241,7 +241,7 @@ class TestQueueIntegrityMonitor:
         assert report.recovery_successful
 
         # Verify repaired file has _corrupted flag on corrupted record
-        with open(temp_queue, "r") as f:
+        with open(temp_queue, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == 2
@@ -272,7 +272,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -291,7 +291,7 @@ class TestQueueIntegrityMonitor:
                 "self_hash": f"hash_{i}",
                 "timestamp": f"2026-08-12T10:00:{i:02d}Z",
             }
-            with open(temp_queue, "a") as f:
+            with open(temp_queue, "a", encoding="utf-8") as f:
                 json.dump(record, f)
                 f.write("\n")
 
@@ -321,7 +321,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -372,7 +372,7 @@ class TestQueueIntegrityMonitor:
             "session_id": "sess_1",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)
@@ -399,7 +399,7 @@ class TestQueueIntegrityMonitor:
             "timestamp": "2026-08-12T10:00:01Z",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             f.write("\n")  # Blank line
@@ -426,7 +426,7 @@ class TestQueueIntegrityMonitor:
             "event_id": "evt_1",
         }
 
-        with open(temp_queue, "w") as f:
+        with open(temp_queue, "w", encoding="utf-8") as f:
             json.dump(record1, f)
             f.write("\n")
             json.dump(record2, f)

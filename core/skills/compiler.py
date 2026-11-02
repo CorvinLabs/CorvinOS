@@ -260,7 +260,7 @@ class SkillCompiler:
             return report
         
         try:
-            with open(manifest_path) as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 manifest = yaml.safe_load(f)
         except Exception as e:
             report.is_valid = False
@@ -337,7 +337,7 @@ class SkillCompiler:
         errors = []
         
         try:
-            with open(skill_code_path) as f:
+            with open(skill_code_path, encoding="utf-8") as f:
                 source = f.read()
                 source_lines = source.split("\n")
         except Exception as e:

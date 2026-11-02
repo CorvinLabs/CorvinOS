@@ -41,12 +41,12 @@ exit "$rc"
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "init.defaultBranch=main", *args],
-        cwd=cwd, check=True, capture_output=True, text=True,
+        cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).stdout.strip()
 
 
 def _commit_version(repo: Path, version: str) -> None:
-    (repo / "pyproject.toml").write_text(f'[project]\nname = "corvinos"\nversion = "{version}"\n')
+    (repo / "pyproject.toml").write_text(f'[project]\nname = "corvinos"\nversion = "{version}"\n', encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", f"v{version}")
 
@@ -59,9 +59,9 @@ def repos(tmp_path):
     seed = tmp_path / "seed"
     _git(tmp_path, "clone", "-q", str(origin), str(seed))
     for name in (".corvin_repo", "install.sh"):
-        (seed / name).write_text("")
-    (seed / "update.sh").write_text(_FAKE_UPDATE_SH)
-    (seed / ".gitignore").write_text(".update-ran\n")
+        (seed / name).write_text("", encoding="utf-8")
+    (seed / "update.sh").write_text(_FAKE_UPDATE_SH, encoding="utf-8")
+    (seed / ".gitignore").write_text(".update-ran\n", encoding="utf-8")
     _commit_version(seed, "1.0.0")
     _git(seed, "push", "-q", "origin", "HEAD:main")
     checkout = tmp_path / "CorvinOS"
@@ -113,7 +113,7 @@ def _run(checkout: Path, *args: str, port: int | None = None, rc: int = 0) -> su
         env["CORVIN_CONSOLE_PORT"] = str(port)
     return subprocess.run(
         [sys.executable, str(_SCRIPT), "--checkout", str(checkout), *args],
-        capture_output=True, text=True, timeout=120, env=env, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=120, env=env, stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace",
     )
 
 

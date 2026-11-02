@@ -49,7 +49,7 @@ def _seed_execution(home, skill_id: str, tenant_id: str = "_default") -> None:
     ev = LearningEvent.create(EventType.SKILL_EXECUTED, skill_id, tenant_id, signal={"output": {}})
     f = home / "tenants" / tenant_id / "learning" / "events" / (ev.timestamp[:10] + ".jsonl")
     f.parent.mkdir(parents=True, exist_ok=True)
-    with open(f, "a") as fh:
+    with open(f, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(ev.to_dict()) + "\n")
 
 
@@ -146,7 +146,7 @@ def test_feedback_is_chained_before_it_is_stored(client, tmp_path):
     assert r.status_code == 200, r.text
     chain = tenant_audit_chain("_default")
     assert str(chain).startswith(str(tmp_path)), "audit write escaped the sandbox"
-    text = chain.read_text()
+    text = chain.read_text(encoding="utf-8")
     recs = [json.loads(line) for line in text.splitlines() if '"skill_feedback"' in line]
     assert recs, "no skill_feedback record was chained"
     d = recs[-1].get("details", recs[-1])
@@ -197,21 +197,21 @@ def test_config_change_is_chained_before_it_is_persisted(client, tmp_path):
 
     client.post(BASE, json=_body("os.delegation_router", "t-9", rating=2))
     events = list((tenant_home("_default") / "learning" / "events").glob("*.jsonl"))
-    recs = [json.loads(line) for f in events for line in f.read_text().splitlines()]
+    recs = [json.loads(line) for f in events for line in f.read_text(encoding="utf-8").splitlines()]
     cfg = [r for r in recs if r.get("event_type") == "config_updated" and r.get("skill_id") == "os.delegation_router"]
     assert len(cfg) == 1, recs
     ref = cfg[0]["audit_ref"]
     chain = _resolve_core_audit().audit_path()
     assert str(chain).startswith(str(tmp_path)), "audit write escaped the sandbox"
-    assert ref in open(chain).read()  # the chain record exists, and it carries no payload
+    assert ref in open(chain, encoding="utf-8").read()  # the chain record exists, and it carries no payload
 
 
 def test_feedback_on_a_skill_that_never_ran_is_refused_and_moves_nothing(client, tmp_path):
     """ADR-0534: the trust gate runs before the outcome is stored or applied."""
     events = tmp_path / "corvin-home" / "tenants" / "_default" / "learning" / "events"
     for f in events.glob("*.jsonl"):  # this tenant's security orchestrator never ran
-        f.write_text("".join(l + "\n" for l in f.read_text().splitlines()
-                             if "os.security_orchestrator" not in l))
+        f.write_text("".join(l + "\n" for l in f.read_text(encoding="utf-8").splitlines()
+                             if "os.security_orchestrator" not in l), encoding="utf-8")
     r = client.post(BASE, json=_body("os.security_orchestrator", "x-1", rating=2))
     assert r.status_code == 422, r.text
     assert r.json()["detail"]["reason"] == "no_corresponding_execution"
@@ -303,11 +303,11 @@ def test_concurrent_feedback_yields_gapless_unique_versions_and_an_intact_chain(
 
     # One `config_updated` learning event per applied version, each pointing at its chain record.
     events = list((tenant_home("_default") / "learning" / "events").glob("*.jsonl"))
-    recs = [json.loads(line) for f in events for line in f.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for f in events for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
     cfg = [r for r in recs if r.get("event_type") == "config_updated" and r.get("skill_id") == "os.delegation_router"]
     assert len(cfg) == len(applied), f"{len(cfg)} config_updated events for {len(applied)} versions"
     chain = _resolve_core_audit().audit_path()
-    text = Path(chain).read_text()
+    text = Path(chain).read_text(encoding="utf-8")
     refs = [r["audit_ref"] for r in cfg]
     assert len(set(refs)) == len(refs), "two versions point at the same chain record"
     assert all(text.count(ref) == 1 for ref in refs), "every version needs exactly one chain record"

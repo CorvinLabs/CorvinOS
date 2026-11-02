@@ -383,7 +383,7 @@ def write_sbom(
     )
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(sbom, indent=2, sort_keys=True))
+    output_path.write_text(json.dumps(sbom, indent=2, sort_keys=True), encoding="utf-8")
     os.chmod(output_path, 0o600)
     return output_path
 

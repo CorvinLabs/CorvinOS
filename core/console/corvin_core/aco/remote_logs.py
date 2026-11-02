@@ -76,7 +76,7 @@ def pull_remote(corvin_home: str | Path, remote: dict, *,
 
     def _run(c: list[str]) -> tuple[int, str]:
         try:
-            p = subprocess.run(c, capture_output=True, text=True, timeout=300)
+            p = subprocess.run(c, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
             return p.returncode, (p.stdout + p.stderr)[-500:]
         except Exception as exc:  # noqa: BLE001
             return 1, str(exc)[:300]

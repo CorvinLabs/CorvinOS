@@ -149,7 +149,7 @@ commits: [abc123]
 Some content here.
 """
 
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 f.write(content)
 
             violations = validate_adr_file(filepath)
@@ -165,7 +165,7 @@ Some content here.
 Some content without frontmatter.
 """
 
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 f.write(content)
 
             violations = validate_adr_file(filepath)
@@ -188,7 +188,7 @@ docs: [docs/quality-gates/]
 # ADR-0688 — Quality Gates
 """
 
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 f.write(content)
 
             violations = validate_adr_file(filepath)
@@ -202,7 +202,7 @@ docs: [docs/quality-gates/]
             filepath = os.path.join(tmpdir, "test.txt")
             test_content = "Test content here"
 
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 f.write(test_content)
 
             content = get_file_content(filepath)
@@ -232,7 +232,7 @@ commits: [abc123]
 # ADR-0688
 """
 
-            with open(valid_path, "w") as f:
+            with open(valid_path, "w", encoding="utf-8") as f:
                 f.write(valid_content)
 
             # Create invalid ADR
@@ -249,7 +249,7 @@ commits: [abc123]
 # ADR-0689
 """
 
-            with open(invalid_path, "w") as f:
+            with open(invalid_path, "w", encoding="utf-8") as f:
                 f.write(invalid_content)
 
             # Validate both

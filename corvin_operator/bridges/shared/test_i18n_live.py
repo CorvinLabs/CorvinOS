@@ -82,7 +82,7 @@ def _run_summarize(*, output_language: str, base_lang: str = "en",
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
     r = subprocess.run(cmd, input=SOURCE, capture_output=True,
-                       text=True, env=env, timeout=timeout)
+                       text=True, env=env, timeout=timeout, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise RuntimeError(f"summarize.py exit {r.returncode}: {r.stderr}")
     return r.stdout.strip()

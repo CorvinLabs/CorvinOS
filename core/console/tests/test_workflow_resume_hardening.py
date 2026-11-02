@@ -177,7 +177,7 @@ class ResumeHardeningTests(unittest.TestCase):
             from forge import paths as _fp
             chain = _fp.tenant_home(tid) / "global" / "forge" / "audit.jsonl"
             self.assertTrue(chain.exists(), "audit chain must exist after resume")
-            lines = [json.loads(x) for x in chain.read_text().splitlines() if x.strip()]
+            lines = [json.loads(x) for x in chain.read_text(encoding="utf-8").splitlines() if x.strip()]
             node_events = [
                 r for r in lines
                 if str(r.get("details", {}).get("action", "")).startswith("workflow.")

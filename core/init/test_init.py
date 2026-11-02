@@ -382,7 +382,7 @@ def case_supervisor_hot_reload_sends_signal() -> None:
             "for _ in range(50):\n"
             "    time.sleep(0.1)\n"
             "    if got: sys.exit(0)\n"
-            "sys.exit(1)\n"
+            "sys.exit(1)\n", encoding="utf-8"
         )
         services = {
             "trap": init.ServiceDef(

@@ -49,7 +49,7 @@ def _fresh():
 def _write_yaml(path: Path, body: dict[str, Any]) -> None:
     import yaml as _y
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_y.safe_dump(body, sort_keys=False))
+    path.write_text(_y.safe_dump(body, sort_keys=False), encoding="utf-8")
 
 
 def _good_probe_set() -> dict[str, Any]:
@@ -316,7 +316,7 @@ def section_audit() -> None:
             t("audit chain file created", audit_p.exists())
             if audit_p.exists():
                 lines = [json.loads(line) for line in
-                         audit_p.read_text().splitlines() if line]
+                         audit_p.read_text(encoding="utf-8").splitlines() if line]
                 kinds = {l["event_type"] for l in lines}
                 t("refusal_probe_completed event emitted",
                   "engine.refusal_probe_completed" in kinds)
@@ -378,7 +378,7 @@ def section_registry_and_cost() -> None:
 
     # Cost-contract: AST walk for forbidden imports
     ec_path = REPO / "corvin_operator" / "voice" / "scripts" / "engine_canary.py"
-    tree = ast.parse(ec_path.read_text())
+    tree = ast.parse(ec_path.read_text(encoding="utf-8"))
     forbidden = ("anthropic", "openai", "google.generativeai", "google_generativeai")
     bad_imports: list[str] = []
     for node in ast.walk(tree):
@@ -411,7 +411,7 @@ def section_cli() -> None:
         script = REPO / "corvin_operator" / "voice" / "scripts" / "engine_canary.py"
         res = subprocess.run(
             ["python3", str(script), "run", "--engine", "claude_code", "--quiet"],
-            env=env, capture_output=True, text=True, timeout=60,
+            env=env, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
         )
         t("`run` exit 0", res.returncode == 0,
           detail=res.stderr[:80] if res.returncode != 0 else "")
@@ -419,7 +419,7 @@ def section_cli() -> None:
         # CLI: show
         res = subprocess.run(
             ["python3", str(script), "show"],
-            env=env, capture_output=True, text=True, timeout=60,
+            env=env, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
         )
         t("`show` exit 0", res.returncode == 0)
         t("`show` mentions engine", "claude_code" in res.stdout,
@@ -428,7 +428,7 @@ def section_cli() -> None:
         # CLI: update
         res = subprocess.run(
             ["python3", str(script), "update"],
-            env=env, capture_output=True, text=True, timeout=60,
+            env=env, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
         )
         t("`update` exit 0", res.returncode == 0)
         t("`update` mentions sha256", "sha256=" in res.stdout)

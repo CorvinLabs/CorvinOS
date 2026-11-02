@@ -138,7 +138,7 @@ class BlenderHeadlessOrchestrator:
                 self._log_audit("bpy_script_generated", {
                     "script_lines": len(bpy_script.split("\n")),
                 })
-                script_file.write_text(bpy_script)
+                script_file.write_text(bpy_script, encoding="utf-8")
 
                 # Step 3: Execute Blender with timeout
                 result = await self._render_with_timeout(

@@ -217,7 +217,7 @@ class TestSyncWorker:
             status_file = tenant_path / 'config' / '.sync-status'
             assert status_file.exists()
 
-            with open(status_file) as f:
+            with open(status_file, encoding="utf-8") as f:
                 saved_status = json.load(f)
 
             assert saved_status['sync_status'] == 'success'

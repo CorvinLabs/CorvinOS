@@ -232,7 +232,7 @@ class PhaseC_QualityGatesReport:
     def _save_report(self, report: Dict):
         """Save report to disk."""
         report_path = self.metrics_dir / "latest_quality_gates.json"
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         print(f"\n📄 Report saved to: {report_path}")
         return report_path

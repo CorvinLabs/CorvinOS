@@ -49,7 +49,7 @@ def unused_helper():
     return 42
 
 unused_var = 99
-"""
+""", encoding="utf-8"
             )
 
             # Service B imports A (circular)
@@ -62,7 +62,7 @@ def fetch_b():
 
 def internal_func():
     return public_api()
-"""
+""", encoding="utf-8"
             )
 
             yield tmpdir_path
@@ -210,8 +210,8 @@ def internal_func():
             tmpdir_path = Path(tmpdir)
 
             # Create 2-module cycle
-            (tmpdir_path / "x.py").write_text("from y import func")
-            (tmpdir_path / "y.py").write_text("from x import func")
+            (tmpdir_path / "x.py").write_text("from y import func", encoding="utf-8")
+            (tmpdir_path / "y.py").write_text("from x import func", encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path, tenant_id="audit_test")
             report = analyzer.scan()
@@ -252,7 +252,7 @@ def internal_func():
             # Create 50 modules
             for i in range(50):
                 (tmpdir_path / f"module_{i}.py").write_text(
-                    f"def func_{i}(): return {i}"
+                    f"def func_{i}(): return {i}", encoding="utf-8"
                 )
 
             # Scan
@@ -300,7 +300,7 @@ from helper import helper_func
 
 def main():
     return helper_func()
-"""
+""", encoding="utf-8"
             )
             (tmpdir_path / "helper.py").write_text(
                 """
@@ -308,7 +308,7 @@ from main import main  # Circular
 
 def helper_func():
     return "help"
-"""
+""", encoding="utf-8"
             )
 
             # Step 1: Dead code detection

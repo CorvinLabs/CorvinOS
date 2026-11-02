@@ -70,7 +70,7 @@ def _make_chain_entry(prev_hash: str, event_type: str, ts: float) -> dict:
 def _write_chain(path: Path, n_entries: int, *, t0: float = 1700000000.0) -> str:
     """Write a fake chain of n entries. Returns the last hash."""
     prev = ""
-    with path.open("w") as fh:
+    with path.open("w", encoding="utf-8") as fh:
         for i in range(n_entries):
             rec = _make_chain_entry(prev, f"test.event_{i}", t0 + i)
             fh.write(json.dumps(rec) + "\n")
@@ -222,7 +222,7 @@ class TestLastHashOfSegment(unittest.TestCase):
     def test_empty_file(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "audit.jsonl"
-            p.write_text("")
+            p.write_text("", encoding="utf-8")
             self.assertEqual(last_hash_of_segment(p), "")
 
     def test_missing_file(self):
@@ -263,7 +263,7 @@ class TestRotateAndSealWithoutEncryption(unittest.TestCase):
             # New live file has rotation_link as first entry, followed by
             # audit.chain_anchor_written from step 6b (ADR-0135 re-anchor).
             assert audit.is_file()
-            lines = [l for l in audit.read_text().splitlines() if l.strip()]
+            lines = [l for l in audit.read_text(encoding="utf-8").splitlines() if l.strip()]
             self.assertGreaterEqual(len(lines), 1)
             rec = json.loads(lines[0])
             self.assertEqual(rec["event_type"], "audit.rotation_link")
@@ -412,7 +412,7 @@ class TestRotationLinkFailClosed(unittest.TestCase):
             self.assertTrue(result.rotated)
             self.assertTrue(audit.is_file())
             # First line is always rotation_link (step 6b may add chain_anchor_written)
-            first_line = audit.read_text().splitlines()[0]
+            first_line = audit.read_text(encoding="utf-8").splitlines()[0]
             line = json.loads(first_line)
             self.assertEqual(line["event_type"], "audit.rotation_link")
 
@@ -562,10 +562,10 @@ class TestRetention(unittest.TestCase):
     def test_only_sealed_segments_listed(self):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
-            (d / "audit.jsonl").write_text("")          # live, ignored
-            (d / "audit.2025-01-15T120000Z.jsonl").write_text("")  # plaintext segment
+            (d / "audit.jsonl").write_text("", encoding="utf-8")          # live, ignored
+            (d / "audit.2025-01-15T120000Z.jsonl").write_text("", encoding="utf-8")  # plaintext segment
             (d / "audit.2025-02-15T120000Z.jsonl.age").write_bytes(b"")
-            (d / "unrelated.txt").write_text("")
+            (d / "unrelated.txt").write_text("", encoding="utf-8")
             segs = list_sealed_segments(d)
             names = [p.name for p in segs]
             self.assertIn("audit.2025-01-15T120000Z.jsonl", names)
@@ -925,7 +925,7 @@ class TestNoAnthropicImport(unittest.TestCase):
 
     def test_no_anthropic_in_source(self):
         import ast
-        src = (Path(__file__).resolve().parent / "audit_sealer.py").read_text()
+        src = (Path(__file__).resolve().parent / "audit_sealer.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

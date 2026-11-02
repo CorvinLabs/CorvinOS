@@ -172,7 +172,7 @@ def mock_audit_backend(temp_plugin_home: Path) -> Generator[MagicMock, None, Non
     audit_path = temp_plugin_home / "audit.jsonl"
 
     def write_event(event: dict[str, Any]) -> None:
-        with open(audit_path, "a") as f:
+        with open(audit_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
 
     mock = MagicMock()
@@ -420,7 +420,7 @@ class OpusCheckpointer:
         plugin_json = scaffold_dir / "plugin.json"
         plugin_meta = {}
         if plugin_json.exists():
-            plugin_meta = json.loads(plugin_json.read_text())
+            plugin_meta = json.loads(plugin_json.read_text(encoding="utf-8"))
 
         plugin_description = plugin_meta.get("description", "Unknown plugin")
         plugin_type = plugin_meta.get("type", "unknown")

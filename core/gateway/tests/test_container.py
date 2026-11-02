@@ -43,28 +43,28 @@ class DockerfileShapeTests(unittest.TestCase):
         self.assertTrue(_DOCKERFILE.exists(), str(_DOCKERFILE))
 
     def test_base_image_is_python_3_12_slim(self):
-        text = _DOCKERFILE.read_text()
+        text = _DOCKERFILE.read_text(encoding="utf-8")
         self.assertIn("FROM python:3.12-slim", text)
 
     def test_non_root_uid_matches_chart(self):
-        df = _DOCKERFILE.read_text()
+        df = _DOCKERFILE.read_text(encoding="utf-8")
         m = re.search(r"--uid\s+(\d+)", df)
         self.assertIsNotNone(m, "Dockerfile must declare a non-root uid")
         uid = int(m.group(1))
         values = yaml.safe_load(
-            (_CHART_DIR / "values.yaml").read_text()
+            (_CHART_DIR / "values.yaml").read_text(encoding="utf-8")
         )
         self.assertEqual(uid, values["securityContext"]["runAsUser"])
 
     def test_entrypoint_runs_uvicorn(self):
-        df = _DOCKERFILE.read_text()
+        df = _DOCKERFILE.read_text(encoding="utf-8")
         self.assertIn("uvicorn", df)
         self.assertIn("corvin_gateway.app:app", df)
         # 0.0.0.0 binding lets the chart's Service forward traffic
         self.assertIn("0.0.0.0", df)
 
     def test_pyjwt_and_pyyaml_pinned_in_requirements(self):
-        req = (_PLUGIN / "requirements.txt").read_text()
+        req = (_PLUGIN / "requirements.txt").read_text(encoding="utf-8")
         for token in ("fastapi", "pydantic", "PyJWT", "pyyaml", "uvicorn"):
             self.assertIn(token, req, f"missing {token!r} in requirements.txt")
 
@@ -74,14 +74,14 @@ class DockerfileShapeTests(unittest.TestCase):
 
 class ChartStructureTests(unittest.TestCase):
     def test_chart_yaml_keys(self):
-        data = yaml.safe_load((_CHART_DIR / "Chart.yaml").read_text())
+        data = yaml.safe_load((_CHART_DIR / "Chart.yaml").read_text(encoding="utf-8"))
         for key in ("apiVersion", "name", "version", "appVersion", "type"):
             self.assertIn(key, data)
         self.assertEqual(data["apiVersion"], "v2")
         self.assertEqual(data["name"], "corvin-gateway")
 
     def test_values_yaml_keys(self):
-        v = yaml.safe_load((_CHART_DIR / "values.yaml").read_text())
+        v = yaml.safe_load((_CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
         for key in (
             "image", "service", "persistence", "resources",
             "securityContext", "livenessProbe", "readinessProbe",
@@ -112,7 +112,7 @@ class HelmRenderTests(unittest.TestCase):
             self.skipTest("helm not on PATH")
         proc = subprocess.run(
             [helm, "template", "release", str(_CHART_DIR)],
-            check=False, capture_output=True, text=True,
+            check=False, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         self.assertEqual(
             proc.returncode, 0,

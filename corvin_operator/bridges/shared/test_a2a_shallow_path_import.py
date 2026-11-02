@@ -78,7 +78,7 @@ class TestShallowStandaloneImport(unittest.TestCase):
             cwd=str(self.tmp),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=30, encoding="utf-8", errors="replace",
         )
 
     def test_sender_imports_cleanly_from_shallow_standalone_dir(self):
@@ -115,7 +115,7 @@ class TestShallowStandaloneImport(unittest.TestCase):
         )
         result = subprocess.run(
             [sys.executable, "-c", script],
-            cwd=str(self.tmp), capture_output=True, text=True, timeout=30,
+            cwd=str(self.tmp), capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         printed = Path(result.stdout.strip())

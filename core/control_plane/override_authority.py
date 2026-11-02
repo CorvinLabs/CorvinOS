@@ -542,7 +542,7 @@ class OverrideAuthority:
 
         events = []
         try:
-            with open(chain_path, "r") as f:
+            with open(chain_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

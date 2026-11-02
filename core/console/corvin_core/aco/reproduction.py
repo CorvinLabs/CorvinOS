@@ -77,7 +77,7 @@ def _git(repo: Path, *args: str) -> tuple[int, str]:
     import subprocess
     try:
         p = subprocess.run(["git", "-C", str(repo), *args],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
         return p.returncode, (p.stdout + p.stderr).strip()
     except Exception as exc:  # noqa: BLE001
         return 1, str(exc)
@@ -251,7 +251,7 @@ def build_repro_runner(repo: str | Path, *, full_cmd: list[str],
     def _run(cmd: list[str]) -> tuple[int, str]:
         try:
             p = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True,
-                               timeout=1800, env=scrubbed)
+                               timeout=1800, env=scrubbed, encoding="utf-8", errors="replace")
             return p.returncode, (p.stdout + p.stderr)[-400:]
         except Exception as exc:  # noqa: BLE001
             return -1, str(exc)[:200]

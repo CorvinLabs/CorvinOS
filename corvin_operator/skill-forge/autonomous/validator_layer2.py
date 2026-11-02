@@ -96,7 +96,7 @@ class TestValidator:
                 cwd=str(skill_dir),
                 capture_output=True,
                 text=True,
-                timeout=120,  # 2-minute timeout
+                timeout=120, encoding="utf-8", errors="replace",  # 2-minute timeout
             )
         except subprocess.TimeoutExpired:
             errors.append("pytest execution timed out (>120 seconds)")

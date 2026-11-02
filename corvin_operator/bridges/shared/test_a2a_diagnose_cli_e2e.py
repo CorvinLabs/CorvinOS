@@ -38,7 +38,7 @@ def setUpModule() -> None:
 
 
 def _write_json(path: Path, cfg: dict) -> None:
-    path.write_text(json.dumps(cfg))
+    path.write_text(json.dumps(cfg), encoding="utf-8")
     path.chmod(0o600)
 
 
@@ -84,7 +84,7 @@ class TestDiagnoseCli(unittest.TestCase):
         env.update({"REMOTE_ENDPOINTS_DIR": str(self.endpoints), "CORVIN_A2A_ATTESTATION_DISABLED": "1",
                     "PYTHONPATH": os.pathsep.join(filter(None, [str(PIN), env.get("PYTHONPATH", "")]))})
         return subprocess.run([sys.executable, str(CLI), "diagnose", *args], capture_output=True, text=True,
-                              timeout=120, env=env)
+                              timeout=120, env=env, encoding="utf-8", errors="replace")
 
     def test_reachable_peer_is_reported_with_a_verdict_and_the_blind_spot(self):
         self._endpoint(self.url)

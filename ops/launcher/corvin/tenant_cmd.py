@@ -291,7 +291,7 @@ def cmd_export(args: argparse.Namespace) -> int:
                 tenant_id, with_secrets, with_compute_runs, exclude_old_sessions
             )
             (bundle_dir / "metadata.json").write_text(
-                json.dumps(metadata, indent=2)
+                json.dumps(metadata, indent=2), encoding="utf-8"
             )
 
             # 9. Create tarball
@@ -392,7 +392,7 @@ def cmd_import(args: argparse.Namespace) -> int:
                 )
                 return 1
 
-            metadata = json.loads(metadata_path.read_text())
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             print(f"   ✓ Metadata valid (v{metadata.get('version', 'unknown')})")
 
             # Backup existing tenant if overwriting

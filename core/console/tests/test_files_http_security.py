@@ -109,14 +109,14 @@ class FilesHttpSecurityTests(unittest.TestCase):
     def test_download_through_symlink_to_secret_is_blocked(self):
         keys = self.root / "keys"
         keys.mkdir()
-        (keys / "tenant_master.key").write_text("MASTER-KEY")
+        (keys / "tenant_master.key").write_text("MASTER-KEY", encoding="utf-8")
         os.symlink(keys / "tenant_master.key", self.root / "files" / "leak")
         r = self.client.get("/files/download", params={"path": "files/leak"})
         self.assertEqual(r.status_code, 403, r.text)
         self.assertNotIn("MASTER-KEY", r.text)
 
     def test_download_ordinary_file_works(self):
-        (self.root / "files" / "ok.txt").write_text("readable")
+        (self.root / "files" / "ok.txt").write_text("readable", encoding="utf-8")
         r = self.client.get("/files/download", params={"path": "files/ok.txt"})
         self.assertEqual(r.status_code, 200, r.text)
         self.assertIn("readable", r.text)

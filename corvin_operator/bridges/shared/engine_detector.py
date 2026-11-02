@@ -72,7 +72,7 @@ def _probe_executable(name: str, *, timeout: float = 8.0) -> tuple[bool, str]:
         return False, f"{name} not on PATH"
     try:
         r = subprocess.run(
-            windows_wrap([exe, "--version"]), capture_output=True, text=True, timeout=timeout,
+            windows_wrap([exe, "--version"]), capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace",
         )
         if r.returncode != 0:
             return False, f"{name} --version rc={r.returncode}"

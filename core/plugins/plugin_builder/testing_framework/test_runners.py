@@ -188,7 +188,7 @@ class PluginTestRunner:
                 cwd=self.plugin_dir,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=300, encoding="utf-8", errors="replace",
             )
             exit_code = result.returncode
             # Parse output for test counts (simplified)

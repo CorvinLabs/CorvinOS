@@ -76,7 +76,7 @@ def test_a_ledger_left_in_the_old_place_is_moved_out_and_still_protected():
     wd = TH / "sessions/voice/telegram/456"
     old = wd / ".corvin-ledger"
     old.mkdir(parents=True)
-    (old / "ledger.jsonl").write_text('{"kind":"turn","seq":1,"n":1,"user_text":"legacy","assistant_text":"a"}\n')
+    (old / "ledger.jsonl").write_text('{"kind":"turn","seq":1,"n":1,"user_text":"legacy","assistant_text":"a"}\n', encoding="utf-8")
     assert path_gate.is_protected_path(old / "ledger.jsonl")
     assert sl.read_ledger(wd) == []                    # never adopted lazily (R6-3)
     assert _fresh_migration(old / "ledger.jsonl") >= 1   # at process start
@@ -90,7 +90,7 @@ def test_a_planted_legacy_ledger_after_start_is_never_adopted():
     sl.append_turn(wd, channel="telegram", chat_key="789", user_text="real", assistant_text="a")
     (wd / ".corvin-ledger").mkdir()
     (wd / ".corvin-ledger" / "ledger.jsonl").write_text(
-        '{"kind":"turn","ts":1,"user_text":"FORGED","assistant_text":"x"}\n')
+        '{"kind":"turn","ts":1,"user_text":"FORGED","assistant_text":"x"}\n', encoding="utf-8")
     assert [r["user"] for r in sl.read_ledger(wd)] == ["real"]
 
 
@@ -100,7 +100,7 @@ def test_old_and_new_ledgers_are_merged_not_dropped():
     sl.append_turn(wd, channel="telegram", chat_key="merge", user_text="new-2", assistant_text="a", ts=20)
     (wd / ".corvin-ledger").mkdir()
     (wd / ".corvin-ledger" / "ledger.jsonl").write_text(
-        '{"kind":"turn","ts":10,"seq":1,"n":1,"user_text":"old-1","assistant_text":"a"}\n')
+        '{"kind":"turn","ts":10,"seq":1,"n":1,"user_text":"old-1","assistant_text":"a"}\n', encoding="utf-8")
     _fresh_migration(wd / ".corvin-ledger" / "ledger.jsonl")
     recs = sl.read_ledger(wd)
     assert [r["user"] for r in recs] == ["old-1", "new-2"] and [r["n"] for r in recs] == [1, 2]

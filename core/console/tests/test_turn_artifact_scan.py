@@ -27,9 +27,9 @@ def _wdat_runs(workdir: Path, n: int) -> None:
         d = workdir / "acs" / "runs" / f"acs-dlg-1785188748-{i:06x}"
         d.mkdir(parents=True)
         (d / "manifest.json").write_text(json.dumps(
-            {"run_id": d.name, "workflow_id": "delegation:codex_cli"}))
+            {"run_id": d.name, "workflow_id": "delegation:codex_cli"}), encoding="utf-8")
         (d / "result.json").write_text(json.dumps(
-            {"run_id": d.name, "status": "completed"}))
+            {"run_id": d.name, "status": "completed"}), encoding="utf-8")
 
 
 def test_wdat_bookkeeping_never_becomes_a_chat_artifact(tmp_path: Path) -> None:
@@ -55,7 +55,7 @@ def test_real_outputs_still_surface_alongside_bookkeeping(tmp_path: Path) -> Non
 
     _wdat_runs(workdir, 30)
     (workdir / "outputs" / "chart.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    (workdir / "report.md").write_text("# Report")
+    (workdir / "report.md").write_text("# Report", encoding="utf-8")
 
     parts, suppressed = cr._scan_turn_artifacts(workdir, before)
     names = [p["name"] for p in parts]
@@ -75,7 +75,7 @@ def test_artifact_flood_is_capped_and_announced(tmp_path: Path) -> None:
 
     total = cr._MAX_TURN_ARTIFACTS + 17
     for i in range(total):
-        (workdir / "outputs" / f"page_{i:03d}.md").write_text(f"# {i}")
+        (workdir / "outputs" / f"page_{i:03d}.md").write_text(f"# {i}", encoding="utf-8")
 
     parts, suppressed = cr._scan_turn_artifacts(workdir, before)
     assert len(parts) == cr._MAX_TURN_ARTIFACTS

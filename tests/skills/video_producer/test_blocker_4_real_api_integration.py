@@ -68,7 +68,7 @@ class TestManimRealAPIIntegration:
                 ["manim", "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5, encoding="utf-8", errors="replace"
             )
             has_manim = result.returncode == 0
         except FileNotFoundError:
@@ -154,7 +154,7 @@ class TestManimRealAPIIntegration:
                 "-show_entries", "stream=codec_name",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(output_file)
-            ], capture_output=True, text=True, timeout=5, check=True)
+            ], capture_output=True, text=True, timeout=5, check=True, encoding="utf-8", errors="replace")
 
             codec = result.stdout.strip()
             assert "h264" in codec.lower() or "h.264" in codec.lower(), \
@@ -424,7 +424,7 @@ class TestQuickRendererRealAPIIntegration:
                 "-show_entries", "stream=codec_name",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(mp4_path)
-            ], capture_output=True, text=True, timeout=5)
+            ], capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             codec = result.stdout.strip()
             assert "h264" in codec.lower(), f"Expected h264, got {codec}"

@@ -108,8 +108,8 @@ class TestWindowsAutostartUninstall:
             desktop_dir.mkdir(parents=True)
             startup_lnk = startup_dir / "CorvinOS.lnk"
             desktop_lnk = desktop_dir / "CorvinOS.lnk"
-            startup_lnk.write_text("fake shortcut")
-            desktop_lnk.write_text("fake shortcut")
+            startup_lnk.write_text("fake shortcut", encoding="utf-8")
+            desktop_lnk.write_text("fake shortcut", encoding="utf-8")
 
             def fake_run(cmd, **kwargs):  # noqa: ANN001
                 result = mock.MagicMock()
@@ -166,9 +166,9 @@ class TestUninstallAlwaysDeletesAuditChain:
             audit_jsonl = tenants_dir / "audit.jsonl"
             audit_verified = tenants_dir / "audit.jsonl.verified"
             audit_compact = tenants_dir / "audit.jsonl.compact"
-            audit_jsonl.write_text('{"hash": "abc"}')
-            audit_verified.write_text('verify output')
-            audit_compact.write_text('{"hash": "def"}')
+            audit_jsonl.write_text('{"hash": "abc"}', encoding="utf-8")
+            audit_verified.write_text('verify output', encoding="utf-8")
+            audit_compact.write_text('{"hash": "def"}', encoding="utf-8")
 
             def fake_run(cmd, **_kw):  # noqa: ANN001
                 result = mock.MagicMock()
@@ -205,7 +205,7 @@ class TestUninstallAlwaysDeletesAuditChain:
             tenants_dir = installer.corvin_home / "tenants" / "_default" / "global"
             tenants_dir.mkdir(parents=True, exist_ok=True)
             audit_jsonl = tenants_dir / "audit.jsonl"
-            audit_jsonl.write_text('{"hash": "abc"}')
+            audit_jsonl.write_text('{"hash": "abc"}', encoding="utf-8")
 
             def fake_run(cmd, **_kw):  # noqa: ANN001
                 result = mock.MagicMock()
@@ -243,10 +243,10 @@ class TestUninstallTouchesOnlyInjectedRoots:
             installer = _make_installer(Path(tmp))
             sandbox_corvin = installer.repo_root / ".corvin"
             sandbox_corvin.mkdir(parents=True)
-            (sandbox_corvin / "sentinel").write_text("x")
+            (sandbox_corvin / "sentinel").write_text("x", encoding="utf-8")
             (installer.systemd_user_dir / "default.target.wants").mkdir(parents=True)
             sandbox_unit = installer.systemd_user_dir / "corvin-sandbox.service"
-            sandbox_unit.write_text("[Unit]\n")
+            sandbox_unit.write_text("[Unit]\n", encoding="utf-8")
 
             def fake_run(cmd, **kwargs):  # noqa: ANN001
                 result = mock.MagicMock()
@@ -286,8 +286,8 @@ class TestUninstallTouchesOnlyInjectedRoots:
             live_desktop.mkdir(parents=True)
             live_startup_lnk = live_startup / "CorvinOS.lnk"
             live_desktop_lnk = live_desktop / "CorvinOS.lnk"
-            live_startup_lnk.write_text("REAL user shortcut — must survive")
-            live_desktop_lnk.write_text("REAL user shortcut — must survive")
+            live_startup_lnk.write_text("REAL user shortcut — must survive", encoding="utf-8")
+            live_desktop_lnk.write_text("REAL user shortcut — must survive", encoding="utf-8")
 
             installer = _make_installer(Path(tmp))  # injects sandbox roots
 

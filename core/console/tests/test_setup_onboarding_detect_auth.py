@@ -96,7 +96,7 @@ def _sandbox(tmp_path: Path, client_addr: tuple[str, int]):
 def _write_onboarding_complete(home: Path, *, complete: bool) -> None:
     path = home / "tenants" / "_default" / "global" / "onboarding.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"complete": complete}))
+    path.write_text(json.dumps({"complete": complete}), encoding="utf-8")
 
 
 def _fake_probes():

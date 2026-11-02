@@ -414,7 +414,7 @@ class TestOpenBatchesState(unittest.TestCase):
                        return_value=home):
                 _record_open_batch(session_key, "job1", "msgbatch_abc123456789012", 42)
                 self.assertTrue(path.exists())
-                entries = json.loads(path.read_text())
+                entries = json.loads(path.read_text(encoding="utf-8"))
                 self.assertEqual(len(entries), 1)
                 self.assertEqual(entries[0]["batch_id"], "msgbatch_abc123456789012")
 
@@ -432,7 +432,7 @@ class TestOpenBatchesState(unittest.TestCase):
                  "submitted_at": 0, "candidate_count": 10},
                 {"job_id": "abatch_2", "batch_id": "msgbatch_bbb000111222333",
                  "submitted_at": 0, "candidate_count": 5},
-            ]))
+            ]), encoding="utf-8")
             mock_cancel = MagicMock(return_value={})
 
             with patch("corvin_compute.engines.anthropic_batch._corvin_home",
@@ -459,7 +459,7 @@ class TestOpenBatchesState(unittest.TestCase):
             path.write_text(json.dumps([
                 {"job_id": "abatch_x", "batch_id": "msgbatch_ccc000111222333",
                  "submitted_at": 0, "candidate_count": 1},
-            ]))
+            ]), encoding="utf-8")
 
             def fail_cancel(url):
                 raise RuntimeError("network error")

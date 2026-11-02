@@ -25,7 +25,7 @@ LIVE_CHAIN = REPO_ROOT / ".corvin" / "tenants" / "_default" / "global" / "forge"
 
 def test_append_open_of_live_chain_is_refused():
     with pytest.raises(PermissionError) as exc:
-        open(LIVE_CHAIN, "a")  # nothing is written: the fence refuses at open()
+        open(LIVE_CHAIN, "a", encoding="utf-8")  # nothing is written: the fence refuses at open()
     assert exc.value.errno == errno.EACCES
 
 
@@ -37,7 +37,7 @@ def test_pathlib_write_of_live_chain_is_refused():
 
 def test_io_open_and_low_level_write_of_live_chain_are_refused():
     with pytest.raises(PermissionError):
-        io.open(LIVE_CHAIN, "a")
+        io.open(LIVE_CHAIN, "a", encoding="utf-8")
     with pytest.raises(PermissionError):
         os.open(LIVE_CHAIN, os.O_WRONLY | os.O_APPEND)
 

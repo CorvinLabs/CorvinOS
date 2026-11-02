@@ -54,7 +54,7 @@ def _chain_records():
     chain = fp.tenant_audit_chain("_default")
     if not chain.exists():
         return []
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 @pytest.fixture
@@ -140,7 +140,7 @@ class TestCanaryTrafficControllerBasics:
 
         # Verify file exists and contains correct data
         assert Path(temp_state_file).exists()
-        with open(temp_state_file, "r") as f:
+        with open(temp_state_file, "r", encoding="utf-8") as f:
             data = json.load(f)
         assert data["current_traffic_percent"] == 1
         assert data["status"] == "unknown"
@@ -452,7 +452,7 @@ class TestCanaryRollbackScenario:
 
     def test_start_canary_fail_closed_on_unwritable_state(self, tmp_path):
         state_file = tmp_path / "ro.json"
-        state_file.write_text("{}")
+        state_file.write_text("{}", encoding="utf-8")
         state_file.chmod(0o444)
         try:
             c = CanaryTrafficController(state_file=str(state_file))

@@ -65,14 +65,14 @@ class FlowCheckpointStore:
         """Create the pause sentinel file (mode 0600)."""
         self._validate_run_id(run_id)
         p = self._pause_path(run_id)
-        p.write_text(json.dumps({"run_id": run_id, "step_id": step_id, "ts": time.time()}) + "\n")
+        p.write_text(json.dumps({"run_id": run_id, "step_id": step_id, "ts": time.time()}) + "\n", encoding="utf-8")
         os.chmod(p, 0o600)
 
     def approve(self, run_id: str) -> None:
         """Write the approval sentinel file (mode 0600)."""
         self._validate_run_id(run_id)
         p = self._go_path(run_id)
-        p.write_text(json.dumps({"run_id": run_id, "approved_at": time.time()}) + "\n")
+        p.write_text(json.dumps({"run_id": run_id, "approved_at": time.time()}) + "\n", encoding="utf-8")
         os.chmod(p, 0o600)
 
     def is_approved(self, run_id: str) -> bool:

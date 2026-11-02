@@ -102,7 +102,7 @@ def _assert_pairing_is_permissive(root: Path) -> None:
     origins = list((root / "origins").glob("*.json"))
     assert origins, f"no origin file under {root}"
     for f in origins:
-        cfg = json.loads(f.read_text())
+        cfg = json.loads(f.read_text(encoding="utf-8"))
         assert cfg.get("require_ibc") is False, (f, cfg.get("require_ibc"))
 
 class _Host:
@@ -169,7 +169,7 @@ class _Host:
 
     def log_tail(self) -> str:
         try:
-            return (self.root / "host.log").read_text(errors="replace")[-3000:]
+            return (self.root / "host.log").read_text(errors="replace", encoding="utf-8")[-3000:]
         except OSError:
             return ""
 

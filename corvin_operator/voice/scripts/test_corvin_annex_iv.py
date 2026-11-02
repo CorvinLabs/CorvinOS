@@ -81,7 +81,7 @@ class TestGenerateAnnexIv:
 
     def test_no_anthropic_import(self):
         import ast
-        src = (_HERE / "corvin_annex_iv.py").read_text()
+        src = (_HERE / "corvin_annex_iv.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):

@@ -68,7 +68,7 @@ class _HeldLock:
         self.path = task_dir / ".lock"
 
     def __enter__(self):
-        self.fh = open(self.path, "a+")
+        self.fh = open(self.path, "a+", encoding="utf-8")
         fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
         return self
 
@@ -194,7 +194,7 @@ class _HeldRollbackLock:
         self.path = log_dir / ".lock"
 
     def __enter__(self):
-        self.fh = open(self.path, "a+")
+        self.fh = open(self.path, "a+", encoding="utf-8")
         fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
         return self
 

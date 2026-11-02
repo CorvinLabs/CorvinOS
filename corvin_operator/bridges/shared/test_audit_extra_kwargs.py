@@ -17,7 +17,7 @@ import audit  # type: ignore  # noqa: E402
 
 
 def _events(p: Path):
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
 
 
 def test_unknown_domain_kwargs_are_recorded_not_dropped(tmp_path, monkeypatch):

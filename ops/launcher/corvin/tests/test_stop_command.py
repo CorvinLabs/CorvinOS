@@ -87,7 +87,7 @@ def test_stop_never_raises_if_quiesce_stage1_explodes(monkeypatch):
 def test_posix_stop_calls_bridge_sh_down(monkeypatch, tmp_path):
     _patch_quiesce(monkeypatch)
     fake_sh = tmp_path / "bridge.sh"
-    fake_sh.write_text("#!/bin/bash\n")
+    fake_sh.write_text("#!/bin/bash\n", encoding="utf-8")
     monkeypatch.setattr(native_backend, "_find_bridge_sh", lambda: fake_sh)
     monkeypatch.setattr(os, "name", "posix")
 
@@ -109,7 +109,7 @@ def test_posix_stop_calls_bridge_sh_down(monkeypatch, tmp_path):
 def test_posix_stop_surfaces_failure(monkeypatch, tmp_path, capsys):
     _patch_quiesce(monkeypatch)
     fake_sh = tmp_path / "bridge.sh"
-    fake_sh.write_text("#!/bin/bash\n")
+    fake_sh.write_text("#!/bin/bash\n", encoding="utf-8")
     monkeypatch.setattr(native_backend, "_find_bridge_sh", lambda: fake_sh)
     monkeypatch.setattr(os, "name", "posix")
 

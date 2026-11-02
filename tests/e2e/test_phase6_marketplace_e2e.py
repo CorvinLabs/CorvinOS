@@ -109,8 +109,8 @@ def test_old_double_prefix_is_gone(registry):
 def test_frontend_skills_tab_lives_inside_the_one_marketplace():
     # Positive control first: the directory page is where the tabs live.
     assert (WEB / "marketplace" / "index.tsx").is_file()
-    assert "SkillsTab" in (WEB / "marketplace" / "index.tsx").read_text()
-    assert '"skills"' in (WEB / "marketplace" / "tabs.ts").read_text()
-    assert "/marketplace/skills/search" in (WEB / "marketplace" / "api.ts").read_text()
+    assert "SkillsTab" in (WEB / "marketplace" / "index.tsx").read_text(encoding="utf-8")
+    assert '"skills"' in (WEB / "marketplace" / "tabs.ts").read_text(encoding="utf-8")
+    assert "/marketplace/skills/search" in (WEB / "marketplace" / "api.ts").read_text(encoding="utf-8")
     # No sibling file may shadow the directory again.
     assert not (WEB / "marketplace.tsx").exists()

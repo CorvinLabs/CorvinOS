@@ -43,7 +43,7 @@ def _records(tenant="_default"):
     p = _chain(tenant)
     if not p.exists():
         return []
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _coord(tenant="_default"):

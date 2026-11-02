@@ -19,7 +19,7 @@ def test_strip_for_tts_fallback():
     adapter_path = proj_root / "corvin_operator" / "bridges" / "shared" / "adapter.py"
 
     # Verify adapter.py has fallback logic
-    adapter_code = adapter_path.read_text()
+    adapter_code = adapter_path.read_text(encoding="utf-8")
     assert "if not pre.strip():" in adapter_code, "Fallback: empty pre check missing"
     assert "pre = text" in adapter_code, "Fallback: raw text assignment missing"
     assert "TimeoutExpired" in adapter_code, "Fallback: timeout handler missing"
@@ -51,11 +51,11 @@ low = result.lower()
 assert any(k in low for k in ("bug", "fixed", "worker", "fehler", "behoben")), \
     f"Original context lost in output: {{result}}"
 print(f"OK {{len(result)}} chars: {{result[:80]}}")
-""")
+""", encoding="utf-8")
 
     result = subprocess.run(
         [sys.executable, str(script)],
-        capture_output=True, text=True, timeout=180, cwd=str(proj_root),
+        capture_output=True, text=True, timeout=180, cwd=str(proj_root), encoding="utf-8", errors="replace",
     )
     print(result.stdout)
     assert result.returncode == 0, f"voice summary E2E failed:\n{result.stderr[-2000:]}"

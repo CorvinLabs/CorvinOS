@@ -34,7 +34,7 @@ _KEY_RE = re.compile(r'"(hmac_key|recv_key|key)"\s*:\s*"[0-9a-fA-F]{64}"')
 def _git(*args: str) -> str:
     try:
         return subprocess.run(
-            ["git", *args], cwd=REPO, capture_output=True, text=True, check=True,
+            ["git", *args], cwd=REPO, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace",
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         pytest.skip("not a git checkout")

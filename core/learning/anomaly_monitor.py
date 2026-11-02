@@ -121,7 +121,7 @@ def _oscillation_anomalies(skills_dir: Path, now: float) -> list[Anomaly]:
         return out
     for path in sorted(skills_dir.glob("*_config.json")):
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         versions = data.get("versions") if isinstance(data, dict) else None

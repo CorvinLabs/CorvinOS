@@ -149,7 +149,7 @@ class TestF2PIILeakageFix:
 
             events_file = tmpdir_path / "learning" / "events" / (ts.split("T")[0] + ".jsonl")
             assert events_file.exists(), "event must be written to disk"
-            written_event = json.loads(events_file.read_text().splitlines()[0])
+            written_event = json.loads(events_file.read_text(encoding="utf-8").splitlines()[0])
             on_disk = json.dumps(written_event)
             assert "user@example.com" not in on_disk, "Email should be scrubbed on disk"
             assert "555-123" not in on_disk, "Phone should be scrubbed on disk"

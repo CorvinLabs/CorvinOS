@@ -611,7 +611,7 @@ class SpawnWindowsSelfUpdaterScriptGenTests(unittest.TestCase):
              "$e=$null;$t=$null;"
              f"[System.Management.Automation.Language.Parser]::ParseFile('{matches[-1]}',[ref]$t,[ref]$e)|Out-Null;"
              "if ($e.Count -gt 0) { $e | ForEach-Object { Write-Output $_.Message }; exit 1 }"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
         self.assertEqual(result.returncode, 0, msg=f"pwsh parse errors:\n{result.stdout}\n{result.stderr}")
 

@@ -74,7 +74,22 @@ def check(payload: dict) -> tuple[bool, str]:
     )
 
 
+def _utf8_stdio() -> None:
+    """Claude Code speaks UTF-8 on the hook's stdin/stdout/stderr. On Windows
+    without UTF-8 mode those streams use the ANSI code page: a non-ASCII path
+    in the payload is mis-decoded, and a deny reason containing one raises
+    UnicodeEncodeError -> exit 1, a NON-blocking hook error (fail-open). No-op
+    where the streams are already UTF-8 (Linux/macOS, PYTHONUTF8=1)."""
+    for _s in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            if _s is not None and (_s.encoding or "").replace("-", "").lower() != "utf8":
+                _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main() -> int:
+    _utf8_stdio()
     raw = sys.stdin.read()
     if not raw.strip():
         return 0

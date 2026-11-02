@@ -244,7 +244,7 @@ def _load_store(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
@@ -269,7 +269,7 @@ def _save_store(path: Path, data: dict[str, dict]) -> None:
         _acquire_exclusive(fd, "roles store", timeout=LOCK_TIMEOUT_SECONDS)
         locked = True
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, path)
     finally:
         if locked:
@@ -341,7 +341,7 @@ def _read_channel_whitelist(channel: str) -> list[str]:
     if not p.exists():
         return []
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     wl = data.get("whitelist") if isinstance(data, dict) else None

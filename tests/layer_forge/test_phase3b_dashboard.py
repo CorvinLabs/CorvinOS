@@ -45,7 +45,7 @@ def sample_definitions(temp_registry):
         # Write back by re-reading and directly setting (no direct update API)
         path = temp_registry._path_for(entry_id, version)
         import json
-        path.write_text(json.dumps(entry))
+        path.write_text(json.dumps(entry), encoding="utf-8")
 
     # Week 1: Two accepted, one flagged
     manifest1 = {"id": "l1", "version": "1.0.0", "targets": [{"layer_id": "L10"}]}

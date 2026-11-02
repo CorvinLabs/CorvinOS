@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent
 
 def test_budget_key_format_in_reset_budget() -> bool:
     """Verify _reset_budget uses bare chat_id, not forge_channel_id."""
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
 
     # Check the function signature uses chat_id not forge_chan_id
     if "def _reset_budget(*, chat_id: str" not in code:
@@ -45,7 +45,7 @@ def test_budget_key_format_in_reset_budget() -> bool:
 
 def test_reset_session_passes_bare_chat_id() -> bool:
     """Verify reset_session() calls _reset_budget with bare chat_id."""
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
 
     # Check that reset_session passes chat_id (not forge_chan_id)
     if "budget_reset = _reset_budget(\n        chat_id=chat_id" not in code:
@@ -58,7 +58,7 @@ def test_reset_session_passes_bare_chat_id() -> bool:
 
 def test_datetime_import() -> bool:
     """Verify datetime is imported (fixes secondary bug)."""
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
     if "from datetime import datetime" not in code:
         print("FAIL: 'from datetime import datetime' not found")
         return False
@@ -71,7 +71,7 @@ def test_cli_basic() -> bool:
     result = subprocess.run(
         ["python3", str(ROOT / "session_reset.py"),
          "--channel", "discord", "--chat-id", "test_42"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         print(f"FAIL: CLI returned {result.returncode}: {result.stderr}")
@@ -90,7 +90,7 @@ def test_cli_basic() -> bool:
 
 def test_docstring_explains_bare_chat_id() -> bool:
     """Verify docstring explains why bare chat_id is used."""
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
 
     # Find _reset_budget docstring
     start = code.find("def _reset_budget(")

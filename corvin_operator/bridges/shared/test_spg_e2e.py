@@ -101,7 +101,7 @@ class TestGateSemantics:
         assert oct(p.stat().st_mode & 0o777) == "0o600"
 
     def test_corrupt_state_file_falls_back_to_private(self, tmp_path):
-        (tmp_path / "spg_state.json").write_text("not json{{{")
+        (tmp_path / "spg_state.json").write_text("not json{{{", encoding="utf-8")
         ok, _ = spg.is_sender_allowed(tmp_path, "alice")
         assert not ok, "corrupt state must fall back to private"
 
@@ -128,7 +128,7 @@ def _spg_cli(tmp_home, *args, channel="discord", chat_key="testchat"):
     extra = list(args[1:])
     result = subprocess.run(
         [sys.executable, SPG_PY, cmd_name, channel, chat_key, *extra],
-        capture_output=True, text=True, env=env, timeout=10,
+        capture_output=True, text=True, env=env, timeout=10, encoding="utf-8", errors="replace",
     )
     return result, session_path
 
@@ -245,7 +245,7 @@ class TestAdapterGateHook:
         # Simulate a corrupt state dir with no read permission
         state_file = spg._state_path(tmp_path)
         tmp_path.mkdir(parents=True, exist_ok=True)
-        state_file.write_text('{"mode": "open"}')
+        state_file.write_text('{"mode": "open"}', encoding="utf-8")
         state_file.chmod(0o000)
         try:
             allowed, reason = self._adapter_spg_check(tmp_path, "anyone")
@@ -285,7 +285,7 @@ class TestAuditChain:
         chain_path = (tmp_path / "tenants" / "_default" / "global" / "audit.jsonl")
         if not chain_path.exists():
             pytest.skip("audit module unavailable in test env")
-        events = [json.loads(line) for line in chain_path.read_text().splitlines() if line]
+        events = [json.loads(line) for line in chain_path.read_text(encoding="utf-8").splitlines() if line]
         spg_events = [e for e in events if e.get("event_type") == "spg.mode_changed"]
         assert len(spg_events) >= 1, "spg.mode_changed must be in audit chain"
         ev = spg_events[0]
@@ -303,7 +303,7 @@ class TestAuditChain:
         chain_path = (tmp_path / "tenants" / "_default" / "global" / "audit.jsonl")
         if not chain_path.exists():
             pytest.skip("audit module unavailable in test env")
-        events = [json.loads(line) for line in chain_path.read_text().splitlines() if line]
+        events = [json.loads(line) for line in chain_path.read_text(encoding="utf-8").splitlines() if line]
         invited = [e for e in events if e.get("event_type") == "spg.guest_invited"]
         assert len(invited) >= 1
         det = invited[0].get("details", {})
@@ -319,7 +319,7 @@ class TestAuditChain:
         chain_path = (tmp_path / "tenants" / "_default" / "global" / "audit.jsonl")
         if not chain_path.exists():
             pytest.skip("audit module unavailable in test env")
-        events = [json.loads(line) for line in chain_path.read_text().splitlines() if line]
+        events = [json.loads(line) for line in chain_path.read_text(encoding="utf-8").splitlines() if line]
         # Import chain verifier
         try:
             _FORGE = _HERE.parents[1] / "forge"

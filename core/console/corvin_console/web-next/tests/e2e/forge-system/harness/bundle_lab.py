@@ -125,7 +125,7 @@ def _write(out: str, envelope: dict, files: dict[str, bytes], tamper: list) -> N
 
 
 def build(recipe_path: str, out: str) -> dict:
-    r = json.load(open(recipe_path))
+    r = json.load(open(recipe_path, encoding="utf-8"))
     envelope = {"format": "corvin.forge-bundle", "format_version": 1,
                 "id": r["id"], "version": r["version"],
                 "created_at": "2026-10-08T00:00:00Z", "artifacts": []}
@@ -145,7 +145,7 @@ def build(recipe_path: str, out: str) -> dict:
 
 
 def graft(base: str, recipe_path: str, out: str) -> dict:
-    r = json.load(open(recipe_path))
+    r = json.load(open(recipe_path, encoding="utf-8"))
     with zipfile.ZipFile(base) as zf:
         envelope = json.loads(zf.read(ENVELOPE))
         files = {i.filename: zf.read(i.filename) for i in zf.infolist() if i.filename != ENVELOPE}

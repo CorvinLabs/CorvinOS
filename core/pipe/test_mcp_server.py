@@ -51,7 +51,7 @@ class MCPClient:
             stderr=subprocess.DEVNULL,
             env=env,
             text=True,
-            bufsize=1,  # line-buffered
+            bufsize=1, encoding="utf-8", errors="replace",  # line-buffered
         )
         self._next_id = 0
 

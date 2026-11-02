@@ -233,7 +233,7 @@ class TestConfigDriftDetection:
         skill = DelegationRouterSkill()
         manifest = Path(__file__).resolve().parents[2] / (
             "core/skills/bundled/os_delegation_router_v1.0/manifest.yaml")
-        declared = yaml.safe_load(manifest.read_text())
+        declared = yaml.safe_load(manifest.read_text(encoding="utf-8"))
         assert declared["name"] == skill.metadata.id
         assert skill.metadata.version == declared["version"]
 

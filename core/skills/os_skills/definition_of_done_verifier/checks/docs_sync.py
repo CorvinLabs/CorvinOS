@@ -34,7 +34,7 @@ class DocsSyncCheck:
                 cwd=cwd,
                 capture_output=True,
                 text=True,
-                shell=False,
+                shell=False, encoding="utf-8", errors="replace",
             )
 
             if keyword in result.stdout:

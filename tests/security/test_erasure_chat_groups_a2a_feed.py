@@ -47,7 +47,7 @@ class ErasureChatGroupsA2AFeedTests(unittest.TestCase):
                     text="keep me", tenant_id="_default")
         res = eh.A2AFeedHandler().purge("peer-subject", "req-1")
         self.assertEqual(res.status.value if hasattr(res.status, "value") else res.status, "applied")
-        store = (self.gdir / "a2a_feed" / "messages.jsonl").read_text()
+        store = (self.gdir / "a2a_feed" / "messages.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("private words", store)
         self.assertIn("keep me", store)
         self.assertFalse((self.gdir / "a2a_feed" / "blobs" / att.sha256).exists())
@@ -63,8 +63,8 @@ class ErasureChatGroupsA2AFeedTests(unittest.TestCase):
                               added_by="operator")
         att_dir = store.attachments_dir(self.gdir, gid)
         att_dir.mkdir(parents=True, exist_ok=True)
-        (att_dir / "their file.txt").write_text("subject data")
-        (att_dir / "mine.txt").write_text("operator data")
+        (att_dir / "their file.txt").write_text("subject data", encoding="utf-8")
+        (att_dir / "mine.txt").write_text("operator data", encoding="utf-8")
         store.append_message(self.gdir, gid, sender_participant_id="peer-subject",
                              text="[Attached files — stored with this group]\n"
                                   "- attachments/their file.txt (0.1 KB, text/plain)\n\nsecret")
@@ -107,8 +107,8 @@ class ErasureChatGroupsA2AFeedTests(unittest.TestCase):
         gid = g["group_id"]
         att_dir = store.attachments_dir(self.gdir, gid)
         att_dir.mkdir(parents=True, exist_ok=True)
-        (att_dir / "a.txt").write_text("x")
-        (att_dir / "b.txt").write_text("y")
+        (att_dir / "a.txt").write_text("x", encoding="utf-8")
+        (att_dir / "b.txt").write_text("y", encoding="utf-8")
         ref = "[Attached files — stored with this group]\n- attachments/{} (0.1 KB, text/plain)"
         store.append_message(self.gdir, gid, sender_participant_id="web:me", text=ref.format("a.txt"))
         store.append_message(self.gdir, gid, sender_participant_id="web:me", text=ref.format("b.txt"))

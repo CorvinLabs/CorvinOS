@@ -52,7 +52,7 @@ class TestRequireIbcWrittenOnNewPairings(_RouteSandbox):
 
         origin_file = self.od / f"{kid}.json"
         self.assertTrue(origin_file.exists(), f"origin file not written: {origin_file}")
-        cfg = json.loads(origin_file.read_text())
+        cfg = json.loads(origin_file.read_text(encoding="utf-8"))
         self.assertIs(cfg.get("require_ibc"), False,
                       f"new pairing must stay permissive until ADR-2099 P1, got: {cfg.get('require_ibc')!r}")
 

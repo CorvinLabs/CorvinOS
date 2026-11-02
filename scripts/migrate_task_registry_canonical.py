@@ -39,7 +39,7 @@ def _normalize_task_id(task_id: str) -> str:
 def analyze_registry(registry_path: Path) -> Dict[str, Any]:
     """Analyze registry for duplicates and issues"""
 
-    with open(registry_path, 'r') as f:
+    with open(registry_path, 'r', encoding="utf-8") as f:
         registry = json.load(f)
 
     tasks = registry.get('tasks', {})
@@ -82,7 +82,7 @@ def migrate_registry(registry_path: Path, dry_run: bool = False, verbose: bool =
 
     # Read registry
     try:
-        with open(registry_path, 'r') as f:
+        with open(registry_path, 'r', encoding="utf-8") as f:
             registry = json.load(f)
     except Exception as e:
         return {
@@ -181,7 +181,7 @@ def migrate_registry(registry_path: Path, dry_run: bool = False, verbose: bool =
     }
 
     try:
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             json.dump(new_registry, f, indent=2)
         print(f"✅ Migration complete: {registry_path}")
     except Exception as e:

@@ -95,7 +95,7 @@ class TestFeedbackCollector:
             feedback_log = Path(tmpdir) / "feedback.jsonl"
             assert feedback_log.exists()
 
-            with open(feedback_log, "r") as f:
+            with open(feedback_log, "r", encoding="utf-8") as f:
                 line = f.readline()
                 data = json.loads(line)
                 assert data["rating"] == 5
@@ -521,7 +521,7 @@ class TestLearningLoopIntegration:
             audit_log = Path(tmpdir) / "learning_audit.jsonl"
             assert audit_log.exists()
 
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 data = json.loads(f.readline())
                 assert data["event_type"] == "feedback_received"
                 assert data["tenant_id"] == "_default"
@@ -535,7 +535,7 @@ class TestLearningLoopIntegration:
             loop._emit_audit_event(event_type="test2")
 
             audit_log = Path(tmpdir) / "learning_audit.jsonl"
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
                 event1 = json.loads(lines[0])

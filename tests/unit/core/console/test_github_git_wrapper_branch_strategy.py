@@ -28,7 +28,7 @@ class TestGitHubGitWrapperBranchStrategy:
 
             # Create a test skill file
             skill_file = skills_dir / "test-skill.md"
-            skill_file.write_text("# Test Skill\nSome content")
+            skill_file.write_text("# Test Skill\nSome content", encoding="utf-8")
 
             with patch.object(GitHubGitWrapper, '_run_git') as mock_run_git:
                 # Mock successful git operations
@@ -75,7 +75,7 @@ class TestGitHubGitWrapperBranchStrategy:
 
             # Create a test skill file
             skill_file = skills_dir / "test-skill.md"
-            skill_file.write_text("# Test Skill")
+            skill_file.write_text("# Test Skill", encoding="utf-8")
 
             with patch.object(GitHubGitWrapper, '_run_git') as mock_run_git:
                 mock_run_git.return_value = (0, "success", "")
@@ -161,7 +161,7 @@ class TestBranchAccumulationPrevention:
             skills_dir.mkdir()
 
             skill_file = skills_dir / "skill1.md"
-            skill_file.write_text("# Skill 1")
+            skill_file.write_text("# Skill 1", encoding="utf-8")
 
             with patch.object(GitHubGitWrapper, '_run_git') as mock_run_git:
                 mock_run_git.return_value = (0, "success", "")
@@ -210,7 +210,7 @@ class TestBranchAccumulationPrevention:
                 skills_dir.mkdir()
 
                 skill_file = skills_dir / f"skill{i}.md"
-                skill_file.write_text(f"# Skill {i}")
+                skill_file.write_text(f"# Skill {i}", encoding="utf-8")
 
                 with patch.object(GitHubGitWrapper, '_run_git') as mock_run_git:
                     mock_run_git.return_value = (0, "success", "")

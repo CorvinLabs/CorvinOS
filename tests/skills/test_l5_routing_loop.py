@@ -117,7 +117,7 @@ class TestLedger:
 
     def test_malformed_lines_are_skipped_not_fatal(self):
         _seed(3)
-        with open(routing_ledger.ledger_path(TENANT), "a") as fh:
+        with open(routing_ledger.ledger_path(TENANT), "a", encoding="utf-8") as fh:
             fh.write('{"v":1,"kind":"decision","ts":"yesterday","turn_id":"x"}\n')
             fh.write('{"v":1,"kind":"decision","ts":1,"turn_id":["a"],"surface":"bridge"}\n')
             fh.write('{"v":1,"kind":"decision","ts":1,"turn_id":"ab","surface":"bridge","used":"native","bundled":"native","source":"bundled","features":"x"}\n')
@@ -134,7 +134,7 @@ class TestLedger:
             tenant_id=TENANT, bundled="native", force_delegate=False, is_big_data=False,
             mode="native", surface="bridge", features=dp.routing_features(prompt), sink={},
         )
-        raw = routing_ledger.ledger_path(TENANT).read_text()
+        raw = routing_ledger.ledger_path(TENANT).read_text(encoding="utf-8")
         assert "alice" not in raw and "Kundendaten" not in raw
 
 
@@ -171,9 +171,9 @@ class TestRollback:
         _seed(100, source="skill", ok=False)
         _seed(100, source="bundled", ok=True)
         rollback_detector.evaluate(TENANT, audit=AuditSpy())
-        rollback_detector.state_path(TENANT).write_text('{"tripp')
+        rollback_detector.state_path(TENANT).write_text('{"tripp', encoding="utf-8")
         assert rollback_detector.rollback_active(TENANT)
-        rollback_detector.state_path(TENANT).write_text("[]")
+        rollback_detector.state_path(TENANT).write_text("[]", encoding="utf-8")
         assert rollback_detector.rollback_active(TENANT)
 
     def test_reset_without_a_committed_audit_is_refused(self):
@@ -289,7 +289,7 @@ def _backdated_console_dual_write(*, days: float):
            "clamped": False, "features": {}}
     path = routing_ledger.ledger_path(TENANT)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as fh:
+    with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec) + "\n")
 
 

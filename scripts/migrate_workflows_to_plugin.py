@@ -132,7 +132,7 @@ async def validate_source_data(tenant_id: str, manifest: MigrationManifest, sour
             # Try parsing YAML
             try:
                 import yaml
-                with open(yaml_file) as f:
+                with open(yaml_file, encoding="utf-8") as f:
                     yaml.safe_load(f)
             except ImportError:
                 # YAML not installed; skip parse validation
@@ -287,7 +287,7 @@ async def run_smoke_tests(
         try:
             import yaml
             for yaml_file in yaml_files:
-                with open(yaml_file) as f:
+                with open(yaml_file, encoding="utf-8") as f:
                     yaml.safe_load(f)
         except ImportError:
             _log.warning("  YAML parse skipped (PyYAML not installed)")
@@ -316,7 +316,7 @@ async def verify_audit_chain(tenant_id: str) -> None:
         audit_log = Path(corvin_home) / "tenants" / tenant_id / "global" / "audit.jsonl"
 
         if audit_log.exists():
-            line_count = sum(1 for _ in open(audit_log))
+            line_count = sum(1 for _ in open(audit_log, encoding="utf-8"))
             _log.info(f"  Audit log exists ({line_count} events)")
         else:
             _log.warning(f"  Audit log not found (OK for new tenant): {audit_log}")

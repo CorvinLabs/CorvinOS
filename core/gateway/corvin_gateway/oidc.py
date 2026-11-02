@@ -229,7 +229,7 @@ def load_trust(tenant_id: str) -> TenantOidcTrust | None:
     except OSError as e:
         raise OidcTrustMalformed(f"stat failed for {p}: {e}") from e
     mode = st.st_mode & 0o777
-    if mode != _REQUIRED_MODE:
+    if sys.platform != "win32" and mode != _REQUIRED_MODE:  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
         raise OidcTrustMalformed(
             f"{p}: mode 0o{mode:o}, want 0o{_REQUIRED_MODE:o}"
         )

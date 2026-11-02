@@ -155,7 +155,7 @@ def get_config() -> SkillCreatorConfig:
             from pathlib import Path
             tenant_yaml = Path.home() / ".corvin" / "tenant.corvin.yaml"
             if tenant_yaml.exists():
-                with open(tenant_yaml) as f:
+                with open(tenant_yaml, encoding="utf-8") as f:
                     tenant_config = yaml.safe_load(f) or {}
                 _instance = SkillCreatorConfig.from_tenant_yaml(tenant_config)
             else:

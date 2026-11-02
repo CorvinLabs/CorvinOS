@@ -318,7 +318,7 @@ def _synthesize_voice_file(
             ],
             capture_output=True,
             text=True,
-            timeout=_VOICE_SYNTHESIS_TIMEOUT_S,
+            timeout=_VOICE_SYNTHESIS_TIMEOUT_S, encoding="utf-8", errors="replace",
         )
 
         if result.returncode == 0:

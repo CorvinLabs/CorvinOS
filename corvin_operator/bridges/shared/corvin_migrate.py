@@ -199,7 +199,7 @@ def migrate_home_if_needed(
                 f"#   {new_home}\n"
                 f"# Migration timestamp: {time.time()}\n"
                 f"# Files: {files}, bytes: {total_bytes}\n"
-                f"# Safe to delete this tree once the new tree is verified.\n"
+                f"# Safe to delete this tree once the new tree is verified.\n", encoding="utf-8"
             )
         except OSError as exc:
             logger.warning("corvin_migrate: MIGRATED marker write failed (%s)", exc)

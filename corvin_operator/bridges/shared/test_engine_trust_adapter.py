@@ -51,7 +51,7 @@ def _iso(offset_days: int = 0) -> str:
 def _write_yaml(path: Path, body: dict[str, Any]) -> None:
     import yaml as _y
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_y.safe_dump(body, sort_keys=False))
+    path.write_text(_y.safe_dump(body, sort_keys=False), encoding="utf-8")
 
 
 def _good_manifest(engine_id: str, *, tier: str = "high",
@@ -91,7 +91,7 @@ def _write_tenant_config(tmp: Path, *, min_tier: str | None = "low") -> None:
     if min_tier is not None:
         body["spec"]["engine_trust"] = {"min_tier": min_tier}
     import yaml as _y
-    p.write_text(_y.safe_dump(body))
+    p.write_text(_y.safe_dump(body), encoding="utf-8")
 
 
 def _fresh_modules():
@@ -210,7 +210,7 @@ def section_gate_trips() -> None:
             t("audit chain file created", audit_path.exists())
             if audit_path.exists():
                 lines = [json.loads(line) for line in
-                         audit_path.read_text().splitlines() if line]
+                         audit_path.read_text(encoding="utf-8").splitlines() if line]
                 kinds = {l["event_type"] for l in lines}
                 t("trust_tier_violated event emitted",
                   "engine.trust_tier_violated" in kinds,

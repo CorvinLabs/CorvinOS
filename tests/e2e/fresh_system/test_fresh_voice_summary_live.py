@@ -137,7 +137,7 @@ def test_transcribe_a_wav_from_the_installed_piper(console):
     # say.py needs the PRODUCT's interpreter (piper-tts lives there), not the test runner's
     py = product_python()
     proc = subprocess.run([py, str(say), str(wav), "The train to Hamburg leaves at nine from platform three.",
-                           "en", "", "piper"], capture_output=True, text=True, timeout=300)
+                           "en", "", "piper"], capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
     if proc.returncode != 0 or not wav.exists():
         pytest.skip(f"piper not usable here: {proc.stderr[-200:]}")
     r = c.post("/voice/transcribe", files={"audio": ("sample.wav", wav.read_bytes(), "audio/wav")},

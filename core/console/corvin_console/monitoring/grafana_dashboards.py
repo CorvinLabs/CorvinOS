@@ -781,7 +781,7 @@ if __name__ == "__main__":
     dashboards = export_dashboards_json()
 
     # Save to file
-    with open("/tmp/grafana_dashboards.json", "w") as f:
+    with open("/tmp/grafana_dashboards.json", "w", encoding="utf-8") as f:
         json.dump(dashboards, f, indent=2)
 
     print("✅ Exported 3 Grafana dashboards to /tmp/grafana_dashboards.json")

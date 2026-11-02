@@ -83,7 +83,7 @@ class RedactionEngine:
 
         # Read artifact
         try:
-            with open(artifact_path, 'r') as f:
+            with open(artifact_path, 'r', encoding="utf-8") as f:
                 content = f.read()
         except IOError as e:
             logger.error(f"Failed to read artifact {artifact_path}: {e}")
@@ -121,7 +121,7 @@ class RedactionEngine:
 
         # Write back (atomic write)
         try:
-            artifact_path.write_text(redacted_content)
+            artifact_path.write_text(redacted_content, encoding="utf-8")
             logger.info(f"Redacted artifact {artifact_path}")
         except IOError as e:
             logger.error(f"Failed to redact artifact {artifact_path}: {e}")

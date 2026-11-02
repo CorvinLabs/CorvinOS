@@ -133,7 +133,7 @@ class PluginProcessManager:
                 stdin=subprocess.PIPE,
                 env=env,
                 text=True,
-                bufsize=1,  # Line-buffered
+                bufsize=1, encoding="utf-8", errors="replace",  # Line-buffered
             )
             self._start_time = datetime.now(timezone.utc)
             self._state = PluginProcessState.HEALTHY
@@ -199,7 +199,7 @@ class PluginProcessManager:
                             f"Plugin {self.plugin_id} did not stop within {timeout}s, killing forcefully",
                             extra={"plugin_id": self.plugin_id},
                         )
-                        self._process.send_signal(signal.SIGKILL)
+                        self._process.kill()  # == SIGKILL on POSIX; signal.SIGKILL is absent on Windows
                         await asyncio.wait_for(
                             self._wait_process_exit(), timeout=5.0
                         )
@@ -208,7 +208,7 @@ class PluginProcessManager:
                         f"Killing plugin {self.plugin_id} forcefully (SIGKILL)",
                         extra={"plugin_id": self.plugin_id},
                     )
-                    self._process.send_signal(signal.SIGKILL)
+                    self._process.kill()  # == SIGKILL on POSIX; signal.SIGKILL is absent on Windows
                     await asyncio.wait_for(self._wait_process_exit(), timeout=5.0)
 
             self._state = PluginProcessState.STOPPED

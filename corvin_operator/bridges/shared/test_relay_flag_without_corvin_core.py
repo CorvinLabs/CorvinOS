@@ -23,7 +23,7 @@ _PROBE = (
 def _probe(home: Path) -> str:
     env = {"CORVIN_HOME": str(home), "HOME": str(home), "PATH": "/usr/bin:/bin"}
     out = subprocess.run([sys.executable, "-c", _PROBE], env=env, cwd=str(home),
-                         capture_output=True, text=True, timeout=60)
+                         capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
     assert out.returncode == 0, out.stderr[-800:]
     return out.stdout.strip()
 
@@ -32,7 +32,7 @@ def _overlay(home: Path, flags: dict | None) -> None:
     d = home / "tenants" / "_default" / "global"
     d.mkdir(parents=True)
     if flags is not None:
-        (d / "features.json").write_text(json.dumps({"flags": flags}))
+        (d / "features.json").write_text(json.dumps({"flags": flags}), encoding="utf-8")
 
 
 def test_flag_on_in_overlay_is_honoured_without_corvin_core(tmp_path):
@@ -51,13 +51,13 @@ def test_flag_off_or_missing_stays_dark_without_corvin_core(tmp_path):
 def test_corrupt_overlay_fails_dark(tmp_path):
     d = tmp_path / "tenants" / "_default" / "global"
     d.mkdir(parents=True)
-    (d / "features.json").write_text("{not json")
+    (d / "features.json").write_text("{not json", encoding="utf-8")
     assert _probe(tmp_path) == "False"
 
 
 def test_orchestration_mcp_pythonpath_carries_corvin_core():
     sys.path.insert(0, str(REPO / "corvin_operator" / "cowork" / "lib"))
-    src = (REPO / "corvin_operator" / "cowork" / "lib" / "resolver.py").read_text()
+    src = (REPO / "corvin_operator" / "cowork" / "lib" / "resolver.py").read_text(encoding="utf-8")
     block = src[src.index('mcp["corvin_orchestration"]'):]
     block = block[:block.index("_ensure_brief")]
     assert "{{CORE_ROOT}}/core/console" in block

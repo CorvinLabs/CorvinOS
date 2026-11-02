@@ -125,7 +125,7 @@ def load_baseline() -> Dict[str, Any]:
     """Load baseline metrics from previous measurement."""
     baseline_file = Path("benchmark/cel/baseline_metrics.json")
     if baseline_file.exists():
-        with open(baseline_file) as f:
+        with open(baseline_file, encoding="utf-8") as f:
             return json.load(f)
     return {"success_rate": 0, "latency_ms": {"p95": 0}}
 
@@ -255,7 +255,7 @@ def main():
 
     # Write results
     output_file = Path(args.output)
-    with open(output_file, "w") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
     logger.info(f"\nDay {args.day} metrics saved to: {output_file}")

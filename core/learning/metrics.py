@@ -410,7 +410,7 @@ class MetricsAggregator:
             return {}
 
         try:
-            with open(self._cursor_file) as f:
+            with open(self._cursor_file, encoding="utf-8") as f:
                 return json.load(f)
         except (IOError, json.JSONDecodeError):
             return {}
@@ -421,7 +421,7 @@ class MetricsAggregator:
             return
 
         try:
-            with open(self._cursor_file, "w") as f:
+            with open(self._cursor_file, "w", encoding="utf-8") as f:
                 json.dump(cursor, f)
         except IOError as e:
             logger.warning(f"Failed to save aggregation cursor: {e}")

@@ -80,7 +80,7 @@ def measure_coverage():
     }
 
     report_file = Path(__file__).parent / "coverage_report.json"
-    with open(report_file, "w") as f:
+    with open(report_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
     print(f"Report saved: {report_file}")

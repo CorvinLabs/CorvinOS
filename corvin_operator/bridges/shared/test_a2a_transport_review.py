@@ -154,7 +154,7 @@ class TestPeerRevokedPairingCarriesNothing(unittest.TestCase):
         import a2a_friendship as ft
         a, b = _Instance(root, "a"), _Instance(root, "b")
         kid = _pair(a, b, "http://127.0.0.1:9")
-        key = json.loads((b.origins / f"{kid}.json").read_text())["hmac_key"]
+        key = json.loads((b.origins / f"{kid}.json").read_text(encoding="utf-8"))["hmac_key"]
         issued = int(time.time())
         sender = a.iid
         sig = _h.new(bytes.fromhex(key), ft._revoke_canonical(kid, issued, sender), "sha256").hexdigest()

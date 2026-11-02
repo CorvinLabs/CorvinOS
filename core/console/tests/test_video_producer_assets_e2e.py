@@ -78,7 +78,7 @@ class AssetRoutesE2E(unittest.TestCase):
             self.assertEqual([h["name"] for h in asset["hotspots"]], ["save_button", "menu"])
             self.assertNotIn("uploaded_by", asset)
             on_disk = home / "tenants" / "tenant_a" / "video_producer" / "assets" / aid
-            doc = json.loads((on_disk / "asset.json").read_text())
+            doc = json.loads((on_disk / "asset.json").read_text(encoding="utf-8"))
             self.assertEqual(doc["uploaded_by"], "console-owner:tenant_a")
             raw = (on_disk / "image.png").read_bytes()
             self.assertLessEqual(len(raw), 4 * 1024 * 1024)

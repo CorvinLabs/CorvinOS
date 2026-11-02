@@ -339,7 +339,7 @@ class TestUniversalFrameworkE2E:
         reporter.report_to_json(output_file)
 
         import json
-        with open(output_file) as f:
+        with open(output_file, encoding="utf-8") as f:
             exported = json.load(f)
 
         assert exported["summary"]["total_tests"] == 12

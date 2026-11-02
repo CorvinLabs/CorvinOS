@@ -45,9 +45,9 @@ def test_revoked_endpoint_has_its_own_text():
         a, b = _Instance(root, "a"), _Instance(root, "b")
         kid = _pair(a, b, "http://127.0.0.1:9")
         p = a.endpoints / f"{kid}.json"
-        cfg = json.loads(p.read_text())
+        cfg = json.loads(p.read_text(encoding="utf-8"))
         cfg["_peer_revoked_at"] = 1.0
-        p.write_text(json.dumps(cfg))
+        p.write_text(json.dumps(cfg), encoding="utf-8")
         p.chmod(0o600)
         res = a.sender().send(kid, "hello", timeout_s=5)
         assert not res.ok

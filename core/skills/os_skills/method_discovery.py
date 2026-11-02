@@ -590,7 +590,7 @@ class MethodDiscovery:
 
     def _load_confirmations(self) -> list[str]:
         try:
-            data = json.loads(self._confirmations_file.read_text())
+            data = json.loads(self._confirmations_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return []
         if data.get("tenant_id") != self.tenant_id:
@@ -634,7 +634,7 @@ class MethodDiscovery:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".tmp", dir=str(path.parent))
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(body)
                 fh.flush()
                 os.fsync(fh.fileno())

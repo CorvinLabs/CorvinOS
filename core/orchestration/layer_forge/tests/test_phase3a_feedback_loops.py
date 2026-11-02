@@ -63,7 +63,7 @@ def _read_audit_events(home: Path) -> list[dict]:
     chain = home / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return recs
 
 
@@ -404,7 +404,7 @@ class TestPhase3AIntegration:
         # 2. Write manifest to temp file for CLI test
         manifest_path = tmp_path / "manifest.json"
         manifest = orch.get(entry_id, version)
-        manifest_path.write_text(json_lib.dumps(manifest))
+        manifest_path.write_text(json_lib.dumps(manifest), encoding="utf-8")
 
         # 3. Run CLI promote with override
         # Note: --tenant must come before the subcommand (it's a global arg)

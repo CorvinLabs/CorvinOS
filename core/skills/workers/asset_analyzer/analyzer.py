@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional, Any
 from datetime import datetime
@@ -131,7 +133,9 @@ class AssetAnalyzer:
         # Call ingest_assets.py
         try:
             cmd = [
-                "python3",
+                # Windows has no python3 (or only the Store stub): use this
+                # interpreter there; POSIX unchanged.
+                sys.executable if os.name == "nt" else "python3",
                 str(ingest_script),
                 *[str(p) for p in asset_paths],
                 "--workdir", str(self.workdir),
@@ -142,14 +146,14 @@ class AssetAnalyzer:
                 capture_output=True,
                 text=True,
                 timeout=120,
-                cwd=str(vp_repo),
+                cwd=str(vp_repo), encoding="utf-8", errors="replace",
             )
 
             if result.returncode != 0:
                 raise AssetIngestionError(f"ingest_assets.py failed: {result.stderr}")
 
             # Load result JSON
-            with open(self.assets_json) as f:
+            with open(self.assets_json, encoding="utf-8") as f:
                 assets_data = json.load(f)
             return assets_data
 

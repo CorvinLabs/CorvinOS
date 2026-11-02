@@ -246,7 +246,7 @@ class TestErrorHandling:
 
         # Create a temporary file with invalid JSON
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8") as f:
             f.write('{"valid": "json"}\n')
             f.write('invalid json line\n')
             f.write('{"also": "valid"}\n')

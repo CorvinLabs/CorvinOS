@@ -64,7 +64,7 @@ def detect_scope() -> str:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=2, check=False,
+            capture_output=True, text=True, timeout=2, check=False, encoding="utf-8", errors="replace",
         )
         if r.returncode == 0 and r.stdout.strip():
             return "project"
@@ -137,7 +137,7 @@ def scope_root(scope: str, *,
         try:
             r = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True, timeout=2, check=False,
+                capture_output=True, text=True, timeout=2, check=False, encoding="utf-8", errors="replace",
             )
             if r.returncode == 0 and r.stdout.strip():
                 return _resolve_repo_workspace(Path(r.stdout.strip())) / "forge"

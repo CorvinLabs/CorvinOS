@@ -156,7 +156,7 @@ class PluginManager:
             return
 
         try:
-            with open(state_file) as f:
+            with open(state_file, encoding="utf-8") as f:
                 state = json.load(f)
                 for plugin_id, plugin_data in state.items():
                     self.installed_plugins[plugin_id] = InstalledPlugin(
@@ -193,7 +193,7 @@ class PluginManager:
                 }
                 for pid, p in self.installed_plugins.items()
             }
-            with open(state_file, "w") as f:
+            with open(state_file, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save plugin state: {e}")
@@ -309,7 +309,7 @@ class PluginManager:
             return None
 
         try:
-            with open(manifest_file) as f:
+            with open(manifest_file, encoding="utf-8") as f:
                 data = json.load(f)["plugin"]
                 return PluginInfo(
                     id=data["id"],
@@ -420,7 +420,7 @@ class PluginManager:
         plugin_json = {
             "plugin": asdict(plugin_info)
         }
-        with open(install_path / "plugin.json", "w") as f:
+        with open(install_path / "plugin.json", "w", encoding="utf-8") as f:
             json.dump(plugin_json, f, indent=2)
 
         # Return dummy checksum

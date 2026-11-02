@@ -79,7 +79,7 @@ def _endpoint(d, eid, **extra):
 
     cfg = {"endpoint_id": eid, "url": "https://x.example/v1/a2a/receive", "hmac_key": "a" * 64,
            "recv_key": "b" * 64, "enabled": True, **extra}
-    (d / f"{eid}.json").write_text(json.dumps(cfg))
+    (d / f"{eid}.json").write_text(json.dumps(cfg), encoding="utf-8")
     (d / f"{eid}.json").chmod(0o600)
 
 

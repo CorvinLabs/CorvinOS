@@ -165,7 +165,7 @@ class MethodAuditSink:
         event store anyway.
         """
         try:
-            data = json.loads(self._head_file.read_text())
+            data = json.loads(self._head_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return GENESIS_HASH
         head = data.get("head")
@@ -183,7 +183,7 @@ class MethodAuditSink:
         )
         fd, tmp = tempfile.mkstemp(prefix=".chain_head.", suffix=".tmp", dir=str(self._state_dir))
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(body)
                 fh.flush()
                 os.fsync(fh.fileno())

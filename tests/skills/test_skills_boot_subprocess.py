@@ -51,7 +51,7 @@ def test_boot_skills_in_fresh_interpreter(tmp_path: Path) -> None:
     }
     proc = subprocess.run(
         [sys.executable, "-c", _BOOT], cwd=str(REPO), env=env,
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, f"fresh-process boot failed:\n{proc.stderr[-4000:]}"
     out = json.loads(proc.stdout.strip().splitlines()[-1])
@@ -147,7 +147,7 @@ def _run(script: str, tmp_path: Path, *, extra_env: dict | None = None) -> dict:
     env.update(extra_env or {})
     proc = subprocess.run(
         [sys.executable, "-c", script], cwd=str(REPO), env=env,
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, f"subprocess failed:\n{proc.stderr[-4000:]}"
     return json.loads(proc.stdout.strip().splitlines()[-1])

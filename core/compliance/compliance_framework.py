@@ -367,7 +367,7 @@ class ComplianceReportGenerator:
 
         events = []
         try:
-            with open(self.audit_path, 'r') as f:
+            with open(self.audit_path, 'r', encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

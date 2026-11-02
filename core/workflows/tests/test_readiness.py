@@ -56,7 +56,7 @@ def _simple(extra_nodes: list[dict] | None = None) -> str:
 
 
 def test_a_all_node_types_with_acceptance_is_ready():
-    r = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=0)
+    r = check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=ACCEPTANCE, repairs=0)
     assert r.ready and r.synthetic and r.run_state == "complete"
     assert [s.status for s in r.signals] == ["pass", "pass", "pass", "info", "pass", "info"]
 
@@ -105,7 +105,7 @@ def test_provoked_fail_branch_is_legitimate():
 
 
 def test_d_no_acceptance_is_unmeasured_and_not_ready():
-    r = check_readiness(EXAMPLE.read_text(), acceptance=None, repairs=0)
+    r = check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=None, repairs=0)
     assert _sig(r, "acceptance").status == "unmeasured"
     assert _sig(r, "reachability").status == "pass"
     assert not r.ready
@@ -113,7 +113,7 @@ def test_d_no_acceptance_is_unmeasured_and_not_ready():
 
 def test_acceptance_failure_and_malformed():
     bad = {**ACCEPTANCE, "expect": {"nodes_reached": ["research"], "final_contains": {"join.report": "NOPE"}}}
-    assert _sig(check_readiness(EXAMPLE.read_text(), acceptance=bad, repairs=0), "acceptance").status == "fail"
+    assert _sig(check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=bad, repairs=0), "acceptance").status == "fail"
     assert _sig(check_readiness(_simple(), acceptance={"expect": {"state": "weird"}}, repairs=0), "acceptance").status == "fail"
     assert validate_acceptance({"expect": {}}) is not None
     assert validate_acceptance({"expect": {"state": "complete"}, "x": 1}) is not None
@@ -121,9 +121,9 @@ def test_acceptance_failure_and_malformed():
 
 
 def test_repairs_above_ceiling_fail():
-    ok = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=3)
+    ok = check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=ACCEPTANCE, repairs=3)
     assert ok.ready
-    over = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=4)
+    over = check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=ACCEPTANCE, repairs=4)
     assert _sig(over, "repairs").status == "fail" and not over.ready
 
 
@@ -154,25 +154,25 @@ def test_f_no_network_and_no_outbox_write(monkeypatch, _sandbox):
 
     monkeypatch.setattr(socket, "socket", no_socket)
     monkeypatch.setattr(socket, "create_connection", no_socket)
-    r = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=0)
+    r = check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=ACCEPTANCE, repairs=0)
     assert r.ready
     assert list(_sandbox.glob("*.json")) == []  # deliver/answer never reached the outbox
 
 
 def test_reports_are_reproducible():
-    one = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=1)
-    two = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=1)
+    one = check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=ACCEPTANCE, repairs=1)
+    two = check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=ACCEPTANCE, repairs=1)
     assert one.signals == two.signals and one.run_state == two.run_state
 
 
 def test_real_node_registry_is_not_mutated():
     before = {k: v["execute"] for k, v in NODE_TYPES.items()}
-    check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=0)
+    check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=ACCEPTANCE, repairs=0)
     assert before == {k: v["execute"] for k, v in NODE_TYPES.items()}
 
 
 def test_report_carries_per_node_outcomes_in_execution_order():
-    r = check_readiness(EXAMPLE.read_text(), acceptance=ACCEPTANCE, repairs=0)
+    r = check_readiness(EXAMPLE.read_text(encoding="utf-8"), acceptance=ACCEPTANCE, repairs=0)
     by = {n.node_id: n.status for n in r.nodes}
     assert by["research"] == "success" and by["low_path"] == "skipped" and by["high_path"] == "success"
     assert [n.node_id for n in r.nodes][0] == "research"

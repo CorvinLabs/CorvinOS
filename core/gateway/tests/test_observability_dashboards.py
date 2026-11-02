@@ -58,7 +58,7 @@ _METRIC_REF_RE = re.compile(r"\bcorvin_[a-z0-9_]+(?:_total|_seconds_bucket|_seco
 
 
 def _metric_refs_in_dashboard(path: Path) -> set[str]:
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     return set(_METRIC_REF_RE.findall(text))
 
 
@@ -67,7 +67,7 @@ class DashboardShapeTests(unittest.TestCase):
         for fn in _DASHBOARDS:
             p = _DASH_DIR / fn
             self.assertTrue(p.exists(), str(p))
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
             for key in ("title", "panels", "uid", "schemaVersion", "tags"):
                 self.assertIn(key, data, f"{fn}: missing {key}")
             self.assertIsInstance(data["panels"], list)
@@ -100,7 +100,7 @@ class DashboardTemplatingTests(unittest.TestCase):
     def test_dashboards_have_tenant_templating(self):
         for fn in _DASHBOARDS:
             p = _DASH_DIR / fn
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
             templating = data.get("templating", {}).get("list", [])
             names = [v.get("name") for v in templating]
             self.assertIn(

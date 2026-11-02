@@ -45,7 +45,7 @@ def _decisions(home: Path, tenant_id: str) -> list:
     chain = home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return [r for r in recs if r.get("event_type") == "remediation.approval_decided"]
 
 

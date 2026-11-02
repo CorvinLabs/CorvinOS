@@ -33,7 +33,7 @@ def _write_registry(read_only: bool) -> Path:
     p.write_text(json.dumps({"tasks": {
         "adr_0001": {"title": "ADR one", "status": "ACCEPTED"},
         "task_a": {"title": "A", "status": "in_progress"},
-    }}))
+    }}), encoding="utf-8")
     if read_only:
         os.chmod(p, 0o444)
     return p

@@ -50,7 +50,7 @@ def section_requirements_parser() -> None:
         p = Path(tmp) / "requirements.txt"
 
         # Simple pinned dep
-        p.write_text("fastapi==0.136.0\n")
+        p.write_text("fastapi==0.136.0\n", encoding="utf-8")
         deps = _sbom.parse_requirements_txt(p)
         t("simple pinned dep parsed",
           len(deps) == 1 and deps[0]["name"] == "fastapi"
@@ -65,7 +65,7 @@ fastapi==0.136.0 --hash=sha256:abc123 \\
 pydantic==2.5.3 --hash=sha256:cafebabe
 
 # end
-""")
+""", encoding="utf-8")
         deps = _sbom.parse_requirements_txt(p)
         t("two deps via continuation",
           len(deps) == 2,
@@ -77,7 +77,7 @@ pydantic==2.5.3 --hash=sha256:cafebabe
               detail=f"got {len(fa['hashes'])}")
 
         # Unpinned (>=, ~=) is skipped
-        p.write_text("requests>=2.28\nfastapi==0.136.0\n")
+        p.write_text("requests>=2.28\nfastapi==0.136.0\n", encoding="utf-8")
         deps = _sbom.parse_requirements_txt(p)
         t("unpinned dep skipped",
           len(deps) == 1 and deps[0]["name"] == "fastapi")
@@ -111,7 +111,7 @@ def section_package_lock_parser() -> None:
                     "integrity": "sha512-ghi789jkl==",
                 },
             },
-        }))
+        }), encoding="utf-8")
         deps = _sbom.parse_package_lock(p)
         t("two npm deps parsed (root skipped)",
           len(deps) == 2,
@@ -126,7 +126,7 @@ def section_package_lock_parser() -> None:
                   and d["hashes"][0]["alg"] == "SHA512")
 
         # Empty / malformed → empty list
-        p.write_text("not json {")
+        p.write_text("not json {", encoding="utf-8")
         try:
             _sbom.parse_package_lock(p)
             t("malformed JSON raises", False)
@@ -150,7 +150,7 @@ Corvin NOTICE
 Third-party components:
    pillow 10.0.0 (PIL fork)
    typing-extensions
-""")
+""", encoding="utf-8")
         items = _sbom.parse_notice_file(p)
         # "Corvin NOTICE", "pillow 10.0.0 (PIL fork)", "typing-extensions"
         # "Third-party components:" is skipped (ends with colon)
@@ -171,14 +171,14 @@ def section_source_sha() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = Path(tmp) / "fake-plugin"
         plugin.mkdir()
-        (plugin / "main.py").write_text("print('hello')")
+        (plugin / "main.py").write_text("print('hello')", encoding="utf-8")
         (plugin / "lib").mkdir()
-        (plugin / "lib" / "helper.py").write_text("x = 1")
+        (plugin / "lib" / "helper.py").write_text("x = 1", encoding="utf-8")
         # Excluded files
         (plugin / "__pycache__").mkdir()
         (plugin / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"\x00")
         (plugin / ".venv").mkdir()
-        (plugin / ".venv" / "huge.txt").write_text("x" * 10000)
+        (plugin / ".venv" / "huge.txt").write_text("x" * 10000, encoding="utf-8")
 
         sha1 = _sbom.plugin_source_sha256(plugin)
         t("sha256 is 64 hex chars",
@@ -189,7 +189,7 @@ def section_source_sha() -> None:
         t("sha256 is deterministic", sha1 == sha2)
 
         # Modify a file → different sha
-        (plugin / "main.py").write_text("print('hello world')")
+        (plugin / "main.py").write_text("print('hello world')", encoding="utf-8")
         sha3 = _sbom.plugin_source_sha256(plugin)
         t("sha256 changes on content change", sha1 != sha3)
 
@@ -211,9 +211,9 @@ def section_build_shape() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = Path(tmp) / "plg"
         plugin.mkdir()
-        (plugin / "main.py").write_text("x = 1\n")
+        (plugin / "main.py").write_text("x = 1\n", encoding="utf-8")
         (plugin / "requirements.txt").write_text(
-            "fastapi==0.136.0 --hash=sha256:abc123\n")
+            "fastapi==0.136.0 --hash=sha256:abc123\n", encoding="utf-8")
         (plugin / "package-lock.json").write_text(json.dumps({
             "lockfileVersion": 3,
             "packages": {
@@ -223,8 +223,8 @@ def section_build_shape() -> None:
                     "integrity": "sha512-xyz==",
                 },
             },
-        }))
-        (plugin / "NOTICE").write_text("vendored: pillow\n")
+        }), encoding="utf-8")
+        (plugin / "NOTICE").write_text("vendored: pillow\n", encoding="utf-8")
 
         bom = _sbom.build_sbom(plugin, plugin_name="plg",
                                 plugin_version="0.1.0")
@@ -271,8 +271,8 @@ def section_round_trip() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plugin = Path(tmp) / "plg"
         plugin.mkdir()
-        (plugin / "main.py").write_text("x = 1\n")
-        (plugin / "requirements.txt").write_text("fastapi==0.136.0\n")
+        (plugin / "main.py").write_text("x = 1\n", encoding="utf-8")
+        (plugin / "requirements.txt").write_text("fastapi==0.136.0\n", encoding="utf-8")
         out = Path(tmp) / "sbom.cdx.json"
         _sbom.write_sbom(plugin, out, plugin_name="plg", plugin_version="0.1")
         t("output file created", out.exists())
@@ -293,7 +293,7 @@ def section_round_trip() -> None:
 
         # Bad SBOM
         bad = Path(tmp) / "bad.cdx.json"
-        bad.write_text(json.dumps({"bomFormat": "OtherFormat"}))
+        bad.write_text(json.dumps({"bomFormat": "OtherFormat"}), encoding="utf-8")
         try:
             _sbom.load_sbom(bad)
             t("non-CycloneDX rejected", False)
@@ -351,7 +351,7 @@ def section_audit_allow_list() -> None:
                      "forge" / "audit.jsonl")
             t("audit chain file created", audit.exists())
             if audit.exists():
-                lines = audit.read_text().splitlines()
+                lines = audit.read_text(encoding="utf-8").splitlines()
                 rec = json.loads(lines[0])
                 t("event_type recorded",
                   rec["event_type"] == "supply_chain.sbom_verified")

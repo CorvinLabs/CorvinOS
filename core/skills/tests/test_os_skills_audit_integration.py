@@ -28,7 +28,7 @@ def _records(path: Path, event_type: str) -> list[dict]:
     if not path.is_file():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             rec = json.loads(line)
             if rec.get("event_type") == event_type:
@@ -71,7 +71,7 @@ def test_skill_executed_is_chained_metadata_only(home: Path):
     assert len(d["input_hash"]) == 64 and len(d["output_hash"]) == 64
     assert d["error_type"] == "ValueError" and d["status"] == "error"
     assert d["latency_ms"] == 12
-    raw = chain.read_text()
+    raw = chain.read_text(encoding="utf-8")
     assert "alice" not in raw and "secret user text" not in raw
     ok_chain, problems = _verify(chain)
     assert ok_chain, problems
@@ -94,7 +94,7 @@ def test_feedback_and_config_update_are_chained(home: Path):
     assert fb[0]["details"]["feedback_type"] == "outcome"
     assert "signal" not in fb[0]["details"]
     assert len(fb[0]["details"]["signal_sha256"]) == 64
-    assert "1234567" not in chain.read_text()
+    assert "1234567" not in chain.read_text(encoding="utf-8")
     c = cu[0]["details"]
     assert (c["param_name"], c["old_value"], c["new_value"], c["reason_code"]) == (
         "confidence_threshold", 0.7, 0.65, "optimizer")
@@ -117,4 +117,4 @@ def test_context_manager_records_the_exception_type(home: Path):
     recs = _records(_chain(home), "skill.executed")
     assert len(recs) == 1
     assert recs[0]["details"]["error_type"] == "RuntimeError"
-    assert "boom" not in _chain(home).read_text()
+    assert "boom" not in _chain(home).read_text(encoding="utf-8")

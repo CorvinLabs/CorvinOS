@@ -189,7 +189,7 @@ class ContextDriftDeploymentValidator:
             full_path = self.repo_root / file_path
             if full_path.exists():
                 # Quick heuristic: check for untyped params
-                content = full_path.read_text()
+                content = full_path.read_text(encoding="utf-8")
                 # Look for "def.*():" without type hints
                 import re
                 untyped = re.findall(r'def\s+\w+\([^)]*:\s*[^=,)]*\):', content)
@@ -214,7 +214,7 @@ class ContextDriftDeploymentValidator:
         for file_path in files_to_check:
             full_path = self.repo_root / file_path
             if full_path.exists():
-                content = full_path.read_text()
+                content = full_path.read_text(encoding="utf-8")
                 # Check for module docstring
                 if not content.startswith('"""'):
                     return ValidationResult(
@@ -235,7 +235,7 @@ class ContextDriftDeploymentValidator:
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60, encoding="utf-8", errors="replace"
             )
             if "95%" in result.stdout or "9[5-9]%" in result.stdout or "100%" in result.stdout:
                 return ValidationResult(name="Test coverage", passed=True, details=">95% coverage verified")
@@ -261,7 +261,7 @@ class ContextDriftDeploymentValidator:
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30, encoding="utf-8", errors="replace"
             )
             if result.returncode == 0:
                 return ValidationResult(name="Linting (pylint)", passed=True, details="0 errors")
@@ -288,7 +288,7 @@ class ContextDriftDeploymentValidator:
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30, encoding="utf-8", errors="replace"
             )
             if "HIGH" not in result.stdout:
                 return ValidationResult(name="Security (bandit)", passed=True, details="0 HIGH vulnerabilities")

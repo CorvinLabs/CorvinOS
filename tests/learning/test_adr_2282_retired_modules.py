@@ -137,7 +137,7 @@ RETIRED_MODULES = frozenset(p.replace("/", ".") for p in RETIRED)
 
 def _tracked_production_files():
     out = subprocess.run(
-        ["git", "ls-files", "*.py"], cwd=REPO, capture_output=True, text=True, check=True
+        ["git", "ls-files", "*.py"], cwd=REPO, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace"
     ).stdout.splitlines()
     for rel in out:
         parts = rel.split("/")

@@ -34,8 +34,8 @@ MANIFEST = {"id": "nordwind.planned", "version": "1.0.0",
 def test_every_event_the_package_emits_is_registered():
     emitted = set()
     for f in PACKAGE.glob("*.py"):
-        emitted |= set(re.findall(r'_audit\(\s*"(layer_forge\.[a-z_]+)"', f.read_text()))
-        emitted |= set(re.findall(r'audit\.emit\(\s*"(layer_forge\.[a-z_]+)"', f.read_text()))
+        emitted |= set(re.findall(r'_audit\(\s*"(layer_forge\.[a-z_]+)"', f.read_text(encoding="utf-8")))
+        emitted |= set(re.findall(r'audit\.emit\(\s*"(layer_forge\.[a-z_]+)"', f.read_text(encoding="utf-8")))
     assert len(emitted) >= 10, f"the scan found only {sorted(emitted)} — the test would be vacuous"
     assert emitted <= set(audit.ALLOWED_FIELDS), sorted(emitted - set(audit.ALLOWED_FIELDS))
     assert emitted <= set(audit.SEVERITY)
@@ -51,7 +51,7 @@ def test_every_module_event_is_registered_centrally_with_the_same_fields():
 
 def _chain(home) -> list[dict]:
     p = Path(home) / "tenants" / T / "global" / "forge" / "audit.jsonl"
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
 
 
 def _fake_client(text: str | None = None, error: Exception | None = None):

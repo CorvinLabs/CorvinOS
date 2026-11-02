@@ -114,7 +114,7 @@ class PresenceCadenceTests(unittest.TestCase):
              mock.patch.object(ac.time, "time", lambda: clock["t"]):
             self.mgr._maintain_friendships()                 # first pass: hello + ping
             self.assertEqual(calls, ["hello", "ping"])
-            cfg = json.loads((self.O / "kid-presence.json").read_text())
+            cfg = json.loads((self.O / "kid-presence.json").read_text(encoding="utf-8"))
             self.assertEqual(ac.presence([cfg], clock["t"])["presence"], "online")
 
             clock["t"] += ac.PRESENCE_INTERVAL_S + 1          # ping due, hello not
@@ -122,7 +122,7 @@ class PresenceCadenceTests(unittest.TestCase):
             calls.clear()
             self.mgr._maintain_friendships()
             self.assertEqual(calls, ["ping"])
-            cfg = json.loads((self.E / "kid-presence.json").read_text())
+            cfg = json.loads((self.E / "kid-presence.json").read_text(encoding="utf-8"))
             self.assertEqual(ac.presence([cfg], clock["t"])["presence"], "offline")
 
             calls.clear()                                      # nothing due

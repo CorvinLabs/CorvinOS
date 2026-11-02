@@ -174,7 +174,7 @@ def load_vault(path: Path | None = None) -> dict[str, str]:
         return {}
     _check_mode(p)
     try:
-        raw = json.loads(p.read_text())
+        raw = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise VaultError(f"vault {p} is not valid JSON: {exc}") from exc
     if not isinstance(raw, dict):

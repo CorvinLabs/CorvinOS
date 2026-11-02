@@ -155,8 +155,8 @@ def test_rolling_window_keeps_last_3_and_preserves_constraint(isolated, monkeypa
 def test_live_surfaces_call_decision_capture():
     """Reachability: both live outbound surfaces actually CALL the capture hook
     (not merely import it) — proven against the real source, per e2e-wiring-proof."""
-    adapter = (_REPO / "corvin_operator" / "bridges" / "shared" / "adapter.py").read_text()
-    chat = (_REPO / "core" / "console" / "corvin_console" / "chat_runtime.py").read_text()
+    adapter = (_REPO / "corvin_operator" / "bridges" / "shared" / "adapter.py").read_text(encoding="utf-8")
+    chat = (_REPO / "core" / "console" / "corvin_console" / "chat_runtime.py").read_text(encoding="utf-8")
     assert "_cel_maybe_capture_decision(" in adapter, (
         "the bridge adapter must call the decision-capture hook on the outbound path")
     assert "_cel_capture_decision(" in chat, (

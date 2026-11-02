@@ -68,7 +68,7 @@ def _make_runs(root: Path, count: int) -> list[str]:
 def _cli(root: Path, *args: str) -> tuple[int, str]:
     proc = subprocess.run(
         [sys.executable, str(ROOT / "forge.py"), "--root", str(root), *args],
-        capture_output=True, text=True, cwd=str(ROOT),
+        capture_output=True, text=True, cwd=str(ROOT), encoding="utf-8", errors="replace",
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -79,7 +79,7 @@ def _cli_stdout(root: Path, *args: str) -> tuple[int, str]:
     must not pollute structured-data output."""
     proc = subprocess.run(
         [sys.executable, str(ROOT / "forge.py"), "--root", str(root), *args],
-        capture_output=True, text=True, cwd=str(ROOT),
+        capture_output=True, text=True, cwd=str(ROOT), encoding="utf-8", errors="replace",
     )
     return proc.returncode, proc.stdout
 
@@ -182,7 +182,7 @@ def test_sync_copies_promoted_skill_to_target():
         t("sync rc=0", rc == 0)
         skill = target / "doubler" / "SKILL.md"
         t("skill copied to target", skill.exists())
-        body = skill.read_text()
+        body = skill.read_text(encoding="utf-8")
         t("copied SKILL.md still has forge frontmatter",
           "promoted_from: forge" in body)
 
@@ -201,7 +201,7 @@ def test_sync_refuses_to_overwrite_non_forge_skill():
         d = target / "doubler"
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text(
-            "---\nname: doubler\ndescription: hand-written\n---\nbody\n"
+            "---\nname: doubler\ndescription: hand-written\n---\nbody\n", encoding="utf-8"
         )
         # Now create a forge skill with the same name
         reg = Registry(root)
@@ -212,7 +212,7 @@ def test_sync_refuses_to_overwrite_non_forge_skill():
         t("sync rc=0", rc == 0)
         t("output says refused", "refused" in out)
         # the hand-written file is still in place
-        body = (target / "doubler" / "SKILL.md").read_text()
+        body = (target / "doubler" / "SKILL.md").read_text(encoding="utf-8")
         t("hand-written body untouched", "hand-written" in body)
 
 

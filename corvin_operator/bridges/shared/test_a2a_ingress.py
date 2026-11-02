@@ -55,7 +55,7 @@ class TestConfig(unittest.TestCase):
     def test_file_and_env_overrides(self):
         p = ing.config_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"enabled": True, "port": 9100, "allow_public": True}))
+        p.write_text(json.dumps({"enabled": True, "port": 9100, "allow_public": True}), encoding="utf-8")
         cfg = ing.load_config()
         self.assertEqual((cfg.port, cfg.allow_public), (9100, True))
         os.environ["CORVIN_A2A_INGRESS"] = "off"
@@ -66,9 +66,9 @@ class TestConfig(unittest.TestCase):
     def test_garbage_config_falls_back_to_defaults(self):
         p = ing.config_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("{not json")
+        p.write_text("{not json", encoding="utf-8")
         self.assertEqual(ing.load_config().port, 8775)
-        p.write_text(json.dumps({"port": 70000}))
+        p.write_text(json.dumps({"port": 70000}), encoding="utf-8")
         self.assertEqual(ing.load_config().port, 8775)
 
 

@@ -238,7 +238,7 @@ def _llm_classify(task: str) -> ACSBlueprint:
         )
         proc = subprocess.run(
             cmd, capture_output=True, text=True,
-            timeout=LLM_TIMEOUT_S, check=False,
+            timeout=LLM_TIMEOUT_S, check=False, encoding="utf-8", errors="replace",
         )
         if proc.returncode != 0:
             return ACSBlueprint(primitive=PRIMITIVE_DIRECT, confidence=0.5,

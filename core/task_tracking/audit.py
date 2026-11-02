@@ -220,7 +220,7 @@ class AuditChainWriter:
             return
 
         try:
-            with open(self.chain_log_path, "r") as f:
+            with open(self.chain_log_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         data = json.loads(line)
@@ -278,7 +278,7 @@ class AuditChainWriter:
         self.chain_log_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Append JSON line with fsync
-        with open(self.chain_log_path, "a") as f:
+        with open(self.chain_log_path, "a", encoding="utf-8") as f:
             json.dump(asdict(event), f)
             f.write("\n")
             f.flush()
@@ -471,7 +471,7 @@ def verify_audit_chain(chain_path: Path, *, tenant_id: str) -> bool:
     prior_hash = "genesis"
 
     try:
-        with open(chain_path, "r") as f:
+        with open(chain_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 if not line.strip():
                     continue

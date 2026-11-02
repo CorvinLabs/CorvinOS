@@ -47,7 +47,7 @@ def _chain_stages(tenant_id: str) -> list[dict]:
     chain = fp.tenant_audit_chain(tenant_id)
     if not chain.exists():
         return []
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return [r for r in recs if r.get("event_type") == "video.autonomous_stage"]
 
 

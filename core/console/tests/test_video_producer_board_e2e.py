@@ -118,7 +118,7 @@ class BoardRoutesE2E(unittest.TestCase):
             self.assertEqual([x["details"].get("step_count") for x in upd], [3, 3, 0, 3])
             acc = _chain_records(home, "tenant_a", "video_producer.asset_accessed")
             self.assertIn("design", [x["details"]["purpose"] for x in acc])
-            chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text()
+            chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("Beispiel", chain)
             self.assertNotIn("Brand mark", chain)
             for rec in upd + acc:
@@ -130,7 +130,7 @@ class BoardRoutesE2E(unittest.TestCase):
             from corvin_console import chat_router
             from entity_extract import EntityPlan  # type: ignore[import-not-found]
 
-            owner = json.loads((store_dir / "asset.json").read_text())["uploaded_by"]
+            owner = json.loads((store_dir / "asset.json").read_text(encoding="utf-8"))["uploaded_by"]
             plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": owner}, confidence=1.0)
             # /erase asks for a one-time code first; take the one the router would have shown the user.
             plan.slots["confirm"] = chat_router._issue_erase_code("tenant_a", plan.slots["subject_id"])
@@ -197,7 +197,7 @@ class BoardVideoE2E(unittest.TestCase):
             self.assertEqual(d["status"], "complete", d)
             video = Path(d["video_output_path"])
             probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height",
-                                               "-of", "json", str(video)], capture_output=True, text=True, check=True).stdout)
+                                               "-of", "json", str(video)], capture_output=True, text=True, check=True, encoding="utf-8", errors="replace").stdout)
             self.assertIn({"codec_type": "video", "width": 1920, "height": 1080}, probe["streams"])
             storage = _plugin("storage").get_storage(str(home / "tenants" / "tenant_a" / "video_producer"))
             md = storage.get_video_output(job_id).metadata

@@ -536,7 +536,7 @@ def compress_for_upload(home: Path, date_str: str | None = None) -> Optional[Pat
     # about to read and delete.
     tmp = src.with_suffix(".jsonl.compressing")
     try:
-        src.rename(tmp)
+        src.replace(tmp)  # rename() fails on Windows on a leftover .compressing
     except OSError as e:
         logger.warning("htrace: compress rename failed: %s", e)
         return None

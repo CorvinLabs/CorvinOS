@@ -135,12 +135,12 @@ class FeedbackCollector:
 
         # Persist to JSONL (append-only)
         try:
-            with open(self.feedback_log, "a") as f:
+            with open(self.feedback_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record.to_dict()) + "\n")
 
             # Also save individual feedback file
             feedback_file = self.feedback_dir / f"{feedback_id}.json"
-            with open(feedback_file, "w") as f:
+            with open(feedback_file, "w", encoding="utf-8") as f:
                 json.dump(record.to_dict(), f, indent=2)
 
             logger.info(f"Feedback submitted: {feedback_id} for job {job_id}")
@@ -157,7 +157,7 @@ class FeedbackCollector:
             return records
 
         try:
-            with open(self.feedback_log, "r") as f:
+            with open(self.feedback_log, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

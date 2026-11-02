@@ -86,7 +86,7 @@ def _count_adrs() -> int:
 def _manifest_version() -> str:
     p = _compliance_dir() / "manifest-version.txt"
     if p.exists():
-        return p.read_text().strip()
+        return p.read_text(encoding="utf-8").strip()
     meta = _load_manifest_meta()
     return str(meta.get("version", "unknown"))
 
@@ -745,7 +745,7 @@ def cmd_export_package(args):
         from incident_tracker import export_incidents  # type: ignore
         incidents = export_incidents(tenant_id=args.tenant)
         incidents_path = audit_dir / "incidents-export.json"
-        incidents_path.write_text(json.dumps(incidents, indent=2, ensure_ascii=False))
+        incidents_path.write_text(json.dumps(incidents, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"  ✓ audit/incidents-export.json ({len(incidents)} records)")
     except Exception as exc:
         print(f"  ⚠ audit/incidents-export.json — {exc}")
@@ -772,10 +772,13 @@ def cmd_export_package(args):
     for p in sorted(out_dir.rglob("*")):
         if p.is_file() and p.name != "PACKAGE-SHA256.txt":
             digest = hashlib.sha256(p.read_bytes()).hexdigest()
-            rel = p.relative_to(out_dir)
+            # as_posix + newline="\n": the README tells auditors to run
+            # `sha256sum --check`, which reads "sub\file\r" from a package
+            # built on Windows as a missing file.
+            rel = p.relative_to(out_dir).as_posix()
             manifest_lines.append(f"{digest}  {rel}")
     manifest_txt = "\n".join(manifest_lines) + "\n"
-    (out_dir / "PACKAGE-SHA256.txt").write_text(manifest_txt, encoding="utf-8")
+    (out_dir / "PACKAGE-SHA256.txt").write_text(manifest_txt, encoding="utf-8", newline="\n")
     print(f"  ✓ PACKAGE-SHA256.txt ({len(manifest_lines)} files)")
 
     # README for certifier

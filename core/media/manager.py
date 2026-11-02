@@ -38,14 +38,14 @@ class MediaManager:
     def _load_manifest(self) -> MediaManifest:
         """Load manifest from disk"""
         if self.manifest_path.exists():
-            with open(self.manifest_path, "r") as f:
+            with open(self.manifest_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return MediaManifest.from_dict(data)
         return MediaManifest()
 
     def _save_manifest(self):
         """Persist manifest to disk"""
-        with open(self.manifest_path, "w") as f:
+        with open(self.manifest_path, "w", encoding="utf-8") as f:
             json.dump(self.manifest.to_dict(), f, indent=2)
 
     def upload(
@@ -228,7 +228,7 @@ class MediaManager:
                 str(file_path)
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
             if result.returncode == 0:
                 data = json.loads(result.stdout)
 

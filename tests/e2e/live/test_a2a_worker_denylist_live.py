@@ -78,7 +78,7 @@ def test_worker_with_no_grant_calls_no_denied_tool(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(spawn_gates, "check_l44", lambda *a, **kw: None)
 
     host_file = tmp_path / "outside_scratch.txt"
-    host_file.write_text(MARKER)
+    host_file.write_text(MARKER, encoding="utf-8")
     tool_uses: list[str] = []
     spawned: list[bool] = []
 
@@ -109,7 +109,7 @@ def test_worker_with_no_grant_calls_no_denied_tool(tmp_path: Path, monkeypatch):
     k_hmac, k_recv = secrets.token_hex(32), secrets.token_hex(32)
     cfg = {"origin_id": "req", "hmac_key": k_hmac, "recv_key": k_recv, "enabled": True, "max_ttl_s": 300,
            "allowed_personas": [], "spawn_worker": True}
-    (origins / "req.json").write_text(json.dumps(cfg))
+    (origins / "req.json").write_text(json.dumps(cfg), encoding="utf-8")
     (origins / "req.json").chmod(0o600)
     server = a2a_http_server.build_server(host="127.0.0.1", port=0, origins_dir=origins,
                                           engine_factory=lambda: _Recording(), instance_id="iid-live-receiver")
@@ -119,7 +119,7 @@ def test_worker_with_no_grant_calls_no_denied_tool(tmp_path: Path, monkeypatch):
         ep = {"endpoint_id": "peer", "url": f"http://{h}:{p}/v1/a2a/receive", "hmac_key": k_hmac,
               "recv_key": k_recv, "instance_id": "iid-live-receiver", "enabled": True, "default_ttl_s": 120,
               "our_origin_id": "req"}
-        (endpoints / "peer.json").write_text(json.dumps(ep))
+        (endpoints / "peer.json").write_text(json.dumps(ep), encoding="utf-8")
         (endpoints / "peer.json").chmod(0o600)
         sender = rts.RemoteTriggerSender(endpoints_dir=endpoints, instance_id="iid-live-sender")
         res = sender.send(

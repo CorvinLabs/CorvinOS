@@ -10,7 +10,7 @@ from pathlib import Path
 
 def parse_python_file(filepath):
     """Parse Python file and return AST"""
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding="utf-8") as f:
         return ast.parse(f.read())
 
 def get_class_methods(tree, classname):
@@ -154,7 +154,7 @@ def verify_implementation_completeness():
     print("\n[VERIFY] Implementation Completeness")
 
     filepath = Path(__file__).parent.parent / "core" / "learning" / "nine_d_loss.py"
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding="utf-8") as f:
         content = f.read()
 
     checks = [

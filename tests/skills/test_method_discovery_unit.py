@@ -290,7 +290,7 @@ class TestMethodDiscoveryEventHandling:
             task_id="t1", task_type="feature", task_complexity=3,
             skill_sequence=["/a", "/b"], skill_latencies_ms=[1, 2], outcome="success",
         )
-        records = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        records = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert any(r.get("event") == "learning.method.observation" or
                    r.get("event_type") == "learning.method.observation" for r in records)
 
@@ -374,7 +374,7 @@ class TestMethodDiscoveryEventHandling:
             skill_sequence=["/a", "/b"], skill_latencies_ms=[1, 2], outcome="success",
         )
         await md.discover()
-        snapshot = json.loads(md._patterns_file.read_text())
+        snapshot = json.loads(md._patterns_file.read_text(encoding="utf-8"))
         assert snapshot["tenant_id"] == TENANT
         assert len(snapshot["patterns"]) == 1
         assert "confidence_derivation" in snapshot["patterns"][0]

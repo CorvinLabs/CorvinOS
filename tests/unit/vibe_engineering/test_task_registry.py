@@ -238,7 +238,7 @@ async def test_registry_file_format_is_jsonl(temp_registry_path):
         await registry.append_task(task)
 
     # Read and verify JSONL format
-    with open(temp_registry_path, "r") as f:
+    with open(temp_registry_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     assert len(lines) == 3

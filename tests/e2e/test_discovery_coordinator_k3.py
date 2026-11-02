@@ -362,7 +362,7 @@ class TestE2ECompleteFlow:
         chain = fp.tenant_audit_chain("test-tenant")
         ok, issues = se.verify_chain(chain)
         assert ok, issues
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         types = [r["event_type"] for r in recs if r["event_type"].startswith("discovery.")]
         assert types == [
             "discovery.pairing_token_created",

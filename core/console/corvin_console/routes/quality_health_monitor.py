@@ -78,7 +78,7 @@ async def get_latest_metrics(session: Dict[str, Any] = Depends(require_session))
                 "status": "initializing"
             }
 
-        with open(metrics_path) as f:
+        with open(metrics_path, encoding="utf-8") as f:
             data = json.load(f)
 
         return data
@@ -149,7 +149,7 @@ async def get_quality_gates_report(session: Dict[str, Any] = Depends(require_ses
                 "status": "not_run"
             }
 
-        with open(gates_path) as f:
+        with open(gates_path, encoding="utf-8") as f:
             report = json.load(f)
 
         return {

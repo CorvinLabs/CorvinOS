@@ -24,7 +24,7 @@ class TestCLIEndToEnd:
         result = subprocess.run(
             ["python", "-m", "corvin_gateway.cli", "plugin", "install", "--help"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         assert result.returncode == 0
@@ -44,7 +44,7 @@ class TestCLIEndToEnd:
                 "https://github.com/user/plugin",
             ],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         assert result.returncode == 1
@@ -62,7 +62,7 @@ class TestCLIEndToEnd:
                 "/nonexistent/path/to/plugin",
             ],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         assert result.returncode == 1
@@ -83,7 +83,7 @@ version: 1.0.0
 origin: community
 plugin_type: data_connector
 boot_layer: installed
-"""
+""", encoding="utf-8"
         )
 
         # Mock the tenant config loading/saving
@@ -135,7 +135,7 @@ version: 0.1.0
 origin: community
 plugin_type: data_connector
 boot_layer: installed
-"""
+""", encoding="utf-8"
         )
 
         # Mock config operations
@@ -167,7 +167,7 @@ class_path: test_backend.notification:SlackNotifier
 config:
   webhook_url: "$SECRET_WEBHOOK_URL"
   channel: "#alerts"
-"""
+""", encoding="utf-8"
         )
 
         config = {"spec": {"plugins": {"installed": []}}}
@@ -201,7 +201,7 @@ setup(
     version="2.1.0",
     py_modules=["notification"],
 )
-"""
+""", encoding="utf-8"
         )
 
         config = {"spec": {"plugins": {"installed": []}}}
@@ -241,7 +241,7 @@ signature:
   algorithm: ed25519
   public_key: "AAAAC3NzaC1lZDI1NTE5AAAAIMqDWz2bUKBkWHEFhmefVMGEQzlp0Jc3EDX3UJL+IFSw"
   value: "invalid_signature_base64"
-"""
+""", encoding="utf-8"
         )
 
         config = {"spec": {"plugins": {"installed": []}}}
@@ -269,7 +269,7 @@ id: com.test.idempotent
 name: Idempotent Plugin
 plugin_type: data_connector
 version: 2.0.0
-"""
+""", encoding="utf-8"
         )
 
         # Config already has v1.0.0
@@ -313,7 +313,7 @@ id: com.test.no_force
 name: No Force Plugin
 plugin_type: data_connector
 version: 1.0.0
-"""
+""", encoding="utf-8"
         )
 
         config = {

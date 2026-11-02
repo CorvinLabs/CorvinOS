@@ -105,9 +105,9 @@ def bridge(tmp_path: Path, monkeypatch):
         (tmp_path / d).mkdir()
     settings_dir = home / "bridges" / "discord"
     settings_dir.mkdir(parents=True)
-    (settings_dir / "settings.json").write_text(json.dumps({"whitelist": [OPERATOR]}))
+    (settings_dir / "settings.json").write_text(json.dumps({"whitelist": [OPERATOR]}), encoding="utf-8")
     shared_settings = tmp_path / "shared-settings.json"
-    shared_settings.write_text(json.dumps({"always_voice": False, "voice_summary_mode": "never"}))
+    shared_settings.write_text(json.dumps({"always_voice": False, "voice_summary_mode": "never"}), encoding="utf-8")
     shim = _write_shim(tmp_path, real_claude)
 
     for k in ("VOICE_AUDIT_PATH", "FORGE_ROOT", "ADAPTER_BRIDGES_DIR", "ADAPTER_FAKE_CLAUDE",
@@ -149,20 +149,20 @@ def bridge(tmp_path: Path, monkeypatch):
         f = tmp_path / "inbox" / f"{msg_id}.json"
         f.write_text(json.dumps(env), encoding="utf-8")
         t0 = time.monotonic()
-        adapter.process_one(f, settings=json.loads(shared_settings.read_text()))
+        adapter.process_one(f, settings=json.loads(shared_settings.read_text(encoding="utf-8")))
         elapsed = time.monotonic() - t0
-        outs = [json.loads(p.read_text()) for p in sorted((tmp_path / "outbox").glob("*.json"))]
+        outs = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((tmp_path / "outbox").glob("*.json"))]
         replies = [o for o in outs if str(o.get("chat_id")) == CHAT and not o.get("_progress")
                    and not o.get("_heartbeat") and (o.get("text") or "").strip()]
-        events = ([json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        events = ([json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
                   if chain.exists() else [])
-        probes = ([json.loads(l) for l in (tmp_path / "probe.jsonl").read_text().splitlines()]
+        probes = ([json.loads(l) for l in (tmp_path / "probe.jsonl").read_text(encoding="utf-8").splitlines()]
                   if (tmp_path / "probe.jsonl").exists() else [])
         tasks = []
         for p in home.rglob("tasks/*.json"):
-            rec = json.loads(p.read_text())
+            rec = json.loads(p.read_text(encoding="utf-8"))
             evf = Path(str(p)[:-5] + ".events.jsonl")
-            rec["_events"] = ([json.loads(l) for l in evf.read_text().splitlines() if l.strip()]
+            rec["_events"] = ([json.loads(l) for l in evf.read_text(encoding="utf-8").splitlines() if l.strip()]
                               if evf.exists() else [])
             tasks.append(rec)
         print(f"\n[live] turn {msg_id}: {elapsed:.1f}s, replies={[r.get('text') for r in replies]!r}")
@@ -246,7 +246,7 @@ def test_turn_task_opened_at_pickup_and_priced_span(bridge, monkeypatch):
     assert rows[HAIKU]["output_tokens"] > 0, f"turn counted but unpriced (0 tokens): {rows[HAIKU]}"
 
     # metadata-only chain
-    raw = r["chain"].read_text()
+    raw = r["chain"].read_text(encoding="utf-8")
     assert "exactly the single word PONG" not in raw, "prompt text leaked into the audit chain"
     assert OPERATOR not in raw, "raw platform uid leaked into the audit chain"
 

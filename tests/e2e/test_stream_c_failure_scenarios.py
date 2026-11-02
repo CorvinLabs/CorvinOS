@@ -223,12 +223,12 @@ Missing id field.
         ]
 
         # Write audit chain
-        with open(audit_file, "w") as f:
+        with open(audit_file, "w", encoding="utf-8") as f:
             for event in events:
                 f.write(json.dumps(event) + "\n")
 
         # Corrupt the middle event's hash
-        with open(audit_file, "w") as f:
+        with open(audit_file, "w", encoding="utf-8") as f:
             f.write(json.dumps({"event_id": "1", "hash": "abc123", "prev_hash": None}) + "\n")
             f.write(json.dumps({"event_id": "2", "hash": "CORRUPTED", "prev_hash": "abc123"}) + "\n")
             f.write(json.dumps({"event_id": "3", "hash": "ghi789", "prev_hash": "def456"}) + "\n")
@@ -394,7 +394,7 @@ Missing id field.
             return {"valid": False, "tripwire_fired": True}
 
         try:
-            with open(audit_file, "r") as f:
+            with open(audit_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         events.append(json.loads(line))

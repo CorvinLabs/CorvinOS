@@ -36,7 +36,7 @@ _KG = "plugin:buildin-knowledge_management-corvin_knowledge"
 
 def _kb(repo: Path, *args) -> dict:
     r = subprocess.run([sys.executable, str(repo / "scripts" / "kb.py"), "--repo", str(repo), *map(str, args)],
-                       capture_output=True, text=True, env={**os.environ, "KB_ACTOR": "human:operator"})
+                       capture_output=True, text=True, env={**os.environ, "KB_ACTOR": "human:operator"}, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise AssertionError(f"kb {args} -> {r.returncode}\n{r.stdout}\n{r.stderr}")
     return json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
@@ -122,7 +122,7 @@ class TenantKnowledgeBaseBinding(unittest.TestCase):
             check = self.tmp / "check.json"
             subprocess.run([sys.executable, str(kb / "scripts" / "kb.py"), "--repo", str(kb), "check",
                             "--json", str(check)], capture_output=True)
-            gates = {k for k in json.loads(check.read_text())["issues"] if k.startswith("G")}
+            gates = {k for k in json.loads(check.read_text(encoding="utf-8"))["issues"] if k.startswith("G")}
             self.assertNotIn("G1_no_concept", gates)
             self.assertIn("G2_no_backedge", gates)
 

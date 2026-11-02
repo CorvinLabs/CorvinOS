@@ -26,7 +26,7 @@ def plugin_manifest():
     manifest_path = MARKETPLACE / "plugins/contributor/media/video_producer/plugin.json"
     if not manifest_path.exists():
         pytest.skip("Plugin manifest not found")
-    with open(manifest_path) as f:
+    with open(manifest_path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -70,7 +70,7 @@ def test_videoproducerpage_removed_from_console():
     ``console_panels`` yet, so until that loader exists ``/app/video-producer``
     has no route. The removal is main's migration direction; this pins it.
     """
-    content = (REPO / "core/console/corvin_console/web-next/src/panels/registry.tsx").read_text()
+    content = (REPO / "core/console/corvin_console/web-next/src/panels/registry.tsx").read_text(encoding="utf-8")
     assert 'rc("video-producer"' not in content
     assert "VideoQualityMetricsPage" not in content
 

@@ -42,7 +42,7 @@ _REPO = Path(__file__).resolve().parent.parent
 def _git_tracked(path: str) -> bool:
     result = subprocess.run(
         ["git", "ls-files", "--error-unmatch", path],
-        cwd=_REPO, capture_output=True, text=True,
+        cwd=_REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     return result.returncode == 0
 
@@ -85,7 +85,7 @@ class TestRealWheelContent:
         cls._tmpdir = tempfile.TemporaryDirectory(prefix="corvinos-wheel-build-")
         result = subprocess.run(
             ["uv", "build", "--wheel", "--out-dir", cls._tmpdir.name],
-            cwd=_REPO, capture_output=True, text=True, timeout=300,
+            cwd=_REPO, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace",
         )
         cls._build_result = result
         cls._wheel_path = None
@@ -149,12 +149,12 @@ class TestRealWheelContent:
                 venv_python = Path(venv_dir) / "Scripts" / "python.exe"
             install = subprocess.run(
                 [str(venv_python), "-m", "pip", "install", "--no-deps", "--quiet", str(self._wheel_path)],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
             )
             assert install.returncode == 0, install.stdout + install.stderr
             check = subprocess.run(
                 [str(venv_python), "-c", "from ops.launcher.corvin.cli import main; print('OK')"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
             )
             assert check.returncode == 0, check.stdout + check.stderr
             assert "OK" in check.stdout

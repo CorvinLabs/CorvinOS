@@ -321,7 +321,7 @@ def run_pip_audit(
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True,
-            timeout=timeout_s, check=False,
+            timeout=timeout_s, check=False, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         return ([], "pip-audit-missing")
@@ -439,7 +439,7 @@ def _save_critical_snapshot(keys: set[str]) -> None:
     p = _critical_snapshot_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"keys": sorted(keys),
-                              "ts": time.time()}, indent=2))
+                              "ts": time.time()}, indent=2), encoding="utf-8")
     os.chmod(p, 0o600)
 
 

@@ -155,7 +155,7 @@ class EnforcementChecker:
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
-                timeout=self.timeout_s,
+                timeout=self.timeout_s, encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired:
             raise LayerBoundaryViolationError("mypy check timed out")

@@ -568,7 +568,7 @@ def audit_health_check(path: Path | None = None) -> tuple[bool, int]:
         # wrong for this specific cross-process case) rather than a second,
         # POSIX-only implementation here.
         if target.exists():
-            with target.open("r") as _lf:
+            with target.open("r", encoding="utf-8") as _lf:
                 _se._lock_chain(_lf, shared=True)
                 ok, problems = _se.verify_chain(target)
                 _se._unlock_chain(_lf)

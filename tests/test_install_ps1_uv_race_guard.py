@@ -90,7 +90,7 @@ $matched | ForEach-Object {{ Write-Output $_.Tag }}
         try:
             result = subprocess.run(
                 ["pwsh", "-NoProfile", "-File", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout
@@ -169,7 +169,7 @@ $matched | ForEach-Object {{ Write-Output $_.Tag }}
         try:
             result = subprocess.run(
                 ["pwsh", "-NoProfile", "-File", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout
@@ -265,7 +265,7 @@ $OutPath = "/tmp/corvin_supervisor_generated_test.ps1"
         try:
             result = subprocess.run(
                 ["pwsh", "-NoProfile", "-File", str(harness_path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue(out_path.exists(), "harness did not write the generated supervisor script")
@@ -277,7 +277,7 @@ if ($errs.Count -gt 0) {{ $errs | ForEach-Object {{ Write-Host $_.Message }}; ex
 """
             parse_result = subprocess.run(
                 ["pwsh", "-NoProfile", "-Command", parse_check],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace",
             )
             self.assertEqual(parse_result.returncode, 0, parse_result.stdout + parse_result.stderr)
 

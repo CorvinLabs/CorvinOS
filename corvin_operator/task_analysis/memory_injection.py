@@ -122,7 +122,7 @@ class MemoryLinker:
 
         for adr_file in self.adr_root.glob("*.md"):
             try:
-                content = adr_file.read_text()
+                content = adr_file.read_text(encoding="utf-8")
                 if not content:
                     continue
 
@@ -195,7 +195,7 @@ class MemoryLinker:
 
         for memory_file in self.memory_root.glob("*.md"):
             try:
-                content = memory_file.read_text()
+                content = memory_file.read_text(encoding="utf-8")
                 if not content:
                     continue
 

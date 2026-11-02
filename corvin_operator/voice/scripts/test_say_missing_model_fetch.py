@@ -22,7 +22,7 @@ def env(tmp_path, monkeypatch):
     cfg_dir = tmp_path / "cfg"
     cfg_dir.mkdir()
     (cfg_dir / "config.json").write_text(json.dumps({
-        "piper_model_en": str(models / "en_US-lessac-medium.onnx"), "lang_default": "en"}))
+        "piper_model_en": str(models / "en_US-lessac-medium.onnx"), "lang_default": "en"}), encoding="utf-8")
     monkeypatch.setattr(say, "_PIPER_MODEL_DIR", models)
     monkeypatch.setattr(say, "VOICE_CONFIG_DIR", cfg_dir)
     for var in list(say.os.environ):

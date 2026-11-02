@@ -40,7 +40,7 @@ def test_beeps_land_on_their_own_scene(tmp_path):
     assert total == pytest.approx(sum(ds) + 2 * t, abs=0.08)
 
     r = subprocess.run(["ffmpeg", "-i", out, "-af", "silencedetect=n=-30dB:d=0.1", "-f", "null", "-"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     onsets = [float(l.split("silence_end: ")[1].split()[0]) for l in r.stderr.splitlines() if "silence_end" in l]
     starts = [sum(ds[:i]) + i * t for i in range(3)]
     assert len(onsets) >= 3

@@ -46,7 +46,7 @@ def _install_fake_summarizer(tmp: Path) -> tuple[Path, Path]:
         "import json, sys\n"
         f"open({json.dumps(str(argv_dump))}, 'w').write("
         "json.dumps(sys.argv[1:]))\n"
-        "print('LLM_FALLBACK_SUMMARY')\n"
+        "print('LLM_FALLBACK_SUMMARY')\n", encoding="utf-8"
     )
     fake_summarize.chmod(0o755)
 
@@ -54,7 +54,7 @@ def _install_fake_summarizer(tmp: Path) -> tuple[Path, Path]:
     fake_stripper.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        "sys.stdout.write(sys.stdin.read())\n"
+        "sys.stdout.write(sys.stdin.read())\n", encoding="utf-8"
     )
     fake_stripper.chmod(0o755)
 

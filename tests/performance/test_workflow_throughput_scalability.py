@@ -219,7 +219,7 @@ class TestSteadyStateThroughput:
         output_path = Path("results/throughput_baseline.json")
         output_path.parent.mkdir(exist_ok=True, parents=True)
 
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
         assert output_path.exists()

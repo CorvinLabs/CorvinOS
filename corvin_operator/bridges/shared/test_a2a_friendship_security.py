@@ -202,7 +202,7 @@ class TestAckSenderBinding(_Sandbox):
         status, _ = self.ack(tok, "http://10.0.0.2:8765")
         self.assertEqual(status, 200)
         for d in (self.od, self.ed):
-            self.assertEqual(json.loads((d / f"{tok.kid}.json").read_text())["_peer_instance_id"], IID_B)
+            self.assertEqual(json.loads((d / f"{tok.kid}.json").read_text(encoding="utf-8"))["_peer_instance_id"], IID_B)
 
     def test_second_token_holder_cannot_rewrite_the_url(self):
         tok = self.issue()
@@ -251,7 +251,7 @@ class TestAckSenderBinding(_Sandbox):
         tok = self.issue()
         self.assertEqual(self.ack(tok, "http://10.0.0.2:8765", sender=None)[0], 200)
         self.assertEqual(self.ack(tok, "http://10.0.0.2:8765")[0], 200)   # keep-alive, no bind
-        self.assertNotIn("_peer_instance_id", json.loads((self.od / f"{tok.kid}.json").read_text()))
+        self.assertNotIn("_peer_instance_id", json.loads((self.od / f"{tok.kid}.json").read_text(encoding="utf-8")))
         self.assertEqual(self.ack(tok, "http://10.0.0.4:8765")[0], 403)   # unbound: no move
         # Our own hello's recv_key-verified response binds the peer ...
         self.assertTrue(ft.remember_peer_instance_id(tok.kid, IID_B, endpoints_dir=self.ed,
@@ -268,7 +268,7 @@ class TestAckSenderBinding(_Sandbox):
         status, resp = self.ack(tok, "http://10.0.0.66:8765", sender=IID_C)
         self.assertEqual((status, resp), (403, {"reason": "ack_peer_unbound"}))
         self.assertEqual(self.endpoint_url(tok.kid), "http://10.0.0.2:8765/v1/a2a/receive")
-        self.assertNotIn("_peer_instance_id", json.loads((self.od / f"{tok.kid}.json").read_text()))
+        self.assertNotIn("_peer_instance_id", json.loads((self.od / f"{tok.kid}.json").read_text(encoding="utf-8")))
 
     def test_tampered_sender_id_fails_the_v2_signature(self):
         tok = self.issue()
@@ -487,7 +487,7 @@ class TestPairingAudit(_Sandbox):
             self.skipTest("no hash-chained writer (forge) in this environment")
         tok = self.issue()
         self.assertEqual(self.ack(tok, "http://10.0.0.2:8765")[0], 200)
-        recs = [json.loads(line) for line in self.audit_file.read_text().splitlines() if line.strip()]
+        recs = [json.loads(line) for line in self.audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
         paired = [r for r in recs if r.get("event") == "A2A.friendship_paired"
                   or r.get("event_type") == "A2A.friendship_paired"]
         self.assertEqual(len(paired), 1, recs)
@@ -571,7 +571,7 @@ class TestRevokeNotice(unittest.TestCase):
                          (self.endpoints, {"endpoint_id": self.kid, "url": ""})):
             (d / f"{self.kid}.json").write_text(json.dumps({
                 "hmac_key": self.key, "recv_key": "cd" * 32, "_friendship": True,
-                "_peer_knows_us": True, "_peer_reports_reachable": True, **extra}))
+                "_peer_knows_us": True, "_peer_reports_reachable": True, **extra}), encoding="utf-8")
 
     def _notice(self, sender="peer-instance-0001", issued_at=None, key=None):
         import hmac as _h
@@ -586,7 +586,7 @@ class TestRevokeNotice(unittest.TestCase):
             req, pending_dir=self.tmp / "p", origins_dir=self.origins, endpoints_dir=self.endpoints)
 
     def _flags(self):
-        return [json.loads((d / f"{self.kid}.json").read_text())["_peer_knows_us"]
+        return [json.loads((d / f"{self.kid}.json").read_text(encoding="utf-8"))["_peer_knows_us"]
                 for d in (self.origins, self.endpoints)]
 
     def test_valid_notice_marks_the_peer_as_gone(self):
@@ -600,9 +600,9 @@ class TestRevokeNotice(unittest.TestCase):
             self.assertEqual(self._process(self._notice(key="ef" * 32))[0], 403)
             self.assertEqual(self._process(self._notice(issued_at=int(time.time()) - 3600))[0], 403)
             self.assertEqual(self._process(self._notice(sender="me-instance-0002"))[0], 400)
-            cfg = json.loads((self.origins / f"{self.kid}.json").read_text())
+            cfg = json.loads((self.origins / f"{self.kid}.json").read_text(encoding="utf-8"))
             cfg["_peer_instance_id"] = "bound-peer-0003"
-            (self.origins / f"{self.kid}.json").write_text(json.dumps(cfg))
+            (self.origins / f"{self.kid}.json").write_text(json.dumps(cfg), encoding="utf-8")
             self.assertEqual(self._process(self._notice(sender="someone-else-04"))[0], 403)
         self.assertEqual(self._flags(), [True, True])
 
@@ -656,8 +656,8 @@ class TestUrlLessImportActivation(_Sandbox):
         origin["_peer_instance_id"] = endpoint["_peer_instance_id"] = IID_B  # bound at import
         if operator_disabled:
             origin["_operator_disabled"] = True
-        (self.od / f"{tok.kid}.json").write_text(json.dumps(origin))
-        (self.ed / f"{tok.kid}.json").write_text(json.dumps(endpoint))
+        (self.od / f"{tok.kid}.json").write_text(json.dumps(origin), encoding="utf-8")
+        (self.ed / f"{tok.kid}.json").write_text(json.dumps(endpoint), encoding="utf-8")
         return tok
 
     def _hello(self, tok, sender=IID_B):
@@ -669,20 +669,20 @@ class TestUrlLessImportActivation(_Sandbox):
     def test_bound_issuer_hello_activates_the_pending_connection(self):
         tok = self._redeemer_side()
         self.assertEqual(self._hello(tok)[0], 200)
-        o = json.loads((self.od / f"{tok.kid}.json").read_text())
-        e = json.loads((self.ed / f"{tok.kid}.json").read_text())
+        o = json.loads((self.od / f"{tok.kid}.json").read_text(encoding="utf-8"))
+        e = json.loads((self.ed / f"{tok.kid}.json").read_text(encoding="utf-8"))
         self.assertTrue(o["enabled"] and e["enabled"])
         self.assertEqual((o["state"], e["url"]), ("ACTIVE", "http://10.0.0.7:8765/v1/a2a/receive"))
 
     def test_operator_disabled_connection_is_never_activated_by_a_peer(self):
         tok = self._redeemer_side(operator_disabled=True)
         self.assertEqual(self._hello(tok)[0], 403)
-        self.assertFalse(json.loads((self.od / f"{tok.kid}.json").read_text())["enabled"])
+        self.assertFalse(json.loads((self.od / f"{tok.kid}.json").read_text(encoding="utf-8"))["enabled"])
 
     def test_other_sender_cannot_activate(self):
         tok = self._redeemer_side()
         self.assertEqual(self._hello(tok, sender=IID_C)[0], 403)
-        self.assertFalse(json.loads((self.od / f"{tok.kid}.json").read_text())["enabled"])
+        self.assertFalse(json.loads((self.od / f"{tok.kid}.json").read_text(encoding="utf-8"))["enabled"])
 
 
 class TestTokenRelayAdoption(_Sandbox):
@@ -698,7 +698,7 @@ class TestTokenRelayAdoption(_Sandbox):
         with mock.patch.object(ft, "my_relay_url_is_explicit", return_value=False), \
              mock.patch.object(ft, "get_my_relay_url", return_value="wss://8.8.4.4/relay"), \
              mock.patch.object(ft, "set_my_relay_url") as setter:
-            (self.ed / "other.json").write_text(json.dumps({"_friendship": True}))
+            (self.ed / "other.json").write_text(json.dumps({"_friendship": True}), encoding="utf-8")
             self.assertEqual(ft.adopt_token_relay("wss://8.8.8.8/relay", endpoints_dir=self.ed,
                                                   exclude_kid="new"), "kept_existing")
             (self.ed / "other.json").unlink()

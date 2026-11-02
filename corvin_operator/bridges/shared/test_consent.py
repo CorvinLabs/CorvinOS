@@ -49,7 +49,7 @@ class ConsentStoreCorruptionTests(unittest.TestCase):
 
         store_path = self._store_path(channel, chat_key)
         store_path.parent.mkdir(parents=True, exist_ok=True)
-        store_path.write_text("{ this is not valid JSON !!!")
+        store_path.write_text("{ this is not valid JSON !!!", encoding="utf-8")
 
         granted, reason = consent.is_granted(channel, chat_key, uid)
 
@@ -73,7 +73,7 @@ class ConsentStoreCorruptionTests(unittest.TestCase):
 
         store_path = self._store_path(channel, chat_key)
         store_path.parent.mkdir(parents=True, exist_ok=True)
-        store_path.write_text("NOT JSON AT ALL")
+        store_path.write_text("NOT JSON AT ALL", encoding="utf-8")
 
         consent.is_granted(channel, chat_key, uid)
 
@@ -89,7 +89,7 @@ class ConsentStoreCorruptionTests(unittest.TestCase):
 
         store_path = self._store_path(channel, chat_key)
         store_path.parent.mkdir(parents=True, exist_ok=True)
-        store_path.write_text("{invalid}")
+        store_path.write_text("{invalid}", encoding="utf-8")
 
         # First call: handles corruption.
         consent.is_granted(channel, chat_key, uid)
@@ -136,7 +136,7 @@ class ConsentStoreCorruptionTests(unittest.TestCase):
                 "channel": channel,
                 "granted_via": "slash",
             }
-        }))
+        }), encoding="utf-8")
 
         granted, reason = consent.is_granted(channel, chat_key, uid_absent)
 
@@ -172,7 +172,7 @@ class ConsentStoreCorruptionTests(unittest.TestCase):
                 "channel": channel,
                 "granted_via": "slash",
             }
-        }))
+        }), encoding="utf-8")
 
         granted, reason = consent.is_granted(channel, chat_key, uid)
 
@@ -262,7 +262,7 @@ class ConsentStoreTypeConfusionTests(unittest.TestCase):
                 "channel": channel,
                 "granted_via": "slash",
             }
-        }))
+        }), encoding="utf-8")
 
         with self.assertRaises(TypeError):
             consent.is_granted(channel, chat_key, uid)
@@ -287,7 +287,7 @@ class ConsentStoreTypeConfusionTests(unittest.TestCase):
                 "channel": channel,
                 "granted_via": "slash",
             }
-        }))
+        }), encoding="utf-8")
 
         with self.assertRaises(TypeError):
             consent.is_granted(channel, chat_key, uid)
@@ -320,7 +320,7 @@ class ConsentAuditRegistrationTests(unittest.TestCase):
         path = Path(self._tmp) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
         if not path.exists():
             return []
-        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     def _last(self, event_type: str) -> dict:
         matches = [r for r in self._read_chain() if r.get("event_type") == event_type]

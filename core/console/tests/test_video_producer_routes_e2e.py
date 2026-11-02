@@ -119,14 +119,14 @@ def _finish_job(home: Path, tenant: str, job_id: str, status: str = "complete", 
 
 
 def _chain_text(home: Path) -> str:
-    return "\n".join(f.read_text() for f in home.rglob("audit.jsonl"))
+    return "\n".join(f.read_text(encoding="utf-8") for f in home.rglob("audit.jsonl"))
 
 
 def _write_tenant_yaml(home: Path, tenant: str, spec: dict) -> None:
     path = home / "tenants" / tenant / "global" / "tenant.corvin.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         yaml.safe_dump({"spec": spec}, f)
 
 
@@ -257,7 +257,7 @@ class VideoProducerRoutesE2E(unittest.TestCase):
         storage = mod._get_storage(str(home / "tenants" / tenant / "video_producer"))
         report = Path(storage.videos_dir) / job_id / "report.json"
         report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(json.dumps({"job_id": job_id, "scenes": [{"tts_tier": tier}]}))
+        report.write_text(json.dumps({"job_id": job_id, "scenes": [{"tts_tier": tier}]}), encoding="utf-8")
         for i, rating in enumerate(ratings):
             r = client.post(f"/v1/console/video/jobs/{job_id}/feedback",
                             json={"scene_id": f"s{i:02d}", "rating": rating}, headers={"X-CSRF-Token": csrf})
@@ -402,7 +402,7 @@ class VideoProducerRoutesE2E(unittest.TestCase):
 
             # the free-text reason is nowhere at rest — not in events, not on the chain
             at_rest = _chain_text(home) + "".join(
-                p.read_text(errors="replace") for p in (home / "tenants").rglob("*") if p.is_file()
+                p.read_text(errors="replace", encoding="utf-8") for p in (home / "tenants").rglob("*") if p.is_file()
                 and p.suffix in (".jsonl", ".json"))
             self.assertNotIn("alice@example.com", at_rest)
             self.assertNotIn("contact me", at_rest)
@@ -515,7 +515,7 @@ class VideoProducerRoutesE2E(unittest.TestCase):
         from unittest import mock
 
         fake = self._tmp / "claude"
-        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         fake.chmod(0o755)
         with _sandbox(self._tmp) as (client, csrf, home, _clients), \
                 mock.patch.dict(os.environ, {"CORVIN_CLAUDE_BIN": str(fake)}):

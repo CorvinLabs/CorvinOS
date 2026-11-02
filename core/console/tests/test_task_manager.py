@@ -302,7 +302,7 @@ def test_event_log_format(tm, tasks_dir):
     assert events_path.exists()
 
     # Verify it's valid JSONL (each line is valid JSON)
-    with open(events_path) as f:
+    with open(events_path, encoding="utf-8") as f:
         for i, line in enumerate(f):
             try:
                 event = json.loads(line)

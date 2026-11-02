@@ -108,7 +108,7 @@ class PluginScanner:
 
     def _extract_metadata(self, manifest_path: Path) -> PluginMetadata:
         """Parse manifest.json and extract metadata"""
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         required_fields = [
             "plugin_id", "version", "plugin_type", "display_name",
@@ -249,7 +249,7 @@ class PluginScanner:
             }
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(inventory_data, indent=2))
+        output_path.write_text(json.dumps(inventory_data, indent=2), encoding="utf-8")
 
         print(f"✓ Generated: {output_path}")
         print(f"  Plugins discovered: {total_plugins}")

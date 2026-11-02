@@ -87,10 +87,10 @@ def __atomic_append_to_queue_file(queue_file: Path, record_dict: Dict) -> bool:
             temp_file.unlink()
 
         # Write: copy existing + append new
-        with open(temp_file, "w") as temp_f:
+        with open(temp_file, "w", encoding="utf-8") as temp_f:
             # Copy existing records
             if queue_file.exists():
-                with open(queue_file, "r") as existing_f:
+                with open(queue_file, "r", encoding="utf-8") as existing_f:
                     temp_f.write(existing_f.read())
 
             # Append new record
@@ -100,7 +100,7 @@ def __atomic_append_to_queue_file(queue_file: Path, record_dict: Dict) -> bool:
             os.fsync(temp_f.fileno())
 
         # Atomic rename
-        os.rename(str(temp_file), str(queue_file))
+        os.replace(str(temp_file), str(queue_file))  # rename fails on Windows if target exists
         return True
 
     except Exception as e:
@@ -191,9 +191,17 @@ class ExclusiveQueueLock:
                 return False
 
             # Read PID from lock file
-            pid = int(lock_file.read_text().strip())
+            pid = int(lock_file.read_text(encoding="utf-8").strip())
 
             # Try to signal process (0 = check if alive)
+            if os.name == "nt":
+                # Signal 0 is CTRL_C_EVENT on Windows, not an existence probe: it reports a
+                # live holder (this very process, another thread) as gone and the lock is stolen.
+                try:
+                    from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415
+                except ImportError:
+                    return False  # cannot tell -> assume alive, never steal
+                return not _os_pid_exists(pid)
             os.kill(pid, 0)
             return False  # Process alive
 
@@ -361,13 +369,13 @@ class AggregatorCheckpoint:
         temp_file = self.checkpoint_file.with_suffix(".tmp")
         try:
             # Write to temp with fsync
-            with open(temp_file, "w") as f:
+            with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
 
             # Atomic rename
-            os.rename(str(temp_file), str(self.checkpoint_file))
+            os.replace(str(temp_file), str(self.checkpoint_file))
             logger.debug(f"Checkpoint saved: {state}")
             return True
 
@@ -384,7 +392,7 @@ class AggregatorCheckpoint:
         """Load last checkpoint state."""
         try:
             if self.checkpoint_file.exists():
-                with open(self.checkpoint_file, "r") as f:
+                with open(self.checkpoint_file, "r", encoding="utf-8") as f:
                     return json.load(f)
         except Exception as e:
             logger.error(f"Checkpoint load failed: {e}")
@@ -481,7 +489,7 @@ class IntegrationAggregator:
                     # Skip this file entirely to prevent processing post-window data
                     pass  # Records remain empty
                 else:
-                    with open(queue_file, "r") as f:
+                    with open(queue_file, "r", encoding="utf-8") as f:
                         for line_no, line in enumerate(f, 1):
                             line = line.strip()
                             if not line:
@@ -519,7 +527,7 @@ class IntegrationAggregator:
 
             # Step 6: Atomically update symlink
             profile_file = self.profile_dir / f"tenant-baseline.v{new_profile['version']}.json"
-            profile_file.write_text(json.dumps(new_profile, indent=2))
+            profile_file.write_text(json.dumps(new_profile, indent=2), encoding="utf-8")
 
             success = AtomicSymlinkManager.atomic_symlink_update(
                 self.profile_dir, "tenant-baseline", new_profile["version"]
@@ -667,7 +675,7 @@ class AtomicSymlinkManager:
 
             if use_symlink:
                 # Unix/Linux/macOS: Use atomic symlink rename
-                os.rename(str(temp_symlink), str(symlink_path))
+                os.replace(str(temp_symlink), str(symlink_path))
                 logger.info(f"Profile updated (symlink)")
             else:
                 # MEDIUM FIX M2 + CODE REVIEW I6-3: Windows fallback with cleanup on failure
@@ -677,7 +685,7 @@ class AtomicSymlinkManager:
                     try:
                         # Copy the profile file to the "current" name atomically
                         shutil.copy2(str(profile_file), str(temp_symlink))
-                        os.rename(str(temp_symlink), str(symlink_path))
+                        os.replace(str(temp_symlink), str(symlink_path))
                         logger.info(f"Atomically updated profile (file-copy fallback)")
                     except Exception as copy_err:
                         # K=8 Polish: Use extracted cleanup method

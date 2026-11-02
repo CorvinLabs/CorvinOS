@@ -53,7 +53,7 @@ def sample_registry():
 @pytest.fixture
 def marketplace(sample_registry):
     """Fixture: Create SkillMarketplaceIndex with sample registry."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
         json.dump(sample_registry, f)
         registry_path = f.name
 

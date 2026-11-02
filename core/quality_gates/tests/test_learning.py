@@ -348,7 +348,7 @@ class TestBayesianGateTuner:
             assert os.path.exists(path)
 
             # Verify checkpoint content
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding="utf-8") as f:
                 checkpoint = json.load(f)
 
             assert checkpoint["tenant_id"] == "test-tenant"

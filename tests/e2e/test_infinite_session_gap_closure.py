@@ -228,7 +228,7 @@ def test_audit_trail_context_recovered(event_store, crypto_binding, session_brid
     # (The audit_callback in resume_from_bridge() should emit this)
     audit_path = event_store.root_dir / "audit.jsonl"
     if audit_path.exists():
-        with open(audit_path) as f:
+        with open(audit_path, encoding="utf-8") as f:
             lines = f.readlines()
 
         # Find session_resumed event

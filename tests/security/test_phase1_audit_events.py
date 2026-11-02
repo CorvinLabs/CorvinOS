@@ -123,7 +123,7 @@ class TestPhase1EventEmission:
     @pytest.fixture
     def temp_chain(self) -> Path:
         """Create a temporary audit chain for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8") as f:
             temp_path = Path(f.name)
         yield temp_path
         # Cleanup
@@ -146,7 +146,7 @@ class TestPhase1EventEmission:
             },
         )
         # Verify record exists in chain
-        with temp_chain.open() as f:
+        with temp_chain.open(encoding="utf-8") as f:
             line = f.readline()
             rec = json.loads(line)
             assert rec["event_type"] == "context.snapshot_created"
@@ -166,7 +166,7 @@ class TestPhase1EventEmission:
                 "recovery_attempted": True,
             },
         )
-        with temp_chain.open() as f:
+        with temp_chain.open(encoding="utf-8") as f:
             line = f.readline()
             rec = json.loads(line)
             assert rec["event_type"] == "compute.checkpoint_corrupted"
@@ -188,7 +188,7 @@ class TestPhase1EventEmission:
                 "bypassed": False,
             },
         )
-        with temp_chain.open() as f:
+        with temp_chain.open(encoding="utf-8") as f:
             line = f.readline()
             rec = json.loads(line)
             assert rec["event_type"] == "acs.l34_gate_passed"
@@ -205,7 +205,7 @@ class TestPhase1EventEmission:
                 "isolation_valid": True,
             },
         )
-        with temp_chain.open() as f:
+        with temp_chain.open(encoding="utf-8") as f:
             line = f.readline()
             rec = json.loads(line)
             assert rec["event_type"] == "erasure.tenant_boundary_checked"
@@ -218,7 +218,7 @@ class TestPhase1ChainIntegrity:
     @pytest.fixture
     def multi_event_chain(self) -> Path:
         """Create a chain with multiple Phase 1 events."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8") as f:
             temp_path = Path(f.name)
 
         # Emit multiple Phase 1 events
@@ -266,7 +266,7 @@ class TestPhase1ChainIntegrity:
         assert ok, f"Chain broken: {problems}"
 
         # Verify all 3 events are in chain
-        with multi_event_chain.open() as f:
+        with multi_event_chain.open(encoding="utf-8") as f:
             events = [json.loads(line) for line in f if line.strip()]
         assert len(events) == 3
         assert events[0]["event_type"] == "context.snapshot_created"
@@ -275,7 +275,7 @@ class TestPhase1ChainIntegrity:
 
     def test_chain_hash_sequence_correct(self, multi_event_chain):
         """Verify each event's prev_hash points to previous event's hash."""
-        with multi_event_chain.open() as f:
+        with multi_event_chain.open(encoding="utf-8") as f:
             events = [json.loads(line) for line in f if line.strip()]
 
         # First event has empty prev_hash
@@ -295,7 +295,7 @@ class TestPhase1PiiProtection:
 
     @pytest.fixture
     def temp_chain(self) -> Path:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8") as f:
             temp_path = Path(f.name)
         yield temp_path
         try:
@@ -316,7 +316,7 @@ class TestPhase1PiiProtection:
                 "added_fields_count": 1,
             },
         )
-        with temp_chain.open() as f:
+        with temp_chain.open(encoding="utf-8") as f:
             content = f.read()
         # Verify no email-like patterns in raw chain
         assert "@" not in content, "Email found in context event"
@@ -334,7 +334,7 @@ class TestPhase1PiiProtection:
                 "recovery_attempted": True,
             },
         )
-        with temp_chain.open() as f:
+        with temp_chain.open(encoding="utf-8") as f:
             content = f.read()
         # Verify error_message is safely encoded (no raw secrets)
         assert "password" not in content.lower()
@@ -374,7 +374,7 @@ class TestPhase1TenantIsolation:
 
     def test_erasure_events_carry_tenant_id(self, multi_tenant_chain):
         """Each erasure event must carry its tenant_id."""
-        with multi_tenant_chain.open() as f:
+        with multi_tenant_chain.open(encoding="utf-8") as f:
             events = [json.loads(line) for line in f if line.strip()]
 
         assert events[0]["details"]["tenant_id"] == "tenant_a"

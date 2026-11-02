@@ -181,7 +181,7 @@ class TestF6UidHash:
                    channel="discord", chat_key="chat1",
                    uid="+49123456789")
             if audit_file.exists():
-                events = [json.loads(l) for l in audit_file.read_text().splitlines() if l]
+                events = [json.loads(l) for l in audit_file.read_text(encoding="utf-8").splitlines() if l]
                 for ev in events:
                     details = ev.get("details", {})
                     assert "+49123456789" not in json.dumps(details), \
@@ -304,8 +304,8 @@ class TestF9SkillContentHash:
 
         # Now tamper with the file directly
         skill_md = reg.root / reg.SKILLS_DIR / "drift_skill" / "SKILL.md"
-        original = skill_md.read_text()
-        skill_md.write_text(original + "\n\n# TAMPERED CONTENT")
+        original = skill_md.read_text(encoding="utf-8")
+        skill_md.write_text(original + "\n\n# TAMPERED CONTENT", encoding="utf-8")
 
         returned_body, status = reg.get_body_verified("drift_skill")
         # Either drift_revalidated (linter passed) or suspended (linter failed)
@@ -391,7 +391,7 @@ class TestF10InstanceIdentity:
             audit_file = tmp_path / "global" / "forge" / "audit.jsonl"
             # The audit might not exist if forge is not importable — that's ok
             if audit_file.exists():
-                events = [json.loads(l) for l in audit_file.read_text().splitlines() if l]
+                events = [json.loads(l) for l in audit_file.read_text(encoding="utf-8").splitlines() if l]
                 types = [e.get("event_type") for e in events]
                 assert "instance_identity.rotated" in types
         finally:

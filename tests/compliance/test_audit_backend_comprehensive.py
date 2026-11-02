@@ -96,7 +96,7 @@ class TestAuditEventCreation:
 
 
 def _recs(path):
-    return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def _ev(i=0, tenant="_default", user="user1", **kw):
@@ -138,11 +138,11 @@ class TestAuditChainWriter:
         w = AuditChainWriter(audit_log)
         for i in range(3):
             w.write_event(_ev(i))
-        lines = audit_log.read_text().splitlines()
+        lines = audit_log.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[1])
         rec["details"]["index"] = 999
         lines[1] = json.dumps(rec)
-        audit_log.write_text("\n".join(lines) + "\n")
+        audit_log.write_text("\n".join(lines) + "\n", encoding="utf-8")
         assert w.verify_chain() is False
 
     def test_last_hash_is_the_chain_tail(self, audit_log):
@@ -170,7 +170,7 @@ class TestAuditChainWriter:
 
     def test_write_failure_raises(self, tmp_path):
         blocker = tmp_path / "file"
-        blocker.write_text("x")
+        blocker.write_text("x", encoding="utf-8")
         w = AuditChainWriter.__new__(AuditChainWriter)
         import threading as _t
         w.log_path, w._lock = blocker / "audit.jsonl", _t.RLock()
@@ -262,7 +262,7 @@ class TestAuditEventTypes:
         writer.write_event(event)
 
         # Verify recorded
-        with open(audit_log, "r") as f:
+        with open(audit_log, "r", encoding="utf-8") as f:
             entry = json.loads(f.read())
 
         assert entry["event_type"] == event_type
@@ -276,9 +276,9 @@ class TestAuditCompliance:
         log = tmp_path / "audit.jsonl"
         w = AuditChainWriter(log)
         w.write_event(_ev(1))
-        first = log.read_text()
+        first = log.read_text(encoding="utf-8")
         w.write_event(_ev(2))
-        assert log.read_text().startswith(first)
+        assert log.read_text(encoding="utf-8").startswith(first)
 
     def test_audit_timestamp_capture(self, tmp_path):
         log = tmp_path / "audit.jsonl"
@@ -289,7 +289,7 @@ class TestAuditCompliance:
     def test_pii_shaped_user_id_is_pseudonymised(self, tmp_path):
         log = tmp_path / "audit.jsonl"
         AuditChainWriter(log).write_event(_ev(1, user="alice@example.com"))
-        assert "alice@example.com" not in log.read_text()
+        assert "alice@example.com" not in log.read_text(encoding="utf-8")
         (rec,) = _recs(log)
         assert len(rec["details"]["user"]) == 8
 

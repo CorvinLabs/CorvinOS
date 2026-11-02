@@ -160,7 +160,7 @@ class ContextEngineeringConfigManager:
         """Load config from YAML (or defaults if file missing)."""
         if self.config_path.exists():
             try:
-                with open(self.config_path) as f:
+                with open(self.config_path, encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                 self._config = ContextEngineeringConfigSchema(**data)
                 logger.info(f"Loaded CE config for {self.tenant_id}")
@@ -188,7 +188,7 @@ class ContextEngineeringConfigManager:
 
             # Persist to disk
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, "w") as f:
+            with open(self.config_path, "w", encoding="utf-8") as f:
                 yaml.dump(new_config.dict(), f, default_flow_style=False)
 
             # Update in-memory

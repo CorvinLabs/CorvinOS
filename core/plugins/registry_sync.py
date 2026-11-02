@@ -328,7 +328,7 @@ class PluginRegistrySynchronizer:
             if not os.path.exists(plugin_json_path):
                 return None
 
-            with open(plugin_json_path, "r") as f:
+            with open(plugin_json_path, "r", encoding="utf-8") as f:
                 plugin_json = json.load(f)
 
             return plugin_json.get("version")

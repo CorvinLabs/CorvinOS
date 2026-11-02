@@ -45,7 +45,7 @@ def write_metadata(skill_dir: Path, metadata: dict) -> bool:
     """Write meta.json to skill directory."""
     try:
         meta_path = skill_dir / "meta.json"
-        with open(meta_path, "w") as f:
+        with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         return True
     except Exception as e:

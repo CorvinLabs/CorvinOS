@@ -56,7 +56,7 @@ def _audit_events(tmp: Path, tenant: str = "_default") -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -389,7 +389,7 @@ def case_forget_cascades_to_fts() -> None:
 def case_no_anthropic_sdk_import() -> None:
     _section("L28.1/12: cost contract — no anthropic SDK import")
     src = Path(__file__).resolve().parent / "conversation_recall.py"
-    body = src.read_text()
+    body = src.read_text(encoding="utf-8")
     # Walk lines instead of AST to also catch dynamic import strings
     for line in body.splitlines():
         stripped = line.strip()

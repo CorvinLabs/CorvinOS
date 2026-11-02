@@ -108,7 +108,7 @@ def _write_envelope(channel: str, envelope: dict) -> bool:
     try:
         # Write atomically (temp + rename)
         temp_path = filename.with_suffix(".json.tmp")
-        with open(str(temp_path), "w") as f:
+        with open(str(temp_path), "w", encoding="utf-8") as f:
             json.dump(envelope, f, indent=2, default=str)
         temp_path.replace(filename)
 

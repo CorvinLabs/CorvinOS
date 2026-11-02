@@ -273,7 +273,7 @@ class TestMetricsCollector:
 
             # Verify file was written
             assert collector.metrics_path.is_file()
-            content = collector.metrics_path.read_text()
+            content = collector.metrics_path.read_text(encoding="utf-8")
             assert "turn_abc123" in content
 
     def test_collector_load_from_file(self):
@@ -355,7 +355,7 @@ class TestMetricsCollector:
 
             # Verify CSV was created and has headers
             assert Path(csv_path).is_file()
-            with open(csv_path) as f:
+            with open(csv_path, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 rows = list(reader)
                 assert len(rows) == 3
@@ -484,7 +484,7 @@ class TestAnalysis:
             metrics_path = f"{tmpdir}/metrics.jsonl"
 
             # Write some test metrics
-            with open(metrics_path, "w") as f:
+            with open(metrics_path, "w", encoding="utf-8") as f:
                 for i in range(50):
                     metric_dict = {
                         "timestamp": "2026-08-19T13:00:00Z",
@@ -515,7 +515,7 @@ class TestAnalysis:
             metrics_path = f"{tmpdir}/metrics.jsonl"
 
             # Write test data
-            with open(metrics_path, "w") as f:
+            with open(metrics_path, "w", encoding="utf-8") as f:
                 for i in range(5):
                     metric_dict = {
                         "timestamp": "2026-08-19T13:00:00Z",

@@ -126,7 +126,7 @@ class CheckpointSaver:
                 "tool_calls_summary": checkpoint.tool_calls_summary,
                 "token_count": checkpoint.token_count,
                 "timestamp": checkpoint.timestamp,
-            })
+            }), encoding="utf-8"
         )
 
         logger.info(f"Checkpoint saved for turn {turn_number} to {checkpoint_file}")
@@ -150,7 +150,7 @@ class CheckpointSaver:
             return None
 
         try:
-            data = json.loads(checkpoint_file.read_text())
+            data = json.loads(checkpoint_file.read_text(encoding="utf-8"))
             checkpoint = TurnCheckpoint(
                 turn_number=data["turn_number"],
                 prompt_summary=data["prompt_summary"],

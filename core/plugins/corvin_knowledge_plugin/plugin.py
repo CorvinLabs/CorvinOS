@@ -90,7 +90,7 @@ class KnowledgeMeshSDK:
             result = subprocess.run(
                 ["git", "clone", self.remote_url, str(self.repo_path)],
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
             if result.returncode != 0:
                 raise RuntimeError(f"Git clone failed: {result.stderr}")
@@ -112,7 +112,7 @@ class KnowledgeMeshSDK:
 
         entities = []
         try:
-            with open(self.entities_file, "r") as f:
+            with open(self.entities_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -171,7 +171,7 @@ class KnowledgeMeshSDK:
                     ["git", "fetch", "origin"],
                     cwd=str(self.repo_path),
                     capture_output=True,
-                    text=True
+                    text=True, encoding="utf-8", errors="replace"
                 )
                 if fetch_result.returncode != 0:
                     result.status = "error"
@@ -183,7 +183,7 @@ class KnowledgeMeshSDK:
                     ["git", "merge", "origin/main"],
                     cwd=str(self.repo_path),
                     capture_output=True,
-                    text=True
+                    text=True, encoding="utf-8", errors="replace"
                 )
 
                 if "conflict" in merge_result.stderr.lower():
@@ -213,7 +213,7 @@ class KnowledgeMeshSDK:
                     ["git", "push", "origin", "main"],
                     cwd=str(self.repo_path),
                     capture_output=True,
-                    text=True
+                    text=True, encoding="utf-8", errors="replace"
                 )
                 if push_result.returncode != 0:
                     result.status = "error"
@@ -248,7 +248,7 @@ class KnowledgeMeshSDK:
         # Check 1: Parse all entities (detect invalid JSON)
         entity_ids = set()
         try:
-            with open(self.entities_file, "r") as f:
+            with open(self.entities_file, "r", encoding="utf-8") as f:
                 for line_num, line in enumerate(f, 1):
                     if not line.strip():
                         continue
@@ -270,7 +270,7 @@ class KnowledgeMeshSDK:
         meta_file = self.graph_dir / "graph-meta.json"
         if meta_file.exists():
             try:
-                with open(meta_file) as f:
+                with open(meta_file, encoding="utf-8") as f:
                     meta = json.load(f)
                     return meta.get("version") or meta.get("sync_ts")
             except:
@@ -383,7 +383,7 @@ class CorvinKnowledgePlugin:
             # Load current
             config = {}
             if config_file.exists():
-                config = json.loads(config_file.read_text())
+                config = json.loads(config_file.read_text(encoding="utf-8"))
 
             # Update
             if repo_path:
@@ -392,7 +392,7 @@ class CorvinKnowledgePlugin:
                 config["remote_url"] = remote_url
 
             # Save
-            config_file.write_text(json.dumps(config, indent=2))
+            config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
             return {
                 "status": "configured",

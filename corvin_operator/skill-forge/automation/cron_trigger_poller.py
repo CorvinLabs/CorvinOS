@@ -260,7 +260,7 @@ class CronTriggerPoller:
             return False
 
         try:
-            with open(config_path, "r") as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
             autonomous_forge = config.get("autonomous_forge", {})
@@ -314,7 +314,7 @@ class CronTriggerPoller:
             trigger_file = trigger_dir / f"{trigger.skill_id}.json"
             payload = asdict(trigger)
             payload["trigger_time"] = trigger.trigger_time.isoformat()
-            trigger_file.write_text(json.dumps(payload))
+            trigger_file.write_text(json.dumps(payload), encoding="utf-8")
 
             logger.info(
                 f"Skill forge triggered for {trigger.skill_id} "

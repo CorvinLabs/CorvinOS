@@ -728,7 +728,7 @@ class ADRComplianceValidator:
                 }
 
                 filepath.parent.mkdir(parents=True, exist_ok=True)
-                with open(filepath, "w") as f:
+                with open(filepath, "w", encoding="utf-8") as f:
                     json.dump(export_data, f, indent=2)
 
                 logger.info(f"Compliance report exported to {filepath} (tenant: {self.tenant_id})")

@@ -90,12 +90,12 @@ class AutoOptimizer:
         results_path = self.opt_dir / "results.json"
 
         if proposals_path.exists():
-            with open(proposals_path) as f:
+            with open(proposals_path, encoding="utf-8") as f:
                 # Load as dicts, convert to dataclasses if needed
                 pass
 
         if results_path.exists():
-            with open(results_path) as f:
+            with open(results_path, encoding="utf-8") as f:
                 # Load as dicts, convert to dataclasses if needed
                 pass
 
@@ -336,7 +336,7 @@ class AutoOptimizer:
             "proposals": [asdict(p) for p in self.proposals],
         }
 
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, default=str, indent=2)
 
     def _save_results(self):
@@ -347,7 +347,7 @@ class AutoOptimizer:
             "results": [asdict(r) for r in self.results],
         }
 
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, default=str, indent=2)
 
     # ─────────────────────────────────────────────────────────────────────

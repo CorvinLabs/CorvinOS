@@ -94,7 +94,7 @@ def get_video_codec(video_path: Path) -> str:
             ],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10, encoding="utf-8", errors="replace"
         )
         
         if result.returncode != 0:
@@ -148,7 +148,7 @@ def validate_audio_duration(audio_path: Path, min_seconds: float = 0.5) -> float
             ],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10, encoding="utf-8", errors="replace"
         )
         
         if result.returncode != 0:
@@ -352,7 +352,7 @@ async def test_complete_video_assembly_produces_real_output():
         
         # 3. Create asset paths for analysis
         asset_file = tmpdir_path / "test_asset.txt"
-        asset_file.write_text("CorvinOS is an autonomous operating system with multi-tenant support")
+        asset_file.write_text("CorvinOS is an autonomous operating system with multi-tenant support", encoding="utf-8")
         asset_paths = [asset_file]
         logger.info(f"✓ Created test asset: {asset_file}")
         
@@ -448,7 +448,7 @@ async def test_complete_video_assembly_produces_real_output():
                     "-show_entries", "format=duration",
                     "-of", "default=noprint_wrappers=1:nokey=1:nk=1",
                     str(video_path)
-                ], capture_output=True, text=True, timeout=10)
+                ], capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
                 
                 if duration_result.returncode == 0:
                     video_duration = float(duration_result.stdout.strip())
@@ -576,7 +576,7 @@ async def test_fail_closed_on_invalid_inputs():
         # TEST 6: Job with blender file too small (< 100KB)
         logger.info("\n[TEST 6] Rejecting job with tiny blender file (suspect)...")
         small_blender_file = tmpdir_path / "small.blend"
-        small_blender_file.write_text("placeholder")  # ~11 bytes (< 100KB)
+        small_blender_file.write_text("placeholder", encoding="utf-8")  # ~11 bytes (< 100KB)
         
         job_small_blender = {
             "job_id": "test_fail_closed_006",

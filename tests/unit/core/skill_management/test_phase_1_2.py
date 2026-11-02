@@ -106,7 +106,7 @@ class TestMetadataValidator:
             "created": datetime.now().isoformat(),
             "last_modified": datetime.now().isoformat()
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
         validator = MetadataValidator()
@@ -120,7 +120,7 @@ class TestMetadataValidator:
         skill_dir = temp_tenant_dir / "_shared" / "skills" / "bad-json"
         skill_dir.mkdir(parents=True)
 
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             f.write("{ invalid json }")
 
         validator = MetadataValidator()
@@ -143,7 +143,7 @@ class TestMetadataValidator:
             "created": (now + timedelta(days=1)).isoformat(),  # Created AFTER modified
             "last_modified": now.isoformat()
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
         validator = MetadataValidator()
@@ -168,7 +168,7 @@ class TestMetadataValidator:
             "last_modified": datetime.now().isoformat(),
             "dependencies": [{"id": "skill-b", "scope": "_shared"}]
         }
-        with open(temp_tenant_dir / "_shared" / "skills" / "skill-a" / "meta.json", "w") as f:
+        with open(temp_tenant_dir / "_shared" / "skills" / "skill-a" / "meta.json", "w", encoding="utf-8") as f:
             json.dump(meta_a, f)
 
         # B depends on A (cycle!)
@@ -180,7 +180,7 @@ class TestMetadataValidator:
             "last_modified": datetime.now().isoformat(),
             "dependencies": [{"id": "skill-a", "scope": "_shared"}]
         }
-        with open(temp_tenant_dir / "_shared" / "skills" / "skill-b" / "meta.json", "w") as f:
+        with open(temp_tenant_dir / "_shared" / "skills" / "skill-b" / "meta.json", "w", encoding="utf-8") as f:
             json.dump(meta_b, f)
 
         dep_validator = DependencyValidator()
@@ -202,7 +202,7 @@ class TestMetadataValidator:
             "last_modified": datetime.now().isoformat(),
             "dependencies": [{"id": "local-dep", "scope": "_local", "min_version": "1.0.0"}]
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
         validator = MetadataValidator()
@@ -224,7 +224,7 @@ class TestMetadataValidator:
                 "created": datetime.now().isoformat(),
                 "last_modified": datetime.now().isoformat()
             }
-            with open(skill_dir / "meta.json", "w") as f:
+            with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
                 json.dump(metadata, f)
 
         validator = MetadataValidator()
@@ -243,7 +243,7 @@ class TestMetadataValidator:
             "created": datetime.now().isoformat(),
             "last_modified": datetime.now().isoformat()
         }
-        with open(meta_file, "w") as f:
+        with open(meta_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
         result = validate_metadata_file(meta_file, metadata_type="skill")

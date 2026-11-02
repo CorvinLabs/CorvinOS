@@ -89,10 +89,10 @@ def test_gate_raises_on_broken_hash_link(audit_path: Path) -> None:
     _seed_chain(audit_path, n=5)
 
     # Tamper: read all lines, corrupt the second-to-last event's hash
-    lines = audit_path.read_text().splitlines()
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
     recs = [json.loads(ln) for ln in lines]
     recs[-2]["hash"] = "deadbeef0000dead"   # corrupt stored hash
-    audit_path.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    audit_path.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
 
     with pytest.raises(ChainIntegrityFailure) as exc_info:
         gate(audit_path, "L22")
@@ -161,7 +161,7 @@ def test_write_epoch_anchor_event(audit_path: Path) -> None:
     _seed_chain(audit_path, n=2)
     write_epoch_anchor(audit_path)
 
-    lines = audit_path.read_text().splitlines()
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
     events = [json.loads(ln) for ln in lines]
     anchor_events = [e for e in events if e.get("event_type") == "audit.epoch_anchor"]
     assert len(anchor_events) == 1
@@ -376,9 +376,9 @@ def test_verify_last_k_non_json_line_reported(audit_path: "Path") -> None:
     _seed_chain(audit_path, n=5)
 
     # Inject a non-JSON line into the middle of the chain
-    lines = audit_path.read_text().splitlines()
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
     lines.insert(len(lines) // 2, "this-is-not-json")
-    audit_path.write_text("\n".join(lines) + "\n")
+    audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     failures = verify_last_k(audit_path, k=10)
     assert any("non-JSON" in f for f in failures), (
@@ -411,7 +411,7 @@ def test_verify_accepts_mac_bearing_records(audit_path: Path, monkeypatch) -> No
 
     _seed_chain(audit_path, n=6)
 
-    recs = [json.loads(ln) for ln in audit_path.read_text().splitlines()]
+    recs = [json.loads(ln) for ln in audit_path.read_text(encoding="utf-8").splitlines()]
     assert all("mac" in r for r in recs), "test setup: every record must carry a mac"
 
     # The fix: mac-bearing records verify cleanly and the gate allows the spawn.
@@ -441,7 +441,7 @@ def test_verify_accepts_instance_sig_bearing_records(audit_path: Path) -> None:
 
     # Append a record shaped exactly like the live writer's output: hash over the
     # canonical body, then instance_id/instance_sig added afterwards.
-    lines = audit_path.read_text().splitlines()
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
     prev = json.loads(lines[-1])["hash"]
     rec = {
         "ts": 1782050865.46,
@@ -464,7 +464,7 @@ def test_verify_accepts_instance_sig_bearing_records(audit_path: Path) -> None:
     with audit_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec) + "\n")
 
-    assert "instance_sig" in json.loads(audit_path.read_text().splitlines()[-1])
+    assert "instance_sig" in json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
     # The fix: the signed session.reset verifies and the spawn gate succeeds.
     assert verify_last_k(audit_path, VERIFY_K_DEFAULT) == []
     cit = gate(audit_path, "L22.engine_spawn.sigtest")
@@ -489,7 +489,7 @@ def test_verify_skips_hashless_meta_event(audit_path: Path) -> None:
 
     # Insert a valid-JSON event with NO hash field (mirrors the live writer's
     # hashless audit.chain_gap_detected), then continue the chain past it.
-    lines = audit_path.read_text().splitlines()
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
     tail_before_gap = json.loads(lines[-1])["hash"]
     with audit_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({
@@ -500,7 +500,7 @@ def test_verify_skips_hashless_meta_event(audit_path: Path) -> None:
         }) + "\n")
     # The next real event chains to the PRE-gap tail, not to the hashless event.
     write_event(audit_path, "test.after_gap", details={"seq": 99})
-    after = json.loads(audit_path.read_text().splitlines()[-1])
+    after = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
     assert after["prev_hash"] == tail_before_gap, "writer must chain past the hashless event"
 
     # The fix: the hashless event is skipped and the following link verifies.
@@ -543,7 +543,7 @@ def test_stale_anchor_emits_tail_and_count_details_not_dropped(
     _seed_chain(audit_path, n=4)
     status, _ = verify_chain_anchor(audit_path, anchor_path, dna_seed=seed, emit=True)
     assert status == "ok"
-    records = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()]
+    records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     stale = [r for r in records if r.get("event_type") == "audit.chain_anchor_stale"]
     assert stale, "no audit.chain_anchor_stale record written"
     details = stale[-1].get("details", {})

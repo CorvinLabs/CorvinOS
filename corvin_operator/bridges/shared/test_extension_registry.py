@@ -107,10 +107,10 @@ def _write_ext(base: Path, name: str, *, scope: str = "tenant",
         manifest["hooks"] = hooks
     if requires:
         manifest["requires"] = requires
-    (ext_dir / "layer.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+    (ext_dir / "layer.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     if hook_body is not None:
         (ext_dir / "hooks").mkdir(exist_ok=True)
-        (ext_dir / "hooks" / "hook.py").write_text(hook_body)
+        (ext_dir / "hooks" / "hook.py").write_text(hook_body, encoding="utf-8")
     if enabled:
         (ext_dir / ".enabled").touch()
     return ext_dir

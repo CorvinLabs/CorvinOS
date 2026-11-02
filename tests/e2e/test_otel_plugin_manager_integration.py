@@ -77,7 +77,7 @@ class TestOTELTelemetryIntegration:
         )
         assert fallback_file.exists()
 
-        with open(fallback_file) as f:
+        with open(fallback_file, encoding="utf-8") as f:
             record = json.loads(f.readline())
             assert record["signal_type"] == "metric"
             assert record["metric_name"] == "skill.execution.time_ms"
@@ -102,7 +102,7 @@ class TestOTELTelemetryIntegration:
             / "trace-test-tenant-instance-001.jsonl"
         )
         if fallback_file.exists():
-            with open(fallback_file) as f:
+            with open(fallback_file, encoding="utf-8") as f:
                 record = json.loads(f.readline())
                 assert record["signal_type"] == "trace"
                 assert record["context"]["user_tier"] == "pro"

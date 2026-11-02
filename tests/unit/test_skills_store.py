@@ -155,7 +155,7 @@ class TestFileSkillStore:
         temp_store.save(skill)
 
         file_path = temp_store.root / "test" / "1.0.json"
-        content = json.loads(file_path.read_text())
+        content = json.loads(file_path.read_text(encoding="utf-8"))
 
         assert content["name"] == "test"
         assert content["version"] == "1.0"
@@ -225,7 +225,7 @@ class TestFileSkillStore:
         # Manually write corrupted JSON
         corrupt_dir = temp_store.root / "corrupt"
         corrupt_dir.mkdir()
-        (corrupt_dir / "1.0.json").write_text("not valid json {")
+        (corrupt_dir / "1.0.json").write_text("not valid json {", encoding="utf-8")
 
         # list_all should skip the corrupted file
         all_skills = temp_store.list_all()

@@ -97,7 +97,7 @@ def main() -> int:
 
         from core.learning.event_persistence import _resolve_core_audit  # noqa: PLC0415
         chain = Path(_resolve_core_audit().audit_path())
-        if not chain.exists() or chain.read_text().count("infinite_session.snapshot_created") < len(snaps):
+        if not chain.exists() or chain.read_text(encoding="utf-8").count("infinite_session.snapshot_created") < len(snaps):
             return _fail("core audit chain", f"missing snapshot_created records in {chain}")
         print(f"ok  core audit chain has the snapshot records ({chain})")
 

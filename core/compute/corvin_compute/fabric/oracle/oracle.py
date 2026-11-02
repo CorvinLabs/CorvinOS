@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shutil
 import time
 from typing import Any, Callable, Optional
 
@@ -155,6 +157,11 @@ async def _call_oracle_subprocess(
         ),
     }))
 
+    if os.name == "nt" and cmd and not os.path.dirname(cmd[0]):
+        # CreateProcess applies no PATHEXT: a bare "claude" that is an npm
+        # claude.cmd shim raises FileNotFoundError. Resolve it (fixed flags
+        # only; the untrusted prompt travels on stdin).
+        cmd = [shutil.which(cmd[0]) or cmd[0], *cmd[1:]]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,

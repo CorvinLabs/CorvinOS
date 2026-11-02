@@ -182,7 +182,7 @@ def test_submit_run_talks_to_worker_with_correct_field_names(monkeypatch, tmp_pa
     monkeypatch.setattr(G, "_cq_increment", lambda *a, **kw: None)
 
     sock = tmp_path / "worker.sock"
-    sock.write_text("")  # just needs to exist for the .exists() check
+    sock.write_text("", encoding="utf-8")  # just needs to exist for the .exists() check
     monkeypatch.setattr(C, "_socket_path", lambda tid: sock)
 
     captured: dict = {}

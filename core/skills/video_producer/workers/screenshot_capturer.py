@@ -263,7 +263,7 @@ class ScreenshotCapturerWorker:
             "captured_at": "mock",
         }
 
-        with open(metadata_path, "w") as f:
+        with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
         return output_path

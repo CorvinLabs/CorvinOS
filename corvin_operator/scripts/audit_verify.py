@@ -184,7 +184,7 @@ def main():
         }
 
         summary_file = Path(args.corvin_home) / "verification_logs" / f"summary-{datetime.utcnow().strftime('%Y-%m-%dT%H-%M-%SZ')}.json"
-        summary_file.write_text(json.dumps(summary, indent=2))
+        summary_file.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         logger.info(f"Summary written to {summary_file}")
 
         # Exit with appropriate code

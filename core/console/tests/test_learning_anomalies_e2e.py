@@ -20,7 +20,7 @@ def _run(coro):
 def _chain_events(home: str, name: str) -> list[dict]:
     chain = Path(home) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     out = []
-    for line in chain.read_text().splitlines():
+    for line in chain.read_text(encoding="utf-8").splitlines():
         try:
             rec = json.loads(line)
         except ValueError:

@@ -67,7 +67,7 @@ def load_goal(channel: str, chat_key: str) -> str | None:
     if not p.exists():
         return None
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
         return data.get("goal") or None
     except Exception:
         return None
@@ -83,7 +83,7 @@ def set_goal(channel: str, chat_key: str, text: str) -> str:
     p = _store_path(channel, chat_key)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"goal": text, "set_at": time.time()}, ensure_ascii=False, indent=2))
+    tmp.write_text(json.dumps({"goal": text, "set_at": time.time()}, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(p)
     return text
 

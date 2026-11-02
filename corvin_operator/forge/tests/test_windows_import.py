@@ -41,7 +41,10 @@ from forge import sandbox  # noqa: F401  — bare ``import resource``
 from forge.corvin_data import data_registry  # noqa: F401  — bare ``import fcntl``
 # the shim is in place + the submodules imported despite no real fcntl/resource
 assert "fcntl" in sys.modules and "resource" in sys.modules
-assert sys.modules["fcntl"].flock(0, sys.modules["fcntl"].LOCK_EX) == 0
+import tempfile as _tf
+with _tf.TemporaryFile() as _fh:  # real LockFileEx on Windows, inert when simulated
+    sys.modules["fcntl"].flock(_fh, sys.modules["fcntl"].LOCK_EX)
+    sys.modules["fcntl"].flock(_fh, sys.modules["fcntl"].LOCK_UN)
 assert callable(paths.corvin_home)
 assert hasattr(security_events, "write_event")
 print("WINDOWS_IMPORT_OK")
@@ -72,7 +75,7 @@ print("SIBLINGS_IMPORT_OK")
 def test_forge_imports_under_simulated_windows():
     proc = subprocess.run(
         [sys.executable, "-c", _SIM_WINDOWS],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
     )
     assert "WINDOWS_IMPORT_OK" in proc.stdout, (
         f"forge failed to import under simulated Windows.\n"
@@ -83,7 +86,7 @@ def test_forge_imports_under_simulated_windows():
 def test_sibling_packages_import_under_simulated_windows():
     proc = subprocess.run(
         [sys.executable, "-c", _SIM_WINDOWS_SIBLINGS],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
     )
     assert "SIBLINGS_IMPORT_OK" in proc.stdout, (
         f"a sibling package failed to import under simulated Windows.\n"

@@ -79,7 +79,7 @@ def _read_audit_events(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -97,7 +97,7 @@ def _register_artifact(channel: str, chat_key: str, base: Path,
     from forge import artifacts as art  # type: ignore
 
     src = base / f"src-{name}"
-    src.write_text("some artifact content\n" * 10)
+    src.write_text("some artifact content\n" * 10, encoding="utf-8")
     session_key = f"{channel}:{chat_key}"
     root = art.session_artifacts_dir(session_key, tenant_id="_default")
     art.register(source_path=src, artifacts_root=root, name=name,
@@ -111,7 +111,7 @@ def _send_reset(adapter, inbox: Path, *, channel: str, chat_key: str,
            "chat_id": chat_key, "_reset": True, "text": text,
            "ts": time.time()}
     msg_path = inbox / f"{msg_id}.json"
-    msg_path.write_text(json.dumps(msg))
+    msg_path.write_text(json.dumps(msg), encoding="utf-8")
     adapter.process_one(msg_path, settings={"whitelist": [chat_key]})
 
 
@@ -126,7 +126,7 @@ def test_reset_without_ack_warns_and_does_not_purge() -> None:
         art_root = _register_artifact(channel, chat_key, base)
         assert art_root.exists(), "artifact root should exist after registration"
         manifest_path = art_root / ".manifest.jsonl"
-        manifest_before = manifest_path.read_text()
+        manifest_before = manifest_path.read_text(encoding="utf-8")
         assert "report.txt" in manifest_before
 
         _send_reset(adapter, inbox, channel=channel, chat_key=chat_key,
@@ -135,14 +135,14 @@ def test_reset_without_ack_warns_and_does_not_purge() -> None:
         # Artifact dir must still exist — no destructive purge happened.
         assert art_root.exists(), \
             "unpinned artifacts must survive a non-ack /reset"
-        manifest_after = manifest_path.read_text()
+        manifest_after = manifest_path.read_text(encoding="utf-8")
         assert manifest_after == manifest_before, \
             "manifest must be untouched when the reset was pre-warned"
 
         # Outbox must carry a warning envelope naming the artifact.
         out_files = sorted(outbox.glob("reset-no-ack_*.json"))
         assert out_files, "expected a warning envelope in the outbox"
-        warning = json.loads(out_files[0].read_text())
+        warning = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert "report.txt" in warning.get("text", ""), \
             f"warning text should list the artifact, got: {warning.get('text')!r}"
         assert "unpinned" in warning.get("text", "").lower()
@@ -189,7 +189,7 @@ def test_reset_with_ack_suffix_purges() -> None:
 
         out_files = sorted(outbox.glob("reset-ack_*.json"))
         assert out_files, "expected the normal reset ack envelope in the outbox"
-        ack_envelope = json.loads(out_files[0].read_text())
+        ack_envelope = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert "New session" in ack_envelope.get("text", ""), ack_envelope
         print("  pass — purged, session.reset audited, normal ack envelope sent")
     finally:
@@ -246,7 +246,7 @@ def test_reset_without_artifacts_purges_immediately() -> None:
 
         out_files = sorted(outbox.glob("reset-empty_*.json"))
         assert out_files, "expected the normal reset ack envelope in the outbox"
-        ack_envelope = json.loads(out_files[0].read_text())
+        ack_envelope = json.loads(out_files[0].read_text(encoding="utf-8"))
         assert "New session" in ack_envelope.get("text", ""), ack_envelope
         print("  pass — empty-artifact fast path purges immediately, no false warn")
     finally:

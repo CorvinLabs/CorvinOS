@@ -418,7 +418,7 @@ def _iter_events(
     """
     if not path.exists():
         return
-    with path.open("r") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:

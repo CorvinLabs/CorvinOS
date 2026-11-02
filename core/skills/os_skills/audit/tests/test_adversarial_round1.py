@@ -27,9 +27,9 @@ T = "t-adv"
 
 
 def _rewrite(trail: AuditTrail, mutate) -> None:
-    lines = trail.chain_path.read_text().splitlines()
+    lines = trail.chain_path.read_text(encoding="utf-8").splitlines()
     lines = mutate(lines)
-    trail.chain_path.write_text("\n".join(lines) + "\n")
+    trail.chain_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _two(trail: AuditTrail) -> None:
@@ -124,7 +124,7 @@ class TestAttackVector2_PIILeakageTesting:
         with pytest.raises(ValueError):
             trail.write_event("weight_updated", payload={"reason": f"see {value}"})
         if trail.chain_path.exists():
-            assert value not in trail.chain_path.read_text()
+            assert value not in trail.chain_path.read_text(encoding="utf-8")
 
     @pytest.mark.parametrize("text,marker", [
         ("user@example.com", "[REDACTED_EMAIL]"),
@@ -232,7 +232,7 @@ class TestAttackVector5_BootVerificationFailClosed:
         from core.paths.tenant import tenant_audit_chain
         path = tenant_audit_chain(T)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{not valid json\n")
+        path.write_text("{not valid json\n", encoding="utf-8")
         with pytest.raises(ValueError, match="Audit chain broken"):
             AuditTrail(tenant_id=T)
 

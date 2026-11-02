@@ -67,7 +67,7 @@ class CodexE2ETester(EngineE2ETester):
                 ["codex", "-p", formatted_prompt],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=30, encoding="utf-8", errors="replace",
             )
 
             if result.returncode == 0:
@@ -183,7 +183,7 @@ class CopilotE2ETester(EngineE2ETester):
                 ["copilot", "-p", formatted_prompt],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=30, encoding="utf-8", errors="replace",
             )
 
             if result.returncode == 0:
@@ -320,5 +320,5 @@ if __name__ == "__main__":
 
     # Export JSON report
     report_file = "e2e_validation_report.json"
-    Path(report_file).write_text(json.dumps(results, indent=2))
+    Path(report_file).write_text(json.dumps(results, indent=2), encoding="utf-8")
     logger.info(f"\nReport saved: {report_file}")

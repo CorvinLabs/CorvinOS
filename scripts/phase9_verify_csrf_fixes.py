@@ -88,7 +88,7 @@ def main():
             ['git', 'diff', '--name-only', 'HEAD~1', 'HEAD'],
             cwd=REPO_ROOT,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         modified_files = [f for f in result.stdout.strip().split('\n') if f and f.endswith('.py')]
     except:

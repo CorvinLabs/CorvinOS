@@ -29,7 +29,7 @@ def _is_forge_skill(skill_md: Path) -> bool:
     if not skill_md.exists():
         return True  # absent → safe to write
     try:
-        head = skill_md.read_text()[:512]
+        head = skill_md.read_text(encoding="utf-8")[:512]
     except OSError:
         return False
     return "promoted_from: forge" in head

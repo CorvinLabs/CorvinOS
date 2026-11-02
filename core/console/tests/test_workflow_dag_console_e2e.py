@@ -48,8 +48,8 @@ def _make(home, tid, wid, text):
     from forge import paths as _fp
     d = _fp.tenant_home(tid) / "workflows"
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"{wid}.meta.json").write_text(json.dumps({"id": wid, "name": wid, "phase": "ready"}))
-    (d / f"{wid}.awp.yaml").write_text(text)
+    (d / f"{wid}.meta.json").write_text(json.dumps({"id": wid, "name": wid, "phase": "ready"}), encoding="utf-8")
+    (d / f"{wid}.awp.yaml").write_text(text, encoding="utf-8")
 
 
 def _stream_in_thread(client, wid, events):
@@ -91,7 +91,7 @@ def env(tmp_path):
         from corvin_console.routes import workflow_dag_run as d
         old = d.ENGINE_FACTORY
         d.ENGINE_FACTORY = _stub_factory()
-        _make(home, tid, "allnodes", EXAMPLE.read_text())
+        _make(home, tid, "allnodes", EXAMPLE.read_text(encoding="utf-8"))
         try:
             yield client, home, tid
         finally:
@@ -170,7 +170,7 @@ def test_deterministic_workflow_needs_no_engine_and_edit_during_pause_is_harmles
     # editing the workflow while the run waits must not change what the resume executes
     from forge import paths as _fp
     yp = _fp.tenant_home(tid) / "workflows" / "det.awp.yaml"
-    yp.write_text(text.replace("n': 5", "n': 1"))
+    yp.write_text(text.replace("n': 5", "n': 1"), encoding="utf-8")
     client.post(f"/v1/console/workflows/det/runs/{rid}/approve", json={"comment": ""})
     t.join(30)
     done = [e for e in events[1:] if e.get("node_id") == "done" and e["type"] == "node_completed"]

@@ -103,7 +103,7 @@ class EveryProbeIsStampedTests(unittest.TestCase):
     def test_the_scan_catches_an_injected_violation(self):
         src = "def new_probe(s):\n    return s.ping('kid')\n"
         tmp = Path(tempfile.mkdtemp()) / "x.py"
-        tmp.write_text(src)
+        tmp.write_text(src, encoding="utf-8")
         self.assertEqual(list(self._probing_functions(tmp)), [("new_probe", False)])
 
 
@@ -140,7 +140,7 @@ class Round2RegressionTests(unittest.TestCase):
         import a2a_nonce_store as ns
         home = Path(tempfile.mkdtemp())
         (home / "global").mkdir()
-        (home / "global" / "nonces").write_text("not a directory")
+        (home / "global" / "nonces").write_text("not a directory", encoding="utf-8")
         with self.assertRaises(RuntimeError):
             ns.default_nonce_store(home)
 

@@ -874,7 +874,7 @@ def create_selector(config_path: Optional[Path] = None) -> ModelSelector:
 
     if config_path and config_path.exists():
         try:
-            with open(config_path) as f:
+            with open(config_path, encoding="utf-8") as f:
                 config_dict = json.load(f)
             # Merge with defaults
             for key, value in config_dict.items():

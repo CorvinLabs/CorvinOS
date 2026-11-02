@@ -210,7 +210,7 @@ This video was generated using the Video Producer Skill 2.0
 
         thumbnail_path = os.path.join(job_scoped_dir(job.job_id), "thumbnail.json")
         try:
-            with open(thumbnail_path, "w") as f:
+            with open(thumbnail_path, "w", encoding="utf-8") as f:
                 json.dump(thumbnail_data, f)
             return thumbnail_path
         except:
@@ -278,7 +278,7 @@ This video was generated using the Video Producer Skill 2.0
 
         metadata_path = os.path.join(job_scoped_dir(job_id), "upload_metadata.json")
         try:
-            with open(metadata_path, "w") as f:
+            with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
             return metadata_path
         except Exception as e:

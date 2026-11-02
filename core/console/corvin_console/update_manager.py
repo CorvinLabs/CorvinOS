@@ -279,7 +279,7 @@ def record_result(state_path: Path, rc: int, src: Path | None = None) -> None:
 
 def _git(src: Path, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(src), *args], capture_output=True, text=True,
-                          timeout=timeout, stdin=subprocess.DEVNULL)
+                          timeout=timeout, stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace")
 
 
 def _pyproject_version(text: str) -> str:
@@ -319,7 +319,7 @@ def _isolated_run_active() -> bool:
         out = subprocess.run(
             ["systemctl", "--user", "list-units", "--plain", "--no-legend", "--state=active,activating,deactivating",
              "corvin-update-*"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace",
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return False

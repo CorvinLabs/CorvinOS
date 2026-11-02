@@ -254,7 +254,7 @@ class TestRouteEndToEnd:
         run_id = "tde-666-ffff"
         _write_normal_turn(path, run_id)
 
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         # Tamper the delegation_decision record for step 1 (line index 1,
         # 0-based) — NOT the last line of the run, so the resulting
         # broken_chain problem (surfacing on the next record) stays inside
@@ -264,7 +264,7 @@ class TestRouteEndToEnd:
         assert rec["event_type"] == "tde.delegation_decision"
         rec["details"]["delegate"] = False  # flip content post-hoc, hash left stale
         lines[target_idx] = json.dumps(rec)
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         payload = self._call(run_id, monkeypatch, path)
         assert payload["meta"]["chain_verified"] is False
@@ -279,14 +279,14 @@ class TestRouteEndToEnd:
         _write_normal_turn(path, run_a, base_ts=1_000.0)
         _write_normal_turn(path, run_b, base_ts=2_000.0)
 
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         # Tamper a record belonging to run_b only.
         target_idx = 8  # second record of run_b's block (delegation_decision)
         rec = json.loads(lines[target_idx])
         assert rec["details"].get("tde_run_id") == run_b
         rec["details"]["delegate"] = not rec["details"]["delegate"]
         lines[target_idx] = json.dumps(rec)
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         payload_a = self._call(run_a, monkeypatch, path)
         assert payload_a["meta"]["chain_verified"] is True
@@ -305,12 +305,12 @@ class TestRouteEndToEnd:
         _write_normal_turn(path, run_a, base_ts=1_000.0)
         _write_normal_turn(path, run_b, base_ts=2_000.0)
 
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[2])  # run_a's segment
         assert rec["details"].get("tde_run_id") == run_a
         rec["details"]["success"] = not rec["details"]["success"]
         lines[2] = json.dumps(rec)
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         payload_b = self._call(run_b, monkeypatch, path)
         assert payload_b["meta"]["chain_verified"] is True          # own segment intact
@@ -341,7 +341,7 @@ class TestRouteEndToEnd:
         run_id = "tde-999-bbbb"
         _write_normal_turn(path, run_id, tenant_id="")
         # Strip the stamp entirely to mimic legacy records.
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         out = []
         for line in lines:
             rec = json.loads(line)
@@ -349,7 +349,7 @@ class TestRouteEndToEnd:
             out.append(json.dumps(rec))
         # NOTE: rewriting breaks the hash chain, but the tenant filter runs
         # BEFORE chain verification and must 404 first.
-        path.write_text("\n".join(out) + "\n")
+        path.write_text("\n".join(out) + "\n", encoding="utf-8")
         with pytest.raises(HTTPException) as exc_info:
             self._call(run_id, monkeypatch, path)
         assert exc_info.value.status_code == 404

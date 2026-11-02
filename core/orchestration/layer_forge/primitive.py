@@ -62,7 +62,7 @@ def atomic_write_json(path: Path, data: dict) -> None:
     path = Path(path)
     tmp = path.parent / f".{path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp"
     try:
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)

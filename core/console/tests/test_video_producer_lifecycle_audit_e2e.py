@@ -38,7 +38,7 @@ def _records(home: Path, tenant: str) -> list:
     p = _chain(home, tenant)
     if not p.exists():
         return []
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _lifecycle(home: Path, tenant: str, job_id: str = None) -> list:
@@ -168,16 +168,16 @@ class VideoProducerLifecycleAuditE2E(unittest.TestCase):
             # the two jobs ran at the same time and kept independent reports in an intact store
             base = home / "tenants" / "tenant_a" / "video_producer"
             for jid, n in ((clean, 0), (degraded, 1)):
-                rep = json.loads((base / "videos" / jid / "report.json").read_text())
+                rep = json.loads((base / "videos" / jid / "report.json").read_text(encoding="utf-8"))
                 self.assertEqual(rep["job_id"], jid)
                 self.assertEqual(len(rep["degradations"]), n)
             for f in (base / "jobs").glob("*.json"):
-                self.assertEqual(json.loads(f.read_text())["status"], "complete", f.name)
+                self.assertEqual(json.loads(f.read_text(encoding="utf-8"))["status"], "complete", f.name)
             self.assertEqual(list((base / "jobs").glob("*.run")), [])
             self.assertEqual(list((base / "jobs").glob("*.lock")), [])
 
             # no task text on the chain, nothing in the other tenant's chain, the chain verifies
-            text = _chain(home, "tenant_a").read_text()
+            text = _chain(home, "tenant_a").read_text(encoding="utf-8")
             for t in tasks:
                 self.assertNotIn(t[:24], text)
             self.assertEqual(_lifecycle(home, "tenant_b"), [])
@@ -227,10 +227,10 @@ class VideoProducerLifecycleAuditE2E(unittest.TestCase):
             base = home / "tenants" / "tenant_a" / "video_producer"
             job_id = "job_c0ffee01"
             drv = subprocess.Popen([sys.executable, str(_DRIVER), str(src), str(base), job_id],
-                                   stdout=subprocess.PIPE, text=True)
+                                   stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
             try:
                 self.assertEqual(drv.stdout.readline().strip(), "READY")
-                _wait(lambda: json.loads((base / "jobs" / f"{job_id}.json").read_text())["status"] == "skills_running",
+                _wait(lambda: json.loads((base / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))["status"] == "skills_running",
                       what="the job to be mid-flight")
                 os.kill(drv.pid, signal.SIGKILL)  # the console dies; its job process is left behind
                 drv.wait(timeout=10)
@@ -294,7 +294,7 @@ class VideoProducerBootAuditCallSites(unittest.TestCase):
     def test_both_hosts_call_start_boot_audit(self):
         root = Path(__file__).resolve().parents[3]
         for rel in ("core/gateway/corvin_gateway/app.py", "core/console/corvin_console/standalone.py"):
-            text = (root / rel).read_text()
+            text = (root / rel).read_text(encoding="utf-8")
             self.assertIn("video_producer_api as _vpa", text, rel)
             self.assertIn("_vpa.start_boot_audit()", text, rel)
 

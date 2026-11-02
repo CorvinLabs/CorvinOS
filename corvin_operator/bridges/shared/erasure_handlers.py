@@ -1140,6 +1140,25 @@ def _record_chain_seam(*, tenant_id: str, request_id: str, task_id: str,
         pass
 
 
+def _rewrite_held_in_place(fh: Any, text: str) -> None:
+    """Windows: rewrite a file THROUGH the handle that holds its writer lock.
+
+    ``os.replace`` (and ``unlink``) onto a file that is still open fails on
+    Windows (WinError 5/32: Python opens without FILE_SHARE_DELETE), and the
+    session-ledger purge must keep the writer's lock open across the rewrite.
+    Truncate + write + fsync on the held fd instead; the writer's inode re-check
+    sees the same file and appends after the rewritten content.
+    """
+    fh.flush()
+    fd = fh.fileno()
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    data = text.encode("utf-8", "surrogateescape")
+    while data:
+        data = data[os.write(fd, data):]
+    os.fsync(fd)
+
+
 def _atomic_replace_text(target: Path, text: str) -> None:
     """Crash-atomic rewrite of ``target`` (R3 follow-up).
 
@@ -2037,7 +2056,7 @@ class CELAnchorHandler:
             # re-write a store purged in between, and the erasure reported
             # APPLIED over data that was back on disk (review R5-3).
             import fcntl  # noqa: PLC0415
-            with open(root / ".store.lock", "a+") as lock_fh:
+            with open(root / ".store.lock", "a+", encoding="utf-8") as lock_fh:
                 fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
                 for f in sorted(root.glob("*.jsonl")):
                     stem = (f.name[: -len(".pending.jsonl")] if f.name.endswith(".pending.jsonl")
@@ -2248,7 +2267,7 @@ class ChatGroupHandler:
                        applied_reason="removed {n} group message(s)/file(s)/membership(s)")
 
 
-def _purge_ledger_file(f: Path, subject_id: str) -> int:
+def _purge_ledger_file(f: Path, subject_id: str, held: Any = None) -> int:
     """Record-wise erasure of one session ledger. A record attributed to the
     subject (chat key, sender, …) is removed. A record that names the subject
     ONLY as a group observer is REWRITTEN instead: the observers' framed lines
@@ -2287,7 +2306,11 @@ def _purge_ledger_file(f: Path, subject_id: str) -> int:
                 line = json.dumps(rec, ensure_ascii=False)
         kept.append(line)
     if hit:
-        _atomic_replace_text(f, "\n".join(kept) + ("\n" if kept else ""))
+        text = "\n".join(kept) + ("\n" if kept else "")
+        if held is not None and os.name == "nt":
+            _rewrite_held_in_place(held, text)  # cannot replace a file we hold open
+        else:
+            _atomic_replace_text(f, text)
     return hit
 
 
@@ -2354,19 +2377,29 @@ class SessionLedgerHandler:
                 # after taking the lock, so it never appends to the replaced file.
                 with open(f, "a+", encoding="utf-8") as lock_fh:
                     fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+                    emptied = False
                     try:
-                        n = _purge_ledger_file(f, subject_id)
+                        n = _purge_ledger_file(f, subject_id, lock_fh)
                         # A boundary written by the inactivity sweep knows only
                         # the SANITISED directory name ("…@s.whatsapp.net" →
                         # "…_s_whatsapp_net"); match that form too.
                         safe = _ledger_safe_key(subject_id)
                         if safe and safe != subject_id:
-                            n += _purge_ledger_file(f, safe)
+                            n += _purge_ledger_file(f, safe, lock_fh)
                         removed += n
-                        if n and not f.read_text(encoding="utf-8").strip():
+                        emptied = bool(n) and not f.read_text(encoding="utf-8").strip()
+                        if emptied and os.name != "nt":
                             f.unlink()
                     finally:
                         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+                if emptied and os.name == "nt":
+                    # Windows cannot unlink a file we hold open; it is empty
+                    # already, so a writer that opened it meanwhile (unlink then
+                    # fails) only appends to an empty ledger.
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
             # Anything else under the store tree follows the generic rule (a
             # file named after the subject, a JSON/JSONL record naming it).
             # The ledger pass ran first, so an observer's records were already

@@ -79,7 +79,7 @@ class FlowDefinition:
 
     @classmethod
     def from_file(cls, path: Path) -> "FlowDefinition":
-        return cls.from_yaml(path.read_text())
+        return cls.from_yaml(path.read_text(encoding="utf-8"))
 
 
 class FlowBudget:
@@ -159,11 +159,11 @@ class FlowRunManifest:
 
     def append(self, event_type: str, **fields: Any) -> None:
         entry = {"type": event_type, "ts": time.time(), **fields}
-        with open(self._path, "a") as fh:
+        with open(self._path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
 
     def events(self) -> list[dict[str, Any]]:
-        lines = self._path.read_text().strip().splitlines()
+        lines = self._path.read_text(encoding="utf-8").strip().splitlines()
         return [json.loads(line) for line in lines if line.strip()]
 
     def event_types(self) -> list[str]:

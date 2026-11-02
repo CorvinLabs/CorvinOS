@@ -323,7 +323,7 @@ def case_no_anthropic_sdk_import():
     import ast
     src_path = (REPO / "corvin_operator" / "bridges" / "shared"
                 / "dialectic.py")
-    tree = ast.parse(src_path.read_text())
+    tree = ast.parse(src_path.read_text(encoding="utf-8"))
     bad = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -398,7 +398,7 @@ def case_rate_limit_per_site():
     audit_path = Path(_TD) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     if audit_path.exists():
         events = []
-        for line in audit_path.read_text().splitlines():
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 try:
                     events.append(json.loads(line))

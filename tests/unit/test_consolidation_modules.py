@@ -31,8 +31,8 @@ class TestModuleAnalyzer:
             tmpdir_path = Path(tmpdir)
 
             # A -> B
-            (tmpdir_path / "a.py").write_text("import b\nresult = b.func()")
-            (tmpdir_path / "b.py").write_text("def func(): return 42")
+            (tmpdir_path / "a.py").write_text("import b\nresult = b.func()", encoding="utf-8")
+            (tmpdir_path / "b.py").write_text("def func(): return 42", encoding="utf-8")
 
             yield tmpdir_path
 
@@ -43,9 +43,9 @@ class TestModuleAnalyzer:
             tmpdir_path = Path(tmpdir)
 
             # A -> B -> C -> A
-            (tmpdir_path / "a.py").write_text("from b import func_b")
-            (tmpdir_path / "b.py").write_text("from c import func_c")
-            (tmpdir_path / "c.py").write_text("from a import func_a")
+            (tmpdir_path / "a.py").write_text("from b import func_b", encoding="utf-8")
+            (tmpdir_path / "b.py").write_text("from c import func_c", encoding="utf-8")
+            (tmpdir_path / "c.py").write_text("from a import func_a", encoding="utf-8")
 
             yield tmpdir_path
 
@@ -61,13 +61,13 @@ class TestModuleAnalyzer:
 
             # core/audit.py -> core/chain.py
             (tmpdir_path / "core" / "audit.py").write_text(
-                "from core.chain import AuditChain"
+                "from core.chain import AuditChain", encoding="utf-8"
             )
-            (tmpdir_path / "core" / "chain.py").write_text("class AuditChain: pass")
+            (tmpdir_path / "core" / "chain.py").write_text("class AuditChain: pass", encoding="utf-8")
 
             # utils/helpers.py -> core/audit.py
             (tmpdir_path / "utils" / "helpers.py").write_text(
-                "from core.audit import Audit"
+                "from core.audit import Audit", encoding="utf-8"
             )
 
             yield tmpdir_path
@@ -94,8 +94,8 @@ class TestModuleAnalyzer:
             tmpdir_path = Path(tmpdir)
 
             # A -> B and B -> A (2-cycle)
-            (tmpdir_path / "a.py").write_text("from b import func_b")
-            (tmpdir_path / "b.py").write_text("from a import func_a")
+            (tmpdir_path / "a.py").write_text("from b import func_b", encoding="utf-8")
+            (tmpdir_path / "b.py").write_text("from a import func_a", encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()
@@ -123,12 +123,12 @@ class TestModuleAnalyzer:
 
             # Create a known graph: 1->2, 2->3, 3->2, 3->4, 4->1
             # SCCs: {1,2,3,4}
-            (tmpdir_path / "module1.py").write_text("from module2 import x")
-            (tmpdir_path / "module2.py").write_text("from module3 import x")
+            (tmpdir_path / "module1.py").write_text("from module2 import x", encoding="utf-8")
+            (tmpdir_path / "module2.py").write_text("from module3 import x", encoding="utf-8")
             (tmpdir_path / "module3.py").write_text(
-                "from module2 import x\nfrom module4 import x"
+                "from module2 import x\nfrom module4 import x", encoding="utf-8"
             )
-            (tmpdir_path / "module4.py").write_text("from module1 import x")
+            (tmpdir_path / "module4.py").write_text("from module1 import x", encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()
@@ -151,7 +151,7 @@ class TestModuleAnalyzer:
 
             # audit module importing from non-compliance layer
             (tmpdir_path / "audit.py").write_text(
-                "import os\nfrom datetime import datetime"
+                "import os\nfrom datetime import datetime", encoding="utf-8"
             )
 
             layer_boundaries = {
@@ -216,7 +216,7 @@ class TestModuleAnalyzer:
         with TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            (tmpdir_path / "standalone.py").write_text("def func(): return 42")
+            (tmpdir_path / "standalone.py").write_text("def func(): return 42", encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()
@@ -229,7 +229,7 @@ class TestModuleAnalyzer:
         with TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            (tmpdir_path / "module.py").write_text("from module import func")
+            (tmpdir_path / "module.py").write_text("from module import func", encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()
@@ -245,8 +245,8 @@ class TestModuleAnalyzer:
         with TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            (tmpdir_path / "a.py").write_text("from b import *")
-            (tmpdir_path / "b.py").write_text("def func(): pass")
+            (tmpdir_path / "a.py").write_text("from b import *", encoding="utf-8")
+            (tmpdir_path / "b.py").write_text("def func(): pass", encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()
@@ -260,9 +260,9 @@ class TestModuleAnalyzer:
             tmpdir_path = Path(tmpdir)
             (tmpdir_path / "pkg").mkdir()
 
-            (tmpdir_path / "pkg" / "__init__.py").write_text("")
-            (tmpdir_path / "pkg" / "a.py").write_text("from . import b")
-            (tmpdir_path / "pkg" / "b.py").write_text("def func(): pass")
+            (tmpdir_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (tmpdir_path / "pkg" / "a.py").write_text("from . import b", encoding="utf-8")
+            (tmpdir_path / "pkg" / "b.py").write_text("def func(): pass", encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()
@@ -275,8 +275,8 @@ class TestModuleAnalyzer:
         with TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            (tmpdir_path / "good.py").write_text("import os\ndef func(): pass")
-            (tmpdir_path / "bad.py").write_text("from x import (")  # Syntax error
+            (tmpdir_path / "good.py").write_text("import os\ndef func(): pass", encoding="utf-8")
+            (tmpdir_path / "bad.py").write_text("from x import (", encoding="utf-8")  # Syntax error
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()
@@ -290,8 +290,8 @@ class TestModuleAnalyzer:
             tmpdir_path = Path(tmpdir)
 
             # 2-module cycle (critical)
-            (tmpdir_path / "x.py").write_text("from y import func")
-            (tmpdir_path / "y.py").write_text("from x import func")
+            (tmpdir_path / "x.py").write_text("from y import func", encoding="utf-8")
+            (tmpdir_path / "y.py").write_text("from x import func", encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()
@@ -321,7 +321,7 @@ class TestModuleAnalyzer:
             # Create 100 modules
             for i in range(100):
                 (tmpdir_path / f"module_{i}.py").write_text(
-                    f"def func_{i}(): pass\nresult = {i}"
+                    f"def func_{i}(): pass\nresult = {i}", encoding="utf-8"
                 )
 
             analyzer = ModuleAnalyzer(tmpdir_path)
@@ -372,7 +372,7 @@ class TestModuleAnalyzer:
             for module, dep_list in imports.items():
                 for dep in dep_list:
                     import_stmt = f"from {dep} import x"
-                (tmpdir_path / f"{module}.py").write_text(import_stmt)
+                (tmpdir_path / f"{module}.py").write_text(import_stmt, encoding="utf-8")
 
             analyzer = ModuleAnalyzer(tmpdir_path)
             report = analyzer.scan()

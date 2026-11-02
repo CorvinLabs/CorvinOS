@@ -36,7 +36,7 @@ def _chain(tenant_id="_default"):
     path = fp.tenant_audit_chain(tenant_id)
     if not path.exists():
         return [], True
-    recs = [_json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    recs = [_json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
     ok, _problems = se.verify_chain(path)
     return recs, ok
 
@@ -184,12 +184,12 @@ class TestConfigOverrides:
             config_dir = temp_config_dir
             config_file = config_dir / f"{tenant_id}.json"
             config_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_file, "w") as f:
+            with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(config, f)
 
         manager_with_audit._write_canonical = mock_write
         manager_with_audit._fetch_canonical = lambda tid: (
-            json.load(open(temp_config_dir / f"{tid}.json"))
+            json.load(open(temp_config_dir / f"{tid}.json", encoding="utf-8"))
             if (temp_config_dir / f"{tid}.json").exists()
             else None
         )

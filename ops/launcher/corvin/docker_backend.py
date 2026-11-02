@@ -64,7 +64,7 @@ def is_running(container_name: Optional[str] = None) -> bool:
     try:
         result = subprocess.run(
             [_docker(), "ps", "-q", "--filter", f"name=^{name}$"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         return bool(result.stdout.strip())
     except FileNotFoundError:

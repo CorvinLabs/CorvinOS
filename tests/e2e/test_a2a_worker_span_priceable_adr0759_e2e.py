@@ -172,7 +172,7 @@ def _run_a2a(chain: Path, monkeypatch, engine: _StubEngine, *, task_id: str):
 def _spans(chain: Path, kind: str = "engine.span.end") -> list[dict]:
     """Every span of *kind* on the chain, as the reader sees it."""
     out: list[dict] = []
-    for line in chain.read_text().splitlines():
+    for line in chain.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
@@ -239,7 +239,7 @@ class TestTheEmitterIsReachable:
 
     def test_spawn_a2a_worker_has_a_production_call_site(self):
         receiver = (_REPO / "corvin_operator" / "bridges" / "shared"
-                    / "remote_trigger_receiver.py").read_text()
+                    / "remote_trigger_receiver.py").read_text(encoding="utf-8")
         assert "spawn_a2a_worker(" in receiver, (
             "the A2A receiver no longer spawns the worker — this whole file "
             "would be testing an unreachable path"
@@ -247,12 +247,12 @@ class TestTheEmitterIsReachable:
 
     def test_the_receiver_is_mounted_by_a_shipped_host(self):
         """``corvin_gateway.app`` is what ``corvin-webui.service`` runs."""
-        gateway = (_REPO / "core" / "gateway" / "corvin_gateway" / "app.py").read_text()
+        gateway = (_REPO / "core" / "gateway" / "corvin_gateway" / "app.py").read_text(encoding="utf-8")
         assert "RemoteTriggerReceiver" in gateway
 
     def test_the_end_span_is_emitted_from_the_worker_itself(self):
         worker = (_REPO / "corvin_operator" / "bridges" / "shared"
-                  / "a2a_worker.py").read_text()
+                  / "a2a_worker.py").read_text(encoding="utf-8")
         assert "_attested_model_of(result)" in worker, (
             "the end span stopped reading the engine-reported model"
         )

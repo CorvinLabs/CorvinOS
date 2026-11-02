@@ -46,9 +46,9 @@ def _make_skill(root: Path, manifest: dict = _MANIFEST) -> Path:
     skill_dir = root / manifest["skill_id"]
     for d in ["src", "hooks", "tests", "scripts", "docs", "references"]:
         (skill_dir / d).mkdir(parents=True, exist_ok=True)
-    (skill_dir / "skill.json").write_text(json.dumps(manifest))
-    (skill_dir / "README.md").write_text("# Test Skill")
-    (skill_dir / "src" / "skill.py").write_text("class TestSkill: pass\n")
+    (skill_dir / "skill.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (skill_dir / "README.md").write_text("# Test Skill", encoding="utf-8")
+    (skill_dir / "src" / "skill.py").write_text("class TestSkill: pass\n", encoding="utf-8")
     return skill_dir
 
 
@@ -103,7 +103,7 @@ class TestSkillPackager:
     def test_package_missing_structure(self, tmp_path):
         skill = tmp_path / "gen" / "test_skill"
         skill.mkdir(parents=True)
-        (skill / "skill.json").write_text(json.dumps(_MANIFEST))
+        (skill / "skill.json").write_text(json.dumps(_MANIFEST), encoding="utf-8")
         with pytest.raises(ValueError, match="Missing required directory"):
             SkillPackager(tmp_path / "pkgs").package(skill, SkillManifestV2.from_dict(_MANIFEST))
 
@@ -237,7 +237,7 @@ class TestHTTPEndpoints:
         }]
 
         chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-        actions = [json.loads(l).get("details", {}).get("action") for l in chain.read_text().splitlines()]
+        actions = [json.loads(l).get("details", {}).get("action") for l in chain.read_text(encoding="utf-8").splitlines()]
         assert {"skill_forge.package", "skill_forge.download", "skill_forge.install"} <= set(actions)
 
     def test_install_refuses_wrong_hash(self, client, home):
@@ -424,7 +424,7 @@ class TestSignedPackagesReview2026_10_12:
     def test_an_unreadable_key_store_refuses_instead_of_installing_unverifiable(self, tmp_path, home):
         zip_path, _ = self._signed(tmp_path, home)
         meta = home / "tenants" / "_default" / "global" / "operator_keys" / "metadata.json"
-        meta.write_text("{not json")
+        meta.write_text("{not json", encoding="utf-8")
         bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
             b"tampered" if n == "test_skill/src/skill.py" else d))
         inst, ok, msg = self._install(tmp_path, bad, digest)
@@ -433,10 +433,10 @@ class TestSignedPackagesReview2026_10_12:
     def test_one_malformed_rotated_key_does_not_discard_the_current_key(self, tmp_path, home):
         zip_path, zip_hash = self._signed(tmp_path, home)
         meta = home / "tenants" / "_default" / "global" / "operator_keys" / "metadata.json"
-        data = json.loads(meta.read_text())
+        data = json.loads(meta.read_text(encoding="utf-8"))
         data["old_keys"] = [{"rotated_at": "2026-10-01T00:00:00", "public_key_pem": "garbage"},
                             {"rotated_at": "not a date"}]
-        meta.write_text(json.dumps(data))
+        meta.write_text(json.dumps(data), encoding="utf-8")
         inst, ok, msg = self._install(tmp_path, zip_path, zip_hash)
         assert ok, msg
         assert inst._load_registry()["test_skill"][0]["verification"]["signature"] == "valid"
@@ -445,10 +445,10 @@ class TestSignedPackagesReview2026_10_12:
         _generate_operator_key(home)
         skill = _make_skill(tmp_path / "gen")
         secret = tmp_path / "secret.txt"
-        secret.write_text("OPERATOR-SECRET")
+        secret.write_text("OPERATOR-SECRET", encoding="utf-8")
         (skill / "docs" / "link.txt").symlink_to(secret)
         (skill / "src" / ".forge").mkdir()
-        (skill / "src" / ".forge" / "helper.py").write_text("x = 1\n")
+        (skill / "src" / ".forge" / "helper.py").write_text("x = 1\n", encoding="utf-8")
         zip_path, zip_hash, _ = SkillPackager(tmp_path / "pkgs").package(
             skill, SkillManifestV2.from_dict(_MANIFEST))
         with zipfile.ZipFile(zip_path) as zf:
@@ -485,7 +485,7 @@ class TestPackagesReviewRound2:
         import zipfile
         _generate_operator_key(home)
         skill = _make_skill(tmp_path / "gen")
-        (skill / "skill.sig").write_text("stale signature from an earlier install")
+        (skill / "skill.sig").write_text("stale signature from an earlier install", encoding="utf-8")
         zip_path, digest, meta = SkillPackager(tmp_path / "pkgs").package(
             skill, SkillManifestV2.from_dict(_MANIFEST))
         names = zipfile.ZipFile(zip_path).namelist()
@@ -512,7 +512,7 @@ class TestPackagesReviewRound2:
         skill = _make_skill(tmp_path / "gen")
         outside = tmp_path / "outside"
         outside.mkdir()
-        (outside / "keep.txt").write_text("operator data")
+        (outside / "keep.txt").write_text("operator data", encoding="utf-8")
         (skill / ".forge").symlink_to(outside)
         with pytest.raises(PackagingError):
             SkillPackager(tmp_path / "pkgs").package(skill, SkillManifestV2.from_dict(_MANIFEST))
@@ -521,17 +521,17 @@ class TestPackagesReviewRound2:
     def test_a_planted_checksum_symlink_is_replaced_not_followed(self, tmp_path, home):
         skill = _make_skill(tmp_path / "gen")
         victim = tmp_path / "victim.txt"
-        victim.write_text("do not touch")
+        victim.write_text("do not touch", encoding="utf-8")
         (skill / ".forge").mkdir()
         (skill / ".forge" / "checksum.sha256").symlink_to(victim)
         SkillPackager(tmp_path / "pkgs").package(skill, SkillManifestV2.from_dict(_MANIFEST))
-        assert victim.read_text() == "do not touch"
+        assert victim.read_text(encoding="utf-8") == "do not touch"
 
     def test_a_hard_link_is_refused(self, tmp_path, home):
         from core.skills.skill_packager import PackagingError
         skill = _make_skill(tmp_path / "gen")
         secret = tmp_path / "secret.env"
-        secret.write_text("DISCORD_TOKEN=live")
+        secret.write_text("DISCORD_TOKEN=live", encoding="utf-8")
         import os
         os.link(secret, skill / "docs" / "notes.txt")
         with pytest.raises(PackagingError, match="hard link"):
@@ -553,9 +553,9 @@ class TestPackagesReviewRound2:
         """A stray root skill.sig and names that only casefold() merges ('straße'/'strasse')."""
         _generate_operator_key(home)
         skill = _make_skill(tmp_path / "gen")
-        (skill / "skill.sig").write_text("stale")
-        (skill / "docs" / "straße.md").write_text("a")
-        (skill / "docs" / "strasse.md").write_text("b")
+        (skill / "skill.sig").write_text("stale", encoding="utf-8")
+        (skill / "docs" / "straße.md").write_text("a", encoding="utf-8")
+        (skill / "docs" / "strasse.md").write_text("b", encoding="utf-8")
         zip_path, zip_hash, meta = SkillPackager(tmp_path / "pkgs").package(
             skill, SkillManifestV2.from_dict(_MANIFEST))
         inst, ok, msg = self._install(tmp_path, zip_path, zip_hash)

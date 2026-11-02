@@ -125,7 +125,7 @@ class Harness:
             m = re.search(r"call: (.+? call --name (\S+) --input) '<one-line JSON object>'", system)
             if m and tool_input is not None:
                 argv = shlex.split(m.group(1)) + [json.dumps(tool_input)]
-                cp = subprocess.run(argv, capture_output=True, text=True, timeout=90)
+                cp = subprocess.run(argv, capture_output=True, text=True, timeout=90, encoding="utf-8", errors="replace")
                 env = json.loads(cp.stdout)
                 self.tool_outputs.append(env)
                 out["result"] = {"tool": m.group(2), "data": env.get("data")}
@@ -308,7 +308,7 @@ def test_the_sandbox_isolates_network_and_host_files_with_an_outside_positive_co
         payload = {"port": port, "path": str(host_file)}
 
         # positive control: the same program, run outside any sandbox, reaches the port and writes the file
-        cp = subprocess.run([sys.executable, "-c", PROBE_IMPL], input=json.dumps(payload), capture_output=True, text=True)
+        cp = subprocess.run([sys.executable, "-c", PROBE_IMPL], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert json.loads(cp.stdout) == {"net": "reachable", "write": "landed"}, cp
         assert host_file.exists()
         host_file.unlink()
@@ -419,7 +419,7 @@ def test_a_child_worker_at_depth_one_uses_the_forged_tool_too(tmp_path):
                 m = re.search(r"call: (.+? call --name (\S+) --input) '<one-line JSON object>'", system)
                 assert m, "the child's prompt has no forged-tool call line"
                 cp = subprocess.run(shlex.split(m.group(1)) + [json.dumps(tool_input)],
-                                    capture_output=True, text=True, timeout=90)
+                                    capture_output=True, text=True, timeout=90, encoding="utf-8", errors="replace")
                 env = json.loads(cp.stdout)
                 self.tool_outputs.append(env)
                 return json.dumps({"status": "success", "confidence": 0.9,

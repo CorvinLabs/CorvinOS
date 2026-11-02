@@ -34,7 +34,7 @@ def test_no_adesso_in_installation():
 
     assert a2a_token_file.exists(), f"a2a_token.py not found at {a2a_token_file}"
 
-    content = a2a_token_file.read_text()
+    content = a2a_token_file.read_text(encoding="utf-8")
 
     # This used to fail — hardcoded "adesso-windows" in __main__ block
     assert 'peer_id="adesso-windows"' not in content, \
@@ -74,7 +74,7 @@ def test_no_adeso_package_in_defaults():
             print("⚠️  install-defaults.yaml not found, skipping package check")
             return
 
-    content = install_defaults.read_text()
+    content = install_defaults.read_text(encoding="utf-8")
 
     # No Adesso-related packages should be in defaults
     assert "adesso" not in content.lower(), \
@@ -99,7 +99,7 @@ def test_no_adesso_in_manifest_files():
     suspicious_files = []
 
     for manifest_file in repo_root.glob("**/manifest.json"):
-        content = manifest_file.read_text()
+        content = manifest_file.read_text(encoding="utf-8")
 
         # adscale-ldd was the problematic package
         if "adscale-ldd" in content and "adesso" in content.lower():

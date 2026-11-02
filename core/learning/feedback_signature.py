@@ -103,7 +103,7 @@ class FeedbackSignatureValidator:
             key_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             # Create key file with 256-bit random material (restricted permissions)
             fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(secrets.token_hex(32))  # 256-bit = 64 hex chars
             return True, ""
         except FileExistsError:
@@ -126,7 +126,7 @@ class FeedbackSignatureValidator:
             return None, f"Signing key not found for tenant {tenant_id} (fail-closed)"
 
         try:
-            material = key_path.read_text().strip()
+            material = key_path.read_text(encoding="utf-8").strip()
         except OSError as exc:
             return None, f"Failed to read signing key: {exc}"
 

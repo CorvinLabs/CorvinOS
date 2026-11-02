@@ -121,7 +121,7 @@ class TestAHookMayDeny(_Base):
         self._hook(lambda w: False)
         self._run()
         meta = json.loads(
-            self.wf._run_meta_path("_default", "wid-1", "rid-1").read_text()
+            self.wf._run_meta_path("_default", "wid-1", "rid-1").read_text(encoding="utf-8")
         )
         self.assertEqual(meta["status"], "failed")
         self.assertIs(meta["ok"], False)

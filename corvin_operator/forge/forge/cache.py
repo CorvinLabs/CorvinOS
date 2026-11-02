@@ -88,7 +88,7 @@ def lookup(workspace_root: Path, key: str) -> dict[str, Any] | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
 
@@ -110,7 +110,7 @@ def store(
     }
     fd, tmp = tempfile.mkstemp(prefix=p.name + ".", dir=str(p.parent))
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(record, indent=2))
             fh.flush()
             os.fsync(fh.fileno())

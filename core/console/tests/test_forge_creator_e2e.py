@@ -167,7 +167,7 @@ def chain_actions(client, tenant: str | None = None) -> list[str]:
     chain = client.home / "tenants" / (tenant or client.tenant) / "global" / "forge" / "audit.jsonl"
     out = []
     if chain.exists():
-        for line in chain.read_text().splitlines():
+        for line in chain.read_text(encoding="utf-8").splitlines():
             try:
                 rec = json.loads(line)
             except ValueError:
@@ -346,7 +346,7 @@ def test_plugin_run_stages_with_panel_and_shows_in_marketplace(tmp_path):
 
         # Not installed: the tenant plugin registry never heard of it.
         registry = client.home / "tenants" / client.tenant / "plugins" / "registry.yaml"
-        assert not registry.exists() or plugin["plugin_id"] not in registry.read_text()
+        assert not registry.exists() or plugin["plugin_id"] not in registry.read_text(encoding="utf-8")
 
         resp = client.delete(f"/v1/console/forge-creator/plugins/{plugin['dirname']}")
         assert resp.status_code == 200, resp.text
@@ -441,16 +441,16 @@ def test_an_existing_directory_blocks_the_name_and_is_left_alone(tmp_path):
     with console(tmp_path, ScriptedEngine()) as client:
         squatter = client.home / "tenants" / client.tenant / "plugin-builder" / "community_weather_digest"
         squatter.mkdir(parents=True)
-        (squatter / "keep.txt").write_text("chat builder scaffold")
+        (squatter / "keep.txt").write_text("chat builder scaffold", encoding="utf-8")
         body = poll(client, start(client, "plugin", "a plugin that summarises the daily weather"))
         assert body["status"] == "failed" and "already exists" in body["message"]
-        assert (squatter / "keep.txt").read_text() == "chat builder scaffold"
+        assert (squatter / "keep.txt").read_text(encoding="utf-8") == "chat builder scaffold"
 
 
 def test_compile_check_reports_a_syntax_error(tmp_path):
     from skill_creator.plugin_creator import PluginCreatorOrchestrator
-    (tmp_path / "plugin.py").write_text("def broken(:\n    pass\n")
-    (tmp_path / "ok.py").write_text("x = 1\n")
+    (tmp_path / "plugin.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
+    (tmp_path / "ok.py").write_text("x = 1\n", encoding="utf-8")
     problems = PluginCreatorOrchestrator.compile_check(tmp_path)
     assert len(problems) == 1 and problems[0].startswith("plugin.py")
     assert not list(tmp_path.glob("*.forgecheck"))
@@ -500,9 +500,9 @@ def _simulate_restart(client, run_id: str, **patch) -> None:
     stopped long ago (a live peer would keep refreshing it, ADR-2253 D6), and an empty in-memory store."""
     from corvin_console import forge_runs
     path = _run_file(client, run_id)
-    rec = json.loads(path.read_text())
+    rec = json.loads(path.read_text(encoding="utf-8"))
     rec.update({"boot_id": "previous-process", "heartbeat_at": 0, **patch})
-    path.write_text(json.dumps(rec))
+    path.write_text(json.dumps(rec), encoding="utf-8")
     with forge_runs.runs_lock:
         forge_runs.runs.clear()
 
@@ -533,7 +533,7 @@ def test_interrupted_run_is_resumed_after_a_console_restart(tmp_path):
         body = poll(client, run_id)  # never a 404: the run is re-spawned from its request
         assert body["status"] in ("running", "success")
         assert poll(client, run_id)["status"] == "success"
-        assert json.loads(_run_file(client, run_id).read_text())["resumes"] == 1
+        assert json.loads(_run_file(client, run_id).read_text(encoding="utf-8"))["resumes"] == 1
 
 
 def test_run_that_cannot_be_resumed_reports_interrupted_not_404(tmp_path):
@@ -675,7 +675,7 @@ def test_a_rejection_is_audited_with_its_reason_code(tmp_path):
         body = poll(client, start(client, "tool", "count the words in a text"))
         assert body["failure_code"] == "tests_failed"
         chain = client.home / "tenants" / client.tenant / "global" / "forge" / "audit.jsonl"
-        recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
         rej = [r for r in recs if r.get("event_type") == "forge.tool_rejected"]
         assert rej and rej[-1]["details"]["code"] == "tests_failed"
         assert rej[-1]["details"]["tests_total"] == 2

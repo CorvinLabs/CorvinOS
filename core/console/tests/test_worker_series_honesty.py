@@ -197,7 +197,7 @@ class TestWorkerSpanReader:
             # (a stub engine, an aborted spawn) — excluded, as before
             _end("nothing", model="", ts=1_800_000_020.0),
         ]
-        chain.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        chain.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         spans = MSL._read_worker_spans(chain, 10_000_000)
         by_id = {s["span_id"]: s for s in spans}
         assert set(by_id) == {"priced", "unpriced"}
@@ -212,7 +212,7 @@ class TestWorkerSpanReader:
             _end("a", model="claude-sonnet-5", ts=1_800_000_000.0),
             _end("b", model="claude-sonnet-5", ts=1_800_000_000.0),
         ]
-        chain.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        chain.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         monkeypatch.setattr(MSL, "_acs_chain_paths", lambda tid: [tmp_path / "none.jsonl", chain])
         monkeypatch.setattr(MSL, "_read_completed_turns", lambda *a, **k: [])
         res = MSL.compute_cost_efficiency("_default", chain_path=chain)
@@ -231,7 +231,7 @@ class TestScanReachesPricedHistory:
         noise = json.dumps({"ts": 1_800_000_100.0, "event_type": "console.session_denied",
                             "details": {"pad": "x" * 900}}) + "\n"
         old_cap = 64 * 1024 * 1024
-        with chain.open("w") as fh:
+        with chain.open("w", encoding="utf-8") as fh:
             fh.write(json.dumps(_end("old-priced", model="claude-sonnet-5",
                                      ts=1_800_000_000.0, tokens=(100, 50, 0, 0))) + "\n")
             fh.write(noise * (old_cap // len(noise) + 1024))
@@ -243,7 +243,7 @@ class TestScanReachesPricedHistory:
         chain = tmp_path / "audit.jsonl"
         first = json.dumps(_end("cut", model="claude-sonnet-5", ts=1.0, tokens=(1, 1, 0, 0)))
         last = json.dumps(_end("kept", model="claude-sonnet-5", ts=2.0, tokens=(1, 1, 0, 0)))
-        chain.write_text(first + "\n" + last + "\n")
+        chain.write_text(first + "\n" + last + "\n", encoding="utf-8")
         spans = MSL._read_worker_spans(chain, len(last) + 10)
         assert [s["span_id"] for s in spans] == ["kept"]
 
@@ -266,7 +266,7 @@ def test_static_span_allowlist_is_a_superset_of_end_fields():
         "('engine.span.start', 'engine.span.end')}))"
     ) % str(_REPO / "corvin_operator" / "forge")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                         check=True, cwd=str(_REPO))
+                         check=True, cwd=str(_REPO), encoding="utf-8", errors="replace")
     static = json.loads(out.stdout.strip().splitlines()[-1])
     missing_end = sorted(ESPAN.END_FIELDS - set(static["engine.span.end"]))
     assert not missing_end, (

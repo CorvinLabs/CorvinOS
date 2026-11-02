@@ -204,7 +204,7 @@ def _find_npm() -> str | None:
         result = subprocess.run(
             f"source {nvm_sh} && which npm",
             shell=True, executable="/bin/bash",
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
         )
         npm_bin = result.stdout.strip()
         if npm_bin and Path(npm_bin).exists():
@@ -233,7 +233,7 @@ def _kill_port(port: int) -> None:
         # netstat -ano lists PID in the last column for LISTENING entries
         result = subprocess.run(
             ["netstat", "-ano"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
         )
         for line in result.stdout.splitlines():
             if f":{port}" in line and "LISTENING" in line:
@@ -246,7 +246,7 @@ def _kill_port(port: int) -> None:
     elif shutil.which("lsof"):
         result = subprocess.run(
             ["lsof", "-t", "-i", f":{port}"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
         )
         for pid in result.stdout.strip().splitlines():
             subprocess.run(["kill", pid], check=False)

@@ -190,7 +190,7 @@ def load_manifest_v2_from_file(manifest_path: str) -> SkillManifestV2:
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return SkillManifestV2.from_dict(data)
     except json.JSONDecodeError as e:
@@ -215,7 +215,7 @@ def save_manifest_v2_to_file(manifest: SkillManifestV2, manifest_path: str) -> N
     path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(manifest.to_dict(), f, indent=2)
     except Exception as e:
         raise IOError(f"Failed to save manifest: {e}")

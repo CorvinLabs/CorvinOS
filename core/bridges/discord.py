@@ -106,5 +106,5 @@ class DiscordBridge(BridgeBase):
         }
 
         log_file = log_dir / f"discord_{media.media_id}.json"
-        with open(log_file, "w") as f:
+        with open(log_file, "w", encoding="utf-8") as f:
             json.dump(log_entry, f, indent=2)

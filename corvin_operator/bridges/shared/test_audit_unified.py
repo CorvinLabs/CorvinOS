@@ -113,7 +113,7 @@ def test_bridge_then_forge_share_one_chain():
                 details={"sha": "abc1234567890abc"}, hash_chain=True,
             )
 
-            lines = unified.read_text().splitlines()
+            lines = unified.read_text(encoding="utf-8").splitlines()
             t("two records written", len(lines) == 2)
             r1 = json.loads(lines[0])
             r2 = json.loads(lines[1])
@@ -162,7 +162,7 @@ def test_concurrent_processes_do_not_corrupt_chain():
             t(f"child rc=0 (tag exit)", p.returncode == 0)
 
         ok, problems = _voice_audit.verify_audit(path)
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         t(f"got 100 records on disk",
           len(lines) == 100,
           detail=f"got {len(lines)}")
@@ -232,7 +232,7 @@ class TestConsentAuditPiiGuard(unittest.TestCase):
             )
             events = [
                 json.loads(line)
-                for line in unified.read_text().splitlines()
+                for line in unified.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
             consent_events = [

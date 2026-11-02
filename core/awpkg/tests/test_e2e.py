@@ -354,7 +354,7 @@ class TestLifecycle:
         result = install(pkg, scope="user", corvin_home=home)
         meta = result.install_dir / "_awpkg_meta.json"
         assert meta.exists()
-        data = json.loads(meta.read_text())
+        data = json.loads(meta.read_text(encoding="utf-8"))
         assert data["id"] == "com.test.meta"
 
     def test_install_extracts_all_components(self, tmp_path):
@@ -647,7 +647,7 @@ class TestAuditChain:
             )
             install(pkg, scope="user", corvin_home=home)
             assert audit_path.exists()
-            events = [json.loads(l) for l in audit_path.read_text().splitlines() if l.strip()]
+            events = [json.loads(l) for l in audit_path.read_text(encoding="utf-8").splitlines() if l.strip()]
             event_types = [e["event_type"] for e in events]
             assert "package.installed" in event_types
         finally:
@@ -665,7 +665,7 @@ class TestAuditChain:
             )
             install(pkg, scope="user", corvin_home=home)
             remove("com.test.audit-remove", scope="user", corvin_home=home)
-            events = [json.loads(l) for l in audit_path.read_text().splitlines() if l.strip()]
+            events = [json.loads(l) for l in audit_path.read_text(encoding="utf-8").splitlines() if l.strip()]
             event_types = [e["event_type"] for e in events]
             assert "package.removed" in event_types
         finally:
@@ -687,7 +687,7 @@ class TestAuditChain:
                 )
                 install(pkg, scope="user", corvin_home=home)
 
-            events = [json.loads(l) for l in audit_path.read_text().splitlines() if l.strip()]
+            events = [json.loads(l) for l in audit_path.read_text(encoding="utf-8").splitlines() if l.strip()]
             assert [e["event_type"] for e in events].count("package.installed") == 3
             # Verified by THE core verifier — the same one the boot tripwire
             # runs. (This test used to recompute a private hash formula that
@@ -746,7 +746,7 @@ def test_awpkg_record_after_a_keyed_record_keeps_the_chain_valid(tmp_path):
     pp = os.pathsep.join([str(repo), str(repo / "corvin_operator")])
     for code in (core_write, awpkg_write, verify):
         r = subprocess.run([sys.executable, "-c", code], env={**env, "PYTHONPATH": pp},
-                           cwd=tmp_path, capture_output=True, text=True, timeout=120)
+                           cwd=tmp_path, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
         assert r.returncode == 0, (r.stdout[-1000:], r.stderr[-2000:])
 
 

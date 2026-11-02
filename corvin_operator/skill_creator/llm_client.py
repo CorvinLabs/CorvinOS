@@ -222,7 +222,7 @@ class ClaudeCodeClient:
                     cwd=neutral_cwd,
                     capture_output=True,
                     text=True,
-                    timeout=self.timeout_s,
+                    timeout=self.timeout_s, encoding="utf-8", errors="replace",
                 )
             except subprocess.TimeoutExpired as exc:
                 raise ClaudeCodeUnavailable(

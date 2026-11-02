@@ -40,11 +40,11 @@ def test_read_audit_head_sees_tenant_chain_records(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     chain = tmp_path / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     chain.parent.mkdir(parents=True)
-    chain.write_text("".join(json.dumps({"hash": f"h{i}", "ts": i}) + "\n" for i in range(3)))
+    chain.write_text("".join(json.dumps({"hash": f"h{i}", "ts": i}) + "\n" for i in range(3)), encoding="utf-8")
     # A stale legacy file must not be what is reported.
     legacy = tmp_path / "global" / "forge" / "audit.jsonl"
     legacy.parent.mkdir(parents=True)
-    legacy.write_text(json.dumps({"hash": "legacy", "ts": 0}) + "\n")
+    legacy.write_text(json.dumps({"hash": "legacy", "ts": 0}) + "\n", encoding="utf-8")
     head = ah.read_audit_head()
     assert head["event_count"] == 3 and head["chain_head"] == "h2"
 

@@ -695,7 +695,7 @@ def _chain_records(tmp_path, action):
     chain = tmp_path / "corvin_home" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     out = []
     if chain.exists():
-        for line in chain.read_text().splitlines():
+        for line in chain.read_text(encoding="utf-8").splitlines():
             try:
                 rec = json.loads(line)
             except ValueError:
@@ -753,12 +753,12 @@ def test_a_skill_run_has_the_complete_envelope_and_an_event_log(tmp_path):
         run_id = r.json()["run_id"]
         body = poll_until_done(client, run_id)
         assert body["status"] == "success", body
-        rec = json.loads((tmp_path / "corvin_home/tenants/_default/global/forge_runs" / f"{run_id}.json").read_text())
+        rec = json.loads((tmp_path / "corvin_home/tenants/_default/global/forge_runs" / f"{run_id}.json").read_text(encoding="utf-8"))
         for field in ("started_at", "ended_at", "engine", "artifact_ref", "request_digest"):
             assert rec.get(field) not in (None, ""), (field, rec)
         assert rec["artifact_ref"] == {"kind": "skill", "id": rec["artifact_ref"]["id"]} and rec["artifact_ref"]["id"].startswith("assistant.")
         assert "JSON validiert" not in json.dumps(rec["request_digest"])
-        log = (tmp_path / "corvin_home/tenants/_default/global/forge_runs" / run_id / "events.jsonl").read_text().splitlines()
+        log = (tmp_path / "corvin_home/tenants/_default/global/forge_runs" / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
         events = [json.loads(line) for line in log]
         assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
         types = {e["type"] for e in events}

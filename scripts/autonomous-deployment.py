@@ -133,7 +133,7 @@ class AutonomousDeploymentManager:
             return False
 
         try:
-            with open(final_data_path) as f:
+            with open(final_data_path, encoding="utf-8") as f:
                 final_tasks = json.load(f)
 
             if not isinstance(final_tasks, list) or len(final_tasks) < 50:
@@ -147,7 +147,7 @@ class AutonomousDeploymentManager:
                     return False
 
             # Write expanded dataset
-            with open(test_data_path, "w") as f:
+            with open(test_data_path, "w", encoding="utf-8") as f:
                 json.dump(final_tasks, f, indent=2)
 
             logger.info(f"  ✅ Expanded to {len(final_tasks)} tasks")
@@ -177,7 +177,7 @@ class AutonomousDeploymentManager:
             # Extract metrics
             report_path = self.staging_dir / f"day{day}_report.json"
             if report_path.exists():
-                with open(report_path) as f:
+                with open(report_path, encoding="utf-8") as f:
                     report = json.load(f)
                 logger.info(
                     f"  ✅ Validation complete: "
@@ -254,7 +254,7 @@ class AutonomousDeploymentManager:
                 logger.error("  ❌ Day 5 report not found")
                 return False
 
-            with open(day5_report_path) as f:
+            with open(day5_report_path, encoding="utf-8") as f:
                 day5_report = json.load(f)
 
             # Determine if ready for canary
@@ -292,7 +292,7 @@ class AutonomousDeploymentManager:
 
             # Save sign-off
             sign_off_path = self.staging_dir / "staging_sign_off.json"
-            with open(sign_off_path, "w") as f:
+            with open(sign_off_path, "w", encoding="utf-8") as f:
                 json.dump(sign_off, f, indent=2)
 
             logger.info(f"  ✅ Sign-off report generated: {sign_off_path}")

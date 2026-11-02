@@ -148,7 +148,7 @@ class AudioSynthesisWorker(WorkerSkillBase):
                 narration
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 logger.error(f"espeak-ng failed: {result.stderr}")
@@ -163,7 +163,7 @@ class AudioSynthesisWorker(WorkerSkillBase):
                 output_file
             ]
 
-            result = subprocess.run(cmd_convert, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd_convert, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 logger.error(f"ffmpeg conversion failed: {result.stderr}")
@@ -212,7 +212,7 @@ class AudioSynthesisWorker(WorkerSkillBase):
                 audio_file
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 raise ValueError(f"ffprobe failed: {result.stderr}")

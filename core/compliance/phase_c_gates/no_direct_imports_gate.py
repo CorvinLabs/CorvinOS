@@ -91,7 +91,7 @@ class NoDirectImportsGate:
               grep -r "{'|'.join(self.OLD_IMPORTS)}" core/ tests/ --include="*.py" 2>/dev/null | \
               grep -v "legacy_compat" | grep -v "test_" | grep -v "__pycache__" | head -20"""
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.stdout.strip():
                 for line in result.stdout.strip().split('\n'):
@@ -122,7 +122,7 @@ class NoDirectImportsGate:
               jq -r 'select(.caller_file | startswith("core/legacy_compat") | not) | \
               "\\(.caller_file) \\(.api_name)"' 2>/dev/null | sort -u"""
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.stdout.strip():
                 for line in result.stdout.strip().split('\n'):

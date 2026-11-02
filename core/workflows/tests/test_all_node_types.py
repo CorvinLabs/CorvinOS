@@ -72,20 +72,20 @@ def _doc(tmp_path):
         if not explicit_chat:
             return load_workflow(EXAMPLE)
         import yaml
-        data = yaml.safe_load(EXAMPLE.read_text())
+        data = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
         for n in data["orchestration"]["graph"]:
             if n["type"] == "deliver":
                 n["config"]["chat_id"] = "qa-chat"
             if n["type"] == "answer":
                 n["chat_id"] = "qa-chat"
         p = tmp_path / "all_node_types_explicit.awp.yaml"
-        p.write_text(yaml.safe_dump(data, sort_keys=False))
+        p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         return load_workflow(p)
     return make
 
 
 def _envelopes(outbox: Path) -> list[dict]:
-    return [json.loads(p.read_text()) for p in sorted(outbox.glob("*.json"))]
+    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(outbox.glob("*.json"))]
 
 
 def test_example_uses_every_registered_node_type(_doc):
@@ -212,21 +212,21 @@ def test_paused_run_past_its_deadline_cannot_be_resumed(_doc):
     assert saved["expires_at_ms"] and saved["expires_at_ms"] > time.time() * 1000
     saved["expires_at_ms"] = int(time.time() * 1000) - 1
     path = ckpt._run_path(run.run_id, None)
-    path.write_text(json.dumps(saved))
+    path.write_text(json.dumps(saved), encoding="utf-8")
     with pytest.raises(PauseExpired):
         resume_workflow(run.run_id, "approve", engine=eng)
     assert ckpt.load(run.run_id) is not None  # kept for inspection
 
 
 def test_editing_the_workflow_file_after_the_pause_blocks_the_resume(tmp_path):
-    src = EXAMPLE.read_text()
+    src = EXAMPLE.read_text(encoding="utf-8")
     f = tmp_path / "wf.awp.yaml"
-    f.write_text(src)
+    f.write_text(src, encoding="utf-8")
     doc = load_workflow(f)
     eng = _stub()
     run = DAGRunner(doc, engine=eng, console_run=True).run({})
     assert run.state == "paused"
-    f.write_text(src.replace("Should the report be published?", "Publish now?"))
+    f.write_text(src.replace("Should the report be published?", "Publish now?"), encoding="utf-8")
     with pytest.raises(WorkflowChanged):
         resume_workflow(run.run_id, "yes", engine=eng)
     assert ckpt.load(run.run_id) is not None  # still there, not consumed
@@ -284,13 +284,13 @@ def test_example_plus_peer_agent_runs_through_pause_and_resume_sending_exactly_o
 
     import yaml as _y
 
-    data = _y.safe_load(EXAMPLE.read_text())
+    data = _y.safe_load(EXAMPLE.read_text(encoding="utf-8"))
     data["orchestration"]["graph"].append({
         "id": "peer_review", "type": "peer_agent", "depends_on": ["join"],
         "endpoint_id": "ep_acme", "agent_id": "reviewer", "instruction_from": "join.report",
     })
     p = tmp_path / "with_peer.awp.yaml"
-    p.write_text(_y.safe_dump(data, sort_keys=False))
+    p.write_text(_y.safe_dump(data, sort_keys=False), encoding="utf-8")
     doc = load_workflow(p)
     validate(doc)
     assert {n["type"] for n in doc.graph} == set(NODE_TYPES)  # every registered type, peer_agent included

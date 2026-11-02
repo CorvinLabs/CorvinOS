@@ -91,7 +91,7 @@ class _Base(unittest.TestCase):
         cfg = {"enabled": True, "hmac_key": hk, "recv_key": secrets.token_hex(32)}
         cfg.update(extra)
         p = self.origins / f"{oid}.json"
-        p.write_text(json.dumps(cfg))
+        p.write_text(json.dumps(cfg), encoding="utf-8")
         p.chmod(0o600)
         self.keys[oid] = hk
 

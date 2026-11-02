@@ -64,7 +64,7 @@ def _run(code: str, home: Path, *, extra_env: dict[str, str] | None = None) -> d
     """)
     proc = subprocess.run(
         [PY, "-c", preamble + textwrap.dedent(code) + "\nprint('@@' + json.dumps(OUT))"],
-        capture_output=True, text=True, env=env, cwd=str(REPO), timeout=180,
+        capture_output=True, text=True, env=env, cwd=str(REPO), timeout=180, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, f"subprocess failed:\n{proc.stdout}\n{proc.stderr}"
     line = [l for l in proc.stdout.splitlines() if l.startswith("@@")][-1]
@@ -158,7 +158,7 @@ def test_source_checkout_branch_with_corvin_home_unset(home: Path):
                                  "bridges": str(bp.tenant_audit_chain("_default"))}}))
     """)
     proc = subprocess.run([PY, "-c", code], capture_output=True, text=True,
-                          env=env, cwd=str(REPO), timeout=120)
+                          env=env, cwd=str(REPO), timeout=120, encoding="utf-8", errors="replace")
     assert proc.returncode == 0, proc.stderr
     out = json.loads([l for l in proc.stdout.splitlines() if l.startswith("@@")][-1][2:])
     assert out["core"] == out["forge"] == out["bridges"], out

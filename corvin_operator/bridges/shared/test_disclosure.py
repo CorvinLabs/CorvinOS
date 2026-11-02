@@ -44,7 +44,7 @@ class _DisclosureTestBase(unittest.TestCase):
         self._channel_settings.write_text(json.dumps({
             "whitelist": [OWNER_UID],
             "read_only": [],
-        }))
+        }), encoding="utf-8")
         # Patch BOTH disclosure._channel_settings_path AND
         # roles._channel_settings_path so /join (which crosses into roles)
         # sees the same whitelist.
@@ -220,21 +220,21 @@ class CliRoundTripTests(_DisclosureTestBase):
         real_settings = bridges_root / CHANNEL / "settings.json"
         if real_settings.exists():
             try:
-                live = json.loads(real_settings.read_text())
+                live = json.loads(real_settings.read_text(encoding="utf-8"))
             except Exception:
                 live = {}
             if (live.get("whitelist") or []) and OWNER_UID not in (live.get("whitelist") or []):
                 self.skipTest("real bridge settings would be clobbered")
-        backup = real_settings.read_text() if real_settings.exists() else None
+        backup = real_settings.read_text(encoding="utf-8") if real_settings.exists() else None
         real_settings.parent.mkdir(parents=True, exist_ok=True)
-        real_settings.write_text(self._channel_settings.read_text())
+        real_settings.write_text(self._channel_settings.read_text(encoding="utf-8"), encoding="utf-8")
         try:
             proc = subprocess.run(
                 [sys.executable, str(HERE / "disclosure.py"), *args],
-                env=env, capture_output=True, text=True, timeout=10)
+                env=env, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
         finally:
             if backup is not None:
-                real_settings.write_text(backup)
+                real_settings.write_text(backup, encoding="utf-8")
             else:
                 try: real_settings.unlink()
                 except FileNotFoundError: pass

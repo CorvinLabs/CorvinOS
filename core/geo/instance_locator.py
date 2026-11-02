@@ -347,7 +347,7 @@ class InstanceLocator:
         """
         cache_file = self.geo_cache_dir / "locations.jsonl"
         try:
-            with open(cache_file, "w") as f:
+            with open(cache_file, "w", encoding="utf-8") as f:
                 for instance_id, (location, timestamp) in self._cache.items():
                     record = {
                         "instance_id": instance_id,
@@ -374,7 +374,7 @@ class InstanceLocator:
 
         try:
             count = 0
-            with open(cache_file, "r") as f:
+            with open(cache_file, "r", encoding="utf-8") as f:
                 for line in f:
                     try:
                         record = json.loads(line.strip())

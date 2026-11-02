@@ -51,8 +51,8 @@ def _write_skill(tmp_path: Path, code: str) -> Path:
 
     d = tmp_path / "skill"
     d.mkdir()
-    (d / "manifest.yaml").write_text(yaml.dump(adr_manifest("os.bad_skill")))
-    (d / "skill.py").write_text(textwrap.dedent(code))
+    (d / "manifest.yaml").write_text(yaml.dump(adr_manifest("os.bad_skill")), encoding="utf-8")
+    (d / "skill.py").write_text(textwrap.dedent(code), encoding="utf-8")
     return d
 
 
@@ -99,7 +99,7 @@ def test_dict_and_file_validation_agree(tmp_path):
     m = adr_manifest()
     m["learning_signal"]["scoring_rule"] = "vibes are good"
     f = tmp_path / "manifest.yaml"
-    f.write_text(yaml.dump(m))
+    f.write_text(yaml.dump(m), encoding="utf-8")
     v = SkillValidator()
     by_dict, by_file = v.validate_manifest_dict(m), v.validate_manifest(f)
     assert not by_dict.is_valid and not by_file.is_valid
@@ -175,7 +175,7 @@ def _chain_records(event_type: str) -> list:
     if not chain.exists():
         return []
     out = []
-    for line in chain.read_text().splitlines():
+    for line in chain.read_text(encoding="utf-8").splitlines():
         rec = json.loads(line)
         if rec.get("event_type") == event_type:
             out.append(rec.get("details") or {})

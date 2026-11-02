@@ -59,7 +59,7 @@ class TestEngineAuthenticationChain(unittest.TestCase):
                 home = Path(tmp)
                 mock_home.return_value = home
                 (home / ".claude").mkdir()
-                (home / ".claude" / ".credentials.json").write_text('{"claudeAiOauth": {"accessToken": "tok-123"}}')
+                (home / ".claude" / ".credentials.json").write_text('{"claudeAiOauth": {"accessToken": "tok-123"}}', encoding="utf-8")
 
                 with (
                     patch("engine_detection.shutil.which", return_value="/usr/bin/claude"),

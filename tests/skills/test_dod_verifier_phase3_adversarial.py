@@ -239,7 +239,7 @@ class TestAdversarialCrossPhase:
             persist = WeightPersistence(storage_path=Path(tmpdir) / "weights.json")
 
             # Write corrupted JSON
-            with open(persist.storage_path, "w") as f:
+            with open(persist.storage_path, "w", encoding="utf-8") as f:
                 f.write("{ INVALID JSON }")
 
             # Load should handle gracefully (fail-closed)

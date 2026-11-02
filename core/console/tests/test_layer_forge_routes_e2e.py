@@ -82,7 +82,7 @@ def _lf_events(home: Path) -> list[dict]:
     chain = home / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return [r for r in recs if str(r.get("event_type", "")).startswith("layer_forge.")]
 
 

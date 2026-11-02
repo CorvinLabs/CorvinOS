@@ -50,8 +50,8 @@ param(
 )
 
 $ErrorActionPreference = "Continue"   # a single failed iteration must never kill the loop
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path   # …\operator\bridges\shared
-$BridgeRoot = Split-Path -Parent $ScriptDir                    # …\operator\bridges
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path   # ...\operator\bridges\shared
+$BridgeRoot = Split-Path -Parent $ScriptDir                    # ...\operator\bridges
 
 if (-not $env:CORVIN_HOME) {
     $env:CORVIN_HOME = Join-Path $env:USERPROFILE ".corvin"
@@ -110,14 +110,14 @@ function Find-Python {
         return $fallback
     }
     # 2026-08-02: the old fallback here was `return "python"`, reasoning
-    # "Start-Process will error clearly if this isn't on PATH either" — false
+    # "Start-Process will error clearly if this isn't on PATH either" -- false
     # whenever something named `python` IS on PATH but isn't usable (a fresh
     # Windows install's default-enabled "python" App Execution Alias, which
     # either opens the Store or exits instantly doing nothing; or a stray
     # Python 2 / pre-3.11 install). In both cases Start-Process "succeeds"
     # launching a process that never runs corvinOS, its quick exit gets
     # treated as a normal crash, and the while($true) loop burns through
-    # MaxRestarts doing nothing useful before giving up — a silent failure
+    # MaxRestarts doing nothing useful before giving up -- a silent failure
     # loop, not the clear, immediate error the old comment assumed. Returning
     # $null here lets the caller (a pre-loop check, unlike bridge.ps1's own
     # one-shot `exit 1` which would be wrong INSIDE this restart-forever
@@ -149,9 +149,12 @@ if ($Target -eq "console") {
     # one) -- matches every OTHER Scheduled-Task action string in this
     # codebase (install.ps1, bridge.ps1's own Install-AutostartTask), which
     # is the exact parity test_windows_supervisor_parity.py checks for.
+    # Start-Process joins -ArgumentList elements with plain spaces and does NOT
+    # quote them, so a path with a space (C:\Users\Max Mustermann\...) split
+    # into two arguments and -File never found bridge.ps1. Quote it ourselves.
     $FilePath = "powershell.exe"
     $ArgList = @("-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
-                 "-File", (Join-Path $BridgeRoot "bridge.ps1"), "up", $Bridge)
+                 "-File", "`"$(Join-Path $BridgeRoot "bridge.ps1")`"", "up", $Bridge)
     $WorkDir = $BridgeRoot
 }
 
@@ -162,6 +165,11 @@ if ($Target -eq "console") {
 # restart-budget slot burns on every 6h update-marker check. The install.ps1-
 # generated supervisor sets the same flag; parity is load-bearing.
 $env:CORVIN_SUPERVISED = "1"
+# Python UTF-8 mode for every Python process started from here (and their
+# children): stdout/stderr are redirected to log files, which Python would
+# otherwise encode in the ANSI code page (cp1252) -- the first emoji or
+# non-Latin-1 character raises UnicodeEncodeError and kills the process.
+if (-not $env:PYTHONUTF8) { $env:PYTHONUTF8 = "1" }
 
 Write-SupervisorLog "supervisor starting -- target=$Target child: $FilePath $($ArgList -join ' ')"
 

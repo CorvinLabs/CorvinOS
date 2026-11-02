@@ -130,7 +130,7 @@ def audit(tenant: str, stage: str, **counts) -> None:
 
 def ffprobe_duration(path: Path) -> float:
     out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                          "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True)
+                          "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     try:
         return float(out.stdout.strip())
     except ValueError:
@@ -139,7 +139,7 @@ def ffprobe_duration(path: Path) -> float:
 
 def ffprobe_streams(path: Path) -> set[str]:
     out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
-                          "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+                          "-of", "csv=p=0", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return {x.strip() for x in out.stdout.splitlines() if x.strip()}
 
 
@@ -184,7 +184,7 @@ def stage_tts(concept: dict, out: Path, board: Board, providers=None) -> bool:
     audio = out / "audio"
     audio.mkdir(parents=True, exist_ok=True)
     manifest_p = audio / "manifest.json"
-    manifest = json.loads(manifest_p.read_text()) if manifest_p.is_file() else {}
+    manifest = json.loads(manifest_p.read_text(encoding="utf-8")) if manifest_p.is_file() else {}
     scenes = concept["scenes"]
     board.update(TASKS["tts"], status="running")
     for i, sc in enumerate(scenes):
@@ -206,9 +206,9 @@ def stage_tts(concept: dict, out: Path, board: Board, providers=None) -> bool:
             board.update(TASKS["tts"], note=f"TTS failed for scene '{sc['name']}' with every provider")
             return False
         manifest[sc["name"]] = {"provider": used, "duration_s": round(ffprobe_duration(dest), 3)}
-        manifest_p.write_text(json.dumps(manifest, indent=2))
+        manifest_p.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         board.update(TASKS["tts"], progress=int((i + 1) / len(scenes) * 90))
-    manifest_p.write_text(json.dumps(manifest, indent=2))
+    manifest_p.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     # Fit every scene to its narration: never cut a sentence off.
     resolved = json.loads(json.dumps(concept))
     for sc in resolved["scenes"]:
@@ -217,7 +217,7 @@ def stage_tts(concept: dict, out: Path, board: Board, providers=None) -> bool:
             sc["duration_s"] = round(max(sc["duration_s"], spoken + NARRATION_TAIL_S), 2)
     raw = _as_yaml_concept(resolved)
     import yaml  # noqa: PLC0415
-    (out / "concept.resolved.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
+    (out / "concept.resolved.yaml").write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
     providers_used = sorted({m["provider"] for m in manifest.values() if m["provider"]})
     board.update(TASKS["tts"], status="done", progress=100,
                  note=f"Narration for {len(scenes)} scenes via {', '.join(providers_used)}; "
@@ -334,18 +334,18 @@ def stage_compose(resolved_path: Path, out: Path, board: Board) -> bool:
                 "-map", "[v]", "-map", "[a]", "-t", f"{dur:.3f}",
                 "-c:v", "libx264", "-crf", "23", "-preset", "medium", "-c:a", "aac", "-b:a", "160k",
                 str(seg)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode != 0 or not seg.is_file():
             board.update(TASKS["compose"], note=f"compose failed on scene '{sc['name']}': {r.stderr[-200:]}")
             return False
         segments.append(seg)
         board.update(TASKS["compose"], progress=int((i + 1) / len(concept["scenes"]) * 80))
     listing = seg_dir / "concat.txt"
-    listing.write_text("".join(f"file '{s.name}'\n" for s in segments))
+    listing.write_text("".join(f"file '{s.name}'\n" for s in segments), encoding="utf-8")
     final = out / f"{concept['slug']}.mp4"
     r = subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
                         "-i", str(listing), "-c", "copy", "-movflags", "+faststart", str(final)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     expected = sum(max(1, int(round(s["duration_s"] * concept["fps"]))) for s in concept["scenes"]) / concept["fps"]
     got = ffprobe_duration(final) if final.is_file() else 0.0
     streams = ffprobe_streams(final) if final.is_file() else set()
@@ -416,11 +416,19 @@ def main(argv: list[str] | None = None) -> int:
         os.close(fd)
     except FileExistsError:
         try:
-            os.kill(int(lock.read_text() or 0), 0)
+            _holder = int(lock.read_text(encoding="utf-8") or 0)
+            if os.name == "nt":
+                # Signal 0 is CTRL_C_EVENT on Windows, no existence probe.
+                from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415
+
+                if not _holder or not _os_pid_exists(_holder):
+                    raise ProcessLookupError(_holder)
+            else:
+                os.kill(_holder, 0)
             print(json.dumps({"state": "already_running"}))
             return 0
         except (ValueError, ProcessLookupError, PermissionError):
-            lock.write_text(str(os.getpid()))  # stale lock from a killed run
+            lock.write_text(str(os.getpid()), encoding="utf-8")  # stale lock from a killed run
     try:
         # Board reporting is retired (ADR-2205): its items moved into the knowledge base
         # (Loop A = I-02) and the old refs are archived; reporting would revive a second

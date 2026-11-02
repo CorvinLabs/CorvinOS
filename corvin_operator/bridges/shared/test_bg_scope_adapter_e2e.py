@@ -60,7 +60,7 @@ def _run(monkeypatch, sandbox, fixture, chat="bgs"):
     chain = paths.tenant_audit_chain("_default")
     recs = []
     if chain.exists():
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     return ans, [r for r in recs if str(r.get("event_type", "")).startswith("bgscope.")], chain, sec
 
 

@@ -80,7 +80,7 @@ class TestWeek6EndToEnd:
             assert pred_file.exists()
             predictions_recorded = [
                 json.loads(line)
-                for line in pred_file.read_text().strip().split("\n")
+                for line in pred_file.read_text(encoding="utf-8").strip().split("\n")
                 if line
             ]
             assert len(predictions_recorded) == 10
@@ -115,7 +115,7 @@ class TestWeek6EndToEnd:
             assert feedback_file.exists()
             feedback_recorded = [
                 json.loads(line)
-                for line in feedback_file.read_text().strip().split("\n")
+                for line in feedback_file.read_text(encoding="utf-8").strip().split("\n")
                 if line
             ]
             assert len(feedback_recorded) == 4
@@ -160,7 +160,7 @@ class TestWeek6EndToEnd:
             assert choice_file.exists()
             choices_recorded = [
                 json.loads(line)
-                for line in choice_file.read_text().strip().split("\n")
+                for line in choice_file.read_text(encoding="utf-8").strip().split("\n")
                 if line
             ]
             assert len(choices_recorded) == 5
@@ -204,7 +204,7 @@ class TestWeek6EndToEnd:
             assert budget_file.exists()
             budgets_recorded = [
                 json.loads(line)
-                for line in budget_file.read_text().strip().split("\n")
+                for line in budget_file.read_text(encoding="utf-8").strip().split("\n")
                 if line
             ]
             assert len(budgets_recorded) == 5
@@ -226,7 +226,7 @@ class TestWeek6EndToEnd:
                 "danger_zones": ["skipping tests when urgent (70% fail)"],
             }
             profile_file = profile_dir / "tenant-baseline.json"
-            profile_file.write_text(json.dumps(mock_profile))
+            profile_file.write_text(json.dumps(mock_profile), encoding="utf-8")
 
             # Test guard filtering
             suggested = ["adr-0269", "skill-e2e-wiring", "memory-phase3"]
@@ -278,7 +278,7 @@ class TestWeek6EndToEnd:
                 filepath = measurement_dir / filename
                 assert filepath.exists(), f"{filename} not created"
 
-                lines = filepath.read_text().strip().split("\n")
+                lines = filepath.read_text(encoding="utf-8").strip().split("\n")
                 assert len(lines) >= 1, f"{filename} is empty"
 
                 # Verify each line is valid JSON

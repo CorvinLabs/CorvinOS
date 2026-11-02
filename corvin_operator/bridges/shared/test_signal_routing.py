@@ -76,7 +76,7 @@ def _write_channel_settings(bridges_dir: Path, channel: str, settings: dict) -> 
     test run's authorization decisions."""
     chan_dir = bridges_dir / channel
     chan_dir.mkdir(parents=True, exist_ok=True)
-    (chan_dir / "settings.json").write_text(json.dumps(settings))
+    (chan_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
 
 def _read_audit_events(home: Path) -> list[dict]:
@@ -84,7 +84,7 @@ def _read_audit_events(home: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -106,7 +106,7 @@ def _run_cli(*args: str, home: Path, inbox: Path | None = None,
         env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(CLI), *args],
-        env=env, capture_output=True, text=True,
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -121,7 +121,7 @@ def case_sig_writes_envelope(home: Path, inbox: Path, outbox: Path,
 
     files = list(inbox.glob("sig_*.json"))
     assert len(files) == 1, files
-    payload = json.loads(files[0].read_text())
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
     assert payload["_signal"] is True
     assert payload["session_id"] == "s_sig_test"
     assert payload["signal"] == "PLAN"
@@ -190,7 +190,7 @@ def case_adapter_handles_signal_envelope(home, inbox, outbox, processed) -> None
         "ts": 0,
     }
     inbox_file = inbox / f"{msg_id}.json"
-    inbox_file.write_text(json.dumps(envelope))
+    inbox_file.write_text(json.dumps(envelope), encoding="utf-8")
 
     # _peek_side_channel must classify _signal as bypass-lock
     assert adapter._peek_side_channel(inbox_file) is True
@@ -209,7 +209,7 @@ def case_adapter_handles_signal_envelope(home, inbox, outbox, processed) -> None
     # Verify outbox ack was written
     out_files = list(outbox.glob(f"{msg_id}*"))
     assert len(out_files) == 1, out_files
-    ack = json.loads(out_files[0].read_text())
+    ack = json.loads(out_files[0].read_text(encoding="utf-8"))
     assert "Signal PLAN" in ack["text"], ack
     print(f"  PASS outbox ack: {ack['text']}")
 
@@ -246,13 +246,13 @@ def case_adapter_handles_unknown_session_signal(home, inbox, outbox,
         "ts": 0,
     }
     inbox_file = inbox / f"{msg_id}.json"
-    inbox_file.write_text(json.dumps(envelope))
+    inbox_file.write_text(json.dumps(envelope), encoding="utf-8")
 
     adapter.process_one(inbox_file, {"whitelist": []})
 
     out_files = list(outbox.glob(f"{msg_id}*"))
     assert len(out_files) == 1
-    ack = json.loads(out_files[0].read_text())
+    ack = json.loads(out_files[0].read_text(encoding="utf-8"))
     assert "unknown session" in ack["text"], ack
     print(f"  PASS ack: {ack['text']}")
 
@@ -278,12 +278,12 @@ def case_adapter_rejects_unsupported_signal(home, inbox, outbox,
         "session_id": "s_unsupp", "signal": "WEIRDO", "ts": 0,
     }
     inbox_file = inbox / f"{msg_id}.json"
-    inbox_file.write_text(json.dumps(envelope))
+    inbox_file.write_text(json.dumps(envelope), encoding="utf-8")
 
     adapter.process_one(inbox_file, {"whitelist": []})
 
     out_files = list(outbox.glob(f"{msg_id}*"))
-    ack = json.loads(out_files[0].read_text())
+    ack = json.loads(out_files[0].read_text(encoding="utf-8"))
     assert "unsupported" in ack["text"].lower() or "WEIRDO" in ack["text"], ack
     print(f"  PASS ack: {ack['text']}")
 
@@ -334,7 +334,7 @@ def case_signal_kill_cross_chat_denied(home, inbox, outbox, processed) -> None:
         "session_id": "s_kill_target_b", "signal": "KILL", "ts": 0,
     }
     inbox_file = inbox / f"{msg_id}.json"
-    inbox_file.write_text(json.dumps(envelope))
+    inbox_file.write_text(json.dumps(envelope), encoding="utf-8")
 
     adapter.process_one(inbox_file, {"whitelist": []})
 
@@ -344,7 +344,7 @@ def case_signal_kill_cross_chat_denied(home, inbox, outbox, processed) -> None:
 
     out_files = list(outbox.glob(f"{msg_id}*"))
     assert len(out_files) == 1, out_files
-    ack = json.loads(out_files[0].read_text())
+    ack = json.loads(out_files[0].read_text(encoding="utf-8"))
     assert "cross-chat KILL denied" in ack["text"], ack
     print(f"  PASS ack denies cross-chat KILL: {ack['text']}")
 
@@ -395,7 +395,7 @@ def case_signal_kill_cross_chat_authorized(home, inbox, outbox, processed) -> No
         "session_id": "s_kill_target_ok", "signal": "KILL", "ts": 0,
     }
     inbox_file = inbox / f"{msg_id}.json"
-    inbox_file.write_text(json.dumps(envelope))
+    inbox_file.write_text(json.dumps(envelope), encoding="utf-8")
 
     adapter.process_one(inbox_file, {"whitelist": []})
 
@@ -405,7 +405,7 @@ def case_signal_kill_cross_chat_authorized(home, inbox, outbox, processed) -> No
 
     out_files = list(outbox.glob(f"{msg_id}*"))
     assert len(out_files) == 1, out_files
-    ack = json.loads(out_files[0].read_text())
+    ack = json.loads(out_files[0].read_text(encoding="utf-8"))
     assert "delivered" in ack["text"], ack
     assert "s_kill_target_ok" in ack["text"], ack
     print(f"  PASS ack confirms authorized cross-chat KILL: {ack['text']}")
@@ -466,7 +466,7 @@ def case_signal_session_race_guard_blocks_kill(home, inbox, outbox, processed) -
         "session_id": "s_race", "signal": "KILL", "ts": 0,
     }
     inbox_file = inbox / f"{msg_id}.json"
-    inbox_file.write_text(json.dumps(envelope))
+    inbox_file.write_text(json.dumps(envelope), encoding="utf-8")
 
     adapter.process_one(inbox_file, {"whitelist": []})
 
@@ -476,7 +476,7 @@ def case_signal_session_race_guard_blocks_kill(home, inbox, outbox, processed) -
 
     out_files = list(outbox.glob(f"{msg_id}*"))
     assert len(out_files) == 1, out_files
-    ack = json.loads(out_files[0].read_text())
+    ack = json.loads(out_files[0].read_text(encoding="utf-8"))
     assert "session race" in ack["text"], ack
     assert "111" in ack["text"] and "222" in ack["text"], ack
     print(f"  PASS ack refuses stale-pid signal: {ack['text']}")

@@ -61,9 +61,9 @@ class FailureTruthE2E(_WithAuditMock):
         _write_origin(origins_b, origin_id="peer-a", hmac_key=hk, recv_key=rk)
         if origin_extra:
             p = origins_b / "peer-a.json"
-            cfg = json.loads(p.read_text())
+            cfg = json.loads(p.read_text(encoding="utf-8"))
             cfg.update(origin_extra)
-            p.write_text(json.dumps(cfg))
+            p.write_text(json.dumps(cfg), encoding="utf-8")
         srv = a2a_http_server.build_server(host="127.0.0.1", port=0, origins_dir=origins_b,
                                            engine_factory=lambda: _SimpleFakeEngine(),
                                            instance_id=iid_b)
@@ -113,7 +113,7 @@ class FailureTruthE2E(_WithAuditMock):
             res = sender.send("peer-b", "run the backup")
         self.assertFalse(res.ok)
         self.assertTrue(res.maybe_delivered)
-        recs = [json.loads(l) for l in (self.tmp / "feed" / "messages.jsonl").read_text().splitlines()]
+        recs = [json.loads(l) for l in (self.tmp / "feed" / "messages.jsonl").read_text(encoding="utf-8").splitlines()]
         resp = [r for r in recs if r["kind"] == "response"][-1]
         self.assertEqual(resp["status"], "unconfirmed")
         self.assertIn("may have", resp["error"])

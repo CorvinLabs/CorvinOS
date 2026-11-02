@@ -126,7 +126,7 @@ def _run_worker(sandbox, spec: dict, *, mode="ok", timeout_s="1800",
     return subprocess.run(
         [sys.executable, str(sandbox["box"] / "bg_task_worker.py"),
          str(spec_file)],
-        capture_output=True, text=True, timeout=wait, env=env,
+        capture_output=True, text=True, timeout=wait, env=env, encoding="utf-8", errors="replace",
     )
 
 
@@ -160,7 +160,7 @@ def test_worker_runs_engine_under_isolated_session_not_origin_chat(sandbox):
     origin = spec["chat_key"]
     spec = dict(spec, engine_chat_key=f"bgtask::{origin}::{spec['task_id']}")
     _run_worker(sandbox, spec)
-    used = (sandbox["tmp"] / "chatkey.txt").read_text()
+    used = (sandbox["tmp"] / "chatkey.txt").read_text(encoding="utf-8")
     assert used != origin, (
         "REGRESSION: worker ran the engine under the ORIGIN chat_key — it would "
         "resume and overwrite the operator's live session (the exact bug)."
@@ -176,7 +176,7 @@ def test_worker_isolates_even_when_spec_lacks_engine_chat_key(sandbox):
     origin = spec["chat_key"]
     assert "engine_chat_key" not in spec
     _run_worker(sandbox, spec)
-    used = (sandbox["tmp"] / "chatkey.txt").read_text()
+    used = (sandbox["tmp"] / "chatkey.txt").read_text(encoding="utf-8")
     assert used != origin
     assert used.startswith("bgtask::")
     assert spec["task_id"] in used
@@ -190,7 +190,7 @@ def test_watchdog_cancels_the_isolated_session_not_the_origin(sandbox):
     origin = spec["chat_key"]
     spec = dict(spec, engine_chat_key=f"bgtask::{origin}::{spec['task_id']}")
     _run_worker(sandbox, spec, mode="hang", timeout_s="2", wait=90)
-    cancelled = (sandbox["tmp"] / "cancel.txt").read_text()
+    cancelled = (sandbox["tmp"] / "cancel.txt").read_text(encoding="utf-8")
     assert cancelled == f"bgtask::{origin}::{spec['task_id']}"
     assert cancelled != origin
 
@@ -217,7 +217,7 @@ def test_worker_reports_progress_while_it_works(sandbox):
 
     outbox = sandbox["tmp"] / "outbox"
     sandbox["tp"].deliver_progress(outbox)
-    texts = [json.loads(p.read_text())["text"] for p in outbox.glob("*.json")]
+    texts = [json.loads(p.read_text(encoding="utf-8"))["text"] for p in outbox.glob("*.json")]
     assert any("stub step" in t for t in texts), texts
 
 
@@ -333,7 +333,7 @@ def test_real_crash_emits_the_retry_classified_audit_event(sandbox):
 
     chain = sandbox["home"] / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     assert chain.exists(), "no audit chain was written at all"
-    records = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    records = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     classified = [r for r in records if r.get("event_type") == "task.retry_classified"]
     assert classified, f"task.retry_classified never fired; saw {sorted({r.get('event_type') for r in records})}"
     last = classified[-1]
@@ -389,7 +389,7 @@ def test_a_resumed_worker_gets_the_continuation_prompt(sandbox):
     spec2 = dict(spec, instruction=prompt)
     _run_worker(sandbox, spec2, mode="ok")
 
-    seen = (sandbox["tmp"] / "prompt.txt").read_text()
+    seen = (sandbox["tmp"] / "prompt.txt").read_text(encoding="utf-8")
     assert "RESUMING" in seen
     assert "do the long thing" in seen, "the original goal must survive"
     assert "engine exploded" in seen, "why it stopped must survive"

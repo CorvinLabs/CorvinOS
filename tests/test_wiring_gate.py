@@ -55,7 +55,7 @@ def test_real_live_entry_points_resolve():
 
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dedent(content))
+    path.write_text(dedent(content), encoding="utf-8")
 
 
 def test_undeclared_module_fails_completeness_check(tmp_path, monkeypatch):

@@ -86,7 +86,7 @@ def main():
             print(f"  ✓ JSON fallback file created: {fallback_file}")
 
             # Read and display the record
-            with open(fallback_file) as f:
+            with open(fallback_file, encoding="utf-8") as f:
                 record = json.loads(f.readline())
 
             print("\n  Heartbeat record (JSON):")

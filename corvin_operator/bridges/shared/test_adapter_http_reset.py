@@ -99,7 +99,7 @@ def _make_two_phase_claude(tmp: Path, *, naked: bool) -> Path:
         }}) + "\\n")
         sys.stdout.flush()
     ''')
-    script.write_text(body)
+    script.write_text(body, encoding="utf-8")
     script.chmod(0o755)
     return bin_dir
 
@@ -216,7 +216,7 @@ def test_429_retry_preserves_session() -> None:
             sys.stdout.write(json.dumps({{"type":"result","is_error":False,
                 "subtype":"success","result":"after-429"}}) + "\\n")
             sys.stdout.flush()
-        '''))
+        '''), encoding="utf-8")
         script.chmod(0o755)
         _common_setup(tmp, bin_dir)
         adapter = _fresh_adapter()
@@ -280,7 +280,7 @@ def test_500_retry_preserves_session() -> None:
             sys.stdout.write(json.dumps({{"type":"result","is_error":False,
                 "subtype":"success","result":"after-500"}}) + "\\n")
             sys.stdout.flush()
-        '''))
+        '''), encoding="utf-8")
         script.chmod(0o755)
         _common_setup(tmp, bin_dir)
         adapter = _fresh_adapter()
@@ -335,7 +335,7 @@ def test_idle_path_still_works() -> None:
             sys.stdout.write(json.dumps({{"type":"result","is_error":False,
                 "subtype":"success","result":"after-idle"}}) + "\\n")
             sys.stdout.flush()
-        '''))
+        '''), encoding="utf-8")
         script.chmod(0o755)
         _common_setup(tmp, bin_dir)
         adapter = _fresh_adapter()

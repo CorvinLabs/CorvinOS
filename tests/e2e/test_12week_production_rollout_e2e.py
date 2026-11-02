@@ -795,11 +795,11 @@ class TestCriticalCoverageFixes:
 
         se, fp = audit_sink._forge()
         chain = fp.tenant_audit_chain("_default")
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[0])
         rec["details"]["day"] = 999
         lines[0] = json.dumps(rec)
-        chain.write_text("\n".join(lines) + "\n")
+        chain.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         orchestrator.advance_day(_canary_metrics())
         assert st.phase == Phase.ROLLED_BACK

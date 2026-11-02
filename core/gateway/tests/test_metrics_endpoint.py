@@ -153,7 +153,7 @@ class ReadOnlyContractTests(unittest.TestCase):
             # specific event_type. If the chain file doesn't exist at all,
             # that trivially satisfies the contract (no events emitted).
             if chain.exists():
-                for raw in chain.read_text().splitlines():
+                for raw in chain.read_text(encoding="utf-8").splitlines():
                     if not raw.strip():
                         continue
                     rec = json.loads(raw)

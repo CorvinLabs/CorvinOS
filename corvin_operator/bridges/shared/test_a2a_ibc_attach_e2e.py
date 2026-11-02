@@ -133,17 +133,17 @@ class TestIbcAttachOverHttp(unittest.TestCase):
 
     def _write_crl(self, revoked: list[str], *, age_s: float = 0) -> None:
         (self.tmp / "crl_cache.json").write_text(json.dumps(
-            {"fetched_at": time.time() - age_s, "revoked_jti": revoked}))
+            {"fetched_at": time.time() - age_s, "revoked_jti": revoked}), encoding="utf-8")
 
     def _set_require_ibc(self, value: bool) -> None:
         p = self.origins_b / "peer-a.json"
-        cfg = json.loads(p.read_text())
+        cfg = json.loads(p.read_text(encoding="utf-8"))
         cfg["require_ibc"] = value
-        p.write_text(json.dumps(cfg))
+        p.write_text(json.dumps(cfg), encoding="utf-8")
         p.chmod(0o600)
 
     def _bind(self, ibc: str) -> None:
-        self.cert_path.write_text(ibc)
+        self.cert_path.write_text(ibc, encoding="utf-8")
         self.cert_path.chmod(0o600)
 
     def _send(self):

@@ -183,7 +183,7 @@ def _grep_repo(pattern: str, *, exclude: tuple[str, ...]) -> list[str]:
             cwd=_REPO,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=60, encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
         pytest.skip(f"git grep unavailable: {exc}")

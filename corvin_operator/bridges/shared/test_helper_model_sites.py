@@ -48,7 +48,7 @@ def _make_stub_claude(target_dir: Path, *, echo_json: bool = True) -> Path:
         )
     else:
         body = "#!/bin/sh\necho stub\n"
-    stub.write_text(body)
+    stub.write_text(body, encoding="utf-8")
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return stub
 
@@ -63,7 +63,7 @@ def _argv_from_run(cwd: Path, env_overlay: dict[str, str] | None = None,
         env.update(env_overlay)
     p = subprocess.run(
         cmd or ["echo", "skip"],
-        capture_output=True, text=True, env=env, cwd=cwd,
+        capture_output=True, text=True, env=env, cwd=cwd, encoding="utf-8", errors="replace",
     )
     return json.loads(p.stdout)["argv"] if p.stdout.strip().startswith("{") else []
 

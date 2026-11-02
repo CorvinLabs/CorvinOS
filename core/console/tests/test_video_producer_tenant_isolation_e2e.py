@@ -104,7 +104,7 @@ def _stand_in_claude(path: Path, storyboard: dict) -> Path:
     """An executable that answers like ``claude -p --output-format json``: the model's reply is ``result``."""
     reply = json.dumps({"type": "result", "subtype": "success", "is_error": False,
                         "result": json.dumps(storyboard), "usage": {"input_tokens": 1, "output_tokens": 1}})
-    path.write_text(f"#!{sys.executable}\nimport sys\nsys.stdin.read()\nprint({reply!r})\n")
+    path.write_text(f"#!{sys.executable}\nimport sys\nsys.stdin.read()\nprint({reply!r})\n", encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
 
@@ -210,7 +210,7 @@ class CrossTenantConsoleCaptureE2E(unittest.TestCase):
             job = mod._get_storage(str(base)).get_job(job_id)
             scenes = [s.to_dict() for s in (job.storyboard.scenes if job and job.storyboard else [])]
             stored_keys = _keys(scenes)
-            records = {str(f.relative_to(base)): f.read_text(errors="replace")
+            records = {str(f.relative_to(base)): f.read_text(errors="replace", encoding="utf-8")
                        for f in base.rglob("*.json") if f.is_file()}
             url_in = sorted(k for k, text in records.items() if f"127.0.0.1:{console.port}" in text)
             print(f"[F1] stored storyboard scene keys: {sorted(stored_keys)}")

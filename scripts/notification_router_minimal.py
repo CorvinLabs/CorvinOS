@@ -39,7 +39,7 @@ async def monitor_completion_events(corvin_home: str = None, poll_interval: floa
                         continue
 
                     try:
-                        with open(event_file) as f:
+                        with open(event_file, encoding="utf-8") as f:
                             event = json.load(f)
 
                         task_id = event.get("task_id")
@@ -58,7 +58,7 @@ async def monitor_completion_events(corvin_home: str = None, poll_interval: floa
 
                         # Write to outbox (Discord bridge will pickup)
                         msg_file = outbox_dir / f"msg_{task_id}_{int(time.time())}.json"
-                        with open(msg_file, "w") as f:
+                        with open(msg_file, "w", encoding="utf-8") as f:
                             json.dump(message, f, indent=2)
 
                         print(f"✅ Discord message written: {msg_file.name}")

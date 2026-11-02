@@ -574,12 +574,12 @@ def _seed_channel_settings(bridges_dir: Path, channel: str, body: dict):
     existing = {}
     if p.exists():
         try:
-            existing = json.loads(p.read_text())
+            existing = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             existing = {}
     existing.setdefault("__test_marker__", True)
     existing.update(body)
-    p.write_text(json.dumps(existing, indent=2))
+    p.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 
 class ChatSettingsListTests(unittest.TestCase):
@@ -648,7 +648,7 @@ class AuditChainTests(unittest.TestCase):
             from forge import security_events as _se
             ok, problems = _se.verify_chain(chain)
             self.assertTrue(ok, f"chain broken: {problems}")
-            events = [json.loads(ln) for ln in chain.read_text().splitlines() if ln.strip()]
+            events = [json.loads(ln) for ln in chain.read_text(encoding="utf-8").splitlines() if ln.strip()]
             actions = [e["event_type"] for e in events
                        if e["event_type"].startswith("console.")]
             self.assertIn("console.action_performed", actions)

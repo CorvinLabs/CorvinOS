@@ -211,7 +211,7 @@ def _check_memory() -> list[CheckResult]:
     else:
         # Mode check is CRITICAL — leaked DB exposes redacted-but-recoverable text.
         mode = stat.S_IMODE(db.stat().st_mode)
-        mode_ok = mode == 0o600
+        mode_ok = sys.platform == "win32" or mode == 0o600  # no POSIX bits on NTFS
         out.append(CheckResult(
             "memory.recall_db_mode", CRITICAL, mode_ok,
             f"mode={oct(mode)}" if mode_ok else
@@ -285,7 +285,7 @@ def _check_audit_chain(*, quick: bool) -> list[CheckResult]:
         # path-divergence. rc=1 if ANY chain is broken.
         r = subprocess.run(
             [sys.executable, str(script), "verify", "--all"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
         )
         if r.returncode == 0:
             out.append(CheckResult("audit.chain_verified", CRITICAL, True,
@@ -378,7 +378,7 @@ def _check_vault() -> list[CheckResult]:
         return out
     out.append(CheckResult("vault.present", INFO, True, str(vault)))
     mode = stat.S_IMODE(vault.stat().st_mode)
-    mode_ok = mode == 0o600
+    mode_ok = sys.platform == "win32" or mode == 0o600  # no POSIX bits on NTFS
     out.append(CheckResult(
         "vault.mode_0600", CRITICAL, mode_ok,
         f"mode={oct(mode)}" if mode_ok else
@@ -402,7 +402,7 @@ def _probe_executable(name: str) -> tuple[bool, str]:
     except ImportError:
         cmd = [exe, "--version"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=8, encoding="utf-8", errors="replace")
         if r.returncode != 0:
             return False, f"{name} --version rc={r.returncode}"
         version = (r.stdout or r.stderr).strip().splitlines()[:1]
@@ -517,7 +517,7 @@ def _check_third_party_mcps() -> list[CheckResult]:
     seen: dict[str, list[str]] = {}  # executable → personas that reference it
     for pfile in sorted(personas_dir.glob("*.json")):
         try:
-            data = json.loads(pfile.read_text())
+            data = json.loads(pfile.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             continue
         servers = data.get("mcp_servers") or {}
@@ -616,7 +616,7 @@ def _check_artifacts(*, quick: bool) -> list[CheckResult]:
         hooks_json = _REPO_ROOT / "corvin_operator" / "voice" / "hooks" / "hooks.json"
         wired = (hook.is_file()
                  and hooks_json.is_file()
-                 and "artifact_register.py" in hooks_json.read_text())
+                 and "artifact_register.py" in hooks_json.read_text(encoding="utf-8"))
         out.append(CheckResult("artifacts.auto_register_hook", INFO, wired,
                                "wired in hooks.json" if wired
                                else "hook file or hooks.json entry missing"))
@@ -952,7 +952,7 @@ def _check_instance_seed() -> list[CheckResult]:
             return out
 
         mode = seed_path.stat().st_mode & 0o777
-        if mode != 0o600:
+        if sys.platform != "win32" and mode != 0o600:  # no POSIX bits on NTFS
             out.append(CheckResult(
                 "instance_seed.key", CRITICAL, False,
                 f"instance_seed.key has mode {oct(mode)} — must be 0600 (key material leak risk)",
@@ -985,7 +985,7 @@ def _check_instance_key() -> list[CheckResult]:
                                    "instance_key.pem absent — auto-generated on first IBC use"))
             return out
         mode = kp.stat().st_mode & 0o777
-        if mode & 0o077:
+        if sys.platform != "win32" and mode & 0o077:  # no POSIX bits on NTFS
             out.append(CheckResult(
                 "instance_key.pem", CRITICAL, False,
                 f"instance_key.pem has mode {oct(mode)} — must be 0600 "
@@ -1210,7 +1210,7 @@ def _check_a2a_key_files() -> list[CheckResult]:
         for p in d.glob("*.json"):
             try:
                 mode = p.stat().st_mode & 0o777
-                if mode & 0o044:  # world- or group-readable
+                if sys.platform != "win32" and mode & 0o044:  # world-/group-readable (POSIX only)
                     bad.append(f"{p.name} ({oct(mode)})")
             except OSError:
                 pass

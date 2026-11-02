@@ -167,7 +167,7 @@ class TestMarketplaceInstallE2E(unittest.TestCase):
             self.assertTrue(registry_path.exists(), "install must write registry.yaml")
             import yaml
 
-            data = yaml.safe_load(registry_path.read_text()) or {}
+            data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
             self.assertIn(_REGISTRY_ID, data.get("plugins", {}),
                           "registry.yaml must contain the installed builtin")
 

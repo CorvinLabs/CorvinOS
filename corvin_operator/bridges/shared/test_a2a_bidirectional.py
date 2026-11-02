@@ -155,7 +155,7 @@ def _write_origin(d: Path, *, origin_id: str, hmac_key: str, recv_key: str,
         "spawn_worker": spawn_worker,
     }
     p = d / f"{origin_id}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
 
 
@@ -173,7 +173,7 @@ def _write_endpoint(d: Path, *, endpoint_id: str, url: str,
         "our_origin_id": our_origin_id,
     }
     p = d / f"{endpoint_id}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
 
 
@@ -369,7 +369,7 @@ class TestA2ABidirectional(unittest.TestCase):
         ep_path = self.A.endpoints_dir / f"peer-{self.B.label}.json"
         cfg = json.loads(ep_path.read_text("utf-8"))
         cfg["instance_id"] = "this-is-not-B"
-        ep_path.write_text(json.dumps(cfg))
+        ep_path.write_text(json.dumps(cfg), encoding="utf-8")
         ep_path.chmod(0o600)
 
         res = self.A.sender.send(

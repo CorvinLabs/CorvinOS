@@ -554,11 +554,11 @@ class TestRollbackTriggers:
         assert orch.get_state().phase == Phase.PHASE_2A_CANARY
 
         chain = fp.tenant_audit_chain("_default")
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[0])
         rec["details"]["day"] = 999  # tamper with a committed record
         lines[0] = json.dumps(rec)
-        chain.write_text("\n".join(lines) + "\n")
+        chain.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         try:
             orch.advance_day(TestPhase1ShadowMode._create_good_metrics())
@@ -588,7 +588,7 @@ class TestRollbackTriggers:
         orch = get_orchestrator()
         orch.advance_day(TestPhase1ShadowMode._create_good_metrics())
         chain = fp.tenant_audit_chain("_default")
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert any(r["event_type"] == "deployment.rollout.day_advanced" and r["details"]["day"] == 2
                    for r in recs)
         ok, problems = se.verify_chain(chain)

@@ -62,7 +62,7 @@ class WindowsBinFallbacksTests(unittest.TestCase):
             npm_dir = appdata / "npm"
             npm_dir.mkdir(parents=True)
             shim = npm_dir / "claude.cmd"
-            shim.write_text("@echo off\n")
+            shim.write_text("@echo off\n", encoding="utf-8")
             os.environ["APPDATA"] = str(appdata)
             os.environ.pop("USERPROFILE", None)
             os.environ.pop("CORVIN_CLAUDE_BIN_FALLBACKS", None)
@@ -81,7 +81,7 @@ class WindowsBinFallbacksTests(unittest.TestCase):
             npm_dir = appdata / "npm"
             npm_dir.mkdir(parents=True)
             shim = npm_dir / "claude.cmd"
-            shim.write_text("@echo off\n")
+            shim.write_text("@echo off\n", encoding="utf-8")
             os.environ["APPDATA"] = str(appdata)
             os.environ.pop("CORVIN_CLAUDE_BIN_FALLBACKS", None)
             with mock.patch.object(claude_code.sys, "platform", "linux"), \

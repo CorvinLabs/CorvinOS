@@ -25,7 +25,7 @@ class TestPhase5SkillManagerWiring:
     def test_router_in_app(self):
         """Verify skill_manager router included in main app."""
         app_path = (_REPO / "core/console/corvin_console/app.py")
-        content = app_path.read_text()
+        content = app_path.read_text(encoding="utf-8")
         
         # Check import
         assert "skill_manager as skill_manager_route" in content, "Import missing"
@@ -39,7 +39,7 @@ class TestPhase5SkillManagerWiring:
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
         assert component_path.exists(), "React component missing"
         
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         # Check key functions
         assert "export function SkillManager" in content
@@ -50,7 +50,7 @@ class TestPhase5SkillManagerWiring:
     def test_component_calls_correct_endpoint(self):
         """Verify React component uses correct API URL."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         # Check endpoint URL
         assert "'/v1/console/skills-manager/skills/installed'" in content, \
@@ -109,8 +109,8 @@ class TestPhase5SkillManagerWiring:
         assert component_path.exists()
         
         # 4. Wiring verified: all three layers integrated
-        assert "SkillInstaller" in component_path.read_text() or \
-               "skills-manager" in component_path.read_text()
+        assert "SkillInstaller" in component_path.read_text(encoding="utf-8") or \
+               "skills-manager" in component_path.read_text(encoding="utf-8")
 
 
 

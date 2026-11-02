@@ -56,7 +56,7 @@ def main():
     
     # Write index.json
     index_file = output_dir / "index.json"
-    with open(index_file, "w") as f:
+    with open(index_file, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2)
     
     print(f"✅ Generated: {index_file}")

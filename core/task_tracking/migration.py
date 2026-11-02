@@ -71,7 +71,7 @@ async def migrate_task_registry_to_db(
 
     # Step 1: Load legacy registry
     try:
-        with open(registry_path, "r") as f:
+        with open(registry_path, "r", encoding="utf-8") as f:
             registry_data = json.load(f)
     except FileNotFoundError:
         return {"error": f"Registry not found: {registry_path}", "migrated": 0}

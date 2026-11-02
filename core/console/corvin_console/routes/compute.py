@@ -237,6 +237,16 @@ def _write_tenant_yaml(tid: str, data: dict[str, Any]) -> None:
 def _compute_dir(tid: str) -> Path:
     return _forge_paths.tenant_home(tid) / "compute"
 
+def _has_path_sep(v: str) -> bool:
+    """True when a URL path id would name more than one path component.
+
+    ``/`` everywhere; on Windows also the backslash (a separator there - a
+    ``%5C`` in the URL arrives decoded) and ``:`` (a drive-qualified id is
+    absolute and replaces the base in ``base / v``; ``x:y`` opens an NTFS
+    stream). POSIX unchanged."""
+    return "/" in v or (os.name == "nt" and ("\\" in v or ":" in v))
+
+
 def _socket_path(tid: str) -> Path:
     return _compute_dir(tid) / "worker.sock"
 
@@ -376,7 +386,7 @@ def compute_run_detail(
 ) -> dict[str, Any]:
     """Manifest + full summary for one run."""
     tid = rec.tenant_id
-    if "/" in run_id or run_id.startswith(".."):
+    if _has_path_sep(run_id) or run_id.startswith(".."):
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail="invalid run_id",
@@ -555,7 +565,7 @@ def pipeline_detail(
 ) -> dict[str, Any]:
     """Full pipeline detail including per-stage iterations."""
     tid = rec.tenant_id
-    if "/" in pipeline_id or pipeline_id.startswith(".."):
+    if _has_path_sep(pipeline_id) or pipeline_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid pipeline_id")
     p = _pipelines_dir(tid) / pipeline_id
     if not p.exists():
@@ -638,7 +648,7 @@ def hac_detail(
 ) -> dict[str, Any]:
     """Full HAC detail with per-sub-manager stage iterations."""
     tid = rec.tenant_id
-    if "/" in hac_id or hac_id.startswith(".."):
+    if _has_path_sep(hac_id) or hac_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid hac_id")
     p = _hac_dir(tid) / hac_id
     if not p.exists():
@@ -775,7 +785,7 @@ def compute_license_status(
             if p.exists():
                 try:
                     mode = p.stat().st_mode & 0o777
-                    if not (mode & 0o077):  # not world-readable
+                    if os.name == "nt" or not (mode & 0o077):  # not world-readable. # POSIX-only bit check: st_mode is always 0o666 on Windows (NTFS ACLs).
                         raw = json.loads(p.read_text(encoding="utf-8"))
                         used_gr  = int(raw.get("iterations_used", 0))
                         used_bay = int(raw.get("bayesian_iterations_used", 0))
@@ -991,7 +1001,7 @@ def _load_settings(tid: str) -> dict[str, Any]:
     if not p.exists():
         return dict(_SETTINGS_DEFAULTS)
     try:
-        if p.stat().st_mode & 0o077:
+        if os.name != "nt" and p.stat().st_mode & 0o077:  # POSIX-only bit check: st_mode is always 0o666 on Windows (NTFS ACLs).
             return dict(_SETTINGS_DEFAULTS)  # world-readable → use defaults
         data = json.loads(p.read_text(encoding="utf-8"))
         return {**_SETTINGS_DEFAULTS, **{k: v for k, v in data.items() if k in _SETTINGS_DEFAULTS}}
@@ -1192,7 +1202,7 @@ def delete_run(
 ) -> dict[str, Any]:
     """Remove a run directory."""
     import shutil
-    if "/" in run_id or run_id.startswith(".."):
+    if _has_path_sep(run_id) or run_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
     run_dir = _runs_dir(rec.tenant_id) / run_id
     console_audit.action_performed(
@@ -1207,6 +1217,26 @@ def delete_run(
     return {"ok": True, "run_id": run_id}
 
 # ── Open directory in file manager ────────────────────────────────────────
+
+def _launch_file_manager(path_str: str, env: dict[str, str]) -> None:
+    """Fire-and-forget reveal of *path_str* in the OS file manager.
+
+    Windows has no ``xdg-open`` (the Popen raised FileNotFoundError, so the
+    endpoint always reported ``launched: false``) — use ``os.startfile``
+    (ShellExecute → Explorer) there. POSIX keeps ``xdg-open`` with the
+    minimal, secret-free *env*. Raises OSError on failure.
+    """
+    if sys.platform == "win32":
+        os.startfile(path_str)  # type: ignore[attr-defined]  # noqa: S606
+        return
+    import subprocess  # noqa: PLC0415
+    subprocess.Popen(
+        ["xdg-open", path_str],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
 
 def _safe_open_dir(target: Path, root: Path) -> dict[str, Any]:
     """Open *target* in the system file manager (xdg-open).
@@ -1235,12 +1265,7 @@ def _safe_open_dir(target: Path, root: Path) -> dict[str, Any]:
             "HOME": os.environ.get("HOME", ""),
             "DBUS_SESSION_BUS_ADDRESS": os.environ.get("DBUS_SESSION_BUS_ADDRESS", ""),
         }
-        subprocess.Popen(
-            ["xdg-open", path_str],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        _launch_file_manager(path_str, env)
         launched = True
     except (FileNotFoundError, OSError):
         launched = False
@@ -1253,7 +1278,7 @@ def open_run_dir(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Open the run directory in the system file manager (non-blocking)."""
-    if "/" in run_id or run_id.startswith(".."):
+    if _has_path_sep(run_id) or run_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
     run_dir  = _runs_dir(rec.tenant_id) / run_id
     root_dir = _compute_dir(rec.tenant_id)
@@ -1265,7 +1290,7 @@ def open_pipeline_dir(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Open the pipeline directory in the system file manager."""
-    if "/" in pipeline_id or pipeline_id.startswith(".."):
+    if _has_path_sep(pipeline_id) or pipeline_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid pipeline_id")
     p_dir    = _pipelines_dir(rec.tenant_id) / pipeline_id
     root_dir = _compute_dir(rec.tenant_id)
@@ -1277,7 +1302,7 @@ def open_hac_dir(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Open the HAC directory in the system file manager."""
-    if "/" in hac_id or hac_id.startswith(".."):
+    if _has_path_sep(hac_id) or hac_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid hac_id")
     h_dir    = _hac_dir(rec.tenant_id) / hac_id
     root_dir = _compute_dir(rec.tenant_id)
@@ -1295,7 +1320,7 @@ def open_acs_run_dir(
     Uses the same 3-root containment guard as get_acs_run_graph().
     """
     import subprocess
-    if "/" in run_id or run_id.startswith(".."):
+    if _has_path_sep(run_id) or run_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
 
     # Dual-path manifest lookup (same as get_acs_run_graph)
@@ -1339,12 +1364,7 @@ def open_acs_run_dir(
             "HOME": os.environ.get("HOME", ""),
             "DBUS_SESSION_BUS_ADDRESS": os.environ.get("DBUS_SESSION_BUS_ADDRESS", ""),
         }
-        subprocess.Popen(
-            ["xdg-open", path_str],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        _launch_file_manager(path_str, env)
         launched = True
     except (FileNotFoundError, OSError):
         launched = False
@@ -1449,7 +1469,7 @@ def get_experiment(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Return experiment detail including comparison table."""
-    if "/" in experiment_id or experiment_id.startswith(".."):
+    if _has_path_sep(experiment_id) or experiment_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid experiment_id")
     tid = rec.tenant_id
     exp_dir = _experiments_dir(tid) / experiment_id
@@ -1460,7 +1480,7 @@ def get_experiment(
     # Build comparison table by reading run manifests + summaries
     runs_data: list[dict[str, Any]] = []
     for run_id in exp.get("run_ids", []):
-        if "/" in run_id or run_id.startswith(".."):
+        if _has_path_sep(run_id) or run_id.startswith(".."):
             continue
         run_dir = _runs_dir(tid) / run_id
         manifest = _read_json(run_dir / "manifest.json") or {}
@@ -1552,7 +1572,7 @@ def update_experiment(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Update experiment (hypothesis, tags, champion, add runs)."""
-    if "/" in experiment_id or experiment_id.startswith(".."):
+    if _has_path_sep(experiment_id) or experiment_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid experiment_id")
     exp_dir = _experiments_dir(rec.tenant_id) / experiment_id
     exp = _read_experiment(exp_dir)
@@ -1588,7 +1608,7 @@ def artifact_stats(
 ) -> dict[str, Any]:
     """Return pre-computed artifact statistics from stage_summary.json."""
     for v in (pipeline_id, stage_id):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid id")
     tid = rec.tenant_id
     stage_dir = _pipelines_dir(tid) / pipeline_id / "stages" / stage_id
@@ -1746,7 +1766,7 @@ def artifact_preview(
 ) -> dict[str, Any]:
     """Preview a stage artifact with full sort / filter / pagination support."""
     for v in (pipeline_id, stage_id, filename):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid parameter")
 
     tid = rec.tenant_id
@@ -1791,7 +1811,7 @@ def artifact_download(
     """Stream a stage artifact file as a download."""
     from fastapi.responses import FileResponse
     for v in (pipeline_id, stage_id, filename):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid parameter")
 
     tid = rec.tenant_id
@@ -1822,7 +1842,7 @@ def export_jupyter(
 ):
     """Generate a Jupyter notebook for this experiment."""
     from fastapi.responses import Response
-    if "/" in experiment_id or experiment_id.startswith(".."):
+    if _has_path_sep(experiment_id) or experiment_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid experiment_id")
     tid = rec.tenant_id
     exp_dir = _experiments_dir(tid) / experiment_id
@@ -1917,7 +1937,7 @@ def export_mlflow(
     """Generate MLflow-compatible mlruns directory as a ZIP archive."""
     import zipfile, io
     from fastapi.responses import StreamingResponse
-    if "/" in experiment_id or experiment_id.startswith(".."):
+    if _has_path_sep(experiment_id) or experiment_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid experiment_id")
     tid = rec.tenant_id
     exp_dir = _experiments_dir(tid) / experiment_id
@@ -2054,7 +2074,7 @@ def experiment_report(
     exists where the SPA is mounted, i.e. never in headless mode.
     """
     from fastapi.responses import HTMLResponse
-    if "/" in experiment_id or experiment_id.startswith(".."):
+    if _has_path_sep(experiment_id) or experiment_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid experiment_id")
     tid = rec.tenant_id
     report = _gather_experiment_report(tid, experiment_id)
@@ -2186,7 +2206,7 @@ def awpkg_export_preview(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Return what an awpkg export would contain without generating it (M2 preview)."""
-    if "/" in pipeline_id or pipeline_id.startswith(".."):
+    if _has_path_sep(pipeline_id) or pipeline_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid pipeline_id")
     tid = rec.tenant_id
 
@@ -2297,7 +2317,7 @@ def awpkg_export_download(
     """Generate and stream the awpkg bundle as a zip download (M2 export, ADR-0090)."""
     import tempfile as _tmp
     from fastapi.responses import FileResponse
-    if "/" in pipeline_id or pipeline_id.startswith(".."):
+    if _has_path_sep(pipeline_id) or pipeline_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid pipeline_id")
     p_dir = _pipelines_dir(rec.tenant_id) / pipeline_id
     if not p_dir.exists():
@@ -2387,7 +2407,7 @@ def promote_champion(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Promote the champion run's parameters to a new awpkg version (M9, ADR-0090)."""
-    if "/" in pipeline_id or pipeline_id.startswith(".."):
+    if _has_path_sep(pipeline_id) or pipeline_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid pipeline_id")
     if "/" in body.run_id or body.run_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
@@ -2470,7 +2490,7 @@ def awpkg_export_to_workflow(
     import time as _time
     import zipfile as _zf
 
-    if "/" in pipeline_id or pipeline_id.startswith(".."):
+    if _has_path_sep(pipeline_id) or pipeline_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid pipeline_id")
     p_dir = _pipelines_dir(rec.tenant_id) / pipeline_id
     if not p_dir.exists():
@@ -2667,7 +2687,7 @@ def stage_artifact_image(
     from fastapi.responses import FileResponse
 
     for v in (pipeline_id, stage_id):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid id")
 
     # Validate filename: alphanumeric, dots, underscores, hyphens only
@@ -2723,7 +2743,7 @@ def stage_artifact_images_list(
 ) -> dict[str, Any]:
     """List image/PDF artifacts for a stage (ADR-0088 M7)."""
     for v in (pipeline_id, stage_id):
-        if "/" in v or v.startswith(".."):
+        if _has_path_sep(v) or v.startswith(".."):
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid id")
 
     tid = rec.tenant_id
@@ -2778,7 +2798,7 @@ def compute_run_narrative(
     Result cached in ``<run_dir>/narrative.json`` (mode 0600).
     Audit: ``compute.narrative_generated`` — run_id + model only, no text.
     """
-    if not run_id or "/" in run_id or run_id.startswith("..") or run_id == ".":
+    if not run_id or _has_path_sep(run_id) or run_id.startswith("..") or run_id == ".":
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
     run_dir = _runs_dir(rec.tenant_id) / run_id
     if not run_dir.exists():
@@ -2853,7 +2873,7 @@ def compute_run_voice(
     import subprocess as _sp
     from fastapi.responses import FileResponse
 
-    if not run_id or "/" in run_id or run_id.startswith("..") or run_id == ".":
+    if not run_id or _has_path_sep(run_id) or run_id.startswith("..") or run_id == ".":
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
     run_dir = _runs_dir(rec.tenant_id) / run_id
     if not run_dir.exists():
@@ -2894,7 +2914,7 @@ def compute_run_voice(
         try:
             result = _sp.run(
                 [sys.executable, str(say_script), str(audio_path), text, lang],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
             )
         except _sp.TimeoutExpired:
             raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "TTS timed out")
@@ -2968,7 +2988,7 @@ def get_acs_workflow_run(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Get status and result for a single ACS run."""
-    if not run_id or run_id in (".", "..") or "/" in run_id or run_id.startswith(".."):
+    if not run_id or run_id in (".", "..") or _has_path_sep(run_id) or run_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
     if not _ACS_ENGINE_OK:
         raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3198,7 +3218,7 @@ def export_acs_workflow_run(
     Mode ``"dag"`` produces a static DAG (deterministic replay via corvin-workflow run).
     Mode ``"template"`` produces a delegation_loop seed for adaptive re-exploration.
     """
-    if not run_id or run_id in (".", "..") or "/" in run_id or run_id.startswith(".."):
+    if not run_id or run_id in (".", "..") or _has_path_sep(run_id) or run_id.startswith(".."):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
     if body.mode not in ("dag", "template"):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "mode must be 'dag' or 'template'")
@@ -3454,7 +3474,7 @@ def compute_run_graph(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Return vis.js-compatible graph data for an L25 compute run (ADR-0107 M1a)."""
-    if not run_id or "/" in run_id or run_id.startswith("..") or run_id == ".":
+    if not run_id or _has_path_sep(run_id) or run_id.startswith("..") or run_id == ".":
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
     run_dir = _runs_dir(rec.tenant_id) / run_id
     if not run_dir.exists():
@@ -3813,7 +3833,7 @@ def compute_acs_run_graph(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Return vis.js-compatible graph data for an ACS workflow run (ADR-0107 M1b)."""
-    if not run_id or "/" in run_id or run_id.startswith("..") or run_id == ".":
+    if not run_id or _has_path_sep(run_id) or run_id.startswith("..") or run_id == ".":
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
 
     # Global index stores only manifest.json; run_dir field points to actual data.
@@ -3923,7 +3943,7 @@ def _read_audit_records(path: Path) -> list[tuple[int, dict[str, Any]]]:
     if not path.exists():
         return out
     line_no = 0
-    with path.open("r") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         for line in fh:
             line_no += 1
             stripped = line.strip()
@@ -4210,7 +4230,7 @@ def compute_tde_audit_graph(
     turn's ``engine``/task-completion events reference (``tde_run_id`` in
     every tde.* audit record for that turn).
     """
-    if not run_id or "/" in run_id or run_id.startswith("..") or run_id == ".":
+    if not run_id or _has_path_sep(run_id) or run_id.startswith("..") or run_id == ".":
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
     if not _TDE_AUDIT_OK or _tde_audit_path is None:
         raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,

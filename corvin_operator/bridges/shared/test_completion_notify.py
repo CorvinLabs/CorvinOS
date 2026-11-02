@@ -59,7 +59,7 @@ def test_register_done_deliver_roundtrip() -> None:
         assert n == 1, f"expected 1 delivered, got {n}"
         files = list(outbox.glob("cn_*.json"))
         assert len(files) == 1
-        env = json.loads(files[0].read_text())
+        env = json.loads(files[0].read_text(encoding="utf-8"))
         assert env["channel"] == "discord"
         assert env["chat_id"] == "987654321"  # STRING — never int-coerced
         assert env["tenant_id"] == "acme"
@@ -86,7 +86,7 @@ def test_failure_status_marker() -> None:
         tid = cn.register(channel="telegram", chat_id="42", label="import job")
         cn.mark_done(tid, text="disk full", ok=False)
         cn.deliver_ready(outbox)
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert env["text"].startswith("⚠️"), env["text"]
         assert env["chat_id"] == "42"
         print("PASS: failure completion carries ⚠️ marker")
@@ -103,7 +103,7 @@ def test_discord_snowflake_id_survives_as_string() -> None:
         tid = cn.register(channel="discord", chat_id=snowflake, label="job")
         cn.mark_done(tid, text="ok")
         cn.deliver_ready(outbox)
-        raw = next(outbox.glob("cn_*.json")).read_text()
+        raw = next(outbox.glob("cn_*.json")).read_text(encoding="utf-8")
         env = json.loads(raw)
         assert env["chat_id"] == snowflake, f"snowflake corrupted: {env['chat_id']}"
         assert isinstance(env["chat_id"], str), "chat_id must be a JSON string"
@@ -119,7 +119,7 @@ def test_whatsapp_routes_on_to() -> None:
                           label="report")
         cn.mark_done(tid, text="done")
         cn.deliver_ready(outbox)
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert env["channel"] == "whatsapp"
         assert env["to"] == "49123@s.whatsapp.net"
         print("PASS: whatsapp routes on `to` (JID)")
@@ -163,7 +163,7 @@ def test_task_engine_producer_shape() -> None:
         assert cn.mark_done("task-abc123",
                             text="completed in 4200 ms (12 events).", ok=True)
         assert cn.deliver_ready(outbox) == 1
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert env["channel"] == "discord" and env["chat_id"] == "700"
         assert "completed in 4200 ms" in env["text"]
         # A console task nobody registered → mark_done is a harmless no-op.
@@ -345,7 +345,7 @@ def test_want_voice_attaches_voice_path_when_synthesizer_given() -> None:
 
         n = cn.deliver_ready(outbox, synthesize_voice=fake_synth)
         assert n == 1
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert env["voice_path"] == "/tmp/fake-voice.ogg"
         assert calls and "please log in" in calls[0]
         print("PASS: want_voice=True attaches voice_path via the injected synthesizer")
@@ -362,7 +362,7 @@ def test_no_synthesizer_delivers_text_only_even_with_want_voice() -> None:
         cn.mark_done(tid, text="please log in", ok=True)
         n = cn.deliver_ready(outbox)   # no synthesize_voice kwarg
         assert n == 1
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "voice_path" not in env
         print("PASS: no synthesizer configured -> text-only delivery, not blocked")
 
@@ -380,7 +380,7 @@ def test_want_voice_false_never_calls_synthesizer() -> None:
         n = cn.deliver_ready(outbox, synthesize_voice=lambda t: calls.append(t) or "x.ogg")
         assert n == 1
         assert calls == [], "synthesizer must never be called for want_voice=False records"
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "voice_path" not in env
         print("PASS: want_voice=False (default) never touches the synthesizer")
 
@@ -400,7 +400,7 @@ def test_synthesis_failure_degrades_to_text_only_not_blocked() -> None:
 
         n = cn.deliver_ready(outbox, synthesize_voice=broken_synth)
         assert n == 1, "delivery must succeed even though voice synthesis raised"
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "voice_path" not in env
         print("PASS: a raising synthesizer degrades to text-only, delivery still succeeds")
 
@@ -430,7 +430,7 @@ def test_mark_done_strips_voice_tag_from_visible_text() -> None:
             outbox, synthesize_voice=lambda t: spoken_calls.append(t) or "x.ogg",
         )
         assert n == 1
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "<voice>" not in env["text"].lower(), (
             f"raw tag leaked into visible chat text: {env['text']!r}"
         )
@@ -453,7 +453,7 @@ def test_mark_done_no_tag_unaffected() -> None:
         assert cn.mark_done(tid, text="all good, no voice tag here", ok=True) is True
         n = cn.deliver_ready(outbox)
         assert n == 1
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "all good, no voice tag here" in env["text"]
         print("PASS: plain text with no <voice> tag passes through unchanged")
 
@@ -502,7 +502,7 @@ def test_sequential_multi_task_voice_delivery_preserves_order_and_distinct_paths
 
         delivered_texts = []
         for env_path in envelopes:
-            env = json.loads(env_path.read_text())
+            env = json.loads(env_path.read_text(encoding="utf-8"))
             assert "voice_path" in env, f"envelope missing voice_path: {env}"
             delivered_texts.append(env["text"])
 
@@ -581,7 +581,7 @@ def test_flag_on_all_gates_pass_delivers_via_gate_exactly_once(monkeypatch) -> N
         assert seen == ["acme"], f"completion must route via the gate for its tenant: {seen}"
         files = list(outbox.glob("cn_*.json"))
         assert len(files) == 1
-        env = json.loads(files[0].read_text())
+        env = json.loads(files[0].read_text(encoding="utf-8"))
         assert env["_completion_notify"] is True          # completion shape preserved
         assert env["chat_id"] == _SNOWFLAKE               # string, precision intact
         assert "the answer the user waited for" in env["text"]
@@ -665,7 +665,7 @@ def test_flag_on_resolved_for_record_tenant_not_env(monkeypatch) -> None:
         assert seen == ["acme"], (
             f"only the acme (flag-ON) record may route via the gate; the flag "
             f"must resolve to the record tenant, not env _default: {seen}")
-        envs = [json.loads(p.read_text()) for p in outbox.glob("cn_*.json")]
+        envs = [json.loads(p.read_text(encoding="utf-8")) for p in outbox.glob("cn_*.json")]
         bodies = " ".join(e.get("text", "") for e in envs)
         assert len(envs) == 2
         assert "acme answer" in bodies and "default answer" in bodies

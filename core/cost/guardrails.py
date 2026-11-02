@@ -292,7 +292,7 @@ class BudgetGuard:
         if not alerts_file.exists():
             return alerts
 
-        with open(alerts_file, "r") as f:
+        with open(alerts_file, "r", encoding="utf-8") as f:
             for line in f:
                 if not line.strip():
                     continue
@@ -366,7 +366,7 @@ class BudgetGuard:
         }
 
         try:
-            with open(denials_file, "a") as f:
+            with open(denials_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(denial_record, separators=(",", ":")) + "\n")
             denials_file.chmod(0o600)
         except Exception as e:
@@ -377,7 +377,7 @@ class BudgetGuard:
         alerts_file = self.budget_dir / "alerts.jsonl"
 
         try:
-            with open(alerts_file, "a") as f:
+            with open(alerts_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(alert.to_dict(), separators=(",", ":")) + "\n")
             alerts_file.chmod(0o600)
         except Exception as e:
@@ -397,7 +397,7 @@ class BudgetGuard:
             return default
 
         try:
-            with open(config_file, "r") as f:
+            with open(config_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return BudgetConfig(
                     monthly_budget=Decimal(data["monthly_budget"]),
@@ -422,7 +422,7 @@ class BudgetGuard:
         config_file = self.budget_dir / "config.json"
 
         try:
-            with open(config_file, "w") as f:
+            with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(config.to_dict(), f, indent=2)
             config_file.chmod(0o600)
         except Exception as e:

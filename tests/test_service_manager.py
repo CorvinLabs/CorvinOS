@@ -47,7 +47,7 @@ class TestLinuxServiceManager:
             unit_file = tmpdir_path / "corvin-test.service"
             assert unit_file.exists()
 
-            content = unit_file.read_text()
+            content = unit_file.read_text(encoding="utf-8")
             assert "[Unit]" in content
             assert "Description=Test service" in content
             assert "[Service]" in content
@@ -82,7 +82,7 @@ class TestLinuxServiceManager:
                 name="test", command="/usr/bin/true", auto_start=False,
             )
 
-            content = (Path(tmpdir) / "corvin-test.service").read_text()
+            content = (Path(tmpdir) / "corvin-test.service").read_text(encoding="utf-8")
             assert "StartLimitIntervalSec=120" in content
             assert "StartLimitBurst=8" in content
 
@@ -127,7 +127,7 @@ class TestInstallerUsesRestartOnStep15AndStep17:
         core_src = (
             Path(__file__).resolve().parent.parent
             / "corvinOS" / "installer" / "core.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         assert 'restart_service("voice-bridge-adapter")' in core_src
         assert 'restart_service(f"voice-bridge-{bridge}")' in core_src
         assert 'restart_service("webui")' in core_src
@@ -211,7 +211,7 @@ class TestServiceNameContract:
         core_src = (
             Path(__file__).resolve().parent.parent
             / "corvinOS" / "installer" / "core.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         assert 'name="voice-bridge-adapter"' in core_src
         assert 'name=f"voice-bridge-{bridge}"' in core_src
         # The legacy names must be gone from service-name call sites.
@@ -225,7 +225,7 @@ class TestServiceNameContract:
         validate_src = (
             Path(__file__).resolve().parent.parent
             / "corvinOS" / "installer" / "steps" / "validate.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         for unit in self.CANONICAL.values():
             assert unit in validate_src
 
@@ -244,7 +244,7 @@ class TestLinuxServiceManagerPreExec:
                 auto_start=False,
                 pre_exec="/usr/bin/python3 /opt/corvin/autoupdate.py",
             )
-            content = (Path(tmpdir) / "corvin-test.service").read_text()
+            content = (Path(tmpdir) / "corvin-test.service").read_text(encoding="utf-8")
             # "-" prefix: a failed/offline check must never block ExecStart.
             assert "ExecStartPre=-/usr/bin/python3 /opt/corvin/autoupdate.py" in content
             assert "ExecStart=/usr/bin/echo hello" in content
@@ -254,7 +254,7 @@ class TestLinuxServiceManagerPreExec:
             mgr = LinuxServiceManager()
             mgr.systemd_user_dir = Path(tmpdir)
             mgr.install_service(name="test", command="/usr/bin/echo hello", auto_start=False)
-            content = (Path(tmpdir) / "corvin-test.service").read_text()
+            content = (Path(tmpdir) / "corvin-test.service").read_text(encoding="utf-8")
             assert "ExecStartPre" not in content
 
 

@@ -40,7 +40,7 @@ class SnapshotPrimitive(unittest.TestCase):
         self.snap = self.d / "snap"
         self.snap.mkdir()
         self.f = self.d / "f.py"
-        self.f.write_text("a = 1\nb = 2\nc = 3\n")
+        self.f.write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -52,7 +52,7 @@ class SnapshotPrimitive(unittest.TestCase):
 
     def test_sed_in_place_shows_the_hunk(self):
         n, lines = self._run("sed -i 's/b = 2/b = 20/' f.py",
-                             lambda: self.f.write_text("a = 1\nb = 20\nc = 3\n"))
+                             lambda: self.f.write_text("a = 1\nb = 20\nc = 3\n", encoding="utf-8"))
         self.assertEqual(n, 1)
         self.assertEqual(lines, ["@@ f.py -1,3 +1,3 @@", " a = 1", "-b = 2", "+b = 20", " c = 3"])
 
@@ -62,12 +62,12 @@ class SnapshotPrimitive(unittest.TestCase):
 
     def test_python_heredoc_naming_the_file_in_a_string(self):
         cmd = "python3 - <<'EOF'\np='f.py'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF"
-        _, lines = self._run(cmd, lambda: self.f.write_text("a = 1\nb = 2\nc = 4\n"))
+        _, lines = self._run(cmd, lambda: self.f.write_text("a = 1\nb = 2\nc = 4\n", encoding="utf-8"))
         self.assertIn("-c = 3", lines)
         self.assertIn("+c = 4", lines)
 
     def test_created_file_is_all_added(self):
-        _, lines = self._run("cat > new.txt <<EOF\nhi\nEOF", lambda: (self.d / "new.txt").write_text("hi\nthere\n"))
+        _, lines = self._run("cat > new.txt <<EOF\nhi\nEOF", lambda: (self.d / "new.txt").write_text("hi\nthere\n", encoding="utf-8"))
         self.assertEqual(lines, ["@@ new.txt -0,0 +1,2 @@", "+hi", "+there"])
 
     def test_deleted_file_is_all_removed(self):
@@ -79,15 +79,15 @@ class SnapshotPrimitive(unittest.TestCase):
         self.assertEqual(self._run("cat f.py", lambda: None)[1], None)
 
     def test_every_snapshot_is_consumed_exactly_once(self):
-        self._run("sed -i x f.py", lambda: self.f.write_text("z\n"))
+        self._run("sed -i x f.py", lambda: self.f.write_text("z\n", encoding="utf-8"))
         self.assertEqual(list(self.snap.iterdir()), [])
         self.assertIsNone(bd.diff_from_snapshot(str(self.snap), "toolu_1"))
 
     def test_credential_named_and_vcs_paths_are_never_snapshotted(self):
         for name in (".env", "prod.pem", "id_rsa", "my_secret.txt"):
-            (self.d / name).write_text("x\n")
+            (self.d / name).write_text("x\n", encoding="utf-8")
         (self.d / ".git").mkdir()
-        (self.d / ".git" / "config").write_text("x\n")
+        (self.d / ".git" / "config").write_text("x\n", encoding="utf-8")
         cmd = "cat .env prod.pem id_rsa my_secret.txt .git/config"
         self.assertEqual(bd.take_snapshot(cmd, str(self.d), "toolu_2", str(self.snap)), 0)
         self.assertEqual(list(self.snap.iterdir()), [])
@@ -96,10 +96,10 @@ class SnapshotPrimitive(unittest.TestCase):
         b = self.d / "blob.bin"
         b.write_bytes(b"\x00\x01\x02")
         big = self.d / "big.txt"
-        big.write_text("x" * (bd.MAX_FILE_BYTES + 1))
+        big.write_text("x" * (bd.MAX_FILE_BYTES + 1), encoding="utf-8")
         bd.take_snapshot("cat blob.bin big.txt", str(self.d), "toolu_3", str(self.snap))
         b.write_bytes(b"\x00\x09")
-        big.write_text("y\n")  # shrinks below the cap: still must NOT read as "created"
+        big.write_text("y\n", encoding="utf-8")  # shrinks below the cap: still must NOT read as "created"
         self.assertIsNone(bd.diff_from_snapshot(str(self.snap), "toolu_3"))
 
     def test_bad_ids_and_missing_dir_are_inert(self):
@@ -110,7 +110,7 @@ class SnapshotPrimitive(unittest.TestCase):
 
     def test_file_cap(self):
         for i in range(30):
-            (self.d / f"f{i}.txt").write_text("x\n")
+            (self.d / f"f{i}.txt").write_text("x\n", encoding="utf-8")
         cmd = "cat " + " ".join(f"f{i}.txt" for i in range(30))
         self.assertEqual(bd.take_snapshot(cmd, str(self.d), "toolu_5", str(self.snap)), bd.MAX_FILES)
 
@@ -118,7 +118,7 @@ class SnapshotPrimitive(unittest.TestCase):
         import subprocess
         for payload in ("not json", "{}", json.dumps({"tool_name": "Bash", "tool_input": None})):
             r = subprocess.run([sys.executable, bd.__file__], input=payload, text=True,
-                               capture_output=True, env={**os.environ, bd.SNAP_ENV: str(self.snap)})
+                               capture_output=True, env={**os.environ, bd.SNAP_ENV: str(self.snap)}, encoding="utf-8", errors="replace")
             self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(list(self.snap.iterdir()), [])
 
@@ -134,14 +134,14 @@ class SnapshotPrimitive(unittest.TestCase):
         [t.start() for t in ts]; [t.join() for t in ts]
         self.assertEqual(errs, [])
         self.assertEqual(len(list(self.snap.iterdir())), 16)
-        self.assertTrue(all(json.loads(p.read_text())["files"] for p in self.snap.iterdir()))
+        self.assertTrue(all(json.loads(p.read_text(encoding="utf-8"))["files"] for p in self.snap.iterdir()))
 
     def test_budget_diffing_a_max_size_file_is_fast(self):
         import time
         big = self.d / "big.py"
-        big.write_text("\n".join(f"line {i} = {i}" for i in range(bd.MAX_FILE_LINES - 5)) + "\n")
+        big.write_text("\n".join(f"line {i} = {i}" for i in range(bd.MAX_FILE_LINES - 5)) + "\n", encoding="utf-8")
         bd.take_snapshot("sed -i x big.py", str(self.d), "toolu_6", str(self.snap))
-        big.write_text(big.read_text().replace("line 10 =", "LINE 10 =").replace("line 3000 =", "LINE 3000 ="))
+        big.write_text(big.read_text(encoding="utf-8").replace("line 10 =", "LINE 10 =").replace("line 3000 =", "LINE 3000 ="), encoding="utf-8")
         t = time.perf_counter()
         lines = bd.diff_from_snapshot(str(self.snap), "toolu_6")
         self.assertLess(time.perf_counter() - t, 1.0)
@@ -219,7 +219,7 @@ class BashDiffE2E(unittest.TestCase):
         _hr._house_rules_classifier = lambda task, rules, auth, **kw: ("", 1.0, "test-benign")
         cls.home = home
         cls.cli = home / "fake-claude"
-        cls.cli.write_text(FAKE_CLI.format(python=sys.executable))
+        cls.cli.write_text(FAKE_CLI.format(python=sys.executable), encoding="utf-8")
         cls.cli.chmod(cls.cli.stat().st_mode | stat.S_IXUSR)
         os.environ["CORVIN_CLAUDE_BIN"] = str(cls.cli)
 
@@ -240,7 +240,7 @@ class BashDiffE2E(unittest.TestCase):
         bd.make_snap_dir = spy
         self.addCleanup(setattr, bd, "make_snap_dir", real)
         script = self.home / "script.json"
-        script.write_text(json.dumps(commands))
+        script.write_text(json.dumps(commands), encoding="utf-8")
         os.environ["FAKE_BASH_SCRIPT"] = str(script)
         sess = self.cr.create_session("_default")
         # commands name files relative to the session workdir (the stand-in's cwd)

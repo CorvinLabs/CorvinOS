@@ -119,7 +119,7 @@ class _E2EBox:
         if not audit_file.exists():
             return []
         out: list[dict] = []
-        for ln in audit_file.read_text().splitlines():
+        for ln in audit_file.read_text(encoding="utf-8").splitlines():
             if ln.strip():
                 try:
                     out.append(json.loads(ln))
@@ -293,7 +293,7 @@ class PostToolUseHookE2ETests(unittest.TestCase):
             r = subprocess.run(
                 [sys.executable, str(hook)],
                 input=payload, capture_output=True, text=True,
-                env=env, timeout=10,
+                env=env, timeout=10, encoding="utf-8", errors="replace",
             )
             self.assertEqual(r.returncode, 0)
             # Give the detached worker a moment to finish.

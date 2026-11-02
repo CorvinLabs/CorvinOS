@@ -23,7 +23,7 @@ SCRIPT = REPO / "corvin_operator" / "bridges" / "run-all-tests.sh"
 
 
 def _checker() -> str:
-    m = re.search(r"<<'PY'\n(.*?)\nPY\n", SCRIPT.read_text(), re.S)
+    m = re.search(r"<<'PY'\n(.*?)\nPY\n", SCRIPT.read_text(encoding="utf-8"), re.S)
     assert m, "protected-chain checker not found in run-all-tests.sh"
     return m.group(1)
 
@@ -32,20 +32,20 @@ def _home(tmp_path: Path, *, own: str | None, tail: str) -> tuple[Path, Path]:
     home = tmp_path / "home"
     chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     chain.parent.mkdir(parents=True)
-    chain.write_text(json.dumps({"event_type": "x", "instance_id": tail}) + "\n")
+    chain.write_text(json.dumps({"event_type": "x", "instance_id": tail}) + "\n", encoding="utf-8")
     if own:
         (home / "global").mkdir(parents=True)
-        (home / "global" / "instance_id.json").write_text(json.dumps({"instance_id": own}))
+        (home / "global" / "instance_id.json").write_text(json.dumps({"instance_id": own}), encoding="utf-8")
     return home, chain
 
 
 def _run(mode: str, snap: Path, home: Path) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, "-I", "-", mode, str(snap), str(home)],
-                          input=_checker(), capture_output=True, text=True)
+                          input=_checker(), capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
 def _append(chain: Path, iid: str) -> None:
-    with open(chain, "a") as fh:
+    with open(chain, "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"event_type": "y", "instance_id": iid}) + "\n")
 
 
@@ -53,7 +53,7 @@ def test_foreign_tail_does_not_become_live(tmp_path):
     home, chain = _home(tmp_path, own="OWN", tail="FOREIGN")
     snap = tmp_path / "snap.json"
     assert _run("before", snap, home).returncode == 0
-    assert json.loads(snap.read_text())[str(home.resolve())]["live"] == "OWN"
+    assert json.loads(snap.read_text(encoding="utf-8"))[str(home.resolve())]["live"] == "OWN"
     _append(chain, "FOREIGN")
     r = _run("after", snap, home)
     assert r.returncode == 1 and "FOREIGN" in r.stderr, r
@@ -72,4 +72,4 @@ def test_tail_is_the_fallback_without_instance_file(tmp_path):
     home, chain = _home(tmp_path, own=None, tail="TAILID")
     snap = tmp_path / "snap.json"
     _run("before", snap, home)
-    assert json.loads(snap.read_text())[str(home.resolve())]["live"] == "TAILID"
+    assert json.loads(snap.read_text(encoding="utf-8"))[str(home.resolve())]["live"] == "TAILID"

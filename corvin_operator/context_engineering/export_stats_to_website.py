@@ -99,7 +99,7 @@ def export_measurements_to_website(
 
         # Write to JSON file
         output_file = output_dir / "latest.json"
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2)
 
         logger.info(f"✓ Exported measurements to {output_file}")
@@ -112,7 +112,7 @@ def export_measurements_to_website(
             ("budget_allocations", records["budget"]),
         ]:
             track_file = output_dir / f"{track_name}.json"
-            with open(track_file, "w") as f:
+            with open(track_file, "w", encoding="utf-8") as f:
                 json.dump({
                     "timestamp": datetime.utcnow().isoformat(),
                     "track": track_name,

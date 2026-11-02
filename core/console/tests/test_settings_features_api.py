@@ -175,7 +175,7 @@ class TestSelfLockingContract(unittest.TestCase):
                        json={"enabled": True}, headers=self._hdr(csrf))
             overlay = home / "tenants" / "_default" / "global" / "features.json"
             self.assertTrue(overlay.is_file(), "expected features.json")
-            self.assertIs(json.loads(overlay.read_text())["flags"][FLAG], True)
+            self.assertIs(json.loads(overlay.read_text(encoding="utf-8"))["flags"][FLAG], True)
 
     def test_the_write_is_audited(self):
         """A deployment-mode change is not a silent config edit."""

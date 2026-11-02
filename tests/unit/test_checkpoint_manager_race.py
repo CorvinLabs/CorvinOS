@@ -72,7 +72,7 @@ class TestCheckpointManagerRaceCondition:
         assert checkpoint_file.exists(), f"Checkpoint file not found: {checkpoint_file}"
 
         # Read and verify JSON is parseable and complete
-        with open(checkpoint_file, 'r') as f:
+        with open(checkpoint_file, 'r', encoding="utf-8") as f:
             data = json.load(f)
 
         # Verify all required fields present
@@ -121,7 +121,7 @@ class TestCheckpointManagerRaceCondition:
 
         # Final checkpoint should be valid
         checkpoint_file = manager.checkpoint_dir / f"{session_id}.json"
-        with open(checkpoint_file, 'r') as f:
+        with open(checkpoint_file, 'r', encoding="utf-8") as f:
             data = json.load(f)
         assert data["session_id"] == session_id
 

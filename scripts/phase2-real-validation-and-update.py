@@ -253,7 +253,7 @@ class Phase2RealValidator:
         output_file = self.exp_root / "phase2-real-validation" / "phase2-real-results.json"
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
 
         print(f"\n✅ Results saved: {output_file}")
@@ -274,7 +274,7 @@ class Phase2RealValidator:
         # Update lab-notebook.md
         lab_notebook = self.exp_root / "lab-notebook.md"
         if lab_notebook.exists():
-            content = lab_notebook.read_text()
+            content = lab_notebook.read_text(encoding="utf-8")
             # Add Phase 2 section
             phase2_section = f"""
 
@@ -309,7 +309,7 @@ Metrics are GATING-READY. Proceed to production deployment Phase 2 ADR-0377 (cos
 """
 
             # Append to notebook (don't overwrite, append-only)
-            with open(lab_notebook, "a") as f:
+            with open(lab_notebook, "a", encoding="utf-8") as f:
                 f.write(phase2_section)
 
             print(f"✅ Updated: {lab_notebook}")
@@ -318,19 +318,19 @@ Metrics are GATING-READY. Proceed to production deployment Phase 2 ADR-0377 (cos
         readme_files = list(self.repo_root.glob("**/README.md"))
         for readme in readme_files[:3]:  # Update first 3 READMEs as examples
             if "exp-001" in str(readme) or ".corvin/tenants" in str(readme):
-                content = readme.read_text()
+                content = readme.read_text(encoding="utf-8")
                 # Replace synthetic values with real values
                 content = content.replace("45.53%", f"{savings_pct:.2f}%")
                 content = content.replace("1.87%", f"{1.5:.2f}%")  # Estimated
                 content = content.replace("Status: ADVISORY", f"Status: {verdict}")
 
-                readme.write_text(content)
+                readme.write_text(content, encoding="utf-8")
                 print(f"✅ Updated: {readme}")
 
         # Update metrics-as-loss.json with real data
         metrics_file = self.exp_root / "metrics-as-loss.json"
         if metrics_file.exists():
-            metrics = json.loads(metrics_file.read_text())
+            metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
 
             # Update with real measurements
             metrics["metadata"]["phase2_real_validation"] = {
@@ -341,7 +341,7 @@ Metrics are GATING-READY. Proceed to production deployment Phase 2 ADR-0377 (cos
                 "verdict": verdict,
             }
 
-            metrics_file.write_text(json.dumps(metrics, indent=2))
+            metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
             print(f"✅ Updated: {metrics_file}")
 
         print("\n✅ ALL REPOSITORY FILES UPDATED WITH REAL VALUES")

@@ -89,7 +89,7 @@ class _FloodEngine:
 
 
 def _write_json(path: Path, cfg: dict) -> None:
-    path.write_text(json.dumps(cfg))
+    path.write_text(json.dumps(cfg), encoding="utf-8")
     path.chmod(0o600)
 
 

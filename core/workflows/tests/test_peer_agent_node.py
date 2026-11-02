@@ -191,7 +191,7 @@ def _chain(home):
     from core.paths import tenant_audit_chain
 
     p = tenant_audit_chain(TENANT)
-    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
 def _events(home):

@@ -146,6 +146,13 @@ class AlreadyClaimedError(RuntimeError):
 
 
 def _pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        # os.kill(pid, 0) is no probe on Windows (signal 0 is CTRL_C_EVENT there): it can
+        # reach the console group and reports a LIVE claimant (even this process) as gone,
+        # so its claim would be reaped mid-resume.
+        from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415
+
+        return _os_pid_exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

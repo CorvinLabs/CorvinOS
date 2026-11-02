@@ -66,10 +66,10 @@ def _make_source(root: Path) -> Path:
     payload = root / "payload"
     (payload / "skills" / "refund-flow").mkdir(parents=True)
     (payload / "skills" / "refund-flow" / "SKILL.md").write_text(
-        "---\nname: refund-flow\ndescription: x\n---\nbody\n"
+        "---\nname: refund-flow\ndescription: x\n---\nbody\n", encoding="utf-8"
     )
     (payload / "personas").mkdir(parents=True)
-    (payload / "personas" / "agent.json").write_text('{"name":"agent"}')
+    (payload / "personas" / "agent.json").write_text('{"name":"agent"}', encoding="utf-8")
     return root
 
 
@@ -165,7 +165,7 @@ class SecurityTests(unittest.TestCase):
             src_p = Path(src)
             (src_p / "payload" / "skills").mkdir(parents=True)
             real = src_p / "real.txt"
-            real.write_text("hi")
+            real.write_text("hi", encoding="utf-8")
             link = src_p / "payload" / "skills" / "link.txt"
             link.symlink_to(real)
             pri, _ = _good_key()
@@ -181,7 +181,7 @@ class SecurityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as src:
             src_p = Path(src)
             (src_p / "payload" / "secrets").mkdir(parents=True)
-            (src_p / "payload" / "secrets" / "x").write_text("nope")
+            (src_p / "payload" / "secrets" / "x").write_text("nope", encoding="utf-8")
             pri, _ = _good_key()
             with tempfile.TemporaryDirectory() as out:
                 with self.assertRaises(PackageMalformed):

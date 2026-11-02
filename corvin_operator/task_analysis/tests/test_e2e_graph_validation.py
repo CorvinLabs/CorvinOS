@@ -44,14 +44,14 @@ def test_repo_dir():
         # ========== NORMAL CASE 1: Simple module ==========
         simple_dir = tmpdir_path / "simple_module"
         simple_dir.mkdir()
-        (simple_dir / "__init__.py").write_text("")
+        (simple_dir / "__init__.py").write_text("", encoding="utf-8")
         (simple_dir / "utils.py").write_text("""
 def add(a, b):
     return a + b
 
 def multiply(a, b):
     return a * b
-""")
+""", encoding="utf-8")
         (simple_dir / "calculator.py").write_text("""
 from .utils import add, multiply
 
@@ -61,17 +61,17 @@ def compute(x, y, op):
     elif op == 'mult':
         return multiply(x, y)
     return None
-""")
+""", encoding="utf-8")
 
         # ========== NORMAL CASE 2: Multi-file with imports ==========
         multi_dir = tmpdir_path / "multi_module"
         multi_dir.mkdir()
-        (multi_dir / "__init__.py").write_text("")
+        (multi_dir / "__init__.py").write_text("", encoding="utf-8")
         (multi_dir / "base.py").write_text("""
 class BaseModel:
     def __init__(self, name):
         self.name = name
-""")
+""", encoding="utf-8")
         (multi_dir / "derived.py").write_text("""
 from .base import BaseModel
 
@@ -79,7 +79,7 @@ class ExtendedModel(BaseModel):
     def __init__(self, name, value):
         super().__init__(name)
         self.value = value
-""")
+""", encoding="utf-8")
         (multi_dir / "service.py").write_text("""
 from .derived import ExtendedModel
 from .base import BaseModel
@@ -89,66 +89,66 @@ def create_model(name, value):
 
 def get_base(name):
     return BaseModel(name)
-""")
+""", encoding="utf-8")
 
         # ========== NORMAL CASE 3: Nested calls ==========
         nested_dir = tmpdir_path / "nested_module"
         nested_dir.mkdir()
-        (nested_dir / "__init__.py").write_text("")
+        (nested_dir / "__init__.py").write_text("", encoding="utf-8")
         (nested_dir / "level1.py").write_text("""
 def func_a():
     return 'A'
-""")
+""", encoding="utf-8")
         (nested_dir / "level2.py").write_text("""
 from .level1 import func_a
 
 def func_b():
     return func_a()
-""")
+""", encoding="utf-8")
         (nested_dir / "level3.py").write_text("""
 from .level2 import func_b
 
 def func_c():
     return func_b()
-""")
+""", encoding="utf-8")
 
         # ========== EDGE CASE 1: Circular dependencies ==========
         circular_dir = tmpdir_path / "circular_module"
         circular_dir.mkdir()
-        (circular_dir / "__init__.py").write_text("")
+        (circular_dir / "__init__.py").write_text("", encoding="utf-8")
         (circular_dir / "mod_a.py").write_text("""
 from . import mod_b
 
 def func_a():
     return mod_b.func_b()
-""")
+""", encoding="utf-8")
         (circular_dir / "mod_b.py").write_text("""
 from . import mod_a
 
 def func_b():
     return "B"
-""")
+""", encoding="utf-8")
 
         # ========== EDGE CASE 2: Deep nesting (level 5) ==========
         deep_dir = tmpdir_path / "deep_module"
         deep_dir.mkdir()
-        (deep_dir / "__init__.py").write_text("")
+        (deep_dir / "__init__.py").write_text("", encoding="utf-8")
         for i in range(1, 6):
             prev = i - 1
             if i == 1:
-                (deep_dir / f"d{i}.py").write_text(f"def f{i}():\n    return {i}")
+                (deep_dir / f"d{i}.py").write_text(f"def f{i}():\n    return {i}", encoding="utf-8")
             else:
                 (deep_dir / f"d{i}.py").write_text(f"""
 from .d{prev} import f{prev}
 
 def f{i}():
     return f{prev}() + {i}
-""")
+""", encoding="utf-8")
 
         # ========== EDGE CASE 3: Large file (100+ lines) ==========
         large_dir = tmpdir_path / "large_module"
         large_dir.mkdir()
-        (large_dir / "__init__.py").write_text("")
+        (large_dir / "__init__.py").write_text("", encoding="utf-8")
         large_content = "def helper():\n    pass\n\n" * 50  # 150+ lines
         large_content += """
 def process_data(items):
@@ -161,38 +161,38 @@ def validate_data(data):
         return False
     return process_data(data) is not None
 """
-        (large_dir / "large.py").write_text(large_content)
+        (large_dir / "large.py").write_text(large_content, encoding="utf-8")
 
         # ========== ERROR CASE 1: Syntax error ==========
         error1_dir = tmpdir_path / "error1_module"
         error1_dir.mkdir()
-        (error1_dir / "__init__.py").write_text("")
+        (error1_dir / "__init__.py").write_text("", encoding="utf-8")
         (error1_dir / "broken.py").write_text("""
 def broken_func(
     return "unclosed paren"
-""")
+""", encoding="utf-8")
 
         # ========== ERROR CASE 2: Missing imports ==========
         error2_dir = tmpdir_path / "error2_module"
         error2_dir.mkdir()
-        (error2_dir / "__init__.py").write_text("")
+        (error2_dir / "__init__.py").write_text("", encoding="utf-8")
         (error2_dir / "missing.py").write_text("""
 from nonexistent_module import something
 
 def uses_missing():
     return something()
-""")
+""", encoding="utf-8")
 
         # ========== ERROR CASE 3: Broken module paths ==========
         error3_dir = tmpdir_path / "error3_module"
         error3_dir.mkdir()
-        (error3_dir / "__init__.py").write_text("")
+        (error3_dir / "__init__.py").write_text("", encoding="utf-8")
         (error3_dir / "broken_path.py").write_text("""
 from ...nonexistent import func
 
 def bad_import():
     return func()
-""")
+""", encoding="utf-8")
 
         yield {
             "tmpdir": tmpdir_path,

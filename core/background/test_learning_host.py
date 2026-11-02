@@ -127,7 +127,7 @@ def test_lease_on_a_replaced_lock_file_is_not_held(tmp_path):
     lease = lh._Lease("_default")
     assert lease.try_acquire() and lease.still_valid()
     lease.path.unlink()
-    lease.path.write_text("")
+    lease.path.write_text("", encoding="utf-8")
     assert not lease.still_valid()
     other = lh._Lease("_default")
     assert other.try_acquire()   # the new file is free - so the old holder must step down
@@ -196,7 +196,7 @@ def test_a_failed_regeneration_is_retried_not_counted_as_done():
 def test_a_refused_state_file_is_recorded_and_kept_aside():
     path = lh.state_path("_default")
     path.parent.mkdir(parents=True)
-    path.write_text('{"daemon": {"version": 99, "tenant_id": "_default"}}')
+    path.write_text('{"daemon": {"version": 99, "tenant_id": "_default"}}', encoding="utf-8")
     host = lh.LearningHost("_default")
     assert host._restored is False
     assert not path.exists()

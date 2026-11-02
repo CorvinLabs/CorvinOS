@@ -201,7 +201,7 @@ def _deliver_completions() -> int:
 def _load_state() -> dict:
     p = _bg_watch_path()
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
@@ -210,7 +210,7 @@ def _save_state(state: dict) -> None:
     p = _bg_watch_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(p)
 
 
@@ -377,7 +377,7 @@ def run_once() -> int:
         }
         try:
             (inbox / f"{msg_id}.json").write_text(
-                json.dumps(envelope, ensure_ascii=False, indent=2)
+                json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             entry["notified_at"] = now
             changed = True

@@ -17,7 +17,7 @@ def test_no_operator_directory():
         ["git", "ls-tree", "-r", "HEAD", "--name-only"],
         capture_output=True,
         text=True,
-        cwd="/tmp/wt-adr-0730"
+        cwd="/tmp/wt-adr-0730", encoding="utf-8", errors="replace"
     ).stdout.splitlines()
     
     operator_files = [f for f in files if f.startswith(("operator/", "core/operator/"))]
@@ -31,7 +31,7 @@ def test_sys_path_references_corvin_operator():
         ["git", "grep", "-c", 'sys\\.path.*"operator"', "--", "*.py"],
         capture_output=True,
         text=True,
-        cwd="/tmp/wt-adr-0730"
+        cwd="/tmp/wt-adr-0730", encoding="utf-8", errors="replace"
     )
     # Return code 1 means no matches found (grep exits 1 when no matches)
     assert result.returncode == 1, f"Found bare 'operator' sys.path refs:\n{result.stdout}"
@@ -46,7 +46,7 @@ def test_form_agnostic_literal_scan():
         ["git","ls-files"],
         capture_output=True,
         text=True,
-        cwd="/tmp/wt-adr-0730"
+        cwd="/tmp/wt-adr-0730", encoding="utf-8", errors="replace"
     ).stdout.splitlines()
     
     exts = (".py",".sh",".yaml",".yml",".json")

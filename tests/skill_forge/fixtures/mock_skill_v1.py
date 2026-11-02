@@ -113,25 +113,25 @@ def create_mock_skill_with_path(
 
     # Write manifest
     manifest_file = skill_dir / "manifest.json"
-    manifest_file.write_text(json.dumps(asdict(skill.manifest), indent=2))
+    manifest_file.write_text(json.dumps(asdict(skill.manifest), indent=2), encoding="utf-8")
 
     # Write source
     src_dir = skill_dir / "src"
     src_dir.mkdir(exist_ok=True)
-    (src_dir / "__init__.py").write_text("")
+    (src_dir / "__init__.py").write_text("", encoding="utf-8")
     (src_dir / "handler.py").write_text(
         '''"""Skill handler."""
 
 async def handle(input_data):
     """Process skill input and return result."""
     return {"result": "processed", "input": input_data}
-'''
+''', encoding="utf-8"
     )
 
     # Write tests
     tests_dir = skill_dir / "tests"
     tests_dir.mkdir(exist_ok=True)
-    (tests_dir / "__init__.py").write_text("")
+    (tests_dir / "__init__.py").write_text("", encoding="utf-8")
     (tests_dir / "test_handler.py").write_text(
         '''"""Tests for skill handler."""
 import pytest
@@ -149,20 +149,20 @@ async def test_handle_returns_dict():
     result = await handle({})
     assert isinstance(result, dict)
     assert "result" in result
-'''
+''', encoding="utf-8"
     )
 
     # Write hooks (optional)
     hooks_dir = skill_dir / "hooks"
     hooks_dir.mkdir(exist_ok=True)
-    (hooks_dir / "__init__.py").write_text("")
+    (hooks_dir / "__init__.py").write_text("", encoding="utf-8")
     (hooks_dir / "pre_execute.py").write_text(
         '''"""Pre-execution hook."""
 
 async def pre_execute(input_data):
     """Pre-execution validation."""
     return True
-'''
+''', encoding="utf-8"
     )
 
     return skill
@@ -196,12 +196,12 @@ def create_mock_bad_skill(
 
     # Write manifest only
     manifest_file = skill_dir / "manifest.json"
-    manifest_file.write_text(json.dumps(asdict(skill.manifest), indent=2))
+    manifest_file.write_text(json.dumps(asdict(skill.manifest), indent=2), encoding="utf-8")
 
     # Write source (but NO tests)
     src_dir = skill_dir / "src"
     src_dir.mkdir(exist_ok=True)
-    (src_dir / "handler.py").write_text("# Handler code\n")
+    (src_dir / "handler.py").write_text("# Handler code\n", encoding="utf-8")
 
     # DON'T create tests directory — will fail validation
 

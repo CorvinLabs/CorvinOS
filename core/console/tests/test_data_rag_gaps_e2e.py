@@ -207,7 +207,7 @@ class TestDatabaseCredentials:
             r = client.post("/v1/console/data-sources", json={"manifest": manifest})
             assert r.status_code == 201, r.text
             # the manifest on disk carries NAMES only
-            stored = json.loads((home / "tenants" / tid / "datasource_connections" / "charts-pg.json").read_text())
+            stored = json.loads((home / "tenants" / tid / "datasource_connections" / "charts-pg.json").read_text(encoding="utf-8"))
             assert "s3cret-Value-42" not in json.dumps(stored)
             # the compute runner's resolver sees the values the form stored
             from corvin_compute.cli import _resolve_datasource_env
@@ -270,7 +270,7 @@ class TestKnowledgeEndToEnd:
             # canonical layout: manifests/ + registry.json, no flat yaml
             rag = home / "tenants" / tid / "global" / "rag"
             assert (rag / "manifests" / "bm25-demo.yaml").is_file()
-            assert [p["id"] for p in json.loads((rag / "registry.json").read_text())["providers"]] == ["bm25-demo"]
+            assert [p["id"] for p in json.loads((rag / "registry.json").read_text(encoding="utf-8"))["providers"]] == ["bm25-demo"]
             assert not (rag / "bm25-demo.yaml").exists()
 
             # listed on the very next request, with the badge vocabulary
@@ -330,10 +330,10 @@ class TestKnowledgeEndToEnd:
                                json=_create_body(bm25_server)).json()["status"] == "created"
             rag = home / "tenants" / tid / "global" / "rag"
             # simulate an older build: flat file only, no index, no manifests/
-            text = (rag / "manifests" / "bm25-demo.yaml").read_text()
+            text = (rag / "manifests" / "bm25-demo.yaml").read_text(encoding="utf-8")
             (rag / "manifests" / "bm25-demo.yaml").unlink()
             (rag / "registry.json").unlink()
-            (rag / "legacy-demo.yaml").write_text(text)
+            (rag / "legacy-demo.yaml").write_text(text, encoding="utf-8")
             listed = client.get("/v1/console/rag/providers").json()
             assert [p["id"] for p in listed["providers"]] == ["legacy-demo"], listed
             assert listed["registered_count"] == 1
@@ -433,11 +433,11 @@ class TestKnowledgeHub:
             client.post("/v1/console/custom-provider/create", json=_create_body(bm25_server))
             client.post("/v1/console/hub/providers", json={"provider_id": "bm25-demo"})
             jsonl = home / "tenants" / tid / "global" / "rag_hub" / "hub_providers.jsonl"
-            before = jsonl.read_text()
+            before = jsonl.read_text(encoding="utf-8")
             for _ in range(5):
                 assert client.get("/v1/console/hub/trending").status_code == 200
                 assert client.get("/v1/console/hub/providers").status_code == 200
-            assert jsonl.read_text() == before, "reads must not append to the hub store"
+            assert jsonl.read_text(encoding="utf-8") == before, "reads must not append to the hub store"
 
     def test_tampered_catalogue_manifest_is_not_importable(self, tmp_path, bm25_server, monkeypatch):
         with _sandbox(tmp_path) as (client, home, tid):
@@ -445,7 +445,7 @@ class TestKnowledgeHub:
             client.post("/v1/console/custom-provider/create", json=_create_body(bm25_server))
             client.post("/v1/console/hub/providers", json={"provider_id": "bm25-demo"})
             hub_manifests = home / "tenants" / tid / "global" / "rag_hub" / "manifests"
-            (next(hub_manifests.glob("*.yaml"))).write_text("kind: Evil\n")
+            (next(hub_manifests.glob("*.yaml"))).write_text("kind: Evil\n", encoding="utf-8")
             r = client.post("/v1/console/hub/import",
                             json={"hub_provider_id": "bm25-demo", "provider_id": "evil"})
             assert r.status_code == 404 and r.json()["detail"]["error"] == "manifest_unavailable"

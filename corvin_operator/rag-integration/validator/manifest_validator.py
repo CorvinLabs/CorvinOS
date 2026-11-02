@@ -230,7 +230,7 @@ class ManifestValidator:
         if not self.schema_path.exists():
             raise FileNotFoundError(f"Schema not found: {self.schema_path}")
 
-        with open(self.schema_path) as f:
+        with open(self.schema_path, encoding="utf-8") as f:
             return json.load(f)
 
     def validate_file(self, manifest_path: Path | str) -> ValidationResult:
@@ -246,10 +246,10 @@ class ManifestValidator:
         # Load manifest
         try:
             if manifest_path.suffix in [".yaml", ".yml"]:
-                with open(manifest_path) as f:
+                with open(manifest_path, encoding="utf-8") as f:
                     manifest = yaml.safe_load(f)
             elif manifest_path.suffix == ".json":
-                with open(manifest_path) as f:
+                with open(manifest_path, encoding="utf-8") as f:
                     manifest = json.load(f)
             else:
                 return ValidationResult(

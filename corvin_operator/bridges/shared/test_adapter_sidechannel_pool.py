@@ -42,7 +42,7 @@ def routed(monkeypatch):
 
 def _write(d, name, payload):
     f = d / name
-    f.write_text(json.dumps(payload))
+    f.write_text(json.dumps(payload), encoding="utf-8")
     return f
 
 

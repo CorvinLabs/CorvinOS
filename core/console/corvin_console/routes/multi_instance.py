@@ -237,7 +237,7 @@ async def get_merge_conflicts(
 
         conflicts = []
         if merge_log_path.exists():
-            with open(merge_log_path) as f:
+            with open(merge_log_path, encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         event = json.loads(line)

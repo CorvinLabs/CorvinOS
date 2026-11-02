@@ -597,7 +597,7 @@ def _repo_root() -> Path | None:
         r = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=3,
-            cwd=str(Path(__file__).parent),
+            cwd=str(Path(__file__).parent), encoding="utf-8", errors="replace",
         )
         if r.returncode == 0:
             return Path(r.stdout.strip())

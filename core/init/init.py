@@ -473,7 +473,7 @@ class Supervisor:
         # Open journal file in append mode (so restarts accumulate)
         log_path = self._journal_path(name)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_fh = open(log_path, "a", buffering=1)
+        log_fh = open(log_path, "a", buffering=1, encoding="utf-8")
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -529,7 +529,7 @@ class Supervisor:
         line = f"{ts} {msg}\n"
         try:
             self._journal_path(name).parent.mkdir(parents=True, exist_ok=True)
-            with self._journal_path(name).open("a") as fh:
+            with self._journal_path(name).open("a", encoding="utf-8") as fh:
                 fh.write(line)
         except OSError:
             # Best-effort journal — never break supervision because of disk

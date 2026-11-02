@@ -25,7 +25,7 @@ class RAGProviderImportExport:
         if not manifest_path.exists():
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
-        with open(manifest_path, "r") as f:
+        with open(manifest_path, "r", encoding="utf-8") as f:
             content = f.read()
 
         return content

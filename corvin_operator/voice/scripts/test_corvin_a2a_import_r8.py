@@ -81,7 +81,7 @@ def test_output_shows_the_stored_connection_name(env, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Alice's box" in out
     assert "For Max" not in out
-    stored = json.loads(next((env / "e").glob("*.json")).read_text())
+    stored = json.loads(next((env / "e").glob("*.json")).read_text(encoding="utf-8"))
     assert stored.get("label") == "Alice's box"
 
 
@@ -123,4 +123,4 @@ def test_cli_accept_keeps_accepting_a_lan_peer(env, monkeypatch):
     rc = corvin_a2a._cmd_accept(argparse.Namespace(token=_foreign_invite("http://10.1.1.1:8765"),
                                                    overwrite=False, dry_run=False, respond=False))
     assert rc == 0
-    assert json.loads((env / "e" / "peerx.json").read_text())["url"] == "http://10.1.1.1:8765/v1/a2a/receive"
+    assert json.loads((env / "e" / "peerx.json").read_text(encoding="utf-8"))["url"] == "http://10.1.1.1:8765/v1/a2a/receive"

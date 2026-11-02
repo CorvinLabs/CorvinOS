@@ -34,7 +34,7 @@ class TestAdr0730OperatorGuard:
             ["git", "grep", "-c", r'sys\.path\.insert[^)]*"operator"'],
             cwd=self.repo,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         count = int(result.stdout.strip()) if result.returncode == 0 else 0
         assert count == 0, f"Found {count} sys.path.insert(…, 'operator') references"
@@ -45,7 +45,7 @@ class TestAdr0730OperatorGuard:
             ["git", "grep", "-E", r"(from|import)\s+operator\."],
             cwd=self.repo,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         assert result.returncode != 0 or not result.stdout.strip(), \
             f"Found stale 'from operator' or 'import operator.X': {result.stdout[:200]}"
@@ -56,7 +56,7 @@ class TestAdr0730OperatorGuard:
             ["git", "ls-files"],
             cwd=self.repo,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         ).stdout.splitlines()
         
         exts = (".py", ".sh", ".yaml", ".yml", ".json", ".js", ".mjs", ".ts")
@@ -75,7 +75,7 @@ class TestAdr0730OperatorGuard:
             if not f.endswith(exts) or any(s in f for s in skip):
                 continue
             try:
-                with open(self.repo / f) as fp:
+                with open(self.repo / f, encoding="utf-8") as fp:
                     for i, ln in enumerate(fp, 1):
                         for pat, kind in pats:
                             if pat.search(ln) and "corvin_operator" not in ln:
@@ -120,7 +120,7 @@ class TestAdr0730OperatorGuard:
             
     def test_bootstrap_injects_corvin_operator_paths(self):
         """Verify _bootstrap correctly injects corvin_operator/* onto sys.path."""
-        with open(self.repo / "core/console/corvin_core/_bootstrap.py") as fp:
+        with open(self.repo / "core/console/corvin_core/_bootstrap.py", encoding="utf-8") as fp:
             content = fp.read()
         assert '"corvin_operator"' in content, "_bootstrap should reference corvin_operator paths"
         assert 'operator"' not in content or 'corvin_operator' in content, \
@@ -132,7 +132,7 @@ class TestAdr0730OperatorGuard:
             ["git", "grep", "-c", r'/ *"corvin_operator"'],
             cwd=self.repo,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         count = int(result.stdout.strip()) if result.returncode == 0 else 0
         # Expected count after Phase 2b: ~600–700 joins

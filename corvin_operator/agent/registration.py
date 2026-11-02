@@ -38,7 +38,7 @@ def _instance_version() -> str:
         for parent in [here, *here.parents]:
             vf = parent / "VERSION"
             if vf.exists():
-                return vf.read_text().strip()
+                return vf.read_text(encoding="utf-8").strip()
     except Exception:  # noqa: BLE001
         pass
     return "0.0.0"
@@ -130,7 +130,7 @@ def _store_mtls_cert(cert_pem: str, *, agent_dir: Path) -> None:
     """Write the mTLS client cert to agent dir (mode 0600)."""
     cert_path = agent_dir / "mtls_cert.pem"
     tmp = cert_path.with_suffix(".pem.tmp")
-    tmp.write_text(cert_pem)
+    tmp.write_text(cert_pem, encoding="utf-8")
     try:
         tmp.chmod(0o600)
     except OSError:

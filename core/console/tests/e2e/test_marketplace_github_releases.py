@@ -120,7 +120,7 @@ class TestMarketplaceGitHubIntegration:
             def get_index_local(self):
                 """Try local first."""
                 if self._index_path and self._index_path.exists():
-                    return json.loads(self._index_path.read_text())
+                    return json.loads(self._index_path.read_text(encoding="utf-8"))
                 return None
 
             def get_index_github(self):

@@ -46,7 +46,7 @@ def create_minimal_skill(tmpdir: Path, skill_id: str = "test.skill") -> Path:
         "hooks": [],
         "lom_binding": "test.skill:execute",
     }
-    (skill_dir / "skill.json").write_text(json.dumps(manifest, indent=2))
+    (skill_dir / "skill.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     # Create required folders
     (skill_dir / "src").mkdir()
@@ -55,9 +55,9 @@ def create_minimal_skill(tmpdir: Path, skill_id: str = "test.skill") -> Path:
     (skill_dir / "scripts").mkdir()
 
     # Create minimal Python files
-    (skill_dir / "src" / "skill.py").write_text("def execute(): pass\n")
+    (skill_dir / "src" / "skill.py").write_text("def execute(): pass\n", encoding="utf-8")
     (skill_dir / "tests" / "test_basic.py").write_text(
-        "def test_placeholder(): pass\n"
+        "def test_placeholder(): pass\n", encoding="utf-8"
     )
 
     return skill_dir
@@ -103,7 +103,7 @@ def test_layer1_invalid_json_fails():
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_dir = Path(tmpdir) / "test.skill"
         skill_dir.mkdir(parents=True)
-        (skill_dir / "skill.json").write_text("{invalid json")
+        (skill_dir / "skill.json").write_text("{invalid json", encoding="utf-8")
 
         validator = StructuralValidator()
         result = validator.validate(skill_dir)
@@ -129,7 +129,7 @@ def test_layer1_missing_required_fields_fails():
             "lom_binding": "test",
             # Missing 'dependencies'
         }
-        (skill_dir / "skill.json").write_text(json.dumps(manifest))
+        (skill_dir / "skill.json").write_text(json.dumps(manifest), encoding="utf-8")
 
         validator = StructuralValidator()
         result = validator.validate(skill_dir)
@@ -153,7 +153,7 @@ def test_layer1_missing_folder_structure_fails():
             "hooks": [],
             "lom_binding": "test",
         }
-        (skill_dir / "skill.json").write_text(json.dumps(manifest))
+        (skill_dir / "skill.json").write_text(json.dumps(manifest), encoding="utf-8")
         # Create only src/ folder, missing tests/, hooks/, scripts/
 
         (skill_dir / "src").mkdir()
@@ -191,7 +191,7 @@ def test_layer1_bad_manifest_schema_type_fails():
             "hooks": [],
             "lom_binding": "test",
         }
-        (skill_dir / "skill.json").write_text(json.dumps(manifest))
+        (skill_dir / "skill.json").write_text(json.dumps(manifest), encoding="utf-8")
         (skill_dir / "src").mkdir()
         (skill_dir / "tests").mkdir()
         (skill_dir / "hooks").mkdir()
@@ -210,10 +210,10 @@ def test_layer1_version_format_warning():
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_dir = create_minimal_skill(Path(tmpdir))
         manifest_path = skill_dir / "skill.json"
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["version"] = "v1"  # Not semver
 
-        manifest_path.write_text(json.dumps(manifest))
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
         validator = StructuralValidator()
         result = validator.validate(skill_dir)
@@ -249,7 +249,7 @@ def test_layer2_no_test_files_fails():
         skill_dir.mkdir(parents=True)
         (skill_dir / "tests").mkdir()
         # Create a non-test Python file
-        (skill_dir / "tests" / "helper.py").write_text("def helper(): pass\n")
+        (skill_dir / "tests" / "helper.py").write_text("def helper(): pass\n", encoding="utf-8")
 
         validator = TestValidator()
         result = validator.validate(skill_dir)
@@ -267,11 +267,11 @@ def test_layer2_test_execution_success():
 
         # Create minimal test
         (skill_dir / "src").mkdir()
-        (skill_dir / "src" / "skill.py").write_text("def add(a, b): return a + b\n")
+        (skill_dir / "src" / "skill.py").write_text("def add(a, b): return a + b\n", encoding="utf-8")
 
         (skill_dir / "tests").mkdir()
         (skill_dir / "tests" / "test_skill.py").write_text(
-            "from src.skill import add\ndef test_add(): assert add(1, 1) == 2\n"
+            "from src.skill import add\ndef test_add(): assert add(1, 1) == 2\n", encoding="utf-8"
         )
 
         validator = TestValidator()

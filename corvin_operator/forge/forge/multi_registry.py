@@ -157,7 +157,7 @@ class MultiRegistry:
                 return spec  # already there
             # Replicate via Registry.create in the target scope. We re-read
             # the impl source from disk so the SHA stays consistent.
-            impl_text = Path(spec.impl_path).read_text()
+            impl_text = Path(spec.impl_path).read_text(encoding="utf-8")
             new_spec = self._registry(to).create(
                 name=spec.name,
                 description=spec.description,

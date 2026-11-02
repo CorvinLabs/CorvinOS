@@ -553,6 +553,14 @@ class MCPServer:
             )
         self.allowed_forged_tools: list[str] | None = allowed_forged_tools
         self._stdin = stdin or sys.stdin
+        if stdin is None:
+            # MCP stdio is UTF-8. On Windows without Python UTF-8 mode sys.stdin decodes the
+            # ANSI code page (cp1252): every non-ASCII tool argument arrived mojibaked.
+            try:
+                if (sys.stdin.encoding or "").replace("-", "").lower() != "utf8":
+                    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 - a non-TextIOWrapper stdin: leave it
+                pass
         self._stdout = stdout or sys.stdout
         self._stderr = stderr or sys.stderr
         self._stdout_lock = threading.Lock()
@@ -3179,7 +3187,7 @@ def _request_server_compute_permit(job_id: str, tenant_id: str) -> str:
         key_file = corvin_home / "global" / "license.key"
         if key_file.exists():
             try:
-                license_token = key_file.read_text().strip()
+                license_token = key_file.read_text(encoding="utf-8").strip()
             except OSError:
                 pass
     if not api_key or not license_token:
@@ -3253,7 +3261,7 @@ def _extract_range(artifacts_root: Path, entry: Any, rng: str) -> dict[str, Any]
                 "encoding": "base64", "content": _b.b64encode(data).decode()}
     if kind == "lines":
         out_lines: list[str] = []
-        with path.open("r", errors="replace") as fh:
+        with path.open("r", errors="replace", encoding="utf-8") as fh:
             for i, line in enumerate(fh, start=1):
                 if i > b:
                     break

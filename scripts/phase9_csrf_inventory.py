@@ -150,7 +150,7 @@ def main():
     output_file = args.output
     if output_file is None:
         print("\n(no --output given: TODO list not written)")
-    with (open(output_file, 'w') if output_file is not None else open(os.devnull, 'w')) as f:
+    with (open(output_file, 'w', encoding="utf-8") if output_file is not None else open(os.devnull, 'w', encoding="utf-8")) as f:
         f.write("CSRF PROTECTION TODO LIST\n")
         f.write("=" * 80 + "\n")
         f.write(f"Generated: {__import__('datetime').datetime.now().isoformat()}\n")

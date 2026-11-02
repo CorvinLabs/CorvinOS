@@ -90,9 +90,10 @@ class RoundTripTests(unittest.TestCase):
             init("acme", display_name="ACME", zone="eu-west")
             p = _yaml_path(home, "acme")
             self.assertTrue(p.exists())
-            self.assertEqual(p.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":  # POSIX mode bits; NTFS reports 0o666
+                self.assertEqual(p.stat().st_mode & 0o777, 0o600)
             # YAML parses to a dict with the expected top-level keys
-            data = yaml.safe_load(p.read_text())
+            data = yaml.safe_load(p.read_text(encoding="utf-8"))
             self.assertEqual(data["apiVersion"], "corvin/v1")
             self.assertEqual(data["kind"], "Tenant")
             self.assertEqual(data["metadata"]["id"], "acme")
@@ -123,7 +124,8 @@ class RoundTripTests(unittest.TestCase):
             self.assertEqual(c2.metadata.display_name, "v2")
             # Mode preserved after rewrite
             p = _yaml_path(home, "acme")
-            self.assertEqual(p.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":  # POSIX mode bits; NTFS reports 0o666
+                self.assertEqual(p.stat().st_mode & 0o777, 0o600)
 
 
 # ── Schema strictness ────────────────────────────────────────────────
@@ -138,7 +140,7 @@ class SchemaStrictnessTests(unittest.TestCase):
                 "kind":       "Tenant",
                 "metadata":   {"id": "acme"},
                 "spec":       {"unknown_key": True},
-            }))
+            }), encoding="utf-8")
             os.chmod(p, 0o600)
             with self.assertRaises(TenantConfigMalformed):
                 load("acme")
@@ -150,7 +152,7 @@ class SchemaStrictnessTests(unittest.TestCase):
                 "apiVersion": "corvin/v9",
                 "kind":       "Tenant",
                 "metadata":   {"id": "acme"},
-            }))
+            }), encoding="utf-8")
             os.chmod(p, 0o600)
             with self.assertRaises(TenantConfigMalformed):
                 load("acme")
@@ -162,7 +164,7 @@ class SchemaStrictnessTests(unittest.TestCase):
                 "apiVersion": "corvin/v1",
                 "kind":       "Tenant",
                 "metadata":   {"id": "globex"},  # wrong!
-            }))
+            }), encoding="utf-8")
             os.chmod(p, 0o600)
             with self.assertRaises(TenantConfigMalformed):
                 load("acme")
@@ -175,7 +177,7 @@ class SchemaStrictnessTests(unittest.TestCase):
                 "kind":       "Tenant",
                 "metadata":   {"id": "acme"},
                 "spec":       {"data_residency": {"zone": "EU WEST"}},
-            }))
+            }), encoding="utf-8")
             os.chmod(p, 0o600)
             with self.assertRaises(TenantConfigMalformed):
                 load("acme")
@@ -190,7 +192,7 @@ class SchemaStrictnessTests(unittest.TestCase):
                 "spec": {
                     "budget": {"max_wall_clock_per_run_s": 999999},  # >3600
                 },
-            }))
+            }), encoding="utf-8")
             os.chmod(p, 0o600)
             with self.assertRaises(TenantConfigMalformed):
                 load("acme")
@@ -209,7 +211,7 @@ class LoadOrDefaultTests(unittest.TestCase):
     def test_raises_when_present_but_defective(self):
         with sandbox(("acme",)) as home:
             p = _yaml_path(home, "acme")
-            p.write_text("not: valid: yaml:")
+            p.write_text("not: valid: yaml:", encoding="utf-8")
             os.chmod(p, 0o600)
             with self.assertRaises(TenantConfigMalformed):
                 load_or_default("acme")
@@ -219,6 +221,7 @@ class LoadOrDefaultTests(unittest.TestCase):
 
 
 class FileModeTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits only (NTFS ACLs)")
     def test_world_readable_rejected(self):
         with sandbox(("acme",)) as home:
             init("acme")

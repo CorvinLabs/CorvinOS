@@ -157,8 +157,8 @@ def test_tampered_counter_file_is_read_as_zero(tmp_path, payload):
     same effect — so this pins that tampering buys nothing BEYOND that.)"""
     home = tmp_path / "h"
     path = quota_counter._quota_path(home, "_default", "f", quota_counter._today_utc())
-    path.write_text(payload)
+    path.write_text(payload, encoding="utf-8")
     os.chmod(path, 0o600)
     with mock.patch.object(quota_counter, "get_limit", lambda f: 10):
         assert quota_counter.increment_and_check(home, "f", "_default") == 1
-    assert json.loads(path.read_text())["count"] == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["count"] == 1

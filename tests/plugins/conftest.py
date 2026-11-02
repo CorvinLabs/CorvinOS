@@ -29,7 +29,7 @@ def temp_corvin_home(tmp_path):
     corvin_home.mkdir()
     (corvin_home / "plugins").mkdir()
     (corvin_home / "audit.jsonl").touch()
-    (corvin_home / "registry.yaml").write_text("plugins: {}\n")
+    (corvin_home / "registry.yaml").write_text("plugins: {}\n", encoding="utf-8")
     return corvin_home
 
 

@@ -187,7 +187,7 @@ def _record_open_batch(
         existing: list[dict] = []
         if path.exists():
             try:
-                existing = json.loads(path.read_text())
+                existing = json.loads(path.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001
                 existing = []
         existing.append({
@@ -196,7 +196,7 @@ def _record_open_batch(
             "submitted_at": int(time.time()),
             "candidate_count": candidate_count,
         })
-        path.write_text(json.dumps(existing, indent=2))
+        path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         log.warning("anthropic_batch: failed to record open batch: %s", exc)
 
@@ -210,12 +210,12 @@ def _remove_open_batch(session_key: str | None, batch_id: str,
         path = _open_batches_path(session_key, _tenant_home_path(tenant_id))
         if not path.exists():
             return
-        existing = json.loads(path.read_text())
+        existing = json.loads(path.read_text(encoding="utf-8"))
         remaining = [e for e in existing if e.get("batch_id") != batch_id]
         if not remaining:
             path.unlink(missing_ok=True)
         else:
-            path.write_text(json.dumps(remaining, indent=2))
+            path.write_text(json.dumps(remaining, indent=2), encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         log.warning("anthropic_batch: failed to update open_batches.json: %s", exc)
 
@@ -646,7 +646,7 @@ def cancel_open_batches_for_session(session_key: str,
         path = _open_batches_path(session_key, _tenant_home_path(tenant_id))
         if not path.exists():
             return []
-        entries = json.loads(path.read_text())
+        entries = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
         log.warning("anthropic_batch: could not read open_batches.json: %s", exc)
         return []

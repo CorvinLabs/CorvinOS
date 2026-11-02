@@ -44,7 +44,7 @@ def test_receive_crl_check_uses_cache_only_not_network(
         "fetched_at": now,
         "revoked_jti": ["revoked-jti-123", "revoked-jti-456"],
     }
-    cache_path.write_text(json.dumps(cache_data))
+    cache_path.write_text(json.dumps(cache_data), encoding="utf-8")
     cache_path.chmod(0o600)
     
     # 2. Block network calls (simulate offline host)
@@ -88,7 +88,7 @@ def test_offline_grace_period_serves_stale_cache(
         "fetched_at": three_days_ago,
         "revoked_jti": ["old-revoked-jti"],
     }
-    cache_path.write_text(json.dumps(cache_data))
+    cache_path.write_text(json.dumps(cache_data), encoding="utf-8")
     cache_path.chmod(0o600)
     
     # 2. Block network (offline)
@@ -134,7 +134,7 @@ def test_crl_cache_beyond_grace_period_returns_empty_safely(
         "fetched_at": eight_days_ago,
         "revoked_jti": ["some-jti"],
     }
-    cache_path.write_text(json.dumps(cache_data))
+    cache_path.write_text(json.dumps(cache_data), encoding="utf-8")
     cache_path.chmod(0o600)
     
     # 2. Check revocation without network (offline)

@@ -530,7 +530,7 @@ def _own_instance_id(chain: Path) -> "str | None":
     for home in _PROTECTED_HOMES:
         if _under(chain, home):
             try:
-                return _json.loads((home / "global" / "instance_id.json").read_text())["instance_id"]
+                return _json.loads((home / "global" / "instance_id.json").read_text(encoding="utf-8"))["instance_id"]
             except Exception:  # noqa: BLE001
                 return None
     return None

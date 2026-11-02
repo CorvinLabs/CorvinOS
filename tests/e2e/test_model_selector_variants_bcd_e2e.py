@@ -83,7 +83,7 @@ class TestVariantBBase:
         }
         config_path = tmp_path / "tenants" / "test_tenant_1" / "global" / "model_selection_overrides.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(json.dumps(override_config))
+        config_path.write_text(json.dumps(override_config), encoding="utf-8")
 
         # Reload selector
         selector = VariantBSelector("test_tenant_1")
@@ -379,7 +379,7 @@ class TestErrorHandling:
         # Create invalid config
         config_path = tmp_path / "tenants" / "bad_tenant" / "global" / "model_selection_overrides.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text("{ INVALID JSON }")
+        config_path.write_text("{ INVALID JSON }", encoding="utf-8")
 
         selector = VariantBSelector("bad_tenant")
         # Should fallback to empty overrides

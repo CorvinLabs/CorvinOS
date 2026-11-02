@@ -198,7 +198,7 @@ def load_config() -> dict[str, Any]:
             try:
                 p.parent.mkdir(parents=True, exist_ok=True)
                 cfg = _default_config()
-                p.write_text(json.dumps(cfg, indent=2))
+                p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
                 _CONFIG_CACHE = cfg
                 _CONFIG_MTIME = p.stat().st_mtime
                 return dict(cfg)
@@ -210,7 +210,7 @@ def load_config() -> dict[str, Any]:
             return dict(_CONFIG_CACHE) if _CONFIG_CACHE else _default_config()
         if not _CONFIG_CACHE or mtime != _CONFIG_MTIME:
             try:
-                raw = json.loads(p.read_text())
+                raw = json.loads(p.read_text(encoding="utf-8"))
                 if not isinstance(raw, dict):
                     raise json.JSONDecodeError("not an object", "", 0)
                 # Shallow-merge over defaults so a missing key never
@@ -239,7 +239,7 @@ def save_config(cfg: dict[str, Any]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     with _CONFIG_LOCK:
-        tmp.write_text(json.dumps(cfg, indent=2))
+        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
         tmp.replace(p)
         _CONFIG_CACHE = dict(cfg)
         _CONFIG_MTIME = p.stat().st_mtime

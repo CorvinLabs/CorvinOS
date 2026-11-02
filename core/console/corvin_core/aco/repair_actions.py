@@ -554,6 +554,13 @@ class StaleLockSweep(RepairAction):
                     data = t.read_bytes()
                 except OSError:
                     data = b""
+                if os.name == "nt" and fd >= 0:
+                    # Windows cannot delete a file we still hold open (WinError
+                    # 32). Closing first stays race-free there: a process that
+                    # opened the lock meanwhile keeps it undeletable (Python
+                    # opens without FILE_SHARE_DELETE), so unlink fails below.
+                    os.close(fd)
+                    fd = -2
                 try:
                     t.unlink()
                 except OSError:

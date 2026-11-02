@@ -83,7 +83,8 @@ class StoreTests(unittest.TestCase):
             self.assertIn("created", entry)
             p = home / "tenants" / "acme" / "global" / "scim" / "users.json"
             self.assertTrue(p.exists())
-            self.assertEqual(p.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":  # POSIX mode bits; NTFS reports 0o666
+                self.assertEqual(p.stat().st_mode & 0o777, 0o600)
             # round-trip
             got = ScimUserStore().get("acme", uid)
             self.assertEqual(got["userName"], "alice@acme.com")
@@ -234,7 +235,7 @@ class AuditChainTests(unittest.TestCase):
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
             ok, problems = _security_events.verify_chain(chain)
             self.assertTrue(ok, f"chain broken: {problems}")
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             event_types = {e["event_type"] for e in lines}
             self.assertIn("gateway.scim_user_created", event_types)
             self.assertIn("gateway.scim_user_conflict", event_types)

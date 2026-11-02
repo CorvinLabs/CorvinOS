@@ -101,7 +101,7 @@ def _console(tmp_path: Path):
 def _held(lock_path: Path):
     """Hold ``lock_path`` from an independent file description."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "a+")
+    fh = open(lock_path, "a+", encoding="utf-8")
     fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     try:
         yield
@@ -446,5 +446,5 @@ def test_workflow_chat_ws_real_design_turn_persists_both_lines(tmp_path):
 
         from forge import paths as _fp
         chat_path = _fp.tenant_home(TENANT) / "workflows" / "wf_live.chat.jsonl"
-        roles = [json.loads(x)["role"] for x in chat_path.read_text().splitlines() if x.strip()]
+        roles = [json.loads(x)["role"] for x in chat_path.read_text(encoding="utf-8").splitlines() if x.strip()]
         assert roles == ["assistant", "user", "assistant"], roles

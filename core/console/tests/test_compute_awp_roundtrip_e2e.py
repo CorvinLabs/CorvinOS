@@ -652,7 +652,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             / self.pipeline_id / "manifest.json"
         )
         self.assertTrue(manifest_path.exists(), "Pipeline manifest not created")
-        data = json.loads(manifest_path.read_text())
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(len(data["stages"]), 5, f"Expected 5 stages, got {len(data['stages'])}")
 
     def test_fixture_stage_ids_are_correct(self):
@@ -660,7 +660,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             self.home / "tenants" / self.tid / "compute" / "pipelines"
             / self.pipeline_id / "manifest.json"
         )
-        data = json.loads(manifest_path.read_text())
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
         stage_ids = [s["stage_id"] for s in data["stages"]]
         expected = [
             "code_spotify_ingest",
@@ -677,7 +677,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             / self.pipeline_id / "stages"
         )
         train_summary = json.loads(
-            (p_dir / "code_spotify_train" / "stage_summary.json").read_text()
+            (p_dir / "code_spotify_train" / "stage_summary.json").read_text(encoding="utf-8")
         )
         self.assertIn("best_params", train_summary)
         self.assertAlmostEqual(train_summary["best_params"]["lr"], 0.0032)
@@ -690,7 +690,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             / self.pipeline_id / "stages"
         )
         predict_summary = json.loads(
-            (p_dir / "code_spotify_predict" / "stage_summary.json").read_text()
+            (p_dir / "code_spotify_predict" / "stage_summary.json").read_text(encoding="utf-8")
         )
         self.assertAlmostEqual(predict_summary["best_loss"], 0.068)
         self.assertEqual(predict_summary["best_params"]["batch_size"], 5000)
@@ -706,7 +706,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             / "spotify-charts-elastic.yaml"
         )
         self.assertTrue(rag_path.exists(), "RAG manifest not created")
-        data = yaml.safe_load(rag_path.read_text())
+        data = yaml.safe_load(rag_path.read_text(encoding="utf-8"))
         self.assertEqual(data["kind"], "RAGProvider")
         self.assertEqual(data["metadata"]["name"], "spotify-charts-elastic")
         self.assertIn("retrieval", data["spec"])
@@ -719,7 +719,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             self.home / "tenants" / self.tid / "global" / "rag"
             / "spotify-charts-elastic.yaml"
         )
-        content = rag_path.read_text()
+        content = rag_path.read_text(encoding="utf-8")
         # Only the env-var name, never an actual token value
         self.assertIn("ES_TOKEN", content)
         # Should not contain anything that looks like a secret value
@@ -731,7 +731,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             / "spotify-charts-s3.json"
         )
         self.assertTrue(ds_path.exists(), "spotify-charts-s3 manifest not created")
-        data = json.loads(ds_path.read_text())
+        data = json.loads(ds_path.read_text(encoding="utf-8"))
         for field in ("name", "adapter", "source", "auth", "pii_handling"):
             self.assertIn(field, data, f"Datasource missing field: {field}")
         self.assertEqual(data["adapter"], "s3_csv")
@@ -744,7 +744,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             self.home / "tenants" / self.tid / "datasource_connections"
             / "spotify-charts-s3.json"
         )
-        data = json.loads(ds_path.read_text())
+        data = json.loads(ds_path.read_text(encoding="utf-8"))
         self.assertIn("vault_path", data["auth"],
                       "Fixture must contain vault_path so we can test that it is stripped")
 
@@ -759,7 +759,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             self.home / "tenants" / self.tid / "compute" / "pipelines"
             / self.pipeline_id / "pipeline_summary.json"
         )
-        data = json.loads(summary_path.read_text())
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
         self.assertEqual(len(data["best_losses"]), 5)
 
     def test_predict_stage_has_output_datasource_reference(self):
@@ -769,7 +769,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             / self.pipeline_id / "stages"
         )
         predict_summary = json.loads(
-            (p_dir / "code_spotify_predict" / "stage_summary.json").read_text()
+            (p_dir / "code_spotify_predict" / "stage_summary.json").read_text(encoding="utf-8")
         )
         self.assertIn("output_datasources_written", predict_summary)
         self.assertIn("spotify-results-s3", predict_summary["output_datasources_written"])
@@ -781,7 +781,7 @@ class TestSpotifyPipelineFixture(unittest.TestCase):
             / self.pipeline_id / "stages"
         )
         features_summary = json.loads(
-            (p_dir / "code_spotify_features" / "stage_summary.json").read_text()
+            (p_dir / "code_spotify_features" / "stage_summary.json").read_text(encoding="utf-8")
         )
         self.assertIn("rag_providers_queried", features_summary)
         self.assertIn("spotify-charts-elastic", features_summary["rag_providers_queried"])
@@ -1152,7 +1152,7 @@ class TestSpotifyRoundTrip(unittest.TestCase):
         for name in installed:
             dest = dest_dir / f"{name}.json"
             self.assertTrue(dest.exists(), f"Datasource file not written: {dest}")
-            data = json.loads(dest.read_text())
+            data = json.loads(dest.read_text(encoding="utf-8"))
             self.assertNotIn(
                 "vault_path", data.get("auth", {}),
                 f"vault_path found in installed datasource {name!r}"
@@ -1212,7 +1212,7 @@ class TestSpotifyRoundTrip(unittest.TestCase):
         s3_dest = dest_dir / "spotify-charts-s3.json"
         if not s3_dest.exists():
             self.skipTest("spotify-charts-s3 was not installed")
-        data = json.loads(s3_dest.read_text())
+        data = json.loads(s3_dest.read_text(encoding="utf-8"))
         secret_keys = data.get("auth", {}).get("secret_keys", [])
         self.assertIn("AWS_ACCESS_KEY_ID", secret_keys,
                       "AWS_ACCESS_KEY_ID not preserved in round-trip datasource")
@@ -1231,7 +1231,7 @@ class TestSpotifyRoundTrip(unittest.TestCase):
         for name in installed:
             dest = dest_dir / f"{name}.json"
             self.assertTrue(dest.exists(), f"Output datasource file not written: {dest}")
-            data = json.loads(dest.read_text())
+            data = json.loads(dest.read_text(encoding="utf-8"))
             self.assertNotIn(
                 "vault_path", data.get("auth", {}),
                 f"vault_path in installed output datasource {name!r}"
@@ -1253,7 +1253,7 @@ class TestSpotifyRoundTrip(unittest.TestCase):
             / "spotify-charts-elastic.yaml"
         )
         self.assertTrue(dest.exists())
-        data = yaml.safe_load(dest.read_text())
+        data = yaml.safe_load(dest.read_text(encoding="utf-8"))
         self.assertEqual(data["kind"], "RAGProvider")
         self.assertIn("retrieval", data.get("spec", {}))
 

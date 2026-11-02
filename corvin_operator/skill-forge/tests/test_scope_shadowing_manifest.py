@@ -76,7 +76,7 @@ def _events(home: Path) -> list[dict]:
     p = _chain(home)
     if not p.exists():
         return []
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def test_higher_scope_shadows_lower(env):
@@ -132,7 +132,7 @@ def test_registry_emits_resolver_manifest_and_resolver_sees_writes(env):
                      body_md=BODY_USER, description="resolvable", claim={})
     manifest = tenant_home / "skill-forge" / "manifest.json"
     assert manifest.exists(), "SkillRegistry._save must emit the ADR-0420 manifest"
-    data = json.loads(manifest.read_text())
+    data = json.loads(manifest.read_text(encoding="utf-8"))
     assert [s["name"] for s in data["skills"]] == ["res.skill"]
 
     entry = resolver.resolve("res.skill")          # no explicit invalidate()

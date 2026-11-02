@@ -189,6 +189,14 @@ META_TOOLS: list[dict[str, Any]] = [
 class PipeMCPServer:
     def __init__(self, *, stdin=None, stdout=None, stderr=None) -> None:
         self._stdin = stdin or sys.stdin
+        if stdin is None:
+            # MCP stdio is UTF-8. On Windows without Python UTF-8 mode sys.stdin decodes the
+            # ANSI code page (cp1252): every non-ASCII tool argument arrived mojibaked.
+            try:
+                if (sys.stdin.encoding or "").replace("-", "").lower() != "utf8":
+                    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 - a non-TextIOWrapper stdin: leave it
+                pass
         self._stdout = stdout or sys.stdout
         self._stderr = stderr or sys.stderr
         self._stdout_lock = threading.Lock()

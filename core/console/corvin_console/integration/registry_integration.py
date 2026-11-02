@@ -218,7 +218,7 @@ class TenantRegistryAdapter:
             return []
         records = []
         try:
-            with open(plugins_file) as f:
+            with open(plugins_file, encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         data = json.loads(line)
@@ -238,7 +238,7 @@ class TenantRegistryAdapter:
             )
         plugins_file = self._registry_dir / "installed_plugins.jsonl"
         try:
-            with open(plugins_file, "a") as f:
+            with open(plugins_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record.to_dict()) + "\n")
             logger.info(
                 f"Recorded installation: {record.target_type}={record.target_id} "
@@ -263,7 +263,7 @@ class TenantRegistryAdapter:
             return []
         records = []
         try:
-            with open(skills_file) as f:
+            with open(skills_file, encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         data = json.loads(line)
@@ -282,7 +282,7 @@ class TenantRegistryAdapter:
             )
         skills_file = self._registry_dir / "installed_skills.jsonl"
         try:
-            with open(skills_file, "a") as f:
+            with open(skills_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record.to_dict()) + "\n")
             logger.info(
                 f"Recorded skill installation: {record.target_id} "
@@ -298,7 +298,7 @@ class TenantRegistryAdapter:
         if not config_file.exists():
             return default
         try:
-            with open(config_file) as f:
+            with open(config_file, encoding="utf-8") as f:
                 config = json.load(f)
             return config.get(key, default)
         except Exception as e:
@@ -311,10 +311,10 @@ class TenantRegistryAdapter:
         try:
             config = {}
             if config_file.exists():
-                with open(config_file) as f:
+                with open(config_file, encoding="utf-8") as f:
                     config = json.load(f)
             config[key] = value
-            with open(config_file, "w") as f:
+            with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to set config: {e}")
@@ -358,7 +358,7 @@ class PluginBuilderAdapter:
             errors.append(f"plugin.json not found at {manifest_file}")
         else:
             try:
-                with open(manifest_file) as f:
+                with open(manifest_file, encoding="utf-8") as f:
                     manifest = json.load(f)
                 # Basic schema validation
                 required_fields = ["plugin_id", "name", "version", "tier", "category"]
@@ -410,7 +410,7 @@ class PluginBuilderAdapter:
         # Load manifest
         try:
             manifest_file = plugin_path / "plugin.json"
-            with open(manifest_file) as f:
+            with open(manifest_file, encoding="utf-8") as f:
                 manifest_data = json.load(f)
             manifest = PluginManifest.from_dict(manifest_data)
         except Exception as e:
@@ -561,7 +561,7 @@ class SkillRegistryAdapter:
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "notes": notes,
             }
-            with open(grades_file, "a") as f:
+            with open(grades_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(grade_record) + "\n")
             logger.info(f"Recorded grade for skill {skill_id}: {score}")
             return True

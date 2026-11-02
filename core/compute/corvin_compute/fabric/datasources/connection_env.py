@@ -40,7 +40,7 @@ def load_connection(corvin_home: Any, tenant_id: str, name: str) -> dict[str, An
     if conn_dir not in path.parents:
         raise ValueError(f"datasource path escaped connections dir: {name!r}")
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"declared datasource {name!r} not resolvable: {exc}") from exc
     if not isinstance(raw, dict):

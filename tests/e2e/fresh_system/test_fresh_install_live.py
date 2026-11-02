@@ -39,7 +39,7 @@ _REPO_IN = "/home/tester/CorvinOS"
 
 def _ex(cmd: str, timeout: float = 300) -> subprocess.CompletedProcess:
     return subprocess.run([str(_FRESH), "ex", _CONTAINER, cmd], capture_output=True,
-                          text=True, timeout=timeout, check=False)
+                          text=True, timeout=timeout, check=False, encoding="utf-8", errors="replace")
 
 
 def _out(cmd: str, timeout: float = 300) -> str:

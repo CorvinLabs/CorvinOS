@@ -47,7 +47,7 @@ def load_config() -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"Failed to load config: {e}")
@@ -72,7 +72,7 @@ def sync_to_github(config: Dict[str, Any]) -> bool:
                 ["git", "clone", "-b", "main", repo_url, str(work_repo)],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30, encoding="utf-8", errors="replace"
             )
 
             if result.returncode != 0:
@@ -103,7 +103,7 @@ def sync_to_github(config: Dict[str, Any]) -> bool:
             }
 
             manifest_file = skills_out / "manifest.json"
-            with open(manifest_file, 'w') as f:
+            with open(manifest_file, 'w', encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)
 
             # Copy skill files
@@ -136,7 +136,7 @@ def sync_to_github(config: Dict[str, Any]) -> bool:
                 ["git", "-C", str(work_repo), "status", "--porcelain"],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10, encoding="utf-8", errors="replace"
             )
 
             commit_sha = None
@@ -147,7 +147,7 @@ def sync_to_github(config: Dict[str, Any]) -> bool:
                      f"[Corvin Sync] Tenant {TENANT_ID}: {len(files_written)} files"],
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=10, encoding="utf-8", errors="replace"
                 )
 
                 if result.returncode != 0:
@@ -159,7 +159,7 @@ def sync_to_github(config: Dict[str, Any]) -> bool:
                     ["git", "-C", str(work_repo), "rev-parse", "HEAD"],
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=10, encoding="utf-8", errors="replace"
                 )
                 commit_sha = result.stdout.strip()[:12]
                 logger.info(f"Committed: {len(files_written)} files ({commit_sha}...)")
@@ -169,7 +169,7 @@ def sync_to_github(config: Dict[str, Any]) -> bool:
                     ["git", "-C", str(work_repo), "push", "origin", "main"],
                     capture_output=True,
                     text=True,
-                    timeout=30
+                    timeout=30, encoding="utf-8", errors="replace"
                 )
 
                 if result.returncode != 0:
@@ -208,7 +208,7 @@ def sync_to_github(config: Dict[str, Any]) -> bool:
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-            with open(SYNC_STATE_FILE, 'w') as f:
+            with open(SYNC_STATE_FILE, 'w', encoding="utf-8") as f:
                 json.dump(sync_state, f, indent=2)
 
             logger.info(f"✓ Sync complete: {len(skills_list)} skills, {len(files_written)} files")

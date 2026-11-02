@@ -67,7 +67,7 @@ def ffprobe(path: Path) -> Optional[dict]:
         try:
             out = subprocess.run(
                 [exe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
-                capture_output=True, text=True, timeout=20, check=False,
+                capture_output=True, text=True, timeout=20, check=False, encoding="utf-8", errors="replace",
             )
             if out.returncode == 0 and out.stdout.strip():
                 result = json.loads(out.stdout)

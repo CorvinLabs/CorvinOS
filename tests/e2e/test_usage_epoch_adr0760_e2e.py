@@ -107,7 +107,7 @@ def chain(tmp_path) -> Path:
     rows += _span("new-2", role="os", model="claude-haiku-4-5-20251001", ts=_NEW + 10,
                   tokens=(200, 200, 0, 0))
     path = tmp_path / "audit.jsonl"
-    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     return path
 
 
@@ -159,7 +159,7 @@ class TestResetDeletesNothing:
     def test_a_corrupt_epoch_file_means_all_time_not_an_error(self, chain, isolated_home, monkeypatch):
         monkeypatch.setattr(MU, "_chain_path", lambda tid: chain)
         UE.set_epoch("_default", at=_EPOCH, reason="test")
-        UE._path("_default").write_text("{ not json")
+        UE._path("_default").write_text("{ not json", encoding="utf-8")
         assert UE.epoch_ts("_default") == 0.0
         assert MU.model_usage("_default")["totals"]["turns"] == 4
 
@@ -227,7 +227,7 @@ class TestWindowTravelsWithTheNumbers:
                                           output_tokens=1)},
         ]
         path = tmp_path / "straddle.jsonl"
-        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         monkeypatch.setattr(MU, "_chain_path", lambda tid: path)
         UE.set_epoch("_default", at=_EPOCH, reason="test")
 

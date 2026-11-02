@@ -338,11 +338,11 @@ class PrometheusFormatTests(unittest.TestCase):
             _write(home, "acme", "tool.created", persona="forge")
             # Tamper: rewrite the second line with a different persona.
             path = _chain(home, "acme")
-            lines = path.read_text().splitlines()
+            lines = path.read_text(encoding="utf-8").splitlines()
             rec = json.loads(lines[1])
             rec["details"]["persona"] = "browser"
             lines[1] = json.dumps(rec)
-            path.write_text("\n".join(lines) + "\n")
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             audit_metrics.clear_cache()
             body = audit_metrics.render("acme")
             self.assertIn("corvin_audit_chain_intact 0", body)

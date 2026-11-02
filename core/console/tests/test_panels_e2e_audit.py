@@ -93,7 +93,7 @@ class TestPanelAuditE2E:
         # First, create a panel to delete
         panel_dir = panels_dir / "test-panel"
         panel_dir.mkdir(parents=True, exist_ok=True)
-        (panel_dir / "index.html").write_text("<h1>Test</h1>")
+        (panel_dir / "index.html").write_text("<h1>Test</h1>", encoding="utf-8")
         (panel_dir / "meta.json").write_text(
             json.dumps({
                 "id": "test-panel",
@@ -102,7 +102,7 @@ class TestPanelAuditE2E:
                 "icon": "Test",
                 "created_at": 0,
                 "created_by": "ai",
-            })
+            }), encoding="utf-8"
         )
 
         # Delete it

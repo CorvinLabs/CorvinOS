@@ -373,7 +373,7 @@ class FakeOpencodeStreamTests(unittest.TestCase):
             f"echo '{json.dumps(e)}'" for e in events_json
         )
         script = f"#!/usr/bin/env bash\nset -e\n{emit_lines}\n"
-        bin_path.write_text(script)
+        bin_path.write_text(script, encoding="utf-8")
         bin_path.chmod(0o755)
         return bin_path
 
@@ -446,7 +446,7 @@ class FakeOpencodeStreamTests(unittest.TestCase):
                 '\'time\':{\'start\':1,\'end\':2}}}))" "$msg"\n'
                 'echo \'{"type":"step_finish","sessionID":"ses_1","part":{}}\'\n'
             )
-            bin_path.write_text(script)
+            bin_path.write_text(script, encoding="utf-8")
             bin_path.chmod(0o755)
 
             engine = OpenCodeEngine(binary=str(bin_path))

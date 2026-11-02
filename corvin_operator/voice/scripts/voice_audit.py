@@ -46,7 +46,7 @@ def _cross_peer_verify(
         records = []
         if not path.is_file():
             return records
-        with path.open("r") as fh:
+        with path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -486,7 +486,7 @@ def _first_prev_hash(path: Path) -> str:
         return ""
     try:
         import json as _json
-        with path.open("r") as fh:
+        with path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -544,7 +544,7 @@ def _verify_segment_manifest(audit_dir: Path, live_first_prev_hash: str):
     entries: list[dict] = []
     if mpath.is_file():
         try:
-            with mpath.open("r") as fh:
+            with mpath.open("r", encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
                     if not line:
@@ -871,7 +871,7 @@ def _notify_chain_break(path: Path, problems: list,
     if not cfg_path.exists():
         return 0
     try:
-        cfg = json.loads(cfg_path.read_text())
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return 0
     if not isinstance(cfg, dict) or not cfg.get("enabled"):
@@ -947,7 +947,7 @@ def _notify_chain_break(path: Path, problems: list,
         msg_id = f"audit-verify_{int(_t.time() * 1000)}_{written}"
         try:
             (outbox_dir / f"{msg_id}.json").write_text(
-                json.dumps(envelope, ensure_ascii=False)
+                json.dumps(envelope, ensure_ascii=False), encoding="utf-8"
             )
             written += 1
         except OSError:
@@ -960,7 +960,7 @@ def cmd_tail(args) -> int:
     if not path.exists():
         print(f"audit file does not exist: {path}")
         return 0
-    lines = path.read_text().splitlines()[-args.limit:]
+    lines = path.read_text(encoding="utf-8").splitlines()[-args.limit:]
     for raw in lines:
         try:
             rec = json.loads(raw)

@@ -300,7 +300,7 @@ class TestAuthDetectionPrecedence:
         path.write_text(json.dumps({"claudeAiOauth": {
             "accessToken": "x" * 40, "subscriptionType": "max",
             "rateLimitTier": "default_claude_max_20x",
-        }}))
+        }}), encoding="utf-8")
         return path
 
     def test_bedrock_flag_wins_over_a_stale_oauth_file(self, monkeypatch, oauth_max_file):
@@ -531,7 +531,7 @@ class TestDispatcherWorkerSpan:
         cfg.mkdir(parents=True)
         (cfg / "tenant.corvin.yaml").write_text(
             "spec:\n  engine_models:\n    claude_code:\n"
-            "      worker_model: claude-opus-5\n"
+            "      worker_model: claude-opus-5\n", encoding="utf-8"
         )
         monkeypatch.setenv("CORVIN_HOME", str(home))
         EM.load_providers(force_reload=True)  # drop any cached tenant spec
@@ -569,7 +569,7 @@ class TestConsoleSurfacesWorkerUsage:
                          "engine_id": "claude_code", "status": "ok",
                          "duration_ms": 1000}},
         ]
-        chain.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        chain.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         return chain
 
     def test_worker_role_is_reported_with_real_tokens(self, tmp_path, monkeypatch):
@@ -645,7 +645,7 @@ class TestTenantConfigRoundTrip:
             "  web_chat:\n"
             "    delegation_enabled: true\n"
             "  learning:\n"
-            "    operator_feedback: true\n"
+            "    operator_feedback: true\n", encoding="utf-8"
         )
         os.chmod(path, 0o600)
         return path
@@ -690,14 +690,14 @@ class TestTenantConfigRoundTrip:
         cfg_dir = tmp_path / "tenants" / "_default" / "global"
         cfg_dir.mkdir(parents=True)
         path = cfg_dir / "tenant.corvin.yaml"
-        path.write_text("spec: {}\n")
+        path.write_text("spec: {}\n", encoding="utf-8")
         os.chmod(path, 0o600)
 
         monkeypatch.setattr(engine_route, "_corvin_home", lambda: tmp_path)
         engine_route._save_tenant_yaml("_default", {"spec": {"default_engine": "claude_code"}})
 
         assert path.stat().st_mode & 0o777 == 0o600
-        assert "claude_code" in path.read_text()
+        assert "claude_code" in path.read_text(encoding="utf-8")
 
     def test_writer_leaves_no_temp_file_behind(self, tmp_path, monkeypatch):
         from core.console.corvin_console.routes import engine as engine_route

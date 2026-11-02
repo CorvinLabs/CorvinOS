@@ -51,7 +51,7 @@ def test_openai_200_with_json_body_is_not_audio(monkeypatch, tmp_path):
 
 def test_non_audio_file_fails_voice_even_with_a_real_provider_label(monkeypatch, tmp_path):
     bogus = tmp_path / "scene.mp3"
-    bogus.write_text(json.dumps({"not": "audio"}))
+    bogus.write_text(json.dumps({"not": "audio"}), encoding="utf-8")
     w = vs.VoiceSynthesizerWorker()
     monkeypatch.setattr(w, "_synthesize_scene_real", lambda text, job_id, scene_index: (str(bogus), "openai-tts"))
     r = w.execute(SimpleNamespace(job_id="rv2_voice", narration=GOOD))
@@ -60,7 +60,7 @@ def test_non_audio_file_fails_voice_even_with_a_real_provider_label(monkeypatch,
 
 def test_normalising_a_non_audio_file_is_not_normalised(tmp_path):
     bogus = tmp_path / "x.mp3"
-    bogus.write_text("{}")
+    bogus.write_text("{}", encoding="utf-8")
     assert vs.VoiceSynthesizerWorker()._normalize_loudness_ffmpeg([str(bogus)], -23) is False
 
 

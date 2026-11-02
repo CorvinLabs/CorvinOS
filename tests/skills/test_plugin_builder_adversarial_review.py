@@ -44,7 +44,7 @@ class TestAdversarialCodeInjection:
             if result.scaffold_dir:
                 plugin_py = Path(result.scaffold_dir) / "src" / "plugin.py"
                 if plugin_py.exists():
-                    content = plugin_py.read_text()
+                    content = plugin_py.read_text(encoding="utf-8")
                     assert "os.system" not in content
                     compile(content, str(plugin_py), "exec")  # Must be valid Python
 
@@ -64,7 +64,7 @@ class TestAdversarialCodeInjection:
             if result.scaffold_dir:
                 setup_py = Path(result.scaffold_dir) / "setup.py"
                 if setup_py.exists():
-                    content = setup_py.read_text()
+                    content = setup_py.read_text(encoding="utf-8")
                     compile(content, str(setup_py), "exec")
                     assert '__import__("os")' not in content
 
@@ -84,7 +84,7 @@ class TestAdversarialCodeInjection:
             if result.scaffold_dir:
                 conftest_py = Path(result.scaffold_dir) / "tests" / "conftest.py"
                 if conftest_py.exists():
-                    content = conftest_py.read_text()
+                    content = conftest_py.read_text(encoding="utf-8")
                     compile(content, str(conftest_py), "exec")
 
     def test_1_4_wheel_metadata_tampering(self):
@@ -248,7 +248,7 @@ class TestAdversarialSecretPIILeakage:
             if result.scaffold_dir:
                 scaffold_path = Path(result.scaffold_dir)
                 for py_file in scaffold_path.rglob("*.py"):
-                    content = py_file.read_text()
+                    content = py_file.read_text(encoding="utf-8")
                     assert not re.search(r"API_KEY\s*=", content, re.IGNORECASE)
                     assert not re.search(r"SECRET\s*=", content, re.IGNORECASE)
 
@@ -288,7 +288,7 @@ class TestAdversarialSecretPIILeakage:
 
                     for file in Path(extract_dir).rglob("*.py"):
                         try:
-                            content = file.read_text()
+                            content = file.read_text(encoding="utf-8")
                             assert not re.search(r"API_KEY\s*=\s*['\"]", content)
                         except UnicodeDecodeError:
                             pass

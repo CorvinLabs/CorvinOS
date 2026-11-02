@@ -229,7 +229,7 @@ class EnvironmentValidator:
         pytest_ini = Path("pytest.ini")
         if pytest_ini.exists():
             print_success("pytest.ini exists")
-            with open(pytest_ini) as f:
+            with open(pytest_ini, encoding="utf-8") as f:
                 content = f.read()
                 if "[pytest]" in content and "markers" in content:
                     print_success("pytest.ini has marker definitions")

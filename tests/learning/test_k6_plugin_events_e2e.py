@@ -15,7 +15,7 @@ def _chain_records(tenant_id="_default"):
     chain = forge_paths.tenant_audit_chain(tenant_id)
     if not chain.exists():
         return []
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 from core.plugins.corvin_plugins.lifecycle import (
     emit_plugin_loaded,
@@ -100,7 +100,7 @@ class TestMultiPluginExecution:
             for r in recs:
                 assert len(r["details"]["input_hash"]) == 64  # SHA256, never the payload
                 assert "hash" in r and "prev_hash" in r
-            chain_text = forge_paths.tenant_audit_chain("_default").read_text()
+            chain_text = forge_paths.tenant_audit_chain("_default").read_text(encoding="utf-8")
             assert "secret1" not in chain_text and "secret2" not in chain_text
 
 

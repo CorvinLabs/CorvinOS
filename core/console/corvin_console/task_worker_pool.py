@@ -161,6 +161,13 @@ def signal_abort(task_id: str) -> bool:
     proc = _active_procs.get(task_id)
     if proc is None:
         return False
+    if sys.platform == "win32":
+        # terminate() is TerminateProcess on the CLI pid alone there: no SIGTERM the CLI
+        # could use to end its tool children, so they outlived the abort. End the tree.
+        from corvin_core.process_signals import kill_tree_windows  # noqa: PLC0415
+
+        if kill_tree_windows(proc.pid):
+            return True
     try:
         proc.terminate()
         return True

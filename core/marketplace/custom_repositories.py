@@ -185,7 +185,7 @@ class RepositoryManager:
             )
 
         # Load from cache
-        with open(cache_file, "r") as f:
+        with open(cache_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         # A record belonging to another tenant reads as "not registered" — the
@@ -216,7 +216,7 @@ class RepositoryManager:
 
         for cache_file in self.cache_dir.glob("*.json"):
             try:
-                with open(cache_file, "r") as f:
+                with open(cache_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
                 # Isolation is enforced on the RECORD, not only on the path.
@@ -282,7 +282,7 @@ class RepositoryManager:
             "enabled": repo.enabled,
         }
 
-        with open(cache_file, "w") as f:
+        with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
     def update_repository_status(

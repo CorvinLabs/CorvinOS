@@ -25,7 +25,7 @@ def load_audit_events(limit=500):
         return []
     
     events = []
-    with open(AUDIT_FILE, 'r') as f:
+    with open(AUDIT_FILE, 'r', encoding="utf-8") as f:
         for i, line in enumerate(f):
             if i >= limit:
                 break
@@ -151,7 +151,7 @@ def check_consent_gate_implementation():
         findings.append(('OK', 'Consent gate implementation exists'))
         
         # Check for fail-closed semantics
-        with open(consent_path, 'r') as f:
+        with open(consent_path, 'r', encoding="utf-8") as f:
             content = f.read()
             if 'fail-closed' in content.lower() and 'ConsentDenied' in content:
                 findings.append(('OK', 'Fail-closed consent validation present'))
@@ -168,7 +168,7 @@ def check_tripwire_integration():
     
     gateway_app_path = Path('/home/shumway/projects/CorvinOS/core/gateway/corvin_gateway/app.py')
     if gateway_app_path.exists():
-        with open(gateway_app_path, 'r') as f:
+        with open(gateway_app_path, 'r', encoding="utf-8") as f:
             content = f.read()
             if '_tripwire_assert_all' in content and 'assert_all' in content:
                 findings.append(('OK', 'Tripwire called in gateway boot sequence'))
@@ -176,7 +176,7 @@ def check_tripwire_integration():
                 # Check for "no override" language
                 tripwire_path = Path('/home/shumway/projects/CorvinOS/core/compliance/corvin_compliance_reports/tripwire.py')
                 if tripwire_path.exists():
-                    with open(tripwire_path, 'r') as tf:
+                    with open(tripwire_path, 'r', encoding="utf-8") as tf:
                         tripwire_content = tf.read()
                         if 'NO override' in tripwire_content and 'env var' in tripwire_content:
                             findings.append(('OK', 'Tripwire explicitly forbids override switches'))
@@ -197,7 +197,7 @@ def check_path_gate_implementation():
     if hardener_path.exists():
         findings.append(('OK', 'File permission hardener (L10 path-gate) exists'))
         
-        with open(hardener_path, 'r') as f:
+        with open(hardener_path, 'r', encoding="utf-8") as f:
             content = f.read()
             if 'fail-closed' in content.lower() and 'PermissionDeniedError' in content:
                 findings.append(('OK', 'L10 path-gate has fail-closed semantics'))

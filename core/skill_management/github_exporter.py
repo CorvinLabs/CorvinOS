@@ -91,7 +91,7 @@ class GitHubExporter:
         manifest_path = self.base_path / "exports" / f"MANIFEST_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
         try:
-            with open(manifest_path, "w") as f:
+            with open(manifest_path, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)
         except Exception as e:
             return ExportResult(

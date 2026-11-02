@@ -65,7 +65,7 @@ def _run(args: list[str], *, env: dict[str, str] | None = None, timeout: int = 2
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout,
+        timeout=timeout, encoding="utf-8", errors="replace",
     )
 
 
@@ -86,7 +86,7 @@ def test_install_sh_passes_posix_shell_syntax_check() -> None:
         ["/bin/sh", "-n", str(_INSTALL_SH)],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=10, encoding="utf-8", errors="replace",
     )
     assert result.returncode == 0, result.stderr
 
@@ -140,7 +140,7 @@ def test_run_outside_a_checkout_dies_before_any_download(tmp_path) -> None:
     shutil.copy(_INSTALL_SH, stray)
     result = subprocess.run(
         ["/bin/sh", str(stray)], capture_output=True, text=True, timeout=20,
-        env={"PATH": "", "TMPDIR": str(tmp_path)},
+        env={"PATH": "", "TMPDIR": str(tmp_path)}, encoding="utf-8", errors="replace",
     )
     assert result.returncode == 1
     assert "must be run from inside a CorvinOS checkout" in result.stderr
@@ -153,7 +153,7 @@ def test_piped_stdin_mode_is_refused(tmp_path) -> None:
     result = subprocess.run(
         ["/bin/sh"], input=_INSTALL_SH.read_text(encoding="utf-8"),
         capture_output=True, text=True, timeout=20,
-        env={"PATH": "", "TMPDIR": str(tmp_path)}, cwd=str(tmp_path),
+        env={"PATH": "", "TMPDIR": str(tmp_path)}, cwd=str(tmp_path), encoding="utf-8", errors="replace",
     )
     assert result.returncode == 1
     assert "must be run from inside a CorvinOS checkout" in result.stderr
@@ -238,8 +238,8 @@ exit 1
     editable_dir = tmp_path / "editable-target"
     editable_dir.mkdir()
     # install.sh only accepts a real CorvinOS checkout as --editable target.
-    (editable_dir / ".corvin_repo").write_text("")
-    (editable_dir / "pyproject.toml").write_text("[project]\nname = \"corvinos\"\n")
+    (editable_dir / ".corvin_repo").write_text("", encoding="utf-8")
+    (editable_dir / "pyproject.toml").write_text("[project]\nname = \"corvinos\"\n", encoding="utf-8")
 
     env = {
         "PATH": f"{fakebin}:/usr/bin:/bin",
@@ -273,7 +273,7 @@ def test_editable_install_carries_the_browser_extra(_stubbed_env) -> None:
 
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
     uv_log = Path(env["HOME"]) / "uv-args.log"
-    logged = uv_log.read_text() if uv_log.exists() else ""
+    logged = uv_log.read_text(encoding="utf-8") if uv_log.exists() else ""
     assert f"{editable_dir}[browser]" in logged, logged
 
 
@@ -300,7 +300,7 @@ def test_stale_lock_of_a_dead_process_is_taken_over(tmp_path) -> None:
     stands down while the lock is held — from being blocked forever."""
     lock = tmp_path / "corvinos-setup.lock"
     lock.mkdir()
-    (lock / "pid").write_text("999999")  # no such process
+    (lock / "pid").write_text("999999", encoding="utf-8")  # no such process
     result = _run(["--this-flag-does-not-exist"],
                   env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path), "HOME": str(tmp_path)})
     # argument parsing happens first; a valid run must get past the lock:
@@ -321,7 +321,7 @@ def test_stale_lock_of_a_dead_process_is_taken_over(tmp_path) -> None:
 def test_live_lock_blocks_a_second_run(tmp_path) -> None:
     lock = tmp_path / "corvinos-setup.lock"
     lock.mkdir()
-    (lock / "pid").write_text(str(os.getpid()))  # alive: this test process
+    (lock / "pid").write_text(str(os.getpid()), encoding="utf-8")  # alive: this test process
     result = _run([], env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path), "HOME": str(tmp_path)})
     assert result.returncode == 1
     assert "another CorvinOS install/update is running" in result.stderr

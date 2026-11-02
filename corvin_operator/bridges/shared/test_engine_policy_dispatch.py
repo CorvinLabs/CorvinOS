@@ -119,7 +119,7 @@ def main() -> int:
             "compliance_zones": {
                 "personal_data": {"allow_engines": ["azure_eu", "vllm_eu"]},
             },
-        }))
+        }), encoding="utf-8")
         # Stub registry: azure_eu is healthy, others unknown
         _patch_registry({"azure_eu": lambda: _StubEngine(),
                          "claude_code": lambda: _StubEngine()})
@@ -146,7 +146,7 @@ def main() -> int:
             "compliance_zones": {
                 "code_only": {"allow_engines": ["primary_dead", "backup_alive"]},
             },
-        }))
+        }), encoding="utf-8")
         _patch_registry({
             "primary_dead": lambda: None,  # builder returns None = unhealthy
             "backup_alive": lambda: _StubEngine(),
@@ -174,7 +174,7 @@ def main() -> int:
             "compliance_zones": {
                 "external_facing": {"allow_engines": ["dead_a", "dead_b"]},
             },
-        }))
+        }), encoding="utf-8")
         _patch_registry({
             "dead_a": lambda: None,
             "dead_b": lambda: None,
@@ -197,7 +197,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         policy_path = _make_repo_corvin(td_path)
-        policy_path.write_text("{ not valid json")
+        policy_path.write_text("{ not valid json", encoding="utf-8")
         with _patch_repo_walk(td_path):
             eid, zone, used = adapter._resolve_engine_via_policy(
                 "anything", None, engine_registry,
@@ -217,7 +217,7 @@ def main() -> int:
                 "personal_data": {"allow_engines": ["eu_engine"]},
                 "code_only": {"allow_engines": ["dev_engine"]},
             },
-        }))
+        }), encoding="utf-8")
         _patch_registry({
             "eu_engine": lambda: _StubEngine(),
             "dev_engine": lambda: _StubEngine(),
@@ -253,7 +253,7 @@ def main() -> int:
                 "personal_data": {"allow_engines": ["eu"]},
                 "code_only": {"allow_engines": ["dev"]},
             },
-        }))
+        }), encoding="utf-8")
         _patch_registry({
             "eu": lambda: _StubEngine(),
             "dev": lambda: _StubEngine(),
@@ -281,7 +281,7 @@ def main() -> int:
         policy_path.write_text(json.dumps({
             "default_engine": "claude_code",
             "fallback_chain": ["claude_code", "codex_cli"],
-        }))
+        }), encoding="utf-8")
         _patch_registry({
             "claude_code": lambda: _StubEngine(),
             "codex_cli": lambda: _StubEngine(),

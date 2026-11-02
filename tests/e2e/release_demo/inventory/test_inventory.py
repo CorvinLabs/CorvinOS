@@ -234,6 +234,6 @@ def test_drift_fails_the_check(tmp_path: Path):
 def test_check_cli_exits_zero_on_the_committed_state():
     r = subprocess.run(
         [sys.executable, str(HERE / "check.py")],
-        cwd=REPO, capture_output=True, text=True, timeout=120,
+        cwd=REPO, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stdout + r.stderr

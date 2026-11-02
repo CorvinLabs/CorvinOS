@@ -992,7 +992,7 @@ def main(argv: list[str] | None = None) -> int:
                             encoding="utf-8")
         print(f"baseline written: {len(rep['dead'])} known-dead implementation(s)")
         return 0
-    base = set(json.loads(BASELINE.read_text())) if BASELINE.is_file() else set()
+    base = set(json.loads(BASELINE.read_text(encoding="utf-8"))) if BASELINE.is_file() else set()
     new = [d for d in rep["dead"] if _key(d) not in base]
     gone = sorted(base - {_key(d) for d in rep["dead"]})
     if a.json:

@@ -82,7 +82,7 @@ class TokenSavingsVerifier:
             return None
 
         try:
-            with open(savings_file, "r") as f:
+            with open(savings_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             logger.info(f"Loaded {len(data)} savings records from {savings_file}")
             return data

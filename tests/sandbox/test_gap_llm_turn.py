@@ -47,15 +47,15 @@ def llm_console(sandbox, planted, live_tripwire):
     link = sandbox.bin_dir / "claude"
     link.symlink_to(os.path.realpath(real))
     creds_src = Path.home() / ".claude" / ".credentials.json"
-    data = json.loads(creds_src.read_text())
+    data = json.loads(creds_src.read_text(encoding="utf-8"))
     data.get("claudeAiOauth", {}).pop("refreshToken", None)  # never rotate the operator's token
     creds = sandbox.home / ".claude" / ".credentials.json"
     creds.parent.mkdir(parents=True, exist_ok=True)
-    creds.write_text(json.dumps(data))
+    creds.write_text(json.dumps(data), encoding="utf-8")
     creds.chmod(0o600)
     vault = sandbox.tenant_home("_default") / "global" / "connector_vault.json"
     vault.parent.mkdir(parents=True, exist_ok=True)
-    vault.write_text(json.dumps({"openai": VAULT_SECRET}))
+    vault.write_text(json.dumps({"openai": VAULT_SECRET}), encoding="utf-8")
     # networked: the sandbox dead-proxy variables block the claude CLI from api.anthropic.com
     srv = networked_server(sandbox, "console-llm").start()
     try:

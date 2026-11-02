@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import zipfile
 from dataclasses import dataclass
@@ -205,6 +206,10 @@ def _import_single_skill(
                     if info.is_dir():
                         continue
                     if info.filename.startswith("/") or ".." in parts or "\\" in info.filename:
+                        raise ItemImportError("skill ZIP holds an unsafe path")
+                    # Windows: ``Path(*parts)`` re-parses each part, so ``skill/x/D:evil``
+                    # turns into the drive-relative ``D:evil`` and ``work / rel`` leaves work.
+                    if os.name == "nt" and ":" in info.filename:
                         raise ItemImportError("skill ZIP holds an unsafe path")
                     if (info.external_attr >> 16) & 0o170000 == 0o120000:
                         raise ItemImportError("skill ZIP holds a symbolic link")

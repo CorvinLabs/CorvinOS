@@ -57,7 +57,7 @@ def _run(argv: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(_SCRIPT), *argv],
         capture_output=True, text=True,
-        env={**os.environ},
+        env={**os.environ}, encoding="utf-8", errors="replace",
     )
 
 

@@ -42,6 +42,16 @@ try:  # pragma: no cover - import shape, exercised by the spawn-site test
 except ImportError:  # pragma: no cover
     _guard_prompt_head = None  # type: ignore[assignment]
 
+# Windows: CreateProcess applies no PATHEXT, so a bare "claude" / "copilot"
+# that is an npm *.cmd shim raises FileNotFoundError; resolve_cli_argv
+# resolves it and routes .cmd shims through the cmd.exe-safe quoting.
+# POSIX: identity.
+try:  # pragma: no cover - import shape
+    from agents._win_shim import resolve_cli_argv as _cli_argv  # type: ignore  # noqa: E402
+except Exception:  # pragma: no cover
+    def _cli_argv(argv):  # type: ignore[misc]
+        return argv
+
 router = APIRouter()
 
 # ── System prompt ──────────────────────────────────────────────────────────
@@ -196,7 +206,7 @@ def assistant_ping(
 ) -> dict[str, Any]:
     """Check if claude CLI is available for the assistant."""
     try:
-        r = subprocess.run(["claude", "--version"], capture_output=True, timeout=5)
+        r = subprocess.run(_cli_argv(["claude", "--version"]), capture_output=True, timeout=5)
         available = r.returncode == 0
         version = (
             r.stdout.decode("utf-8", errors="replace").strip().split("\n")[0]
@@ -277,13 +287,13 @@ def assistant_message(
 
     try:
         result = subprocess.run(
-            [
+            _cli_argv([
                 "claude",
                 "-p",
                 "--max-turns", "1",
                 "--tools", "",
                 "--system-prompt", _SYSTEM_PROMPT,
-            ],
+            ]),
             input=full_prompt,
             capture_output=True,
             text=True,

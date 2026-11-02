@@ -158,7 +158,7 @@ def run_stage_sandboxed(stage_id: str, module_path: Any, bundle: Any, ctx: Any,
         proc = subprocess.run(
             cmd, input=envelope, capture_output=True, text=True,
             timeout=_WALL_TIMEOUT_S, env=sb.stripped_env(),
-            preexec_fn=(lambda: sb.apply_rlimits(limits)) if os.name != "nt" else None,
+            preexec_fn=(lambda: sb.apply_rlimits(limits)) if os.name != "nt" else None, encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired:
         return bundle, StageTelemetry(

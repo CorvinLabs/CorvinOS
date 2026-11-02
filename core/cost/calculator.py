@@ -245,7 +245,7 @@ class CostCalculator:
 
         # Sum across all call cost files
         for filepath in self.costs_dir.glob("calls_*.jsonl"):
-            with open(filepath, "r") as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -284,7 +284,7 @@ class CostCalculator:
 
         # Search all call cost files
         for filepath in self.costs_dir.glob("calls_*.jsonl"):
-            with open(filepath, "r") as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -336,7 +336,7 @@ class CostCalculator:
 
         # Search all call cost files for this date
         for filepath in self.costs_dir.glob("calls_*.jsonl"):
-            with open(filepath, "r") as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -389,7 +389,7 @@ class CostCalculator:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         for filepath in self.costs_dir.glob("calls_*.jsonl"):
-            with open(filepath, "r") as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

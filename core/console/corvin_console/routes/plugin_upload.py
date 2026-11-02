@@ -158,7 +158,7 @@ def list_uploads(
 
     for entry in sorted(manager.staging_root.glob("*.meta")):
         try:
-            metadata = json.loads(entry.read_text())
+            metadata = json.loads(entry.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError, ValueError):
             continue
         uploads.append(

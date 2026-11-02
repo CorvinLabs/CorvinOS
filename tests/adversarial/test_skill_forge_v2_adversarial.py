@@ -174,9 +174,9 @@ class TestSymlinkAttacks:
                 "name": "Test",
                 "description": "Test",
                 "entry_point": "src.main:execute",
-            }))
+            }), encoding="utf-8")
             (skill_dir / "src").mkdir()
-            (skill_dir / "src" / "main.py").write_text("# Test")
+            (skill_dir / "src" / "main.py").write_text("# Test", encoding="utf-8")
 
             # Create a symlink that would escape
             evil_link = skill_dir / "evil_link"
@@ -727,7 +727,7 @@ class TestAtomicFailures:
             # Registry should not have bad_skill entry
             registry_file = tmpdir / "corvin_home" / ".registry" / "installed.json"
             if registry_file.exists():
-                registry = json.loads(registry_file.read_text())
+                registry = json.loads(registry_file.read_text(encoding="utf-8"))
                 installed_ids = [r["skill_id"] for r in registry.get("installed_skills", [])]
                 assert "bad_skill" not in installed_ids
 

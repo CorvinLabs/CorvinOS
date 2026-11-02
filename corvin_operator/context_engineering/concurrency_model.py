@@ -141,7 +141,7 @@ class AggregatorCheckpoint:
         """Load checkpoint."""
         if self.checkpoint_file.exists():
             import json
-            with open(self.checkpoint_file, "r") as f:
+            with open(self.checkpoint_file, "r", encoding="utf-8") as f:
                 return json.load(f)
 
         return {
@@ -156,7 +156,7 @@ class AggregatorCheckpoint:
         """Save checkpoint."""
         import json
         checkpoint["updated_at"] = datetime.utcnow().isoformat() + "Z"
-        with open(self.checkpoint_file, "w") as f:
+        with open(self.checkpoint_file, "w", encoding="utf-8") as f:
             json.dump(checkpoint, f, indent=2)
 
 

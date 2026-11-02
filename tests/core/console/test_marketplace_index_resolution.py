@@ -29,7 +29,7 @@ def _write_index(path: Path, plugin_id: str) -> None:
         "plugin_count": 1,
         "plugins": [{"id": plugin_id, "name": plugin_id, "version": "1.0.0"}],
         "by_id": {}, "by_category": {}, "by_tier": {},
-    }))
+    }), encoding="utf-8")
 
 
 def test_env_override_wins(tmp_path, monkeypatch):
@@ -50,7 +50,7 @@ def _relocate_module(monkeypatch, tmp_path: Path) -> Path:
     import corvin_console.routes.marketplace as mp
     fake = tmp_path / "repo" / "core" / "console" / "corvin_console" / "routes" / "marketplace.py"
     fake.parent.mkdir(parents=True)
-    fake.write_text("")
+    fake.write_text("", encoding="utf-8")
     monkeypatch.setattr(mp, "__file__", str(fake))
     return tmp_path / "repo"
 

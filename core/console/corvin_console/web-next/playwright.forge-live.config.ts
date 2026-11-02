@@ -18,7 +18,8 @@ import { HOME_B, PORT_B } from './tests/e2e/forge-system/forge-env';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const harness = path.join(dir, 'tests/e2e/forge-system/harness/isolated_forge_backend.py');
-const python = path.resolve(dir, '../../.venv/bin/python');
+// Windows venvs keep the interpreter in Scripts/python.exe, not bin/python.
+const python = path.resolve(dir, process.platform === 'win32' ? '../../.venv/Scripts/python.exe' : '../../.venv/bin/python');
 
 export default defineConfig({
   testDir: './tests/e2e-live/forge-live',
@@ -32,7 +33,7 @@ export default defineConfig({
   use: { trace: 'retain-on-failure', screenshot: 'only-on-failure', acceptDownloads: true, ...devices['Desktop Chrome'] },
   projects: [{ name: 'chromium' }],
   webServer: process.env.FORGE_LIVE_SKIP_B === '1' ? undefined : {
-    command: `${python} ${harness}`,
+    command: `"${python}" "${harness}"`,
     url: `http://127.0.0.1:${PORT_B}/healthz`,
     reuseExistingServer: false,
     timeout: 120_000,

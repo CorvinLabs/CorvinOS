@@ -2027,7 +2027,7 @@ def _meta_update_lock_for(tenant_id: str):
     d = _store_dir(tenant_id)
     d.mkdir(parents=True, exist_ok=True)
     with _meta_thread_lock:
-        with open(d / ".meta.lock", "a+") as fh:
+        with open(d / ".meta.lock", "a+", encoding="utf-8") as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
                 yield
@@ -3886,7 +3886,7 @@ def _render_acs_graph(scan_root: Path) -> Path | None:
     if iterations_dir.is_dir():
         for iter_file in sorted(iterations_dir.glob("iter_*.json")):
             try:
-                data = json.loads(iter_file.read_text())
+                data = json.loads(iter_file.read_text(encoding="utf-8"))
                 n = int(iter_file.stem.split("_")[-1])
                 iteration_data[n] = data
             except Exception:
@@ -3907,7 +3907,7 @@ def _render_acs_graph(scan_root: Path) -> Path | None:
         n = _iter_num_from_name(entry.name)
         if entry.is_file() and entry.suffix == ".json":
             try:
-                data = json.loads(entry.read_text())
+                data = json.loads(entry.read_text(encoding="utf-8"))
             except Exception:
                 data = {}
             data.setdefault("worker_id", entry.stem)
@@ -3916,7 +3916,7 @@ def _render_acs_graph(scan_root: Path) -> Path | None:
         elif entry.is_dir():
             manifest_f = entry / "manifest.json"
             try:
-                data = json.loads(manifest_f.read_text()) if manifest_f.exists() else {}
+                data = json.loads(manifest_f.read_text(encoding="utf-8")) if manifest_f.exists() else {}
             except Exception:
                 data = {}
             data.setdefault("worker_id", entry.name)
@@ -4051,7 +4051,7 @@ def _drain_compute_inbox(sess: "WebChatSession") -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for nf in sorted(inbox.glob("*_result.json")):
         try:
-            data = json.loads(nf.read_text())
+            data = json.loads(nf.read_text(encoding="utf-8"))
         except Exception:
             continue
         task_id = data.get("task_id", nf.stem)

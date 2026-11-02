@@ -62,7 +62,7 @@ def _write_channel_settings(channel: str, settings: dict) -> Path:
     chan_dir = ROOT.parent / channel
     chan_dir.mkdir(parents=True, exist_ok=True)
     settings_file = chan_dir / "settings.json"
-    settings_file.write_text(json.dumps(settings))
+    settings_file.write_text(json.dumps(settings), encoding="utf-8")
     return settings_file
 
 
@@ -70,7 +70,7 @@ def _restore_channel_settings(settings_file: Path, original: str | None) -> None
     if original is None:
         settings_file.unlink(missing_ok=True)
     else:
-        settings_file.write_text(original)
+        settings_file.write_text(original, encoding="utf-8")
 
 
 def _fresh_adapter():
@@ -90,7 +90,7 @@ def _read_audit_events(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -259,11 +259,11 @@ def case_lazy_prune_expired() -> None:
                 "granted_via": "test",
                 "ttl_s": 3600,
             }
-        }))
+        }), encoding="utf-8")
         ok, reason = consent.is_granted("telegram", "999", "stale")
         assert not ok and reason == "expired", (ok, reason)
         # Pruned from disk
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         assert "stale" not in data, data
         # Audit event for the lazy-prune
         events = _read_audit_events(_forge_audit_path(tmp))
@@ -282,7 +282,7 @@ def case_observer_drop_without_consent() -> None:
     _section("L17/5: observer envelope without consent → drop + audit")
     tmp = Path(tempfile.mkdtemp(prefix="consent-l5-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp)
         _write_channel_settings("telegram", {
@@ -296,12 +296,12 @@ def case_observer_drop_without_consent() -> None:
                "_observer": True, "text": "uninvited line",
                "ts": time.time()}
         p = Path(adapter.INBOX) / "obs_nocon.json"
-        p.write_text(json.dumps(msg))
+        p.write_text(json.dumps(msg), encoding="utf-8")
         adapter.process_one(p, {})
 
         # No buffer was written
         buf_path = adapter._observer_buffer_path("telegram", "555")
-        assert not buf_path.exists() or buf_path.read_text().strip() == "", \
+        assert not buf_path.exists() or buf_path.read_text(encoding="utf-8").strip() == "", \
             "buffer must stay empty when sender has no consent"
         # Audit chain has consent.observer_dropped
         events = _read_audit_events(_forge_audit_path(tmp))
@@ -329,7 +329,7 @@ def case_observer_pass_with_consent() -> None:
     _section("L17/6: observer envelope WITH consent → buffered")
     tmp = Path(tempfile.mkdtemp(prefix="consent-l6-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp)
         _write_channel_settings("telegram", {
@@ -346,12 +346,12 @@ def case_observer_pass_with_consent() -> None:
                "_observer": True, "text": "consented line",
                "ts": time.time()}
         p = Path(adapter.INBOX) / "obs_ok.json"
-        p.write_text(json.dumps(msg))
+        p.write_text(json.dumps(msg), encoding="utf-8")
         adapter.process_one(p, {})
 
         buf_path = adapter._observer_buffer_path("telegram", "555")
         assert buf_path.exists(), f"buffer should exist at {buf_path}"
-        lines = [json.loads(l) for l in buf_path.read_text().splitlines() if l.strip()]
+        lines = [json.loads(l) for l in buf_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert len(lines) == 1 and lines[0]["text"] == "consented line", lines
         assert lines[0].get("consent_reason") == "durable", lines[0]
         assert lines[0].get("one_shot") is False, lines[0]
@@ -381,7 +381,7 @@ def case_share_envelope_admits_without_consent() -> None:
     _section("L17/7: /share one-shot envelope bypasses consent gate")
     tmp = Path(tempfile.mkdtemp(prefix="consent-l7-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp)
         _write_channel_settings("telegram", {
@@ -395,12 +395,12 @@ def case_share_envelope_admits_without_consent() -> None:
                "_observer": True, "_share": True,
                "text": "single one-shot line", "ts": time.time()}
         p = Path(adapter.INBOX) / "share_one.json"
-        p.write_text(json.dumps(msg))
+        p.write_text(json.dumps(msg), encoding="utf-8")
         adapter.process_one(p, {})
 
         buf_path = adapter._observer_buffer_path("telegram", "555")
         assert buf_path.exists(), "buffer should hold the share envelope"
-        lines = [json.loads(l) for l in buf_path.read_text().splitlines() if l.strip()]
+        lines = [json.loads(l) for l in buf_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert len(lines) == 1, lines
         assert lines[0]["text"] == "single one-shot line"
         assert lines[0].get("one_shot") is True, lines[0]
@@ -437,7 +437,7 @@ def case_consume_drift_revoke_after_buffer() -> None:
     _section("L17/8: consume-time drift — revoke after buffer-write")
     tmp = Path(tempfile.mkdtemp(prefix="consent-l8-"))
     settings_file = ROOT.parent / "telegram" / "settings.json"
-    original = settings_file.read_text() if settings_file.exists() else None
+    original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp)
         _write_channel_settings("telegram", {
@@ -453,7 +453,7 @@ def case_consume_drift_revoke_after_buffer() -> None:
                "from": "mit-leser", "chat_id": "555",
                "_observer": True, "text": "soon-stale line", "ts": time.time()}
         p1 = Path(adapter.INBOX) / "obs_drift.json"
-        p1.write_text(json.dumps(obs))
+        p1.write_text(json.dumps(obs), encoding="utf-8")
         adapter.process_one(p1, {})
         buf_path = adapter._observer_buffer_path("telegram", "555")
         assert buf_path.exists(), "buffer should be populated"
@@ -473,7 +473,7 @@ def case_consume_drift_revoke_after_buffer() -> None:
                      "from": "the-owner", "chat_id": "555",
                      "text": "what did people say?", "ts": time.time()}
         p2 = Path(adapter.INBOX) / "owner_drift.json"
-        p2.write_text(json.dumps(owner_msg))
+        p2.write_text(json.dumps(owner_msg), encoding="utf-8")
         adapter.process_one(p2, {})
 
         assert captured, "fake claude should have been called"
@@ -513,7 +513,7 @@ def case_cli_subcommands() -> None:
 
         def _run(args):
             r = subprocess.run([sys.executable, str(cli), *args],
-                               capture_output=True, text=True, env=env, timeout=10)
+                               capture_output=True, text=True, env=env, timeout=10, encoding="utf-8", errors="replace")
             return r.returncode, r.stdout, r.stderr
 
         # parse-ttl
@@ -643,7 +643,7 @@ def test_store_corrupted_denies_all() -> None:
         # Write a corrupt JSON file to the store path
         path = consent._store_path("telegram", "999", tenant_id="_default")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{not valid json,,}")
+        path.write_text("{not valid json,,}", encoding="utf-8")
 
         granted, reason = consent.is_granted("telegram", "999", "alice")
 
@@ -689,7 +689,7 @@ def test_prune_retry_on_write_failure() -> None:
                 "granted_via": "test",
                 "ttl_s": 3600,
             }
-        }))
+        }), encoding="utf-8")
 
         call_count = [0]
         original_save = consent._save_store
@@ -720,7 +720,7 @@ def test_prune_retry_on_write_failure() -> None:
                 "granted_via": "test",
                 "ttl_s": 3600,
             }
-        }))
+        }), encoding="utf-8")
 
         warn_msgs: list[str] = []
 

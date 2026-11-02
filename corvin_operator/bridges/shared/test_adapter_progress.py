@@ -83,7 +83,7 @@ def _run_one_text_message(adapter, sandbox_dirs, settings_overrides=None):
         "ts": time.time(),
     }
     in_file = inbox / "msg-progress-1.json"
-    in_file.write_text(json.dumps(env))
+    in_file.write_text(json.dumps(env), encoding="utf-8")
     base_settings = {"whitelist": ["u_p"], "progress_updates": True}
     if settings_overrides:
         base_settings.update(settings_overrides)
@@ -118,7 +118,7 @@ def test_default_dedupes_todowrite_to_one_status() -> None:
         )
         # Verify the one we got really is the plan, not something stripped.
         status_file = list(outbox.glob("msg-progress-1_s*.json"))[0]
-        body = json.loads(status_file.read_text())
+        body = json.loads(status_file.read_text(encoding="utf-8"))
         assert body.get("_progress") is True
         assert "Plan" in body.get("text", "")
         print(f"PASS: 3 TodoWrite events → 1 status file ({status_file.name})")

@@ -156,7 +156,7 @@ def stop() -> None:
         # already handled above.
         return
     result = subprocess.run(
-        ["bash", str(bridge_sh), "down"], capture_output=True, text=True,
+        ["bash", str(bridge_sh), "down"], capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         # Surface it — silently swallowing this (the old `capture_output=True`

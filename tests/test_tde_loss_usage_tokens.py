@@ -237,7 +237,7 @@ class TestPersistedProfileE2E:
         assert result["success"] is True
 
         assert path.is_file(), f"no loss_profile.jsonl written at {path}"
-        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         fresh = [r for r in rows if r.get("timestamp", 0) >= started and r.get("measured")]
         assert fresh, "the run must persist measured entries"
         for r in fresh:
@@ -253,7 +253,7 @@ class TestPersistedProfileE2E:
         # records, otherwise "it verifies" would be vacuous.
         chain = _audit.audit_path()
         assert chain.exists(), f"the run emits tde.* events, so {chain} must exist"
-        recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert any(str(r.get("event_type", r.get("event", ""))).startswith("tde.") for r in recs), \
             "no tde.* record reached the chain"
         ok, problems = verify_chain(chain)

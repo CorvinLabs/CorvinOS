@@ -54,11 +54,11 @@ def test_bridge_event_lands_in_tenant_chain_and_verifies(home, monkeypatch):
     assert ev.hash
 
     chain = Path(tenant_audit_chain("_default"))
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     bridge = [r for r in recs if r["event_type"] == "infinite_session.bridge_created"]
     assert len(bridge) == 1
     assert bridge[0]["details"]["task_id"] == "task_1"
-    assert "sid-secret-123" not in chain.read_text()  # fingerprinted only
+    assert "sid-secret-123" not in chain.read_text(encoding="utf-8")  # fingerprinted only
 
     from forge import security_events
 
@@ -85,7 +85,7 @@ def test_snapshot_key_file_honours_corvin_home(home):
 
     keyfile = Path(home) / "corvin" / "keys" / "snapshot.key"
     keyfile.parent.mkdir(parents=True)
-    keyfile.write_text("k-from-corvin-home\n")
+    keyfile.write_text("k-from-corvin-home\n", encoding="utf-8")
     assert KeyManagementConfig.get_snapshot_key() == "k-from-corvin-home"
 
 
@@ -96,7 +96,7 @@ def test_recovery_restored_event_goes_through_chain_writer(home):
     mgr = SessionRecoveryManager()
     mgr._emit_context_restored_event(task_id="task_1", tenant_id="_default", snapshot_hash="abc")
     chain = Path(tenant_audit_chain("_default"))
-    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     assert [r["event_type"] for r in recs][-1] == "infinite_session.context_restored"
     from forge import security_events
 

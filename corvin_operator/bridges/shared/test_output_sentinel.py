@@ -76,7 +76,7 @@ def _write_tenant_config(tmp: Path, *, et_block: dict[str, Any] | None) -> None:
     if et_block is not None:
         body["spec"]["engine_trust"] = et_block
     import yaml as _y
-    p.write_text(_y.safe_dump(body))
+    p.write_text(_y.safe_dump(body), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +297,7 @@ def section_audit() -> None:
             t("audit chain file created", audit_p.exists())
             if audit_p.exists():
                 lines = [json.loads(l) for l in
-                         audit_p.read_text().splitlines() if l]
+                         audit_p.read_text(encoding="utf-8").splitlines() if l]
                 t("chain has one entry", len(lines) == 1)
                 d = lines[0]["details"]
                 t("event has engine_id", "engine_id" in d)
@@ -377,7 +377,7 @@ def section_registry_and_cost() -> None:
 
     # AST walk: NO anthropic / openai / google SDK imports
     p = REPO / "corvin_operator" / "bridges" / "shared" / "output_sentinel.py"
-    tree = ast.parse(p.read_text())
+    tree = ast.parse(p.read_text(encoding="utf-8"))
     forbidden = ("anthropic", "openai", "google.generativeai",
                  "google_generativeai")
     bad: list[str] = []

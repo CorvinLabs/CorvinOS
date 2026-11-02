@@ -61,7 +61,7 @@ def _seed() -> dict:
         for rel in ("scenes/scene_01.png", "audio/scene_01.mp3", "poster.jpg"):
             (job_dir / rel).parent.mkdir(parents=True, exist_ok=True)
             (job_dir / rel).write_bytes(b"\0" * 4096)
-        (job_dir / "report.json").write_text(json.dumps({"job_id": job_id, "schema": 1}))
+        (job_dir / "report.json").write_text(json.dumps({"job_id": job_id, "schema": 1}), encoding="utf-8")
         store.save_video_output(models.VideoOutput(job_id=job_id, video_path=str(out), metadata={"report": "report.json"}, created_at=now))
         vjs.record_owner(base, job_id, f"console-owner:{tenant}")
 
@@ -81,7 +81,7 @@ def _seed() -> dict:
 
     yml = HOME / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
     yml.write_text("spec:\n  telemetry:\n    ping_enabled: false\n    healing_traces: false\n"
-                   "  video_producer:\n    storage_quota_gb: 1\n")
+                   "  video_producer:\n    storage_quota_gb: 1\n", encoding="utf-8")
     os.chmod(yml, 0o600)
     return {"job_delete": JOB_DELETE, "job_running": JOB_RUNNING, "job_keep": JOB_KEEP,
             "job_other_tenant": JOB_OTHER, "store": str(base), "tenant_yaml": str(yml)}
@@ -92,7 +92,7 @@ def main() -> None:
     vq._sandbox_env()
     for t in ("_default", "tenant_b"):
         vq._install_plugin(t)
-    (HOME / "seed.json").write_text(json.dumps(_seed(), indent=1))
+    (HOME / "seed.json").write_text(json.dumps(_seed(), indent=1), encoding="utf-8")
 
     import uvicorn
     from corvin_gateway.app import app

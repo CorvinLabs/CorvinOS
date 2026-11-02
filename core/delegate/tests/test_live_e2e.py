@@ -85,7 +85,7 @@ def _codex_version(binary: str) -> tuple[int, ...] | None:
     import re as _re
     try:
         out = subprocess.run([binary, "--version"], capture_output=True,
-                             text=True, timeout=15).stdout
+                             text=True, timeout=15, encoding="utf-8", errors="replace").stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
     m = _re.search(r"(\d+)\.(\d+)\.(\d+)", out)
@@ -124,7 +124,7 @@ class ForgeMcpLiveTests(unittest.TestCase):
                 tempdir=tmp_path,
             )
             cfg_path = result["spawn_kwargs"]["mcp_config_path"]
-            cfg = json.loads(Path(cfg_path).read_text())
+            cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
             forge_spec = cfg["mcpServers"]["forge"]
 
             env = os.environ.copy()
@@ -154,7 +154,7 @@ class ForgeMcpLiveTests(unittest.TestCase):
                 env=env,
                 cwd=str(tmp_path),
                 text=True,
-                bufsize=1,
+                bufsize=1, encoding="utf-8", errors="replace",
             )
             try:
                 proc.stdin.write(json.dumps({
@@ -260,7 +260,7 @@ class CodexConfigParseLiveTests(unittest.TestCase):
                     env=env,
                     capture_output=True,
                     text=True,
-                    timeout=15,
+                    timeout=15, encoding="utf-8", errors="replace",
                 )
             except subprocess.TimeoutExpired:
                 self.fail("codex mcp list timed out")
@@ -312,7 +312,7 @@ class OpenCodeConfigParseLiveTests(unittest.TestCase):
                     cwd=str(wd),
                     capture_output=True,
                     text=True,
-                    timeout=20,
+                    timeout=20, encoding="utf-8", errors="replace",
                 )
             except subprocess.TimeoutExpired:
                 self.fail("opencode mcp list timed out")

@@ -16,7 +16,7 @@ from ..api import LearningDashboardAPI
 
 
 def _lines(trail: AuditTrail) -> list[dict]:
-    return [json.loads(l) for l in trail.chain_path.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in trail.chain_path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 class TestAuditTrail:
@@ -77,7 +77,7 @@ class TestAuditTrail:
         with pytest.raises(ValueError, match="dropped"):
             trail.write_event("weight_updated",
                               payload={"reason": "mail me at user@example.com"})
-        assert "user@example.com" not in trail.chain_path.read_text()
+        assert "user@example.com" not in trail.chain_path.read_text(encoding="utf-8")
 
     def test_query_events_filters_by_tenant(self):
         trail1 = AuditTrail(tenant_id="tenant_1")
@@ -90,11 +90,11 @@ class TestAuditTrail:
     def test_verify_detects_tampering(self):
         trail = AuditTrail(tenant_id="t-audit")
         trail.write_event("weight_updated", payload={"change_pct": 1.0})
-        lines = trail.chain_path.read_text().splitlines()
+        lines = trail.chain_path.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[-1])
         rec["details"]["change_pct"] = 99.0
         lines[-1] = json.dumps(rec)
-        trail.chain_path.write_text("\n".join(lines) + "\n")
+        trail.chain_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         with pytest.raises(ValueError, match="Audit chain broken"):
             AuditTrail(tenant_id="t-audit")
 
@@ -102,11 +102,11 @@ class TestAuditTrail:
         trail = AuditTrail(tenant_id="t-audit")
         trail.write_event("weight_updated", payload={"change_pct": 1.0})
         trail.write_event("weight_updated", payload={"change_pct": 2.0})
-        lines = trail.chain_path.read_text().splitlines()
+        lines = trail.chain_path.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[-1])
         rec["prev_hash"] = "fake_hash_123"
         lines[-1] = json.dumps(rec)
-        trail.chain_path.write_text("\n".join(lines) + "\n")
+        trail.chain_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         with pytest.raises(ValueError, match="Audit chain broken"):
             AuditTrail(tenant_id="t-audit")
 

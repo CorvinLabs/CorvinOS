@@ -147,7 +147,7 @@ class TestAuditLogging:
         )
         assert h
         recs = [json.loads(line) for line in
-                tenant_audit_chain("_default").read_text().splitlines() if line.strip()]
+                tenant_audit_chain("_default").read_text(encoding="utf-8").splitlines() if line.strip()]
         rec = [r for r in recs if r["event_type"] == APPROVAL_EVENT_TYPE][-1]
         assert rec["hash"] == h
         assert rec["details"]["item_id"] == "task_1"
@@ -190,7 +190,7 @@ class TestEUAIActCompliance:
             validation_results={k: v.passed for k, v in policy.validation_results.items()},
         )
         recs = [json.loads(line) for line in
-                tenant_audit_chain("_default").read_text().splitlines() if line.strip()]
+                tenant_audit_chain("_default").read_text(encoding="utf-8").splitlines() if line.strip()]
         d = [r for r in recs if r["event_type"] == APPROVAL_EVENT_TYPE][-1]["details"]
         assert d["actor_kind"] == "reviewer"
         assert d["validator_ids"] == "test_v"

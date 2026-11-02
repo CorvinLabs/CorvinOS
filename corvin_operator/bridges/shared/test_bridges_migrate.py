@@ -37,21 +37,21 @@ def _fake_repo(tmp: Path, channels=("discord", "email")) -> Path:
         # Inbox + outbox + processed with realistic content
         (ch_dir / "inbox").mkdir()
         (ch_dir / "inbox" / "msg-1.json").write_text(
-            json.dumps({"from": "x", "text": "hello"})
+            json.dumps({"from": "x", "text": "hello"}), encoding="utf-8"
         )
         (ch_dir / "outbox").mkdir()
         (ch_dir / "outbox" / "reply-1.json").write_text(
-            json.dumps({"chat_id": 1, "text": "reply"})
+            json.dumps({"chat_id": 1, "text": "reply"}), encoding="utf-8"
         )
         (ch_dir / "processed").mkdir()
         # Attachments
         (ch_dir / "attachments").mkdir()
         (ch_dir / "attachments" / "chat-export.txt").write_text(
-            "PRIVATE: should-never-leak"
+            "PRIVATE: should-never-leak", encoding="utf-8"
         )
         # settings.json + voice.log files
-        (ch_dir / "settings.json").write_text('{"token": "secret"}')
-        (ch_dir / "voice.log").write_text("[boot] daemon up\n")
+        (ch_dir / "settings.json").write_text('{"token": "secret"}', encoding="utf-8")
+        (ch_dir / "voice.log").write_text("[boot] daemon up\n", encoding="utf-8")
     return repo
 
 
@@ -121,10 +121,10 @@ def case_full_migration_same_fs() -> None:
         # Targets exist + sources gone (rename method)
         d_inbox = home / "bridges" / "discord" / "inbox" / "msg-1.json"
         assert d_inbox.exists()
-        assert json.loads(d_inbox.read_text())["text"] == "hello"
+        assert json.loads(d_inbox.read_text(encoding="utf-8"))["text"] == "hello"
         e_attach = home / "bridges" / "email" / "attachments" / "chat-export.txt"
         assert e_attach.exists()
-        assert "PRIVATE" in e_attach.read_text()
+        assert "PRIVATE" in e_attach.read_text(encoding="utf-8")
         # settings.json now lives at the channel root
         assert (home / "bridges" / "discord" / "settings.json").exists()
         # voice.log under log/
@@ -150,7 +150,7 @@ def case_idempotent_second_run() -> None:
         # touch it, because the marker file short-circuits.
         ch_inbox = repo / "corvin_operator" / "bridges" / "discord" / "inbox"
         ch_inbox.mkdir(parents=True, exist_ok=True)
-        (ch_inbox / "msg-2.json").write_text(json.dumps({"text": "leftover"}))
+        (ch_inbox / "msg-2.json").write_text(json.dumps({"text": "leftover"}), encoding="utf-8")
         second = bridges_migrate.migrate_bridges_state_if_needed(
             repo_root=repo, corvin_home=home,
         )
@@ -172,7 +172,7 @@ def case_force_runs_again() -> None:
         # Set up additional source
         ch_inbox = repo / "corvin_operator" / "bridges" / "discord" / "inbox"
         ch_inbox.mkdir(parents=True, exist_ok=True)
-        (ch_inbox / "msg-2.json").write_text(json.dumps({"text": "second"}))
+        (ch_inbox / "msg-2.json").write_text(json.dumps({"text": "second"}), encoding="utf-8")
         forced = bridges_migrate.migrate_bridges_state_if_needed(
             repo_root=repo, corvin_home=home, force=True,
         )
@@ -192,7 +192,7 @@ def case_audit_event_emitted() -> None:
             repo_root=repo, corvin_home=home, audit_path=audit,
         )
         assert audit.exists(), "audit file must be created"
-        lines = audit.read_text().strip().splitlines()
+        lines = audit.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) >= 2, lines  # intent + complete
         events = [json.loads(L) for L in lines]
         for ev in events:
@@ -231,7 +231,7 @@ def case_legacy_shared_queues() -> None:
         for kind in ("inbox", "outbox", "processed"):
             (shared_legacy / kind).mkdir(parents=True)
             (shared_legacy / kind / "msg.json").write_text(
-                json.dumps({"kind": kind})
+                json.dumps({"kind": kind}), encoding="utf-8"
             )
         home = tmp / "corvin"
         _clean_env()
@@ -242,7 +242,7 @@ def case_legacy_shared_queues() -> None:
         for kind in ("inbox", "outbox", "processed"):
             moved = home / "bridges" / "shared" / kind / "msg.json"
             assert moved.exists(), moved
-            assert json.loads(moved.read_text())["kind"] == kind
+            assert json.loads(moved.read_text(encoding="utf-8"))["kind"] == kind
 
 
 def case_partial_migration_some_channels_absent() -> None:

@@ -71,7 +71,7 @@ needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="the jail
 def test_a_code_node_cannot_read_a_host_file_outside_its_jail(tmp_path, shim):
     secret = tmp_path / "host_secret.txt"
     token = "CANARY-" + secrets.token_hex(6)
-    secret.write_text(token)
+    secret.write_text(token, encoding="utf-8")
     with live_sandbox(tmp_path / "sb") as (client, home, tid):
         rid, events = run_code(client, tid, f"def main():\n    return {{'r': open({str(secret)!r}).read()}}\n")
         assert token not in json.dumps(events), "a host file leaked through the code node"
@@ -281,7 +281,7 @@ def test_a_node_that_outlives_the_engine_timeout_fails_and_leaves_no_process_beh
         assert events[-1]["type"] == "run_completed" and events[-1]["ok"] is False
         errs = [d for d in _chain_events(tid, "engine.span.end")[before:] if d["status"] == "error"]
         assert len(errs) == 1
-        left = subprocess.run(["pgrep", "-f", str(shim.bindir / "claude")], capture_output=True, text=True)
+        left = subprocess.run(["pgrep", "-f", str(shim.bindir / "claude")], capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert left.stdout.strip() == "", "a shim process outlived its node"
         assert_chain_intact(tid)
 
@@ -296,7 +296,7 @@ def test_a_canary_in_the_task_never_reaches_the_audit_chain_the_profile_or_the_s
         rid, events = run_with_rid(client, "wf")
         assert events[-1]["ok"] is True
         assert any(canary in r["prompt"] for r in shim.nodes()), "control: the canary did reach the engine"
-        hits = [p for p in home.rglob("*") if p.is_file() and canary in p.read_text(errors="ignore")]
+        hits = [p for p in home.rglob("*") if p.is_file() and canary in p.read_text(errors="ignore", encoding="utf-8")]
         bad = [p for p in hits if "audit" in p.name or "profile" in str(p) or "span" in p.name]
         assert bad == [], f"the canary reached an audit-grade file: {bad}"
         # the places the text is EXPECTED to live are the run record and the workflow's own YAML

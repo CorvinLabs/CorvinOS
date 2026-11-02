@@ -41,7 +41,11 @@ class PermissionStore:
         self.path = self.root / self.FILENAME
         self.lock_path = self.root / ".approvals.lock"
         if not self.path.exists():
-            self._atomic_write(self.path, "{}\n")
+            # Under the lock: a store is built per run_tool call, and an unlocked
+            # replace racing a locked reader fails on Windows (WinError 5 / EACCES).
+            with self._locked():
+                if not self.path.exists():
+                    self._atomic_write(self.path, "{}\n")
 
     @contextlib.contextmanager
     def _locked(self) -> Iterator[None]:
@@ -57,7 +61,7 @@ class PermissionStore:
     def _atomic_write(path: Path, text: str) -> None:
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -71,7 +75,7 @@ class PermissionStore:
 
     def _load(self) -> dict[str, dict]:
         try:
-            return json.loads(self.path.read_text() or "{}")
+            return json.loads(self.path.read_text(encoding="utf-8") or "{}")
         except json.JSONDecodeError:
             return {}
 

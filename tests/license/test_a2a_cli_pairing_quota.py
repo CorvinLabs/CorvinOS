@@ -33,7 +33,7 @@ def a2a(tmp_path, monkeypatch):
 def test_free_tier_first_peer_is_allowed_second_is_refused(a2a, tmp_path):
     assert a2a._check_local_a2a_peer_quota() is None
     (tmp_path / "origins").mkdir()
-    (tmp_path / "origins" / "peer1.json").write_text("{}")
+    (tmp_path / "origins" / "peer1.json").write_text("{}", encoding="utf-8")
     err = a2a._check_local_a2a_peer_quota()
     assert err and "limit reached: 1/1" in err
 

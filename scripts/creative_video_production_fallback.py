@@ -75,7 +75,7 @@ def generate_title_card():
   </text>
 </svg>"""
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix=".svg", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix=".svg", delete=False, encoding="utf-8") as f:
         f.write(svg)
         return f.name
 
@@ -126,7 +126,7 @@ def generate_system_card():
   </g>
 </svg>"""
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix=".svg", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix=".svg", delete=False, encoding="utf-8") as f:
         f.write(svg)
         return f.name
 
@@ -179,7 +179,7 @@ def generate_skills_card():
   </text>
 </svg>"""
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix=".svg", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix=".svg", delete=False, encoding="utf-8") as f:
         f.write(svg)
         return f.name
 
@@ -228,7 +228,7 @@ def generate_outro_card():
   </text>
 </svg>"""
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix=".svg", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix=".svg", delete=False, encoding="utf-8") as f:
         f.write(svg)
         return f.name
 
@@ -364,7 +364,7 @@ def main():
         print("-" * 60)
 
         concat_file = os.path.join(temp_dir, "concat.txt")
-        with open(concat_file, 'w') as f:
+        with open(concat_file, 'w', encoding="utf-8") as f:
             for seg in segments:
                 f.write(f"file '{seg}'\n")
 

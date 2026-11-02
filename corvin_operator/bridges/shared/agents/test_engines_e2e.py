@@ -485,7 +485,7 @@ class FakeClaudeStreamTests(unittest.TestCase):
                     break
             error = next((e.error for e in events if e.type == "error"), None)
             self.assertIsNone(error)
-            with open(dump) as fh:
+            with open(dump, encoding="utf-8") as fh:
                 lines = [ln for ln in fh.read().splitlines() if ln.strip()]
             self.assertEqual(len(lines), 1)
             import json as _json

@@ -249,7 +249,8 @@ class TestBuildContextBlockCCWorker(unittest.TestCase):
 
     def test_cc_worker_writes_memory_files(self):
         chat_key = "cc-test-chat"
-        session_dir = _SESSIONS_DIR / f"discord:{chat_key}" / ".claude" / "memory"
+        # OS-safe session root (``discord_cc-test-chat`` on Windows, where ':' is illegal)
+        session_dir = mb._session_root("_default", "discord", chat_key) / ".claude" / "memory"
 
         with patch.object(mb, "_run_haiku", _null_haiku):
             result = mb.build_context_block(
@@ -267,7 +268,7 @@ class TestBuildContextBlockCCWorker(unittest.TestCase):
 
     def test_non_cc_worker_does_not_write_files(self):
         chat_key = "opencode-test-chat"
-        session_dir = _SESSIONS_DIR / f"discord:{chat_key}" / ".claude" / "memory"
+        session_dir = mb._session_root("_default", "discord", chat_key) / ".claude" / "memory"
 
         with patch.object(mb, "_run_haiku", _null_haiku):
             mb.build_context_block(
@@ -315,6 +316,7 @@ class TestWindowsSafeSessionDir(unittest.TestCase):
         written = list((_SESSIONS_DIR / "discord_winchat1" / ".claude" / "memory").glob("corvin_*.md"))
         self.assertGreater(len(written), 0, "worker memory files land in the sanitised dir")
 
+    @unittest.skipIf(os.name == "nt", "a ':' directory cannot be created on Windows")
     def test_posix_layout_unchanged(self):
         with patch.object(mb, "_is_windows", return_value=False), \
              patch.object(mb, "_run_haiku", _null_haiku):
@@ -403,8 +405,11 @@ class TestHarvestWritesEntries(unittest.TestCase):
                     chat_key="harvest-write-test",
                     tenant_id="_default",
                 )
+                # Wait while the stub is still patched in: the harvest runs in a
+                # thread, and leaving the ``with`` first races it onto the real
+                # Haiku call (seen reliably on Windows thread scheduling).
+                done.wait(timeout=5.0)
 
-        done.wait(timeout=5.0)
         harvest_dir = _GLOBAL_DIR / "memory" / "worker_harvest"
         files = list(harvest_dir.glob("harvest_*.md"))
         self.assertGreater(len(files), 0, "project-scope entry should be written to worker_harvest/")
@@ -428,7 +433,7 @@ class TestHarvestWritesEntries(unittest.TestCase):
         self.assertTrue(result)
         mem_files = list((session_dir / ".claude" / "memory").glob("harvest_*.md"))
         self.assertEqual(len(mem_files), 1)
-        content = mem_files[0].read_text()
+        content = mem_files[0].read_text(encoding="utf-8")
         self.assertIn("User prefers verbose output", content)
 
 
@@ -562,7 +567,7 @@ class TestE2ERoundTrip(unittest.TestCase):
         harvest_files = list(harvest_dir.glob("harvest_*.md"))
         self.assertGreater(len(harvest_files), 0, "Turn 1 should write at least one harvest file")
 
-        written_content = harvest_files[0].read_text()
+        written_content = harvest_files[0].read_text(encoding="utf-8")
         self.assertIn("retry", written_content.lower(), "harvest file should mention retry")
 
         # ── Turn 2: build_context_block reads harvested memory ────────────────

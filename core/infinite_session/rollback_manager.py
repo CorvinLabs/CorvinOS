@@ -182,7 +182,7 @@ class RollbackManager:
         request that never answers.
         """
         limit = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
-        with open(self.log_dir / ".lock", "a+") as fh:
+        with open(self.log_dir / ".lock", "a+", encoding="utf-8") as fh:
             deadline = time.monotonic() + limit
             while True:
                 try:

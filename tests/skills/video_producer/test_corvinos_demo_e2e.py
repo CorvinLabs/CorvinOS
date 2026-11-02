@@ -49,7 +49,7 @@ def test_corvinos_demo_renders_with_real_voice_and_3d_content(tmp_path):
 
     import json
 
-    config = json.loads(DURATION_CONFIG.read_text())
+    config = json.loads(DURATION_CONFIG.read_text(encoding="utf-8"))
     expected_duration_s = config["duration_s"]
     expected_frame_end = config["frame_end"]
 
@@ -65,7 +65,7 @@ def test_corvinos_demo_renders_with_real_voice_and_3d_content(tmp_path):
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
-        timeout=410,
+        timeout=410, encoding="utf-8", errors="replace",
     )
 
     assert proc.returncode == 0, f"CLI failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"

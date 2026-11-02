@@ -13,7 +13,7 @@ from core.compliance.audit_chain_writer import AuditChainWriter
 
 @pytest.fixture
 def temp_audit_path():
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8") as f:
         path = f.name
     yield path
     Path(path).unlink(missing_ok=True)
@@ -48,7 +48,7 @@ class TestFreeUserAccess:
 
     def test_free_rejection_writes_audit(self, enforcer, temp_audit_path):
         enforcer.check_model_access("free_user", "claude-opus-4")
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             events = [json.loads(line) for line in f.readlines()]
         denied = [e for e in events if e["event_type"] == "tier_denied"]
         assert len(denied) > 0
@@ -66,7 +66,7 @@ class TestMemberAccess:
     def test_member_access_writes_audit(self, enforcer, temp_audit_path):
         enforcer.set_user_tier("member_user", UserTier.MEMBER)
         enforcer.check_model_access("member_user", "claude-opus-4")
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             events = [json.loads(line) for line in f.readlines()]
         checked = [e for e in events if e["event_type"] == "tier_checked"]
         assert len(checked) > 0
@@ -85,7 +85,7 @@ class TestTierEnforcement:
 
     def test_set_tier_writes_audit(self, enforcer, temp_audit_path):
         enforcer.set_user_tier("user1", UserTier.MEMBER)
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             events = [json.loads(line) for line in f.readlines()]
         enforced = [e for e in events if e["event_type"] == "tier_enforced"]
         assert len(enforced) > 0
@@ -128,7 +128,7 @@ class TestTierExpiry:
         enforcer._user_tiers["user1"] = UserTier.MEMBER
 
         enforcer.check_and_downgrade_on_expiry("user1")
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             events = [json.loads(line) for line in f.readlines()]
         downgraded = [e for e in events if e["event_type"] == "tier_downgrade"]
         assert len(downgraded) > 0
@@ -172,14 +172,14 @@ class TestAuditTrail:
 
     def test_all_tier_checks_audited(self, enforcer, temp_audit_path):
         enforcer.check_model_access("user1", "claude-opus-4")
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             lines = f.readlines()
         assert len(lines) > 0
 
     def test_audit_chain_integrity(self, enforcer, temp_audit_path):
         enforcer.set_user_tier("user1", UserTier.MEMBER)
         enforcer.check_model_access("user1", "claude-opus-4")
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             lines = f.readlines()
         if len(lines) > 1:
             prev = json.loads(lines[0])
@@ -198,7 +198,7 @@ class TestAuditTrail:
             TierEnforcer(tid, AuditChainWriter(tmp_path / f"{tid}.jsonl")).set_user_tier(
                 user, UserTier.MEMBER)
         for tid in ("tenant_1", "tenant_2"):
-            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text().splitlines()]
+            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text(encoding="utf-8").splitlines()]
             assert recs and {r["details"]["tenant_id"] for r in recs} == {tid}
 
 

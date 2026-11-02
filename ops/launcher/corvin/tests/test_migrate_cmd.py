@@ -188,7 +188,7 @@ class TestDataReporting(_SandboxBase):
         self.assertTrue(json_report.exists(), "JSON report should be written")
 
         # Verify JSON is valid and has expected structure
-        report = json.loads(json_report.read_text())
+        report = json.loads(json_report.read_text(encoding="utf-8"))
         self.assertIn("total_tenants", report)
         self.assertIn("total_files", report)
         self.assertIn("tenants", report)

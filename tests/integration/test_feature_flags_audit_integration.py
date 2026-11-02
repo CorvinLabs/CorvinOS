@@ -24,7 +24,7 @@ def _events(home: Path, tenant: str) -> list[dict]:
     p = _chain(home, tenant)
     if not p.exists():
         return []
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 class TestAuditIntegration:

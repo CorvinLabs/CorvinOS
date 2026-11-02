@@ -112,7 +112,7 @@ def follow_up(home: Path, channel: str, text: str) -> None:
 
 def chain_records(home: Path) -> list[dict]:
     path = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_full_canary_lifecycle_over_http(tmp_path):
@@ -301,7 +301,7 @@ sys.exit(1 if errors else 0)
 """
     for _ in range(5):
         proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
-                              env={**os.environ, "CORVIN_HOME": str(tmp_path / "h")})
+                              env={**os.environ, "CORVIN_HOME": str(tmp_path / "h")}, encoding="utf-8", errors="replace")
         assert proc.returncode == 0, proc.stdout + proc.stderr
 
 

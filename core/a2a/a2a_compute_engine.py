@@ -127,7 +127,7 @@ class DeterministicComputeEngine:
 
         # Write summary.json
         (out_dir / "summary.json").write_text(
-            json.dumps(summary, sort_keys=True, indent=2),
+            json.dumps(summary, sort_keys=True, indent=2), encoding="utf-8",
         )
 
         # Render histogram of the first numeric column (if any)

@@ -223,7 +223,7 @@ class ForgeSkillValidator:
             hash_dir = tenant_home(tenant_id) / "global" / "skill_registry_hashes"
             hash_file = hash_dir / f"{skill_id}_{version}.sha256"
             if hash_file.exists():
-                return hash_file.read_text().strip()
+                return hash_file.read_text(encoding="utf-8").strip()
         except Exception as e:
             logger.warning(f"Failed to load hash for {skill_id}:{version}: {e}")
         return None

@@ -37,7 +37,7 @@ def check_http_packages() -> DiagnosisResult:
             [sys.executable, "-m", "pip", "list", "--format=json"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=10, encoding="utf-8", errors="replace",
         )
         import json
         packages = {pkg["name"]: pkg["version"] for pkg in json.loads(result.stdout)}
@@ -78,7 +78,7 @@ def check_corvin_task() -> DiagnosisResult:
             ["powershell", "-Command", "Get-ScheduledTask -TaskName CorvinOS-Console -ErrorAction SilentlyContinue"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=5, encoding="utf-8", errors="replace",
         )
         if "CorvinOS-Console" in result.stdout:
             return DiagnosisResult("CorvinOS autostart", True, "Scheduled Task registered")

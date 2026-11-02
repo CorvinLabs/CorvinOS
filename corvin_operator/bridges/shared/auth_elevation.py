@@ -149,7 +149,7 @@ def _load_store() -> dict[str, dict]:
     if not p.exists():
         return {}
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
@@ -163,7 +163,7 @@ def _save_store(data: dict[str, dict]) -> None:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2) + "\n")
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, p)
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)

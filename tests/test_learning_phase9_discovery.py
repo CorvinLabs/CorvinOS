@@ -207,7 +207,7 @@ class TestFailureClusterer:
         assert log_path.exists()
 
         # Read and verify log entry
-        with open(log_path, "r") as f:
+        with open(log_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) > 0
@@ -309,7 +309,7 @@ class TestPatternDiscoverySafety:
         discovery = clusterer._register_pattern_for_cluster(cluster)
 
         log_path = clusterer.base_dir / "discoveries.jsonl"
-        with open(log_path, "r") as f:
+        with open(log_path, "r", encoding="utf-8") as f:
             content = f.read()
 
         # Check that no PII keywords appear
@@ -458,7 +458,7 @@ class TestPatternDiscoveryE2E:
         log_path = clusterer.base_dir / "discoveries.jsonl"
 
         if log_path.exists():
-            with open(log_path, "r") as f:
+            with open(log_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             # Each line should be valid JSON

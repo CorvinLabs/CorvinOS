@@ -160,7 +160,7 @@ class ComplianceScanner:
             return
 
         # Check if registry is non-empty
-        content = signatories.read_text()
+        content = signatories.read_text(encoding="utf-8")
         has_signatories = len(content.strip()) > 100  # Simple heuristic
 
         self.checks.append(
@@ -180,7 +180,7 @@ class ComplianceScanner:
 
         content = ""
         if exists:
-            content = license_file.read_text()
+            content = license_file.read_text(encoding="utf-8")
             is_apache = "Apache License" in content or "apache.org" in content.lower()
         else:
             is_apache = False
@@ -226,7 +226,7 @@ class ComplianceScanner:
                 continue
 
             try:
-                content = py_file.read_text()
+                content = py_file.read_text(encoding="utf-8")
                 if re.search(pattern, content, re.IGNORECASE):
                     return True
             except (IOError, UnicodeDecodeError):

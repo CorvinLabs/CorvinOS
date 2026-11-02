@@ -141,7 +141,7 @@ class TestTaskQueueDurability:
         log_path = tmp_tenant_dir / "tasks__default.jsonl"
         assert log_path.exists()
 
-        lines = log_path.read_text().strip().split("\n")
+        lines = log_path.read_text(encoding="utf-8").strip().split("\n")
         assert len(lines) >= 2  # At least 2 enqueue events
 
         # Verify each line is valid JSON

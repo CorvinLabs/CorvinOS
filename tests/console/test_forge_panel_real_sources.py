@@ -32,13 +32,13 @@ def _make_skill(sb, name: str, *, grades=(), scope: str = "project") -> Path:
 
     d = Path(corvin_home()) / "tenants" / sb.tenant_id / "skill-forge" / "skills" / name
     d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(f"# {name}\n")
+    (d / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
     (d / "meta.json").write_text(json.dumps({
         "name": name, "type": "domain", "description": f"desc of {name}",
         "scope": scope, "created_at": 1.0, "sha256": "deadbeef",
         "grades": [{"run_id": f"r{i}", "score": s, "ts": 1.0, "notes": ""}
                    for i, s in enumerate(grades)],
-    }))
+    }), encoding="utf-8")
     return d
 
 

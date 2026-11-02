@@ -67,7 +67,7 @@ print(f"RESULT={{result!r}}")
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=30, encoding="utf-8", errors="replace",
         )
         assert proc.returncode == 0, f"stderr: {proc.stderr}"
         assert "RESULT=None" in proc.stdout, (
@@ -107,7 +107,7 @@ print(f"RESULT={{result!r}}")
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=30, encoding="utf-8", errors="replace",
         )
         assert proc.returncode == 0, f"stderr: {proc.stderr}"
         assert "RESULT=None" in proc.stdout, (

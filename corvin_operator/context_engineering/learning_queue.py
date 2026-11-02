@@ -118,14 +118,14 @@ class LearningQueue:
                     temp_file.unlink()
 
                 # Write to temp
-                with open(temp_file, "w") as f:
+                with open(temp_file, "w", encoding="utf-8") as f:
                     json.dump(asdict(record), f)
                     f.flush()
                     # Force to disk (C1 fix: ensure durable before rename)
                     os.fsync(f.fileno())
 
                 # Atomic append: append to queue file
-                with open(queue_file, "a") as f:
+                with open(queue_file, "a", encoding="utf-8") as f:
                     json.dump(asdict(record), f)
                     f.write("\n")
                     f.flush()
@@ -184,7 +184,7 @@ class LearningQueue:
             if end_date and file_date > end_date:
                 continue
 
-            with open(queue_file, "r") as f:
+            with open(queue_file, "r", encoding="utf-8") as f:
                 for line_no, line in enumerate(f, 1):
                     line = line.strip()
                     if not line:
@@ -256,7 +256,7 @@ class LearningQueue:
             "parse_errors": 0,
         }
 
-        with open(filepath, "r") as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -314,7 +314,7 @@ class QueueMetadata:
     def load(self) -> Dict:
         """Load metadata from disk."""
         if self.metadata_file.exists():
-            with open(self.metadata_file, "r") as f:
+            with open(self.metadata_file, "r", encoding="utf-8") as f:
                 return json.load(f)
 
         return {
@@ -329,5 +329,5 @@ class QueueMetadata:
     def save(self, metadata: Dict) -> None:
         """Save metadata to disk."""
         metadata["last_updated"] = datetime.utcnow().isoformat() + "Z"
-        with open(self.metadata_file, "w") as f:
+        with open(self.metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)

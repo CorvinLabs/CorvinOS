@@ -14,7 +14,7 @@ class TestPhase15PreChecks(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.content = self.script_path.read_text()
+        self.content = self.script_path.read_text(encoding="utf-8")
 
     def test_phase_1_5_function_exists(self):
         """Verify Phase 1.5 pre-checks function exists."""
@@ -44,7 +44,7 @@ class TestPhase2Rotation(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.content = self.script_path.read_text()
+        self.content = self.script_path.read_text(encoding="utf-8")
 
     def test_phase_2_function_exists(self):
         """Verify Phase 2 rotation function exists."""
@@ -91,7 +91,7 @@ class TestPhase15Gating(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.content = self.script_path.read_text()
+        self.content = self.script_path.read_text(encoding="utf-8")
 
     def test_main_calls_phase_1_5(self):
         """Verify main() calls Phase 1.5 pre-checks."""
@@ -117,7 +117,7 @@ class TestArgParsing(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.content = self.script_path.read_text()
+        self.content = self.script_path.read_text(encoding="utf-8")
 
     def test_has_argument_parser(self):
         """Verify script uses argparse."""
@@ -138,7 +138,7 @@ class TestFileHandling(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.content = self.script_path.read_text()
+        self.content = self.script_path.read_text(encoding="utf-8")
 
     def test_load_env_file_function(self):
         """Verify load_env_file() function exists."""
@@ -163,7 +163,7 @@ class TestColorOutput(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.content = self.script_path.read_text()
+        self.content = self.script_path.read_text(encoding="utf-8")
 
     def test_has_green_function(self):
         """Verify green color output function."""
@@ -192,7 +192,7 @@ class TestScriptStructure(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.content = self.script_path.read_text()
+        self.content = self.script_path.read_text(encoding="utf-8")
 
     def test_script_has_shebang(self):
         """Verify script has Python shebang."""
@@ -221,7 +221,7 @@ class TestErrorHandling(unittest.TestCase):
     def setUp(self):
         """Load script content."""
         self.script_path = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-        self.content = self.script_path.read_text()
+        self.content = self.script_path.read_text(encoding="utf-8")
 
     def test_handles_load_env_exceptions(self):
         """Verify load_env_file handles exceptions."""

@@ -650,7 +650,7 @@ class TestCanaryDeploymentScript:
             env=env,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=5, encoding="utf-8", errors="replace",
         )
 
         assert result.returncode == 0, f"Script failed: {result.stderr}"
@@ -671,7 +671,7 @@ class TestCanaryDeploymentScript:
             env=env,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=5, encoding="utf-8", errors="replace",
         )
 
         state_file = temp_canary_dir / "canary-deployment" / "state.json"

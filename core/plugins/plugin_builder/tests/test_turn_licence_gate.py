@@ -84,7 +84,7 @@ print(reply)
            "VOICE_AUDIT_PATH": str(tmp_path / "audit.jsonl")}
     out = subprocess.run(
         [sys.executable, "-c", probe, str(_REPO), str(_REPO / "core" / "plugins")],
-        env=env, capture_output=True, text=True, timeout=120,
+        env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
     )
     lines = out.stdout.strip().splitlines()
     assert lines, out.stderr[-2000:]

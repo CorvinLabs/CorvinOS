@@ -53,11 +53,11 @@ def _build_chain(audit: Path) -> None:
 
 def _corrupt(audit: Path, line_index: int) -> None:
     """Tamper with the `details` field of one record so the chain breaks."""
-    lines = audit.read_text().splitlines()
+    lines = audit.read_text(encoding="utf-8").splitlines()
     rec = json.loads(lines[line_index])
     rec["details"] = {"tampered": True}
     lines[line_index] = json.dumps(rec)
-    audit.write_text("\n".join(lines) + "\n")
+    audit.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _run_verify(audit: Path, relay: Path | None, outbox: Path) -> tuple[int, str, str]:
@@ -65,7 +65,7 @@ def _run_verify(audit: Path, relay: Path | None, outbox: Path) -> tuple[int, str
            "verify", "--notify-bridge", "--outbox-dir", str(outbox)]
     if relay is not None:
         cmd += ["--relay-config", str(relay)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace")
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -82,7 +82,7 @@ def case_chain_break_with_relay():
             "channel": "telegram",
             "to":      "12345",
             "prefix":  "🚨 audit",
-        }))
+        }), encoding="utf-8")
         _build_chain(audit)
         _corrupt(audit, line_index=1)
         rc, stdout, stderr = _run_verify(audit, relay, outbox)
@@ -92,7 +92,7 @@ def case_chain_break_with_relay():
         t("exactly one envelope written to outbox",
           len(envelopes) == 1, detail=f"got {len(envelopes)}")
         if envelopes:
-            env = json.loads(envelopes[0].read_text())
+            env = json.loads(envelopes[0].read_text(encoding="utf-8"))
             t("envelope channel = telegram",
               env.get("channel") == "telegram",
               detail=f"got {env.get('channel')!r}")
@@ -124,7 +124,7 @@ def case_clean_chain_no_envelope():
             "enabled": True,
             "channel": "telegram",
             "to":      "12345",
-        }))
+        }), encoding="utf-8")
         _build_chain(audit)
         rc, stdout, _ = _run_verify(audit, relay, outbox)
         t("verify exit code = 0 (chain ok)", rc == 0,
@@ -166,7 +166,7 @@ def case_chain_break_relay_disabled():
             "enabled": False,
             "channel": "telegram",
             "to":      "12345",
-        }))
+        }), encoding="utf-8")
         _build_chain(audit)
         _corrupt(audit, line_index=0)
         rc, _, _ = _run_verify(audit, relay, outbox)
@@ -184,18 +184,18 @@ def case_systemd_units_exist():
     t("audit-verify.service exists", svc.exists(), detail=str(svc))
     t("audit-verify.timer exists", timer.exists(), detail=str(timer))
     if svc.exists():
-        body = svc.read_text()
+        body = svc.read_text(encoding="utf-8")
         # ADR-0640: the daily unit verifies EVERY chain (`verify --all`) and
         # notifies the bridge on failure.
         t("service ExecStart references voice_audit.py verify --all --notify-bridge",
           "voice_audit.py verify --all --notify-bridge" in body,
           detail=body[:200])
     if timer.exists():
-        body = timer.read_text()
+        body = timer.read_text(encoding="utf-8")
         t("timer fires daily 04:30",
           "OnCalendar=*-*-* 04:30:00" in body,
           detail=body[:200])
-    bsh = (REPO / "corvin_operator" / "bridges" / "bridge.sh").read_text()
+    bsh = (REPO / "corvin_operator" / "bridges" / "bridge.sh").read_text(encoding="utf-8")
     t("bridge.sh registers the audit-verify timer in ALL_UNITS",
       "UNIT_CORVIN_AUDIT_VERIFY_TIMER" in bsh)
     t("bridge.sh enables the timer in cmd_up()",

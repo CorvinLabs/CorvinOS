@@ -73,7 +73,7 @@ class AttachmentCleanupTests(unittest.TestCase):
 
     def test_envelope_alone_moves_to_processed(self) -> None:
         env = self.inbox / "msg_001.json"
-        env.write_text(json.dumps({"from": "x", "text": "hi"}))
+        env.write_text(json.dumps({"from": "x", "text": "hi"}), encoding="utf-8")
         self.adapter._move_inbox_with_attachments(env, {"from": "x", "text": "hi"})
         self.assertFalse(env.exists(), "envelope should be gone from inbox")
         self.assertTrue((self.processed / "msg_001.json").exists(),
@@ -84,7 +84,7 @@ class AttachmentCleanupTests(unittest.TestCase):
         ogg.write_bytes(b"OggS\x00\x00fake-opus-bytes")
         env = self.inbox / "msg_002.json"
         msg = {"from": "x", "audio_path": str(ogg)}
-        env.write_text(json.dumps(msg))
+        env.write_text(json.dumps(msg), encoding="utf-8")
         self.adapter._move_inbox_with_attachments(env, msg)
         self.assertFalse(env.exists(), "envelope still in inbox")
         self.assertFalse(ogg.exists(), "attachment still in inbox — orphan bug regression")
@@ -99,7 +99,7 @@ class AttachmentCleanupTests(unittest.TestCase):
         pdf.write_bytes(b"%PDF-1.4 fake")
         env = self.inbox / "msg_003.json"
         msg = {"from": "x", "image_path": str(jpg), "document_path": str(pdf)}
-        env.write_text(json.dumps(msg))
+        env.write_text(json.dumps(msg), encoding="utf-8")
         self.adapter._move_inbox_with_attachments(env, msg)
         self.assertFalse(jpg.exists())
         self.assertFalse(pdf.exists())
@@ -111,7 +111,7 @@ class AttachmentCleanupTests(unittest.TestCase):
         mp4.write_bytes(b"\x00\x00\x00\x18ftypisom-fake")
         env = self.inbox / "msg_004.json"
         msg = {"from": "x", "video_path": str(mp4)}
-        env.write_text(json.dumps(msg))
+        env.write_text(json.dumps(msg), encoding="utf-8")
         self.adapter._move_inbox_with_attachments(env, msg)
         self.assertFalse(mp4.exists())
         self.assertTrue((self.processed / "clip.mp4").exists())
@@ -123,7 +123,7 @@ class AttachmentCleanupTests(unittest.TestCase):
         ogg.write_bytes(b"NEWOggS-new-content")
         env = self.inbox / "msg_005.json"
         msg = {"audio_path": str(ogg)}
-        env.write_text(json.dumps(msg))
+        env.write_text(json.dumps(msg), encoding="utf-8")
         self.adapter._move_inbox_with_attachments(env, msg)
         # Source is gone — the structural cleanup happened.
         self.assertFalse(ogg.exists())
@@ -137,14 +137,14 @@ class AttachmentCleanupTests(unittest.TestCase):
         # already-deleted, daemon restart between download and envelope-
         # write). MUST NOT raise.
         msg = {"audio_path": str(self.inbox / "ghost.ogg")}
-        env.write_text(json.dumps(msg))
+        env.write_text(json.dumps(msg), encoding="utf-8")
         # Should not raise:
         self.adapter._move_inbox_with_attachments(env, msg)
         self.assertTrue((self.processed / "msg_006.json").exists())
 
     def test_non_dict_msg_is_a_silent_no_op(self) -> None:
         env = self.inbox / "msg_007.json"
-        env.write_text("malformed-not-json")
+        env.write_text("malformed-not-json", encoding="utf-8")
         # Pass None as msg (early-return path from process_one).
         # MUST move the envelope, MUST NOT raise, MUST NOT try
         # attachment cleanup.
@@ -155,7 +155,7 @@ class AttachmentCleanupTests(unittest.TestCase):
     def test_no_attachment_keys_is_normal_envelope_move(self) -> None:
         env = self.inbox / "msg_008.json"
         msg = {"from": "x", "text": "plain text message"}
-        env.write_text(json.dumps(msg))
+        env.write_text(json.dumps(msg), encoding="utf-8")
         self.adapter._move_inbox_with_attachments(env, msg)
         self.assertFalse(env.exists())
         self.assertTrue((self.processed / "msg_008.json").exists())

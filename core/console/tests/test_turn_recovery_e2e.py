@@ -69,7 +69,7 @@ class TurnRecoveryE2E(unittest.TestCase):
     # -- helpers ------------------------------------------------------------
     def _tasks(self) -> list[dict]:
         d = Path(self.sess.workdir) / "tasks"
-        return sorted((json.loads(p.read_text()) for p in d.glob("*.json") if p.name != "recovery_attempts.json"),
+        return sorted((json.loads(p.read_text(encoding="utf-8")) for p in d.glob("*.json") if p.name != "recovery_attempts.json"),
                       key=lambda m: m["created_at"])
 
     async def _interrupted_turn(self, prompt: str, sess=None) -> None:
@@ -84,12 +84,12 @@ class TurnRecoveryE2E(unittest.TestCase):
                 pass
         t = asyncio.create_task(drain())
         for _ in range(200):
-            if pidfile.exists() and pidfile.read_text().strip():
+            if pidfile.exists() and pidfile.read_text(encoding="utf-8").strip():
                 break
             await asyncio.sleep(0.05)
         else:
             raise AssertionError("fake CLI never started")
-        os.kill(int(pidfile.read_text().strip()), signal.SIGTERM)
+        os.kill(int(pidfile.read_text(encoding="utf-8").strip()), signal.SIGTERM)
         await asyncio.wait_for(t, 30)
 
     # -- tests --------------------------------------------------------------
@@ -136,7 +136,7 @@ class TurnRecoveryE2E(unittest.TestCase):
             # instead of silently ending a helper thread.
             while True:
                 try:
-                    txt = pidfile.read_text().strip()
+                    txt = pidfile.read_text(encoding="utf-8").strip()
                 except OSError:
                     txt = ""
                 if txt.isdigit() and txt not in seen and _is_fake_cli(int(txt)):
@@ -248,7 +248,7 @@ class TurnRecoveryE2E(unittest.TestCase):
         tasks = Path(self.sess.workdir) / "tasks"
         tasks.mkdir(exist_ok=True)
         (tasks / "t1.events.jsonl").write_text("\n".join(
-            json.dumps({"event": "tool_use", "tool_name": n}) for n in names) + "\n")
+            json.dumps({"event": "tool_use", "tool_name": n}) for n in names) + "\n", encoding="utf-8")
         self.assertEqual(self.tr.outbound_tools(tasks, "t1"), ())
 
     def test_camel_case_and_shell_outbound_tools_are_outbound(self):
@@ -266,7 +266,7 @@ class TurnRecoveryE2E(unittest.TestCase):
         ]
         tasks = Path(self.sess.workdir) / "tasks"
         tasks.mkdir(exist_ok=True)
-        (tasks / "t2.events.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        (tasks / "t2.events.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         found = self.tr.outbound_tools(tasks, "t2")
         self.assertEqual(found, ("Bash (outbound command)", "SendMessage", "mcp__slack__chat_postMessage",
                                  "mcp__x__sendEmail"))
@@ -287,12 +287,12 @@ class TurnRecoveryE2E(unittest.TestCase):
             t = asyncio.create_task(drain())
             self.cr.register_live_turn(self.sess.tenant_id, self.sess.sid, loop, t)
             for _ in range(200):
-                if pidfile.exists() and pidfile.read_text().strip():
+                if pidfile.exists() and pidfile.read_text(encoding="utf-8").strip():
                     break
                 await asyncio.sleep(0.05)
             else:
                 raise AssertionError("fake CLI never started")
-            pid = int(pidfile.read_text().strip())
+            pid = int(pidfile.read_text(encoding="utf-8").strip())
             self.assertTrue(self.cr.cancel_live_turn(self.sess.tenant_id, self.sess.sid))
             with self.assertRaises(asyncio.CancelledError):
                 await asyncio.wait_for(t, 30)
@@ -323,7 +323,7 @@ class TurnRecoveryE2E(unittest.TestCase):
             tid = tm.create_task(self.sess.chat_key, "please finish the report", tenant_id="_default")
             tm.record_event(tid, {"event": "task.started", "engine": "claude", "pid": 2 ** 22 + 12345})
             self.assertEqual(TaskManager(tasks_dir).reap_stale_running(), [tid])
-            meta = json.loads((tasks_dir / f"{tid}.json").read_text())
+            meta = json.loads((tasks_dir / f"{tid}.json").read_text(encoding="utf-8"))
             self.assertEqual((meta["status"], meta["exit_code"]), ("interrupted", -1))
             self.assertEqual([c.task_id for c in self.tr.find_interrupted("_default")], [tid])
             os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=4.0))
@@ -439,7 +439,7 @@ class TurnRecoveryE2E(unittest.TestCase):
 
     def _tasks_of(self, sess) -> list[dict]:
         d = Path(sess.workdir) / "tasks"
-        return sorted((json.loads(p.read_text()) for p in d.glob("*.json") if p.name != "recovery_attempts.json"),
+        return sorted((json.loads(p.read_text(encoding="utf-8")) for p in d.glob("*.json") if p.name != "recovery_attempts.json"),
                       key=lambda m: m["created_at"])
 
 

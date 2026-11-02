@@ -79,10 +79,10 @@ class Env:
 
     def spawned_env(self) -> dict:
         assert self.dump.exists(), "the claude subprocess was never started"
-        return dict(l.split("=", 1) for l in self.dump.read_text().splitlines() if "=" in l)
+        return dict(l.split("=", 1) for l in self.dump.read_text(encoding="utf-8").splitlines() if "=" in l)
 
     def args(self) -> list[str]:
-        return self.argdump.read_text().splitlines()
+        return self.argdump.read_text(encoding="utf-8").splitlines()
 
 
 @pytest.fixture()
@@ -131,7 +131,7 @@ def test_a_confidential_turn_spawns_on_the_declared_provider_with_the_declared_m
     spawned = env.spawned_env()
     assert spawned.get("ANTHROPIC_BASE_URL") == f"https://{HOST}/v1"
     assert spawned.get("ANTHROPIC_API_KEY") == "k-acme-test"
-    blob = env.dump.read_text()
+    blob = env.dump.read_text(encoding="utf-8")
     assert "stale.example" not in blob and "k-anthropic-original" not in blob
     args = env.args()
     assert "--model" in args and args[args.index("--model") + 1] == "vendor/Model-1"

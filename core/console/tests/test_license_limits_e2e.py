@@ -507,18 +507,18 @@ class TestCreateWorkflowMaxEnforcement(unittest.TestCase):
             base = Path(tmpdir)
             import json as _json
             # Valid workflow — must be counted
-            (base / "wf_valid.meta.json").write_text(_json.dumps({"id": "wf_valid"}))
+            (base / "wf_valid.meta.json").write_text(_json.dumps({"id": "wf_valid"}), encoding="utf-8")
             # Corrupt JSON — must NOT be counted
-            (base / "wf_corrupt.meta.json").write_text("<<<not json>>>")
+            (base / "wf_corrupt.meta.json").write_text("<<<not json>>>", encoding="utf-8")
             # Empty file — must NOT be counted
-            (base / "wf_empty.meta.json").write_text("")
+            (base / "wf_empty.meta.json").write_text("", encoding="utf-8")
             # Empty JSON object — must NOT be counted (falsy, same as list_workflows filter)
-            (base / "wf_empty_obj.meta.json").write_text("{}")
+            (base / "wf_empty_obj.meta.json").write_text("{}", encoding="utf-8")
 
             def _read_json_local(path: Path):
                 try:
                     import json as j
-                    return j.loads(path.read_text())
+                    return j.loads(path.read_text(encoding="utf-8"))
                 except Exception:
                     return None
 
@@ -541,12 +541,12 @@ class TestCreateWorkflowMaxEnforcement(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             # Create two workflow meta files
-            (base / "wf_alpha.meta.json").write_text('{"wid":"wf_alpha"}')
-            (base / "wf_beta.meta.json").write_text('{"wid":"wf_beta"}')
+            (base / "wf_alpha.meta.json").write_text('{"wid":"wf_alpha"}', encoding="utf-8")
+            (base / "wf_beta.meta.json").write_text('{"wid":"wf_beta"}', encoding="utf-8")
             # Also a run meta (in subdirectory) — must NOT be counted
             run_dir = base / "wf_alpha" / "runs"
             run_dir.mkdir(parents=True, exist_ok=True)
-            (run_dir / "rid1.meta.json").write_text('{"rid":"rid1","status":"running"}')
+            (run_dir / "rid1.meta.json").write_text('{"rid":"rid1","status":"running"}', encoding="utf-8")
 
             count = sum(1 for _ in base.glob("*.meta.json"))
             self.assertEqual(count, 2,
@@ -556,9 +556,9 @@ class TestCreateWorkflowMaxEnforcement(unittest.TestCase):
         """YAML and JSONL files must not be counted."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
-            (base / "wf_alpha.awp.yaml").write_text("awp: 1.0.0")
-            (base / "wf_alpha.chat.jsonl").write_text("")
-            (base / "wf_alpha.meta.json").write_text('{"wid":"wf_alpha"}')
+            (base / "wf_alpha.awp.yaml").write_text("awp: 1.0.0", encoding="utf-8")
+            (base / "wf_alpha.chat.jsonl").write_text("", encoding="utf-8")
+            (base / "wf_alpha.meta.json").write_text('{"wid":"wf_alpha"}', encoding="utf-8")
 
             count = sum(1 for _ in base.glob("*.meta.json"))
             self.assertEqual(count, 1,

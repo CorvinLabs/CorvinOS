@@ -112,7 +112,7 @@ class TaskTrackingRouteTest(unittest.TestCase):
                        and e["details"].get("new_status") == "complete")
             self.assertEqual((upd["details"]["old_status"], upd["details"]["fields"]), ("open", "status"))
             self.assertEqual(upd["details"]["tenant_id"], "_default")
-            chain_text = (home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").read_text()
+            chain_text = (home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertNotIn(_SECRET_TITLE, chain_text)
             self.assertNotIn("claude", chain_text.split("task_item.", 1)[1])  # assignee never in the chain
 
@@ -200,7 +200,7 @@ class TaskTrackingRouteTest(unittest.TestCase):
         with _sandbox(self._tmp) as (client, csrf, home, _):
             g = home / "tenants" / "_default" / "global"
             (g / "initiatives.json").write_text(json.dumps({"version": 1, "initiatives": [
-                {"id": "loop-x", "label": "X", "title": "X", "tasks": [{"id": "t", "title": "T"}]}]}))
+                {"id": "loop-x", "label": "X", "title": "X", "tasks": [{"id": "t", "title": "T"}]}]}), encoding="utf-8")
             r = self._post(client, csrf, "/import")
             self.assertEqual(r.status_code, 410, r.text)
             self.assertIn("knowledge base", r.json()["detail"])

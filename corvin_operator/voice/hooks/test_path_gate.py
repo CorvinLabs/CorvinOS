@@ -907,7 +907,7 @@ def main() -> int:
         env={**os.environ,
              "CORVIN_HOME": audit_home,
              "CORVIN_CALLER_PERSONA": "coder",
-             "CORVIN_CHANNEL_ID": "test-chat-42"},
+             "CORVIN_CHANNEL_ID": "test-chat-42"}, encoding="utf-8", errors="replace",
     )
     t("subprocess returns exit-2 on deny",
       proc.returncode == 2,
@@ -920,7 +920,7 @@ def main() -> int:
         # every deny (Layer 11), so we filter to the path_gate.denied
         # record specifically rather than reading the last line.
         all_events = []
-        for line in audit_jsonl.read_text().splitlines():
+        for line in audit_jsonl.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 try:
                     all_events.append(json.loads(line))
@@ -961,7 +961,7 @@ def main() -> int:
         [sys.executable, str(HOOK_DIR / "path_gate.py")],
         input=json.dumps(allow_payload),
         capture_output=True, text=True,
-        env={**os.environ, "CORVIN_HOME": audit_home2},
+        env={**os.environ, "CORVIN_HOME": audit_home2}, encoding="utf-8", errors="replace",
     )
     t("subprocess returns exit-0 on allow",
       proc2.returncode == 0,
@@ -991,7 +991,7 @@ def main() -> int:
         [sys.executable, str(HOOK_DIR / "path_gate.py")],
         input=json.dumps(crash_payload),
         capture_output=True, text=True,
-        env={**os.environ, "CORVIN_HOME": crash_home},
+        env={**os.environ, "CORVIN_HOME": crash_home}, encoding="utf-8", errors="replace",
     )
     t("NUL-byte file_path → exit 2 (fail-closed deny, never an uncaught "
       "exception exit code)",
@@ -1004,7 +1004,7 @@ def main() -> int:
       detail=f"stderr[:200]={proc3.stderr[:200]!r}")
     crash_events = []
     if crash_audit_jsonl.exists():
-        for _ln in crash_audit_jsonl.read_text().splitlines():
+        for _ln in crash_audit_jsonl.read_text(encoding="utf-8").splitlines():
             try:
                 crash_events.append(json.loads(_ln))
             except json.JSONDecodeError:
@@ -1034,7 +1034,7 @@ def main() -> int:
         audit_jsonl_self = _tenant_chain(self_home)
         t("self_test: clean install does NOT write self_test_failed event",
           not audit_jsonl_self.exists()
-          or "path_gate.self_test_failed" not in audit_jsonl_self.read_text())
+          or "path_gate.self_test_failed" not in audit_jsonl_self.read_text(encoding="utf-8"))
 
         # Failure injection — monkey-patch _self_test_vectors to include a
         # vector that targets a NON-protected path so check() will allow it.
@@ -1058,7 +1058,7 @@ def main() -> int:
             # CRITICAL audit event must land in the chain.
             if audit_jsonl_self.exists():
                 events = []
-                for line in audit_jsonl_self.read_text().splitlines():
+                for line in audit_jsonl_self.read_text(encoding="utf-8").splitlines():
                     if line.strip():
                         try:
                             events.append(json.loads(line))

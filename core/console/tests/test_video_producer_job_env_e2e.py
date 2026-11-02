@@ -144,7 +144,7 @@ class BundledFfmpegE2E(unittest.TestCase):
 
         exe = home / "wheel" / "ffmpeg-linux64-v7.0"
         exe.parent.mkdir(parents=True)
-        exe.write_text("#!/bin/sh\nexit 0\n")
+        exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
         fake = types.ModuleType("imageio_ffmpeg")
         fake.get_ffmpeg_exe = lambda: str(exe)

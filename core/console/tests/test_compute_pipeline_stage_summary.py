@@ -40,7 +40,7 @@ def test_finished_stage_card_has_iterations_and_loss(tmp_path, monkeypatch):
     asyncio.run(coord.run())
 
     stage_dir = tmp_path / "tenants" / "_default" / "compute" / "pipelines" / "pipeline_t" / "stages" / "s1"
-    written = json.loads((stage_dir / "stage_summary.json").read_text())
+    written = json.loads((stage_dir / "stage_summary.json").read_text(encoding="utf-8"))
     assert written["state"] == "complete" and written["total_iterations"] == 3 and written["run_id"]
 
     card = compute._read_stage_summary(stage_dir)

@@ -241,7 +241,7 @@ class TestRealCliEndToEnd:
             [sys.executable, str(_SCRIPT),
              "core/plugins/plugin_builder/generators/adr.py",
              "--decisions-dir", str(decisions_dir), "--format", "json"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)
@@ -255,7 +255,7 @@ class TestRealCliEndToEnd:
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--adr", "0100",
              "--decisions-dir", str(decisions_dir), "--format", "json"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)
@@ -267,7 +267,7 @@ class TestRealCliEndToEnd:
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "some/unrelated/file.py",
              "--decisions-dir", str(decisions_dir)],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
 
@@ -278,7 +278,7 @@ class TestRealCliEndToEnd:
             pytest.skip("sibling Corvin-Knowledge checkout not present")
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--adr", "0264"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         assert "ADR-0264" in result.stdout
@@ -289,7 +289,7 @@ class TestRealCliEndToEnd:
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--doc", "docs/claude-ref/adr-gate.md",
              "--decisions-dir", str(decisions_dir), "--format", "json"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)
@@ -305,7 +305,7 @@ class TestRealCliEndToEnd:
             pytest.skip("sibling Corvin-Knowledge checkout not present")
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--doc", "docs/claude-ref/adr-gate.md"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
         )
         assert result.returncode == 0, result.stderr
         assert "ADR-0264" in result.stdout

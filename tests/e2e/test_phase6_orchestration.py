@@ -340,14 +340,14 @@ class TestCheckpointPersistence:
         checkpoint_file = orchestrator_with_checkpoints._checkpoint_dir / f"{checkpoint_id}.json"
 
         # Write checkpoint
-        with open(checkpoint_file, 'w') as f:
+        with open(checkpoint_file, 'w', encoding="utf-8") as f:
             json.dump(checkpoint_data, f)
 
         # Verify file exists
         assert checkpoint_file.exists()
 
         # Load and verify
-        with open(checkpoint_file, 'r') as f:
+        with open(checkpoint_file, 'r', encoding="utf-8") as f:
             loaded_data = json.load(f)
 
         assert loaded_data["checkpoint_id"] == checkpoint_id

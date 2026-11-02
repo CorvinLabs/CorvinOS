@@ -138,7 +138,7 @@ class Registry:
         directory = path.parent
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(directory))
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -152,7 +152,7 @@ class Registry:
 
     def _load(self) -> dict[str, dict]:
         try:
-            text = self.manifest_path.read_text() or "{}"
+            text = self.manifest_path.read_text(encoding="utf-8") or "{}"
             return json.loads(text)
         except json.JSONDecodeError as e:
             raise RuntimeError(
@@ -340,7 +340,7 @@ class Registry:
 
             impl_src = Path(spec.impl_path)
             impl_dst = skill_dir / impl_src.name
-            self._atomic_write_text(impl_dst, impl_src.read_text())
+            self._atomic_write_text(impl_dst, impl_src.read_text(encoding="utf-8"))
 
             skill_md = skill_dir / "SKILL.md"
             self._atomic_write_text(
@@ -357,7 +357,7 @@ class Registry:
     def note(self, text: str) -> None:
         memory = self.root / self.MEMORY_NAME
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
-        with self._locked(), memory.open("a") as fh:
+        with self._locked(), memory.open("a", encoding="utf-8") as fh:
             fh.write(f"\n## {ts}\n\n{text.rstrip()}\n")
             fh.flush()
             os.fsync(fh.fileno())
@@ -367,7 +367,7 @@ class Registry:
         events: list[dict] = []
         audit = self.root / self.AUDIT_NAME
         if audit.exists():
-            for line in audit.read_text().splitlines():
+            for line in audit.read_text(encoding="utf-8").splitlines():
                 try:
                     events.append(json.loads(line))
                 except json.JSONDecodeError:

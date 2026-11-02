@@ -13,7 +13,7 @@ from core.compliance.audit_chain_writer import AuditChainWriter
 
 @pytest.fixture
 def temp_audit_path():
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8") as f:
         path = f.name
     yield path
     Path(path).unlink(missing_ok=True)
@@ -74,7 +74,7 @@ class TestGracePeriod:
 
         crl.check_credential_valid("cred1")
 
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             events = [json.loads(line) for line in f.readlines()]
 
         alerts = [e for e in events if e["event_type"] == "grace_period_alert"]
@@ -133,7 +133,7 @@ class TestAuditIntegration:
 
         crl.check_credential_valid("cred1")
 
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             events = [json.loads(line) for line in f.readlines()]
 
         verified = [e for e in events if e["event_type"] == "credential_verified"]
@@ -145,7 +145,7 @@ class TestAuditIntegration:
 
         crl.check_credential_valid("cred1")
 
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             events = [json.loads(line) for line in f.readlines()]
 
         expired = [e for e in events if e["event_type"] == "credential_expired"]
@@ -164,7 +164,7 @@ class TestAuditIntegration:
         crl.register_credential("cred1", expires)
         crl.check_credential_valid("cred1")
 
-        with open(temp_audit_path, 'r') as f:
+        with open(temp_audit_path, 'r', encoding="utf-8") as f:
             lines = f.readlines()
 
         if len(lines) > 1:
@@ -182,7 +182,7 @@ class TestAuditIntegration:
             crl.register_credential(cred, expires)
             crl.check_credential_valid(cred)
         for tid in ("tenant_1", "tenant_2"):
-            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text().splitlines()]
+            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text(encoding="utf-8").splitlines()]
             assert recs and {r["details"]["tenant_id"] for r in recs} == {tid}
 
 

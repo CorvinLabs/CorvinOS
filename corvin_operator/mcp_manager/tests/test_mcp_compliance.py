@@ -142,7 +142,7 @@ class TestSecretVault:
 
     def test_check_secrets_present(self, monkeypatch, tmp_path):
         vault = tmp_path / "secrets.json"
-        vault.write_text(json.dumps({"BRAVE_API_KEY": "secret-val"}))
+        vault.write_text(json.dumps({"BRAVE_API_KEY": "secret-val"}), encoding="utf-8")
         monkeypatch.setenv("CORVIN_SECRET_VAULT", str(vault))
         entry = {"id": "t", "secrets": [{"name": "BRAVE_API_KEY", "required": True}]}
         ok, _ = compliance.check_secrets(entry)
@@ -150,7 +150,7 @@ class TestSecretVault:
 
     def test_check_secrets_missing_required(self, monkeypatch, tmp_path):
         vault = tmp_path / "secrets.json"
-        vault.write_text(json.dumps({}))
+        vault.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setenv("CORVIN_SECRET_VAULT", str(vault))
         entry = {"id": "t", "secrets": [{"name": "BRAVE_API_KEY", "required": True}]}
         ok, reason = compliance.check_secrets(entry)
@@ -160,7 +160,7 @@ class TestSecretVault:
 
     def test_optional_secret_not_blocking(self, monkeypatch, tmp_path):
         vault = tmp_path / "secrets.json"
-        vault.write_text(json.dumps({}))
+        vault.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setenv("CORVIN_SECRET_VAULT", str(vault))
         entry = {"id": "t", "secrets": [{"name": "OPT_KEY", "required": False}]}
         ok, _ = compliance.check_secrets(entry)
@@ -168,7 +168,7 @@ class TestSecretVault:
 
     def test_spawn_blocked_on_missing_secret(self, tmp_corvin, monkeypatch, tmp_path):
         vault = tmp_path / "secrets.json"
-        vault.write_text(json.dumps({}))
+        vault.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setenv("CORVIN_SECRET_VAULT", str(vault))
         tool_id = "secret-tool"
         _add_tool(TID, tool_id,
@@ -179,7 +179,7 @@ class TestSecretVault:
 
     def test_spawn_succeeds_with_secret_in_vault(self, tmp_corvin, monkeypatch, tmp_path):
         vault = tmp_path / "secrets.json"
-        vault.write_text(json.dumps({"REQUIRED_KEY": "val"}))
+        vault.write_text(json.dumps({"REQUIRED_KEY": "val"}), encoding="utf-8")
         monkeypatch.setenv("CORVIN_SECRET_VAULT", str(vault))
         tool_id = "secret-tool-ok"
         _add_tool(TID, tool_id,
@@ -434,7 +434,7 @@ class TestFilterCompliantServers:
     def test_multiple_tools_mixed_compliance(self, monkeypatch, tmp_path, tmp_corvin):
         monkeypatch.setattr(compliance, "_load_tenant_matrix", lambda tid: _STRICT_MATRIX)
         vault = tmp_path / "secrets.json"
-        vault.write_text(json.dumps({}))
+        vault.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setenv("CORVIN_SECRET_VAULT", str(vault))
         servers = {
             "good": {"command": "npx", "args": []},

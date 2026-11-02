@@ -60,10 +60,10 @@ def test_merge_tenant_dirs_end_to_end(tmp_path: Path):
 
     report = ts.merge_tenant_dirs(local_dir, remote_dir)
 
-    merged_grades = json.loads((local_dir / "learning" / "ce_stage_grades.json").read_text())
+    merged_grades = json.loads((local_dir / "learning" / "ce_stage_grades.json").read_text(encoding="utf-8"))
     assert merged_grades["memory"]["n_grades"] == 2  # two distinct grades unioned
     assert "graph" in merged_grades  # stage only on remote is now present
-    assert (local_dir / "learning" / "events.jsonl").read_text().count("\n") == 2  # union
+    assert (local_dir / "learning" / "events.jsonl").read_text(encoding="utf-8").count("\n") == 2  # union
     assert (local_dir / "skills" / "new.md").exists()  # new remote file copied
     assert report.as_dict()["ok"] is True
 
@@ -84,7 +84,7 @@ def test_gpg_and_bundle_roundtrip(tmp_path: Path):
     # bundle/unbundle a dir
     src = tmp_path / "src"; _write(src / "a/b.txt", "hello")
     ts.unbundle(ts.bundle_dir(src), tmp_path / "out")
-    assert (tmp_path / "out" / "a" / "b.txt").read_text() == "hello"
+    assert (tmp_path / "out" / "a" / "b.txt").read_text(encoding="utf-8") == "hello"
 
 
 @pytest.mark.skipif(gpg_missing, reason="gpg not available")
@@ -98,7 +98,7 @@ def test_two_instance_git_sync(tmp_path: Path):
     # seed an initial commit so clone --depth 1 has a HEAD
     seed = tmp_path / "seed"
     subprocess.run(["git", "clone", str(bare), str(seed)], check=True, capture_output=True)
-    (seed / "README").write_text("corvin tenant remote")
+    (seed / "README").write_text("corvin tenant remote", encoding="utf-8")
     for a in (["add", "."], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"],
               ["push", "origin", "HEAD"]):
         subprocess.run(["git", *a], cwd=str(seed), check=True, capture_output=True)
@@ -122,9 +122,9 @@ def test_two_instance_git_sync(tmp_path: Path):
     _write(b_dir / "events.jsonl", '{"b":2}\n')
     ts.run_git_sync(b_dir, remote, tmp_path / "B_cache", pw)
 
-    merged = json.loads((b_dir / "ce_stage_grades.json").read_text())
+    merged = json.loads((b_dir / "ce_stage_grades.json").read_text(encoding="utf-8"))
     assert "memory" in merged and "graph" in merged  # A's + B's stages both present
-    events = (b_dir / "events.jsonl").read_text()
+    events = (b_dir / "events.jsonl").read_text(encoding="utf-8")
     assert '{"a":1}' in events and '{"b":2}' in events  # event union
     assert (b_dir / "memory" / "note.md").exists()  # A's memory file arrived at B
 
@@ -166,7 +166,7 @@ def test_pat_never_in_argv_or_remote_url(tmp_path: Path, monkeypatch):
     assert clone_call["env"]["CORVIN_SYNC_GIT_PAT"] == "ghp_SECRET_TOKEN_123"
     helper = Path(clone_call["env"]["GIT_ASKPASS"])
     assert helper.is_file() and (helper.stat().st_mode & 0o777) == 0o700
-    assert "SECRET_TOKEN" not in helper.read_text()
+    assert "SECRET_TOKEN" not in helper.read_text(encoding="utf-8")
     # local-only git commands (config) never receive the PAT
     cfg_call = next(c for c in seen if c["argv"][1] == "config")
     assert "CORVIN_SYNC_GIT_PAT" not in cfg_call["env"]

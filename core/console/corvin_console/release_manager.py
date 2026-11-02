@@ -60,7 +60,7 @@ class ReleaseManager:
             return {}
 
         try:
-            with open(self.releases_file) as f:
+            with open(self.releases_file, encoding="utf-8") as f:
                 return json.load(f)
         except:
             return {}
@@ -69,7 +69,7 @@ class ReleaseManager:
         """Save releases index."""
         self._ensure_dirs()
 
-        with open(self.releases_file, 'w') as f:
+        with open(self.releases_file, 'w', encoding="utf-8") as f:
             json.dump(releases, f, indent=2)
 
     def create_release(
@@ -119,7 +119,7 @@ class ReleaseManager:
         try:
             # Save release metadata
             release_path = self.releases_dir / f'{skill_id}-{version}.json'
-            with open(release_path, 'w') as f:
+            with open(release_path, 'w', encoding="utf-8") as f:
                 json.dump(release.to_dict(), f, indent=2)
 
             # Update releases index
@@ -161,7 +161,7 @@ class ReleaseManager:
             return None
 
         try:
-            with open(release_path) as f:
+            with open(release_path, encoding="utf-8") as f:
                 data = json.load(f)
             return Release(**data)
         except:
@@ -328,7 +328,7 @@ def create_release_snapshot(
         if not meta_path.exists():
             return False, 'Skill metadata not found'
 
-        with open(meta_path) as f:
+        with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
 
         # Generate changelog entries

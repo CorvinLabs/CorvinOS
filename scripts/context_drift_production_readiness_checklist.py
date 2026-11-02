@@ -277,7 +277,7 @@ class ProductionReadinessChecklist:
             full_path = self.repo_root / file_path
             if not full_path.exists():
                 return False
-            content = full_path.read_text()
+            content = full_path.read_text(encoding="utf-8")
             # Module should start with triple quotes (docstring)
             if not content.startswith('"""'):
                 return False
@@ -323,7 +323,7 @@ class ProductionReadinessChecklist:
         goal_context = self.repo_root / "core" / "session_manager" / "goal_context.py"
         if not goal_context.exists():
             return False
-        content = goal_context.read_text()
+        content = goal_context.read_text(encoding="utf-8")
         return "goal_hash" in content and "audit" in content.lower()
 
     def _check_encryption(self) -> bool:

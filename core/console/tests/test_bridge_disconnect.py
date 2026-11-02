@@ -169,7 +169,7 @@ class DisconnectFlowTests(unittest.TestCase):
                 self.assertFalse(br._channel_connected("discord"))
                 for p in (home / "bridges" / "discord" / "settings.json",
                           legacy / "discord" / "settings.json"):
-                    data = json.loads(p.read_text())
+                    data = json.loads(p.read_text(encoding="utf-8"))
                     self.assertNotIn("discord_token", data, p)
                     self.assertEqual(data.get("pin"), "1111", "PIN must survive")
 
@@ -185,7 +185,7 @@ class DisconnectFlowTests(unittest.TestCase):
                     "lang": "de", "chat_profiles": {"a": 1},
                 })
                 self._clean("discord", "disconnect")
-                data = json.loads(p.read_text())
+                data = json.loads(p.read_text(encoding="utf-8"))
                 self.assertEqual(data["whitelist"], ["u1", "u2"])
                 self.assertEqual(data["rate_limit_per_hour"], 20)
                 self.assertEqual(data["lang"], "de")
@@ -224,7 +224,7 @@ class DisconnectFlowTests(unittest.TestCase):
                 br._write_atomic(p, settings)
 
                 self.assertTrue(br._channel_connected("discord"))
-                data = json.loads(p.read_text())
+                data = json.loads(p.read_text(encoding="utf-8"))
                 self.assertEqual(data["discord_token"], "new")
                 self.assertEqual(data["whitelist"], ["keep"])
 

@@ -423,7 +423,7 @@ class E2EIntegrationSuite:
 
         # Save results
         results_file = Path("e2e_test_results.json")
-        results_file.write_text(json.dumps(self.results, indent=2))
+        results_file.write_text(json.dumps(self.results, indent=2), encoding="utf-8")
         print(f"\nResults saved to: {results_file}")
 
         return passed == total

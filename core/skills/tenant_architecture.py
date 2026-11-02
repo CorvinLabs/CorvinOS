@@ -239,7 +239,7 @@ class TenantSkillVersionManager:
             return
 
         try:
-            with open(self._storage_path, "r") as f:
+            with open(self._storage_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
                 for version_data in data.get("versions", []):
@@ -288,7 +288,7 @@ class TenantSkillVersionManager:
             ],
         }
 
-        with open(self._storage_path, "w") as f:
+        with open(self._storage_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     def register_version(
@@ -564,7 +564,7 @@ class TenantSkillStateManager:
             return
 
         try:
-            with open(self._storage_path, "r") as f:
+            with open(self._storage_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -595,7 +595,7 @@ class TenantSkillStateManager:
         self._storage_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Append to JSONL (immutable append-only log)
-        with open(self._storage_path, "a") as f:
+        with open(self._storage_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(state.to_dict()) + "\n")
 
         self._state_chain.append(state)

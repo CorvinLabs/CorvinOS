@@ -310,7 +310,7 @@ def case_stale_socket_cleaned_up() -> None:
     home, plugin_root = _setup_sandbox()
     sock_path = _socket_path(home)
     sock_path.parent.mkdir(parents=True, exist_ok=True)
-    sock_path.write_text("not a real socket")  # stale leftover
+    sock_path.write_text("not a real socket", encoding="utf-8")  # stale leftover
     proc = _spawn_daemon(home, plugin_root)
     try:
         # Daemon must REPLACE the stale file with a real socket. Mere

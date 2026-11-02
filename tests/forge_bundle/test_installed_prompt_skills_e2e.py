@@ -109,11 +109,11 @@ def _install_by_hand(home, skill_id, version, body, *, verified=True):
     root = home / "skills_installed"
     pkg = root / skill_id / version / skill_id
     pkg.mkdir(parents=True)
-    (pkg / "SKILL.md").write_text(body)
+    (pkg / "SKILL.md").write_text(body, encoding="utf-8")
     reg = root / "skills_registry.json"
-    data = json.loads(reg.read_text()) if reg.exists() else {}
+    data = json.loads(reg.read_text(encoding="utf-8")) if reg.exists() else {}
     data[skill_id] = [{"version": version, "boot_layer": "installed", "dependencies": [], "verified": verified}]
-    reg.write_text(json.dumps(data))
+    reg.write_text(json.dumps(data), encoding="utf-8")
     return pkg
 
 
@@ -142,7 +142,7 @@ def test_a_symlinked_skill_md_is_never_read(tmp_corvin_home):
     pkg = _install_by_hand(tmp_corvin_home, "linked", "1.0", "x")
     (pkg / "SKILL.md").unlink()
     secret = tmp_corvin_home / "secret.txt"
-    secret.write_text("# secret\n")
+    secret.write_text("# secret\n", encoding="utf-8")
     (pkg / "SKILL.md").symlink_to(secret)
 
     from core.skills.installed_prompt_skills import activate_missing_installed_skills

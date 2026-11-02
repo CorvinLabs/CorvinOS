@@ -53,7 +53,7 @@ def chain(tmp_path, monkeypatch):
 
 
 def _records(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 # ── smuggled content is refused before any write ──────────────────────────
@@ -122,7 +122,7 @@ def test_full_nonce_is_truncated_to_prefix(chain):
     assert [r["details"]["nonce_prefix"] for r in recs] == ["deadbeef", "deadbeef"]
     assert recs[0]["details"]["epoch"] == 7
     assert recs[1]["details"]["collision_count"] == 3
-    assert _FULL_NONCE not in chain.read_text()
+    assert _FULL_NONCE not in chain.read_text(encoding="utf-8")
     assert se.verify_chain(chain) == (True, [])
 
 
@@ -164,7 +164,7 @@ def test_writer_floor_drops_denylisted_keys_even_without_an_emitter(chain):
                    details={"plugin_id": "p", "boot_layer": "bundled",
                             "error_class": "E", "prompt": f"hi {_EMAIL}",
                             "tenant_id": "_default"})
-    raw = chain.read_text()
+    raw = chain.read_text(encoding="utf-8")
     assert _EMAIL not in raw
     assert _records(chain)[0]["details"]["plugin_id"] == "p"
     assert se.verify_chain(chain) == (True, [])

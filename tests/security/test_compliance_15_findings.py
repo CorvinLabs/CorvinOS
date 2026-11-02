@@ -56,7 +56,7 @@ def _incidents_on_chain(tenant):
     path = fp.tenant_audit_chain(tenant)
     if not path.exists():
         return [], True
-    recs = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     ok, _ = se.verify_chain(path)
     return [r for r in recs if r["event_type"] == "deployment.incident_detected"], ok
 
@@ -182,11 +182,11 @@ class TestFinding5Compliance:
         notifier._write_incident_to_audit(_incident("test-2"))
         se, fp = audit_sink._forge()
         path = fp.tenant_audit_chain("_default")
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[0])
         rec["details"]["actual_value"] = 1.0
         lines[0] = json.dumps(rec)
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         _, ok = _incidents_on_chain("_default")
         assert ok is False
 

@@ -57,7 +57,7 @@ _STALE_SYSPATH = re.compile(r'sys\.path\.insert[^)]*"operator"')
 def _git(*args: str) -> str:
     try:
         out = subprocess.run(
-            ["git", *args], cwd=REPO, capture_output=True, text=True, timeout=120
+            ["git", *args], cwd=REPO, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace"
         )
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
         pytest.skip(f"git unavailable: {exc}")

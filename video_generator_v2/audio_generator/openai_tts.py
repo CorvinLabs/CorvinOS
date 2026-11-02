@@ -92,7 +92,7 @@ class OpenAITTSEngine:
             logger.debug(f"[{segment_name}] Executing: {' '.join(cmd[:5])}...")
 
             # Execute curl
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 error_msg = result.stderr or "Unknown error"
@@ -149,7 +149,7 @@ class OpenAITTSEngine:
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
             if result.returncode != 0:
                 logger.warning(f"FFmpeg warning: {result.stderr[:200]}")
 
@@ -199,7 +199,7 @@ class OpenAITTSEngine:
                 "-of", "json",
                 audio_file
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 data = json.loads(result.stdout)
@@ -223,7 +223,7 @@ class OpenAITTSEngine:
                 "-",
                 "-v", "error"
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
 
             stderr = result.stderr or result.stdout
             if "mean_volume" in stderr:
@@ -306,7 +306,7 @@ def generate_german_narration(
 
     # Concatenate all audio files
     concat_file = os.path.join(output_dir, "concat_list.txt")
-    with open(concat_file, 'w') as f:
+    with open(concat_file, 'w', encoding="utf-8") as f:
         for item in audio_files:
             f.write(f"file '{item['file']}'\n")
 
@@ -322,7 +322,7 @@ def generate_german_narration(
     ]
 
     logger.info(f"Concatenating {len(audio_files)} audio segments...")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
 
     if result.returncode != 0:
         raise RuntimeError(f"Audio concatenation failed: {result.stderr}")

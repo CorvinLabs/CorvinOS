@@ -103,7 +103,7 @@ class ComputeCompletionNotifyTests(unittest.TestCase):
 
             n = cn.deliver_ready(outbox)
             self.assertEqual(n, 1, f"expected 1 delivered, got {n}")
-            env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+            env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
             self.assertEqual(env["channel"], "discord")
             self.assertEqual(env["chat_id"], "555000111")  # string, snowflake-safe
             self.assertIn("Compute run", env["text"])

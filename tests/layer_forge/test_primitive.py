@@ -15,7 +15,7 @@ from core.orchestration.layer_forge.primitive import (
 def test_atomic_write_roundtrip_leaves_no_temp_files(tmp_path):
     target = tmp_path / "x.json"
     atomic_write_json(target, {"value": 42})
-    assert json.loads(target.read_text()) == {"value": 42}
+    assert json.loads(target.read_text(encoding="utf-8")) == {"value": 42}
     assert [p.name for p in tmp_path.iterdir()] == ["x.json"]
 
 
@@ -28,13 +28,13 @@ def test_read_modify_write_under_lock_loses_no_update(tmp_path):
 
     def bump(_):
         with prim.locked():
-            n = json.loads(counter.read_text())["n"]
+            n = json.loads(counter.read_text(encoding="utf-8"))["n"]
             atomic_write_json(counter, {"n": n + 1})
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
         list(ex.map(bump, range(40)))
 
-    assert json.loads(counter.read_text())["n"] == 40
+    assert json.loads(counter.read_text(encoding="utf-8"))["n"] == 40
 
 
 def test_lock_is_exclusive_while_held(tmp_path):

@@ -61,7 +61,7 @@ class OpenAITTSWorker:
         result = subprocess.run(
             ["espeak-ng", "--version"],
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8", errors="replace"
         )
         if result.returncode != 0:
             print("⚠️  espeak-ng not found. Install with: apt-get install espeak-ng")
@@ -237,7 +237,7 @@ class OpenAITTSWorker:
             text
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode != 0:
             print(f"  ✗ espeak-ng failed: {result.stderr}")
             return None
@@ -249,7 +249,7 @@ class OpenAITTSWorker:
             "-y", mp3_path
         ]
 
-        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode != 0:
             print(f"  ✗ ffmpeg WAV→MP3 failed: {result.stderr}")
             return None
@@ -270,7 +270,7 @@ class OpenAITTSWorker:
                 audio_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 duration = float(result.stdout.strip())
@@ -290,7 +290,7 @@ class OpenAITTSWorker:
                 "-y", f"{audio_file}.norm.mp3"
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 os.replace(f"{audio_file}.norm.mp3", audio_file)

@@ -71,7 +71,7 @@ class ReloadAuditDedupTests(unittest.TestCase):
     def _count(self, event_type: str) -> int:
         if not self.chain.exists():
             return 0
-        return sum(1 for line in self.chain.read_text().splitlines()
+        return sum(1 for line in self.chain.read_text(encoding="utf-8").splitlines()
                    if line.strip() and json.loads(line).get("event_type") == event_type)
 
     def test_unchanged_licence_is_seeded_once(self) -> None:

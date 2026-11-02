@@ -64,7 +64,7 @@ class _IndexManager:
             self._index_path = resolve_index_path()
 
         try:
-            with open(self._index_path) as f:
+            with open(self._index_path, encoding="utf-8") as f:
                 self._index = json.load(f)
             logger.info(f"✅ Loaded marketplace index from {self._index_path}")
             return self._index
@@ -302,7 +302,7 @@ def _get_tenant_spec(tenant_id: str) -> Dict[str, Any]:
         if not spec_file.is_file():
             return {}
         import yaml
-        with open(spec_file) as f:
+        with open(spec_file, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         return data.get("spec", {})
     except Exception:

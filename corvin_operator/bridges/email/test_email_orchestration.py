@@ -389,7 +389,7 @@ class TestProcessOrchestrationOutbox:
                 "metadata": {},
                 "chat_id": "user@example.com",
             }
-            outbox_file.write_text(json.dumps(payload))
+            outbox_file.write_text(json.dumps(payload), encoding="utf-8")
 
             smtp_config = {
                 "host": "smtp.example.com",
@@ -432,7 +432,7 @@ class TestProcessOrchestrationOutbox:
                 "metadata": {},
                 "chat_id": "123456789",
             }
-            outbox_file.write_text(json.dumps(payload))
+            outbox_file.write_text(json.dumps(payload), encoding="utf-8")
 
             results = process_orchestration_outbox(str(tmpdir), {})
 
@@ -446,7 +446,7 @@ class TestProcessOrchestrationOutbox:
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a malformed JSON file
             outbox_file = Path(tmpdir) / "orchestration_email_1234_bad.json"
-            outbox_file.write_text("{invalid json}")
+            outbox_file.write_text("{invalid json}", encoding="utf-8")
 
             results = process_orchestration_outbox(str(tmpdir), {})
 
@@ -474,7 +474,7 @@ class TestProcessOrchestrationOutbox:
                 "metadata": {},
                 # Missing chat_id and to fields
             }
-            outbox_file.write_text(json.dumps(payload))
+            outbox_file.write_text(json.dumps(payload), encoding="utf-8")
 
             results = process_orchestration_outbox(str(tmpdir), {})
 

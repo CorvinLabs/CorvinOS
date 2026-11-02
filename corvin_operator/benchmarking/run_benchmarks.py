@@ -31,7 +31,7 @@ async def main():
     import json
     analysis_file = output_dir / run_id / "analysis.json"
     if analysis_file.exists():
-        data = json.loads(analysis_file.read_text())
+        data = json.loads(analysis_file.read_text(encoding="utf-8"))
         agg = data.get("aggregate", {})
         print(f"\n📊 SUMMARY:")
         print(f"  Total Tokens (CC): {agg.get('total_tokens_cc', 0):,}")

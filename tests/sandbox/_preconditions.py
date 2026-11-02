@@ -24,7 +24,7 @@ def skip_reason() -> str | None:
     if not sys.platform.startswith("linux"):
         return f"sandbox suite is Linux-only (/proc, PR_SET_PDEATHSIG); platform={sys.platform}"
     try:
-        Path("/proc/net/tcp").read_text()
+        Path("/proc/net/tcp").read_text(encoding="utf-8")
     except OSError as exc:
         return f"sandbox suite needs /proc/net/tcp ({type(exc).__name__})"
     for mod in ("uvicorn", "fastapi", "httpx", "corvin_console", "corvin_gateway"):

@@ -36,7 +36,9 @@ const { icon: statusIcon } = require('./status_markers');
 const HERE = __dirname;
 const COWORK_BUNDLE_DIR = path.resolve(HERE, '../../../cowork/personas');
 const COWORK_USER_DIR = path.join(
-  process.env.COWORK_USER_DIR || path.join(process.env.HOME || '/tmp', '.config/claude-cowork'),
+  // os.homedir(), not '/tmp': Windows has no HOME, and '/tmp' resolved to
+  // C:\tmp\... instead of the %USERPROFILE%\.config dir uninstall.ps1 cleans.
+  process.env.COWORK_USER_DIR || path.join(process.env.HOME || require('os').homedir(), '.config/claude-cowork'),
   'personas',
 );
 

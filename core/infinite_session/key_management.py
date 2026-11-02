@@ -38,7 +38,7 @@ class KeyManagementConfig:
         keyfile = Path(corvin_home()) / "keys" / "snapshot.key"
         if keyfile.exists():
             try:
-                key = keyfile.read_text().strip()
+                key = keyfile.read_text(encoding="utf-8").strip()
                 if key and key != "default-key":
                     return key
             except Exception as e:

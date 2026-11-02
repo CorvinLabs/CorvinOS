@@ -175,7 +175,7 @@ def _find_license_token() -> str | None:
     key_file = corvin_home / "global" / "license.key"
     if key_file.exists():
         try:
-            t = key_file.read_text().strip()
+            t = key_file.read_text(encoding="utf-8").strip()
             if t:
                 return t
         except OSError:

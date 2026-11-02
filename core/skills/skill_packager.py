@@ -185,7 +185,7 @@ class SkillPackager:
         fd, tmp = tempfile.mkstemp(prefix=f".{name}.", dir=str(directory))
         try:
             os.fchmod(fd, 0o600) if hasattr(os, "fchmod") else None
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(text)
             os.replace(tmp, directory / name)
         except BaseException:
@@ -203,7 +203,7 @@ class SkillPackager:
         forge_metadata_file = skill_folder / ".forge" / "generation_context.json"
         if forge_metadata_file.exists():
             # Use existing generation context (from Phase 1-2)
-            return json.loads(forge_metadata_file.read_text())
+            return json.loads(forge_metadata_file.read_text(encoding="utf-8"))
 
         # Create new one (fallback)
         return {
@@ -227,7 +227,7 @@ class SkillPackager:
         if forge_audit_file.exists():
             # Use existing audit trail + add packaging event
             events = [
-                json.loads(line) for line in forge_audit_file.read_text().strip().split("\n") if line
+                json.loads(line) for line in forge_audit_file.read_text(encoding="utf-8").strip().split("\n") if line
             ]
         else:
             events = []

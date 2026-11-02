@@ -156,7 +156,7 @@ def _load_store(path: Path) -> dict:
     if not path.exists():
         return {"proposals": []}
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return {"proposals": []}
         if not isinstance(data.get("proposals"), list):
@@ -173,7 +173,7 @@ def _save_store(path: Path, data: dict) -> None:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, path)
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)

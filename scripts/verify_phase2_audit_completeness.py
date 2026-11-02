@@ -71,7 +71,7 @@ PHASE2_EVENTS = {
 def load_event_severity():
     """Extract EVENT_SEVERITY events from security_events.py."""
     try:
-        with open(SECURITY_EVENTS_FILE) as f:
+        with open(SECURITY_EVENTS_FILE, encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         print(f"ERROR: {SECURITY_EVENTS_FILE} not found")
@@ -89,7 +89,7 @@ def load_event_severity():
 def load_event_allowlist():
     """Extract _EVENT_ALLOWLIST events + fields from security_events.py."""
     try:
-        with open(SECURITY_EVENTS_FILE) as f:
+        with open(SECURITY_EVENTS_FILE, encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         print(f"ERROR: {SECURITY_EVENTS_FILE} not found")

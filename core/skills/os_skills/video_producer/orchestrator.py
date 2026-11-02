@@ -169,12 +169,12 @@ class VideoProducerOrchestrator:
 
     def _save_analysis(self, analysis: AssetAnalysisResult) -> None:
         """Save analysis to JSON file."""
-        with open(self.analysis_path, "w") as f:
+        with open(self.analysis_path, "w", encoding="utf-8") as f:
             json.dump(analysis.to_dict(), f, indent=2)
 
     def _save_storyboard(self, storyboard: Storyboard) -> None:
         """Save storyboard to JSON file."""
-        with open(self.storyboard_path, "w") as f:
+        with open(self.storyboard_path, "w", encoding="utf-8") as f:
             json.dump(storyboard.to_dict(), f, indent=2)
 
     def _check_analysis_gates(self, analysis: AssetAnalysisResult) -> None:
@@ -342,7 +342,7 @@ class VideoProducerOrchestrator:
             timings_file = self.project_dir / "timings.json"
             timings = {}
             if timings_file.exists():
-                with open(timings_file) as f:
+                with open(timings_file, encoding="utf-8") as f:
                     timings = json.load(f)
 
             # Assemble video
@@ -358,7 +358,7 @@ class VideoProducerOrchestrator:
             # Save video metadata to disk
             if result.get("status") == "success":
                 video_metadata_path = self.project_dir / "video_metadata.json"
-                with open(video_metadata_path, "w") as f:
+                with open(video_metadata_path, "w", encoding="utf-8") as f:
                     json.dump(result, f, indent=2)
 
             return result

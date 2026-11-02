@@ -75,10 +75,10 @@ class UnitSweepTest(unittest.TestCase):
             ppid=me, cgroup_path="/user.slice/user-1000.slice/user@1000.service/app.slice/x.service"))
         try:
             manager = next(p for p in (1, os.getppid())
-                           if Path(f"/proc/{p}/comm").read_text().strip() == "systemd")
+                           if Path(f"/proc/{p}/comm").read_text(encoding="utf-8").strip() == "systemd")
         except (StopIteration, OSError):
             manager = 1
-        if Path(f"/proc/{manager}/comm").read_text().strip() != "systemd":
+        if Path(f"/proc/{manager}/comm").read_text(encoding="utf-8").strip() != "systemd":
             self.skipTest("no systemd parent available to probe")
         self.assertTrue(unit_sweep.running_as_service_main(
             ppid=manager, cgroup_path="/user.slice/user-1000.slice/user@1000.service/app.slice/x.service"))

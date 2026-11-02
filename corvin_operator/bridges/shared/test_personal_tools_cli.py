@@ -23,7 +23,7 @@ def _run(args: list[str], home: Path, *,
          expect_ok: bool = True) -> dict:
     cmd = [sys.executable, str(_PERSONAL), "--corvin-home", str(home)] + args
     r = subprocess.run(cmd, input=stdin, capture_output=True,
-                       text=True, timeout=15)
+                       text=True, timeout=15, encoding="utf-8", errors="replace")
     if expect_ok and r.returncode != 0:
         raise AssertionError(
             f"unexpected exit={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}"
@@ -106,7 +106,7 @@ class SaveFromScopeCliTests(_Base):
         task = (self.tmp / "tasks" / chat_key / "forge")
         (task / "tools").mkdir(parents=True, exist_ok=True)
         impl = task / "tools" / f"{name}.py"
-        impl.write_text(body)
+        impl.write_text(body, encoding="utf-8")
         (task / "registry.json").write_text(json.dumps({
             name: {
                 "name": name, "description": f"task tool {name}",
@@ -114,7 +114,7 @@ class SaveFromScopeCliTests(_Base):
                 "scope": "task", "created_at": time.time(),
                 "sha256": "abcd",
             }
-        }))
+        }), encoding="utf-8")
 
     def test_save_round_trip_via_cli(self) -> None:
         self._seed_task("poke_api",

@@ -186,7 +186,7 @@ class TestModelCatalogLive(unittest.TestCase):
                         home / "tenants" / "_default" / "global" / "model_catalog_cache.json"
                     )
                     self.assertTrue(cache_path.exists())
-                    cache = json.loads(cache_path.read_text())
+                    cache = json.loads(cache_path.read_text(encoding="utf-8"))
                     self.assertIn("providers", cache)
                     self.assertIn("anthropic", cache["providers"])
                     self.assertEqual(cache["providers"]["anthropic"]["count"], 2)

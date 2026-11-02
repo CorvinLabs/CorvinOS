@@ -152,7 +152,7 @@ def test_gate_is_tenant_scoped(tmp_path: Path):
                                   signal={"output": {}})
         f = sb.home / "tenants" / "acme" / "learning" / "events" / (ev.timestamp[:10] + ".jsonl")
         f.parent.mkdir(parents=True)
-        f.write_text(json.dumps(ev.to_dict()) + "\n")
+        f.write_text(json.dumps(ev.to_dict()) + "\n", encoding="utf-8")
         r = _rate(sb, "os.flow_guard")
         assert r.status_code == 422
         assert r.json()["detail"]["reason"] == "no_corresponding_execution"

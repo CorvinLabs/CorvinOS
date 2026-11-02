@@ -136,7 +136,7 @@ class A2ATokenStore:
             "_secret_key": codec_secret,  # Never exposed
         }
 
-        with open(self.active_tokens_file, "w") as f:
+        with open(self.active_tokens_file, "w", encoding="utf-8") as f:
             json.dump(active, f, indent=2)
 
     def load_token(self, peer_id: str) -> Optional[tuple[str, str]]:
@@ -153,7 +153,7 @@ class A2ATokenStore:
     def _load_tokens(self) -> dict:
         """Load tokens from disk"""
         if self.active_tokens_file.exists():
-            with open(self.active_tokens_file) as f:
+            with open(self.active_tokens_file, encoding="utf-8") as f:
                 return json.load(f)
         return {}
 
@@ -162,7 +162,7 @@ class A2ATokenStore:
         active = self._load_tokens()
         if peer_id in active:
             active[peer_id]["state"] = "ACTIVE"
-            with open(self.active_tokens_file, "w") as f:
+            with open(self.active_tokens_file, "w", encoding="utf-8") as f:
                 json.dump(active, f, indent=2)
 
     def revoke(self, peer_id: str) -> None:
@@ -170,7 +170,7 @@ class A2ATokenStore:
         active = self._load_tokens()
         if peer_id in active:
             del active[peer_id]
-            with open(self.active_tokens_file, "w") as f:
+            with open(self.active_tokens_file, "w", encoding="utf-8") as f:
                 json.dump(active, f, indent=2)
 
 

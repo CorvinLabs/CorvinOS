@@ -56,7 +56,7 @@ def test_raw_sid_never_returned_or_audited():
         assert [o["requestor_id"] for o in r.json()["overrides"]] == [fp]
 
         for chain in home.rglob("audit.jsonl"):
-            assert sid not in chain.read_text(), chain
+            assert sid not in chain.read_text(encoding="utf-8"), chain
         ov._authority = None
 
 

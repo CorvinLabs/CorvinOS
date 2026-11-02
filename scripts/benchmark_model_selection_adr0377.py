@@ -467,7 +467,7 @@ def main() -> int:
     output_file = Path(__file__).parent.parent / "docs" / "benchmark_model_selection_adr0377.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_file, "w") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         # Convert float to strings to avoid JSON serialization issues
         json.dump(results, f, indent=2, default=str)
 

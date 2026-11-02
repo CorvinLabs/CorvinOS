@@ -216,12 +216,12 @@ class SessionContinuationManager:
 
             # Save to latest.json
             latest_path = task_checkpoint_dir / "latest.json"
-            with open(latest_path, "w") as f:
+            with open(latest_path, "w", encoding="utf-8") as f:
                 f.write(checkpoint.to_json())
 
             # Append to history.jsonl
             history_path = task_checkpoint_dir / "history.jsonl"
-            with open(history_path, "a") as f:
+            with open(history_path, "a", encoding="utf-8") as f:
                 f.write(checkpoint.to_json() + "\n")
 
             logger.info(
@@ -270,7 +270,7 @@ class SessionContinuationManager:
                     raise CheckpointNotFoundError(
                         f"No latest checkpoint for task '{task_id}'"
                     )
-                with open(latest_path) as f:
+                with open(latest_path, encoding="utf-8") as f:
                     checkpoint = SessionCheckpoint.from_json(f.read())
             else:
                 # Load specific checkpoint from history
@@ -281,7 +281,7 @@ class SessionContinuationManager:
                     )
 
                 checkpoint = None
-                with open(history_path) as f:
+                with open(history_path, encoding="utf-8") as f:
                     for line in f:
                         cp = SessionCheckpoint.from_json(line)
                         if cp.checkpoint_id == checkpoint_id:
@@ -326,7 +326,7 @@ class SessionContinuationManager:
             return metadata
 
         try:
-            with open(history_path) as f:
+            with open(history_path, encoding="utf-8") as f:
                 for line in f:
                     cp = SessionCheckpoint.from_json(line)
                     metadata.append({

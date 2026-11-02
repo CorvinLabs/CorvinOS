@@ -129,7 +129,7 @@ class TestASTGateFileExecution(unittest.TestCase):
 
     def _write_and_check(self, code: str) -> tuple[bool, str]:
         with tempfile.NamedTemporaryFile(
-            suffix=".py", mode="w", delete=False
+            suffix=".py", mode="w", delete=False, encoding="utf-8"
         ) as f:
             f.write(textwrap.dedent(code))
             f.flush()
@@ -309,7 +309,7 @@ class TestForgeExecIntegration(unittest.TestCase):
         # MCPServer needs a registry root; use a temp dir.
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
-            (td_path / "registry.json").write_text("[]")
+            (td_path / "registry.json").write_text("[]", encoding="utf-8")
             try:
                 srv = MCPServer.__new__(MCPServer)
                 srv.allowed_forged_tools = None  # open ACL
@@ -329,7 +329,7 @@ class TestForgeExecIntegration(unittest.TestCase):
             self.skipTest(f"forge not importable: {e}")
 
         # Find the forge_exec entry in the static tool list definition.
-        src = Path(mcp_mod.__file__).read_text()
+        src = Path(mcp_mod.__file__).read_text(encoding="utf-8")
         self.assertIn('"forge_exec"', src,
                       "forge_exec must be registered in _all_tools()")
         self.assertIn("_call_forge_exec", src,

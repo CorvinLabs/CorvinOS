@@ -49,7 +49,7 @@ class AuditTrailCheck:
             count = 0
             last_events = []
 
-            with open(audit_path, "r") as f:
+            with open(audit_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

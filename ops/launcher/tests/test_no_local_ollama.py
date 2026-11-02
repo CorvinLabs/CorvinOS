@@ -40,13 +40,13 @@ def test_legacy_config_keys_load_and_are_dropped(cfg_path):
         "ollama_url": "http://127.0.0.1:11434",
         "model": "qwen3:8b",
         "bridge": "discord",
-    }))
+    }), encoding="utf-8")
     conf = launcher_cfg.load()
     assert conf["bridge"] == "discord"
     assert "ollama_url" not in conf and "model" not in conf
     assert launcher_cfg.is_configured()
     launcher_cfg.set_value("image", "example/img:1")
-    assert "ollama_url" not in json.loads(cfg_path.read_text())
+    assert "ollama_url" not in json.loads(cfg_path.read_text(encoding="utf-8"))
 
 
 def test_defaults_carry_no_ollama(cfg_path):
@@ -115,7 +115,7 @@ def _run_cli(args, home):
     env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
     env["PYTHONPATH"] = os.pathsep.join([str(_LAUNCHER_ROOT), env.get("PYTHONPATH", "")])
     return subprocess.run([sys.executable, "-m", "corvin", *args], env=env,
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
 
 
 def test_real_entry_setup_help_and_status(tmp_path):
@@ -125,7 +125,7 @@ def test_real_entry_setup_help_and_status(tmp_path):
 
     legacy = tmp_path / ".config" / "corvin-launcher" / "config.json"
     legacy.parent.mkdir(parents=True)
-    legacy.write_text(json.dumps({"ollama_url": "http://127.0.0.1:11434", "model": "qwen3:8b"}))
+    legacy.write_text(json.dumps({"ollama_url": "http://127.0.0.1:11434", "model": "qwen3:8b"}), encoding="utf-8")
     status = _run_cli(["status"], tmp_path)
     assert status.returncode == 0, status.stderr
     assert not any(w in status.stdout.lower() for w in _FORBIDDEN), status.stdout

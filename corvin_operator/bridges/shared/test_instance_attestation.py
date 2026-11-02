@@ -228,7 +228,7 @@ class TestGetCaPubkeyBytes(unittest.TestCase):
 
     def test_path_env(self):
         _, pub = _fresh_ca()
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".pub", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".pub", delete=False, encoding="utf-8") as f:
             f.write(pub)
             f.flush()
             os.environ["CORVIN_CA_PUBKEY_PATH"] = f.name
@@ -287,6 +287,8 @@ class TestLoadSaveAttestation(unittest.TestCase):
         path = att.attestation_path()
         mode = path.stat().st_mode
         self.assertFalse(mode & (stat.S_IRWXG | stat.S_IRWXO))
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits only (NTFS ACLs)")
 
     def test_world_readable_file_ignored(self):
         iac, _, _ = _issue()

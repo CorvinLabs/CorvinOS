@@ -290,7 +290,7 @@ def test_floor_only_event_survives_the_real_forge_writer(tmp_path, monkeypatch):
         "channel": "web",
     })
     import json
-    recs = [json.loads(line) for line in chain.read_text().splitlines()]
+    recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines()]
     body = recs[-1]
     flat = json.dumps(body)
     assert "house_rules.floor_only" in flat

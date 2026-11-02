@@ -106,7 +106,7 @@ class SVGGraphicsGenerator:
 
         # Save
         output_path = self.output_dir / output_filename
-        output_path.write_text(svg_content)
+        output_path.write_text(svg_content, encoding="utf-8")
 
         return {
             "status": "success",
@@ -184,7 +184,7 @@ class SVGGraphicsGenerator:
 </svg>'''
 
         output_path = self.output_dir / output_filename
-        output_path.write_text(svg_content)
+        output_path.write_text(svg_content, encoding="utf-8")
 
         return {
             "status": "success",
@@ -253,7 +253,7 @@ class SVGGraphicsGenerator:
 </svg>'''
 
         output_path = self.output_dir / output_filename
-        output_path.write_text(svg_content)
+        output_path.write_text(svg_content, encoding="utf-8")
 
         return {
             "status": "success",

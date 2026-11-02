@@ -77,7 +77,7 @@ def test_yaml_roundtrip_all_presets():
 
                 # Verify YAML syntax is valid
                 yaml_path = mock_path()
-                with open(yaml_path) as f:
+                with open(yaml_path, encoding="utf-8") as f:
                     parsed = yaml.safe_load(f)
                 assert parsed["spec"]["preset"] == preset
         finally:

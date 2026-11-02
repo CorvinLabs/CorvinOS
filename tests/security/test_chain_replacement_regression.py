@@ -86,7 +86,7 @@ def _env(home: Path) -> dict:
 
 def _run(script: str, home: Path) -> str:
     proc = subprocess.run([sys.executable, "-c", script], env=_env(home),
-                          cwd=str(_REPO), capture_output=True, text=True, timeout=300)
+                          cwd=str(_REPO), capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
     return proc.stdout + "\n" + proc.stderr
 
 
@@ -384,14 +384,14 @@ class TestChainIdentityFollowsSymlinks:
         env = _env(home)
         env["VOICE_AUDIT_PATH"] = str(path)
         proc = subprocess.run([sys.executable, "-c", _SEED], env=env, cwd=str(_REPO),
-                              capture_output=True, text=True, timeout=300)
+                              capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
         assert "SEEDED" in proc.stdout + proc.stderr, (proc.stdout + proc.stderr)[-3000:]
 
     def _verify_as(self, home: Path, path: Path) -> dict:
         env = _env(home)
         env["VOICE_AUDIT_PATH"] = str(path)
         proc = subprocess.run([sys.executable, "-c", _VERIFY], env=env, cwd=str(_REPO),
-                              capture_output=True, text=True, timeout=300)
+                              capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
         out = proc.stdout + proc.stderr
         line = next((l for l in out.splitlines() if l.startswith("RESULT ")), None)
         assert line, out[-3000:]

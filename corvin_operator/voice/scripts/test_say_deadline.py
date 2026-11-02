@@ -73,7 +73,7 @@ def test_exhausted_budget_skips_all_providers_e2e(tmp_path):
     env["CORVIN_TTS_TOTAL_BUDGET_S"] = "0"
     proc = subprocess.run(
         [sys.executable, str(_SCRIPTS / "say.py"), str(out), "hello", "en"],
-        capture_output=True, text=True, env=env, timeout=15,
+        capture_output=True, text=True, env=env, timeout=15, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == "", "silent skip — no provider may run"

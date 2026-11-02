@@ -293,10 +293,20 @@ def main():
     print(f"✓ Updated {memory_file}")
 
     if args.commit:
-        os.chdir(corvinos_root)
-        result = os.system(
-            f'git add {memory_file} && git commit -m "chore: sync memory from ADRs" 2>&1 | head -5'
-        )
+        # argv lists, not os.system: the old `... 2>&1 | head -5` sh pipeline
+        # has no `head` under cmd.exe (always "failed" on Windows) and broke
+        # on a memory_file path with spaces on every platform.
+        import subprocess
+        result = 1
+        add = subprocess.run(["git", "add", str(memory_file)], cwd=corvinos_root)
+        if add.returncode == 0:
+            commit = subprocess.run(
+                ["git", "commit", "-m", "chore: sync memory from ADRs"],
+                cwd=corvinos_root, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+            )
+            print("\n".join(((commit.stdout or "") + (commit.stderr or "")).splitlines()[:5]))
+            result = commit.returncode
         if result == 0:
             print("✓ Committed to git")
         else:

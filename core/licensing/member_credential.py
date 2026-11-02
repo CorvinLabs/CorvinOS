@@ -309,7 +309,7 @@ class CredentialStore:
         """Save credential to disk."""
         cred_file = self.credentials_dir / f"{credential.credential_id}.json"
         try:
-            with open(cred_file, "w") as f:
+            with open(cred_file, "w", encoding="utf-8") as f:
                 json.dump(credential.to_dict(), f, indent=2)
             logger.info(f"Saved credential {credential.credential_id}")
         except Exception as e:
@@ -323,7 +323,7 @@ class CredentialStore:
             return None
 
         try:
-            with open(cred_file) as f:
+            with open(cred_file, encoding="utf-8") as f:
                 data = json.load(f)
             return MemberCredential.from_dict(data)
         except Exception as e:
@@ -335,7 +335,7 @@ class CredentialStore:
         credentials = []
         for cred_file in self.credentials_dir.glob("*.json"):
             try:
-                with open(cred_file) as f:
+                with open(cred_file, encoding="utf-8") as f:
                     data = json.load(f)
                 if data["member_id"] == member_id:
                     credentials.append(MemberCredential.from_dict(data))

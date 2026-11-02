@@ -44,6 +44,15 @@ from corvin_plugins.manifest import BootLayer  # noqa: E402
 from corvin_plugins.protocol import PluginContext  # noqa: E402
 from corvin_plugins.registry import PluginRegistry  # noqa: E402
 
+try:  # imported before any test mocks subprocess.Popen (corvin_core patches it on import)
+    from corvin_core import process_signals as _process_signals  # noqa: E402
+except ImportError:  # pragma: no cover
+    _process_signals = None
+
+#: These pin the POSIX killpg ladder; Windows ends the daemon tree instead (see
+#: TestUnload.test_windows_unload_ends_the_whole_daemon_tree).
+_posix_killpg = unittest.skipIf(sys.platform == "win32", "POSIX process-group signals")
+
 #: A token shape that must never appear in a log line or an audit detail.
 FAKE_TOKEN = "MTIzNDU2Nzg5MDEyMzQ1Njc4.GhIjKl.FAKE-DISCORD-TOKEN-do-not-leak"
 
@@ -194,12 +203,21 @@ class _SupervisorTestCase(unittest.TestCase):
         # runner: the FakePopen pid does not exist, so getpgid would raise and
         # the signal ladder would silently fall through to the single-process
         # path — hiding exactly the behaviour under test.
-        killpg_patch = mock.patch.object(sup.os, "killpg")
+        # create=True: neither exists on Windows (the patch itself raised there).
+        killpg_patch = mock.patch.object(sup.os, "killpg", create=True)
         self.killpg = killpg_patch.start()
         self.addCleanup(killpg_patch.stop)
-        pgid_patch = mock.patch.object(sup.os, "getpgid", side_effect=lambda pid: pid)
+        pgid_patch = mock.patch.object(sup.os, "getpgid", side_effect=lambda pid: pid,
+                                       create=True)
         pgid_patch.start()
         self.addCleanup(pgid_patch.stop)
+        # Windows path: the FakePopen pid is made up — a real `taskkill /T /F` could end
+        # some unrelated process that happens to own it.
+        if _process_signals is not None:
+            tree_patch = mock.patch.object(_process_signals, "kill_tree_windows",
+                                           return_value=False)
+            self.kill_tree = tree_patch.start()
+            self.addCleanup(tree_patch.stop)
 
     def _root(self) -> Path:
         self._roots += 1
@@ -493,6 +511,7 @@ class TestNoDoubleStart(_SupervisorTestCase):
         p.on_load(_ctx())  # e.g. a hot-reload that re-registers the plugin
         self.assertEqual(len(self.spawned), 1)
 
+    @_posix_killpg
     def test_a_second_on_load_keeps_the_daemon_ours(self):
         # If the re-load reclassified our own daemon as "externally managed",
         # health would consult the wrong probe and on_unload would stop killing
@@ -534,6 +553,7 @@ class TestNoDoubleStart(_SupervisorTestCase):
 
 
 class TestUnload(_SupervisorTestCase):
+    @_posix_killpg
     def test_sigterm_first_then_no_kill_when_the_daemon_obeys(self):
         p = self._plugin()
         p.on_load(_ctx())
@@ -543,6 +563,18 @@ class TestUnload(_SupervisorTestCase):
         self.assertEqual(self.killpg.call_args[0][1], sup.signal.SIGTERM)
         self.assertFalse(proc.killed)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows process-tree kill")
+    def test_windows_unload_ends_the_whole_daemon_tree(self):
+        # terminate() alone is TerminateProcess on the daemon pid: its helpers survived.
+        self.kill_tree.return_value = True
+        p = self._plugin()
+        p.on_load(_ctx())
+        proc = self.spawned[0]
+        p.on_unload()
+        self.kill_tree.assert_called_once_with(proc.pid)
+        self.assertFalse(proc.terminated)
+
+    @_posix_killpg
     def test_sigkill_only_after_the_grace_period_expires(self):
         p = self._plugin()
         p.on_load(_ctx())
@@ -698,6 +730,7 @@ class TestRegistryIntegration(_SupervisorTestCase):
         reg.register(self._plugin(), _ctx())
         self.assertIs(reg.boot_layer_of("discord-bridge"), BootLayer.BUNDLED)
 
+    @_posix_killpg
     def test_a_bridge_is_disableable(self):
         reg = PluginRegistry()
         p = self._plugin()

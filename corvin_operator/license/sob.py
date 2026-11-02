@@ -163,7 +163,7 @@ def _instance_id(corvin_home: Path) -> str:
     iid_path = corvin_home / "global" / "instance_id.json"
     try:
         if iid_path.exists():
-            data = json.loads(iid_path.read_text())
+            data = json.loads(iid_path.read_text(encoding="utf-8"))
             iid = str(data.get("instance_id", ""))
             if iid:
                 return iid
@@ -183,7 +183,7 @@ def _instance_id(corvin_home: Path) -> str:
         # Race: another process created the file between our exists() check and
         # the O_EXCL open.  Re-read the winner's value.
         try:
-            _data = json.loads(iid_path.read_text())
+            _data = json.loads(iid_path.read_text(encoding="utf-8"))
             _iid = str(_data.get("instance_id", ""))
             if _iid:
                 return _iid

@@ -65,7 +65,7 @@ BLOCKED_CEILING = 5.0
 def _held(lock_path: Path):
     """Hold ``lock_path`` from an independent file description."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "a+")
+    fh = open(lock_path, "a+", encoding="utf-8")
     fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     try:
         yield
@@ -121,7 +121,7 @@ class BoundedFlockTests(_TmpHome):
         try:
             _bounded_lock.acquire_exclusive(fd, "probe", timeout=SHORT_DEADLINE)
             # A second, independent description must now find it taken.
-            other = open(lock_path, "a+")
+            other = open(lock_path, "a+", encoding="utf-8")
             try:
                 with self.assertRaises(BlockingIOError):
                     fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -184,9 +184,9 @@ class ConsentLockTests(_TmpHome):
         consent.grant(self.CH, self.KEY, self.UID, ttl_s=consent.MIN_TTL_S)
         # Age the entry past its expiry directly on disk.
         store = self._store()
-        data = json.loads(store.read_text())
+        data = json.loads(store.read_text(encoding="utf-8"))
         data[self.UID]["expires_at"] = time.time() - 1
-        store.write_text(json.dumps(data))
+        store.write_text(json.dumps(data), encoding="utf-8")
 
         with _deadline(consent), _held(self._lock()):
             started = time.monotonic()
@@ -197,7 +197,7 @@ class ConsentLockTests(_TmpHome):
         self.assertFalse(granted, f"busy prune lock became an ALLOW: {reason}")
         self.assertEqual(reason, "expired")
         # It degraded rather than raising: the expired entry is still on disk.
-        self.assertIn(self.UID, json.loads(store.read_text()))
+        self.assertIn(self.UID, json.loads(store.read_text(encoding="utf-8")))
 
     def test_grant_still_works_once_the_lock_is_free(self):
         consent.grant(self.CH, self.KEY, self.UID)
@@ -221,7 +221,7 @@ class ConsentLockTests(_TmpHome):
             proc = subprocess.run(
                 [sys.executable, str(HERE / "consent.py"),
                  "on", self.CH, self.KEY, self.UID],
-                capture_output=True, text=True, env=env, timeout=30,
+                capture_output=True, text=True, env=env, timeout=30, encoding="utf-8", errors="replace",
             )
             elapsed = time.monotonic() - started
 
@@ -301,13 +301,13 @@ class RolesLockTests(_TmpHome):
             elapsed = time.monotonic() - started
         self.assertLess(elapsed, BLOCKED_CEILING)
         store = roles._store_path(self.CH, self.KEY)
-        on_disk = json.loads(store.read_text()) if store.exists() else {}
+        on_disk = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
         self.assertNotIn("target1", on_disk, "a busy lock granted a role bundle")
 
     def test_grant_still_lands_once_the_lock_is_free(self):
         roles.grant(self.CH, self.KEY, "target1", bundle="member", granted_by="grantor1")
         store = roles._store_path(self.CH, self.KEY)
-        self.assertIn("target1", json.loads(store.read_text()))
+        self.assertIn("target1", json.loads(store.read_text(encoding="utf-8")))
 
     def test_role_reads_never_take_the_lock(self):
         with _deadline(roles), _held(self._lock()):

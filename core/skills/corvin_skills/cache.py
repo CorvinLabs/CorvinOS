@@ -200,7 +200,7 @@ class SkillCache:
             FileNotFoundError: Manifest not found
             json.JSONDecodeError: Manifest invalid JSON
         """
-        with open(self.manifest_path, "r") as f:
+        with open(self.manifest_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _find_in_manifest(

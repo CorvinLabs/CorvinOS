@@ -1338,7 +1338,7 @@ class ClaudeCodeEngine:
         dump = os.environ.get("ADAPTER_FAKE_ARGS_DUMP")
         if dump:
             try:
-                with open(dump, "a") as fh:
+                with open(dump, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps({
                         "channel": channel, "chat_key": chat_key,
                         "args": args,

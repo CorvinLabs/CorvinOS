@@ -158,14 +158,14 @@ def main() -> int:
             )
             sess_root = mr._root_for("session")   # tenant-native: <td>/tenants/_default/sessions/demo/skill-forge
             man_path = sess_root / "skills_registry.json"
-            data = json.loads(man_path.read_text())
+            data = json.loads(man_path.read_text(encoding="utf-8"))
             data["demo.ungraded"]["created_at"] = time.time() - 86400 * 8
-            man_path.write_text(json.dumps(data))
+            man_path.write_text(json.dumps(data), encoding="utf-8")
             r = subprocess.run(
                 [sys.executable, str(CLEANUP_SCRIPT), "ungraded",
                  "--ttl-days", "7"],
                 capture_output=True, text=True, check=False,
-                env={**os.environ, "CORVIN_HOME": td},
+                env={**os.environ, "CORVIN_HOME": td}, encoding="utf-8", errors="replace",
             )
             t("cleanup exit 0", r.returncode == 0,
               detail=f"stderr={r.stderr!r}")
@@ -184,7 +184,7 @@ def main() -> int:
             ok, problems = verify_chain(chain)
             t("tenant core chain verifies", ok, detail=f"problems={problems}")
             assert ok, problems
-            kinds = [json.loads(l)["event_type"] for l in chain.read_text().splitlines() if l.strip()]
+            kinds = [json.loads(l)["event_type"] for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
             t("lifecycle events present", "skill.create" in kinds and "skill.promote" in kinds,
               detail=str(sorted(set(kinds))))
         finally:

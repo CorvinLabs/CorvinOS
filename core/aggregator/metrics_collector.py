@@ -470,7 +470,7 @@ class MetricsCollector:
             date_str = datetime.utcnow().strftime("%Y-%m-%d")
             metrics_file = self.aggregation_dir / f"{date_str}.jsonl"
 
-            with open(metrics_file, "a") as f:
+            with open(metrics_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(global_metrics.to_dict()) + "\n")
 
             logger.debug(f"Persisted global metrics to {metrics_file}")
@@ -503,7 +503,7 @@ class MetricsCollector:
 
             if metrics_file.exists():
                 try:
-                    with open(metrics_file, "r") as f:
+                    with open(metrics_file, "r", encoding="utf-8") as f:
                         for line in f:
                             if line.strip():
                                 data = json.loads(line)

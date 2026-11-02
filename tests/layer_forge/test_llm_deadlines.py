@@ -119,7 +119,7 @@ def test_the_plan_call_uses_only_arguments_the_installed_sdk_accepts():
 
     accepted = set(inspect.signature(anthropic.resources.messages.Messages.create).parameters)
     for path in (llm_plan.__file__, review.__file__):
-        tree = ast.parse(pathlib.Path(path).read_text())
+        tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
         calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
                  and isinstance(n.func, ast.Attribute) and n.func.attr == "create"
                  and isinstance(n.func.value, ast.Attribute) and n.func.value.attr == "messages"]

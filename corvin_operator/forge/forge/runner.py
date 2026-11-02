@@ -293,7 +293,7 @@ def _check_tamper(spec: ToolSpec) -> None:
     impl = Path(spec.impl_path)
     if not impl.exists():
         raise ToolError(f"impl missing: {impl}")
-    actual = hashlib.sha256(impl.read_text().encode()).hexdigest()[:16]
+    actual = hashlib.sha256(impl.read_text(encoding="utf-8").encode()).hexdigest()[:16]
     if actual != spec.sha256:
         raise TamperError(
             f"sha256 mismatch for {spec.name}: "
@@ -433,7 +433,7 @@ def run_tool(
 
     # Permission gate
     impl_path = Path(spec.impl_path)
-    impl_text = impl_path.read_text()
+    impl_text = impl_path.read_text(encoding="utf-8")
     perms = PermissionStore(registry.root)
     decision = decide(
         store=perms,

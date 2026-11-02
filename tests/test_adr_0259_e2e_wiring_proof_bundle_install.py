@@ -40,7 +40,7 @@ def _run_install(tmp_path: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=60,
-        cwd=str(BUNDLE_DIR),
+        cwd=str(BUNDLE_DIR), encoding="utf-8", errors="replace",
     ), fake_home
 
 

@@ -535,8 +535,8 @@ class StyleHardeningE2E(unittest.TestCase):
         self.assertEqual(bc.gateway_cap_for("/v1/console/anything/else"), bc.BODY_CAP_DEFAULT)
         self.assertIsNone(bc.gateway_cap_for("/v1/a2a/receive"))  # the gateway's own routes keep their own guards
         root = Path(__file__).resolve().parents[2]
-        self.assertIn("make_body_cap_middleware(_standalone_cap_for)", (root / "console" / "corvin_console" / "standalone.py").read_text())
-        self.assertIn("make_body_cap_middleware(_body_cap.gateway_cap_for)", (root / "gateway" / "corvin_gateway" / "app.py").read_text())
+        self.assertIn("make_body_cap_middleware(_standalone_cap_for)", (root / "console" / "corvin_console" / "standalone.py").read_text(encoding="utf-8"))
+        self.assertIn("make_body_cap_middleware(_body_cap.gateway_cap_for)", (root / "gateway" / "corvin_gateway" / "app.py").read_text(encoding="utf-8"))
 
     # 2. importer CPU
     def test_imports_are_bounded_and_a_burst_is_refused_not_queued(self):
@@ -585,7 +585,7 @@ class StyleHardeningE2E(unittest.TestCase):
             runner = _RecordingRunner()
             mod.get_runner = lambda: runner
             sid = self._commit(client, csrf, set_default=True).json()["style"]["id"]
-            (home / "tenants" / "_default" / "video_producer" / "styles" / sid / "style.json").write_text("{" + "A" * 300000)
+            (home / "tenants" / "_default" / "video_producer" / "styles" / sid / "style.json").write_text("{" + "A" * 300000, encoding="utf-8")
             lst = client.get(f"{V}/styles").json()
             self.assertEqual(lst["default_style_id"], sid)
             self.assertIn("damaged", lst["default_style_error"])
@@ -699,7 +699,7 @@ def _chain_records(home: Path, tenant: str, event: str) -> list:
     if not path.is_file():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         try:
             rec = json.loads(line)
         except ValueError:

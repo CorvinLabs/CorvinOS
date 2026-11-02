@@ -51,7 +51,7 @@ def extract_narration(storyboard_path: Path) -> str:
         return ""
 
     try:
-        with open(storyboard_path) as f:
+        with open(storyboard_path, encoding="utf-8") as f:
             sb = json.load(f)
 
         texts = []
@@ -150,7 +150,7 @@ def get_audio_duration(audio_path: Path) -> float:
             ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1:nokey=1', str(audio_path)],
             capture_output=True,
             timeout=10,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         return float(result.stdout.strip())
     except:
@@ -198,7 +198,7 @@ def reassemble_video(video_source: Path, audio_source: Path, output_path: Path) 
             str(output_path),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=600, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             log(f"FFmpeg error: {result.stderr[:200]}", "ERR")
@@ -227,7 +227,7 @@ def verify_video_audio(video_path: Path) -> bool:
             ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name,bit_rate', '-of', 'default=noprint_wrappers=1:nokey=1', str(video_path)],
             capture_output=True,
             timeout=10,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         output_lines = result.stdout.strip().split('\n')

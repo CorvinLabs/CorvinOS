@@ -131,7 +131,7 @@ class LearningLoopLiveE2E(unittest.TestCase):
             self.assertTrue(any(h["param"] == "confidence_threshold" for h in body["hypotheses"]))
             cfg = home / "tenants" / tenant_id / "skills" / "os_delegation_router_config.json"
             self.assertTrue(cfg.is_file())
-            self.assertGreaterEqual(json.loads(cfg.read_text())["optimizer"]["epoch"], 2)
+            self.assertGreaterEqual(json.loads(cfg.read_text(encoding="utf-8"))["optimizer"]["epoch"], 2)
             print("[live] loop closed: shadow=%d outcome=%d hypotheses=%d" % (
                 len(shadow), len(outcomes), len(body["hypotheses"])))
 

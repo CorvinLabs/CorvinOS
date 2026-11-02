@@ -52,7 +52,7 @@ class TestRobustRmtree:
         target_dir = tmp_path / "locked"
         target_dir.mkdir()
         locked_file = target_dir / "file.txt"
-        locked_file.write_text("data")
+        locked_file.write_text("data", encoding="utf-8")
 
         # Don't actually sleep through the backoff in a test.
         monkeypatch.setattr(core_mod.time, "sleep", lambda *_a, **_kw: None)
@@ -85,7 +85,7 @@ class TestRobustRmtree:
         target_dir = tmp_path / "stuck"
         target_dir.mkdir()
         stuck_file = target_dir / "locked.bin"
-        stuck_file.write_text("original-data")
+        stuck_file.write_text("original-data", encoding="utf-8")
 
         monkeypatch.setattr(core_mod.time, "sleep", lambda *_a, **_kw: None)
 
@@ -117,7 +117,7 @@ class TestRobustRmtree:
         # Consistent, non-half-deleted state: the locked file and its parent
         # directory must both still be present with original content intact.
         assert stuck_file.exists()
-        assert stuck_file.read_text() == "original-data"
+        assert stuck_file.read_text(encoding="utf-8") == "original-data"
         assert target_dir.exists()
 
     def test_read_only_bit_is_cleared_before_retrying(
@@ -128,7 +128,7 @@ class TestRobustRmtree:
         target_dir = tmp_path / "readonly"
         target_dir.mkdir()
         ro_file = target_dir / "ro.txt"
-        ro_file.write_text("data")
+        ro_file.write_text("data", encoding="utf-8")
 
         monkeypatch.setattr(core_mod.time, "sleep", lambda *_a, **_kw: None)
 

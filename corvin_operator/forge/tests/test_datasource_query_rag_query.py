@@ -49,7 +49,7 @@ class Mcp:
             [sys.executable, str(FORGE / "forge.py"), "--root", str(root), "mcp",
              "--permission-mode", "yes"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1, cwd=str(FORGE), env=env,
+            text=True, bufsize=1, cwd=str(FORGE), env=env, encoding="utf-8", errors="replace",
         )
         self._id = 0
         self.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
@@ -120,19 +120,19 @@ def _register(home: Path, name: str, adapter: str, config: dict, *, residency: s
         "dsi_version": "1", "name": name, "adapter": adapter, "config": config,
         "data_classification": classification, "data_residency": residency,
         "secrets": secrets or [], "read_only": True,
-    }))
+    }), encoding="utf-8")
 
 
 def _chain(home: Path) -> list[dict]:
     p = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
 
 
 @pytest.fixture()
 def mcp(tmp_path):
     env = _env(tmp_path)
     csv_path = tmp_path / "streams.csv"
-    csv_path.write_text(CSV)
+    csv_path.write_text(CSV, encoding="utf-8")
     home = Path(env["CORVIN_HOME"])
     _register(home, "streams-csv", "local_file", {"path": str(csv_path)})
     _register(home, "streams-local", "local_file", {"path": str(csv_path)}, residency="local")
@@ -237,11 +237,11 @@ def bm25(tmp_path):
     (data / "tables" / "songs.csv").write_text(
         "track_uri,track_name,artist_names,label,release_date\n"
         "syn:track:1,Glasswind Cobbleway,Moravine Zigurd,Parallaxo Records,2016-01-17\n"
-        "syn:track:2,Hollowed Flintway,Fendris Bodkin,Malachyte Records,2021-11-01\n")
-    (data / "tables" / "artists.csv").write_text("artist_uri,artist_name\nsyn:artist:1,Moravine Zigurd\n")
+        "syn:track:2,Hollowed Flintway,Fendris Bodkin,Malachyte Records,2021-11-01\n", encoding="utf-8")
+    (data / "tables" / "artists.csv").write_text("artist_uri,artist_name\nsyn:artist:1,Moravine Zigurd\n", encoding="utf-8")
     (data / "tables" / "albums.csv").write_text(
         "album_uri,album_name,artist_names,label,release_date\n"
-        "syn:album:1,Waystation Ledger,Moravine Zigurd,Parallaxo Records,2016-01-17\n")
+        "syn:album:1,Waystation Ledger,Moravine Zigurd,Parallaxo Records,2016-01-17\n", encoding="utf-8")
     sys.path.insert(0, str(SIDECAR_DIR))
     try:
         import bm25_sidecar
@@ -277,14 +277,14 @@ def test_rag_query_returns_the_grounded_passage(mcp, bm25):
     client, home = mcp
     reg = home / "tenants" / "_default" / "global" / "rag"
     (reg / "manifests").mkdir(parents=True)
-    (reg / "manifests" / "bm25-demo.yaml").write_text(_manifest(bm25, "INTERNAL"))
+    (reg / "manifests" / "bm25-demo.yaml").write_text(_manifest(bm25, "INTERNAL"), encoding="utf-8")
     out, is_error = client.call("rag_query", {"query": "Glasswind Cobbleway label", "limit": 3})
     assert not is_error, out
     assert out["status"] == "ok" and out["providers_answered"] == ["bm25-demo"]
     assert out["passages"] and "Parallaxo Records" in out["passages"][0]["content"]
     assert out["classification"] == "INTERNAL"
     # counted and audited (metadata only)
-    stats = json.loads((reg / "registry.json").read_text())["providers"][0]["query_stats"]
+    stats = json.loads((reg / "registry.json").read_text(encoding="utf-8"))["providers"][0]["query_stats"]
     assert stats["total_queries"] == 1
     events = {e.get("event_type"): e for e in _chain(home)}
     assert "rag.query_executed" in events and "rag.tool_query" in events
@@ -295,7 +295,7 @@ def test_rag_query_is_gated_by_the_classification_of_the_provider(mcp, bm25):
     client, home = mcp
     reg = home / "tenants" / "_default" / "global" / "rag"
     (reg / "manifests").mkdir(parents=True)
-    (reg / "manifests" / "bm25-demo.yaml").write_text(_manifest(bm25, "CONFIDENTIAL"))
+    (reg / "manifests" / "bm25-demo.yaml").write_text(_manifest(bm25, "CONFIDENTIAL"), encoding="utf-8")
     out, is_error = client.call("rag_query", {"query": "Glasswind"})
     assert is_error and out["blocked_by"] == "L34_DATA_CLASSIFICATION" and out["passages"] == []
 
@@ -315,7 +315,7 @@ def test_postgres_over_the_mcp_boundary(tmp_path):
     home = Path(env["CORVIN_HOME"])
     vault = Path(env["CORVIN_SECRET_VAULT"])
     vault.parent.mkdir(parents=True, exist_ok=True)
-    vault.write_text(json.dumps({"PGUSER": user, "PGPASSWORD": password}))
+    vault.write_text(json.dumps({"PGUSER": user, "PGPASSWORD": password}), encoding="utf-8")
     vault.chmod(0o600)
     _register(home, "charts-pg", "postgresql", {"host": host, "port": int(port), "database": db},
               secrets=["PGUSER", "PGPASSWORD"])

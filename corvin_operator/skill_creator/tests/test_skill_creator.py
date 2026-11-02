@@ -402,7 +402,7 @@ class TestSkillPromoter:
         # Body on disk, under the canonical <name>/SKILL.md layout.
         skill_md = tmp_path / "skills" / "assistant.test_skill" / "SKILL.md"
         assert skill_md.exists()
-        assert spec.method.strip() in skill_md.read_text()
+        assert spec.method.strip() in skill_md.read_text(encoding="utf-8")
 
     def test_bootstrap_grade_is_capped_and_disclosed(self, tmp_path):
         """A self-awarded seed must never look like earned usage."""

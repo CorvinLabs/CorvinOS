@@ -305,7 +305,7 @@ class SkillVersionManager:
             return {}
         
         try:
-            with open(self.runs_file) as f:
+            with open(self.runs_file, encoding="utf-8") as f:
                 data = json.load(f)
             
             runs = {}
@@ -323,7 +323,7 @@ class SkillVersionManager:
             for run_id, run in self._runs.items()
         }
         
-        with open(self.runs_file, "w") as f:
+        with open(self.runs_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
 

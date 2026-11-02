@@ -493,13 +493,13 @@ class TestMemoryEnrichment(unittest.TestCase):
 
             # Create test memory files
             (memory_dir / "incident-2026-08-04-audio-lag.md").write_text(
-                "Audio lag issue in voice module\nAffects TTS rendering\n"
+                "Audio lag issue in voice module\nAffects TTS rendering\n", encoding="utf-8"
             )
             (memory_dir / "adr-0267-task-normalizer.md").write_text(
-                "ADR for task normalization system\n"
+                "ADR for task normalization system\n", encoding="utf-8"
             )
             (memory_dir / "unrelated.md").write_text(
-                "Something about clouds and weather\n"
+                "Something about clouds and weather\n", encoding="utf-8"
             )
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
@@ -517,7 +517,7 @@ class TestMemoryEnrichment(unittest.TestCase):
             memory_dir = Path(tmpdir)
 
             (memory_dir / "incident-2026-08-04-audio.md").write_text(
-                "Audio-specific issue\n"
+                "Audio-specific issue\n", encoding="utf-8"
             )
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
@@ -535,11 +535,11 @@ class TestMemoryEnrichment(unittest.TestCase):
 
             # High-relevance file (multiple keyword matches)
             (memory_dir / "high-score.md").write_text(
-                "Audio voice TTS rendering pipeline\n" * 5
+                "Audio voice TTS rendering pipeline\n" * 5, encoding="utf-8"
             )
 
             # Low-relevance file (single keyword match)
-            (memory_dir / "low-score.md").write_text("Mentions audio once\n")
+            (memory_dir / "low-score.md").write_text("Mentions audio once\n", encoding="utf-8")
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
 
@@ -579,10 +579,10 @@ class TestMemoryEnrichment(unittest.TestCase):
 
             # File with keyword in name (should score higher)
             (memory_dir / "incident-crash-recovery.md").write_text(
-                "General description\n"
+                "General description\n", encoding="utf-8"
             )
             # File with keyword in content only
-            (memory_dir / "other.md").write_text("Crash happened in module X\n" * 10)
+            (memory_dir / "other.md").write_text("Crash happened in module X\n" * 10, encoding="utf-8")
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
 
@@ -607,11 +607,11 @@ class TestIncidentLinking(unittest.TestCase):
 
             # Create incident mentioning core/compliance
             (memory_dir / "incident-2026-08-04-compliance.md").write_text(
-                "Compliance layer failure affecting core/compliance/tripwire.py\n"
+                "Compliance layer failure affecting core/compliance/tripwire.py\n", encoding="utf-8"
             )
             # Non-incident file (should not match)
             (memory_dir / "adr-some.md").write_text(
-                "core/compliance mentioned here too\n"
+                "core/compliance mentioned here too\n", encoding="utf-8"
             )
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
@@ -629,8 +629,8 @@ class TestIncidentLinking(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             memory_dir = Path(tmpdir)
 
-            (memory_dir / "incident-1.md").write_text("core/voice crash\n")
-            (memory_dir / "incident-2.md").write_text("corvin_operator/bridge failure\n")
+            (memory_dir / "incident-1.md").write_text("core/voice crash\n", encoding="utf-8")
+            (memory_dir / "incident-2.md").write_text("corvin_operator/bridge failure\n", encoding="utf-8")
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
 
@@ -647,7 +647,7 @@ class TestIncidentLinking(unittest.TestCase):
             memory_dir = Path(tmpdir)
 
             (memory_dir / "incident-2026-08-04.md").write_text(
-                "Audio module problem\n"
+                "Audio module problem\n", encoding="utf-8"
             )
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
@@ -672,8 +672,8 @@ class TestIncidentLinking(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             memory_dir = Path(tmpdir)
 
-            (memory_dir / "adr-0267.md").write_text("core/voice mentioned\n")
-            (memory_dir / "incident-real.md").write_text("core/voice crash\n")
+            (memory_dir / "adr-0267.md").write_text("core/voice mentioned\n", encoding="utf-8")
+            (memory_dir / "incident-real.md").write_text("core/voice crash\n", encoding="utf-8")
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
 
@@ -779,7 +779,7 @@ class TestFullNormalization(unittest.TestCase):
 
             # Create memory file
             (memory_dir / "incident-crash.md").write_text(
-                "Voice crash issue\nAudio rendering\n"
+                "Voice crash issue\nAudio rendering\n", encoding="utf-8"
             )
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)

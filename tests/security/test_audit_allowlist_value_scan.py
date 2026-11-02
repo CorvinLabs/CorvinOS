@@ -69,7 +69,7 @@ def test_leak_never_reaches_the_chain(tmp_path, monkeypatch):
     chain = tmp_path / "audit.jsonl"
     se.write_event(chain, "package.installed",
                    details={"name": f"Invoice bot for {_EMAIL}", "version": "1.0.0"})
-    raw = chain.read_text()
+    raw = chain.read_text(encoding="utf-8")
     assert _EMAIL not in raw
     rec = json.loads(raw.splitlines()[-1])
     assert "name" in rec["details"].get("_dropped_fields", [])

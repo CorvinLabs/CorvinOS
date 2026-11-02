@@ -141,8 +141,8 @@ class TestInstaller:
     def test_install_local_no_manifest_node(self, tmp_corvin, tmp_path):
         pkg_dir = tmp_path / "my-node-tool"
         pkg_dir.mkdir()
-        (pkg_dir / "package.json").write_text('{"name": "my-node-tool"}')
-        (pkg_dir / "index.js").write_text("// entry")
+        (pkg_dir / "package.json").write_text('{"name": "my-node-tool"}', encoding="utf-8")
+        (pkg_dir / "index.js").write_text("// entry", encoding="utf-8")
         entry = installer.install(f"local:{pkg_dir}", TID)
         assert entry["runtime"]["command"] == "node"
         assert "index.js" in entry["runtime"]["args"][0]
@@ -161,7 +161,7 @@ class TestInstaller:
             "id: my-custom-tool\n"
             "runtime:\n"
             "  command: python3\n"
-            "  args: ['server.py']\n"
+            "  args: ['server.py']\n", encoding="utf-8"
         )
         entry = installer.install(f"local:{tool_dir}", TID)
         assert entry["id"] == "my-custom-tool"
@@ -242,7 +242,7 @@ class TestActivate:
 
     def test_get_active_mcp_servers_with_secrets(self, tmp_corvin, monkeypatch, tmp_path):
         vault = tmp_path / "secrets.json"
-        vault.write_text('{"API_KEY": "test-val"}')
+        vault.write_text('{"API_KEY": "test-val"}', encoding="utf-8")
         monkeypatch.setenv("CORVIN_SECRET_VAULT", str(vault))
         catalog.add_tool(TID, {
             "id": "secret-tool",

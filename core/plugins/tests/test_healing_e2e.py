@@ -114,7 +114,7 @@ class TestHealingRunsForReal(unittest.TestCase):
         self._tmp.cleanup()
 
     def _audit_text(self) -> str:
-        return self.audit_path.read_text() if self.audit_path.exists() else ""
+        return self.audit_path.read_text(encoding="utf-8") if self.audit_path.exists() else ""
 
     # ── the real loop ────────────────────────────────────────────────────────
 
@@ -244,7 +244,7 @@ class TestGatewayBootWiresHealing(unittest.TestCase):
                         "plugin_self_healing": True,
                     }
                 }
-            )
+            ), encoding="utf-8"
         )
 
     def tearDown(self):

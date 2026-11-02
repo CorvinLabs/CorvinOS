@@ -514,7 +514,7 @@ class TestNoAnthropicImport(unittest.TestCase):
 
     def test_no_anthropic_in_source(self):
         import ast
-        src = (Path(__file__).resolve().parent / "data_classification.py").read_text()
+        src = (Path(__file__).resolve().parent / "data_classification.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -544,7 +544,7 @@ class TestLoadGuardForTenant(unittest.TestCase):
     def _write_cfg(self, body: str):
         d = self.home / "tenants" / "_default" / "global"
         d.mkdir(parents=True, exist_ok=True)
-        (d / "tenant.corvin.yaml").write_text(body)
+        (d / "tenant.corvin.yaml").write_text(body, encoding="utf-8")
 
     def test_no_config_returns_none(self):
         from data_classification import load_guard_for_tenant
@@ -774,7 +774,7 @@ class TestGuardAuditChainResolution(unittest.TestCase):
         d = home / "tenants" / "_default" / "global"
         d.mkdir(parents=True)
         (d / "tenant.corvin.yaml").write_text(
-            "spec:\n  data_classification:\n    matrix:\n      INTERNAL: [local]\n")
+            "spec:\n  data_classification:\n    matrix:\n      INTERNAL: [local]\n", encoding="utf-8")
         target = self._tmp / "redirect" / "audit.jsonl"
         os.environ["VOICE_AUDIT_PATH"] = str(target)
         guard = load_guard_for_tenant("_default", corvin_home=home)
@@ -820,14 +820,14 @@ class TestGuardHomeNotFromAnotherCheckout(unittest.TestCase):
         pkg = other / "corvin_operator" / "forge" / "forge"
         pkg.mkdir(parents=True)
         for d in (other / "corvin_operator", other / "corvin_operator" / "forge", pkg):
-            (d / "__init__.py").write_text("")
+            (d / "__init__.py").write_text("", encoding="utf-8")
         self._other_home = other / ".corvin"
         (pkg / "paths.py").write_text(
             "from pathlib import Path\n"
-            f"def corvin_home():\n    return Path({str(self._other_home)!r})\n")
+            f"def corvin_home():\n    return Path({str(self._other_home)!r})\n", encoding="utf-8")
         cfg = self._other_home / "tenants" / "zz_split_probe" / "global"
         cfg.mkdir(parents=True)
-        (cfg / "tenant.corvin.yaml").write_text("spec: {}\n")
+        (cfg / "tenant.corvin.yaml").write_text("spec: {}\n", encoding="utf-8")
         sys.path.insert(0, str(other))
 
     def tearDown(self):

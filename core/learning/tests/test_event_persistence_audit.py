@@ -57,7 +57,7 @@ def _event(tenant_id: str = TENANT, user_id: str | None = "u1", **payload) -> Le
 def _chain_records(chain: Path) -> list[dict]:
     if not chain.exists():
         return []
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 class TestL01AuditFirst:
@@ -75,11 +75,11 @@ class TestL01AuditFirst:
         assert rec["details"]["tenant_id"] == TENANT
         assert rec["details"]["event_id"] == ev.event_id
         assert "hash" in rec, "record must be hash-chained"
-        assert "MUST NOT REACH CHAIN" not in chain.read_text(), "payload is content, never on the chain"
+        assert "MUST NOT REACH CHAIN" not in chain.read_text(encoding="utf-8"), "payload is content, never on the chain"
 
         disk = list((tmp / "tenants" / TENANT / "learning" / "events").glob("*.jsonl"))
         assert len(disk) == 1
-        line = json.loads(disk[0].read_text().splitlines()[0])
+        line = json.loads(disk[0].read_text(encoding="utf-8").splitlines()[0])
         assert line["audit_ref"] == ref
         assert "_persistence_fallback" not in line
 
@@ -160,11 +160,11 @@ class TestL13PerUserErasure:
         events_dir = tmp / "tenants" / TENANT / "learning" / "events"
         files = list(events_dir.glob("*.jsonl"))
         assert len(files) == 1 and not list(events_dir.glob(".*.tmp")), "atomic: no temp leftovers"
-        lines = [json.loads(l) for l in files[0].read_text().splitlines()]
+        lines = [json.loads(l) for l in files[0].read_text(encoding="utf-8").splitlines()]
         assert [l.get("user_id") for l in lines if l.get("event_type") != "learning.tombstone"] == ["u2"]
         tomb = [l for l in lines if l.get("event_type") == "learning.tombstone"]
         assert len(tomb) == 1 and tomb[0]["erased_count"] == 2
-        assert "u1" not in files[0].read_text(), "tombstone must not carry the erased user id"
+        assert "u1" not in files[0].read_text(encoding="utf-8"), "tombstone must not carry the erased user id"
 
         # readers skip tombstones
         remaining = asyncio.run(store.read_events(tenant_id=TENANT))
@@ -190,7 +190,7 @@ class TestL17AtomicRetention:
         old_file = events_dir / f"{old.date().isoformat()}.jsonl"
         ev = _event().to_audit_event()
         ev["timestamp"] = old.isoformat() + "Z"
-        old_file.write_text(json.dumps(ev) + "\n" + json.dumps(ev) + "\n")
+        old_file.write_text(json.dumps(ev) + "\n" + json.dumps(ev) + "\n", encoding="utf-8")
         asyncio.run(store.write_event(_event(), TENANT))  # fresh, must survive
 
         deleted = asyncio.run(store.cleanup_old_events(tenant_id=TENANT, retention_days=90))
@@ -208,7 +208,7 @@ class TestL17AtomicRetention:
         asyncio.run(store.write_event(_event(), TENANT))
         events_dir = tmp / "tenants" / TENANT / "learning" / "events"
         target = next(events_dir.glob("*.jsonl"))
-        before = target.read_text()
+        before = target.read_text(encoding="utf-8")
 
         import os as _os
         def _boom(*a, **k):
@@ -216,5 +216,5 @@ class TestL17AtomicRetention:
         monkeypatch.setattr(_os, "replace", _boom)
         with pytest.raises(OSError):
             store._rewrite_partition(target, ["x\n"], None)
-        assert target.read_text() == before, "original partition untouched when replace fails"
+        assert target.read_text(encoding="utf-8") == before, "original partition untouched when replace fails"
         assert not list(events_dir.glob(".*.tmp"))

@@ -39,7 +39,7 @@ def temp_measurement_dir(tmp_path):
         {"timestamp": datetime.utcnow().isoformat(), "context_id": "skill-e2e",
          "confidence_pred": 0.70, "outcome_actual": 0.72},
     ]
-    with open(predictions_file, "a") as f:
+    with open(predictions_file, "a", encoding="utf-8") as f:
         for p in predictions:
             f.write(json.dumps(p) + "\n")
 
@@ -53,7 +53,7 @@ def temp_measurement_dir(tmp_path):
         {"timestamp": datetime.utcnow().isoformat(), "context_id": "skill-e2e",
          "feedback_impact": "harmful", "score_before": 0.75, "score_after": 0.70},
     ]
-    with open(feedback_file, "a") as f:
+    with open(feedback_file, "a", encoding="utf-8") as f:
         for fb in feedback:
             f.write(json.dumps(fb) + "\n")
 
@@ -67,7 +67,7 @@ def temp_measurement_dir(tmp_path):
         {"timestamp": datetime.utcnow().isoformat(), "user_id": "user2",
          "decision_style": "pragmatic", "task_type": "devops"},
     ]
-    with open(choices_file, "a") as f:
+    with open(choices_file, "a", encoding="utf-8") as f:
         for c in choices:
             f.write(json.dumps(c) + "\n")
 
@@ -84,7 +84,7 @@ def temp_measurement_dir(tmp_path):
          "budget_allocated": "nice_to_have", "complexity_est": 2.0, "tokens_used": 500,
          "match_score": 0.90},
     ]
-    with open(budget_file, "a") as f:
+    with open(budget_file, "a", encoding="utf-8") as f:
         for b in budget:
             f.write(json.dumps(b) + "\n")
 

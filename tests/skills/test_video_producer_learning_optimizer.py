@@ -61,7 +61,7 @@ class TestOptimizerInitialization:
         """Test optimizer handles corrupted state file gracefully."""
         with tempfile.TemporaryDirectory() as tmpdir:
             state_path = Path(tmpdir) / "optimizer_state.json"
-            state_path.write_text("{invalid json")
+            state_path.write_text("{invalid json", encoding="utf-8")
 
             # Should use defaults instead of crashing
             optimizer = VideoProducerLearningOptimizer(tmpdir)

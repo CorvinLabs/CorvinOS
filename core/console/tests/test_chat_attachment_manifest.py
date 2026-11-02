@@ -58,7 +58,7 @@ class AttachmentManifestTests(unittest.TestCase):
         ad = self.workdir / "attachments"
         ad.mkdir()
         f = ad / "sales.csv"
-        f.write_text("a,b\n1,2\n")
+        f.write_text("a,b\n1,2\n", encoding="utf-8")
         manifest = self.cr._attachment_manifest(self.sess)
         # absolute path present
         self.assertIn(str(f), manifest)
@@ -70,9 +70,9 @@ class AttachmentManifestTests(unittest.TestCase):
     def test_ignores_hidden_and_subdirs(self) -> None:
         ad = self.workdir / "attachments"
         ad.mkdir()
-        (ad / ".hidden").write_text("x")
+        (ad / ".hidden").write_text("x", encoding="utf-8")
         (ad / "sub").mkdir()
-        (ad / "real.txt").write_text("hello")
+        (ad / "real.txt").write_text("hello", encoding="utf-8")
         manifest = self.cr._attachment_manifest(self.sess)
         self.assertIn("real.txt", manifest)
         self.assertNotIn(".hidden", manifest)
@@ -83,7 +83,7 @@ class AttachmentManifestTests(unittest.TestCase):
         ad.mkdir()
         n = self.cr._ATTACH_MANIFEST_MAX + 5
         for i in range(n):
-            (ad / f"f{i:03d}.txt").write_text("x")
+            (ad / f"f{i:03d}.txt").write_text("x", encoding="utf-8")
         manifest = self.cr._attachment_manifest(self.sess)
         self.assertIn("more file(s)", manifest)
 
@@ -112,7 +112,7 @@ class AttachmentManifestTests(unittest.TestCase):
         ad = self.workdir / "attachments"
         ad.mkdir()
         f = ad / "data.csv"
-        f.write_text("x,y\n")
+        f.write_text("x,y\n", encoding="utf-8")
         args = self.cr._build_args(self.sess, resume=True)
         # --append-system-prompt-file is the argv slot right after the flag —
         # a short path, not the (multi-KB-capable) prompt text itself.

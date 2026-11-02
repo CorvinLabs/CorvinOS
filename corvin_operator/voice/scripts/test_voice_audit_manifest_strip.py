@@ -26,7 +26,7 @@ def sealed_env(monkeypatch):
 
     def append_chain(p, n, ev, start_prev=None):
         prev = start_prev if start_prev is not None else S.last_hash_of_segment(p)
-        with p.open("a") as fh:
+        with p.open("a", encoding="utf-8") as fh:
             for i in range(n):
                 r = {"ts": 1.0 + i, "event_type": ev, "severity": "INFO",
                      "run_id": "", "tool": "t", "details": {}, "prev_hash": prev}
@@ -35,13 +35,13 @@ def sealed_env(monkeypatch):
                 prev = r["hash"]
                 fh.write(json.dumps(r) + "\n")
 
-    live.write_text("")
+    live.write_text("", encoding="utf-8")
     append_chain(live, 2, "e", start_prev="")
     pol = S.AuditPolicy(rotation=S.RotationPolicy(max_size_mb=0, max_age_days=0),
                         encryption=S.EncryptionConfig(enabled=False),
                         retention=S.RetentionPolicy())
     S.rotate_and_seal(live, pol, now=100.0)
-    fp = next(json.loads(l).get("prev_hash") for l in live.open())
+    fp = next(json.loads(l).get("prev_hash") for l in live.open(encoding="utf-8"))
     return S, V, d, live, fp
 
 
@@ -56,7 +56,7 @@ def test_whole_manifest_deletion_detected(sealed_env):
 
 def test_non_dict_manifest_line_flagged(sealed_env):
     S, V, d, live, fp = sealed_env
-    S.segment_manifest_path(d).write_text("[1,2,3]\n")   # parses, not a dict
+    S.segment_manifest_path(d).write_text("[1,2,3]\n", encoding="utf-8")   # parses, not a dict
     ok, problems, _ = V._verify_segment_manifest(d, fp)
     assert not ok and any(p["issue"] in ("manifest_corrupt_line", "manifest_full_strip")
                           for p in problems)
@@ -70,9 +70,9 @@ def test_genesis_chain_replacement_detected(sealed_env):
     assert ok, "baseline must link to sealed tail"
     # Attacker drops in an internally-valid GENESIS chain.
     import json, hashlib
-    live.write_text("")
+    live.write_text("", encoding="utf-8")
     prev = ""
-    with live.open("a") as fh:
+    with live.open("a", encoding="utf-8") as fh:
         for i in range(2):
             r = {"ts": 1.0 + i, "event_type": "e", "severity": "INFO",
                  "run_id": "", "tool": "t", "details": {}, "prev_hash": prev}

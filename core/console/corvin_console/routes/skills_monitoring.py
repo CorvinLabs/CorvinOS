@@ -261,7 +261,7 @@ async def get_skill_metrics(
 
         if grading_stats_file.exists():
             try:
-                with open(grading_stats_file) as f:
+                with open(grading_stats_file, encoding="utf-8") as f:
                     grading_stats = json.load(f)
                     for epoch in grading_stats.get('epochs', []):
                         score_history.append({
@@ -284,7 +284,7 @@ async def get_skill_metrics(
 
         if feedback_log_file.exists():
             try:
-                with open(feedback_log_file) as f:
+                with open(feedback_log_file, encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue

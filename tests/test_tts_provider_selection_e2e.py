@@ -276,7 +276,7 @@ def mock_service_env(tmp_path):
     service_env = tmp_path / "service.env"
     service_env.write_text(
         "CORVIN_TTS_OPENAI_KEY=sk-proj-test-key-123\n"
-        "OPENAI_API_KEY=sk-proj-fallback-key-456\n"
+        "OPENAI_API_KEY=sk-proj-fallback-key-456\n", encoding="utf-8"
     )
     return service_env
 

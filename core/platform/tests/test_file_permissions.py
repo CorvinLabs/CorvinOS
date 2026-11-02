@@ -31,7 +31,7 @@ class TestFilePermissionsUnix:
         """Verify os.chmod() is called with correct mode."""
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = Path(tmpdir) / "test.txt"
-            test_file.write_text("test")
+            test_file.write_text("test", encoding="utf-8")
 
             # Set to 0o644 (world-readable)
             os.chmod(test_file, 0o644)
@@ -57,7 +57,7 @@ class TestFilePermissionsUnix:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             audit_file = Path(tmpdir) / "audit.jsonl"
-            audit_file.write_text('{"event": "test"}\n')
+            audit_file.write_text('{"event": "test"}\n', encoding="utf-8")
 
             # Set to world-readable first
             os.chmod(audit_file, 0o644)
@@ -95,7 +95,7 @@ class TestFilePermissionsWindows:
         # on Windows it verifies degradation.
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = Path(tmpdir) / "test.txt"
-            test_file.write_text("test")
+            test_file.write_text("test", encoding="utf-8")
 
             # Should not raise an exception
             result = setup_file_permissions(test_file, mode=0o600, require_success=False)

@@ -73,7 +73,7 @@ def main() -> None:
     created, restored = [], []
     from pathlib import Path  # noqa: PLC0415
     for p in Path(home_dir).rglob("forge/audit.jsonl"):
-        for line in p.read_text().splitlines():
+        for line in p.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:

@@ -339,7 +339,7 @@ class EventStore:
         event_dict = event.to_audit_event()
         event_dict["audit_ref"] = audit_ref
         events_file = self.events_dir / f"{event.timestamp_utc.date().isoformat()}.jsonl"
-        with open(events_file, "a") as f:
+        with open(events_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(event_dict) + "\n")
 
         # 3. Update KG index (SECOND, async-safe; never blocks on failure)
@@ -413,7 +413,7 @@ class EventStore:
             if len(events) >= limit:
                 break
 
-            with open(events_file) as f:
+            with open(events_file, encoding="utf-8") as f:
                 for line in reversed(f.readlines()):
                     if not line.strip():
                         continue
@@ -475,7 +475,7 @@ class EventStore:
             return
         fd, tmp_name = tempfile.mkstemp(prefix=f".{events_file.stem}.", suffix=".tmp", dir=str(events_file.parent))
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.writelines(remaining)
                 if tombstone is not None:
                     f.write(json.dumps(tombstone) + "\n")
@@ -518,7 +518,7 @@ class EventStore:
             # CRITICAL-2 FIX: FIRST — validate ALL events in this partition belong to self.tenant_id
             cross_tenant_count = 0
             cross_tenant_ids = set()
-            with open(events_file) as f:
+            with open(events_file, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -553,7 +553,7 @@ class EventStore:
 
             # SECOND — Process old events (all validated as same-tenant)
             remaining_lines: list[str] = []
-            with open(events_file) as f:
+            with open(events_file, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -609,7 +609,7 @@ class EventStore:
         for events_file in sorted(self.events_dir.glob("*.jsonl")):
             remaining: list[str] = []
             removed_here = 0
-            with open(events_file) as f:
+            with open(events_file, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -652,7 +652,7 @@ class EventStore:
         count = 0
 
         for events_file in self.events_dir.glob("*.jsonl"):
-            with open(events_file) as f:
+            with open(events_file, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -690,7 +690,7 @@ class EventStore:
             if len(results) >= limit:
                 break
 
-            with open(events_file) as f:
+            with open(events_file, encoding="utf-8") as f:
                 for line in reversed(f.readlines()):
                     if not line.strip():
                         continue

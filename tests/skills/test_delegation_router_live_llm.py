@@ -93,7 +93,7 @@ def test_real_haiku_turn_leaves_an_attributed_shadow_router_record(tmp_path: Pat
     proc = subprocess.run(
         [*runners[engine], f"Reply with exactly the single token {nonce} and nothing else.",
          "--model", "haiku"],
-        capture_output=True, text=True, timeout=180, cwd=work, env=env,
+        capture_output=True, text=True, timeout=180, cwd=work, env=env, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     print("\n[live] haiku said:", proc.stdout.strip()[:80])
@@ -102,7 +102,7 @@ def test_real_haiku_turn_leaves_an_attributed_shadow_router_record(tmp_path: Pat
     # temp cwd — that is why it is a temp dir and never the repo root)
 
     # 4. attribution on disk
-    records = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    records = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
     routed = [
         r for r in records
         if r.get("event_type") == "skill.executed"
@@ -112,7 +112,7 @@ def test_real_haiku_turn_leaves_an_attributed_shadow_router_record(tmp_path: Pat
     d = routed[0]["details"]
     assert d["status"] == "success"
     assert d["lom"] == "corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route"
-    src = (_SHARED / "delegation_policy.py").read_text()
+    src = (_SHARED / "delegation_policy.py").read_text(encoding="utf-8")
     import ast
     node = next(n for n in ast.walk(ast.parse(src))
                 if isinstance(n, ast.FunctionDef) and n.name == "_acp_shadow_route")

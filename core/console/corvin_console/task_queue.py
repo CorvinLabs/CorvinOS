@@ -175,7 +175,7 @@ class TaskQueue:
             "tenant_id": tenant_id,
             **details,
         }
-        with open(log_path, "a") as f:
+        with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
             f.flush()
             os.fsync(f.fileno())
@@ -435,7 +435,7 @@ class TaskQueue:
         state: dict[str, TaskQueueEntry] = {}
 
         try:
-            with open(log_path, "r") as f:
+            with open(log_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue

@@ -69,7 +69,7 @@ def log_warn(msg: str):
 def extract_narration_from_storyboard(storyboard_path: Path) -> str:
     """Extract all narration text from storyboard."""
     try:
-        with open(storyboard_path, 'r') as f:
+        with open(storyboard_path, 'r', encoding="utf-8") as f:
             storyboard = json.load(f)
 
         narrations = []
@@ -121,7 +121,7 @@ def re_encode_audio_to_proper_bitrate(input_path: Path, output_path: Path, bitra
             str(output_path),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, timeout=60, text=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=60, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode == 0 and output_path.exists():
             file_size = output_path.stat().st_size / 1024
@@ -154,7 +154,7 @@ def get_audio_duration(audio_path: Path) -> float:
             ],
             capture_output=True,
             timeout=10,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         return float(result.stdout.strip())
     except:
@@ -173,7 +173,7 @@ def get_video_duration(video_path: Path) -> float:
             ],
             capture_output=True,
             timeout=10,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         return float(result.stdout.strip())
     except:
@@ -230,7 +230,7 @@ def reassemble_video_with_audio(
         ]
 
         log_info(f"Running FFmpeg: video + audio merge")
-        result = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=600, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             log_error(f"FFmpeg failed: {result.stderr[:300]}")
@@ -245,7 +245,7 @@ def reassemble_video_with_audio(
             ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=bit_rate', '-of', 'default=noprint_wrappers=1:nokey=1:nokey=1', str(output_path)],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=10, encoding="utf-8", errors="replace",
         )
 
         audio_bitrate = audio_info.stdout.strip()
@@ -272,7 +272,7 @@ def verify_video_audio(video_path: Path) -> Dict:
             ['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type,codec_name,bit_rate,duration', '-show_entries', 'format=duration', '-of', 'json', str(video_path)],
             capture_output=True,
             timeout=10,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         info = json.loads(result.stdout)

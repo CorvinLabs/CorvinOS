@@ -17,7 +17,7 @@ REPORT = {"item_id": "att-1", "verdict": "admitted_redacted", "reason_code": "",
 
 def _records(client):
     chain = client.home / "tenants/_default/global/forge/audit.jsonl"
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def test_each_verdict_maps_to_its_event_with_only_ids_counts_and_codes(tmp_path):
@@ -40,5 +40,5 @@ def test_no_file_name_and_no_cell_value_can_reach_the_chain_even_if_a_caller_pas
         hostile = {**REPORT, "name": "customers-2026.csv", "filename": "customers-2026.csv", "sample": [{"email": "a@b.org"}],
                    "pii_kinds": {"email": 1}}
         console_audit.forge_intake_item(tenant_id="_default", report=hostile)
-        raw = (client.home / "tenants/_default/global/forge/audit.jsonl").read_text()
+        raw = (client.home / "tenants/_default/global/forge/audit.jsonl").read_text(encoding="utf-8")
         assert "customers-2026" not in raw and "a@b.org" not in raw

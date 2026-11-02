@@ -174,7 +174,7 @@ class HashChain:
 
         try:
             self.chain_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.chain_file, 'w') as f:
+            with open(self.chain_file, 'w', encoding="utf-8") as f:
                 for entry in self.entries:
                     f.write(entry.to_json() + '\n')
         except IOError as e:
@@ -186,7 +186,7 @@ class HashChain:
             return
 
         try:
-            with open(self.chain_file, 'r') as f:
+            with open(self.chain_file, 'r', encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

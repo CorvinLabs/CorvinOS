@@ -17,7 +17,7 @@ from core.skills.os_skills.skill_adapter import SkillAdapter
 
 
 def _epoch_on_disk(adapter: SkillAdapter) -> int:
-    return json.loads(adapter.config_file.read_text())["optimizer"]["epoch"]
+    return json.loads(adapter.config_file.read_text(encoding="utf-8"))["optimizer"]["epoch"]
 
 
 def test_two_concurrent_adapters_never_lose_an_epoch(tmp_path: Path) -> None:

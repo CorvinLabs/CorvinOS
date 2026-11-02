@@ -89,9 +89,9 @@ def test_pre_m3_session_without_proof_still_loads(console_home):
     rec = auth.create_session(tenant_id="_default")
     # Rewrite the session file dropping lic_proof (simulate a pre-M3 record).
     path = auth._session_path(rec.sid)
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data.pop("lic_proof", None)
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     os.chmod(path, 0o600)
     loaded = auth.load_session(rec.sid)
     assert loaded is not None  # empty stored proof → skip check (backward-compat)

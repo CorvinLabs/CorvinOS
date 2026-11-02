@@ -83,7 +83,7 @@ def gate_sandbox(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "claude"
-    fake.write_text(_FAKE_CLAUDE)
+    fake.write_text(_FAKE_CLAUDE, encoding="utf-8")
     fake.chmod(0o755)
     spawn_log = tmp_path / "spawn.log"
     monkeypatch.setenv("CORVIN_HOME", str(home))
@@ -97,8 +97,8 @@ def gate_sandbox(tmp_path, monkeypatch):
     (tmp_path / "home").mkdir()
     wf_dir = home / "tenants" / "_default" / "workflows"
     wf_dir.mkdir(parents=True)
-    (wf_dir / f"{WID}.meta.json").write_text(json.dumps({"name": WID}))
-    (wf_dir / f"{WID}.awp.yaml").write_text(_WORKFLOW_YAML)
+    (wf_dir / f"{WID}.meta.json").write_text(json.dumps({"name": WID}), encoding="utf-8")
+    (wf_dir / f"{WID}.awp.yaml").write_text(_WORKFLOW_YAML, encoding="utf-8")
     return {"home": home, "wf_dir": wf_dir, "spawn_log": spawn_log}
 
 
@@ -112,11 +112,11 @@ def _cli_env() -> dict[str, str]:
 
 def _paused_run(sb: dict, instructions: str = FORBIDDEN) -> str:
     """Pause the probe workflow at its ask_human node with the real CLI (stub engine)."""
-    (sb["wf_dir"] / f"{WID}.awp.yaml").write_text(_WORKFLOW_YAML.replace(FORBIDDEN, instructions))
+    (sb["wf_dir"] / f"{WID}.awp.yaml").write_text(_WORKFLOW_YAML.replace(FORBIDDEN, instructions), encoding="utf-8")
     proc = subprocess.run(
         [sys.executable, "-m", "corvin_workflows", "run",
          str(sb["wf_dir"] / f"{WID}.awp.yaml"), "--engine", "stub", "--format", "json"],
-        cwd=str(_WORKFLOWS), env=_cli_env(), capture_output=True, text=True, timeout=180,
+        cwd=str(_WORKFLOWS), env=_cli_env(), capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout)
@@ -127,14 +127,14 @@ def _paused_run(sb: dict, instructions: str = FORBIDDEN) -> str:
 def _worker_spawns(sb: dict) -> list[str]:
     if not sb["spawn_log"].exists():
         return []
-    return [ln for ln in sb["spawn_log"].read_text().splitlines() if ln == "WORKER"]
+    return [ln for ln in sb["spawn_log"].read_text(encoding="utf-8").splitlines() if ln == "WORKER"]
 
 
 def _audit_events(sb: dict) -> list[dict]:
     chain = sb["home"] / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    return [json.loads(ln) for ln in chain.read_text().splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in chain.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 def _console_client(home: Path):
@@ -177,7 +177,7 @@ def test_cli_resume_does_not_spawn_a_worker_for_an_l44_forbidden_node(gate_sandb
 
     proc = subprocess.run(
         [sys.executable, "-m", "corvin_workflows", "resume", rid, "yes", "--engine", "claude"],
-        cwd=str(_WORKFLOWS), env=_cli_env(), capture_output=True, text=True, timeout=180,
+        cwd=str(_WORKFLOWS), env=_cli_env(), capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace",
     )
 
     assert _worker_spawns(gate_sandbox) == [], (
@@ -196,7 +196,7 @@ def test_cli_resume_still_spawns_a_worker_for_a_permitted_node(gate_sandbox):
 
     proc = subprocess.run(
         [sys.executable, "-m", "corvin_workflows", "resume", rid, "yes", "--engine", "claude"],
-        cwd=str(_WORKFLOWS), env=_cli_env(), capture_output=True, text=True, timeout=180,
+        cwd=str(_WORKFLOWS), env=_cli_env(), capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace",
     )
 
     assert proc.returncode == 0, f"a permitted resume was refused: {proc.stdout[:300]}"

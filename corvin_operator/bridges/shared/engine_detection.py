@@ -161,7 +161,7 @@ def _windows_wrap(cmd: list[str]) -> list[str]:
 def _run(cmd: list[str], timeout: float = _PROBE_TIMEOUT) -> tuple[int, str, str]:
     """Run subprocess; return (returncode, stdout, stderr). Never raises."""
     try:
-        r = subprocess.run(_windows_wrap(cmd), capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(_windows_wrap(cmd), capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return -1, "", ""
@@ -343,7 +343,7 @@ def probe_copilot() -> EngineProbeResult:
     copilot_cfg = Path.home() / ".copilot" / "config.json"
     if copilot_cfg.exists():
         try:
-            cfg = json.loads(copilot_cfg.read_text())
+            cfg = json.loads(copilot_cfg.read_text(encoding="utf-8"))
             if cfg.get("github_token") or cfg.get("access_token"):
                 return EngineProbeResult(
                     engine_id=engine_id, installed=True, authenticated=True,

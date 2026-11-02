@@ -300,7 +300,7 @@ def _load_store(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
@@ -377,7 +377,7 @@ def _read_channel_whitelist(channel: str) -> list[str]:
     if not p.exists():
         return []
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     wl = data.get("whitelist") if isinstance(data, dict) else None

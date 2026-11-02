@@ -203,7 +203,7 @@ class LocalFileAuditBackend(AuditBackend):
             return
 
         try:
-            with open(self.audit_file, "r") as f:
+            with open(self.audit_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
             if lines:
                 last_line = lines[-1].strip()
@@ -226,7 +226,7 @@ class LocalFileAuditBackend(AuditBackend):
             event.hash = hashlib.sha256(event_json.encode()).hexdigest()
 
             # Append to file (immutable)
-            with open(self.audit_file, "a") as f:
+            with open(self.audit_file, "a", encoding="utf-8") as f:
                 f.write(event_json + "\n")
 
             self.last_hash = event.hash

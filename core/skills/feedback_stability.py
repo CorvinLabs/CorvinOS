@@ -378,7 +378,7 @@ class OperatorApprovalGate:
             return  # No persisted approvals yet
 
         try:
-            with open(self.approvals_file, "r") as f:
+            with open(self.approvals_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -400,7 +400,7 @@ class OperatorApprovalGate:
             self.approvals_file.parent.mkdir(parents=True, exist_ok=True)
 
             # Append record as JSON line (JSONL format, append-only)
-            with open(self.approvals_file, "a") as f:
+            with open(self.approvals_file, "a", encoding="utf-8") as f:
                 json_line = json.dumps(asdict(record), default=str)  # Use default=str for datetime
                 f.write(json_line + "\n")
         except Exception as e:
@@ -418,7 +418,7 @@ class OperatorApprovalGate:
             # Read all records
             records = []
             try:
-                with open(self.approvals_file, "r") as f:
+                with open(self.approvals_file, "r", encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue
@@ -449,7 +449,7 @@ class OperatorApprovalGate:
 
             # Rewrite file (only kept records)
             if deleted_count > 0:
-                with open(self.approvals_file, "w") as f:
+                with open(self.approvals_file, "w", encoding="utf-8") as f:
                     for data in kept_records:
                         json_line = json.dumps(data, default=str)
                         f.write(json_line + "\n")

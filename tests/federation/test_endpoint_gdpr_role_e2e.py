@@ -108,12 +108,12 @@ def test_role_set_is_audited_with_endpoint_role_and_actor_only(federation_pair):
     ctx = federation_pair
     _set_role(ctx, "joint", organisation="Secret Org Name 4711")
     chain = tenant_audit_chain(TENANT)
-    recs = [json.loads(x) for x in chain.read_text().splitlines() if x.strip()]
+    recs = [json.loads(x) for x in chain.read_text(encoding="utf-8").splitlines() if x.strip()]
     rec = [r for r in recs if r["event_type"] == "federation.endpoint_role_set"][-1]
     # chain_dna / _-prefixed keys are added by the chain writer itself, not by the emitter
     assert {k: v for k, v in rec["details"].items() if not k.startswith("_") and k != "chain_dna"} == {
         "endpoint_id": "peer-B", "gdpr_role": "joint", "actor": "cli", "tenant_id": TENANT}
-    assert "4711" not in chain.read_text(), "the organisation text never enters the chain"
+    assert "4711" not in chain.read_text(encoding="utf-8"), "the organisation text never enters the chain"
     ok, problems = real_se.verify_chain(chain)
     assert ok, problems
 
@@ -122,7 +122,7 @@ def test_a_peer_cannot_set_or_change_the_role(federation_pair, monkeypatch):
     """B answers with text that names a role and an organisation; A's endpoint record is unchanged."""
     ctx = federation_pair
     _set_role(ctx, "unset", organisation="Operator Said This")
-    before = json.loads((_ep_dir(ctx) / "peer-B.json").read_text())
+    before = json.loads((_ep_dir(ctx) / "peer-B.json").read_text(encoding="utf-8"))
 
     orig = _RecordingEngine.spawn
 
@@ -136,7 +136,7 @@ def test_a_peer_cannot_set_or_change_the_role(federation_pair, monkeypatch):
     res = ctx["sender"].send("peer-B", PUBLIC)
     assert res.ok
     monkeypatch.setattr(_RecordingEngine, "spawn", orig)
-    after = json.loads((_ep_dir(ctx) / "peer-B.json").read_text())
+    after = json.loads((_ep_dir(ctx) / "peer-B.json").read_text(encoding="utf-8"))
     assert (after.get("gdpr_role"), after.get("organisation")) == (before["gdpr_role"], before["organisation"])
     assert endpoint_role.role_of(after) == "unset"
     assert ctx["sender"].send("peer-B", CLASSIFIED[0]).data == {"reason": "endpoint_role_unset"}
@@ -168,7 +168,7 @@ def test_delegate_refuses_classified_text_before_its_audit_first_record(federati
 
 def _release(home: Path, grade: str) -> None:
     (home / "tenants" / TENANT / "global" / "tenant.corvin.yaml").write_text(yaml.safe_dump(
-        {"spec": {"workflows": {"peer_policy": {"endpoints": {"peer-B": {"max_classification": grade}}}}}}))
+        {"spec": {"workflows": {"peer_policy": {"endpoints": {"peer-B": {"max_classification": grade}}}}}}), encoding="utf-8")
 
 
 def test_workflow_step_refuses_released_classified_data_while_the_role_is_unset(two):

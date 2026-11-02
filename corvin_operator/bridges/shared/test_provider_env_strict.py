@@ -52,7 +52,7 @@ def home(monkeypatch, tmp_path):
     cfg.parent.mkdir(parents=True)
 
     def declare(*entries, providers):
-        cfg.write_text(yaml.safe_dump({"spec": {"data_classification": {"provider_compliance": list(entries)}}}))
+        cfg.write_text(yaml.safe_dump({"spec": {"data_classification": {"provider_compliance": list(entries)}}}), encoding="utf-8")
         cfg.chmod(0o600)
         monkeypatch.setattr(em, "load_providers", lambda force_reload=False: providers)
     return declare

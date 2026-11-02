@@ -21,7 +21,7 @@ def run_summarize_smart(text: str, lang: str = "en", max_chars: int = 300) -> st
         input=text,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=30, encoding="utf-8", errors="replace",
     )
 
     if result.returncode != 0:

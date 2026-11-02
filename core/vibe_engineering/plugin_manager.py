@@ -43,7 +43,7 @@ class PluginManifest:
         """Load manifest from YAML (MVP: JSON fallback)."""
         try:
             # MVP: Use JSON for simplicity; v1.1: add YAML support
-            with open(manifest_path) as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 data = json.load(f)
                 return cls(
                     id=data["plugin"]["id"],

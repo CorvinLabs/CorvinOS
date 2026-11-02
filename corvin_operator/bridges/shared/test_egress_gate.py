@@ -282,7 +282,7 @@ class TestFromFile(unittest.TestCase):
                 "default_action": "deny",
                 "allowed_hosts": ["localhost"],
                 "forbidden_hosts": [],
-            }))
+            }), encoding="utf-8")
             gate = EgressGate.from_file(p)
             self.assertIsNotNone(gate)
             assert gate is not None
@@ -298,7 +298,7 @@ class TestFromFile(unittest.TestCase):
                     "default_action": "deny",
                     "allowed_hosts": ["localhost"],
                 }}
-            }))
+            }), encoding="utf-8")
             gate = EgressGate.from_file(p)
             self.assertIsNotNone(gate)
             assert gate is not None
@@ -307,7 +307,7 @@ class TestFromFile(unittest.TestCase):
     def test_malformed_json_raises(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "egress_policy.json"
-            p.write_text("not json {")
+            p.write_text("not json {", encoding="utf-8")
             with self.assertRaises(ValueError):
                 EgressGate.from_file(p)
 
@@ -396,7 +396,7 @@ class TestNoAnthropicImport(unittest.TestCase):
 
     def test_no_anthropic_in_source(self):
         import ast
-        src = (Path(__file__).resolve().parent / "egress_gate.py").read_text()
+        src = (Path(__file__).resolve().parent / "egress_gate.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

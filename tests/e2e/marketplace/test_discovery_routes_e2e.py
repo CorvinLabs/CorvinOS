@@ -89,7 +89,7 @@ def sample_index(tmp_path):
             },
         ],
     }
-    index_file.write_text(json.dumps(index_data))
+    index_file.write_text(json.dumps(index_data), encoding="utf-8")
     return index_file
 
 

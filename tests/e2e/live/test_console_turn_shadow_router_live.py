@@ -139,7 +139,7 @@ def test_console_turn_shadow_router_and_priced_span_share_one_chain(tmp_path: Pa
         assert "PONG" in answer.upper(), answer
 
         # the emitter drains asynchronously; the chain writes are synchronous
-        events = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        events = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         etypes = [e.get("event_type") for e in events]
         print(f"[live] tenant chain: {etypes}")
 
@@ -164,7 +164,7 @@ def test_console_turn_shadow_router_and_priced_span_share_one_chain(tmp_path: Pa
 
         rows = {m["model_id"]: m for m in model_usage(tid)["models"]}
         assert HAIKU in rows and rows[HAIKU]["output_tokens"] > 0, rows
-        assert "single word PONG" not in chain.read_text(), "prompt text leaked into the chain"
+        assert "single word PONG" not in chain.read_text(encoding="utf-8"), "prompt text leaked into the chain"
     finally:
         if emitter is not None:
             try:

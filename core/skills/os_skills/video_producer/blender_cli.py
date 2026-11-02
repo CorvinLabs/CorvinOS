@@ -51,7 +51,7 @@ def probe_blend_scene(blend_file: str) -> dict:
     read bpy scene state without importing bpy (which only exists inside a
     running Blender process, not in this plain python3 interpreter).
     """
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(_PROBE_SCRIPT)
         script_path = f.name
 
@@ -60,7 +60,7 @@ def probe_blend_scene(blend_file: str) -> dict:
             ["blender", "--background", blend_file, "--python", script_path],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=60, encoding="utf-8", errors="replace",
         )
     finally:
         Path(script_path).unlink(missing_ok=True)

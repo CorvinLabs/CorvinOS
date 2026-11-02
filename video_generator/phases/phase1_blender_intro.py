@@ -149,7 +149,7 @@ print("Blender render complete!")
 
                 # Create Blender script
                 script_path = "/tmp/corvinos_blender_render.py"
-                with open(script_path, 'w') as f:
+                with open(script_path, 'w', encoding="utf-8") as f:
                     f.write(self.create_blender_script())
 
                 # Run Blender

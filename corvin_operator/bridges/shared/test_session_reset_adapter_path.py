@@ -78,7 +78,7 @@ def _adapter_session_dir(home: Path, channel: str, chat_id: str) -> Path:
     env.pop("CORVIN_TENANT_ID", None)
     out = subprocess.run(
         [sys.executable, "-c", code, channel, chat_id],
-        env=env, capture_output=True, text=True, check=True,
+        env=env, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace",
     ).stdout.strip()
     return Path(out)
 
@@ -89,17 +89,17 @@ def _seed_session(d: Path) -> None:
     # Claude conversation state — MUST be removed by /new.
     (d / ".main_session.json").write_text(
         json.dumps({"session_id": "1e53620a-335b-4a5c-a0fa-c1d08c9d3d82",
-                    "saved_at": "2026-08-28T06:55:48Z"})
+                    "saved_at": "2026-08-28T06:55:48Z"}), encoding="utf-8"
     )
     (d / ".session_started").touch()
-    (d / ".claude.json").write_text('{"sessionId":"abc"}')
+    (d / ".claude.json").write_text('{"sessionId":"abc"}', encoding="utf-8")
     cdir = d / ".claude"
     cdir.mkdir(exist_ok=True)
-    (cdir / "history.jsonl").write_text('{"role":"user"}\n')
+    (cdir / "history.jsonl").write_text('{"role":"user"}\n', encoding="utf-8")
     # Project files — MUST survive (the /new reply promises exactly this).
-    (d / "notes.md").write_text("# my project notes\n")
+    (d / "notes.md").write_text("# my project notes\n", encoding="utf-8")
     (d / "outputs").mkdir(exist_ok=True)
-    (d / "outputs" / "chart.png").write_text("png")
+    (d / "outputs" / "chart.png").write_text("png", encoding="utf-8")
 
 
 def _has_claude_state(d: Path) -> bool:
@@ -118,7 +118,7 @@ def _call_reset(home: Path, channel: str, chat_id: str) -> dict:
     r = subprocess.run(
         [sys.executable, str(SESSION_RESET_PY),
          "--channel", channel, "--chat-id", chat_id, "--reason", "manual"],
-        env=env, capture_output=True, text=True,
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if r.returncode != 0:
         raise AssertionError(f"session_reset exited {r.returncode}: {r.stderr[:600]}")

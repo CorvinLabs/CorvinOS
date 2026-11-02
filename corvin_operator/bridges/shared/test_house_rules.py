@@ -28,7 +28,7 @@ def _policy():
 
 
 def test_no_anthropic_import():
-    src = Path(H.__file__).read_text()
+    src = Path(H.__file__).read_text(encoding="utf-8")
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -271,7 +271,7 @@ def test_tenant_overlay_cannot_weaken():
 
 def test_load_repo_policy_fail_closed_on_garbage(tmp_path):
     bad = tmp_path / "house_rules.yaml"
-    bad.write_text("this: is: not: valid: yaml: [")
+    bad.write_text("this: is: not: valid: yaml: [", encoding="utf-8")
     pol = H.load_repo_policy(bad)
     assert pol.default_action == "deny"
     assert any(r.id == "_failclosed" for r in pol.rules)
@@ -325,7 +325,7 @@ def test_policy_anchor_matches_repo_file():
 def test_integrity_mismatch_denies(tmp_path):
     # A tampered policy file (hash != anchor) → fail-closed deny at the gate.
     bad = tmp_path / "house_rules.yaml"
-    bad.write_text("version: 1\ndefault_action: allow\nrules: []\n")
+    bad.write_text("version: 1\ndefault_action: allow\nrules: []\n", encoding="utf-8")
     ok, reason = H.verify_policy_integrity(bad)
     assert not ok and "mismatch" in reason
 
@@ -351,7 +351,7 @@ def test_no_json_retry_reinforces_prompt_and_recovers(monkeypatch):
             self.stdout = stdout
             self.stderr = ""
 
-    def _fake_run(cmd, capture_output, text, timeout):
+    def _fake_run(cmd, capture_output, text, timeout, **_kw):
         prompt = cmd[-1]
         calls.append(prompt)
         if len(calls) == 1:

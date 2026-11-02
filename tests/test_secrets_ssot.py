@@ -108,7 +108,7 @@ def test_tts_key_falls_back_to_general_env():
 
 
 def test_tts_key_file_fallback(tmp_path):
-    (tmp_path / "service.env").write_text("CORVIN_TTS_OPENAI_KEY=sk-from-file\n")
+    (tmp_path / "service.env").write_text("CORVIN_TTS_OPENAI_KEY=sk-from-file\n", encoding="utf-8")
     results = _resolve_all("tts_openai_api_key", tmp_path)
     _assert_all_agree(results)
     assert results["secrets.resolve_key"] == "sk-from-file"
@@ -140,7 +140,7 @@ def test_stt_key_falls_back_to_general_env():
 
 
 def test_stt_key_file_fallback(tmp_path):
-    (tmp_path / "service.env").write_text("CORVIN_STT_OPENAI_KEY=sk-from-file\n")
+    (tmp_path / "service.env").write_text("CORVIN_STT_OPENAI_KEY=sk-from-file\n", encoding="utf-8")
     results = _resolve_all("stt_openai_api_key", tmp_path)
     _assert_all_agree(results)
     assert results["secrets.resolve_key"] == "sk-from-file"
@@ -151,7 +151,7 @@ def test_retired_dotenv_file_is_no_longer_consulted(tmp_path):
     no longer surface, for any implementation. (Pre-consolidation, say.py /
     stt/openai_whisper.py both scanned it; a real install had it diverge
     from service.env with a stale/wrong value.)"""
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-stale-in-retired-file\n")
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-stale-in-retired-file\n", encoding="utf-8")
     results = _resolve_all("tts_openai_api_key", tmp_path)
     _assert_all_agree(results)
     assert results["secrets.resolve_key"] is None
@@ -196,7 +196,7 @@ def test_secrets_store_precedence_with_service_env(tmp_path):
     from provider_keys import SecretsStore
 
     # Write service.env
-    (tmp_path / "service.env").write_text("OPENAI_API_KEY=sk-from-service-env\n")
+    (tmp_path / "service.env").write_text("OPENAI_API_KEY=sk-from-service-env\n", encoding="utf-8")
 
     # Write secrets.enc
     env = _clean_env(VOICE_CONFIG_DIR=str(tmp_path))

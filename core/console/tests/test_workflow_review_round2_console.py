@@ -126,9 +126,9 @@ def test_b07_expired_pause_is_ended_when_the_run_is_read(env):
     rid, events, t = _paused_run(client)
     from corvin_console.routes import workflows as w
     mp = w._run_meta_path(tid, "appr", rid)
-    meta = json.loads(mp.read_text())
+    meta = json.loads(mp.read_text(encoding="utf-8"))
     meta["awaiting"]["expires_at_ms"] = int(time.time() * 1000) - 1
-    mp.write_text(json.dumps(meta))
+    mp.write_text(json.dumps(meta), encoding="utf-8")
     got = client.get(f"/v1/console/workflows/appr/runs/{rid}").json()["run"]
     assert got["status"] == "failed" and got["error"] == "pause expired"
     t.join(10)

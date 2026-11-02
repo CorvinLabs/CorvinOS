@@ -65,7 +65,7 @@ def case_bundle_dir_resolves_in_simulated_wheel_layout() -> None:
     fake_ldd_dir = fake_vendor_root / "corvin_operator" / "bundle" / "skills" / "ldd" / "adr_gate"
     fake_ldd_dir.mkdir(parents=True)
     (fake_ldd_dir / "SKILL.md").write_text(
-        "---\nname: adr_gate\ndescription: fake vendored copy\n---\n\nbody\n"
+        "---\nname: adr_gate\ndescription: fake vendored copy\n---\n\nbody\n", encoding="utf-8"
     )
     # _HERE is computed once at import time from the REAL file location, so
     # we can't just re-import; instead verify the candidate-path FORMULA

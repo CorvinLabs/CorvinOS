@@ -119,7 +119,7 @@ class PipelineEditorTests(unittest.TestCase):
         # written to tenant.corvin.yaml
         p = self.base / "_default" / "global" / "tenant.corvin.yaml"
         self.assertTrue(p.exists())
-        self.assertIn("context_engineering", p.read_text())
+        self.assertIn("context_engineering", p.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

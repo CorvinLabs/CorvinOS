@@ -343,7 +343,7 @@ def last_hash_of_segment(plaintext_path: Path) -> str:
     if not plaintext_path.is_file():
         return ""
     last = ""
-    with plaintext_path.open("r") as fh:
+    with plaintext_path.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -365,7 +365,7 @@ def first_prev_hash_of_segment(plaintext_path: Path) -> str:
     first ``prev_hash``."""
     if not plaintext_path.is_file():
         return ""
-    with plaintext_path.open("r") as fh:
+    with plaintext_path.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -557,7 +557,7 @@ def append_segment_manifest(
                       os.O_CREAT | os.O_RDWR, 0o600)
     try:
         _fcntl.flock(lock_fd, _fcntl.LOCK_EX)
-        with mpath.open("a") as fh:
+        with mpath.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
@@ -878,7 +878,7 @@ def rotate_and_seal(
             ).hexdigest()[:16]
         try:
             audit_path.parent.mkdir(parents=True, exist_ok=True)
-            with audit_path.open("w") as fh:
+            with audit_path.open("w", encoding="utf-8") as fh:
                 fh.write(json.dumps(link_rec) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())

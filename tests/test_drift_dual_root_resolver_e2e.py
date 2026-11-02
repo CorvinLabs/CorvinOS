@@ -49,7 +49,7 @@ def _run_isolated(body: str, corvin_home: str | None) -> str:
     if corvin_home is not None:
         env["CORVIN_HOME"] = corvin_home
     out = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, env=env)
+        [sys.executable, "-c", script], capture_output=True, text=True, env=env, encoding="utf-8", errors="replace")
     assert out.returncode == 0, f"child failed:\n{out.stderr}"
     return out.stdout.strip()
 

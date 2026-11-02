@@ -96,7 +96,7 @@ class TestStability(_TempHomeMixin, unittest.TestCase):
     def test_id_survives_module_reload(self) -> None:
         iid1 = instance_identity.get_instance_id()
         # Simulate restart by reloading via fresh metadata read
-        with self.id_path.open() as fh:
+        with self.id_path.open(encoding="utf-8") as fh:
             on_disk = json.load(fh)
         self.assertEqual(on_disk["instance_id"], iid1)
 
@@ -124,7 +124,7 @@ class TestLabel(_TempHomeMixin, unittest.TestCase):
         meta = instance_identity.set_label("test-instance")
         self.assertEqual(meta["label"], "test-instance")
         # And the file reflects it
-        with self.id_path.open() as fh:
+        with self.id_path.open(encoding="utf-8") as fh:
             on_disk = json.load(fh)
         self.assertEqual(on_disk["label"], "test-instance")
 
@@ -162,14 +162,14 @@ class TestSelfHeal(_TempHomeMixin, unittest.TestCase):
         self.assertEqual(mode, 0o600)
 
     def test_corrupt_file_regenerates(self) -> None:
-        with self.id_path.open("w") as fh:
+        with self.id_path.open("w", encoding="utf-8") as fh:
             fh.write("not valid json {{{")
         os.chmod(self.id_path, 0o600)
         iid = instance_identity.get_instance_id()
         uuid.UUID(iid, version=4)
 
     def test_missing_uuid_field_regenerates(self) -> None:
-        with self.id_path.open("w") as fh:
+        with self.id_path.open("w", encoding="utf-8") as fh:
             json.dump({"created_at": "2026-01-01T00:00:00+00:00"}, fh)
         os.chmod(self.id_path, 0o600)
         iid = instance_identity.get_instance_id()

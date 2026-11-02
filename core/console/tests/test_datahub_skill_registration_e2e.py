@@ -25,7 +25,7 @@ class DataHubSkillRegistrationTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.src = self.tmp / "data" / "rows.json"
         self.src.parent.mkdir(parents=True)
-        self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2}]))
+        self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2}]), encoding="utf-8")
 
     def _create(self, client, csrf, **over):
         body = {"name": "orders", "description": "Order rows", "creation_type": "skill",
@@ -86,7 +86,7 @@ class DataHubSkillRegistrationTest(unittest.TestCase):
     def test_the_source_hash_and_path_are_kept_for_regeneration_but_not_in_the_listing(self):
         with _sandbox(self.tmp) as (client, csrf, home, _):
             aid = self._create(client, csrf).json()["artifact_id"]
-            stored = json.loads(next(Path(home).rglob(f"datahub_artifacts/{aid}.json")).read_text())
+            stored = json.loads(next(Path(home).rglob(f"datahub_artifacts/{aid}.json")).read_text(encoding="utf-8"))
             self.assertEqual(len(stored["source"]["sha256"]), 64)
             self.assertTrue(stored["source"]["path"].endswith("rows.json"))
             listing = client.get(f"{_BASE}/list").json()

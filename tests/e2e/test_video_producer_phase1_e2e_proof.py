@@ -55,7 +55,7 @@ class TestVideoProducerPhase1E2E:
             The plugin registry enforces load order dependencies.
             Plugin configuration is tenant-scoped (ADR-0007).
             """
-            (text_dir / "doc1.txt").write_text(doc1_text)
+            (text_dir / "doc1.txt").write_text(doc1_text, encoding="utf-8")
 
             # Mock asset 2: Another document
             doc2_text = """
@@ -67,7 +67,7 @@ class TestVideoProducerPhase1E2E:
             They learn via feedback (ADR-0314).
             They are composable and versioned.
             """
-            (text_dir / "doc2.txt").write_text(doc2_text)
+            (text_dir / "doc2.txt").write_text(doc2_text, encoding="utf-8")
 
             # Phase 1: Create analyzer
             analyzer = AssetAnalyzer(str(project_dir))

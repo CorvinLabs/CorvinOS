@@ -117,7 +117,7 @@ def test_implicit_depends_on_prev_iter(tmp_path):
     """Workers with no explicit depends_on inherit all nodes from the previous iteration."""
     run_dir = _make_run_dir(tmp_path)
     # Remove explicit deps from worker-c
-    d = json.loads((run_dir / "subtasks" / "subtasks_iter_0001.json").read_text())
+    d = json.loads((run_dir / "subtasks" / "subtasks_iter_0001.json").read_text(encoding="utf-8"))
     d["subtasks"][0]["depends_on"] = []
     _write(run_dir / "subtasks" / "subtasks_iter_0001.json", d)
 

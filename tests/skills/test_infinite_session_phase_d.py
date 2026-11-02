@@ -201,9 +201,9 @@ def test_history_rejects_traversal_ids(home, console_audit, bad):
 def test_history_detects_tampered_chain(home, console_audit):
     snaps = _seed("task_t", [{"v": 1}, {"v": 2}])
     path = home / "tenants" / TENANT / "infinite_session" / "snapshots" / "task_t" / f"{snaps[1].snapshot_id}.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data["state_dict"]["v"] = 99
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     res = _client(_record()).get("/api/infinite-session/task/task_t/history")
     # A hash-mismatching snapshot cannot be loaded at all (fail-closed)
     assert res.status_code == 500
@@ -278,7 +278,7 @@ def test_revert_appends_chained_recovery_snapshot(home, console_audit):
     from core.learning.event_persistence import _resolve_core_audit
     chain_path = Path(_resolve_core_audit().audit_path())
     assert chain_path.is_relative_to(home)  # never the live root
-    chain = chain_path.read_text()
+    chain = chain_path.read_text(encoding="utf-8")
     assert "infinite_session.snapshot_created" in chain and new_id in chain
     assert '"v": 1' not in chain and '"state_dict"' not in chain  # content-free
 
@@ -347,9 +347,9 @@ def test_health_counts_and_verifies(home, console_audit):
 def test_health_degraded_on_broken_chain(home, console_audit):
     snaps = _seed("task_hb", [{"v": 1}, {"v": 2}])
     index = home / "tenants" / TENANT / "infinite_session" / "snapshots" / "task_hb" / "index.json"
-    data = json.loads(index.read_text())
+    data = json.loads(index.read_text(encoding="utf-8"))
     data[1]["content_hash"] = "0" * 64
-    index.write_text(json.dumps(data))
+    index.write_text(json.dumps(data), encoding="utf-8")
     body = _client(_record()).get("/api/infinite-session/health").json()
     assert body["status"] == "degraded" and body["event_store"] == "degraded"
     assert any(e.startswith("chain:task_hb") for e in body["errors"])
@@ -377,16 +377,16 @@ def test_mid_chain_excision_is_detected(home, console_audit):
 
     # excise b and re-link c onto a — exactly the reviewer's repro
     (d / f"{b.snapshot_id}.json").unlink()
-    third = json.loads((d / f"{c.snapshot_id}.json").read_text())
+    third = json.loads((d / f"{c.snapshot_id}.json").read_text(encoding="utf-8"))
     third["prev_snapshot_hash"] = a.content_hash
-    (d / f"{c.snapshot_id}.json").write_text(json.dumps(third))
-    index = [m for m in json.loads((d / "index.json").read_text())
+    (d / f"{c.snapshot_id}.json").write_text(json.dumps(third), encoding="utf-8")
+    index = [m for m in json.loads((d / "index.json").read_text(encoding="utf-8"))
              if m["snapshot_id"] != b.snapshot_id]
     for seq, meta in enumerate(index, start=1):
         meta["seq"] = seq
         if meta["snapshot_id"] == c.snapshot_id:
             meta["prev_snapshot_hash"] = a.content_hash
-    (d / "index.json").write_text(json.dumps(index))
+    (d / "index.json").write_text(json.dumps(index), encoding="utf-8")
 
     client = _client(_record())
     body = client.get("/api/infinite-session/task/task_splice/history").json()
@@ -404,7 +404,7 @@ def test_rewriting_any_link_field_invalidates_the_chain(home, console_audit):
     a, b = _seed("task_fields", [{"v": 1}, {"v": 2}])
     d = _snapshot_dir(home, "task_fields")
     path = d / f"{b.snapshot_id}.json"
-    pristine = path.read_text()
+    pristine = path.read_text(encoding="utf-8")
 
     for field, value in (
         ("prev_snapshot_hash", "f" * 64),
@@ -414,14 +414,14 @@ def test_rewriting_any_link_field_invalidates_the_chain(home, console_audit):
     ):
         data = json.loads(pristine)
         data[field] = value
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(data), encoding="utf-8")
         ok, err = EventStore(TENANT, audit=_recording_audit([])).verify_snapshot_chain(
             TENANT, "task_fields")
         if field == "task_id":
             assert ok, (field, err)  # control: an unchanged field must still verify
         else:
             assert not ok and "MAC" in err, (field, err)
-    path.write_text(pristine)
+    path.write_text(pristine, encoding="utf-8")
     assert EventStore(TENANT, audit=_recording_audit([])).verify_snapshot_chain(
         TENANT, "task_fields") == (True, "")
 
@@ -432,9 +432,9 @@ def test_legacy_unsigned_snapshot_does_not_silently_verify(home, console_audit):
     a, b = _seed("task_legacy", [{"v": 1}, {"v": 2}])
     d = _snapshot_dir(home, "task_legacy")
     for snap in (a, b):
-        data = json.loads((d / f"{snap.snapshot_id}.json").read_text())
+        data = json.loads((d / f"{snap.snapshot_id}.json").read_text(encoding="utf-8"))
         data.pop("chain_mac", None)
-        (d / f"{snap.snapshot_id}.json").write_text(json.dumps(data))
+        (d / f"{snap.snapshot_id}.json").write_text(json.dumps(data), encoding="utf-8")
 
     store = EventStore(TENANT, audit=_recording_audit([]))
     ok, err = store.verify_snapshot_chain(TENANT, "task_legacy")
@@ -477,7 +477,7 @@ def test_revert_refuses_503_when_rollback_log_lock_is_wedged(home, console_audit
     a, b = _seed("task_lockbusy", [{"v": 1}, {"v": 2}])
 
     lock_path = RollbackManager(TENANT).log_dir / ".lock"
-    holder = open(lock_path, "a+")  # an independent file description
+    holder = open(lock_path, "a+", encoding="utf-8")  # an independent file description
     fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
     try:
         started = time.monotonic()
@@ -523,7 +523,7 @@ def test_revert_retry_after_lock_busy_applies_exactly_once(home, console_audit, 
     a, b = _seed("task_retry", [{"v": 1}, {"v": 2}])
 
     lock_path = RollbackManager(TENANT).log_dir / ".lock"
-    holder = open(lock_path, "a+")
+    holder = open(lock_path, "a+", encoding="utf-8")
     fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
     try:
         assert _revert(_client(_record()), "task_retry", a.snapshot_id).status_code == 503

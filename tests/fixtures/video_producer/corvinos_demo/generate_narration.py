@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCRIPT_TEXT = (HERE / "narration_script.txt").read_text().strip()
+SCRIPT_TEXT = (HERE / "narration_script.txt").read_text(encoding="utf-8").strip()
 VOICE = "en-US-AriaNeural"
 FPS = 25
 
@@ -55,7 +55,7 @@ def main() -> int:
         "voice": VOICE,
         "audio_file": mp3_path.name,
     }
-    (HERE / "narration_duration.json").write_text(json.dumps(config, indent=2))
+    (HERE / "narration_duration.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
 
     print(f"Narration: {mp3_path} ({duration_s:.2f}s, frame_end={frame_end} @ {FPS}fps)")
     return 0

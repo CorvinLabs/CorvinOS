@@ -75,9 +75,9 @@ def test_migration_never_rewrites_config_file(tmp_path):
         "spec:\n  telemetry:\n    geo_tracking_tier: 1\n",
     )
 
-    old_text = cfg_path.read_text()
+    old_text = cfg_path.read_text(encoding="utf-8")
     gtm.migrate_geo_tier_to_default(home)
-    assert cfg_path.read_text() == old_text
+    assert cfg_path.read_text(encoding="utf-8") == old_text
 
 
 def test_effective_geo_tier_respects_explicit_opt_out(tmp_path):

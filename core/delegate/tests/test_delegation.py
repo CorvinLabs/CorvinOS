@@ -494,7 +494,7 @@ class DelegateAuditChainRoutingTests(unittest.TestCase):
         )
         r = subprocess.run(
             [sys.executable, "-c", code], env=env, cwd=self._tmp.name,
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
         )
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         chain = Path(self._tmp.name) / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"

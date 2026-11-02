@@ -120,7 +120,7 @@ def _seed_poisoned_events(home: Path) -> int:
         record["audit_ref"] = payload
         lines.append(json.dumps(record, separators=(",", ":")))
 
-    (events_dir / (now.strftime("%Y-%m-%d") + ".jsonl")).write_text("\n".join(lines) + "\n")
+    (events_dir / (now.strftime("%Y-%m-%d") + ".jsonl")).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return len(lines)
 
 

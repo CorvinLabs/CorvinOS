@@ -98,7 +98,7 @@ class LearningLoopIntegration:
         """Load last hash from audit log."""
         if self.audit_log.exists():
             try:
-                with open(self.audit_log, "r") as f:
+                with open(self.audit_log, "r", encoding="utf-8") as f:
                     for line in f:
                         if line.strip():
                             data = json.loads(line)
@@ -323,7 +323,7 @@ class LearningLoopIntegration:
         self.last_hash = event_hash
 
         try:
-            with open(self.audit_log, "a") as f:
+            with open(self.audit_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event_dict) + "\n")
             logger.info(f"Audit event: {event_type} (hash: {event_hash[:8]}...)")
         except Exception as e:

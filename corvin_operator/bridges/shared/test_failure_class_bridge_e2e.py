@@ -104,12 +104,12 @@ def test_sigtermed_bridge_child_is_classified_c1() -> None:
             kwargs={"settings": {"whitelist": ["u123"]}}, daemon=True)
         worker.start()
         deadline = time.time() + 60
-        while time.time() < deadline and not (pidfile.exists() and pidfile.read_text().strip()):
+        while time.time() < deadline and not (pidfile.exists() and pidfile.read_text(encoding="utf-8").strip()):
             time.sleep(0.05)
         assert pidfile.exists(), (
             "the fake claude child never started; outbox: "
             + repr([json.loads(p.read_text(encoding="utf-8")).get("text") for p in outbox.glob("*.json")]))
-        os.kill(int(pidfile.read_text().strip()), signal.SIGTERM)
+        os.kill(int(pidfile.read_text(encoding="utf-8").strip()), signal.SIGTERM)
         worker.join(timeout=60)
         assert not worker.is_alive(), "process_one did not return after the child was signalled"
 

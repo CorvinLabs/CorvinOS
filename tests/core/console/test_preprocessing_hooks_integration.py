@@ -52,7 +52,7 @@ class TestRunPreprocessingHooks:
             """
 def reject_all(ctx):
     ctx.reject('Rejected by test hook')
-"""
+""", encoding="utf-8"
         )
 
         registry = get_hook_registry("_default")

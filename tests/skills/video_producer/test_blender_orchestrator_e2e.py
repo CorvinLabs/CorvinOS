@@ -142,7 +142,7 @@ async def test_render_enhancement_writes_a_durable_audit_trail(tmp_path, isolate
     chain_path = tenant_audit_chain(isolated_tenant)
     assert chain_path.exists(), f"no durable audit chain written at {chain_path}"
 
-    records = [json.loads(line) for line in chain_path.read_text().splitlines() if line.strip()]
+    records = [json.loads(line) for line in chain_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     event_types = {r["event_type"] for r in records}
     assert {
         "blender.render_start",

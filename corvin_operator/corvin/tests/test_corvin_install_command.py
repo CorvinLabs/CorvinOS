@@ -209,7 +209,7 @@ def test_console_never_healthy_after_successful_install_is_still_a_failure(monke
 def _fake_checkout(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     for name in (".corvin_repo", "pyproject.toml", "install.sh"):
-        (root / name).write_text("")
+        (root / name).write_text("", encoding="utf-8")
     return root
 
 
@@ -221,8 +221,8 @@ def test_find_checkout_walks_up_from_a_nested_start(tmp_path):
 
 
 def test_find_checkout_requires_the_repo_marker(tmp_path):
-    (tmp_path / "pyproject.toml").write_text("")
-    (tmp_path / "install.sh").write_text("")
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
+    (tmp_path / "install.sh").write_text("", encoding="utf-8")
     assert cic.find_checkout([tmp_path]) is None
 
 
@@ -263,7 +263,7 @@ def test_installer_flags_are_ones_install_sh_accepts():
     result = subprocess.run(
         ["/bin/sh", str(repo / "install.sh"), *extra, "--definitely-unknown"],
         capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL,
-        env={"PATH": "", "TMPDIR": str(Path(__file__).parent)},
+        env={"PATH": "", "TMPDIR": str(Path(__file__).parent)}, encoding="utf-8", errors="replace",
     )
     # Only OUR sentinel may be rejected — never a flag run_installer adds.
     assert "Unknown argument: --definitely-unknown" in result.stderr
@@ -323,7 +323,7 @@ def test_check_mode_real_subprocess_against_the_real_console():
     actually has listening right now, mutates nothing."""
     result = subprocess.run(
         [sys.executable, str(_SCRIPT_PATH), "--check"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
     )
     # This host's own console may or may not be up at test time — either
     # outcome is a valid proof of real wiring; a hang, a traceback, or any

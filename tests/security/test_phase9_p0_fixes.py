@@ -39,7 +39,7 @@ def _production_importers(needle: str) -> list[str]:
             if "/tests/" in rel or f.name.startswith("test_") or "node_modules" in rel:
                 continue
             try:
-                if needle in f.read_text(errors="ignore"):
+                if needle in f.read_text(errors="ignore", encoding="utf-8"):
                     hits.append(rel)
             except OSError:
                 continue
@@ -137,9 +137,9 @@ class TestUnmountedLegacyRouters:
     def test_router_is_not_mounted_anywhere(self, module):
         hits = [h for h in _production_importers(module)
                 if not h.endswith(f"routes/{module}.py")
-                and ("include_router" in (REPO / h).read_text(errors="ignore")
-                     or f"import {module}" in (REPO / h).read_text(errors="ignore")
-                     or f"{module} as" in (REPO / h).read_text(errors="ignore"))]
+                and ("include_router" in (REPO / h).read_text(errors="ignore", encoding="utf-8")
+                     or f"import {module}" in (REPO / h).read_text(errors="ignore", encoding="utf-8")
+                     or f"{module} as" in (REPO / h).read_text(errors="ignore", encoding="utf-8"))]
         assert hits == [], hits
 
     def test_console_serves_none_of_their_paths(self):

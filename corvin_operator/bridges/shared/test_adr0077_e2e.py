@@ -59,7 +59,7 @@ def _write_origin(tmp: Path, **extra) -> None:
         **extra,
     }
     p = tmp / f"{ORIGIN_ID}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
 
 
@@ -415,7 +415,7 @@ class TestC3ErasureHandler(unittest.TestCase):
         ws.mkdir(parents=True, exist_ok=True)
         record = {"scope_label": scope_label, "persona": persona,
                   "session_id": "sid-123"}
-        (ws / f"{scope_label.replace(':', '_')}.json").write_text(json.dumps(record))
+        (ws / f"{scope_label.replace(':', '_')}.json").write_text(json.dumps(record), encoding="utf-8")
         return ws
 
     def test_matching_record_deleted(self):

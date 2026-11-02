@@ -83,7 +83,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
         cls._hr, cls._hr_orig = _hr, _hr._house_rules_classifier
         _hr._house_rules_classifier = lambda task, rules, auth, **kw: ("", 1.0, "test-benign")
         cls.cli = home / "fake-claude"
-        cls.cli.write_text(FAKE_CLI.format(python=sys.executable))
+        cls.cli.write_text(FAKE_CLI.format(python=sys.executable), encoding="utf-8")
         cls.cli.chmod(cls.cli.stat().st_mode | stat.S_IXUSR)
         os.environ["CORVIN_CLAUDE_BIN"] = str(cls.cli)
 

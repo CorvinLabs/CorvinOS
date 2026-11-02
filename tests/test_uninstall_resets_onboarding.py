@@ -49,13 +49,13 @@ def _seed_onboarding_state(installer: CorvinInstaller, tenant_id: str = "_defaul
     setup_complete_flag.touch()
 
     onboarding_json = global_dir / "onboarding.json"
-    onboarding_json.write_text(json.dumps({"complete": True, "completed_at": "2026-07-12T00:00:00Z"}))
+    onboarding_json.write_text(json.dumps({"complete": True, "completed_at": "2026-07-12T00:00:00Z"}), encoding="utf-8")
 
     tenant_yaml = global_dir / "tenant.corvin.yaml"
     tenant_yaml.write_text(
         "spec:\n"
         "  default_engine: codex_cli\n"
-        "  data_residency: eu\n"  # an unrelated setting that must survive
+        "  data_residency: eu\n", encoding="utf-8"  # an unrelated setting that must survive
     )
     return {
         "setup_complete_flag": setup_complete_flag,
@@ -87,7 +87,7 @@ class TestUninstallResetsOnboarding:
                 "tenant.corvin.yaml itself must survive a declined purge — "
                 "only the engine selection inside it is reset"
             )
-            doc = paths["tenant_yaml"].read_text()
+            doc = paths["tenant_yaml"].read_text(encoding="utf-8")
             assert "default_engine" not in doc, "engine selection must be cleared"
             assert "data_residency: eu" in doc, (
                 "unrelated tenant settings must NOT be silently wiped by the "
@@ -116,7 +116,7 @@ class TestUninstallResetsOnboarding:
 
             for paths in (paths_default, paths_other):
                 assert not paths["onboarding_json"].exists()
-                assert "default_engine" not in paths["tenant_yaml"].read_text()
+                assert "default_engine" not in paths["tenant_yaml"].read_text(encoding="utf-8")
 
     def test_nothing_to_reset_does_not_crash(self) -> None:
         """A fresh/never-onboarded install has none of these files yet —

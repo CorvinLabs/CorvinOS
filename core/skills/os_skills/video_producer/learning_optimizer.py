@@ -133,7 +133,7 @@ class VideoProducerLearningOptimizer:
         """Load optimizer state from disk or create default."""
         if self.state_path.exists():
             try:
-                data = json.loads(self.state_path.read_text())
+                data = json.loads(self.state_path.read_text(encoding="utf-8"))
                 state = OptimizerState(
                     skill_id=data.get("skill_id", "os.video_producer"),
                     tenant_id=data.get("tenant_id", self.tenant_id),
@@ -179,7 +179,7 @@ class VideoProducerLearningOptimizer:
                 "last_updated": config.last_updated,
             }
 
-        self.state_path.write_text(json.dumps(data, indent=2))
+        self.state_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def get_worker_config(self, worker_id: str) -> dict[str, Any]:
         """Get current tuned config for a worker.

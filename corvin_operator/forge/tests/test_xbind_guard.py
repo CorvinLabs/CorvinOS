@@ -47,5 +47,5 @@ def test_fifo_rejected_for_both_ro_and_rw(writable):
 @pytest.mark.parametrize("writable", [False, True])
 def test_regular_tmp_file_allowed_for_both(writable):
     f = Path(tempfile.mkdtemp(dir="/tmp")) / "data.csv"
-    f.write_text("a,b\n1,2\n")
+    f.write_text("a,b\n1,2\n", encoding="utf-8")
     _guard_bind_target(str(f), f.resolve(), writable=writable)  # must not raise

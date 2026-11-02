@@ -45,7 +45,7 @@ class E2ETester:
                 ["python", "-m", "corvin_console.standalone"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
             time.sleep(3)  # Wait for server to start
 

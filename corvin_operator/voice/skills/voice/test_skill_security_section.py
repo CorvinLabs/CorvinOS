@@ -33,7 +33,7 @@ def t(label: str, ok: bool, *, detail: str = "") -> None:
 
 def main() -> int:
     print("\n[voice/SKILL.md security section]")
-    body = SKILL.read_text()
+    body = SKILL.read_text(encoding="utf-8")
 
     t("file exists", SKILL.exists())
 

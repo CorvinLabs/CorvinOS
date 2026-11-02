@@ -259,7 +259,7 @@ class PackageManager:
                 )
             # Parse and validate YAML
             try:
-                with open(skill_file, "r") as f:
+                with open(skill_file, "r", encoding="utf-8") as f:
                     yaml.safe_load(f)
             except yaml.YAMLError as e:
                 raise ValidationError(
@@ -277,7 +277,7 @@ class PackageManager:
                 )
             # Check Python syntax by compiling
             try:
-                with open(hook_file, "r") as f:
+                with open(hook_file, "r", encoding="utf-8") as f:
                     code = f.read()
                 compile(code, str(hook_file), "exec")
             except SyntaxError as e:
@@ -292,7 +292,7 @@ class PackageManager:
         )
         for config_file in config_files:
             try:
-                with open(config_file, "r") as f:
+                with open(config_file, "r", encoding="utf-8") as f:
                     yaml.safe_load(f)
             except yaml.YAMLError as e:
                 raise ValidationError(
@@ -304,7 +304,7 @@ class PackageManager:
         json_config_files = list(package_path.glob("config/**/*.json"))
         for config_file in json_config_files:
             try:
-                with open(config_file, "r") as f:
+                with open(config_file, "r", encoding="utf-8") as f:
                     json.load(f)
             except json.JSONDecodeError as e:
                 raise ValidationError(

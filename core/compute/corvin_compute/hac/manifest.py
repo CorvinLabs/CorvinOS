@@ -100,7 +100,7 @@ class HACStore:
         }
         path = self.root / "manifest.json"
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, separators=(",", ":")))
+        tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
         os.replace(tmp, path)
         os.chmod(path, 0o600)
 
@@ -120,7 +120,7 @@ class HACStore:
         }
         path = self.root / "hac_summary.json"
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, separators=(",", ":")))
+        tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
         os.replace(tmp, path)
         os.chmod(path, 0o600)
 
@@ -128,7 +128,7 @@ class HACStore:
         p = self.root / "hac_summary.json"
         if not p.exists():
             return {}
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
 
     def manager_dir(self, manager_id: str) -> Path:
         d = self.root / "sub_managers" / manager_id

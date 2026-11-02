@@ -118,7 +118,7 @@ def test_audit_event_recorded(make_skill, tmp_corvin_home):
         selections=[SkillSelection(skill_id="summarize", version="1.0.0")],
     )
     chain = tmp_corvin_home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-    events = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    events = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     exported = [e for e in events if e.get("event_type") == "forge_bundle.exported"]
     assert exported, events
     details = exported[-1].get("details", exported[-1])
@@ -230,7 +230,7 @@ def test_export_packages_the_skill_folder_as_it_is_now(make_skill, tmp_corvin_ho
     folder = make_skill("summarize", "1.0.0")
     build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
                  selections=[SkillSelection(skill_id="summarize", version="1.0.0")])
-    (folder / "src" / "skill.py").write_text("def run(text):\n    return 'NEW CODE'\n")
+    (folder / "src" / "skill.py").write_text("def run(text):\n    return 'NEW CODE'\n", encoding="utf-8")
     second = build_bundle(bundle_id="b", bundle_version="1.0.1", tenant_id="_default",
                           selections=[SkillSelection(skill_id="summarize", version="1.0.0")])
     with zipfile.ZipFile(BytesIO(second.data)) as zf:
@@ -268,9 +268,9 @@ def test_layer_review_flags_never_travel(make_layer):
 
     make_layer("acme.audit-l34", "1.0.0")
     path = layer_forge_home("_default") / "registry" / "acme.audit-l34@1.0.0.json"
-    stored = json.loads(path.read_text())
+    stored = json.loads(path.read_text(encoding="utf-8"))
     stored.update(review_flagged=True, review_flags=["x"], _promoted_at="t")
-    path.write_text(json.dumps(stored))
+    path.write_text(json.dumps(stored), encoding="utf-8")
     result = build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
                           selections=[LayerSelection("acme.audit-l34", "1.0.0")])
     with zipfile.ZipFile(BytesIO(result.data)) as zf:

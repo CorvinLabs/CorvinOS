@@ -50,7 +50,7 @@ def test_cli_renders_a_real_video_as_a_subprocess(tmp_path, monkeypatch):
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
-        timeout=100,
+        timeout=100, encoding="utf-8", errors="replace",
     )
 
     assert proc.returncode == 0, f"CLI failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
@@ -79,7 +79,7 @@ def test_cli_fails_closed_on_missing_blend_file(tmp_path):
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=20, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 1
     assert "not found" in proc.stderr

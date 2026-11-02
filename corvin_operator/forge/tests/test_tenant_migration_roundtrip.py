@@ -120,11 +120,11 @@ class R1_PreMigrationSeedSurvives(_MigrationSandbox):
         self.assertTrue(new_path.exists())
         # Legacy path is reachable via the symlink at <home>/global
         self.assertTrue(legacy_path.exists())  # resolves via symlink
-        self.assertTrue((self.home / "global").is_symlink())
+        self.assertTrue((self.home / "global").is_symlink() or (self.home / "global").is_junction())  # junction on Windows
 
         # Both must read identical content
-        self.assertEqual(legacy_path.read_text(), new_path.read_text())
-        self.assertIn('"event":"seed-A"', new_path.read_text())
+        self.assertEqual(legacy_path.read_text(encoding="utf-8"), new_path.read_text(encoding="utf-8"))
+        self.assertIn('"event":"seed-A"', new_path.read_text(encoding="utf-8"))
 
     def test_legacy_roles_state_survives(self):
         self._seed_legacy_roles('{"chatX":{"role":"observer"}}')
@@ -136,8 +136,8 @@ class R1_PreMigrationSeedSurvives(_MigrationSandbox):
             / "discord__chatA.json"
         )
         self.assertTrue(new.exists())
-        self.assertEqual(legacy.read_text(), new.read_text())
-        self.assertEqual(legacy.read_text(), '{"chatX":{"role":"observer"}}')
+        self.assertEqual(legacy.read_text(encoding="utf-8"), new.read_text(encoding="utf-8"))
+        self.assertEqual(legacy.read_text(encoding="utf-8"), '{"chatX":{"role":"observer"}}')
 
 
 class R2_DefaultBranchLandsUnderTenants(_MigrationSandbox):
@@ -159,11 +159,11 @@ class R2_DefaultBranchLandsUnderTenants(_MigrationSandbox):
             / "audit.jsonl"
         )
         self.assertTrue(new_path.exists())
-        body = new_path.read_text()
+        body = new_path.read_text(encoding="utf-8")
         self.assertIn("post-migrate", body)
         # Also visible through the legacy symlink
         legacy = self.home / "global" / "forge" / "audit.jsonl"
-        self.assertIn("post-migrate", legacy.read_text())
+        self.assertIn("post-migrate", legacy.read_text(encoding="utf-8"))
 
     def test_state_store_default_kwarg_writes_through_symlink(self):
         # Pre-migration, the legacy roles dir holds chatA's state
@@ -196,7 +196,7 @@ class R3_SymlinkTransparency(_MigrationSandbox):
         # Read via the legacy-symlink-default path
         default = _forge_paths.tenant_global_dir() / "forge" / "audit.jsonl"
         self.assertEqual(explicit.resolve(), default.resolve())
-        self.assertIn("explicit", default.read_text())
+        self.assertIn("explicit", default.read_text(encoding="utf-8"))
 
 
 class R4_AuditChainContinuity(_MigrationSandbox):
@@ -228,7 +228,7 @@ class R4_AuditChainContinuity(_MigrationSandbox):
             / "audit.jsonl"
         )
         lines = [
-            json.loads(l) for l in physical.read_text().splitlines() if l.strip()
+            json.loads(l) for l in physical.read_text(encoding="utf-8").splitlines() if l.strip()
         ]
         event_types = [rec.get("event_type") for rec in lines]
         self.assertIn("tool.created", event_types)
@@ -279,14 +279,14 @@ class R5_GatewayProvisionsAcmeAfterMigration(_MigrationSandbox):
         default_chain_body = (
             self.home / "tenants" / DEFAULT_TENANT_ID / "global" / "forge"
             / "audit.jsonl"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         self.assertIn("_default", default_chain_body)
         self.assertNotIn('"tenant_hint": "acme"', default_chain_body)
 
         # And acme's chain must NOT mention _default details
         acme_chain_body = (
             self.home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         self.assertIn("acme", acme_chain_body)
         self.assertNotIn('"tenant_hint": "_default"', acme_chain_body)
 
@@ -315,7 +315,7 @@ class R6_OptOutKeepsLegacyAddressable(_MigrationSandbox):
         self.assertTrue(legacy.exists())
         # Write through the legacy path still works
         _se.write_event(legacy, "tool.created", details={"reason": "optout"})
-        body = legacy.read_text()
+        body = legacy.read_text(encoding="utf-8")
         self.assertIn("optout", body)
         # And the new tenants/ tree was NOT created by the helper
         self.assertFalse((self.home / "tenants").exists())

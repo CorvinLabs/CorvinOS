@@ -136,7 +136,7 @@ class SpawnPythonpathTests(unittest.TestCase):
             r = subprocess.run(
                 [sys.executable, "-c",
                  f"import {module} as m; print(m.__file__)"],
-                env=env, cwd=cwd, capture_output=True, text=True, timeout=120,
+                env=env, cwd=cwd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
             )
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         return r.stdout.strip().splitlines()[-1]

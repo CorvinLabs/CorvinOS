@@ -176,11 +176,14 @@ class TrustStoreTests(unittest.TestCase):
             _install_trust("acme", jwks)
             p = home / "tenants" / "acme" / "global" / "auth" / "oidc.yaml"
             self.assertTrue(p.exists())
-            self.assertEqual(p.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":  # POSIX mode bits; NTFS reports 0o666
+                self.assertEqual(p.stat().st_mode & 0o777, 0o600)
             trust = load_trust("acme")
             self.assertEqual(len(trust.issuers), 1)
             self.assertEqual(trust.issuers[0].issuer, "https://idp.example/realms/acme")
             self.assertEqual(trust.issuers[0].audience, "corvin-acme")
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits only (NTFS ACLs)")
 
     def test_world_readable_rejected(self):
         with sandbox(("acme",)) as home:
@@ -217,7 +220,7 @@ class JwtThroughAppTests(unittest.TestCase):
             # passed (i.e. NOT 401).
             self.assertEqual(r.status_code, 404)
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             ok = [e for e in lines if e["event_type"] == "gateway.oidc_resolved"]
             self.assertEqual(len(ok), 1)
             self.assertEqual(ok[0]["details"]["issuer"],

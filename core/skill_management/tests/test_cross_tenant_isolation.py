@@ -124,12 +124,12 @@ class TestCrossTenantDataLeakPrevention:
             # Simulate Tenant A's git repo path
             repo_a = Path(tmpdir) / "tenants" / "tenant_a" / "git_sync_repo"
             repo_a.mkdir(parents=True)
-            (repo_a / "skill_a.md").write_text("Tenant A skill")
+            (repo_a / "skill_a.md").write_text("Tenant A skill", encoding="utf-8")
 
             # Simulate Tenant B's git repo path (different directory)
             repo_b = Path(tmpdir) / "tenants" / "tenant_b" / "git_sync_repo"
             repo_b.mkdir(parents=True)
-            (repo_b / "skill_b.md").write_text("Tenant B skill")
+            (repo_b / "skill_b.md").write_text("Tenant B skill", encoding="utf-8")
 
             # Verify no collision
             assert not (repo_b / "skill_a.md").exists()  # Tenant B cannot access Tenant A's files

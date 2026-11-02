@@ -85,7 +85,7 @@ class GroupReceiveStatusE2E(_WithAuditMock):
         self._send_group(lambda **kw: {"status": "accepted", "message_id": "m-1"})
         self._send_group(lambda **kw: {"status": "error", "reason": "x"})
         store = self.tmp / "feed" / "messages.jsonl"
-        self.assertFalse(store.exists() and "hello group" in store.read_text())
+        self.assertFalse(store.exists() and "hello group" in store.read_text(encoding="utf-8"))
 
     def test_refused_message_is_rejected(self):
         res = self._send_group(lambda **kw: {"status": "error", "reason": "sender_not_a_group_participant"})

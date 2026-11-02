@@ -440,7 +440,7 @@ class Phase2Validator:
         }
 
         output_file = self.phase2_dir / "phase2-results.json"
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
 
         print(f"\n✅ Results saved to {output_file}")

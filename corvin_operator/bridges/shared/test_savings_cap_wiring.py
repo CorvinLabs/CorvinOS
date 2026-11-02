@@ -112,12 +112,12 @@ def _seed_saving(home: Path, haiku_turns: int = 10):
 
 
 def _settings(home: Path, **kw):
-    (home / "tenants" / "_default" / "global" / "cost_optimize.json").write_text(json.dumps(kw))
+    (home / "tenants" / "_default" / "global" / "cost_optimize.json").write_text(json.dumps(kw), encoding="utf-8")
 
 
 def _pin_tenant_os_model(home: Path, model: str):
     (home / "tenants" / "_default" / "global" / "tenant.corvin.yaml").write_text(
-        yaml.dump({"spec": {"engine_models": {"claude_code": {"os_model": model}}}}))
+        yaml.dump({"spec": {"engine_models": {"claude_code": {"os_model": model}}}}), encoding="utf-8")
 
 
 def test_positive_control_automatic_tier_picks_haiku_when_uncapped(env):

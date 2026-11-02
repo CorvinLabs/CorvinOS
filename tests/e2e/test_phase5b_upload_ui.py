@@ -23,7 +23,7 @@ class TestPhase5bUploadUI:
     def test_upload_form_rendered(self):
         """Upload form section exists."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert "Install New Skill" in content
         assert "Skill ID" in content
@@ -33,7 +33,7 @@ class TestPhase5bUploadUI:
     def test_form_inputs_capture_state(self):
         """Form inputs bound to state."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         # skill_id input
         assert "upload.skillId" in content
@@ -49,14 +49,14 @@ class TestPhase5bUploadUI:
     def test_file_picker_accepts_zip(self):
         """File input accepts only ZIP."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert 'accept=".zip"' in content
     
     def test_upload_button_state_management(self):
         """Upload button disabled until form complete."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         # Button should be disabled if missing fields
         assert "disabled={upload.uploading ||" in content
@@ -67,7 +67,7 @@ class TestPhase5bUploadUI:
     def test_progress_bar_renders(self):
         """Progress bar shows during upload."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert "width: `${upload.progress}%`" in content
         assert "bg-green-600" in content
@@ -75,7 +75,7 @@ class TestPhase5bUploadUI:
     def test_upload_handler_posts_multipart(self):
         """handleUpload sends FormData with file."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert "FormData" in content
         assert "formData.append('file'" in content
@@ -86,7 +86,7 @@ class TestPhase5bUploadUI:
     def test_xhr_progress_tracking(self):
         """Progress tracked via XMLHttpRequest."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert "XMLHttpRequest()" in content
         assert "xhr.upload.addEventListener('progress'" in content
@@ -95,7 +95,7 @@ class TestPhase5bUploadUI:
     def test_success_message_shown(self):
         """Success alert rendered after install."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert "upload.success" in content
         assert "✅" in content
@@ -104,7 +104,7 @@ class TestPhase5bUploadUI:
     def test_auto_refresh_after_install(self):
         """Skills list refreshes after successful install."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert "setTimeout" in content
         assert "fetchSkills()" in content
@@ -113,7 +113,7 @@ class TestPhase5bUploadUI:
     def test_uninstall_button_present(self):
         """Uninstall button per skill."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert "Uninstall" in content
         assert "/skills/uninstall/" in content
@@ -122,7 +122,7 @@ class TestPhase5bUploadUI:
     def test_error_handling(self):
         """Errors caught and displayed."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         assert "setError" in content
         assert "catch" in content
@@ -131,7 +131,7 @@ class TestPhase5bUploadUI:
     def test_form_reset_after_success(self):
         """Form fields cleared after successful install."""
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
-        content = component_path.read_text()
+        content = component_path.read_text(encoding="utf-8")
         
         # Form state reset in upload handler
         assert "file: null" in content

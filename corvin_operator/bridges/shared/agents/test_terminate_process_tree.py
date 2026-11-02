@@ -163,7 +163,7 @@ class TestSpawnCreatesNewProcessGroupOnWindows(unittest.TestCase):
         # Static check on the source, not a live spawn — spawning `claude`
         # in this sandbox has no real binary and would just error out with
         # a different failure mode than what this test cares about.
-        src = (Path(__file__).resolve().parent / "claude_code.py").read_text()
+        src = (Path(__file__).resolve().parent / "claude_code.py").read_text(encoding="utf-8")
         self.assertIn("CREATE_NEW_PROCESS_GROUP", src)
         self.assertIn('sys.platform.startswith("win")', src)
         self.assertIn("no_console_window_flags", src)

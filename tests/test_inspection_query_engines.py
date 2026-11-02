@@ -236,7 +236,7 @@ class TestTaskGraphQuery:
             },
         ]
 
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             for item in test_data:
                 f.write(f"{__import__('json').dumps(item)}\n")
 
@@ -257,7 +257,7 @@ class TestTaskGraphQuery:
             {"task_id": "task-2", "name": "Task 2", "status": "running", "phase": "a", "iteration": 1},
         ]
 
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             for item in test_data:
                 f.write(f"{__import__('json').dumps(item)}\n")
 
@@ -272,7 +272,7 @@ class TestTaskGraphQuery:
         registry_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Create 5 tasks
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             for i in range(5):
                 data = {
                     "task_id": f"task-{i}",
@@ -296,7 +296,7 @@ class TestTaskGraphQuery:
         registry_path = tmp_path / ".corvin" / "tenants" / "_default" / "tasks" / "registry.jsonl"
         registry_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             data = {"task_id": "task-1", "name": "Test Task", "status": "pending", "phase": "test", "iteration": 1}
             f.write(f"{__import__('json').dumps(data)}\n")
 
@@ -309,7 +309,7 @@ class TestTaskGraphQuery:
         registry_path = tmp_path / ".corvin" / "tenants" / "_default" / "tasks" / "registry.jsonl"
         registry_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             data = {"task_id": "task-1", "name": "Test", "status": "pending", "phase": "test", "iteration": 1}
             f.write(f"{__import__('json').dumps(data)}\n")
 
@@ -321,7 +321,7 @@ class TestTaskGraphQuery:
         registry_path = tmp_path / ".corvin" / "tenants" / "_default" / "tasks" / "registry.jsonl"
         registry_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             data1 = {"task_id": "task-1", "name": "Task 1", "status": "blocked", "phase": "test", "iteration": 1}
             data2 = {"task_id": "task-2", "name": "Task 2", "status": "pending", "phase": "test", "iteration": 1}
             f.write(f"{__import__('json').dumps(data1)}\n")
@@ -337,7 +337,7 @@ class TestTaskGraphQuery:
         registry_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Create linear chain: task-1 → task-2 → task-3
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             f.write(__import__('json').dumps({"task_id": "task-1", "name": "T1", "status": "done", "phase": "test", "iteration": 1, "dependencies": []}) + "\n")
             f.write(__import__('json').dumps({"task_id": "task-2", "name": "T2", "status": "done", "phase": "test", "iteration": 1, "dependencies": ["task-1"]}) + "\n")
             f.write(__import__('json').dumps({"task_id": "task-3", "name": "T3", "status": "done", "phase": "test", "iteration": 1, "dependencies": ["task-2"]}) + "\n")
@@ -474,7 +474,7 @@ class TestErrorHandling:
         registry_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Write invalid JSON
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding="utf-8") as f:
             f.write("invalid json line\n")
             f.write('{"task_id": "task-1", "name": "Task", "status": "pending", "phase": "test", "iteration": 1}\n')
 

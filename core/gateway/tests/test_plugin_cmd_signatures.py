@@ -174,7 +174,7 @@ class TestVettedPluginInstall:
 
         plugin_yaml = plugin_dir / "plugin.yaml"
         import yaml
-        plugin_yaml.write_text(yaml.safe_dump(signed_manifest))
+        plugin_yaml.write_text(yaml.safe_dump(signed_manifest), encoding="utf-8")
 
         # Load the real trust anchors
         from corvin_plugins.trust import load_trust_anchors
@@ -215,7 +215,7 @@ name: Unsigned Vetted
 version: 1.0.0
 origin: vetted
 boot_layer: bundled
-"""
+""", encoding="utf-8"
         )
 
         # Load the real trust anchors (non-empty for vetted check)
@@ -287,7 +287,7 @@ class TestTrustAnchorIntegration:
 
         # Create a temp empty file
         empty_file = tmp_path / "plugin_trust_anchors.txt"
-        empty_file.write_text("# Empty file\n")
+        empty_file.write_text("# Empty file\n", encoding="utf-8")
 
         # Manually call the logic
         from pathlib import Path

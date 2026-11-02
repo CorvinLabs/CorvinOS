@@ -80,7 +80,7 @@ ACS_RUN_DIR.mkdir(parents=True, exist_ok=True)
     "status":     "success",
     "started_at": time.time() - 45,
     "ended_at":   time.time() - 2,
-}))
+}), encoding="utf-8")
 
 # ── session metadata ────────────────────────────────────────────────────────
 SESSION_STORE = CORVIN_HOME / "tenants" / TENANT_ID / "global" / "web_chat" / "sessions"

@@ -197,16 +197,23 @@ def _acquire_lock(out_dir: Path, tenant: str) -> "Path | None":
         return lock
     except FileExistsError:
         try:
-            holder = int(lock.read_text().strip() or "0")
+            holder = int(lock.read_text(encoding="utf-8").strip() or "0")
         except Exception:  # noqa: BLE001
             holder = 0
         if holder and holder != _os.getpid():
-            try:
-                _os.kill(holder, 0)
-                return None  # a live run holds it
-            except OSError:
-                pass  # stale — steal it
-        lock.write_text(str(_os.getpid()))
+            if _os.name == "nt":
+                # Signal 0 is CTRL_C_EVENT on Windows, no existence probe.
+                from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415
+
+                if _os_pid_exists(holder):
+                    return None  # a live run holds it
+            else:
+                try:
+                    _os.kill(holder, 0)
+                    return None  # a live run holds it
+                except OSError:
+                    pass  # stale — steal it
+        lock.write_text(str(_os.getpid()), encoding="utf-8")
         return lock
 
 

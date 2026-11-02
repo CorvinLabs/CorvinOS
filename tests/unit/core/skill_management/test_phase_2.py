@@ -41,10 +41,10 @@ def temp_tenant_export(tmp_path, monkeypatch):
             "last_modified": datetime.now().isoformat(),
             "dependencies": []
         }
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
-        (skill_dir / "body.md").write_text(f"# {skill_id}")
+        (skill_dir / "body.md").write_text(f"# {skill_id}", encoding="utf-8")
 
     return tenant_path
 
@@ -83,7 +83,7 @@ class TestGitHubExporter:
         assert result.manifest_path.exists()
 
         # Verify manifest
-        with open(result.manifest_path) as f:
+        with open(result.manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
 
         assert manifest["version"] == "1.0"
@@ -149,7 +149,7 @@ class TestGitHubImporter:
             "created": datetime.now().isoformat(),
             "last_modified": datetime.now().isoformat()
         }
-        with open(local_skill_dir / "meta.json", "w") as f:
+        with open(local_skill_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(local_meta, f)
 
         importer = GitHubImporter()
@@ -254,7 +254,7 @@ class TestPhase2Robustness:
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
 
         bad_tarball = tmp_path / "bad.tar.gz"
-        bad_tarball.write_text("not a tarball")
+        bad_tarball.write_text("not a tarball", encoding="utf-8")
 
         importer = GitHubImporter()
         result = importer.import_from_tarball(bad_tarball, dry_run=True)
@@ -270,7 +270,7 @@ class TestPhase2Robustness:
         skill_dir.mkdir(parents=True)
 
         # Write invalid JSON
-        with open(skill_dir / "meta.json", "w") as f:
+        with open(skill_dir / "meta.json", "w", encoding="utf-8") as f:
             f.write("{ invalid json }")
 
         exporter = GitHubExporter("https://github.com/test/repo")

@@ -34,7 +34,7 @@ def test_write_opt_out_ping_and_error(monkeypatch, tmp_path):
     assert flags["error_enabled"] is False
     assert flags["telemetry_enabled"] is True     # untouched → still on
     # Written under spec.telemetry with the runtime-read key names.
-    doc = yaml.safe_load(p.read_text())
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
     tel = doc.get("spec", doc)["telemetry"]
     assert tel["ping_enabled"] is False
     assert tel["error_traces"] is False
@@ -45,9 +45,9 @@ def test_write_preserves_other_keys_and_spec(monkeypatch, tmp_path):
     p.write_text(yaml.safe_dump({
         "apiVersion": "corvin/v1", "kind": "Tenant",
         "spec": {"telemetry": {"healing_traces": True}, "engine": {"id": "claude_code"}},
-    }))
+    }), encoding="utf-8")
     hc._write_flags("_default", {"ping_enabled": False})
-    doc = yaml.safe_load(p.read_text())
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
     assert doc["apiVersion"] == "corvin/v1"            # header preserved
     assert doc["spec"]["engine"]["id"] == "claude_code"     # unrelated key preserved
     assert doc["spec"]["telemetry"]["ping_enabled"] is False
@@ -56,7 +56,7 @@ def test_write_preserves_other_keys_and_spec(monkeypatch, tmp_path):
 
 def test_false_like_string_reads_as_off(monkeypatch, tmp_path):
     p = _patch_path(monkeypatch, tmp_path)
-    p.write_text(yaml.safe_dump({"spec": {"telemetry": {"ping_enabled": "off"}}}))
+    p.write_text(yaml.safe_dump({"spec": {"telemetry": {"ping_enabled": "off"}}}), encoding="utf-8")
     assert hc._read_flags("_default")["ping_enabled"] is False
 
 
@@ -131,7 +131,7 @@ def test_patch_telemetry_allowed_for_member_tier(monkeypatch, tmp_path):
     assert result["ping_enabled"] is False
 
     # Verify the file was written
-    doc = yaml.safe_load(p.read_text())
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
     assert doc["spec"]["telemetry"]["ping_enabled"] is False
 
 
@@ -161,5 +161,5 @@ def test_patch_non_telemetry_allowed_for_free_tier(monkeypatch, tmp_path):
     assert result["healing_enabled"] is False
 
     # Verify the file was written
-    doc = yaml.safe_load(p.read_text())
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
     assert doc["spec"]["aco"]["l5_enabled"] is False

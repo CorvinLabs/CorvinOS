@@ -40,7 +40,7 @@ _KEYS = ("CORVIN_HOME", "CORVIN_TENANT_ID", "FORGE_ROOT", "VOICE_AUDIT_PATH",
 def _records(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 class _Sandbox(unittest.TestCase):
@@ -98,7 +98,7 @@ class TestServerAuditChainResolution(_Sandbox):
         """``audit.hash_chain: false`` in policy.json used to reach
         ``write_event(hash_chain=False)``, which raises ValueError for every
         event but the gap marker — out of every security-event call site."""
-        (self.ws / "policy.json").write_text(json.dumps({"audit": {"hash_chain": False}}))
+        (self.ws / "policy.json").write_text(json.dumps({"audit": {"hash_chain": False}}), encoding="utf-8")
         srv = mcp_server.MCPServer(self.ws)
         srv._log_security_event("policy.reload_failed",
                                 details={"error": "x", "kept_old_policy": True})
@@ -117,7 +117,7 @@ class TestServerAuditChainOverTheWire(_Sandbox):
             [sys.executable, str(_FORGE_PLUGIN / "forge.py"), "--root", str(self.ws),
              "mcp", "--permission-mode", "yes"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, cwd=str(self.tmp), env=env,
+            text=True, cwd=str(self.tmp), env=env, encoding="utf-8", errors="replace",
         )
         try:
             def rpc(i: int, method: str, params: dict) -> dict:
@@ -134,7 +134,7 @@ class TestServerAuditChainOverTheWire(_Sandbox):
             rpc(1, "initialize", {})
             # A malformed policy edit → next call logs policy.reload_failed.
             pol = self.ws / "policy.json"
-            pol.write_text("{ broken")
+            pol.write_text("{ broken", encoding="utf-8")
             future = time.time() + 2
             os.utime(pol, (future, future))
             rpc(2, "tools/call", {"name": "no.such.tool", "arguments": {}})

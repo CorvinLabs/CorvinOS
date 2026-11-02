@@ -45,7 +45,7 @@ def _main_checkout() -> Path:
 
     try:
         common = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                                capture_output=True, text=True, timeout=10).stdout.strip()
+                                capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace").stdout.strip()
         if common.endswith(".git"):
             return Path(common).parent
     except (OSError, subprocess.SubprocessError):
@@ -63,15 +63,15 @@ def _reset_home() -> None:
         (th / sub).mkdir(parents=True, exist_ok=True)
     for sub in ("skills_gen", "skills_packages", "skills_installed", "xdg", "e2e-control", "plugin-packages"):
         (HOME / sub).mkdir(parents=True, exist_ok=True)
-    (HOME / MARKER).write_text("throwaway CORVIN_HOME for the forge-system Playwright suite\n")
+    (HOME / MARKER).write_text("throwaway CORVIN_HOME for the forge-system Playwright suite\n", encoding="utf-8")
     # Throwaway installs must not count as instances: opt out of the ping /
     # heartbeat and healing traces (both default-ON, opt-out). Mode 0600 — the
     # gateway reads this file fail-closed on mode (ADR-0759).
     yml = th / "global" / "tenant.corvin.yaml"
-    yml.write_text("spec:\n  telemetry:\n    ping_enabled: false\n    healing_traces: false\n")
+    yml.write_text("spec:\n  telemetry:\n    ping_enabled: false\n    healing_traces: false\n", encoding="utf-8")
     os.chmod(yml, 0o600)
-    (HOME / "e2e-control" / "layer_review.json").write_text(json.dumps({"verdict": "PASS", "delay_s": 0}))
-    (HOME / "e2e-control" / "plan.json").write_text(json.dumps({"mode": "manifest", "delay_s": 0}))
+    (HOME / "e2e-control" / "layer_review.json").write_text(json.dumps({"verdict": "PASS", "delay_s": 0}), encoding="utf-8")
+    (HOME / "e2e-control" / "plan.json").write_text(json.dumps({"mode": "manifest", "delay_s": 0}), encoding="utf-8")
 
 
 def _sandbox_env() -> None:
@@ -126,7 +126,7 @@ def _patch_external_boundaries() -> None:
     # model is a ReviewVerdict("ERROR"), and flags are ReviewFlag members.
     def _review(manifest, enforcement, **_k):
         try:
-            cfg = json.loads(control.read_text())
+            cfg = json.loads(control.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             cfg = {}
         time.sleep(float(cfg.get("delay_s", 0)))
@@ -158,7 +158,7 @@ def _patch_external_boundaries() -> None:
         def create(self, **kwargs):
             real_create.bind(None, **kwargs)          # TypeError for any keyword the SDK does not take
             try:
-                cfg = json.loads(plan_control.read_text())
+                cfg = json.loads(plan_control.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 cfg = {}
             time.sleep(float(cfg.get("delay_s", 0)))
@@ -232,16 +232,16 @@ def _seed_skills() -> None:
         folder = HOME / "skills_gen" / skill_id
         for sub in ("src", "hooks", "tests", "scripts", "docs", "references", ".forge"):
             (folder / sub).mkdir(parents=True, exist_ok=True)
-        (folder / "src" / "skill.py").write_text(body)
-        (folder / "README.md").write_text(f"# {skill_id}\n\nNordwind Logistik automation skill.\n")
+        (folder / "src" / "skill.py").write_text(body, encoding="utf-8")
+        (folder / "README.md").write_text(f"# {skill_id}\n\nNordwind Logistik automation skill.\n", encoding="utf-8")
         (folder / "skill.json").write_text(json.dumps({
             "skill_id": skill_id, "version": version, "boot_layer": "installed",
             "entry_point": "src.skill:run",
-        }))
+        }), encoding="utf-8")
         (folder / ".forge" / "generation_context.json").write_text(json.dumps({
             "generated_at": "2026-10-08T00:00:00Z", "generated_by": "forge-e2e-harness",
             "skill_id": skill_id, "version": version,
-        }))
+        }), encoding="utf-8")
 
 
 def _seed_tools() -> None:
@@ -291,7 +291,7 @@ def main() -> None:
         "plugins": [f"{p}@{v}" for p, v in PLUGINS],
         "repo": str(REPO),
         "seeded": os.environ.get("FORGE_E2E_SEED", "1") != "0",
-    }, indent=2))
+    }, indent=2), encoding="utf-8")
 
     import uvicorn
     from corvin_gateway.app import app

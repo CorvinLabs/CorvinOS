@@ -58,7 +58,7 @@ def test_lock_chain_uses_msvcrt_when_available():
     fake = _fake_msvcrt()
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
-        p.write_text("existing content\n")
+        p.write_text("existing content\n", encoding="utf-8")
         with p.open("r+b") as fh:
             with mock.patch.object(se, "msvcrt", fake):
                 se._lock_chain(fh)
@@ -145,7 +145,7 @@ def test_verify_under_a_held_read_lock_can_still_read_the_chain_on_windows():
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
         se.write_event(p, "test.first", details={"name": "v"})
-        with p.open("r") as lf:
+        with p.open("r", encoding="utf-8") as lf:
             se._lock_chain(lf, shared=True)
             try:
                 ok, problems = se.verify_chain(p)
@@ -195,7 +195,7 @@ def test_lock_chain_falls_back_to_fcntl_when_msvcrt_unavailable():
     fcntl.flock, not a silent no-op."""
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
-        p.write_text("x\n")
+        p.write_text("x\n", encoding="utf-8")
         with p.open("r+b") as fh:
             fd = fh.fileno()
             with mock.patch.object(se, "msvcrt", None), \
@@ -212,7 +212,7 @@ def test_lock_chain_falls_back_to_fcntl_when_msvcrt_unavailable():
 def test_lock_chain_shared_still_uses_flock_lock_sh_on_posix():
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
-        p.write_text("x\n")
+        p.write_text("x\n", encoding="utf-8")
         with p.open("r+b") as fh:
             fd = fh.fileno()
             with mock.patch.object(se, "msvcrt", None), \
@@ -252,7 +252,7 @@ def test_write_event_self_heals_from_a_stale_permission_denied():
     fake = _fake_msvcrt()
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
-        p.write_text("")
+        p.write_text("", encoding="utf-8")
         os.chmod(p, 0o400)
         with mock.patch.object(se, "msvcrt", fake):
             rec = se.write_event(p, "test.event", details={"name": "v"})
@@ -268,7 +268,7 @@ def test_write_event_does_not_retry_permission_denied_on_posix():
     self-heal was never meant to paper over."""
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
-        p.write_text("")
+        p.write_text("", encoding="utf-8")
         os.chmod(p, 0o400)
         try:
             with mock.patch.object(se, "msvcrt", None):

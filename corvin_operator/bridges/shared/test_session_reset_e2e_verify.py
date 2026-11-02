@@ -30,7 +30,7 @@ def test_e2e_budget_reset_workflow():
     result = subprocess.run(
         ["python3", str(ROOT / "session_reset.py"),
          "--channel", "discord", "--chat-id", "test_e2e_123"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
     )
 
     if result.returncode != 0:
@@ -74,7 +74,7 @@ def test_e2e_budget_reset_workflow():
 
     # Test 2: Verify the fix - check that _reset_budget uses bare chat_id
     print("\nTest 2: Verify fix - _reset_budget uses bare chat_id (not forge_channel_id)")
-    code = Path(ROOT / "session_reset.py").read_text()
+    code = Path(ROOT / "session_reset.py").read_text(encoding="utf-8")
 
     # The call should be: _reset_budget(chat_id=chat_id, failures=failures)
     # NOT: _reset_budget(forge_chan_id=forge_chan_id, failures=failures)

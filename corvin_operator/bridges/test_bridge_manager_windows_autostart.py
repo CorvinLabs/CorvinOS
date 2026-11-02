@@ -130,7 +130,7 @@ class TestStartChannelDetachedCallsAutostart(unittest.TestCase):
     "Start bridge" button's real entry point) must actually call it."""
 
     def test_start_channel_detached_calls_ensure_windows_autostart(self):
-        src = (Path(__file__).resolve().parent / "bridge_manager.py").read_text()
+        src = (Path(__file__).resolve().parent / "bridge_manager.py").read_text(encoding="utf-8")
         start_idx = src.index("def start_channel_detached(")
         next_def_idx = src.index("\ndef ", start_idx + 1)
         body = src[start_idx:next_def_idx]

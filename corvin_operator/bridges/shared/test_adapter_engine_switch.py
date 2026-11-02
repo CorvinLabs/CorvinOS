@@ -115,7 +115,7 @@ def _setup_fake_opencode(name: str) -> tuple[Path, Path]:
     bin_dir = work / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "opencode"
-    fake.write_text(_FAKE_OPENCODE)
+    fake.write_text(_FAKE_OPENCODE, encoding="utf-8")
     fake.chmod(0o755)
     return work, bin_dir
 

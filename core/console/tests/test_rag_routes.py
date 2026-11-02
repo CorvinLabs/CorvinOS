@@ -64,7 +64,7 @@ async def test_get_orchestrator_calls_initialize_before_caching(monkeypatch, tmp
     initialize() must actually run so registered providers are loaded."""
     registry_dir = tmp_path / "rag"
     (registry_dir / "manifests").mkdir(parents=True)
-    (registry_dir / "manifests" / "demo_provider.yaml").write_text("metadata: {name: demo}\n")
+    (registry_dir / "manifests" / "demo_provider.yaml").write_text("metadata: {name: demo}\n", encoding="utf-8")
     monkeypatch.setattr(
         rag_route._forge_paths, "tenant_global_dir", lambda tid: tmp_path
     )
@@ -92,7 +92,7 @@ async def test_list_providers_reports_real_engines_not_empty(monkeypatch, tmp_pa
     the honest-empty-state branch because health_check_all() saw no engines."""
     registry_dir = tmp_path / "rag"
     (registry_dir / "manifests").mkdir(parents=True)
-    (registry_dir / "manifests" / "spotify_knowledge_base.yaml").write_text("metadata: {name: kb}\n")
+    (registry_dir / "manifests" / "spotify_knowledge_base.yaml").write_text("metadata: {name: kb}\n", encoding="utf-8")
     monkeypatch.setattr(
         rag_route._forge_paths, "tenant_global_dir", lambda tid: tmp_path
     )
@@ -115,10 +115,10 @@ def test_registered_count_globs_the_manifests_subdirectory(tmp_path):
     registry_dir = tmp_path / "rag"
     manifests_dir = registry_dir / "manifests"
     manifests_dir.mkdir(parents=True)
-    (manifests_dir / "spotify_knowledge_base.yaml").write_text("id: spotify_knowledge_base\n")
+    (manifests_dir / "spotify_knowledge_base.yaml").write_text("id: spotify_knowledge_base\n", encoding="utf-8")
     # A stray file directly under registry_dir must NOT be counted -- only
     # the manifests/ layout the loader actually reads should be authoritative.
-    (registry_dir / "not_a_manifest.yaml").write_text("junk: true\n")
+    (registry_dir / "not_a_manifest.yaml").write_text("junk: true\n", encoding="utf-8")
 
     manifests_glob = list(manifests_dir.glob("*.yaml"))
     assert len(manifests_glob) == 1

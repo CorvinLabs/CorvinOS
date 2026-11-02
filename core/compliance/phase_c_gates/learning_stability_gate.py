@@ -103,7 +103,7 @@ class LearningStabilityGate:
             cmd = f"""grep '"event_type".*"skill_executed"' {self.audit_path} 2>/dev/null | \
               jq -r 'select(.skill_id | startswith("os.")) | select(.confidence != null) | .confidence' 2>/dev/null"""
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             if result.stdout:
                 scores = [float(x) for x in result.stdout.strip().split('\n') if x]
 
@@ -138,12 +138,12 @@ class LearningStabilityGate:
         try:
             # Query deprecated_api_call events (compat layer invocations)
             cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | wc -l"""
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             fallback_count = int(result.stdout.strip()) if result.stdout.strip() else 0
 
             # Query total SkillExecutedEvent count
             cmd = f"""grep '"event_type".*"skill_executed"' {self.audit_path} 2>/dev/null | wc -l"""
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             total_count = int(result.stdout.strip()) if result.stdout.strip() else 1
 
             if total_count == 0:

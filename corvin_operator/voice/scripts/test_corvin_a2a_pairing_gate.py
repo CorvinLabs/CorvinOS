@@ -34,10 +34,10 @@ def _run(tmp: Path, *argv: str, stdin: str = "") -> subprocess.CompletedProcess:
     })
     for d in ("o", "e", "p", "i", "home", "xdg"):
         (tmp / d).mkdir(exist_ok=True)
-    (tmp / "anchor.key").write_text("ab" * 32)
+    (tmp / "anchor.key").write_text("ab" * 32, encoding="utf-8")
     (tmp / "anchor.key").chmod(0o600)
     return subprocess.run([sys.executable, str(_CLI), *argv], env=env, input=stdin, text=True,
-                          capture_output=True, timeout=60, cwd=str(tmp))
+                          capture_output=True, timeout=60, cwd=str(tmp), encoding="utf-8", errors="replace")
 
 
 def _written(tmp: Path) -> list[str]:
@@ -61,7 +61,7 @@ def test_free_install_every_cli_pairing_writer_is_refused(tmp_path, name):
     assert "member seat" in r.stderr and "nothing was written" in r.stderr, r.stderr
     assert _written(tmp_path) == []
     audit = tmp_path / "audit.jsonl"
-    assert not audit.exists() or "pairing_authorized" not in audit.read_text()
+    assert not audit.exists() or "pairing_authorized" not in audit.read_text(encoding="utf-8")
 
 
 def test_local_configuration_commands_stay_ungated(tmp_path):

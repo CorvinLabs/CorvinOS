@@ -62,7 +62,7 @@ class GitHubGitWrapper:
                 cwd=cwd,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30, encoding="utf-8", errors="replace"
             )
 
             # Success
@@ -114,7 +114,9 @@ class GitHubGitWrapper:
 
         returncode, stdout, stderr = self._run_git(
             "clone", self.repo_url, str(self.work_dir),
-            cwd=Path("/tmp")
+            # the mkdtemp parent: "/tmp" does not exist on Windows (the
+            # subprocess failed with NotADirectoryError before git ran)
+            cwd=self.work_dir.parent
         )
 
         if returncode != 0:
@@ -160,7 +162,7 @@ class GitHubGitWrapper:
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            file_path.write_text(content)
+            file_path.write_text(content, encoding="utf-8")
             logger.info(f"File written: {relative_path}")
             return {
                 "success": True,

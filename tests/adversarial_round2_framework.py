@@ -259,7 +259,7 @@ class AdversarialReviewRound2:
         }
 
         report_path = self.output_dir / "findings_report.json"
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
         print(f"\nFindings Report:")
@@ -296,7 +296,7 @@ class AdversarialReviewRound2:
             })
 
         plan_path = self.output_dir / "remediation_plan.json"
-        with open(plan_path, "w") as f:
+        with open(plan_path, "w", encoding="utf-8") as f:
             json.dump(plan, f, indent=2)
 
         print(f"\nRemediation Plan: {len(high_critical)} items")
@@ -339,7 +339,7 @@ class AdversarialReviewRound2:
         summary["next_steps"].append("DOCUMENT: Update compliance baseline if new constraints identified")
 
         summary_path = self.output_dir / "ROUND2_SUMMARY.json"
-        with open(summary_path, "w") as f:
+        with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
 
         print(f"\n{'='*70}")

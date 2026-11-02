@@ -235,7 +235,7 @@ class TestValidatePluginStructure(unittest.TestCase):
 
             # Create required structure
             (plugin_dir / "plugin.py").write_text(
-                "def on_load(): pass\ndef on_unload(): pass"
+                "def on_load(): pass\ndef on_unload(): pass", encoding="utf-8"
             )
             (plugin_dir / "setup.py").touch()
 

@@ -122,7 +122,7 @@ def test_guard_server_env_is_allowlisted(server, sandbox):
     assert Path(env["CORVIN_AUDIT_ANCHOR_KEY"]).is_absolute()
     assert env["HOME"] != str(harness.real_home())
     launcher = Path(env["HOME"]) / ".config" / "corvin-launcher" / "config.json"
-    assert json.loads(launcher.read_text())["auto_update"] is False
+    assert json.loads(launcher.read_text(encoding="utf-8"))["auto_update"] is False
     yaml = sandbox.corvin_home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
     assert (yaml.stat().st_mode & 0o777) == 0o600
     # Read-only `systemctl is-active …` from status routes is refused by the shim and reported
@@ -136,7 +136,7 @@ def test_guard_server_env_is_allowlisted(server, sandbox):
 def test_guard_git_shim_intercepts_and_redacts(sandbox):
     before = len(sandbox.git_invocations())
     proc = subprocess.run(["git", "clone", "https://user:s3cr3t@github.com/x/y", "/nonexistent"],
-                          env=sandbox.env, capture_output=True, text=True)
+                          env=sandbox.env, capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert proc.returncode == harness.GIT_EXIT
     new = sandbox.git_invocations()[before:]
     assert len(new) == 1 and "s3cr3t" not in new[0] and "://***@github.com" in new[0], new
@@ -163,7 +163,7 @@ time.sleep(600)
 
 def _alive(pid: int) -> bool:
     try:
-        state = Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
+        state = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split(")")[-1].split()[0]
     except OSError:
         return False
     return state != "Z"
@@ -182,7 +182,7 @@ def test_guard_sandbox_server_dies_with_its_parent(sandbox):
            "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"]
     parent = subprocess.Popen([sys.executable, "-c", _PARENT,
                                json.dumps({"cmd": cmd, "env": env, "cwd": str(sandbox.root)})],
-                              stdout=subprocess.PIPE, text=True)
+                              stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
     server_pid = int(parent.stdout.readline().strip())
     try:
         deadline = time.monotonic() + 30

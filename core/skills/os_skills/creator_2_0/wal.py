@@ -146,7 +146,7 @@ class SkillCreationWAL:
                 # If this write fails, the phase does NOT execute
                 # If the next write fails, we can recover from this entry
                 line = json.dumps(entry.to_dict(), separators=(",", ":")) + "\n"
-                with open(self.wal_file, "a") as f:
+                with open(self.wal_file, "a", encoding="utf-8") as f:
                     f.write(line)
                     f.flush()  # Ensure durable write to disk
                     os.fsync(f.fileno())  # Force fsync (crash-safe)
@@ -169,7 +169,7 @@ class SkillCreationWAL:
             # Read all entries
             entries = []
             try:
-                with open(self.wal_file, "r") as f:
+                with open(self.wal_file, "r", encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue
@@ -191,7 +191,7 @@ class SkillCreationWAL:
 
             # Rewrite WAL with updated entries
             try:
-                with open(self.wal_file, "w") as f:
+                with open(self.wal_file, "w", encoding="utf-8") as f:
                     for entry in entries:
                         line = json.dumps(entry.to_dict(), separators=(",", ":")) + "\n"
                         f.write(line)
@@ -212,7 +212,7 @@ class SkillCreationWAL:
         entries = []
         with self._lock:
             try:
-                with open(self.wal_file, "r") as f:
+                with open(self.wal_file, "r", encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue
@@ -245,7 +245,7 @@ class SkillCreationWAL:
             # Read all entries
             entries = []
             try:
-                with open(self.wal_file, "r") as f:
+                with open(self.wal_file, "r", encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue
@@ -262,7 +262,7 @@ class SkillCreationWAL:
 
             # Rewrite WAL
             try:
-                with open(self.wal_file, "w") as f:
+                with open(self.wal_file, "w", encoding="utf-8") as f:
                     for entry in entries:
                         line = json.dumps(entry.to_dict(), separators=(",", ":")) + "\n"
                         f.write(line)
@@ -283,7 +283,7 @@ class SkillCreationWAL:
             # Read all entries
             entries = []
             try:
-                with open(self.wal_file, "r") as f:
+                with open(self.wal_file, "r", encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue
@@ -296,7 +296,7 @@ class SkillCreationWAL:
 
             # Rewrite WAL without this skill's entries
             try:
-                with open(self.wal_file, "w") as f:
+                with open(self.wal_file, "w", encoding="utf-8") as f:
                     for entry in entries:
                         line = json.dumps(entry.to_dict(), separators=(",", ":")) + "\n"
                         f.write(line)

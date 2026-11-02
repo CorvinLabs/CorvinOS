@@ -151,7 +151,7 @@ class TestEventEmitterContract:
         repo = Path(__file__).resolve().parents[3]
         proc = subprocess.run(
             [sys.executable, "-c", script], cwd=str(repo), timeout=20,
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         assert proc.returncode == 0, proc.stderr
         # the atexit flush wrote the queued event before exit
@@ -183,7 +183,7 @@ class TestEmitterWiring:
         bad = re.compile(r"EventEmitter\(\s*(?:\)|Path\(|corvin_home|tenant_home|_tenant_dir\b|tenant_dir\b)")
         for site in sites:
             # code only — comments legitimately quote the legacy form
-            src = "\n".join(l for l in site.read_text().splitlines() if not l.lstrip().startswith("#"))
+            src = "\n".join(l for l in site.read_text(encoding="utf-8").splitlines() if not l.lstrip().startswith("#"))
             assert "EventEmitter(" in src, site
             assert not bad.search(src), f"{site}: legacy EventEmitter construction"
             assert re.search(r"EventEmitter\(\s*_?LearningEventStore\(", src), \
@@ -195,7 +195,7 @@ class TestEmitterWiring:
         pattern = re.compile(r"await\s+(?:self\.)?(?:event_)?emitter\.(?:emit|stop|start|flush)\(")
         offenders = []
         for f in sorted(learning_dir.glob("*.py")):
-            if pattern.search(f.read_text()):
+            if pattern.search(f.read_text(encoding="utf-8")):
                 offenders.append(f.name)
         # STRICT (N-05): every emit path in core/learning is on the sync contract.
         assert not offenders, f"sync-emit misuse (await on EventEmitter.emit/stop): {offenders}"
@@ -213,7 +213,7 @@ class TestEmitterWiring:
         wire_import = re.compile(r"from\s+(?:\.|core\.learning\.)learning_events\s+import")
         offenders = []
         for f in sorted(learning_dir.glob("*.py")):
-            src = f.read_text()
+            src = f.read_text(encoding="utf-8")
             if emit_call.search(src) and schema_import.search(src) and not wire_import.search(src):
                 offenders.append(f.name)
         assert not offenders, f"event_schema record handed to the learning_events emitter: {offenders}"

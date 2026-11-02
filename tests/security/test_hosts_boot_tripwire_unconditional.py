@@ -78,11 +78,11 @@ def _boot(host: str, tmp_path: Path, *, strip: bool, tamper: bool = False) -> st
                "tool": "", "details": {}, "prev_hash": "", "hash": "deadbeefdeadbeef"}
         chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
         chain.parent.mkdir(parents=True, exist_ok=True)
-        chain.write_text(json.dumps(rec) + "\n")
+        chain.write_text(json.dumps(rec) + "\n", encoding="utf-8")
         (home / "anchor.key").write_bytes(b"A" * 32)
         os.chmod(home / "anchor.key", 0o644)
     proc = subprocess.run([sys.executable, "-c", _BOOT], env=env, cwd=str(_REPO),
-                          capture_output=True, text=True, timeout=240)
+                          capture_output=True, text=True, timeout=240, encoding="utf-8", errors="replace")
     return proc.stdout + "\n" + proc.stderr
 
 

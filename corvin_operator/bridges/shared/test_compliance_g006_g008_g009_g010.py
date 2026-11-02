@@ -140,14 +140,14 @@ def test_g008_sbom() -> None:
         t("component purl starts with pkg:pypi/",
           comp.get("purl", "").startswith("pkg:pypi/"))
 
-        out.write_text(json.dumps(sbom, indent=2))
+        out.write_text(json.dumps(sbom, indent=2), encoding="utf-8")
         ok, msg = check_freshness(out, max_age_days=1)
         t("freshness check passes for new SBOM", ok, detail=msg)
 
         # Old SBOM check
         old_sbom = {**sbom, "metadata": {**sbom["metadata"], "timestamp": "2020-01-01T00:00:00Z"}}
         old_out = Path(tmp) / "sbom_old.cdx.json"
-        old_out.write_text(json.dumps(old_sbom))
+        old_out.write_text(json.dumps(old_sbom), encoding="utf-8")
         ok2, msg2 = check_freshness(old_out, max_age_days=90)
         t("freshness check fails for stale SBOM", not ok2, detail=msg2)
 

@@ -71,7 +71,7 @@ def _sha256_prefix(s: str) -> str:
 
 def append_event(event_type: str, **fields) -> None:
     entry = {"type": event_type, "ts": time.time(), **fields}
-    with open(RUN_FILE, "a") as f:
+    with open(RUN_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
 now = time.time()

@@ -38,7 +38,7 @@ def _claude_turn(prompt: str) -> tuple[int, str]:
     with tempfile.TemporaryDirectory() as work:  # never run a real turn in the repo
         proc = subprocess.run(
             ["claude", "-p", prompt, "--model", "haiku"],
-            capture_output=True, text=True, timeout=180, env=env, cwd=work,
+            capture_output=True, text=True, timeout=180, env=env, cwd=work, encoding="utf-8", errors="replace",
         )
     return proc.returncode, proc.stdout.strip()
 
@@ -83,7 +83,7 @@ def test_live_turn_snapshot_restart_recover(tmp_path, monkeypatch):
 
     # Core chain got the audit-first records
     from core.learning.event_persistence import _resolve_core_audit
-    chain = _resolve_core_audit().audit_path().read_text()
+    chain = _resolve_core_audit().audit_path().read_text(encoding="utf-8")
     assert chain.count("infinite_session.snapshot_created") >= 2
     assert snap_1.snapshot_id in chain and snap_2.snapshot_id in chain
     assert "pong" not in chain and "pang" not in chain  # content-free

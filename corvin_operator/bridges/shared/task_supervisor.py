@@ -254,7 +254,7 @@ def _is_zombie(pid: int) -> bool:
     and the heartbeat check still catches the case.
     """
     try:
-        stat = Path(f"/proc/{int(pid)}/stat").read_text()
+        stat = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8")
         # The comm field is parenthesised and may itself contain spaces, so
         # split after the closing paren — state is the first field there.
         return stat[stat.rindex(")") + 1:].split()[0] == "Z"
@@ -1071,8 +1071,14 @@ def _terminate(pid: int) -> None:
     a resumable summary, and SIGKILL would throw that away."""
     try:
         if sys.platform.startswith("win"):
-            subprocess.run(["taskkill", "/PID", str(pid), "/T"],
-                           capture_output=True, check=False)
+            r = subprocess.run(["taskkill", "/PID", str(pid), "/T"],
+                               capture_output=True, check=False, timeout=10)
+            # A windowless worker refuses the polite request ("can only be terminated
+            # forcefully", rc 128) and kept running next to its resumed replacement.
+            # There is no graceful SIGTERM on Windows, so force it.
+            if r.returncode != 0 and _pid_alive(int(pid)):
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               capture_output=True, check=False, timeout=10)
         else:
             # Recorded before the signal (P0): a worker stopped here shows as a
             # supervisor action, not as an unexplained exit 143.

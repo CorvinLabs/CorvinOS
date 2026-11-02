@@ -74,7 +74,7 @@ def _skip(rel: str) -> bool:
 
 
 def _current() -> dict[str, int]:
-    out = subprocess.check_output(["git", "ls-files", "*.py"], cwd=REPO, text=True)
+    out = subprocess.check_output(["git", "ls-files", "*.py"], cwd=REPO, text=True, encoding="utf-8", errors="replace")
     found: dict[str, int] = {}
     for rel in out.split():
         if _skip(rel):

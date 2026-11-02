@@ -28,7 +28,7 @@ ENTRY = "assets/index-abc123.js"
 
 def _git(cwd: Path, *a: str) -> str:
     return subprocess.run(["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", *a],
-                          check=True, capture_output=True, text=True).stdout.strip()
+                          check=True, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
 
 
 def _updater(body: str) -> str:
@@ -57,20 +57,20 @@ def world(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
     src = tmp_path / "src"
     subprocess.run(["git", "clone", "-q", str(origin), str(src)], check=True, capture_output=True)
-    (src / "pyproject.toml").write_text('[project]\nname = "corvinos"\nversion = "1.0.0"\n')
-    (src / "update.ps1").write_text("")
+    (src / "pyproject.toml").write_text('[project]\nname = "corvinos"\nversion = "1.0.0"\n', encoding="utf-8")
+    (src / "update.ps1").write_text("", encoding="utf-8")
     _git(src, "checkout", "-q", "-B", "main")
     monkeypatch.setenv("CORVIN_SRC_DIR", str(src))
     monkeypatch.setattr(UpdateManager, "state_path", lambda self: tmp_path / "state.json")
     monkeypatch.setattr(um, "_use_systemd_run", lambda: False)
 
     def publish(updater: str) -> None:
-        (src / "update.sh").write_text(updater)
+        (src / "update.sh").write_text(updater, encoding="utf-8")
         _git(src, "add", "-A"); _git(src, "commit", "-q", "-m", "init"); _git(src, "push", "-q", "-f", "origin", "main")
         other = tmp_path / "other"
         if not other.exists():
             subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, capture_output=True)
-        (other / "feature.txt").write_text(str(time.time()))
+        (other / "feature.txt").write_text(str(time.time()), encoding="utf-8")
         _git(other, "add", "-A"); _git(other, "commit", "-q", "-m", "feat: new"); _git(other, "push", "-q", "origin", "main")
         _git(src, "fetch", "-q", "origin", "main")
 
@@ -123,7 +123,7 @@ def test_full_run_through_the_settings_click_is_visible_and_proven(world, client
 def test_exit_zero_without_a_rebuilt_ui_is_not_a_success(world, client):
     src, publish, tmp = world
     prior = 1234567.0
-    (tmp / "state.json").write_text(json.dumps({"status": "success", "finished_at": prior, "last_success_at": prior}))
+    (tmp / "state.json").write_text(json.dumps({"status": "success", "finished_at": prior, "last_success_at": prior}), encoding="utf-8")
     publish(_updater('''emit delivery running
 git fetch -q origin main && git merge -q --ff-only origin/main
 emit delivery ok "$(git rev-parse HEAD)"
@@ -202,7 +202,7 @@ def test_auto_update_run_is_marked_auto(world):
 
 
 def test_shipped_update_sh_progress_function_writes_valid_json(tmp_path):
-    text = (um.find_source_tree() / "update.sh").read_text()
+    text = (um.find_source_tree() / "update.sh").read_text(encoding="utf-8")
     start = text.index('PROGRESS="${CORVIN_UPDATE_PROGRESS:-}"')
     fn = text[start:text.index("\n}\n", start) + 3]
     out = tmp_path / "p.jsonl"
@@ -218,5 +218,5 @@ def test_shipped_update_sh_progress_function_writes_valid_json(tmp_path):
 def test_torn_progress_lines_are_ignored(tmp_path):
     f = tmp_path / "p.jsonl"
     f.write_text('{"phase":"delivery","status":"ok","detail":"x","ts":1}\n{"phase":"deliv\nnot json\n'
-                 '{"phase":"bogus","status":"ok"}\n')
+                 '{"phase":"bogus","status":"ok"}\n', encoding="utf-8")
     assert [e["phase"] for e in um.read_progress(f)] == ["delivery"]

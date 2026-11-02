@@ -106,7 +106,7 @@ def _write_artifact(tenant_id: str, artifact: dict) -> None:
     path = _artifact_path(tenant_id, artifact["artifact_id"])
     tmp = path.with_suffix(".tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(artifact, f, indent=2)
     os.replace(tmp, path)
 
@@ -116,7 +116,7 @@ def _read_artifact(tenant_id: str, artifact_id: str) -> Optional[dict]:
         return None
     path = _artifact_path(tenant_id, artifact_id)
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
@@ -126,7 +126,7 @@ def _live_artifacts(tenant_id: str) -> list[dict]:
     out = []
     for path in _artifacts_dir(tenant_id).glob("*.json"):
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 artifact = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue

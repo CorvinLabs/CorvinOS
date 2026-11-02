@@ -84,7 +84,7 @@ class EngineSettingPinTests(unittest.TestCase):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(
             "apiVersion: corvin/v1\nkind: Tenant\nspec:\n  default_engine: claude_code\n"
-            "  engine_models:\n" + engine_models_block
+            "  engine_models:\n" + engine_models_block, encoding="utf-8"
         )
 
     def test_get_resolves_pins_like_the_runtime(self) -> None:
@@ -151,7 +151,7 @@ class EngineSettingPinTests(unittest.TestCase):
         })
         self.assertEqual(r.status_code, 200, r.text)
         raw = (Path(self._tmp.name) / "tenants" / "_default" / "global"
-               / "tenant.corvin.yaml").read_text()
+               / "tenant.corvin.yaml").read_text(encoding="utf-8")
         self.assertNotIn("anthropic/", raw, raw)
         cfg = client.get("/v1/console/settings/engine").json()["engine_models"]["claude_code"]
         self.assertEqual(cfg["os_model"], MID)

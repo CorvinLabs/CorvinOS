@@ -112,7 +112,7 @@ class TestBlocker5ContextPipelineV2:
         assert v2_file.exists()
 
         # Read file to check for research code notice
-        content = v2_file.read_text()
+        content = v2_file.read_text(encoding="utf-8")
         assert "RESEARCH PROTOTYPE" in content or "orphaned" in content.lower()
 
     def test_dual_gate_alternative_exists(self):
@@ -139,7 +139,7 @@ class TestBlocker6ExecutionContextConsolidation:
         for path in paths:
             file = Path(path)
             assert file.exists()
-            content = file.read_text()
+            content = file.read_text(encoding="utf-8")
 
             # Check for clarifying documentation
             assert "ExecutionContext" in content
@@ -155,7 +155,7 @@ class TestBlocker6ExecutionContextConsolidation:
         from pathlib import Path
 
         file = Path("/home/shumway/projects/CorvinOS/core/context_engineering/execution_context.py")
-        content = file.read_text()
+        content = file.read_text(encoding="utf-8")
 
         assert "CANONICAL" in content
         assert "Brain subsystems" in content

@@ -862,7 +862,7 @@ class TaskManager:
     @staticmethod
     def _proc_start(pid: int) -> str | None:
         try:
-            stat = Path(f"/proc/{pid}/stat").read_text()
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
         except OSError:
             return None
         rest = stat[stat.rfind(")") + 2:].split()

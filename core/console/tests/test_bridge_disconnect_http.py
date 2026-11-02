@@ -146,7 +146,7 @@ class GateTests(_Base):
         self._post(mode="delete", re_auth_token="nope")
         self.assertEqual(self.calls, [], "no side effects before authorisation")
         data = json.loads(
-            (self.home / "bridges" / "discord" / "settings.json").read_text())
+            (self.home / "bridges" / "discord" / "settings.json").read_text(encoding="utf-8"))
         self.assertEqual(data["discord_token"], "live-secret-value")
 
     def test_unknown_channel_rejected(self):
@@ -194,7 +194,7 @@ class ResponseTests(_Base):
         self._post(mode="disconnect", re_auth_token=_GOOD_REAUTH)
         for p in (self.home / "bridges" / "discord" / "settings.json",
                   self.legacy / "discord" / "settings.json"):
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
             self.assertNotIn("discord_token", data, p)
             self.assertEqual(data["pin"], "1234")
             self.assertEqual(data["whitelist"], ["u1"])

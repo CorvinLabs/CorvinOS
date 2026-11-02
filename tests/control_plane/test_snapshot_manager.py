@@ -343,7 +343,7 @@ async def test_default_audit_goes_to_the_tenant_core_chain(tmp_path, monkeypatch
     with pytest.raises(SnapshotRestoreNotImplemented):
         await manager.restore_snapshot(snap["snapshot_id"], "tenant_1", "admin")
 
-    chain = tenant_audit_chain("tenant_1").read_text()
+    chain = tenant_audit_chain("tenant_1").read_text(encoding="utf-8")
     assert "secret name" not in chain
     types = [json.loads(l)["event_type"] for l in chain.splitlines() if l.strip()]
     assert "snapshot_created" in types and "snapshot_restore_failed" in types

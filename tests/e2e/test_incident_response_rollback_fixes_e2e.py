@@ -61,7 +61,7 @@ def _chain_records():
     chain = fp.tenant_audit_chain("_default")
     if not chain.exists():
         return [], (True, [])
-    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     return recs, se.verify_chain(chain)
 
 

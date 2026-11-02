@@ -77,7 +77,7 @@ class MockAuditBackend:
         self.events.append(event)
 
         # Write to file (append-only)
-        with open(self.chain_path, "a") as f:
+        with open(self.chain_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
 
         return True
@@ -87,7 +87,7 @@ class MockAuditBackend:
         if not self.chain_path.exists():
             return []
         events = []
-        with open(self.chain_path, "r") as f:
+        with open(self.chain_path, "r", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     events.append(json.loads(line))
@@ -930,7 +930,7 @@ class TestCriticalPathsE2E:
 
         # Write report
         report_path = Path(e2e_env["tmpdir"]) / "e2e_test_report.json"
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump({
                 "timestamp": datetime.utcnow().isoformat(),
                 "total_tests": len(results),

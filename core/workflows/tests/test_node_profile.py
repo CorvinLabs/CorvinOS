@@ -89,20 +89,20 @@ def test_append_writes_one_line_to_the_dated_segment_and_never_rewrites(tmp_path
     assert seg.name == f"workflow_node_profile.{day().isoformat()}.jsonl"
     np.append("_default", e2)
     assert seg.read_bytes().startswith(first)                      # the earlier line is byte-identical
-    assert len(seg.read_text().splitlines()) == 2
+    assert len(seg.read_text(encoding="utf-8").splitlines()) == 2
     assert (seg.stat().st_mode & 0o777) == 0o600
 
 
 @pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW is POSIX")
 def test_a_planted_symlink_segment_is_never_followed(tmp_path):
     victim = tmp_path / "victim.txt"
-    victim.write_text("untouched\n")
+    victim.write_text("untouched\n", encoding="utf-8")
     directory = np.profile_dir("_default")
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"workflow_node_profile.{day().isoformat()}.jsonl").symlink_to(victim)
     with pytest.raises(OSError):
         np.append("_default", np.build_entry(meta(), "agent|n|<8k|json", "ok", now=at(day())))
-    assert victim.read_text() == "untouched\n"
+    assert victim.read_text(encoding="utf-8") == "untouched\n"
 
 
 def test_record_writes_for_an_in_scope_spawn_and_nothing_for_an_excluded_one():
@@ -118,7 +118,7 @@ def _plant_segments(offsets):
     directory = np.profile_dir("_default")
     directory.mkdir(parents=True, exist_ok=True)
     for off in offsets:
-        (directory / f"workflow_node_profile.{day(off).isoformat()}.jsonl").write_text(f'{{"day": {off}}}\n')
+        (directory / f"workflow_node_profile.{day(off).isoformat()}.jsonl").write_text(f'{{"day": {off}}}\n', encoding="utf-8")
     return directory
 
 

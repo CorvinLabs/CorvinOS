@@ -106,7 +106,7 @@ class TestIbcMaintain(unittest.TestCase):
             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
         (t / "xdg" / "corvin-voice").mkdir(parents=True)
         features = t / "xdg" / "corvin-voice" / "features.json"
-        features.write_text(json.dumps({"api_key": "k" * 32, "token_fp": "fp"}))
+        features.write_text(json.dumps({"api_key": "k" * 32, "token_fp": "fp"}), encoding="utf-8")
         features.chmod(0o600)
         self.home = t / "home"
         self.cert = t / "id" / "instance_cert.jwt"
@@ -133,18 +133,18 @@ class TestIbcMaintain(unittest.TestCase):
 
     def _bind(self, exp: float) -> str:
         token = _ibc(self.trust, sub="iid-test", pubkey="AAAA", exp=exp)
-        self.cert.write_text(token)
+        self.cert.write_text(token, encoding="utf-8")
         self.cert.chmod(0o600)
         return token
 
     def _maintain(self) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, str(CLI), "maintain"], cwd=HERE, env=self.env,
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
 
     def _events(self) -> list[str]:
         if not self.chain.exists():
             return []
-        return [json.loads(line)["event_type"] for line in self.chain.read_text().splitlines()]
+        return [json.loads(line)["event_type"] for line in self.chain.read_text(encoding="utf-8").splitlines()]
 
     def test_expiring_ibc_is_renewed_and_crl_cached(self):
         old = self._bind(time.time() + 5 * DAY)
@@ -152,10 +152,10 @@ class TestIbcMaintain(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("IBC: renewed", r.stdout)
         self.assertEqual(len(self.stub.binds), 1)
-        new = self.cert.read_text().strip()
+        new = self.cert.read_text(encoding="utf-8").strip()
         self.assertNotEqual(new, old)
         self.assertGreater(_claims(new)["exp"], time.time() + 300 * DAY)
-        self.assertEqual(json.loads(self.crl.read_text())["revoked_jti"], ["ibc-revoked-1"])
+        self.assertEqual(json.loads(self.crl.read_text(encoding="utf-8"))["revoked_jti"], ["ibc-revoked-1"])
         events = self._events()
         self.assertIn("instance.crl_refreshed", events)
         self.assertIn("instance.ibc_issued", events)
@@ -166,7 +166,7 @@ class TestIbcMaintain(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("IBC: fresh", r.stdout)
         self.assertEqual(self.stub.binds, [])
-        self.assertEqual(self.cert.read_text().strip(), token)
+        self.assertEqual(self.cert.read_text(encoding="utf-8").strip(), token)
 
     def test_unbound_instance_only_refreshes_the_list(self):
         r = self._maintain()
@@ -176,11 +176,11 @@ class TestIbcMaintain(unittest.TestCase):
         self.assertTrue(self.crl.exists())
 
     def test_failed_fetch_exits_1_keeps_cache_and_is_audited(self):
-        self.crl.write_text(json.dumps({"fetched_at": 1, "revoked_jti": ["keep-me"]}))
+        self.crl.write_text(json.dumps({"fetched_at": 1, "revoked_jti": ["keep-me"]}), encoding="utf-8")
         self.stub.crl_status = 503
         r = self._maintain()
         self.assertEqual(r.returncode, 1)
-        self.assertEqual(json.loads(self.crl.read_text())["revoked_jti"], ["keep-me"])
+        self.assertEqual(json.loads(self.crl.read_text(encoding="utf-8"))["revoked_jti"], ["keep-me"])
         self.assertIn("instance.crl_refresh_failed", self._events())
 
     def test_audit_chain_verifies(self):
@@ -193,7 +193,7 @@ class TestIbcMaintain(unittest.TestCase):
              "ok, errs = se.verify_chain(Path(sys.argv[1])); print(ok, errs); sys.exit(0 if ok else 1)",
              str(self.chain)],
             env={**self.env, "PYTHONPATH": str(REPO / "corvin_operator" / "forge")},
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
 
 

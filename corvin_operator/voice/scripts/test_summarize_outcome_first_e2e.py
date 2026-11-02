@@ -55,7 +55,7 @@ def _run_cli(text: str, lang: str = "de", max_chars: int = 400,
     proc = subprocess.run(
         [sys.executable, str(SUMMARIZE), "--lang", lang,
          "--max-chars", str(max_chars)],
-        input=text, capture_output=True, text=True, timeout=180, env=env,
+        input=text, capture_output=True, text=True, timeout=180, env=env, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, f"CLI exit {proc.returncode}: {proc.stderr[-400:]}"
     return proc.stdout.strip(), proc.stderr

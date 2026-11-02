@@ -74,7 +74,7 @@ class TenantIsolationGate:
             cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | \
               jq -r 'select(.tenant_id == null) | "NO_TENANT_ID"' 2>/dev/null | head -10"""
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.stdout.strip().count("NO_TENANT_ID") > 0:
                 violations.append({
@@ -90,7 +90,7 @@ class TenantIsolationGate:
               jq -r 'select(.tenant_id != .request_tenant_id) | \
               "MISMATCH \\(.tenant_id) != \\(.request_tenant_id)"' 2>/dev/null | head -10"""
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.stdout.strip():
                 mismatch_count = len([x for x in result.stdout.strip().split('\n') if x.startswith("MISMATCH")])
@@ -106,7 +106,7 @@ class TenantIsolationGate:
             cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | \
               jq -r '.tenant_id' 2>/dev/null | sort | uniq"""
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             seen_tenants = set(x for x in result.stdout.strip().split('\n') if x and x != "null")
 
             # Log which tenants saw compat calls (for audit)

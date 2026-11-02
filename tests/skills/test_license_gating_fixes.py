@@ -84,7 +84,7 @@ class TestLayerTwoIntegrityCheck:
             for tenant, expected_hash in (("_default", "abc123def456"), ("acme", "fedcba654321")):
                 hash_dir = tmp_path / "tenants" / tenant / "global" / "skill_registry_hashes"
                 hash_dir.mkdir(parents=True)
-                (hash_dir / "test.skill_1.0.0.sha256").write_text(expected_hash)
+                (hash_dir / "test.skill_1.0.0.sha256").write_text(expected_hash, encoding="utf-8")
 
             validator = ForgeSkillValidator()
             assert validator._load_manifest_hash("test.skill", "1.0.0") == "abc123def456"

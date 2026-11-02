@@ -32,10 +32,10 @@ def make_fake_claude_bin(tmp: Path) -> Path:
     tmp.mkdir(parents=True, exist_ok=True)
     if sys.platform.startswith("win"):
         launcher = tmp / "claude.cmd"
-        launcher.write_text(f'@echo off\r\n"{sys.executable}" "{FAKE}" %*\r\n')
+        launcher.write_text(f'@echo off\r\n"{sys.executable}" "{FAKE}" %*\r\n', encoding="utf-8")
     else:
         launcher = tmp / "claude"
-        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n')
+        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n', encoding="utf-8")
         launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP)
     return launcher
 
@@ -70,14 +70,14 @@ def fake_env(tmp: Path, fixture: "str | Path", *, speedup: float = 1.0,
 
 def spawn_count(tmp: Path) -> int:
     p = tmp / "spawns.log"
-    return len(p.read_text().splitlines()) if p.exists() else 0
+    return len(p.read_text(encoding="utf-8").splitlines()) if p.exists() else 0
 
 
 def pid_alive(pidfile: Path) -> bool:
     if not pidfile.exists():
         return False
     try:
-        pid = int(pidfile.read_text().strip())
+        pid = int(pidfile.read_text(encoding="utf-8").strip())
     except ValueError:
         return False
     try:
@@ -88,7 +88,7 @@ def pid_alive(pidfile: Path) -> bool:
     stat_path = Path(f"/proc/{pid}/stat")
     if stat_path.exists():
         try:
-            return stat_path.read_text().rsplit(")", 1)[1].split()[0] != "Z"
+            return stat_path.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0] != "Z"
         except (OSError, IndexError):
             return True
     return True

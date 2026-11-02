@@ -51,9 +51,9 @@ def test_readers_follow_the_daemon_file() -> None:
         canonical = tmp / "home" / "bridges" / CHANNEL / "settings.json"
         canonical.parent.mkdir(parents=True)
         canonical.write_text(json.dumps({"whitelist": [OWNER],
-                                         "chat_profiles": {"c1": {"persona": "coder"}}}))
+                                         "chat_profiles": {"c1": {"persona": "coder"}}}), encoding="utf-8")
         legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.write_text(json.dumps({"operator_name": "legacy only"}))
+        legacy.write_text(json.dumps({"operator_name": "legacy only"}), encoding="utf-8")
 
         paths = _fresh("paths")
         assert paths.resolve_bridge_settings_file(CHANNEL) == canonical
@@ -98,7 +98,7 @@ def test_no_reader_composes_the_path_by_hand() -> None:
     files = [p for p in ROOT.glob("*.py") if not p.name.startswith("test_")]
     # positive control: the sweep reaches real modules, the resolver included
     assert len(files) > 30, f"sweep reached only {len(files)} files"
-    assert "def resolve_bridge_settings_file" in (ROOT / "paths.py").read_text()
+    assert "def resolve_bridge_settings_file" in (ROOT / "paths.py").read_text(encoding="utf-8")
     offenders = []
     for p in files:
         for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):

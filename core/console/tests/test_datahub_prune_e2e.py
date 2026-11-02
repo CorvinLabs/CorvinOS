@@ -34,9 +34,9 @@ class DataHubPruneTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.src = self.tmp / "data" / "rows.json"
         self.src.parent.mkdir(parents=True)
-        self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2}]))
+        self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2}]), encoding="utf-8")
         self.src2 = self.tmp / "data" / "other.json"
-        self.src2.write_text(json.dumps([{"city": "x", "pop": 10}, {"city": "y", "pop": 20}, {"city": "z", "pop": 30}]))
+        self.src2.write_text(json.dumps([{"city": "x", "pop": 10}, {"city": "y", "pop": 20}, {"city": "z", "pop": 30}]), encoding="utf-8")
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ class DataHubPruneTest(unittest.TestCase):
         d = self._slot() / f"{prefix}{hex_id}"
         d.mkdir(parents=True, exist_ok=True)
         md = d / "SKILL.md"
-        md.write_text(f"---\nname: {prefix}{hex_id}\ndescription: test leftover\n---\n\n# leftover {hex_id}\n")
+        md.write_text(f"---\nname: {prefix}{hex_id}\ndescription: test leftover\n---\n\n# leftover {hex_id}\n", encoding="utf-8")
         old = time.time() - age_s
         os.utime(md, (old, old))
         return d
@@ -66,9 +66,9 @@ class DataHubPruneTest(unittest.TestCase):
 
     def _mark_deleted(self, home: Path, aid: str) -> None:
         p = self._artifact_file(home, aid)
-        d = json.loads(p.read_text())
+        d = json.loads(p.read_text(encoding="utf-8"))
         d["status"] = "deleted"
-        p.write_text(json.dumps(d))
+        p.write_text(json.dumps(d), encoding="utf-8")
 
     @staticmethod
     def _registered(name: str):
@@ -79,7 +79,7 @@ class DataHubPruneTest(unittest.TestCase):
     def _chain(event: str) -> list[dict]:
         from core.paths.tenant import tenant_audit_chain
         out = []
-        for line in Path(tenant_audit_chain("_default")).read_text().splitlines():
+        for line in Path(tenant_audit_chain("_default")).read_text(encoding="utf-8").splitlines():
             if f'"{event}"' in line:
                 out.append(json.loads(line))
         return out
@@ -148,7 +148,7 @@ class DataHubPruneTest(unittest.TestCase):
             by_hand = self._slot() / "assistant_datahub_notes"           # a skill someone wrote by hand
             for d, text in ((legacy, template), (by_hand, "---\nname: notes\n---\n\nmy own notes\n")):
                 d.mkdir(parents=True)
-                (d / "SKILL.md").write_text(text)
+                (d / "SKILL.md").write_text(text, encoding="utf-8")
                 old = time.time() - 7200
                 os.utime(d / "SKILL.md", (old, old))
 
@@ -164,7 +164,7 @@ class DataHubPruneTest(unittest.TestCase):
             rows = prune.removed_list("_default")
             self.assertEqual(len(rows), 1)
             self.assertTrue(rows[0]["name"].startswith("assistant.datahub_legacy_"), rows)
-            blob = json.dumps(rows) + Path(tenant_audit_chain("_default")).read_text()
+            blob = json.dumps(rows) + Path(tenant_audit_chain("_default")).read_text(encoding="utf-8")
             for word in ("erika", "mustermann", "hiv", "patient"):
                 self.assertNotIn(word, blob.lower(), f"the legacy name leaked into a record: {word}")
 
@@ -266,7 +266,7 @@ class DataHubPruneTest(unittest.TestCase):
             names = []
             for i in range(4):          # the free tier admits 5 new skills a day, so the guard is lowered below
                 src = self.tmp / "data" / f"r{i}.json"
-                src.write_text(json.dumps([{"k": i, "v": "x" * (i + 1)}]))
+                src.write_text(json.dumps([{"k": i, "v": "x" * (i + 1)}]), encoding="utf-8")
                 aid = self._create(client, csrf, src=src, name=f"set{i}")
                 names.append(aid)
                 self.assertIsNotNone(self._registered(f"assistant.datahub_{aid}"), "precondition: registered")
@@ -317,7 +317,7 @@ class DataHubPruneTest(unittest.TestCase):
             self._tick(LearningHost("_default"))
             name = "assistant.datahub_0000d00d"
             self.assertTrue(prune.verify("_default", [name], scan_roots=[self.tmp / "data"])["ok"])
-            (self.tmp / "data" / "note.md").write_text("see assistant_datahub_0000d00d for details")
+            (self.tmp / "data" / "note.md").write_text("see assistant_datahub_0000d00d for details", encoding="utf-8")
             v = prune.verify("_default", [name], scan_roots=[self.tmp / "data"])
             self.assertFalse(v["ok"])
             self.assertIn(name, v["references"])

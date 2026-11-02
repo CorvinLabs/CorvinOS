@@ -181,7 +181,7 @@ def test_opus_checkpoint_medium_plugin(
                 "description": "SQL database connector with retry logic and connection pooling",
                 "version": "1.0.0",
             }
-        )
+        ), encoding="utf-8"
     )
 
     # Call real Opus checkpoint
@@ -245,7 +245,7 @@ def test_opus_identifies_connection_retry_risks(
                 "type": "data_connector",
                 "description": "Database connector with connection pooling and error recovery",
             }
-        )
+        ), encoding="utf-8"
     )
 
     result = real_opus_client.checkpoint_plugin_phase(plugin_scaffold_dir)

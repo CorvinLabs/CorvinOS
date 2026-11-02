@@ -191,8 +191,8 @@ def test_pool_spawns_fake_binary_with_instruction_on_stdin_only(
 ):
     task_id = _run_pool_once(corvin_home, HOSTILE)
 
-    argv = json.loads((fake_claude / "argv.json").read_text())
-    stdin_text = (fake_claude / "stdin.txt").read_text()
+    argv = json.loads((fake_claude / "argv.json").read_text(encoding="utf-8"))
+    stdin_text = (fake_claude / "stdin.txt").read_text(encoding="utf-8")
 
     # argv: no instruction text, no injected flags
     assert HOSTILE not in argv

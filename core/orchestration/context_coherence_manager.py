@@ -95,12 +95,12 @@ class ContextCoherenceManager:
             coherence_dict["coherence_id"] = coherence_id
             coherence_dict["session_id"] = session_id
 
-            with open(latest_path, "w") as f:
+            with open(latest_path, "w", encoding="utf-8") as f:
                 json.dump(coherence_dict, f, indent=2)
 
             # Append to history.jsonl
             history_path = task_coherence_dir / "history.jsonl"
-            with open(history_path, "a") as f:
+            with open(history_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(coherence_dict) + "\n")
 
             logger.info(
@@ -150,7 +150,7 @@ class ContextCoherenceManager:
                         f"No latest coherence for task '{task_id}'"
                     )
 
-                with open(latest_path) as f:
+                with open(latest_path, encoding="utf-8") as f:
                     data = json.load(f)
             else:
                 # Load specific coherence from history
@@ -161,7 +161,7 @@ class ContextCoherenceManager:
                     )
 
                 data = None
-                with open(history_path) as f:
+                with open(history_path, encoding="utf-8") as f:
                     for line in f:
                         entry = json.loads(line)
                         if entry.get("coherence_id") == coherence_id:

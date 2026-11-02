@@ -46,7 +46,7 @@ class TestRotationDaemonPhase1:
         env_file.write_text(
             "GITHUB_TOKEN=ghp_test1234567890\n"
             "HETZNER_API_TOKEN=token123\n"
-            "OPENAI_API_KEY=sk-test1234567890\n"
+            "OPENAI_API_KEY=sk-test1234567890\n", encoding="utf-8"
         )
         return env_file
 
@@ -119,7 +119,7 @@ class TestRotationDaemonBackup:
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create mock credential files
             env_file = Path(tmpdir) / ".env"
-            env_file.write_text("GITHUB_TOKEN=ghp_test\n")
+            env_file.write_text("GITHUB_TOKEN=ghp_test\n", encoding="utf-8")
 
             with patch("pathlib.Path.expanduser", return_value=env_file):
                 backup_path = daemon.create_backup()
@@ -137,7 +137,7 @@ class TestRotationDaemonBackup:
 
             # Create mock credential file
             env_file = Path(tmpdir) / ".env"
-            env_file.write_text("GITHUB_TOKEN=ghp_test\n")
+            env_file.write_text("GITHUB_TOKEN=ghp_test\n", encoding="utf-8")
 
             with patch("pathlib.Path.expanduser", return_value=env_file):
                 backup_path = daemon.create_backup()
@@ -181,7 +181,7 @@ class TestRotationDaemonPhase2:
             env_file = Path(tmpdir) / ".env"
             env_file.write_text(
                 "GITHUB_TOKEN=ghp_real_token\n"
-                "HETZNER_API_TOKEN=real_api_token\n"
+                "HETZNER_API_TOKEN=real_api_token\n", encoding="utf-8"
             )
 
             # Perform rotation
@@ -193,7 +193,7 @@ class TestRotationDaemonPhase2:
             daemon._rotate_file(env_file, replacements)
 
             # Verify file contains placeholders
-            content = env_file.read_text()
+            content = env_file.read_text(encoding="utf-8")
             assert "GITHUB_PLACEHOLDER_PAT_20260920" in content
             assert "HETZNER_PLACEHOLDER_TOKEN_20260920" in content
             assert "ghp_real_token" not in content
@@ -210,7 +210,7 @@ class TestRotationDaemonPhase2:
                         "HETZNER_API_TOKEN": "real_hetzner_token",
                         "HETZNER_SSH_KEY_NAME": "real_key_name",
                     }
-                )
+                ), encoding="utf-8"
             )
 
             # Perform rotation
@@ -222,7 +222,7 @@ class TestRotationDaemonPhase2:
             daemon._rotate_file(secrets_file, replacements)
 
             # Verify JSON is valid and contains placeholders
-            updated = json.loads(secrets_file.read_text())
+            updated = json.loads(secrets_file.read_text(encoding="utf-8"))
             assert updated["HETZNER_API_TOKEN"] == "HETZNER_PLACEHOLDER_TOKEN_20260920"
             assert updated["HETZNER_SSH_KEY_NAME"] == "HETZNER_PLACEHOLDER_KEY_NAME_20260920"
 
@@ -233,7 +233,7 @@ class TestRotationDaemonPhase2:
             env_file = Path(tmpdir) / ".env"
             env_file.write_text(
                 "GITHUB_TOKEN=GITHUB_PLACEHOLDER_PAT_20260920\n"
-                "OPENAI_API_KEY=OPENAI_PLACEHOLDER_KEY_20260920\n"
+                "OPENAI_API_KEY=OPENAI_PLACEHOLDER_KEY_20260920\n", encoding="utf-8"
             )
 
             with patch("pathlib.Path.expanduser", return_value=env_file):

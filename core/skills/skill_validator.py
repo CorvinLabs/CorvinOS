@@ -166,7 +166,7 @@ class SkillValidator:
         if not schema_path.exists():
             raise FileNotFoundError(f"Schema not found: {schema_path}")
 
-        with open(schema_path) as f:
+        with open(schema_path, encoding="utf-8") as f:
             self.schema = yaml.safe_load(f)
 
         # Initialize JSON Schema validator
@@ -212,7 +212,7 @@ class SkillValidator:
             return report
 
         try:
-            with open(manifest_path) as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 manifest = yaml.safe_load(f)
         except yaml.YAMLError as e:
             report.is_valid = False

@@ -152,7 +152,7 @@ class EngineConfigRouteTests(unittest.TestCase):
         claude_code (mapped on read, never rejected — ADR-2091)."""
         cfg = Path(self._tmp.name) / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
         cfg.parent.mkdir(parents=True, exist_ok=True)
-        cfg.write_text("spec:\n  default_engine: hermes\n  hermes_model: qwen3:8b\n")
+        cfg.write_text("spec:\n  default_engine: hermes\n  hermes_model: qwen3:8b\n", encoding="utf-8")
         r = self._client().get("/settings/engine")
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["default_engine"], "claude_code")

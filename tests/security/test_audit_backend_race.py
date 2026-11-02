@@ -66,7 +66,7 @@ class TestAuditBackendRaceConditions:
             assert len(events) == 100
             # Every record links to its predecessor (the chain order IS the
             # sequence; the forge record carries no separate counter)
-            with open(log_path, "r") as f:
+            with open(log_path, "r", encoding="utf-8") as f:
                 entries = [json.loads(line) for line in f if line.strip()]
             for prev, cur in zip(entries, entries[1:]):
                 assert cur["prev_hash"] == prev["hash"]

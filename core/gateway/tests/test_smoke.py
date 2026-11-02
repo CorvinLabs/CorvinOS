@@ -400,7 +400,7 @@ class FullPipelineTests(unittest.TestCase):
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
             ok, problems = _security_events.verify_chain(chain)
             self.assertTrue(ok, f"chain broken: {problems}")
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             event_types = {e["event_type"] for e in lines}
             # gateway.webhook_dispatched is deliberately NOT required: this run's
             # webhook target is loopback and was refused before dispatch (see step 5).

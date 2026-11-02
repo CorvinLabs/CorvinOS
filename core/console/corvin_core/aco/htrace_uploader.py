@@ -452,7 +452,7 @@ def ping_if_due(home: Path) -> bool:
         lf = None
         try:
             htrace_dir(home).mkdir(parents=True, exist_ok=True)
-            lf = lock_path.open("w")
+            lf = lock_path.open("w", encoding="utf-8")
             if _HAS_FLOCK:
                 _fcntl.flock(lf, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
         except (OSError, BlockingIOError):
@@ -921,7 +921,7 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
     lf = None
     try:
         htrace_dir(home).mkdir(parents=True, exist_ok=True)
-        lf = lock_file.open("w")
+        lf = lock_file.open("w", encoding="utf-8")
         if _HAS_FLOCK:
             _fcntl.flock(lf, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
     except (OSError, BlockingIOError):

@@ -18,7 +18,8 @@ import { HOME_A, HOME_B, PORT_A, PORT_B, URL_A, URL_B } from './tests/e2e/forge-
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const harness = path.join(dir, 'tests/e2e/forge-system/harness/isolated_forge_backend.py');
-const python = path.resolve(dir, '../../.venv/bin/python');
+// Windows venvs keep the interpreter in Scripts/python.exe, not bin/python.
+const python = path.resolve(dir, process.platform === 'win32' ? '../../.venv/Scripts/python.exe' : '../../.venv/bin/python');
 
 export const FORGE_E2E = {
   A: { url: URL_A, home: HOME_A },
@@ -47,7 +48,7 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: [
     {
-      command: `${python} ${harness}`,
+      command: `"${python}" "${harness}"`,
       url: `${FORGE_E2E.A.url}/healthz`,
       reuseExistingServer: false,
       timeout: 120_000,
@@ -56,7 +57,7 @@ export default defineConfig({
       env: { FORGE_E2E_HOME: FORGE_E2E.A.home, FORGE_E2E_PORT: String(PORT_A), FORGE_E2E_SEED: '1' },
     },
     {
-      command: `${python} ${harness}`,
+      command: `"${python}" "${harness}"`,
       url: `http://127.0.0.1:${PORT_B}/healthz`,
       reuseExistingServer: false,
       timeout: 120_000,

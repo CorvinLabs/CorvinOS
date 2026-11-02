@@ -18,6 +18,16 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// Windows: a Python child whose stdout is a pipe encodes it in the ANSI code
+// page (cp1252), so any CLI printing non-Latin-1 text (e.g. `/lang zh-Hans` ->
+// "简体中文") died with UnicodeEncodeError, and umlauts arrived as mojibake in
+// the bridge, which decodes child output as UTF-8. Every Python this process
+// starts inherits the env, so default the stdio encoding to UTF-8 once here.
+// An operator's own value wins; POSIX is untouched.
+if (process.platform === 'win32' && !process.env.PYTHONIOENCODING) {
+  process.env.PYTHONIOENCODING = 'utf-8';
+}
+
 let _cached = null;
 
 function _isExec(p) {

@@ -154,7 +154,7 @@ def _assert_pairing_is_permissive(root: Path) -> None:
     origins = list((root / "origins").glob("*.json"))
     assert origins, f"no origin file under {root}"
     for f in origins:
-        cfg = json.loads(f.read_text())
+        cfg = json.loads(f.read_text(encoding="utf-8"))
         assert cfg.get("require_ibc") is False, (f, cfg.get("require_ibc"))
 
 class _Proc:
@@ -180,7 +180,7 @@ class _Proc:
 
     def log_tail(self, n: int = 2500) -> str:
         try:
-            return (self.root / "proc.log").read_text(errors="replace")[-n:]
+            return (self.root / "proc.log").read_text(errors="replace", encoding="utf-8")[-n:]
         except OSError:
             return ""
 
@@ -400,7 +400,7 @@ class TestHubTenPeers(unittest.TestCase):
         def all_bound():
             for p in [self.hub, *self.agents]:
                 for f in (p.root / "endpoints").glob("*.json"):
-                    if not json.loads(f.read_text()).get("_peer_bind_pub"):
+                    if not json.loads(f.read_text(encoding="utf-8")).get("_peer_bind_pub"):
                         return False
             return True
         self._await(all_bound, "binding keys exchanged on every connection end", 60)
@@ -408,8 +408,8 @@ class TestHubTenPeers(unittest.TestCase):
         own = {p.name: self._own_bind_pub(p) for p in [self.hub, *self.agents]}
         self.assertEqual(len(set(own.values())), len(own), "instances share a binding key")
         for a in self.agents:
-            hub_view = json.loads((self.hub.root / "endpoints" / f"{self.kids[a.name]}.json").read_text())
-            agent_view = json.loads((a.root / "endpoints" / f"{self.kids[a.name]}.json").read_text())
+            hub_view = json.loads((self.hub.root / "endpoints" / f"{self.kids[a.name]}.json").read_text(encoding="utf-8"))
+            agent_view = json.loads((a.root / "endpoints" / f"{self.kids[a.name]}.json").read_text(encoding="utf-8"))
             self.assertEqual(hub_view["_peer_bind_pub"], own[a.name], f"hub stored a wrong key for {a.name}")
             self.assertEqual(agent_view["_peer_bind_pub"], own["hub"], f"{a.name} stored a wrong hub key")
             # Names: the hub calls the agent by ITS token label, the agent calls
@@ -591,7 +591,7 @@ class TestHubTenPeers(unittest.TestCase):
         # The STORE's append order (on disk) must equal seq order — the API
         # sorts, so checking its output would prove nothing.
         feed_file = next((self.hub.root / "home").rglob("a2a_feed/messages.jsonl"))
-        disk = [json.loads(l)["seq"] for l in feed_file.read_text().splitlines() if l.strip()]
+        disk = [json.loads(l)["seq"] for l in feed_file.read_text(encoding="utf-8").splitlines() if l.strip()]
         self.assertEqual(disk, sorted(disk), "append order != seq order in the store")
         self.assertEqual(len(disk), len(set(disk)), "duplicate seq in the store")
         print(f"[5] feed: {len(peers)} agents, {len(msgs)} messages, cursor gap-free")
@@ -758,11 +758,11 @@ const imgs = await p.$$eval('[data-testid="peer-conversation"] img',
 await p.screenshot({ path: shot });
 console.log(JSON.stringify({ peers, msgs, imgs, errors, rail, presences }));
 await b.close();
-""")
+""", encoding="utf-8")
         shot = self.tmp / "feed.png"
         try:
             out = subprocess.run(["node", str(script), f"http://127.0.0.1:{self.hub.port}", str(shot)],
-                                 cwd=str(web), capture_output=True, text=True, timeout=120)
+                                 cwd=str(web), capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
         finally:
             script.unlink(missing_ok=True)
         self.assertEqual(out.returncode, 0, out.stderr[-2000:])
@@ -802,7 +802,7 @@ await b.close();
                 sent.setdefault(m["peer_id"], set()).add(m["task_id"])
         for a in self.agents:
             chain = a.root / "home" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-            got = {json.loads(l)["details"].get("task_id") for l in chain.read_text().splitlines()
+            got = {json.loads(l)["details"].get("task_id") for l in chain.read_text(encoding="utf-8").splitlines()
                    if '"A2A.envelope_received"' in l}
             missing = sent.get(self.kids[a.name], set()) - got
             self.assertEqual(missing, set(), f"{a.name}: tasks missing from its own audit chain")
@@ -820,7 +820,7 @@ await b.close();
                         if not k.startswith(("CORVIN_", "REMOTE_", "VOICE_", "FORGE_"))},
                      "PYTHONPATH": _AGENT_PYTHONPATH, "CORVIN_HOME": str(p.root / "home"),
                      "VOICE_AUDIT_PATH": str(chain)},
-                capture_output=True, text=True, timeout=120)
+                capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
             ok, probs = json.loads(out.stdout.strip().splitlines()[-1])
             self.assertTrue(ok, f"{p.name}: audit chain does not verify: {probs}")
         dropped, count = [], 0

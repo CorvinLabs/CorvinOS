@@ -79,7 +79,7 @@ def _send(sb: Path, key: str, n: int) -> None:
     inbox.mkdir(parents=True, exist_ok=True)
     item = {"id": f"m{n}-{key}", "channel": CHANNEL, "chat_id": CHAT,
             "from": CHAT, "text": MSGS[key]}
-    (inbox / f"m{n}-{key}.json").write_text(json.dumps(item))
+    (inbox / f"m{n}-{key}.json").write_text(json.dumps(item), encoding="utf-8")
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if len(list((sb / "processed").glob("*.json"))) >= n:
@@ -89,7 +89,7 @@ def _send(sb: Path, key: str, n: int) -> None:
 
 
 def _system_prompt(sb: Path, n: int) -> str:
-    calls = [json.loads(l) for l in (sb / "args.jsonl").read_text().splitlines() if l.strip()]
+    calls = [json.loads(l) for l in (sb / "args.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     args = calls[n - 1]["args"]
     if "--append-system-prompt" in args:
         return args[args.index("--append-system-prompt") + 1]
@@ -115,8 +115,8 @@ def _ledger_file(wd: Path) -> Path:
 def _write_transcript(sb: Path, wd: Path, entries: list[dict]) -> None:
     proj = sb / "claude-cfg" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(wd.resolve()))
     proj.mkdir(parents=True, exist_ok=True)
-    (proj / f"{SID}.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
-    (wd / ".main_session.json").write_text(json.dumps({"session_id": SID}))
+    (proj / f"{SID}.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+    (wd / ".main_session.json").write_text(json.dumps({"session_id": SID}), encoding="utf-8")
     (wd / ".session_started").touch()
 
 
@@ -127,7 +127,7 @@ def _user(text: str) -> dict:
 
 def _reset(env: dict, reason: str) -> None:
     r = subprocess.run([sys.executable, str(RESET), "--channel", CHANNEL, "--chat-id", CHAT,
-                        "--reason", reason], env=env, capture_output=True, text=True, timeout=120)
+                        "--reason", reason], env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -135,9 +135,9 @@ def main() -> int:
     sb = Path(tempfile.mkdtemp(prefix="ledger-e2e-"))
     env = _env(sb)
     (sb / "bridges" / CHANNEL).mkdir(parents=True)
-    (sb / "bridges" / CHANNEL / "settings.json").write_text(json.dumps({"chat_profiles": {CHAT: {}}}))
+    (sb / "bridges" / CHANNEL / "settings.json").write_text(json.dumps({"chat_profiles": {CHAT: {}}}), encoding="utf-8")
     proc = subprocess.Popen([sys.executable, str(ADAPTER)], env=env,
-                            stdout=open(sb / "adapter.log", "a"), stderr=subprocess.STDOUT)
+                            stdout=open(sb / "adapter.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
     failures: list[str] = []
 
     def check(cond: bool, msg: str) -> None:
@@ -189,7 +189,7 @@ def main() -> int:
         check("before the operator's /new" in sp5, "/new leaves one pointer to the history view")
         check(".corvin-history.md" in sp5 and "ledger.jsonl" not in sp5,
               "the worker is pointed at the view, never at the record")
-        view = (wd / ".corvin-history.md").read_text()
+        view = (wd / ".corvin-history.md").read_text(encoding="utf-8")
         check(all(MSGS[k] in view for k in "ABCD"), "the view still holds the turns before /new")
 
         print("6 FOXTROT — the new topic continues")
@@ -201,7 +201,7 @@ def main() -> int:
               "the fence and the ledger file are named")
 
         print("7 the record itself")
-        recs = [json.loads(l) for l in _ledger_file(wd).read_text().splitlines()]
+        recs = [json.loads(l) for l in _ledger_file(wd).read_text(encoding="utf-8").splitlines()]
         turns = [r for r in recs if r["kind"] == "turn"]
         check([r["n"] for r in turns] == [1, 2, 3, 4, 5, 6], "six turns, numbered 1..6")
         check([r["user_text"] for r in turns] == [MSGS[k] for k in "ABCDEF"], "every user text kept verbatim")
@@ -219,7 +219,7 @@ def main() -> int:
         chains = list(sb.rglob("audit.jsonl"))
         events = []
         for c in chains:
-            for l in c.read_text().splitlines():
+            for l in c.read_text(encoding="utf-8").splitlines():
                 try:
                     events.append(json.loads(l))
                 except json.JSONDecodeError:

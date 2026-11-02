@@ -76,7 +76,7 @@ def create_test_index(tmpdir: Path) -> Path:
         index["by_tier"][tier].append(p)
 
     index_file = index_dir / "plugins.json"
-    with open(index_file, "w") as f:
+    with open(index_file, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2)
 
     return index_file

@@ -119,7 +119,7 @@ def run_validation(
     print("  Checking configuration...")
     env_file = voice_config_dir / "service.env"
     if env_file.exists():
-        content = env_file.read_text()
+        content = env_file.read_text(encoding="utf-8")
         if _key_present(content, "OPENAI_API_KEY", prefix="sk-"):
             print("  ✓ OPENAI_API_KEY configured")
         else:

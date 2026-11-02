@@ -49,7 +49,7 @@ def setup_logging(log_file: str | None = None) -> None:
 def parse_events(jsonl_file: Path) -> list[dict[str, Any]]:
     """Parse JSONL export file into event list."""
     events = []
-    with open(jsonl_file, "r") as f:
+    with open(jsonl_file, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
@@ -357,7 +357,7 @@ def generate_index_html(output_dir: Path, metrics: dict[str, Any], timestamp: st
 </html>
 """
     index_file = output_dir / "index.html"
-    with open(index_file, "w") as f:
+    with open(index_file, "w", encoding="utf-8") as f:
         f.write(html)
     logger.info("✓ Generated index.html: %s", index_file)
 

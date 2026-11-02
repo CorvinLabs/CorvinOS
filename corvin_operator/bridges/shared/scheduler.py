@@ -86,7 +86,7 @@ class ScheduleFileCorrupt(RuntimeError):
 def load(*, for_write: bool = False) -> list[dict[str, Any]]:
     """Read the schedule file; missing file → empty list."""
     try:
-        return json.loads(SCHEDULE_FILE.read_text())
+        return json.loads(SCHEDULE_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
     except json.JSONDecodeError as exc:
@@ -101,7 +101,7 @@ def save(items: list[dict[str, Any]]) -> None:
     """Atomic write: tmp-file + rename so a crash mid-write can't corrupt."""
     SCHEDULE_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = SCHEDULE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(items, indent=2, ensure_ascii=False))
+    tmp.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
     shutil.move(str(tmp), str(SCHEDULE_FILE))
 
 
@@ -487,7 +487,7 @@ def _run_workflow_to_outbox(
 
     try:
         result = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, timeout=120
+            cmd, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace"
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         body = f"{_icon('warning')} workflow `{workflow_name}` failed to run: {e}"
@@ -617,7 +617,7 @@ def materialize_due(inbox_dir: Path, now: float | None = None) -> list[dict[str,
             try:
                 inbox_dir.mkdir(parents=True, exist_ok=True)
                 (inbox_dir / f"{msg_id}.json").write_text(
-                    json.dumps(envelope, ensure_ascii=False, indent=2)
+                    json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
             except OSError:
                 # File-system trouble — leave the task in place, retry next tick.

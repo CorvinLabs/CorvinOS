@@ -102,7 +102,7 @@ def test_plugin_loaded_through_the_registry_receives_a_core_event_copy(tmp_path,
 
     # The CORE chain committed regardless of the backend: it is the record of
     # truth, the backend only ever gets a copy after the write.
-    chain = (tmp_path / "audit.jsonl").read_text()
+    chain = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
     assert '"e2e.probe"' in chain
 
     reg.unregister(backend.plugin_id)
@@ -120,7 +120,7 @@ def test_hostile_backend_cannot_break_the_core_write(tmp_path, monkeypatch):
     audit.audit_event("e2e.boom", details={"reason": "probe"}, tenant_id="_default")
     ab.drain_now(timeout=5.0)
 
-    chain = (tmp_path / "audit.jsonl").read_text()
+    chain = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
     assert '"e2e.boom"' in chain, "core write must commit even when the backend raises"
     assert ab.failure_count() >= 1
 

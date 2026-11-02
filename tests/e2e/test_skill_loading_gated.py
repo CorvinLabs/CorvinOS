@@ -36,7 +36,7 @@ def _publish_hash(manifest) -> None:
     body = json.dumps(manifest.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
     d = tenant_home("_default") / "global" / "skill_registry_hashes"
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"{manifest.skill_id}_{manifest.version}.sha256").write_text(hashlib.sha256(body).hexdigest())
+    (d / f"{manifest.skill_id}_{manifest.version}.sha256").write_text(hashlib.sha256(body).hexdigest(), encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)

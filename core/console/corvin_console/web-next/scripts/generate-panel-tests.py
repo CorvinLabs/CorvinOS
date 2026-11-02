@@ -116,7 +116,7 @@ def main():
             continue
         
         test_code = generate_panel_test(panel)
-        test_file.write_text(test_code)
+        test_file.write_text(test_code, encoding="utf-8")
         generated += 1
         print(f"✨ Generated: {panel:25s}")
     

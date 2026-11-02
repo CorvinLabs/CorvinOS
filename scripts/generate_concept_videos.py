@@ -177,7 +177,7 @@ class VideoGenerator:
         print(f"Encoding video for {self.name}...")
 
         # Create temporary frame file list
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding="utf-8") as f:
             for i, frame in enumerate(self.frames):
                 frame_path = OUTPUT_DIR / f"frame_{self.name}_{i:04d}.png"
                 frame.save(frame_path)

@@ -89,8 +89,8 @@ class FlowBundle:
         if not manifest_path.exists():
             raise FlowBundleError(f"manifest.json not found in {flow_dir}")
 
-        flow_yaml = flow_yaml_path.read_text()
-        manifest_text = manifest_path.read_text()
+        flow_yaml = flow_yaml_path.read_text(encoding="utf-8")
+        manifest_text = manifest_path.read_text(encoding="utf-8")
         manifest_dict = json.loads(manifest_text)
         bm = BundleManifest.from_dict(manifest_dict)
 
@@ -109,7 +109,7 @@ class FlowBundle:
 
             nodes_yaml_path = flow_dir / "nodes.yaml"
             if nodes_yaml_path.exists():
-                zf.writestr("nodes.yaml", nodes_yaml_path.read_text())
+                zf.writestr("nodes.yaml", nodes_yaml_path.read_text(encoding="utf-8"))
 
             if signing_key_bytes is not None:
                 sig = cls._sign(flow_yaml, manifest_text, signing_key_bytes)
@@ -155,8 +155,8 @@ class FlowBundle:
         # Write to dest_dir — preserve the original manifest_text byte-for-byte
         # so a post-install re-verify against the bundle's _payload() still passes.
         dest_dir.mkdir(parents=True, exist_ok=True)
-        (dest_dir / "flow.yaml").write_text(flow_yaml)
-        (dest_dir / "manifest.json").write_text(manifest_text)
+        (dest_dir / "flow.yaml").write_text(flow_yaml, encoding="utf-8")
+        (dest_dir / "manifest.json").write_text(manifest_text, encoding="utf-8")
 
         return fd
 

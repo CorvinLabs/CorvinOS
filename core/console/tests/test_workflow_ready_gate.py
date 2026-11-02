@@ -19,15 +19,15 @@ INVALID_YAML = _TWO_STEP.replace("depends_on: [fetch]", "depends_on: [ghost]")
 
 def _meta(tid, wid="wf1"):
     from forge import paths as _fp
-    return json.loads((_fp.tenant_home(tid) / "workflows" / f"{wid}.meta.json").read_text())
+    return json.loads((_fp.tenant_home(tid) / "workflows" / f"{wid}.meta.json").read_text(encoding="utf-8"))
 
 
 def _set_meta(tid, wid="wf1", **kv):
     from forge import paths as _fp
     p = _fp.tenant_home(tid) / "workflows" / f"{wid}.meta.json"
-    m = json.loads(p.read_text())
+    m = json.loads(p.read_text(encoding="utf-8"))
     m.update(kv)
-    p.write_text(json.dumps(m))
+    p.write_text(json.dumps(m), encoding="utf-8")
 
 
 def _fake_designer(monkeypatch, yaml_text):
@@ -133,7 +133,7 @@ def test_dry_run_is_a_synthetic_check_that_reports_a_failing_node(tmp_path):
         # the run record keeps its dry_run flag
         from forge import paths as _fp
         metas = list((_fp.tenant_home(tid) / "workflows" / "good" / "runs").glob("*.meta.json"))
-        assert metas and json.loads(metas[0].read_text())["dry_run"] is True
+        assert metas and json.loads(metas[0].read_text(encoding="utf-8"))["dry_run"] is True
 
 
 def test_dry_run_no_longer_sleeps_per_node():

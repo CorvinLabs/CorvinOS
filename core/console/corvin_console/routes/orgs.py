@@ -146,7 +146,7 @@ def create_org_route(
     try:
         ap = actor_doc_path(rec.tenant_id)
         if ap.exists():
-            doc = _json.loads(ap.read_text())
+            doc = _json.loads(ap.read_text(encoding="utf-8"))
             owner_actor_id = doc.get("id") or doc.get("actor_id") or rec.tenant_id
     except Exception:
         pass

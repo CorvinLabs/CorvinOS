@@ -65,11 +65,11 @@ def test_e2e_generate_and_validate():
 
         # Write manifest
         manifest_file = skill_dir / ".forge" / "manifest.json"
-        manifest_file.write_text(json_str)
+        manifest_file.write_text(json_str, encoding="utf-8")
 
         # Write skill body
         skill_file = skill_dir / "SKILL.md"
-        skill_file.write_text(manifest.body_md)
+        skill_file.write_text(manifest.body_md, encoding="utf-8")
 
         # Verify files exist
         assert manifest_file.exists()
@@ -78,7 +78,7 @@ def test_e2e_generate_and_validate():
         assert (skill_dir / "tests").exists()
 
         # Read back and verify
-        saved_json = manifest_file.read_text()
+        saved_json = manifest_file.read_text(encoding="utf-8")
         saved_manifest = SkillManifest.from_dict(json.loads(saved_json))
 
         assert saved_manifest.name == manifest.name

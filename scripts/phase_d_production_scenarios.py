@@ -350,7 +350,7 @@ class PhaseD_ProductionValidator:
 
         # Save report
         report_path = self.phase_d_dir / "phase_d_production_report.json"
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, default=str)
         print(f"\n📋 Report saved to: {report_path}")
 

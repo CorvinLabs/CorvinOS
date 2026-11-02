@@ -82,7 +82,7 @@ def migrate_manifest_file(
     """
     try:
         # Load v1 manifest
-        with open(manifest_path, "r") as f:
+        with open(manifest_path, "r", encoding="utf-8") as f:
             v1_data = json.load(f)
 
         # Parse as v1
@@ -133,7 +133,7 @@ def migrate_manifest_file(
             logger.info(f"Backed up {manifest_path.name} to {backup_path}")
 
         # Write v2 manifest
-        with open(manifest_path, "w") as f:
+        with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(v2_with_binding.to_dict(), f, indent=2)
 
         logger.info(f"✅ Migrated {v1_manifest.skill_id} (tier={tier})")

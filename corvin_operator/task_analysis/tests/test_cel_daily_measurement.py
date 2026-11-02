@@ -136,7 +136,7 @@ class TestCELMeasurementDay9:
         }
 
         output_file = _METRICS_DIR / f"day{day}_metrics.json"
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
         print(f"\n✓ Day {day}: {successes}/{len(measurements)} tasks")

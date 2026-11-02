@@ -73,7 +73,7 @@ def gateway(tmp_path, monkeypatch):
 def _records(chain: Path, prefix: str = "skill.approval.") -> list[dict]:
     if not chain.exists():
         return []
-    out = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    out = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in out if str(r.get("event", r.get("event_type", ""))).startswith(prefix)]
 
 
@@ -160,7 +160,7 @@ def test_a_decision_is_refused_when_the_chain_cannot_commit(gateway, tmp_path, m
 
     # The writer's parent is a FILE: the core write cannot commit (audit_event -> False).
     blocker = tmp_path / "not_a_dir"
-    blocker.write_text("x")
+    blocker.write_text("x", encoding="utf-8")
     monkeypatch.setenv("VOICE_AUDIT_PATH", str(blocker / "audit.jsonl"))
 
     r = _post(client, approval_id, "approve", "approved")

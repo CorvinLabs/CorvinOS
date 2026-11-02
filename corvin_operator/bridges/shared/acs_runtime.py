@@ -1491,7 +1491,7 @@ def _resolve_acs_datasources(tenant_id: str, names: list[str],
         path = (conn_dir / f"{name}.json").resolve()
         if conn_dir not in path.parents:
             raise ValueError(f"datasource path escaped connections dir: {name!r}")
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
         adapter = str(raw.get("adapter", "")).lower()
         cfg = raw.get("config") or {}
         classification = str(raw.get("data_classification", "INTERNAL")).upper()

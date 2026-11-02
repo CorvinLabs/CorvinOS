@@ -96,7 +96,7 @@ def _collect(extra_env: dict[str, str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "--noconftest", "-p", "no:cacheprovider",
          "tests/e2e/test_output_rendering.py"],
-        cwd=REPO, env=env, capture_output=True, text=True, timeout=120,
+        cwd=REPO, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
     )
 
 

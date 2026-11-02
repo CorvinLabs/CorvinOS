@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import urllib.request
 from datetime import datetime, timezone
@@ -30,6 +31,14 @@ _GITHUB_RE = re.compile(
 _GITHUB_API = "https://api.github.com/repos/{owner}/{repo}/tarball/{ref}"
 # Block branch-only installs without explicit opt-in (supply-chain protection).
 _LOOKS_LIKE_VERSION = re.compile(r"^v?\d|^[0-9a-f]{7,40}$")
+
+
+def _python_command() -> str:
+    """Interpreter recorded for a Python MCP tool. POSIX: ``python3`` as
+    before. Windows has no ``python3`` -- or only the WindowsApps Store stub,
+    which exits 9009 -- so the MCP server never started; use this
+    interpreter instead."""
+    return sys.executable if os.name == "nt" else "python3"
 
 
 def _safe_id(source: str) -> str:
@@ -134,7 +143,7 @@ def _install_pip(spec: str, tid: str) -> dict[str, Any]:
     # uvx creates an isolated venv and runs the package in one step —
     # same pattern as npx for npm. Falls back to `python3 -m` if uvx is absent.
     cmd, args = ("uvx", [versioned]) if shutil.which("uvx") else (
-        "python3", ["-m", package.replace("-", "_")]
+        _python_command(), ["-m", package.replace("-", "_")]
     )
     entry: dict[str, Any] = {
         "id": tool_id,
@@ -281,9 +290,9 @@ def _detect_runtime(tool_root: Path, base_path: Path) -> dict[str, Any]:
         # Try to find a main.py or __main__.py
         for candidate in ("main.py", "__main__.py", "server.py"):
             if (tool_root / candidate).is_file():
-                return {"command": "python3", "args": [str(tool_root / candidate)]}
+                return {"command": _python_command(), "args": [str(tool_root / candidate)]}
         # Fall back to module execution
-        return {"command": "python3", "args": ["-m", tool_root.name.replace("-", "_")]}
+        return {"command": _python_command(), "args": ["-m", tool_root.name.replace("-", "_")]}
 
     raise ValueError(
         f"Cannot auto-detect runtime in {tool_root}. "
@@ -349,7 +358,7 @@ def _entry_from_local_dir(path: Path, tid: str) -> dict[str, Any]:
     if (path / "package.json").is_file():
         runtime: dict[str, Any] = {"command": "node", "args": [str(path / "index.js")]}
     elif (path / "pyproject.toml").is_file() or (path / "setup.py").is_file():
-        runtime = {"command": "python3", "args": [str(path / "main.py")]}
+        runtime = {"command": _python_command(), "args": [str(path / "main.py")]}
     else:
         raise ValueError(
             f"Cannot auto-detect runtime for local tool at {path}. "
@@ -389,7 +398,7 @@ def _docker_pull(image_ref: str) -> None:
     docker = _docker_bin()
     result = subprocess.run(
         [docker, "pull", image_ref],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         raise ValueError(
@@ -406,7 +415,7 @@ def _docker_digest(image_ref: str) -> str:
     docker = _docker_bin()
     result = subprocess.run(
         [docker, "inspect", "--format={{index .RepoDigests 0}}", image_ref],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         raise ValueError(

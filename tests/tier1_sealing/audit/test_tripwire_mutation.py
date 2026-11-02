@@ -60,28 +60,28 @@ class TestVerifierMutations:
         assert se.verify_chain(chain) == (True, [])
 
     def test_mutated_record_fails(self, chain):
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         lines[1] = lines[1].replace('"count": 1', '"count": 99')
         _rewrite(chain, lines)
         ok, problems = se.verify_chain(chain)
         assert not ok and any(p["issue"] in ("tampered", "mac_tampered") for p in problems)
 
     def test_deleted_middle_record_fails(self, chain):
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         del lines[2]
         _rewrite(chain, lines)
         ok, problems = se.verify_chain(chain)
         assert not ok and any(p["issue"] == "broken_chain" for p in problems)
 
     def test_reordered_records_fail(self, chain):
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         lines[3], lines[4] = lines[4], lines[3]
         _rewrite(chain, lines)
         ok, _ = se.verify_chain(chain)
         assert not ok
 
     def test_truncated_hash_fails(self, chain):
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         rec = json.loads(lines[0])
         rec["hash"] = rec["hash"][:8]
         lines[0] = json.dumps(rec)
@@ -93,7 +93,7 @@ class TestVerifierMutations:
         """F-A1: a hash-less record is accepted nowhere but as a tail-bound gap marker."""
         forged = json.dumps({"ts": 1.0, "event_type": "consent.granted", "severity": "INFO",
                              "run_id": "", "tool": "", "details": {"granted": True}})
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         lines.insert(2, forged)
         _rewrite(chain, lines)
         ok, problems = se.verify_chain(chain)
@@ -103,7 +103,7 @@ class TestVerifierMutations:
 
     def test_deleted_tail_records_fail(self, chain):
         """F-A12: the out-of-tree tail anchor exposes a self-consistent truncated chain."""
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         _rewrite(chain, lines[:-2])
         ok, problems = se.verify_chain(chain)
         assert not ok and any(p["issue"] == "tail_truncated" for p in problems)
@@ -116,21 +116,21 @@ class TestBootTripwire:
 
     def test_whole_chain_tamper_blocks_boot(self, chain):
         """Every record broken == lost-anchor-key shape: boot refuses, nothing is deleted."""
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             rec = json.loads(line)
             rec["hash"] = ("0" if rec["hash"][0] != "0" else "1") + rec["hash"][1:]
             lines[i] = json.dumps(rec)
         _rewrite(chain, lines)
-        before = chain.read_text()
+        before = chain.read_text(encoding="utf-8")
         with pytest.raises(tripwire.TripwireError) as exc:
             tripwire.assert_all()
         assert "audit_chain_intact" in str(exc.value)
         # Nothing deleted or rewritten (other gates may APPEND their own records).
-        assert chain.read_text().startswith(before)
+        assert chain.read_text(encoding="utf-8").startswith(before)
 
     def test_truncated_tail_blocks_boot(self, chain):
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         _rewrite(chain, lines[:-1])
         with pytest.raises(tripwire.TripwireError) as exc:
             tripwire.assert_all()
@@ -144,7 +144,7 @@ class TestBootTripwire:
 
     def test_no_override_env_var(self, chain, monkeypatch):
         """There is no switch: any env var an attacker might set is ignored."""
-        lines = chain.read_text().splitlines()
+        lines = chain.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             rec = json.loads(line)
             rec["hash"] = ("0" if rec["hash"][0] != "0" else "1") + rec["hash"][1:]

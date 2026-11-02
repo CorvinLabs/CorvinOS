@@ -144,7 +144,7 @@ def _console(tmp_path: Path):
 def _held(lock_path: Path):
     """Hold ``lock_path`` from an independent file description."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "a+")
+    fh = open(lock_path, "a+", encoding="utf-8")
     fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     try:
         yield
@@ -208,7 +208,7 @@ def test_engine_pref_put_succeeds_once_the_store_lock_is_free(tmp_path):
         )
         assert res.status_code == 200, res.text
         assert res.json()["per_chat_engine"] == "claude_code"
-        saved = json.loads(_engine_pref_path(home, "chatfree").read_text())
+        saved = json.loads(_engine_pref_path(home, "chatfree").read_text(encoding="utf-8"))
         assert saved["engine"] == "claude_code"
 
 
@@ -266,7 +266,7 @@ def test_cli_invite_succeeds_and_records_once_the_lock_is_free(tmp_path):
             "/v1/console/remote-trigger/pair/cli-invite", json=_cli_invite_body()
         )
         assert res.status_code == 200, res.text
-        recorded = json.loads((home / "invites.json").read_text())
+        recorded = json.loads((home / "invites.json").read_text(encoding="utf-8"))
         assert len(recorded) == 1
 
 
@@ -284,7 +284,7 @@ def test_invite_revoke_refuses_503_and_leaves_the_invite_live(tmp_path):
             "/v1/console/remote-trigger/pair/cli-invite", json=_cli_invite_body()
         )
         assert created.status_code == 200, created.text
-        ikey = next(iter(json.loads((home / "invites.json").read_text())))
+        ikey = next(iter(json.loads((home / "invites.json").read_text(encoding="utf-8"))))
 
         with patch.object(reg, "LOCK_TIMEOUT_SECONDS", SHORT_DEADLINE), _audited(ap) as audit:
             with _held(_invite_lock(home)):
@@ -297,7 +297,7 @@ def test_invite_revoke_refuses_503_and_leaves_the_invite_live(tmp_path):
         assert elapsed < 5.0, f"invite revoke blocked for {elapsed:.1f}s"
         assert "lock_busy" in _failed_reasons(audit)
         # The entry is untouched — not silently marked revoked.
-        entry = json.loads((home / "invites.json").read_text())[ikey]
+        entry = json.loads((home / "invites.json").read_text(encoding="utf-8"))[ikey]
         assert not entry.get("revoked"), entry
 
 
@@ -323,8 +323,8 @@ def test_friendship_set_url_refuses_503_when_config_lock_is_wedged(tmp_path):
         endpoints.mkdir(parents=True, exist_ok=True)
         before = {"kid": "kidlock", "_friendship": True, "state": "PENDING",
                   "enabled": False, "url": ""}
-        (origins / "kidlock.json").write_text(json.dumps(before))
-        (endpoints / "kidlock.json").write_text(json.dumps(before))
+        (origins / "kidlock.json").write_text(json.dumps(before), encoding="utf-8")
+        (endpoints / "kidlock.json").write_text(json.dumps(before), encoding="utf-8")
 
         with patch.object(ft, "LOCK_TIMEOUT_SECONDS", SHORT_DEADLINE), _audited(ap) as audit:
             with _held(origins / ft.CONFIG_LOCK_NAME):
@@ -341,7 +341,7 @@ def test_friendship_set_url_refuses_503_when_config_lock_is_wedged(tmp_path):
         assert "lock_busy" in _failed_reasons(audit)
         audit.action_performed.assert_not_called()
         # Still PENDING — the refusal changed no routing state.
-        assert json.loads((origins / "kidlock.json").read_text())["state"] == "PENDING"
+        assert json.loads((origins / "kidlock.json").read_text(encoding="utf-8"))["state"] == "PENDING"
 
 
 def test_config_file_lock_releases_the_first_dir_when_the_second_is_busy(tmp_path):
@@ -359,7 +359,7 @@ def test_config_file_lock_releases_the_first_dir_when_the_second_is_busy(tmp_pat
                     with ft.config_file_lock(d1, d2):
                         pass
             # d1's lock was released on the way out — it is takeable now.
-            probe = open(d1 / ft.CONFIG_LOCK_NAME, "a+")
+            probe = open(d1 / ft.CONFIG_LOCK_NAME, "a+", encoding="utf-8")
             try:
                 fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fcntl.flock(probe.fileno(), fcntl.LOCK_UN)

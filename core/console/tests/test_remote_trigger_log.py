@@ -119,7 +119,7 @@ class TestLoadEvents(unittest.TestCase):
         self.assertEqual(evs[0]["severity"], "WARNING")
 
     def test_malformed_line_skipped(self):
-        with self.chain.open("w") as fh:
+        with self.chain.open("w", encoding="utf-8") as fh:
             fh.write(json.dumps(_ev("A2A.envelope_received", origin_id="o1")) + "\n")
             fh.write("not-json-at-all\n")
             fh.write(json.dumps(_ev("A2A.engine_spawned", origin_id="o1")) + "\n")

@@ -69,7 +69,7 @@ def _artifacts_dir(tenant_id: str) -> Path:
 
 def _read(path: Path) -> Optional[dict]:
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
@@ -78,7 +78,7 @@ def _write(tenant_id: str, artifact: dict) -> None:
     path = _artifacts_dir(tenant_id) / f"{artifact['artifact_id']}.json"
     tmp = path.with_suffix(".tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(artifact, f, indent=2)
     os.replace(tmp, path)
 

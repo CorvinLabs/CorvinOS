@@ -299,7 +299,7 @@ inputs = _json.loads({_inputs_json!r})
             [sys.executable, "-c", runner_code],
             capture_output=True,
             text=True,
-            timeout=_PREVIEW_TIMEOUT,
+            timeout=_PREVIEW_TIMEOUT, encoding="utf-8", errors="replace",
         )
         console_audit.action_performed(
             tenant_id=rec.tenant_id,

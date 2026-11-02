@@ -73,7 +73,7 @@ def test_flag_on_voice_path_reaches_envelope() -> None:
 
         # Real delivery path — NO callback (bg_monitor-style poller).
         assert cn.deliver_ready(outbox) == 1
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert env["voice_path"] == fake, env            # <-- mutation target
         assert "Sharpe 1.9" in env["text"]               # text still present
         assert env["channel"] == "discord"
@@ -97,7 +97,7 @@ def test_poller_independence_stored_path_wins() -> None:
         cn.attach_voice(t1, fake)
         cn.mark_done(t1, text="done A", ok=True)
         assert cn.deliver_ready(obx_a) == 1
-        env_a = json.loads(next(obx_a.glob("cn_*.json")).read_text())
+        env_a = json.loads(next(obx_a.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert env_a["voice_path"] == fake, env_a
 
         # (b) adapter-loop-style: deliver_ready WITH a callback — the stored path
@@ -114,7 +114,7 @@ def test_poller_independence_stored_path_wins() -> None:
         cn.attach_voice(t2, fake)
         cn.mark_done(t2, text="done B", ok=True)
         assert cn.deliver_ready(obx_b, synthesize_voice=_cb) == 1
-        env_b = json.loads(next(obx_b.glob("cn_*.json")).read_text())
+        env_b = json.loads(next(obx_b.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert env_b["voice_path"] == fake, env_b
         assert cb_calls == [], "callback must not run when a stored path exists"
     print("PASS: poller-independent — both pollers attach the stored voice_path; "
@@ -133,7 +133,7 @@ def test_flag_off_is_text_only() -> None:
                           label="task", want_voice=False)
         cn.mark_done(tid, text="plain result", ok=True)
         assert cn.deliver_ready(outbox) == 1
-        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "voice_path" not in env, env
         assert "plain result" in env["text"]
     print("PASS: ship-dark — flag off delivers text only, no voice_path key")
@@ -154,7 +154,7 @@ def test_fail_open_text_always_delivered() -> None:
                          want_voice=True)
         cn.mark_done(t1, text="result one", ok=True)
         assert cn.deliver_ready(obx_a) == 1
-        env_a = json.loads(next(obx_a.glob("cn_*.json")).read_text())
+        env_a = json.loads(next(obx_a.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "voice_path" not in env_a, env_a
         assert "result one" in env_a["text"]
 
@@ -169,7 +169,7 @@ def test_fail_open_text_always_delivered() -> None:
             raise RuntimeError("TTS engine exploded")
 
         assert cn.deliver_ready(obx_b, synthesize_voice=_boom) == 1
-        env_b = json.loads(next(obx_b.glob("cn_*.json")).read_text())
+        env_b = json.loads(next(obx_b.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "voice_path" not in env_b, env_b
         assert "result two" in env_b["text"]
     print("PASS: fail-open — TTS None and a raising callback both still deliver "
@@ -198,26 +198,26 @@ def test_worker_want_voice_reachable_and_fail_open() -> None:
                "cn.register('bgt_voice', channel='signal', chat_id='+49150', "
                "sender='+49150', label='voice job', want_voice=True)")
         r = subprocess.run([sys.executable, "-c", reg], env=env,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert r.returncode == 0, r.stderr
 
         spec = Path(td) / "spec.json"
         spec.write_text(json.dumps({
             "task_id": "bgt_voice", "instruction": "summarise the logs",
             "channel": "signal", "chat_key": "+49150", "want_voice": True,
-        }))
+        }), encoding="utf-8")
         w = subprocess.run([sys.executable, str(WORKER), str(spec)], env=env,
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
         assert w.returncode == 0, f"worker failed: {w.stderr}"
 
         dl = (f"import sys; sys.path.insert(0, r'{HERE}'); "
               "import completion_notify as cn; "
               f"print(cn.deliver_ready(r'{outbox}'))")
         d = subprocess.run([sys.executable, "-c", dl], env=env,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert d.returncode == 0, d.stderr
         assert d.stdout.strip().endswith("1"), d.stdout
-        env_json = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        env_json = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
         assert "summarise the logs" in env_json["text"], env_json["text"]
         # TTS disabled ⇒ no voice_path, but the completion was still delivered.
         assert "voice_path" not in env_json, env_json
@@ -251,7 +251,7 @@ def test_worker_maybe_voice_attaches_voice_path() -> None:
             assert attached is True, "worker _maybe_voice must attach the path"
             cn.mark_done(tid, text="A long result about the logs.", ok=True)
             assert cn.deliver_ready(outbox) == 1
-            env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+            env = json.loads(next(outbox.glob("cn_*.json")).read_text(encoding="utf-8"))
             assert env["voice_path"] == str(fake_ogg), env
         finally:
             _ad.build_voice_summary = _orig_bvs
@@ -267,7 +267,7 @@ def _fresh_adapter(env_overrides: dict):
     os.environ["CORVIN_OS_ENGINE"] = "claude_code"
     xdg = Path(tempfile.mkdtemp(prefix="voicecomp-xdg-"))
     (xdg / "corvin-voice").mkdir(parents=True)
-    (xdg / "corvin-voice" / "profile.json").write_text("{}")
+    (xdg / "corvin-voice" / "profile.json").write_text("{}", encoding="utf-8")
     os.environ["XDG_CONFIG_HOME"] = str(xdg)
     sys.modules.pop("profile", None)
     for k, v in env_overrides.items():
@@ -306,11 +306,11 @@ def _run_task_and_read_records(*, flag_on: bool):
         env = {"id": "msg-v1", "channel": "sandbox-task", "from": "u42",
                "chat_id": "chan-99", "text": "/task crunch the numbers", "ts": 0}
         f = inbox / "msg-v1.json"
-        f.write_text(json.dumps(env))
+        f.write_text(json.dumps(env), encoding="utf-8")
         adapter.process_one(f, settings={"whitelist": ["u42"]})
 
-        rec = json.loads(next((home / "pending_notifications").glob("*.json")).read_text())
-        spec = json.loads(Path(captured["args"][2]).read_text())
+        rec = json.loads(next((home / "pending_notifications").glob("*.json")).read_text(encoding="utf-8"))
+        spec = json.loads(Path(captured["args"][2]).read_text(encoding="utf-8"))
         Path(captured["args"][2]).unlink(missing_ok=True)
         return rec, spec
     finally:

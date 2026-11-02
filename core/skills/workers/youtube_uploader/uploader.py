@@ -126,7 +126,7 @@ class YouTubeUploader:
 
         # 5. Save upload record to disk for persistence
         record_path = self.upload_dir / f"{task_id}.json"
-        with open(record_path, "w") as f:
+        with open(record_path, "w", encoding="utf-8") as f:
             json.dump(upload_record, f, indent=2)
 
         # 6. Emit UploadEnqueuedEvent (ADR-0314)
@@ -157,7 +157,7 @@ class YouTubeUploader:
             # Try to load from disk
             record_path = self.upload_dir / f"{task_id}.json"
             if record_path.exists():
-                with open(record_path) as f:
+                with open(record_path, encoding="utf-8") as f:
                     return json.load(f)
             return {"error": f"Task not found: {task_id}"}
 
@@ -225,7 +225,7 @@ class YouTubeUploader:
         finally:
             # Save final state to disk
             record_path = self.upload_dir / f"{task_id}.json"
-            with open(record_path, "w") as f:
+            with open(record_path, "w", encoding="utf-8") as f:
                 json.dump(upload_record, f, indent=2)
 
     async def validate_quality(

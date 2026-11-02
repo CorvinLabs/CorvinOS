@@ -102,14 +102,14 @@ def test_secret_is_redacted_in_manifest_but_reaches_tool():
 
         # Manifest on disk: api_key is redacted, endpoint is NOT
         manifest = json.loads(
-            (td / "runs" / run_id / "run_manifest.json").read_text()
+            (td / "runs" / run_id / "run_manifest.json").read_text(encoding="utf-8")
         )
         t("manifest.input.api_key == '<redacted>'",
           manifest["input"].get("api_key") == "<redacted>")
         t("manifest.input.endpoint = real value (not redacted)",
           manifest["input"].get("endpoint") == "/v1/me")
         # The secret is NOT in the manifest text anywhere
-        manifest_text = (td / "runs" / run_id / "run_manifest.json").read_text()
+        manifest_text = (td / "runs" / run_id / "run_manifest.json").read_text(encoding="utf-8")
         t("secret string not present anywhere in manifest text",
           secret not in manifest_text)
 

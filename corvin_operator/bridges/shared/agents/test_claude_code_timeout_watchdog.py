@@ -48,7 +48,7 @@ def _alive(pid: int) -> bool:
         return False
     # A zombie still answers kill(0); treat it as dead.
     try:
-        with open(f"/proc/{pid}/stat") as fh:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
             return fh.read().split()[2] != "Z"
     except OSError:
         return True
@@ -59,7 +59,7 @@ class WatchdogTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="cc-watchdog-"))
         self.fake = self.tmp / "fakeclaude"
-        self.fake.write_text(_FAKE.format(py=sys.executable))
+        self.fake.write_text(_FAKE.format(py=sys.executable), encoding="utf-8")
         self.fake.chmod(self.fake.stat().st_mode | stat.S_IEXEC)
         self.pidfile = self.tmp / "pid"
         self._env = {k: os.environ.get(k) for k in ("FAKE_SLEEP", "FAKE_PIDFILE", "ADAPTER_FAKE_CLAUDE")}
@@ -84,7 +84,7 @@ class WatchdogTests(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 1.4)
         self.assertEqual(res.error, STREAM_TIMEOUT_ERROR)
         self.assertTrue(eng.timed_out)
-        pid = int(self.pidfile.read_text())
+        pid = int(self.pidfile.read_text(encoding="utf-8"))
         self.assertFalse(_alive(pid), "child process survived the timeout")
 
     def test_infinite_timeout_arms_no_watchdog(self) -> None:

@@ -347,7 +347,7 @@ class TestPluginBuilderAuditIntegration:
         from pathlib import Path
 
         path = Path(os.environ["VOICE_AUDIT_PATH"])
-        return path, [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        return path, [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
     def test_audit_event_written_to_chain(self, tmp_path):
         """Audit events go through the core writer onto the tenant chain, content-free."""
@@ -487,10 +487,10 @@ class TestPluginBuilderE2ESimple:
         # Create package
         pkg_dir = src_dir / "my_simple_plugin"
         pkg_dir.mkdir()
-        (pkg_dir / "__init__.py").write_text('"""My simple plugin."""\n__version__ = "1.0.0"\n')
+        (pkg_dir / "__init__.py").write_text('"""My simple plugin."""\n__version__ = "1.0.0"\n', encoding="utf-8")
 
         # Create README
-        (plugin_dir / "README.md").write_text("# My Simple Plugin\n\nA simple test plugin.\n")
+        (plugin_dir / "README.md").write_text("# My Simple Plugin\n\nA simple test plugin.\n", encoding="utf-8")
 
         # Build
         config = BuildConfig(

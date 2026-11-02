@@ -69,8 +69,8 @@ def test_worker_prompt_travels_on_stdin_never_argv(fake_claude):
     ipc = worker_ipc.SubprocessWorkerIPC(timeout_s=30)
     result = ipc._run_worker(HOSTILE)
 
-    argv = json.loads((fake_claude / "argv.json").read_text())
-    stdin_text = (fake_claude / "stdin.txt").read_text()
+    argv = json.loads((fake_claude / "argv.json").read_text(encoding="utf-8"))
+    stdin_text = (fake_claude / "stdin.txt").read_text(encoding="utf-8")
 
     assert HOSTILE not in argv
     assert "--add-dir" not in argv and "--mcp-config" not in argv
@@ -106,7 +106,7 @@ def test_worker_at_reference_is_neutralised_on_the_wire(fake_claude):
     from agents.claude_code import AT_NEUTRALISER
     ipc = worker_ipc.SubprocessWorkerIPC(timeout_s=30)
     ipc._run_worker("summarise @/etc/hostname for me")
-    stdin_text = (fake_claude / "stdin.txt").read_text()
+    stdin_text = (fake_claude / "stdin.txt").read_text(encoding="utf-8")
     assert AT_NEUTRALISER + "@" in stdin_text
     for i, ch in enumerate(stdin_text):
         if ch == "@":

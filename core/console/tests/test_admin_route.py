@@ -134,7 +134,7 @@ def _audit_events(home: Path, tenant_id: str = "_default") -> list[dict]:
     if not chain.exists():
         return []
     out = []
-    for line in chain.read_text().splitlines():
+    for line in chain.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

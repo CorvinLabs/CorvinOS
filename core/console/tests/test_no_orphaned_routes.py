@@ -16,7 +16,7 @@ def test_no_orphaned_blueprints():
 
     # Read app.py to find all imported route modules
     app_file = routes_dir.parent / "app.py"
-    app_content = app_file.read_text()
+    app_content = app_file.read_text(encoding="utf-8")
 
     # Extract imported module names from "from .routes import (...)"
     import_pattern = r"from \.routes import \(([\s\S]*?)\)"
@@ -39,7 +39,7 @@ def test_no_orphaned_blueprints():
             continue  # Skip private/test files
 
         module_name = route_file.stem
-        content = route_file.read_text()
+        content = route_file.read_text(encoding="utf-8")
 
         # Check if file defines a Flask blueprint
         if "Blueprint(" in content or "@bp.route" in content or "bp = Blueprint" in content:
@@ -68,7 +68,7 @@ def test_no_fastapi_routes_reference_vibe_plugins():
     routes_dir = Path(__file__).parent.parent / "routes"
     app_file = routes_dir.parent / "app.py"
 
-    content = app_file.read_text()
+    content = app_file.read_text(encoding="utf-8")
     assert "vibe_plugins_api" not in content, (
         "app.py should not reference vibe_plugins_api (it's orphaned). "
         "If you need vibe plugin API routes, create a new FastAPI route module."

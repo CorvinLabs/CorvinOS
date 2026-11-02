@@ -88,7 +88,7 @@ def _read_audit(audit_path: Path) -> list[dict]:
     if not audit_path.exists():
         return []
     out = []
-    for line in audit_path.read_text().splitlines():
+    for line in audit_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -160,7 +160,7 @@ def case_vault_load() -> None:
           sv.load_vault(vault_path) == {})
 
         # Wrong mode (group readable) is rejected.
-        vault_path.write_text(json.dumps({"K": "v"}))
+        vault_path.write_text(json.dumps({"K": "v"}), encoding="utf-8")
         os.chmod(vault_path, 0o644)
         raised = False
         try:
@@ -175,7 +175,7 @@ def case_vault_load() -> None:
         t("0600 vault loads", loaded == {"K": "v"})
 
         # Malformed JSON.
-        vault_path.write_text("{not json")
+        vault_path.write_text("{not json", encoding="utf-8")
         os.chmod(vault_path, 0o600)
         raised = False
         try:
@@ -185,7 +185,7 @@ def case_vault_load() -> None:
         t("malformed JSON raises VaultError", raised)
 
         # Non-string value.
-        vault_path.write_text(json.dumps({"K": 42}))
+        vault_path.write_text(json.dumps({"K": 42}), encoding="utf-8")
         os.chmod(vault_path, 0o600)
         raised = False
         try:
@@ -195,7 +195,7 @@ def case_vault_load() -> None:
         t("non-string value raises VaultError", raised)
 
         # Invalid key shape.
-        vault_path.write_text(json.dumps({"bad-key": "v"}))
+        vault_path.write_text(json.dumps({"bad-key": "v"}), encoding="utf-8")
         os.chmod(vault_path, 0o600)
         raised = False
         try:
@@ -281,13 +281,13 @@ def case_policy_load_merge() -> None:
             "persona_secret_allow": {
                 "research": ["OPENAI_API_KEY"],
             }
-        }))
+        }), encoding="utf-8")
         loaded = Policy.load(Path(td))
         t("workspace persona_secret_allow loaded",
           loaded.persona_secret_allow.get("research") == ["OPENAI_API_KEY"])
 
         # Bad shape (not a dict) is silently dropped.
-        wp.write_text(json.dumps({"persona_secret_allow": "garbage"}))
+        wp.write_text(json.dumps({"persona_secret_allow": "garbage"}), encoding="utf-8")
         loaded2 = Policy.load(Path(td))
         t("malformed persona_secret_allow falls back to empty",
           loaded2.persona_secret_allow == {})
@@ -316,7 +316,7 @@ def case_runner_e2e() -> None:
         vault_file.write_text(json.dumps({
             "TEST_API_KEY":      secret_value,
             "UNUSED_KEY":        "should-not-leak",
-        }))
+        }), encoding="utf-8")
         os.chmod(vault_file, 0o600)
         os.environ["CORVIN_SECRET_VAULT"] = str(vault_file)
 
@@ -329,7 +329,7 @@ def case_runner_e2e() -> None:
                 "research":       ["TEST_API_KEY"],
                 "browser":        [],
             }
-        }))
+        }), encoding="utf-8")
         policy = Policy.load(td_path)
 
         try:
@@ -391,7 +391,7 @@ def case_runner_e2e() -> None:
                 t("audit: persona recorded",
                   d.get("persona") == "test_persona")
                 # Most important: the value MUST NOT appear anywhere.
-                full_audit_text = audit_path.read_text()
+                full_audit_text = audit_path.read_text(encoding="utf-8")
                 t("audit: secret value never appears in chain",
                   secret_value not in full_audit_text)
                 # ADR-0153 M3 — with instance_identity importable (sys.path
@@ -441,7 +441,7 @@ def case_runner_e2e() -> None:
             os.environ["FORGE_PERSONA"] = "test_persona"
             # Replace the vault with one that lacks our key (but still has
             # the persona on the allow-list).
-            vault_file.write_text(json.dumps({"OTHER_KEY": "x"}))
+            vault_file.write_text(json.dumps({"OTHER_KEY": "x"}), encoding="utf-8")
             os.chmod(vault_file, 0o600)
             raised = False
             try:
@@ -470,7 +470,7 @@ def case_runner_e2e() -> None:
             t("absent vault → SecretMissing", raised)
 
             # ---- spec on disk does not contain value ----------------
-            manifest_text = (td_path / "registry.json").read_text()
+            manifest_text = (td_path / "registry.json").read_text(encoding="utf-8")
             t("spec/manifest never contains the secret value",
               secret_value not in manifest_text,
               detail="(would mean secret got written to disk)")

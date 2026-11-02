@@ -123,7 +123,7 @@ def _write_origin(
     if allowed_purposes is not None:
         cfg["allowed_purposes"] = allowed_purposes
     p = d / f"{origin_id}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
 
 
@@ -143,7 +143,7 @@ def _write_endpoint(
         "our_origin_id": our_origin_id,
     }
     p = d / f"{endpoint_id}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
 
 
@@ -1199,9 +1199,9 @@ class TestFullE2EHttp(_WithAuditMock):
         """Sending with wrong HMAC key: receiver rejects with bad_signature."""
         # Modify the endpoint to use wrong hmac_key
         ep_path = self.tmpdir / "a" / "endpoints" / "peer-b.json"
-        cfg = json.loads(ep_path.read_text())
+        cfg = json.loads(ep_path.read_text(encoding="utf-8"))
         cfg["hmac_key"] = _hex()  # wrong key
-        ep_path.write_text(json.dumps(cfg))
+        ep_path.write_text(json.dumps(cfg), encoding="utf-8")
         ep_path.chmod(0o600)
 
         res = self.sender_a.send("peer-b", "x")
@@ -1211,9 +1211,9 @@ class TestFullE2EHttp(_WithAuditMock):
     def test_wrong_recv_key_rejects_response(self):
         """Sender uses wrong recv_key: response signature fails."""
         ep_path = self.tmpdir / "a" / "endpoints" / "peer-b.json"
-        cfg = json.loads(ep_path.read_text())
+        cfg = json.loads(ep_path.read_text(encoding="utf-8"))
         cfg["recv_key"] = _hex()  # wrong recv key
-        ep_path.write_text(json.dumps(cfg))
+        ep_path.write_text(json.dumps(cfg), encoding="utf-8")
         ep_path.chmod(0o600)
 
         res = self.sender_a.send(
@@ -1224,9 +1224,9 @@ class TestFullE2EHttp(_WithAuditMock):
 
     def test_instance_id_pin_mismatch_rejected_by_sender(self):
         ep_path = self.tmpdir / "a" / "endpoints" / "peer-b.json"
-        cfg = json.loads(ep_path.read_text())
+        cfg = json.loads(ep_path.read_text(encoding="utf-8"))
         cfg["instance_id"] = "wrong-iid-" + secrets.token_hex(4)
-        ep_path.write_text(json.dumps(cfg))
+        ep_path.write_text(json.dumps(cfg), encoding="utf-8")
         ep_path.chmod(0o600)
 
         res = self.sender_a.send(
@@ -1241,7 +1241,7 @@ class TestFullE2EHttp(_WithAuditMock):
         """Same nonce posted twice: second must be rejected."""
         import urllib.request as _ur
         ep_path = self.tmpdir / "a" / "endpoints" / "peer-b.json"
-        cfg = json.loads(ep_path.read_text())
+        cfg = json.loads(ep_path.read_text(encoding="utf-8"))
 
         fixed_nonce = secrets.token_hex(32)
         env = RemoteTriggerSender._build_envelope(
@@ -1418,14 +1418,14 @@ class TestCriticalFixes(_WithAuditMock):
 
 class TestCILint(unittest.TestCase):
     def test_no_anthropic_import_in_receiver(self):
-        src = (Path(__file__).parent / "remote_trigger_receiver.py").read_text()
+        src = (Path(__file__).parent / "remote_trigger_receiver.py").read_text(encoding="utf-8")
         # Use \n prefix to avoid matching the docstring comment
         # "MUST NOT import anthropic" which is intentional documentation.
         self.assertNotIn("\nimport anthropic", src)
         self.assertNotIn("\nfrom anthropic", src)
 
     def test_no_anthropic_import_in_sender(self):
-        src = (Path(__file__).parent / "remote_trigger_sender.py").read_text()
+        src = (Path(__file__).parent / "remote_trigger_sender.py").read_text(encoding="utf-8")
         self.assertNotIn("\nimport anthropic", src)
         self.assertNotIn("\nfrom anthropic", src)
 

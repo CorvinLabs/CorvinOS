@@ -137,7 +137,7 @@ class ProtocolContractTests(unittest.TestCase):
         engine.cancel()  # Must not raise
 
     def test_does_not_import_anthropic(self) -> None:
-        source = (HERE / "copilot_cli.py").read_text()
+        source = (HERE / "copilot_cli.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

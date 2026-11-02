@@ -42,7 +42,7 @@ def test_build_events_land_on_the_chain_and_it_still_verifies(tmp_path):
                                               "stderr": "SENTINEL_STDERR"}),
     ]
     assert len(set(ids)) == 2
-    text = _chain().read_text()
+    text = _chain().read_text(encoding="utf-8")
     recs = [json.loads(l) for l in text.splitlines() if l.strip()]
     mine = [r for r in recs if r.get("event_type") == "plugin_builder.build"]
     assert [r["details"]["stage"] for r in mine] == ["build_started", "build_failed"]

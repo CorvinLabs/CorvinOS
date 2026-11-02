@@ -51,7 +51,7 @@ def _issues(problems) -> set[str]:
 def test_all_mac_chain_verifies():
     print("\n[all-mac chain verifies]")
     p = _TMP / "audit.jsonl"  # live-chain name so the strip detector is active
-    p.write_text("")
+    p.write_text("", encoding="utf-8")
     macs = 0
     for i in range(4):
         r = write_event(p, "tool.created", tool=f"x{i}")
@@ -64,14 +64,14 @@ def test_all_mac_chain_verifies():
 def test_tampered_mac_caught():
     print("\n[forged mac → mac_tampered]")
     p = _TMP / "audit_tamper.jsonl"
-    p.write_text("")
+    p.write_text("", encoding="utf-8")
     for i in range(3):
         write_event(p, "tool.created", tool=f"y{i}")
-    lines = p.read_text().splitlines()
+    lines = p.read_text(encoding="utf-8").splitlines()
     rec = json.loads(lines[-1])
     rec["mac"] = "0" * 16  # forge a wrong mac (attacker can't compute the real one)
     lines[-1] = json.dumps(rec)
-    p.write_text("\n".join(lines) + "\n")
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     ok, problems = verify_chain(p)
     t("forged mac flagged mac_tampered",
       (not ok) and "mac_tampered" in _issues(problems), detail=str(_issues(problems)))
@@ -80,15 +80,15 @@ def test_tampered_mac_caught():
 def test_missing_mac_after_epoch_caught():
     print("\n[mac stripped after epoch → mac_missing]")
     p = _TMP / "audit_missing.jsonl"
-    p.write_text("")
+    p.write_text("", encoding="utf-8")
     write_event(p, "tool.created", tool="a")  # mac'd → MAC-epoch starts here
     write_event(p, "tool.created", tool="b")
     write_event(p, "tool.created", tool="c")
-    lines = p.read_text().splitlines()
+    lines = p.read_text(encoding="utf-8").splitlines()
     rec = json.loads(lines[1])  # strip the mac off the middle record
     rec.pop("mac", None)
     lines[1] = json.dumps(rec)
-    p.write_text("\n".join(lines) + "\n")
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     ok, problems = verify_chain(p)
     t("post-epoch missing mac flagged mac_missing",
       (not ok) and "mac_missing" in _issues(problems), detail=str(_issues(problems)))
@@ -97,16 +97,16 @@ def test_missing_mac_after_epoch_caught():
 def test_full_strip_caught():
     print("\n[every mac stripped on live chain → mac_stripped_chain]")
     p = _TMP / "audit.jsonl"  # MUST be the live-chain name for the strip detector
-    p.write_text("")
+    p.write_text("", encoding="utf-8")
     for i in range(4):
         write_event(p, "tool.created", tool=f"z{i}")
-    lines = p.read_text().splitlines()
+    lines = p.read_text(encoding="utf-8").splitlines()
     stripped = []
     for ln in lines:
         rec = json.loads(ln)
         rec.pop("mac", None)  # silent downgrade to hash-only
         stripped.append(json.dumps(rec))
-    p.write_text("\n".join(stripped) + "\n")
+    p.write_text("\n".join(stripped) + "\n", encoding="utf-8")
     ok, problems = verify_chain(p)
     t("fully-stripped live chain flagged mac_stripped_chain",
       (not ok) and "mac_stripped_chain" in _issues(problems), detail=str(_issues(problems)))
@@ -135,7 +135,7 @@ def _hand_chain(path, n, *, prev=""):
         rec["hash"] = h.hexdigest()[:16]
         prev = rec["hash"]
         out.append(json.dumps(rec))
-    path.write_text("\n".join(out) + "\n")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
     return prev
 
 
@@ -166,13 +166,13 @@ def test_stripped_chain_is_not_laundered_by_deleting_one_witness():
     print("\n[stripped chain, one witness deleted → still flagged]")
     p = _TMP / "laundered" / "audit.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("")
+    p.write_text("", encoding="utf-8")
     for i in range(3):
         write_event(p, "tool.created", tool=f"m{i}")
-    lines = [json.loads(x) for x in p.read_text().splitlines()]
+    lines = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
     for rec in lines:
         rec.pop("mac", None)
-    p.write_text("\n".join(json.dumps(r) for r in lines) + "\n")
+    p.write_text("\n".join(json.dumps(r) for r in lines) + "\n", encoding="utf-8")
     from forge.security_events import _mac_chain_marker_path
     mk = _mac_chain_marker_path(p)
     if mk.exists():

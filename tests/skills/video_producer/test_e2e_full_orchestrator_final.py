@@ -210,7 +210,7 @@ class MockMaestroOrchestrator:
             # Create output file (mock)
             output_path = Path(job.output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text("MOCK_VIDEO_DATA")
+            output_path.write_text("MOCK_VIDEO_DATA", encoding="utf-8")
 
             duration_ms = (datetime.now() - start_time).total_seconds() * 1000
 

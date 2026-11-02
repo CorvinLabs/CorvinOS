@@ -135,7 +135,7 @@ print("-" * 80)
 def test_adapter_code_has_fallback():
     """Check that adapter.py actually implements the fallback logic."""
 
-    adapter_code = ADAPTER_PATH.read_text()
+    adapter_code = ADAPTER_PATH.read_text(encoding="utf-8")
 
     checks = [
         ("_try_openai_tts function exists", "_try_openai_tts(" in adapter_code),

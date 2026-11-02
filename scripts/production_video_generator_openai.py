@@ -247,7 +247,7 @@ class ProductionVideoGenerator:
                     text
                 ]
 
-                result = subprocess.run(cmd_espeak, capture_output=True, text=True)
+                result = subprocess.run(cmd_espeak, capture_output=True, text=True, encoding="utf-8", errors="replace")
                 if result.returncode != 0:
                     print(f"✗ espeak-ng failed")
                     return []
@@ -258,7 +258,7 @@ class ProductionVideoGenerator:
                     "-q:a", "9", "-y", mp3_path
                 ]
 
-                result = subprocess.run(cmd_ffmpeg, capture_output=True, text=True)
+                result = subprocess.run(cmd_ffmpeg, capture_output=True, text=True, encoding="utf-8", errors="replace")
                 if result.returncode != 0:
                     print(f"✗ FFmpeg conversion failed")
                     return []
@@ -353,7 +353,7 @@ class ProductionVideoGenerator:
             output_path
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode == 0:
             return output_path
 
@@ -393,7 +393,7 @@ class ProductionVideoGenerator:
         try:
             # Create concat file for audio
             concat_file = f"{self.output_dir}/{self.job_id}_concat.txt"
-            with open(concat_file, "w") as f:
+            with open(concat_file, "w", encoding="utf-8") as f:
                 for audio_file in audio_files:
                     f.write(f"file '{audio_file}'\n")
 
@@ -409,7 +409,7 @@ class ProductionVideoGenerator:
                 concat_audio_path
             ]
 
-            result = subprocess.run(cmd_concat, capture_output=True, text=True)
+            result = subprocess.run(cmd_concat, capture_output=True, text=True, encoding="utf-8", errors="replace")
             if result.returncode != 0:
                 print(f"  ✗ Audio concat failed: {result.stderr}")
                 return False
@@ -443,7 +443,7 @@ class ProductionVideoGenerator:
                 output_path
             ]
 
-            result = subprocess.run(cmd_mux, capture_output=True, text=True)
+            result = subprocess.run(cmd_mux, capture_output=True, text=True, encoding="utf-8", errors="replace")
             if result.returncode != 0:
                 print(f"  ✗ FFmpeg mux failed: {result.stderr}")
                 return False
@@ -467,7 +467,7 @@ class ProductionVideoGenerator:
                 audio_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
             if result.returncode == 0:
                 return float(result.stdout.strip())
         except:
@@ -506,7 +506,7 @@ class ProductionVideoGenerator:
                 video_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
 
             if result.returncode == 0:
                 data = json.loads(result.stdout)

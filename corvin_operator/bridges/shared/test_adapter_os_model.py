@@ -288,14 +288,14 @@ class ForgePersonaShapeTests(_EnvGuard, unittest.TestCase):
         # Otherwise fall through to the outputs/ staging copy.
         for p in (self.INSTALLED_PATH, self.OUTPUTS_PATH):
             if p.exists():
-                data = json.loads(p.read_text())
+                data = json.loads(p.read_text(encoding="utf-8"))
                 if data.get("os_model_floor") == "sonnet":
                     return data
         # Fallback: return whatever is installed (test will catch the missing field).
         if self.INSTALLED_PATH.exists():
-            return json.loads(self.INSTALLED_PATH.read_text())
+            return json.loads(self.INSTALLED_PATH.read_text(encoding="utf-8"))
         if self.OUTPUTS_PATH.exists():
-            return json.loads(self.OUTPUTS_PATH.read_text())
+            return json.loads(self.OUTPUTS_PATH.read_text(encoding="utf-8"))
         self.skipTest("forge.json not found at expected locations")
         return {}
 

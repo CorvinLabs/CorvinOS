@@ -75,7 +75,7 @@ class CodeAnalyzer:
             print(f"  ⚠ {event_store_path} not found")
             return
 
-        content = event_store_path.read_text()
+        content = event_store_path.read_text(encoding="utf-8")
 
         # Check for scrubbing logic
         has_pii_scrubber = any(pattern in content for pattern in [
@@ -129,7 +129,7 @@ class CodeAnalyzer:
         # Check skill executor
         executor_path = self.repo_root / "core/skills/executor.py"
         if executor_path.exists():
-            content = executor_path.read_text()
+            content = executor_path.read_text(encoding="utf-8")
 
             # Find execute method
             if "def execute" in content:
@@ -164,7 +164,7 @@ class CodeAnalyzer:
         # Check event emitter queue behavior
         emitter_path = self.repo_root / "core/learning/event_emitter.py"
         if emitter_path.exists():
-            content = emitter_path.read_text()
+            content = emitter_path.read_text(encoding="utf-8")
 
             # Look for queue.full() handling
             if "queue.full" in content or "full()" in content:
@@ -190,7 +190,7 @@ class CodeAnalyzer:
 
         validator_path = self.repo_root / "core/learning/feedback_validator.py"
         if validator_path.exists():
-            content = validator_path.read_text()
+            content = validator_path.read_text(encoding="utf-8")
 
             # Check if FeedbackSignatureValidator is used everywhere
             if "FeedbackSignatureValidator" in content:
@@ -229,7 +229,7 @@ class CodeAnalyzer:
         # Check weight updater
         weight_path = self.repo_root / "core/learning/weight_updater.py"
         if weight_path.exists():
-            content = weight_path.read_text()
+            content = weight_path.read_text(encoding="utf-8")
 
             # Look for locking
             has_lock = any(pattern in content for pattern in [
@@ -264,7 +264,7 @@ class CodeAnalyzer:
 
         event_schema_path = self.repo_root / "core/learning/event_schema.py"
         if event_schema_path.exists():
-            content = event_schema_path.read_text()
+            content = event_schema_path.read_text(encoding="utf-8")
 
             # Check for size limits
             has_size_limit = any(pattern in content for pattern in [
@@ -296,7 +296,7 @@ class CodeAnalyzer:
 
         optimizer_path = self.repo_root / "core/learning/tuning_optimizer.py"
         if optimizer_path.exists():
-            content = optimizer_path.read_text()
+            content = optimizer_path.read_text(encoding="utf-8")
 
             # Check for version history
             has_versioning = any(pattern in content for pattern in [
@@ -330,7 +330,7 @@ class CodeAnalyzer:
         # Check if consent gate is still in place
         claudemd_path = self.repo_root / "CLAUDE.md"
         if claudemd_path.exists():
-            content = claudemd_path.read_text()
+            content = claudemd_path.read_text(encoding="utf-8")
 
             required_rules = [
                 "Per-user consent gate",
@@ -366,7 +366,7 @@ class CodeAnalyzer:
 
         event_store_path = self.repo_root / "core/learning/event_store.py"
         if event_store_path.exists():
-            content = event_store_path.read_text()
+            content = event_store_path.read_text(encoding="utf-8")
 
             # Find write_event method
             write_event_block = re.search(
@@ -442,7 +442,7 @@ def main():
     }
 
     report_path = output_dir / "ADVERSARIAL_ROUND2_FINDINGS.json"
-    report_path.write_text(json.dumps(findings_data, indent=2))
+    report_path.write_text(json.dumps(findings_data, indent=2), encoding="utf-8")
 
     print(f"\nReport saved to: {report_path}")
 

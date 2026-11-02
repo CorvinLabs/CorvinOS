@@ -105,7 +105,7 @@ def _load_trial_state(corvin_home: Path) -> TrialState:
     if not path.exists():
         return TrialState()
     mode = path.stat().st_mode & 0o777
-    if mode & 0o077:
+    if os.name != "nt" and mode & 0o077:  # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
         # World-readable state file — treat as tampered; enforce cap immediately
         # so chmod 644 → rm trick can't reset the counter.
         return TrialState(iterations_used=TRIAL_ITERATION_CAP)
@@ -150,7 +150,7 @@ def record_trial_iteration(corvin_home: Path, strategy: str = "grid") -> None:
         import fcntl as _fcntl  # Unix-only; the deploy target is Linux
     except ImportError:
         _fcntl = None  # best-effort: fall back to unlocked RMW off-Linux
-    _lf = open(lock_path, "w")
+    _lf = open(lock_path, "w", encoding="utf-8")
     try:
         try:
             os.chmod(lock_path, 0o600)

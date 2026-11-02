@@ -204,7 +204,7 @@ def test_hub_publish_review_import_export(browser_page):
 
     with page.expect_download() as dl:
         page.get_by_test_id("hub-export-btn-bm25-demo").click()
-    exported = Path(dl.value.path()).read_text()
+    exported = Path(dl.value.path()).read_text(encoding="utf-8")
     assert "kind: RAGProvider" in exported and "bm25-demo" in exported
 
     status, summary = _api(page, "GET", "/v1/console/hub/analytics/summary")
@@ -215,7 +215,7 @@ def test_hub_publish_review_import_export(browser_page):
 
 @pytest.mark.skipif(not os.environ.get("CORVIN_ACCEPT_CHAT"), reason="CORVIN_ACCEPT_CHAT not set")
 def test_real_chat_turn_answers_from_db_and_rag(browser_page):
-    truth = json.loads(Path(os.environ["CORVIN_ACCEPT_TRUTH"]).read_text())
+    truth = json.loads(Path(os.environ["CORVIN_ACCEPT_TRUTH"]).read_text(encoding="utf-8"))
     de = next(f for f in truth["facts"] if f["id"] == "fact_01")
     track = de["answer"]["track_name"]
     artist = de["answer"]["artist_names"]
@@ -252,10 +252,10 @@ def test_real_chat_turn_answers_from_db_and_rag(browser_page):
         }""",
         [sid, prompt],
     )
-    (OUT / "chat-events.json").write_text(json.dumps(events, indent=1, default=str))
+    (OUT / "chat-events.json").write_text(json.dumps(events, indent=1, default=str), encoding="utf-8")
     text = "".join(e.get("text", "") for e in events if e.get("type") == "delta")
     final = next((e.get("text", "") for e in reversed(events) if e.get("type") == "result"), "") or text
-    (OUT / "chat-answer.txt").write_text(final)
+    (OUT / "chat-answer.txt").write_text(final, encoding="utf-8")
     tools = json.dumps([e for e in events if "tool" in str(e.get("type", ""))])
     assert "datasource_query" in tools, f"no datasource_query call; events: {[e.get('type') for e in events]}"
     assert "rag_query" in tools, "no rag_query call"

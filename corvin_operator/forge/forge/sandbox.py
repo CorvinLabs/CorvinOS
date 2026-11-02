@@ -97,7 +97,7 @@ def ensure_requirements(requirements: list[str], cache_root: Path) -> Path | Non
             ],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=180, encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             print(

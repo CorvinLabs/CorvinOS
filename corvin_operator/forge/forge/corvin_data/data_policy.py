@@ -198,9 +198,10 @@ def load_policy(path: str | Path | None = None) -> DataPolicy:
 
 
 def _load_from_file(path: Path) -> DataPolicy:
+    import os
     import stat as _stat
     _mode = _stat.S_IMODE(path.stat().st_mode)
-    if _mode & 0o077:  # group or world readable/writable
+    if os.name != "nt" and _mode & 0o077:  # group/world access. # POSIX-only: NTFS has no group/other bits, st_mode is always 0o666 on Windows.
         raise PolicyError(
             f"{path}: unsafe file permissions {oct(_mode)} — "
             "data_policy file must be mode 0600 or more restrictive"

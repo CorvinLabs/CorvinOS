@@ -36,14 +36,14 @@ def temp_corvin_home(tmp_path):
     (tenant_dir / "datasource_connections").mkdir(parents=True)
 
     # Add some test files
-    (tenant_dir / "global" / "tenant.corvin.yaml").write_text("spec:\n  features: {}\n")
-    (tenant_dir / "global" / "config.json").write_text('{"test": true}')
-    (tenant_dir / "voice" / "profile.json").write_text('{"lang": "en"}')
-    (tenant_dir / "plugins" / "manifest.json").write_text('{"plugins": []}')
+    (tenant_dir / "global" / "tenant.corvin.yaml").write_text("spec:\n  features: {}\n", encoding="utf-8")
+    (tenant_dir / "global" / "config.json").write_text('{"test": true}', encoding="utf-8")
+    (tenant_dir / "voice" / "profile.json").write_text('{"lang": "en"}', encoding="utf-8")
+    (tenant_dir / "plugins" / "manifest.json").write_text('{"plugins": []}', encoding="utf-8")
 
     # Create a test session
     (tenant_dir / "sessions" / "test_session").mkdir()
-    (tenant_dir / "sessions" / "test_session" / "metadata.json").write_text('{}')
+    (tenant_dir / "sessions" / "test_session" / "metadata.json").write_text('{}', encoding="utf-8")
 
     yield corvin_home
 
@@ -80,7 +80,7 @@ class TestTenantExport:
     def test_export_excludes_secrets_by_default(self, temp_corvin_home):
         """Export without --with-secrets omits secrets.enc."""
         tenant_dir = temp_corvin_home / "tenants" / "_default"
-        (tenant_dir / "global" / "secrets.enc").write_text("encrypted_data")
+        (tenant_dir / "global" / "secrets.enc").write_text("encrypted_data", encoding="utf-8")
 
         output_path = temp_corvin_home.parent / "export.tar.gz"
 
@@ -101,7 +101,7 @@ class TestTenantExport:
     def test_export_includes_secrets_when_requested(self, temp_corvin_home):
         """Export with --with-secrets includes secrets.enc."""
         tenant_dir = temp_corvin_home / "tenants" / "_default"
-        (tenant_dir / "global" / "secrets.enc").write_text("encrypted_data")
+        (tenant_dir / "global" / "secrets.enc").write_text("encrypted_data", encoding="utf-8")
 
         output_path = temp_corvin_home.parent / "export.tar.gz"
 
@@ -169,7 +169,7 @@ class TestTenantExport:
     def test_export_to_existing_output_fails(self, temp_corvin_home):
         """Export to existing output file returns error."""
         output_path = temp_corvin_home.parent / "export.tar.gz"
-        output_path.write_text("existing")
+        output_path.write_text("existing", encoding="utf-8")
 
         class Args:
             tenant_id = "_default"
@@ -261,7 +261,7 @@ class TestTenantImport:
 
         # Modify a file to verify overwrite
         tenant_dir = temp_corvin_home / "tenants" / "_default"
-        (tenant_dir / "global" / "config.json").write_text('{"modified": true}')
+        (tenant_dir / "global" / "config.json").write_text('{"modified": true}', encoding="utf-8")
 
         # Import with force
         class ImportArgs:
@@ -274,7 +274,7 @@ class TestTenantImport:
         assert result == 0
 
         # Verify file was overwritten
-        config = json.loads((tenant_dir / "global" / "config.json").read_text())
+        config = json.loads((tenant_dir / "global" / "config.json").read_text(encoding="utf-8"))
         assert config.get("test") is True
         assert "modified" not in config
 

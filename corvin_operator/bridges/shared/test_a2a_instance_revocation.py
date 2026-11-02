@@ -25,7 +25,7 @@ def _origin(tmp: Path):
     p.write_text(json.dumps({
         "origin_id": _ORIGIN, "hmac_key": _HMAC_KEY, "recv_key": _RECV_KEY,
         "enabled": True, "max_ttl_s": 300, "allowed_personas": ["assistant"],
-    }))
+    }), encoding="utf-8")
     p.chmod(0o600)
 
 

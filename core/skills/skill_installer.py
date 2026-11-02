@@ -326,13 +326,13 @@ class SkillInstaller:
     
     def _load_registry(self) -> Dict:
         if not self.registry_path.exists(): return {}
-        with open(self.registry_path, "r") as f:
+        with open(self.registry_path, "r", encoding="utf-8") as f:
             return json.load(f)
     
     def _write_registry(self, registry: Dict) -> None:
         """Write registry atomically (fixes H2: File Permissions + H1: Registry Race)."""
         temp_path = self.registry_path.parent / f".{self.registry_path.name}.tmp"
-        with open(temp_path, "w") as f:
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(registry, f, indent=2)
 
         # FIX H2: Set permissions before finalizing (owner read+write only)

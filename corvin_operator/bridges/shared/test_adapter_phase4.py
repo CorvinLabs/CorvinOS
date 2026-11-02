@@ -41,7 +41,7 @@ def test_settings_mtime_cache() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="settings-cache-"))
     try:
         f = tmp / "settings.json"
-        f.write_text('{"foo": "one"}')
+        f.write_text('{"foo": "one"}', encoding="utf-8")
         adapter.SETTINGS_FILE = f
 
         # Reset cache state.
@@ -62,7 +62,7 @@ def test_settings_mtime_cache() -> None:
 
         # mtime resolution on most filesystems = 1s; bump and verify reload.
         time.sleep(1.1)
-        f.write_text('{"foo": "two"}')
+        f.write_text('{"foo": "two"}', encoding="utf-8")
         s3 = adapter.load_settings()
         assert s3["foo"] == "two", f"expected reload, got {s3}"
         assert adapter._settings_mtime > m1
@@ -70,7 +70,7 @@ def test_settings_mtime_cache() -> None:
 
         # Corrupt the file → keep last good cache.
         time.sleep(1.1)
-        f.write_text('{not valid')
+        f.write_text('{not valid', encoding="utf-8")
         s4 = adapter.load_settings()
         assert s4["foo"] == "two", "corrupt file should keep last good cache"
         print("PASS: corrupt file keeps last-good cache")
@@ -155,7 +155,7 @@ def test_chat_locks_idle_cleanup() -> None:
 
 def test_no_dup_imports() -> None:
     _section("dup imports removed")
-    src = (ROOT / "adapter.py").read_text()
+    src = (ROOT / "adapter.py").read_text(encoding="utf-8")
     # `import threading` should appear exactly once at module top.
     assert src.count("\nimport threading\n") == 1, \
         "import threading appears multiple times — Phase 4 cleanup regressed"

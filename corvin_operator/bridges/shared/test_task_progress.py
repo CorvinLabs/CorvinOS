@@ -63,7 +63,7 @@ def _outbox_envelopes(outbox: Path) -> list[dict]:
     Sorted by the envelope's own `ts`, never by filename: the file name carries
     a random token, so alphabetical order is not chronological order.
     """
-    envs = [json.loads(p.read_text()) for p in outbox.glob("*.json")]
+    envs = [json.loads(p.read_text(encoding="utf-8")) for p in outbox.glob("*.json")]
     return sorted(envs, key=lambda e: e.get("ts", 0))
 
 
@@ -99,7 +99,7 @@ def test_chat_id_stays_a_string(env):
     tid = _register(env["cn"], chat_id="987654321098765432")
     env["tp"].emit(tid, "working")
     env["tp"].deliver_progress(env["outbox"])
-    raw = next(iter(env["outbox"].glob("*.json"))).read_text()
+    raw = next(iter(env["outbox"].glob("*.json"))).read_text(encoding="utf-8")
     assert '"chat_id": "987654321098765432"' in raw
 
 

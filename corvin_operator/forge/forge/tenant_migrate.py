@@ -74,6 +74,35 @@ def count_existing_tenants(corvin_home_path: Path) -> int:
     )
 
 
+def _link_legacy(relative: Path, legacy: Path, target: Path) -> None:
+    """Leave ``legacy`` pointing at the moved ``target`` directory.
+
+    POSIX: a relative symlink (unchanged). Windows: ``os.symlink`` needs
+    ``target_is_directory=True`` for a usable directory link and the
+    SeCreateSymbolicLink privilege (WinError 1314 for a normal user without
+    Developer Mode), so fall back to a directory junction, which needs no
+    privilege (absolute target). If neither works the move is rolled back:
+    the legacy path must stay addressable or the ``tenant_id=None`` default
+    branches would recreate an empty sibling tree (split state / audit chain).
+    """
+    if os.name != "nt":
+        os.symlink(str(relative), str(legacy))
+        return
+    try:
+        os.symlink(str(relative), str(legacy), target_is_directory=True)
+        return
+    except OSError:
+        pass
+    try:
+        import _winapi  # noqa: PLC0415 - Windows-only
+
+        _winapi.CreateJunction(str(target.resolve()), str(legacy))
+    except OSError as exc:
+        logger.error("tenant_migrate: cannot link %s -> %s (%s); undoing move", legacy, target, exc)
+        os.rename(str(target), str(legacy))  # undo: keep the legacy layout intact
+        raise
+
+
 def _canonical_chain(home: Path) -> Path:
     """The tenant chain every writer resolves (``tenant_audit_chain``), bound
     to the ``home`` this helper operates on rather than to the process env."""
@@ -167,8 +196,8 @@ def migrate_to_default_tenant_if_needed(
         legacy = home / sub
         if not legacy.exists():
             continue
-        if legacy.is_symlink():
-            # Already migrated in a previous run; skip silently.
+        if legacy.is_symlink() or getattr(os.path, "isjunction", lambda _p: False)(legacy):
+            # Already migrated in a previous run (junction = Windows link); skip silently.
             continue
         target = tenants_dir / sub
         if target.exists():
@@ -236,7 +265,7 @@ def migrate_to_default_tenant_if_needed(
             # Relative symlink so the tree stays portable across
             # operator-driven corvin_home moves.
             relative = Path("tenants") / DEFAULT_TENANT_ID / sub
-            os.symlink(str(relative), str(legacy))
+            _link_legacy(relative, legacy, target)
             moved.append(sub)
         except OSError as exc:
             logger.error(

@@ -303,9 +303,9 @@ class TestAdversarial:
     def test_snapshot_tampering_detected(self, store):
         snap, _ = snapshot_task_state(TENANT, "task_1", {"a": 1}, store=store)
         f = store.root_dir / "task_1" / f"{snap.snapshot_id}.json"
-        data = json.loads(f.read_text())
+        data = json.loads(f.read_text(encoding="utf-8"))
         data["state_dict"]["a"] = 2
-        f.write_text(json.dumps(data))
+        f.write_text(json.dumps(data), encoding="utf-8")
         got, err = store.read_snapshot(TENANT, "task_1", snap.snapshot_id)
         assert got is None and "mismatch" in err
         assert store.verify_snapshot_chain(TENANT, "task_1")[0] is False
@@ -315,9 +315,9 @@ class TestAdversarial:
         s2, _ = snapshot_task_state(TENANT, "task_1", {"a": 2}, store=store)
         # Re-point s2's prev link and re-hash consistently — the index still holds the truth
         f = store.root_dir / "task_1" / f"{s2.snapshot_id}.json"
-        data = json.loads(f.read_text())
+        data = json.loads(f.read_text(encoding="utf-8"))
         data["prev_snapshot_hash"] = "f" * 64
-        f.write_text(json.dumps(data))
+        f.write_text(json.dumps(data), encoding="utf-8")
         ok, err = store.verify_snapshot_chain(TENANT, "task_1")
         # R4-F2: the keyed chain MAC covers prev_snapshot_hash, so re-pointing
         # a link is caught by the MAC before the link comparison is reached —
@@ -327,9 +327,9 @@ class TestAdversarial:
     def test_index_tampering_detected(self, store):
         snapshot_task_state(TENANT, "task_1", {"a": 1}, store=store)
         index = store.root_dir / "task_1" / "index.json"
-        data = json.loads(index.read_text())
+        data = json.loads(index.read_text(encoding="utf-8"))
         data[0]["content_hash"] = "0" * 64
-        index.write_text(json.dumps(data))
+        index.write_text(json.dumps(data), encoding="utf-8")
         ok, err = store.verify_snapshot_chain(TENANT, "task_1")
         assert not ok and "hash mismatch" in err
 

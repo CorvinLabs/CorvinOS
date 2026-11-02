@@ -36,7 +36,7 @@ def _chain(tenant_id):
     path = forge_paths.tenant_audit_chain(tenant_id)
     if not path.exists():
         return []
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ class TestApprovalAudit:
         ok, _ = gate.reject_transition(req.request_id, tenant, "alice@example.com",
                                        reason="Metrics not ready for canary")
         assert ok
-        text = forge_paths.tenant_audit_chain(tenant).read_text()
+        text = forge_paths.tenant_audit_chain(tenant).read_text(encoding="utf-8")
         assert "alice@example.com" not in text  # operator id pseudonymised
         assert "Metrics not ready" not in text  # free text stays out of the chain
         rec = [r for r in _chain(tenant) if r["event_type"] == "operator_approval.decided"][0]
@@ -128,9 +128,9 @@ class TestExpiry:
     def test_expired_request_cannot_be_approved(self, gate, tenant):
         req = gate.request_approval(tenant, "canary", {"confidence": 0.95})
         path = gate._requests_file(tenant)
-        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
         rows[0]["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
-        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
         assert gate.approve_transition(req.request_id, tenant, "op")[0] is False
         assert gate.check_approval_status(req.request_id, tenant)[0] == "expired"
         assert any(r["event_type"] == "operator_approval.expired" for r in _chain(tenant))

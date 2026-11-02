@@ -72,13 +72,13 @@ class TestWatchdogHealthCheck(unittest.TestCase):
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
         self.assertTrue(install_sh.exists(), "install.sh not found")
 
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
         self.assertIn("healthz_check_probe()", content, "healthz_check_probe() function not found in install.sh")
 
     def test_exponential_backoff_logic(self):
         """Verify exponential backoff is implemented in healthz_check_probe()."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Check for backoff growth pattern
         self.assertIn("backoff", content, "Backoff variable not found")
@@ -88,7 +88,7 @@ class TestWatchdogHealthCheck(unittest.TestCase):
     def test_two_layer_health_verification(self):
         """Verify both console and gateway endpoints are checked."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Check for both endpoints
         self.assertIn("v1/console/healthz", content, "Console health endpoint not found")
@@ -97,7 +97,7 @@ class TestWatchdogHealthCheck(unittest.TestCase):
     def test_health_check_uses_real_http_call(self):
         """Verify health check uses curl (real HTTP call), not mock."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Verify curl is used
         self.assertIn("curl", content, "health check does not use curl")
@@ -106,14 +106,14 @@ class TestWatchdogHealthCheck(unittest.TestCase):
     def test_install_phase4_exists(self):
         """Verify Phase 4 (server startup) is in install.sh."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         self.assertIn("# Phase 4: Start console server", content, "Phase 4 comment not found")
 
     def test_failing_health_check_sets_exit_code(self):
         """Verify install fails if health checks don't pass."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Check for exit on health check failure
         self.assertIn("exit 2", content, "exit 2 not found for health check failure")
@@ -125,7 +125,7 @@ class TestWatchdogHealthCheck(unittest.TestCase):
         # Both are acceptable; verify one of them is in the code
 
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Current implementation uses: backoff = backoff * 2 (up to 8)
         # With 60 max retries: 1+2+4+8+8+...+8 = way more than 60s
@@ -135,7 +135,7 @@ class TestWatchdogHealthCheck(unittest.TestCase):
     def test_health_check_alerted_to_operator(self):
         """Verify health check status is communicated to operator."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Check for user-facing messages
         self.assertIn("Console already running", content, "Message for already-running console not found")
@@ -148,7 +148,7 @@ class TestWatchdogHealthCheck(unittest.TestCase):
         # Verify this format is in the script
 
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Extract the exact curl command
         self.assertIn("-fs", content, "curl -fs flag not found (silent + fail)")
@@ -162,7 +162,7 @@ class TestInstallPhase4Integration(unittest.TestCase):
     def test_phase4_startup_order(self):
         """Verify Phase 4 starts server before health checks."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Find line numbers for key operations
         lines = content.split('\n')
@@ -184,7 +184,7 @@ class TestInstallPhase4Integration(unittest.TestCase):
     def test_server_pid_captured(self):
         """Verify server PID is captured for monitoring."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         self.assertIn("SERVER_PID", content, "SERVER_PID variable not found")
         self.assertIn("$!", content, "$! (last background PID) not used to capture SERVER_PID")
@@ -196,7 +196,7 @@ class TestHealthCheckEdgeCases(unittest.TestCase):
     def test_console_already_running_detected(self):
         """Verify if console already running, skip restart."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Should check if already running before starting
         self.assertIn("Console already running", content)
@@ -204,7 +204,7 @@ class TestHealthCheckEdgeCases(unittest.TestCase):
     def test_health_check_timeout_is_reasonable(self):
         """Verify health check timeout is between 20-120 seconds."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Exponential backoff should result in reasonable timeout
         self.assertIn("backoff", content)
@@ -214,7 +214,7 @@ class TestHealthCheckEdgeCases(unittest.TestCase):
     def test_both_endpoints_required_to_pass(self):
         """Verify both console and gateway endpoints must pass."""
         install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
-        content = install_sh.read_text()
+        content = install_sh.read_text(encoding="utf-8")
 
         # Both should be checked in sequence
         # HEALTHZ_PASS should require both to pass

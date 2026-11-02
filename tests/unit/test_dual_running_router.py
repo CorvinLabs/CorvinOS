@@ -91,7 +91,7 @@ class TestDualRunningRouterCohorts:
         assert cohort_file.exists()
 
         # Check content
-        with open(cohort_file) as f:
+        with open(cohort_file, encoding="utf-8") as f:
             metadata = json.load(f)
         assert metadata["tenant_id"] == "tenant_1"
         assert metadata["cohort"] == "early"
@@ -124,7 +124,7 @@ class TestDualRunningRouterCohorts:
 
         # Modify the file
         cohort_file = tmp_path / "tenant_1.cohort.json"
-        with open(cohort_file, "w") as f:
+        with open(cohort_file, "w", encoding="utf-8") as f:
             json.dump({"tenant_id": "tenant_1", "cohort": "staged"}, f)
 
         # Second call uses cache (returns EARLY, not STAGED)
@@ -270,7 +270,7 @@ class TestDualRunningRouterErrorHandling:
 
         # Write corrupted file
         cohort_file = tmp_path / "tenant_bad.cohort.json"
-        cohort_file.write_text("NOT VALID JSON {")
+        cohort_file.write_text("NOT VALID JSON {", encoding="utf-8")
 
         # Should default to CONTROL
         cohort = router.get_tenant_cohort("tenant_bad")
@@ -282,7 +282,7 @@ class TestDualRunningRouterErrorHandling:
 
         # Write metadata without 'cohort' field
         cohort_file = tmp_path / "tenant_missing.cohort.json"
-        cohort_file.write_text('{"tenant_id": "tenant_missing"}')
+        cohort_file.write_text('{"tenant_id": "tenant_missing"}', encoding="utf-8")
 
         # Should default to CONTROL
         cohort = router.get_tenant_cohort("tenant_missing")

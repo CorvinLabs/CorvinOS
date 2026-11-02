@@ -12,38 +12,38 @@ def test_phase2_script_exists():
 def test_phase2_has_pre_checks():
     """Verify Phase 1.5 pre-checks function is present"""
     script = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-    content = script.read_text()
+    content = script.read_text(encoding="utf-8")
     assert "phase_1_5_pre_checks" in content, "Phase 1.5 pre-checks function missing"
 
 def test_phase2_has_rotation():
     """Verify Phase 2 rotation function is present"""
     script = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-    content = script.read_text()
+    content = script.read_text(encoding="utf-8")
     assert "rotate_credentials_phase2" in content, "Phase 2 rotation function missing"
 
 def test_phase2_has_backup():
     """Verify backup functionality is present"""
     script = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-    content = script.read_text()
+    content = script.read_text(encoding="utf-8")
     assert "backup_credentials" in content or "BACKUP_DIR" in content, "Backup function missing"
 
 def test_phase2_has_restore():
     """Verify rollback/restore functionality is present"""
     script = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-    content = script.read_text()
+    content = script.read_text(encoding="utf-8")
     assert "restore_credentials" in content or "rollback" in content.lower(), "Restore function missing"
 
 def test_placeholder_generation():
     """Verify placeholder generation logic is present"""
     script = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-    content = script.read_text()
+    content = script.read_text(encoding="utf-8")
     assert "PLACEHOLDER" in content, "Placeholder generation missing"
     assert "timestamp" in content, "Timestamp in placeholder missing"
 
 def test_dry_run_support():
     """Verify --dry-run flag is supported"""
     script = Path("/home/shumway/projects/CorvinOS/scripts/rotate_corvin_keys_phase2.py")
-    content = script.read_text()
+    content = script.read_text(encoding="utf-8")
     assert "--dry-run" in content or "dry_run" in content, "Dry-run support missing"
 
 def test_file_permissions():

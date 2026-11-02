@@ -136,7 +136,7 @@ def generate_tts_pico(text: str, output_path: Path) -> bool:
             ],
             capture_output=True,
             timeout=60,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         if result.returncode != 0:
@@ -161,7 +161,7 @@ def generate_tts_pico(text: str, output_path: Path) -> bool:
             ],
             capture_output=True,
             timeout=60,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
 
         # Cleanup
@@ -300,7 +300,7 @@ def get_video_duration(video_path: Path) -> float:
             ],
             capture_output=True,
             timeout=10,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         return float(result.stdout.strip())
     except Exception as e:
@@ -320,7 +320,7 @@ def get_audio_duration(audio_path: Path) -> float:
             ],
             capture_output=True,
             timeout=10,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         return float(result.stdout.strip())
     except Exception as e:
@@ -378,7 +378,7 @@ def reassemble_video_with_audio_subtitles(
     log.info(f"Running FFmpeg (video + audio + subtitles merge)")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=300, text=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=300, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             log.error(f"FFmpeg failed with return code {result.returncode}")
@@ -515,7 +515,7 @@ def main():
 
     # Write report to file
     report_path = OUTPUTS_DIR / "PHASE_3_NARRATION_SUBTITLES_COMPLETE.md"
-    with open(report_path, 'w') as f:
+    with open(report_path, 'w', encoding="utf-8") as f:
         f.write(f"""# Phase 3: Real TTS Narration + Subtitles + Video Reassembly
 
 **Generated:** {datetime.now().isoformat()}

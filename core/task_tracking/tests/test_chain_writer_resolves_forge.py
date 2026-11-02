@@ -32,10 +32,10 @@ def test_default_chain_writer_imports_forge_without_host_sys_path(tmp_path):
                HOME=str(tmp_path / "userhome"), XDG_CONFIG_HOME=str(tmp_path / "xdg"),
                CORVIN_AUDIT_ANCHOR_KEY=str(tmp_path / "anchor.key"))
     r = subprocess.run([sys.executable, "-c", _PROG], cwd=tmp_path, env=env,
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr[-2000:]
     out = json.loads(r.stdout.strip().splitlines()[-1])
     assert out["hash"]
     chain = tmp_path / "home" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-    recs = [json.loads(line) for line in chain.read_text().splitlines()]
+    recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines()]
     assert any(rec.get("event_type") == "task.created" for rec in recs)

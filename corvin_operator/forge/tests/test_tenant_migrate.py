@@ -99,14 +99,14 @@ class E2E_A_TwoTenantSmokeTests(_SandboxBase):
         )
         acme_chain = self.home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
 
-        default_event = json.loads(default_chain.read_text().strip())
-        acme_event = json.loads(acme_chain.read_text().strip())
+        default_event = json.loads(default_chain.read_text(encoding="utf-8").strip())
+        acme_event = json.loads(acme_chain.read_text(encoding="utf-8").strip())
 
         self.assertEqual(default_event["tenant"], DEFAULT_TENANT_ID)
         self.assertEqual(acme_event["tenant"], "acme")
         # No cross-contamination
-        self.assertNotIn("acme", default_chain.read_text())
-        self.assertNotIn(DEFAULT_TENANT_ID, acme_chain.read_text())
+        self.assertNotIn("acme", default_chain.read_text(encoding="utf-8"))
+        self.assertNotIn(DEFAULT_TENANT_ID, acme_chain.read_text(encoding="utf-8"))
 
 
 class E2E_B_LegacyMigrationTests(_SandboxBase):
@@ -115,7 +115,7 @@ class E2E_B_LegacyMigrationTests(_SandboxBase):
     def test_full_migration_round_trip(self):
         self._seed_legacy_layout()
         legacy_audit_path = self.home / "global" / "forge" / "audit.jsonl"
-        pre_content = legacy_audit_path.read_text()
+        pre_content = legacy_audit_path.read_text(encoding="utf-8")
         # The seed event is the first thing in the chain
         self.assertIn('"event":"seed"', pre_content)
 
@@ -130,7 +130,7 @@ class E2E_B_LegacyMigrationTests(_SandboxBase):
 
         # Legacy path is now a symlink
         legacy_global = self.home / "global"
-        self.assertTrue(legacy_global.is_symlink())
+        self.assertTrue(legacy_global.is_symlink() or legacy_global.is_junction())  # junction on Windows
         self.assertEqual(
             os.readlink(str(legacy_global)),
             str(Path("tenants") / DEFAULT_TENANT_ID / "global"),
@@ -145,7 +145,7 @@ class E2E_B_LegacyMigrationTests(_SandboxBase):
         # The seed event is still present in the post-migration chain
         # (read via the legacy symlink), AND the tenant.path_migrated
         # event has been appended ahead of the move.
-        post_content = legacy_audit_path.read_text()
+        post_content = legacy_audit_path.read_text(encoding="utf-8")
         self.assertTrue(post_content.startswith(pre_content),
                         "pre-migration seed event must remain as prefix")
         self.assertIn('"event_type": "tenant.path_migrated"', post_content)
@@ -154,7 +154,7 @@ class E2E_B_LegacyMigrationTests(_SandboxBase):
         # State-store-style read also works via legacy path
         legacy_roles = self.home / "global" / "roles" / "discord__chatA.json"
         self.assertTrue(legacy_roles.exists())  # resolves through symlink
-        self.assertEqual(legacy_roles.read_text(), '{"chatA":{}}')
+        self.assertEqual(legacy_roles.read_text(encoding="utf-8"), '{"chatA":{}}')
 
 
 class E2E_C_OptOutTests(_SandboxBase):
@@ -175,7 +175,7 @@ class E2E_C_OptOutTests(_SandboxBase):
         self.assertFalse((self.home / "global").is_symlink())
         # Original file content preserved
         self.assertEqual(
-            (self.home / "global" / "forge" / "audit.jsonl").read_text(),
+            (self.home / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8"),
             '{"event":"seed"}\n',
         )
 
@@ -245,7 +245,7 @@ class PartialMigrationToleranceTests(_SandboxBase):
         self.assertEqual(result["status"], "ok")
         self.assertNotIn("global", result["moved"])
         # The preexisting file is untouched
-        self.assertEqual((target / "preexisting.txt").read_text(), "KEEP")
+        self.assertEqual((target / "preexisting.txt").read_text(encoding="utf-8"), "KEEP")
         # The legacy /global/ dir is still a real dir (not symlinked)
         self.assertFalse((self.home / "global").is_symlink())
 
@@ -274,7 +274,7 @@ class AuditEventEmittedTests(_SandboxBase):
         )
 
         self.assertTrue(sandbox_audit.exists())
-        line = sandbox_audit.read_text().strip().splitlines()[0]
+        line = sandbox_audit.read_text(encoding="utf-8").strip().splitlines()[0]
         event = json.loads(line)
         self.assertEqual(event["event_type"], "tenant.path_migrated")
         self.assertEqual(event["details"]["tenant_id"], DEFAULT_TENANT_ID)
@@ -299,7 +299,7 @@ class AuditEventEmittedTests(_SandboxBase):
                          "no legacy global/ (and no second chain) may be created")
         canonical = self.home / "tenants" / DEFAULT_TENANT_ID / "global" / "forge" / "audit.jsonl"
         self.assertTrue(canonical.exists())
-        event = json.loads(canonical.read_text().strip().splitlines()[-1])
+        event = json.loads(canonical.read_text(encoding="utf-8").strip().splitlines()[-1])
         self.assertEqual(event["event_type"], "tenant.path_migrated")
         self.assertEqual(event["details"]["subdirs"], ["sessions"])
 
@@ -309,9 +309,9 @@ class AuditEventEmittedTests(_SandboxBase):
         self._seed_legacy_layout()
         migrate_to_default_tenant_if_needed(corvin_home_path=self.home)
         moved = self.home / "tenants" / DEFAULT_TENANT_ID / "global" / "forge" / "audit.jsonl"
-        lines = moved.read_text().strip().splitlines()
+        lines = moved.read_text(encoding="utf-8").strip().splitlines()
         self.assertEqual(json.loads(lines[-1])["event_type"], "tenant.path_migrated")
-        self.assertTrue((self.home / "global").is_symlink())
+        self.assertTrue((self.home / "global").is_symlink() or (self.home / "global").is_junction())  # junction on Windows
 
 
 class CanonicalChainSsotTests(_SandboxBase):

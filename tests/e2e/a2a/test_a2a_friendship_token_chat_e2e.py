@@ -284,9 +284,9 @@ class FriendshipTokenConfirmRouteTests(_Sandbox):
         tenant_dir = self.R._a2a_paths.tenant_global_dir("_default")
         pdir = tenant_dir / "remote_trigger" / "pending_chat_friendship_tokens"
         pf = pdir / f"{pending_id}.json"
-        data = json.loads(pf.read_text())
+        data = json.loads(pf.read_text(encoding="utf-8"))
         data["created_at"] = time.time() - 700
-        pf.write_text(json.dumps(data))
+        pf.write_text(json.dumps(data), encoding="utf-8")
         r = self._client().post(
             f"/v1/console/remote-trigger/pair/friendship-token/confirm/{pending_id}"
         )

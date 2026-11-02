@@ -72,9 +72,9 @@ def test_bridge_turn_writes_the_windows_the_models_page_reads(sandbox, monkeypat
     assert rec["windows"]["five_hour"] == {"utilization": 0.08, "resets_at": 1791567000.0}
     assert rec["windows"]["seven_day"] == {"utilization": 0.16, "resets_at": 1792036800.0}
     assert oct(path.stat().st_mode & 0o777) == "0o600"
-    raw = path.read_text()
+    raw = path.read_text(encoding="utf-8")
     # identifiers in the captured event never reach the store
-    evt = next(json.loads(l) for l in FIXTURE.read_text().splitlines() if '"rate_limit_event"' in l)
+    evt = next(json.loads(l) for l in FIXTURE.read_text(encoding="utf-8").splitlines() if '"rate_limit_event"' in l)
     assert evt["session_id"] not in raw and evt["uuid"] not in raw
 
 

@@ -104,7 +104,7 @@ class LoopResult:
 def _git(repo: Path, *args: str) -> tuple[int, str]:
     try:
         p = subprocess.run(["git", "-C", str(repo), *args],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
         return p.returncode, (p.stdout + p.stderr).strip()
     except Exception as exc:  # noqa: BLE001
         return 1, str(exc)

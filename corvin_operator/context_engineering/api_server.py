@@ -85,7 +85,7 @@ class MeasurementReader:
             return records
 
         try:
-            with open(filepath, "r") as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     if len(records) >= self.MAX_RECORDS_PER_FILE:
                         logger.warning(f"Truncated {filepath} at {self.MAX_RECORDS_PER_FILE} records")

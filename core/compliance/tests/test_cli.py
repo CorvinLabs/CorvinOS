@@ -102,7 +102,7 @@ def test_generate_emits_audit_event(
     ])
     events = [
         json.loads(line)
-        for line in chain_path.read_text().splitlines()
+        for line in chain_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     types = [e["event_type"] for e in events]

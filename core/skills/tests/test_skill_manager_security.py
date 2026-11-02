@@ -34,8 +34,8 @@ learning_signal:
 def _bundle(root: Path, name: str, version: str = "1.0.0", trigger: str = "before_delegation_decision") -> Path:
     d = root / "bundles" / f"{name.replace('/', '_')}_{version}"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "manifest.yaml").write_text(MANIFEST_TMPL.format(name=name, version=version, trigger=trigger))
-    (d / "SKILL.md").write_text("# skill\n")
+    (d / "manifest.yaml").write_text(MANIFEST_TMPL.format(name=name, version=version, trigger=trigger), encoding="utf-8")
+    (d / "SKILL.md").write_text("# skill\n", encoding="utf-8")
     return d
 
 
@@ -43,7 +43,7 @@ def _chain_events(home: Path, tenant: str = "_default") -> list[dict]:
     chain = home / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
-    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 @pytest.fixture
@@ -121,9 +121,9 @@ class TestExecutorContract:
         )
         assert result.success, result.errors
         state_file = mgr.skills_dir / "san.skill_v1.0.0" / "runs" / result.run_id / "run_state.json"
-        state = json.loads(state_file.read_text())
+        state = json.loads(state_file.read_text(encoding="utf-8"))
         assert state["inputs"] == {"task_shape": "big_data", "keep": 1}
-        raw = state_file.read_text()
+        raw = state_file.read_text(encoding="utf-8")
         assert "TOP SECRET" not in raw and "sk-123" not in raw
         for e in _chain_events(home):
             assert "TOP SECRET" not in json.dumps(e)
@@ -138,7 +138,7 @@ class TestExecutorContract:
         hit = mgr.execute_skill("on_custom_event", {"task_shape": "small_code"})
         assert hit.success is True
         state_file = mgr.skills_dir / "other.skill_v1.0.0" / "runs" / hit.run_id / "run_state.json"
-        assert json.loads(state_file.read_text())["trigger"] == "on_custom_event"
+        assert json.loads(state_file.read_text(encoding="utf-8"))["trigger"] == "on_custom_event"
 
     def test_disabled_skill_is_not_triggered(self, home):
         mgr = SkillManager(home, "_default")

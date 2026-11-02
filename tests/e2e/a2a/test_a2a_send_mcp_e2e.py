@@ -210,10 +210,10 @@ class A2ASendConfirmRouteTests(_Sandbox):
         (self.home / "endpoints" / f"{peer_id}.json").write_text(json.dumps({
             "origin_id": peer_id, "url": "http://10.9.9.9:9999",
             "hmac_key": "k", "enabled": True,
-        }))
+        }), encoding="utf-8")
         (self.home / "origins" / f"{peer_id}.json").write_text(json.dumps({
             "origin_id": peer_id, "hmac_key": "k", "recv_key": "k", "enabled": True,
-        }))
+        }), encoding="utf-8")
 
     def test_confirm_without_session_is_401(self):
         pending_id = self._stage()
@@ -296,9 +296,9 @@ class A2ASendConfirmRouteTests(_Sandbox):
         tenant_dir = self.R._forge_paths.tenant_global_dir("_default")
         pdir = tenant_dir / "remote_trigger" / "pending_chat_sends"
         pf = pdir / f"{pending_id}.json"
-        data = json.loads(pf.read_text())
+        data = json.loads(pf.read_text(encoding="utf-8"))
         data["created_at"] = time.time() - 700
-        pf.write_text(json.dumps(data))
+        pf.write_text(json.dumps(data), encoding="utf-8")
         r = self._client().post(f"/v1/console/a2a/feed/send/confirm/{pending_id}")
         self.assertEqual(r.status_code, 404)
 

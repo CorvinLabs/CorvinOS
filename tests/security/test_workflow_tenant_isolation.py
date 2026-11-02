@@ -235,7 +235,7 @@ class TestStorageIsolation:
         # Create workflow in Tenant A
         tenant_a_path = isolated_storage["tenant_a"]["path"]
         wf_a = tenant_a_path / "workflow_a.awp.yaml"
-        wf_a.write_text("version: 0.1\nname: Workflow A")
+        wf_a.write_text("version: 0.1\nname: Workflow A", encoding="utf-8")
 
         # Verify file exists in Tenant A storage
         assert wf_a.exists()
@@ -256,7 +256,7 @@ class TestStorageIsolation:
 
         tenant_path = isolated_storage["tenant_a"]["path"]
         metadata_file = tenant_path / "workflow.meta.json"
-        metadata_file.write_text('{"id": "wid_a", "title": "Workflow A"}')
+        metadata_file.write_text('{"id": "wid_a", "title": "Workflow A"}', encoding="utf-8")
 
         # Check permissions
         stat_info = os.stat(metadata_file)

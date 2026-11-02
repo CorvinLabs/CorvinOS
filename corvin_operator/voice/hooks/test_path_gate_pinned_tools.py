@@ -222,7 +222,20 @@ def test_the_shipped_pin_table_is_one_exact_absolute_path_with_no_wildcards():
     table = pg._PINNED_PYTHON_TOOLS        # this test uses no fixture: monkeypatches of other tests are undone
     assert len(table) == 1
     (script, bundle), = table.items()
-    assert Path(script).is_absolute() and script.endswith("/Corvin-Knowledge/scripts/kb.py")
+    assert Path(script).is_absolute() and Path(script).as_posix().endswith("/Corvin-Knowledge/scripts/kb.py")
     assert not any(c in script for c in "*?[]$~") and ".." not in script
     assert set(bundle) == {"kb.py", "kb_lib.py", "kb_model.py"}
     assert all(len(h) == 64 and set(h) <= set("0123456789abcdef") for h in bundle.values())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows separator spellings")
+def test_windows_bash_spellings_of_the_exact_pinned_path_are_accepted(bundle):
+    """Git-Bash eats unquoted backslashes, so on Windows the pinned path can only be written
+    ``C:/.../kb.py`` or ``/c/.../kb.py``; both name the same absolute file as the table key."""
+    d, audits = bundle
+    posix = (d / "kb.py").as_posix()
+    msys = "/" + posix[0].lower() + posix[2:]
+    for spelling in (posix, msys):
+        ok, reason = _check(f"python3 {spelling} check")
+        assert ok, (spelling, reason)
+    assert audits.count(("allowed_pinned", "")) == 2, audits

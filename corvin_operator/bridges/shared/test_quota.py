@@ -50,7 +50,7 @@ class _QuotaTestBase(unittest.TestCase):
         self._channel_settings = self._channel_dir / "settings.json"
         self._channel_settings.write_text(json.dumps({
             "whitelist": [OWNER_UID],
-        }))
+        }), encoding="utf-8")
         self._orig_resolver = roles._channel_settings_path
         roles._channel_settings_path = lambda c: self._channel_settings
 
@@ -271,9 +271,9 @@ class WindowRolloverTests(_QuotaTestBase):
         quota.record(CHANNEL, CHAT, MEMBER_UID, tokens=200)
         # Backdate the day_anchor by > WINDOW_S so the next read rolls over.
         store = quota._store_path(CHANNEL, CHAT)
-        data = json.loads(store.read_text())
+        data = json.loads(store.read_text(encoding="utf-8"))
         data[MEMBER_UID]["day_anchor"] = time.time() - quota.WINDOW_S - 60
-        store.write_text(json.dumps(data))
+        store.write_text(json.dumps(data), encoding="utf-8")
         usage = quota.get_usage(CHANNEL, CHAT, MEMBER_UID)
         # After rollover, counters reset; the rolling-window timer just
         # restarted, so window_remaining_s is back near a full WINDOW_S.
@@ -291,9 +291,9 @@ class WindowRolloverTests(_QuotaTestBase):
                     bundle="member", granted_by=OWNER_UID, ttl_s=3600)
         quota.record(CHANNEL, CHAT, MEMBER_UID, tokens=500)
         store = quota._store_path(CHANNEL, CHAT)
-        data = json.loads(store.read_text())
+        data = json.loads(store.read_text(encoding="utf-8"))
         data[MEMBER_UID]["day_anchor"] = time.time() - quota.WINDOW_S - 60
-        store.write_text(json.dumps(data))
+        store.write_text(json.dumps(data), encoding="utf-8")
 
         # Call get_usage() which triggers rollover.
         usage = quota.get_usage(CHANNEL, CHAT, MEMBER_UID)
@@ -302,7 +302,7 @@ class WindowRolloverTests(_QuotaTestBase):
 
         # Verify that the rolled-over state is persisted: reload from disk
         # and confirm counters are zero, not the prior 1/500.
-        data_after = json.loads(store.read_text())
+        data_after = json.loads(store.read_text(encoding="utf-8"))
         self.assertEqual(data_after[MEMBER_UID]["messages"], 0)
         self.assertEqual(data_after[MEMBER_UID]["tokens"], 0)
 
@@ -389,21 +389,21 @@ class CliRoundTripTests(_QuotaTestBase):
         real_settings = bridges_root / CHANNEL / "settings.json"
         if real_settings.exists():
             try:
-                live = json.loads(real_settings.read_text())
+                live = json.loads(real_settings.read_text(encoding="utf-8"))
             except Exception:
                 live = {}
             if (live.get("whitelist") or []) and OWNER_UID not in (live.get("whitelist") or []):
                 self.skipTest("real bridge settings would be clobbered")
-        backup = real_settings.read_text() if real_settings.exists() else None
+        backup = real_settings.read_text(encoding="utf-8") if real_settings.exists() else None
         real_settings.parent.mkdir(parents=True, exist_ok=True)
-        real_settings.write_text(self._channel_settings.read_text())
+        real_settings.write_text(self._channel_settings.read_text(encoding="utf-8"), encoding="utf-8")
         try:
             proc = subprocess.run(
                 [sys.executable, str(HERE / module), *args],
-                env=env, capture_output=True, text=True, timeout=10)
+                env=env, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
         finally:
             if backup is not None:
-                real_settings.write_text(backup)
+                real_settings.write_text(backup, encoding="utf-8")
             else:
                 try: real_settings.unlink()
                 except FileNotFoundError: pass

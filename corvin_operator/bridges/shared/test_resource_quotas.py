@@ -318,7 +318,7 @@ class TestComputeQuotaCounter(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         import json as _json
         yesterday = "2000-01-01"  # far in the past, not today
-        path.write_text(_json.dumps({yesterday: 999}))
+        path.write_text(_json.dumps({yesterday: 999}), encoding="utf-8")
         os.chmod(path, 0o600)
         # Today's counter is fresh (0) even though yesterday was at 999
         _cq.increment_and_check(self._home)   # should not raise
@@ -440,7 +440,7 @@ class TestInstanceIdBinding(unittest.TestCase):
         iid_dir = self._home / "global"
         iid_dir.mkdir(parents=True, exist_ok=True)
         p = iid_dir / "instance_id.json"
-        p.write_text(json.dumps({"instance_id": iid}))
+        p.write_text(json.dumps({"instance_id": iid}), encoding="utf-8")
         p.chmod(0o600)
 
     def test_unbound_token_passes_any_instance(self):

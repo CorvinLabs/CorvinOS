@@ -39,7 +39,7 @@ def run_tests() -> Dict[str, Any]:
          "corvin_operator/context_engineering/tests/",
          "-v", "--tb=no", "--quiet"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
 
     elapsed_s = time.perf_counter() - start
@@ -96,7 +96,7 @@ def main():
 
     # Write results
     output_file = Path("benchmark/cel/baseline_metrics.json")
-    with open(output_file, "w") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
     print(f"\nBaseline metrics saved to: {output_file}")

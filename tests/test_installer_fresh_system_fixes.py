@@ -158,10 +158,10 @@ def test_node_fallback_runs_ensure_node_sh_under_the_resolved_root(tmp_path, mon
         ran.setdefault("env", kw.get("env", {}))
         (home / "node" / "bin").mkdir(parents=True, exist_ok=True)
         node = home / "node" / "bin" / "node"
-        node.write_text("#!/bin/sh\necho v24.18.0\n")
+        node.write_text("#!/bin/sh\necho v24.18.0\n", encoding="utf-8")
         node.chmod(0o755)
         npm = home / "node" / "bin" / "npm"
-        npm.write_text("#!/bin/sh\necho 11\n")
+        npm.write_text("#!/bin/sh\necho 11\n", encoding="utf-8")
         npm.chmod(0o755)
         return mock.Mock(returncode=0, stdout="v24.18.0\n")
 
@@ -305,7 +305,7 @@ def test_install_sh_http_probe_answers_through_wget_when_curl_is_absent(tmp_path
         bindir = _tool_dir(tmp_path, "wget", "awk", "sh")
         script = f'{helpers}\n_http_code "http://127.0.0.1:{port}/"; echo; _http_code "http://127.0.0.1:{port}/"; echo; _http_code "http://127.0.0.1:1/"; echo; echo END'
         r = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=30,
-                           env={"PATH": str(bindir), "HOME": str(tmp_path)})
+                           env={"PATH": str(bindir), "HOME": str(tmp_path)}, encoding="utf-8", errors="replace")
     finally:
         srv.shutdown()
     assert r.returncode == 0, r.stderr
@@ -324,16 +324,16 @@ def _fake_node_release(tmp_path: Path, *, tamper: bool = False) -> Path:
     tree = tmp_path / "tree" / name / "bin"
     tree.mkdir(parents=True)
     node = tree / "node"
-    node.write_text("#!/bin/sh\necho v24.18.0\n")
+    node.write_text("#!/bin/sh\necho v24.18.0\n", encoding="utf-8")
     node.chmod(0o755)
-    (tree / "npm").write_text("#!/bin/sh\necho 11\n")
+    (tree / "npm").write_text("#!/bin/sh\necho 11\n", encoding="utf-8")
     ext = "tar.xz" if shutil.which("xz") else "tar.gz"
     archive = rel / f"{name}.{ext}"
     with tarfile.open(archive, "w:xz" if ext == "tar.xz" else "w:gz") as tf:
         tf.add(tmp_path / "tree" / name, arcname=name)
     import hashlib
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    (rel / "SHASUMS256.txt").write_text(f"{digest}  {archive.name}\n{'0' * 64}  other.tar.gz\n")
+    (rel / "SHASUMS256.txt").write_text(f"{digest}  {archive.name}\n{'0' * 64}  other.tar.gz\n", encoding="utf-8")
     if tamper:
         archive.write_bytes(archive.read_bytes() + b"\0")
     return rel
@@ -346,11 +346,11 @@ def _run_ensure_node(tmp_path: Path, rel: Path, corvin_home: Path) -> subprocess
     curl = bindir / "curl"
     curl.write_text("#!/bin/sh\n# fake curl: -o DEST URL -> copy the release file\n"
                     "while [ $# -gt 1 ]; do case \"$1\" in -o) dest=\"$2\"; shift ;; esac; shift; done\n"
-                    f"cp \"{rel}/$(basename \"$1\")\" \"$dest\"\n")
+                    f"cp \"{rel}/$(basename \"$1\")\" \"$dest\"\n", encoding="utf-8")
     curl.chmod(0o755)
     env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "CORVIN_HOME": str(corvin_home), "HOME": str(tmp_path)}
     return subprocess.run(["bash", str(_ROOT / "scripts" / "ensure-node.sh")], capture_output=True, text=True,
-                          timeout=60, env=env)
+                          timeout=60, env=env, encoding="utf-8", errors="replace")
 
 
 def test_ensure_node_verifies_the_archive_against_shasums256_and_a_root_with_a_space(tmp_path):
@@ -360,7 +360,7 @@ def test_ensure_node_verifies_the_archive_against_shasums256_and_a_root_with_a_s
     assert r.returncode == 0, r.stderr
     assert "verified against SHASUMS256.txt" in r.stderr
     assert (home / "node" / "bin" / "node").is_file()
-    out = subprocess.run([str(home / "node" / "bin" / "node"), "--version"], capture_output=True, text=True)
+    out = subprocess.run([str(home / "node" / "bin" / "node"), "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert out.stdout.strip() == "v24.18.0"
 
 
@@ -383,7 +383,7 @@ def test_setup_sh_without_systemd_is_a_noop_success_not_an_error(tmp_path):
     bindir = _tool_dir(tmp_path, "bash", "mkdir", "dirname", "printf", "echo", "cat", "chmod", "sleep", "grep")
     home = tmp_path / "home"
     r = subprocess.run(["bash", str(_ROOT / "scripts" / "setup.sh")], capture_output=True, text=True, timeout=30,
-                       env={"PATH": str(bindir), "HOME": str(tmp_path), "CORVIN_HOME": str(home)})
+                       env={"PATH": str(bindir), "HOME": str(tmp_path), "CORVIN_HOME": str(home)}, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "watchdog not needed here" in r.stdout
     assert (home / "logs").is_dir()
@@ -452,7 +452,7 @@ def test_hooks_in_the_plugin_cache_never_resolve_under_dot_claude(tmp_path, monk
     # The installer recorded the live root (corvin-install step 18): that wins.
     cfg = tmp_path / "xdg" / "corvin-voice"
     cfg.mkdir(parents=True)
-    (cfg / "installer.json").write_text(json.dumps({"corvin_home": str(tmp_path / "srv" / "CorvinOS" / ".corvin")}))
+    (cfg / "installer.json").write_text(json.dumps({"corvin_home": str(tmp_path / "srv" / "CorvinOS" / ".corvin")}), encoding="utf-8")
     assert pg._corvin_home() == tmp_path / "srv" / "CorvinOS" / ".corvin"
     assert wt._corvin_home() == tmp_path / "srv" / "CorvinOS" / ".corvin"
     assert nr._voice_dir() == tmp_path / "srv" / "CorvinOS" / ".corvin" / "voice"
@@ -608,7 +608,7 @@ def test_voice_autoupdate_stands_down_inside_a_corvinos_checkout(tmp_path):
     repo = tmp_path / "repo"
     (repo / "corvin_operator" / "voice" / "scripts").mkdir(parents=True)
     (repo / ".git").mkdir()
-    (repo / ".corvin_repo").write_text("")
+    (repo / ".corvin_repo").write_text("", encoding="utf-8")
     for f in ("autoupdate.sh", "voice_lib.sh"):
         shutil.copy(_ROOT / "corvin_operator" / "voice" / "scripts" / f, repo / "corvin_operator" / "voice" / "scripts" / f)
     bindir = tmp_path / "bin"
@@ -616,16 +616,16 @@ def test_voice_autoupdate_stands_down_inside_a_corvinos_checkout(tmp_path):
     calls = tmp_path / "git_calls"
     fake_git = bindir / "git"
     fake_git.write_text("#!/bin/bash\necho \"$@\" >> \"$GIT_CALLS\"\n"
-                        "case \"$*\" in *show-toplevel*) echo \"$REPO\";; *fetch*|*checkout*) exit 1;; esac\nexit 0\n")
+                        "case \"$*\" in *show-toplevel*) echo \"$REPO\";; *fetch*|*checkout*) exit 1;; esac\nexit 0\n", encoding="utf-8")
     fake_git.chmod(0o755)
     env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "GIT_CALLS": str(calls), "REPO": str(repo),
            "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path / "xdg"), "VOICE_CONFIG_DIR": str(tmp_path / "vc")}
     r = subprocess.run(["bash", str(repo / "corvin_operator" / "voice" / "scripts" / "autoupdate.sh")],
-                       capture_output=True, text=True, timeout=60, env=env)
+                       capture_output=True, text=True, timeout=60, env=env, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     log = "".join(p.read_text(encoding="utf-8", errors="replace") for p in (tmp_path / "vc").rglob("*.log")) \
         + "".join(p.read_text(encoding="utf-8", errors="replace") for p in (tmp_path / "xdg").rglob("*.log")) if (tmp_path / "vc").exists() or (tmp_path / "xdg").exists() else ""
-    recorded = calls.read_text() if calls.exists() else ""
+    recorded = calls.read_text(encoding="utf-8") if calls.exists() else ""
     assert "fetch" not in recorded and "checkout" not in recorded, recorded
     assert "is a CorvinOS checkout" in (log + r.stdout + r.stderr), (log, r.stdout, r.stderr, recorded)
 
@@ -663,25 +663,52 @@ def test_hooks_launcher_finds_the_tool_venv_python_when_python3_is_absent(tmp_pa
     venv_bin = tmp_path / "data" / "uv" / "tools" / "corvinos" / "bin"
     venv_bin.mkdir(parents=True)
     py = venv_bin / "python3"
-    py.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n")
+    py.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n", encoding="utf-8")
     py.chmod(0o755)
     hooks = tmp_path / "hooks"
     hooks.mkdir()
     shutil.copy(_ROOT / "corvin_operator" / "voice" / "hooks" / "with_python.sh", hooks / "with_python.sh")
-    (hooks / "probe.py").write_text("import sys; print('ran with', sys.version_info[0], 'stdin=' + sys.stdin.read().strip())\n")
+    (hooks / "probe.py").write_text("import sys; print('ran with', sys.version_info[0], 'stdin=' + sys.stdin.read().strip())\n", encoding="utf-8")
     r = subprocess.run(["sh", str(hooks / "with_python.sh"), "probe.py"], input="PAYLOAD", capture_output=True,
                        text=True, timeout=30, env={"PATH": str(bindir), "HOME": str(tmp_path),
-                                                   "XDG_DATA_HOME": str(tmp_path / "data")})
+                                                   "XDG_DATA_HOME": str(tmp_path / "data")}, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "ran with 3 stdin=PAYLOAD"
     # No interpreter anywhere: a loud failure, never a silent 127.
     r2 = subprocess.run(["sh", str(hooks / "with_python.sh"), "probe.py"], capture_output=True, text=True,
-                        timeout=30, env={"PATH": str(bindir), "HOME": str(tmp_path / "nowhere")})
+                        timeout=30, env={"PATH": str(bindir), "HOME": str(tmp_path / "nowhere")}, encoding="utf-8", errors="replace")
     assert r2.returncode == 1 and "no Python 3 found" in r2.stderr
     manifest = json.loads((_ROOT / "corvin_operator" / "voice" / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     cmds = [h["command"] for group in manifest["hooks"].values() for entry in group for h in entry["hooks"]]
     assert not [c for c in cmds if c.startswith("python3 ")], cmds
     assert all("with_python.sh" in c for c in cmds if c.endswith(".py")), cmds
+
+
+def test_hooks_launcher_skips_the_windowsapps_python3_store_stub(tmp_path):
+    """Fresh Windows 11: WindowsApps\\python3.exe is the Store alias stub
+    (prints "Python was not found", exit 9009). `command -v python3` finds it;
+    the launcher must probe it and fall through to the tool venv."""
+    bindir = _tool_dir(tmp_path, "sh", "dirname", "basename", "cat", "env")
+    stub_dir = tmp_path / "WindowsApps"
+    stub_dir.mkdir()
+    stub = stub_dir / "python3"
+    stub.write_text("#!/bin/sh\necho 'Python was not found' >&2\nexit 9009\n", encoding="utf-8")
+    stub.chmod(0o755)
+    venv_bin = tmp_path / "data" / "uv" / "tools" / "corvinos" / "bin"
+    venv_bin.mkdir(parents=True)
+    py = venv_bin / "python3"
+    py.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n", encoding="utf-8")
+    py.chmod(0o755)
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    shutil.copy(_ROOT / "corvin_operator" / "voice" / "hooks" / "with_python.sh", hooks / "with_python.sh")
+    (hooks / "probe.py").write_text("import sys; print('ran', sys.stdin.read().strip())\n", encoding="utf-8")
+    r = subprocess.run(["sh", str(hooks / "with_python.sh"), "probe.py"], input="P", capture_output=True,
+                       text=True, timeout=30,
+                       env={"PATH": f"{stub_dir}{os.pathsep}{bindir}", "HOME": str(tmp_path),
+                            "XDG_DATA_HOME": str(tmp_path / "data")}, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "ran P"
 
 
 def test_update_sh_re_provisions_units_written_before_the_start_limit_and_root_fixes():

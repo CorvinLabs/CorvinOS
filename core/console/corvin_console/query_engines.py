@@ -121,7 +121,7 @@ class TaskGraphQuery(QueryEngine):
         total = 0  # number of tasks MATCHING the filters, across all pages
 
         try:
-            with open(registry_path, 'r') as f:
+            with open(registry_path, 'r', encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -162,7 +162,7 @@ class TaskGraphQuery(QueryEngine):
             return None
 
         try:
-            with open(registry_path, 'r') as f:
+            with open(registry_path, 'r', encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -473,7 +473,7 @@ class SkillToolQuery(QueryEngine):
         # Read manifest
         if manifest_path.exists():
             try:
-                with open(manifest_path, 'r') as f:
+                with open(manifest_path, 'r', encoding="utf-8") as f:
                     manifest_data = json.load(f)
             except json.JSONDecodeError as e:
                 logger.warning(f"Invalid manifest for skill {skill_id}: {e}")
@@ -481,7 +481,7 @@ class SkillToolQuery(QueryEngine):
         # Read config
         if config_path.exists():
             try:
-                with open(config_path, 'r') as f:
+                with open(config_path, 'r', encoding="utf-8") as f:
                     config_data = json.load(f)
             except json.JSONDecodeError as e:
                 logger.warning(f"Invalid config for skill {skill_id}: {e}")
@@ -518,7 +518,7 @@ class SkillToolQuery(QueryEngine):
 
         if manifest_path.exists():
             try:
-                with open(manifest_path, 'r') as f:
+                with open(manifest_path, 'r', encoding="utf-8") as f:
                     manifest_data = json.load(f)
             except json.JSONDecodeError as e:
                 logger.warning(f"Invalid manifest for tool {tool_id}: {e}")
@@ -560,7 +560,7 @@ class SkillToolQuery(QueryEngine):
             return True
 
         try:
-            with open(config_path, 'r') as f:
+            with open(config_path, 'r', encoding="utf-8") as f:
                 config = json.load(f)
                 return config.get('enabled', True)
         except (json.JSONDecodeError, Exception):

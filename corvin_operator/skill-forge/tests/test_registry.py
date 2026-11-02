@@ -57,7 +57,7 @@ def test_create_happy():
         skill_dir = Path(td) / "skill-forge" / "skills" / "trading.score_reviews"
         t("SKILL.md on disk", (skill_dir / "SKILL.md").exists())
         t("meta.json on disk", (skill_dir / "meta.json").exists())
-        body = (skill_dir / "SKILL.md").read_text()
+        body = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
         t("front-matter rendered", body.startswith("---\nname: trading.score_reviews"))
         t("body content present",
           "weighted sum" in body)
@@ -77,7 +77,7 @@ def test_linter_blocks_create():
         skill_dir = Path(td) / "skill-forge" / "skills" / "demo.bad"
         t("no skill dir written", not skill_dir.exists())
         manifest = Path(td) / "skill-forge" / "skills_registry.json"
-        data = json.loads(manifest.read_text())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
         t("manifest unchanged", "demo.bad" not in data)
 
 
@@ -125,7 +125,7 @@ def test_grade_appends():
         t("two grades stored", spec.n_grades == 2)
         t("mean score correct", abs(spec.mean_score - 0.6) < 1e-6)
         meta = json.loads(
-            (Path(td) / "skill-forge" / "skills" / "g1" / "meta.json").read_text()
+            (Path(td) / "skill-forge" / "skills" / "g1" / "meta.json").read_text(encoding="utf-8")
         )
         t("meta.json grades synced", len(meta["grades"]) == 2)
         # invalid score range

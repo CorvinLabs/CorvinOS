@@ -39,7 +39,7 @@ def _load_prior_max() -> Optional[int]:
         return None
 
     try:
-        data = json.loads(ts_file.read_text())
+        data = json.loads(ts_file.read_text(encoding="utf-8"))
         return int(data.get("max_timestamp"))
     except (json.JSONDecodeError, ValueError, KeyError) as e:
         log.warning(
@@ -60,7 +60,7 @@ def _persist_max(timestamp: int) -> None:
     }
 
     try:
-        ts_file.write_text(json.dumps(data, indent=2))
+        ts_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         ts_file.chmod(0o600)  # Read-only by owner
     except OSError as e:
         log.warning("monotonic_time: failed to persist timestamp: %s", e)

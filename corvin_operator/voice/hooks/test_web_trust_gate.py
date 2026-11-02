@@ -55,7 +55,7 @@ def run_hook(payload: dict, *, env: dict | None = None) -> tuple[int, str, str]:
         ["python3", str(HOOK)],
         input=json.dumps(payload),
         capture_output=True, text=True,
-        env=full_env, timeout=10,
+        env=full_env, timeout=10, encoding="utf-8", errors="replace",
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -185,13 +185,13 @@ def main() -> int:
 
     # ── 11. main(): empty stdin → exit 0 silent ─────────────────────
     proc = subprocess.run(["python3", str(HOOK)],
-                          input="", capture_output=True, text=True)
+                          input="", capture_output=True, text=True, encoding="utf-8", errors="replace")
     expect(proc.returncode == 0 and not proc.stdout.strip(),
            "empty stdin → exit 0 silent")
 
     # ── 12. main(): malformed JSON → exit 0 silent ──────────────────
     proc = subprocess.run(["python3", str(HOOK)],
-                          input="{not json", capture_output=True, text=True)
+                          input="{not json", capture_output=True, text=True, encoding="utf-8", errors="replace")
     expect(proc.returncode == 0 and not proc.stdout.strip(),
            "malformed JSON → exit 0 silent")
 
@@ -203,7 +203,7 @@ def main() -> int:
     custom_data_file.write_text(json.dumps({
         "domains": {"sandbox-only-domain.test": {"tier": "yellow", "note": "test"}},
         "tld_hints": {},
-    }))
+    }), encoding="utf-8")
     # Override the module's DATA_FILE pointer + reset cache.
     wtg.DATA_FILE = custom_data_file
     wtg._cache["mtime"] = 0.0
@@ -230,7 +230,7 @@ def main() -> int:
     expect(rc == 0, "audit-redirected hook still exits 0")
     audit_file = audit_sandbox / "global" / "forge" / "audit.jsonl"
     if audit_file.exists():
-        lines = audit_file.read_text().strip().splitlines()
+        lines = audit_file.read_text(encoding="utf-8").strip().splitlines()
         if lines:
             try:
                 ev = json.loads(lines[-1])

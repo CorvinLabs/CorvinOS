@@ -21,7 +21,7 @@ import bpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-with open(os.path.join(HERE, "narration_duration.json")) as f:
+with open(os.path.join(HERE, "narration_duration.json"), encoding="utf-8") as f:
     AUDIO_CONFIG = json.load(f)
 
 FPS = AUDIO_CONFIG["fps"]

@@ -65,7 +65,7 @@ class TestClosedTextLeavesTheDisk(_HomeCase):
     def test_cancel_removes_the_text_from_the_file(self):
         self.keep("T9", text="PRIVATE text the operator withdrew")
         a2a_outbox.cancel("T9", tenant_id="_default")
-        raw = (a2a_feed.feed_dir("_default") / "outbox.jsonl").read_text()
+        raw = (a2a_feed.feed_dir("_default") / "outbox.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("PRIVATE text", raw)
         self.assertEqual(a2a_outbox.get("T9")["state"], "cancelled")
 
@@ -73,7 +73,7 @@ class TestClosedTextLeavesTheDisk(_HomeCase):
         self.keep("T8", text="DELIVERED-TEXT")
         a2a_outbox.update("T8", attempts=1)
         a2a_outbox.close("T8", "sent")
-        raw = (a2a_feed.feed_dir("_default") / "outbox.jsonl").read_text()
+        raw = (a2a_feed.feed_dir("_default") / "outbox.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("DELIVERED-TEXT", raw)
         a2a_outbox._reset_for_tests()
         self.assertEqual(a2a_outbox.get("T8")["state"], "sent")
@@ -119,7 +119,7 @@ class TestHostTenantOutbox(unittest.TestCase):
             mgr = asyncio.run(scenario())
             self.assertEqual(mgr._tenant_id, "acme")
             self.assertEqual(a2a_outbox.get("TX")["state"], "expired")
-            raw = (a2a_feed.feed_dir(None) / "outbox.jsonl").read_text()
+            raw = (a2a_feed.feed_dir(None) / "outbox.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("hello acme peer", raw)
             self.assertIn("acme", str(a2a_feed.feed_dir(None)))
 

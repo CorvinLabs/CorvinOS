@@ -342,7 +342,7 @@ class DecisionMeasurementRecorder:
             log_dir = os.path.dirname(self.log_path)
             if log_dir:
                 Path(log_dir).mkdir(parents=True, exist_ok=True)
-            with open(self.log_path, "a") as f:
+            with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(sample.to_persistable_dict(), default=str) + "\n")
 
     def load(self) -> list["DecisionMeasurementSample"]:
@@ -352,7 +352,7 @@ class DecisionMeasurementRecorder:
         out: list[DecisionMeasurementSample] = []
         with self._write_lock:
             try:
-                with open(self.log_path, "r") as f:
+                with open(self.log_path, "r", encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue
@@ -456,7 +456,7 @@ class MeasurementRecorder:
             sample: The measurement sample to write.
         """
         with self._write_lock:
-            with open(self.log_path, "a") as f:
+            with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(sample.to_persistable_dict(), default=str) + "\n")
 
     def get_aggregated_evidence(self) -> list[BandEvidence]:
@@ -484,7 +484,7 @@ class MeasurementRecorder:
         with self._write_lock:
             loaded: list[MeasurementSample] = []
             try:
-                with open(self.log_path, "r") as f:
+                with open(self.log_path, "r", encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue

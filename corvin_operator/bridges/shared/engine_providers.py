@@ -139,7 +139,7 @@ def claude_subscription_token() -> str:
         try:
             r = subprocess.run(
                 ["security", "find-generic-password", "-s", _MACOS_KEYCHAIN_SERVICE, "-w"],
-                capture_output=True, text=True, timeout=5, check=False,
+                capture_output=True, text=True, timeout=5, check=False, encoding="utf-8", errors="replace",
             )
             if r.returncode == 0 and r.stdout.strip():
                 return _oauth_from_blob(json.loads(r.stdout.strip()))
@@ -355,7 +355,7 @@ def _cli_token(argv: list[str]) -> str:
     workstation is actually logged in, and shelling out to it is the only way to
     honour that without adding an SDK dependency."""
     try:
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=15)  # noqa: S603
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace")  # noqa: S603
     except Exception:  # noqa: BLE001 — CLI absent
         return ""
     if out.returncode != 0:

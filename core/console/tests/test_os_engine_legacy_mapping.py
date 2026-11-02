@@ -63,7 +63,7 @@ class LegacyEngineMappingE2E(unittest.TestCase):
         # A real executable standing in for the claude CLI.
         self.fake_claude = Path(self.tmp.name) / "bin" / "claude"
         self.fake_claude.parent.mkdir(parents=True)
-        self.fake_claude.write_text("#!/bin/sh\nexit 0\n")
+        self.fake_claude.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         self.fake_claude.chmod(0o755)
 
         # No live classifier: pin house_rules to allow (same technique as

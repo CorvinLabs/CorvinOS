@@ -125,9 +125,9 @@ def test_cgroup_limit_finds_systemd_unit_limit_root_unlimited(tmp_path, monkeypa
     root-only read reported unlimited here and picked a too-big model (OOM)."""
     unit = tmp_path / "system.slice" / "corvin.service"
     unit.mkdir(parents=True)
-    (unit / "memory.max").write_text("1073741824")            # 1 GiB
-    (tmp_path / "system.slice" / "memory.max").write_text("max")
-    (tmp_path / "memory.max").write_text("max")
+    (unit / "memory.max").write_text("1073741824", encoding="utf-8")            # 1 GiB
+    (tmp_path / "system.slice" / "memory.max").write_text("max", encoding="utf-8")
+    (tmp_path / "memory.max").write_text("max", encoding="utf-8")
     dirs = [str(unit), str(tmp_path / "system.slice"), str(tmp_path)]
     monkeypatch.setattr(lw, "_cgroup_self_dirs", lambda: dirs)
     monkeypatch.setattr(lw, "_cgroup_v1_dirs", lambda c: [])
@@ -137,9 +137,9 @@ def test_cgroup_limit_finds_systemd_unit_limit_root_unlimited(tmp_path, monkeypa
 def test_cgroup_limit_takes_tightest_across_levels(tmp_path, monkeypatch):
     deep = tmp_path / "a" / "b"
     deep.mkdir(parents=True)
-    (deep / "memory.max").write_text(str(4 * 1024 * 1024 * 1024))   # 4 GiB
-    (tmp_path / "a" / "memory.max").write_text(str(2 * 1024 * 1024 * 1024))  # 2 GiB (tightest)
-    (tmp_path / "memory.max").write_text("max")
+    (deep / "memory.max").write_text(str(4 * 1024 * 1024 * 1024), encoding="utf-8")   # 4 GiB
+    (tmp_path / "a" / "memory.max").write_text(str(2 * 1024 * 1024 * 1024), encoding="utf-8")  # 2 GiB (tightest)
+    (tmp_path / "memory.max").write_text("max", encoding="utf-8")
     dirs = [str(deep), str(tmp_path / "a"), str(tmp_path)]
     monkeypatch.setattr(lw, "_cgroup_self_dirs", lambda: dirs)
     monkeypatch.setattr(lw, "_cgroup_v1_dirs", lambda c: [])
@@ -147,7 +147,7 @@ def test_cgroup_limit_takes_tightest_across_levels(tmp_path, monkeypatch):
 
 
 def test_cgroup_all_unlimited_is_none(tmp_path, monkeypatch):
-    (tmp_path / "memory.max").write_text("max")
+    (tmp_path / "memory.max").write_text("max", encoding="utf-8")
     monkeypatch.setattr(lw, "_cgroup_self_dirs", lambda: [str(tmp_path)])
     monkeypatch.setattr(lw, "_cgroup_v1_dirs", lambda c: [])
     assert lw._cgroup_limit_mb() is None
@@ -159,15 +159,15 @@ def test_cgroup_all_unlimited_is_none(tmp_path, monkeypatch):
 def test_cgroup_cpu_quota_reads_v2_cpu_max(tmp_path, monkeypatch):
     unit = tmp_path / "corvin.service"
     unit.mkdir()
-    (unit / "cpu.max").write_text("200000 100000")   # 2 effective CPUs
-    (tmp_path / "cpu.max").write_text("max 100000")  # root unlimited
+    (unit / "cpu.max").write_text("200000 100000", encoding="utf-8")   # 2 effective CPUs
+    (tmp_path / "cpu.max").write_text("max 100000", encoding="utf-8")  # root unlimited
     monkeypatch.setattr(lw, "_cgroup_self_dirs", lambda: [str(unit), str(tmp_path)])
     monkeypatch.setattr(lw, "_cgroup_v1_dirs", lambda c: [])
     assert lw._cgroup_cpu_quota() == 2
 
 
 def test_cgroup_cpu_quota_unlimited_is_none(tmp_path, monkeypatch):
-    (tmp_path / "cpu.max").write_text("max 100000")
+    (tmp_path / "cpu.max").write_text("max 100000", encoding="utf-8")
     monkeypatch.setattr(lw, "_cgroup_self_dirs", lambda: [str(tmp_path)])
     monkeypatch.setattr(lw, "_cgroup_v1_dirs", lambda c: [])
     assert lw._cgroup_cpu_quota() is None

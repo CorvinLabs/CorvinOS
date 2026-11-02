@@ -40,7 +40,7 @@ def _corvin(home: Path, *argv: str) -> subprocess.CompletedProcess:
     )
     return subprocess.run(
         [sys.executable, "-m", "corvin", "plugin", *argv],
-        capture_output=True, text=True, timeout=120, env=env, cwd=str(home),
+        capture_output=True, text=True, timeout=120, env=env, cwd=str(home), encoding="utf-8", errors="replace",
     )
 
 
@@ -48,7 +48,7 @@ def _installed_ids(home: Path, tenant: str = "_default") -> list[str]:
     reg = home / "tenants" / tenant / "plugins" / "registry.yaml"
     if not reg.is_file():
         return []
-    data = yaml.safe_load(reg.read_text()) or {}
+    data = yaml.safe_load(reg.read_text(encoding="utf-8")) or {}
     plugins = data.get("plugins") or []
     if isinstance(plugins, dict):
         return sorted(plugins)

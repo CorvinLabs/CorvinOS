@@ -228,6 +228,7 @@ run "Python: OS-model single source of truth" python3 shared/test_os_model_singl
 run "Python: channel list SSOT (one list, seven channels)" python3 shared/test_channel_list_ssot.py >/dev/null || fails=$((fails+1))
 run "Node: operator-root resolution (runtime dir finds the Python CLIs)" node shared/js/test_operator_root_resolution.js >/dev/null || fails=$((fails+1))
 run "Node: event-loop watchdog (kills a frozen loop, spares an idle one)" node shared/js/test_event_loop_watchdog.js >/dev/null || fails=$((fails+1))
+run "Node: local-announce survives a missing announce program" node shared/js/test_local_announce.js >/dev/null || fails=$((fails+1))
 run "Python: voice summarizer choice (VOICE-F9)" python3 shared/test_adapter_voice_summarizer_choice.py >/dev/null || fails=$((fails+1))
 run "Python: voice quota"        python3 shared/test_voice_quota.py >/dev/null              || fails=$((fails+1))
 run "Python: session reset"      python3 shared/test_session_reset.py >/dev/null      || fails=$((fails+1))

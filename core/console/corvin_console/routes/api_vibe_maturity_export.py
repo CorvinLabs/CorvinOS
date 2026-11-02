@@ -36,7 +36,7 @@ async def export_maturity_pdf(window: str = "7d", rec=Depends(require_session)):
         </body></html>
         """
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding="utf-8") as f:
             f.write(html)
             html_path = f.name
 

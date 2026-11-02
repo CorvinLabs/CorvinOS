@@ -34,7 +34,7 @@ def _isolated_home(tmp_path, monkeypatch):
 def _write_signed(snapshot_file: Path, snapshot: Dict[str, Any]) -> None:
     """Persist a snapshot the way SessionBridgeProducer does: HMAC-signed."""
     snapshot_file.parent.mkdir(parents=True, exist_ok=True)
-    snapshot_file.write_text(json.dumps({"snapshot": snapshot, "signature": sign_snapshot(snapshot)}))
+    snapshot_file.write_text(json.dumps({"snapshot": snapshot, "signature": sign_snapshot(snapshot)}), encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_forged_signature_rejected(tmp_path):
     snapshot_dir = tmp_path / "snapshots"
     f = snapshot_dir / tenant_id / task_id / "latest.json"
     f.parent.mkdir(parents=True)
-    f.write_text(json.dumps({"snapshot": snap, "signature": "fake"}))
+    f.write_text(json.dumps({"snapshot": snap, "signature": "fake"}), encoding="utf-8")
     with pytest.raises(SnapshotVerificationError):
         await SessionRecoveryManager(snapshot_dir=snapshot_dir).auto_restore_session_context(
             tenant_id=tenant_id, task_id=task_id,

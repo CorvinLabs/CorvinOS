@@ -36,7 +36,7 @@ def box(tmp_path, monkeypatch):
         d.mkdir(parents=True)
     xdg = tmp_path / "xdg"
     (xdg / "corvin-voice").mkdir(parents=True)
-    (xdg / "corvin-voice" / "profile.json").write_text("{}")
+    (xdg / "corvin-voice" / "profile.json").write_text("{}", encoding="utf-8")
     for k, v in {
         "ADAPTER_INBOX": inbox, "ADAPTER_OUTBOX": outbox, "ADAPTER_PROCESSED": processed,
         "CORVIN_HOME": tmp_path / "corvin", "XDG_CONFIG_HOME": xdg,
@@ -71,13 +71,13 @@ def _turn(monkeypatch, box: Path, fixture: str, *, speedup: float = 4, silent_s:
     inbox = Path(os.environ["ADAPTER_INBOX"])
     f = inbox / f"{msg_id}.json"
     f.write_text(json.dumps({"id": msg_id, "channel": "sandbox-bg", "from": "u42",
-                             "chat_id": "chan-1", "text": "please do it", "ts": 0}))
+                             "chat_id": "chan-1", "text": "please do it", "ts": 0}), encoding="utf-8")
     t0 = time.time()
     adapter.process_one(f, settings={"whitelist": ["u42"], **(settings or {})})
     elapsed = time.time() - t0
     outbox = Path(os.environ["ADAPTER_OUTBOX"])
     files = sorted(outbox.glob(f"{msg_id}_*.json"))
-    return [json.loads(p.read_text()) for p in files], [p.name for p in files], elapsed
+    return [json.loads(p.read_text(encoding="utf-8")) for p in files], [p.name for p in files], elapsed
 
 
 def _split(msgs):
@@ -95,14 +95,14 @@ def _audit(box: Path, prefix="bgscope."):
     chain = paths.tenant_audit_chain("_default")
     if not chain.exists():
         return []
-    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    recs = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in recs if str(r.get("event_type", "")).startswith(prefix)]
 
 
 def _ledger_texts(box: Path):
     out = []
     for p in (box / "corvin").rglob("ledger.jsonl"):
-        out += [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+        out += [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
     return out
 
 

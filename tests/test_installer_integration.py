@@ -106,7 +106,7 @@ class TestCorvinInstallerIntegration:
                 config_path = tmpdir_path / "installer.json"
                 assert config_path.exists()
 
-                config = json.loads(config_path.read_text())
+                config = json.loads(config_path.read_text(encoding="utf-8"))
                 assert config["installed_bridges"] == ["discord", "whatsapp"]
                 assert config["version"] == "0.1.0"
 
@@ -369,8 +369,8 @@ class TestInstallOrchestration:
 
                 profile_path = voice_config_dir / "profile.json"
                 config_path = voice_config_dir / "installer.json"
-                first_profile = json.loads(profile_path.read_text())
-                first_config = json.loads(config_path.read_text())
+                first_profile = json.loads(profile_path.read_text(encoding="utf-8"))
+                first_config = json.loads(config_path.read_text(encoding="utf-8"))
                 assert first_profile == {
                     "voice_audience_metaphors": "on", "voice_audience_learning": 3,
                 }
@@ -379,12 +379,12 @@ class TestInstallOrchestration:
                 # /profile set) — a correct re-run must NOT clobber it, since
                 # step_2 only seeds defaults "if not profile_file.exists()".
                 mutated = {"voice_audience_metaphors": "off", "voice_audience_learning": 5}
-                profile_path.write_text(json.dumps(mutated))
+                profile_path.write_text(json.dumps(mutated), encoding="utf-8")
 
                 installer.install()
 
-                second_profile = json.loads(profile_path.read_text())
-                second_config = json.loads(config_path.read_text())
+                second_profile = json.loads(profile_path.read_text(encoding="utf-8"))
+                second_config = json.loads(config_path.read_text(encoding="utf-8"))
 
         # profile.json must be left exactly as the user set it — a second
         # install() run is not allowed to silently reset it to defaults.
@@ -415,7 +415,7 @@ class TestRestore:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             installer = self._make_installer(tmpdir_path)
-            (installer.voice_config / "installer.json").write_text("{not valid json!!")
+            (installer.voice_config / "installer.json").write_text("{not valid json!!", encoding="utf-8")
 
             with mock.patch.object(installer.service_manager, "stop_service"), \
                  mock.patch.object(installer.service_manager, "restart_service"), \
@@ -439,7 +439,7 @@ class TestRestore:
             dist_dir = (installer.repo_root / "core" / "console" / "corvin_console"
                         / "web-next" / "dist")
             dist_dir.mkdir(parents=True)
-            (dist_dir / "index.html").write_text("<html></html>")
+            (dist_dir / "index.html").write_text("<html></html>", encoding="utf-8")
 
             with mock.patch.object(installer.service_manager, "stop_service"), \
                  mock.patch.object(installer.service_manager, "restart_service"), \
@@ -518,7 +518,7 @@ class TestRestore:
             tmpdir_path = Path(tmpdir)
             installer = self._make_installer(tmpdir_path)
             (installer.voice_config / "installer.json").write_text(
-                json.dumps({"installed_bridges": ["slack"]})
+                json.dumps({"installed_bridges": ["slack"]}), encoding="utf-8"
             )
 
             with mock.patch.object(installer.service_manager, "stop_service"), \

@@ -57,7 +57,7 @@ def _chain(home: Path, tenant: str) -> Path:
 
 
 def _events(path: Path) -> list[dict]:
-    return [json.loads(l) for l in path.read_text().strip().split("\n") if l.strip()]
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").strip().split("\n") if l.strip()]
 
 
 class TestAuditPathTenantAwareness:

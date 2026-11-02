@@ -26,7 +26,7 @@ def get_staged_files() -> List[str]:
             ["git", "diff", "--cached", "--name-only"],
             capture_output=True,
             text=True,
-            check=True,
+            check=True, encoding="utf-8", errors="replace",
         )
         return result.stdout.strip().split("\n") if result.stdout.strip() else []
     except subprocess.CalledProcessError as e:
@@ -60,7 +60,7 @@ def get_file_content(filepath: str) -> Optional[str]:
         File content, or None if file not found
     """
     try:
-        with open(filepath, "r") as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             return f.read()
     except Exception as e:
         logger.error(f"Failed to read {filepath}: {e}")

@@ -261,7 +261,7 @@ def _run_haiku(system: str, prompt: str, model: str) -> str | None:
                 "--model", model,
                 "--disallowedTools", "*",
             ],
-            capture_output=True, text=True, env=env, timeout=90, check=True,
+            capture_output=True, text=True, env=env, timeout=90, check=True, encoding="utf-8", errors="replace",
         )
         return out.stdout.strip() or None
     except subprocess.CalledProcessError as exc:

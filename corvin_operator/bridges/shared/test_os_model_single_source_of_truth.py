@@ -49,7 +49,7 @@ class TierTwoFiveSingleSourceOfTruthTests(unittest.TestCase):
                     }
                 }
             }
-        }))
+        }), encoding="utf-8")
 
     def tearDown(self) -> None:
         for k, v in self._saved.items():

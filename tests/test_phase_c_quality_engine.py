@@ -292,7 +292,7 @@ class TestPhaseC_Integration:
         assert report_path.exists(), "Quality gates report should be saved"
 
         # Verify JSON is valid
-        with open(report_path) as f:
+        with open(report_path, encoding="utf-8") as f:
             data = json.load(f)
             assert "overall_status" in data
             assert "gate_results" in data

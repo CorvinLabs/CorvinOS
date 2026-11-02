@@ -38,7 +38,7 @@ def _chain_records(tenant: str = "_default") -> list[dict]:
     p = Path(tenant_audit_chain(tenant))
     if not p.exists():
         return []
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_task_event_lands_in_tenant_audit_chain_only(home):
@@ -104,7 +104,7 @@ def test_migration_honours_corvin_home_and_mapping_registry(home):
             "adr_0001": {"title": "ADR one", "status": "ACCEPTED"},
             "task_x": {"title": "X", "status": "in_progress"},
         }
-    }))
+    }), encoding="utf-8")
     report = asyncio.run(migration.migrate_task_registry_to_db(tenant_id="_default"))
     assert report.get("migrated_count") == 2, report
     assert report["errors"] == []

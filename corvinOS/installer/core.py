@@ -290,7 +290,7 @@ class CorvinInstaller:
         profile_file = self.voice_config / "profile.json"
         if not profile_file.exists():
             defaults = {"voice_audience_metaphors": "on", "voice_audience_learning": 3}
-            profile_file.write_text(json.dumps(defaults, indent=2))
+            profile_file.write_text(json.dumps(defaults, indent=2), encoding="utf-8")
             if sys.platform != "win32":
                 profile_file.chmod(0o600)
             print(f"  ✓ {profile_file} (defaults seeded)")
@@ -781,7 +781,7 @@ class CorvinInstaller:
             "version": "0.1.0",
         }
         cfg_path = self.voice_config / "installer.json"
-        cfg_path.write_text(json.dumps(config, indent=2))
+        cfg_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         if sys.platform != "win32":
             cfg_path.chmod(0o600)
         print(f"  ✓ Config saved to {cfg_path}")
@@ -814,7 +814,7 @@ class CorvinInstaller:
                 "complete": True,
                 "completed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
             }
-            (global_dir / "onboarding.json").write_text(json.dumps(state, indent=2))
+            (global_dir / "onboarding.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
         except Exception as e:
             print(f"  ⚠ Could not mark onboarding complete: {e}")
 
@@ -1173,7 +1173,7 @@ class CorvinInstaller:
                 try:
                     query = subprocess.run(
                         ["schtasks", "/query", "/tn", _task],
-                        capture_output=True, text=True, check=False,
+                        capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
                     )
                     if query.returncode != 0:
                         print(f"  ℹ Scheduled Task not found: {_task}")
@@ -1184,7 +1184,7 @@ class CorvinInstaller:
                     )
                     delete = subprocess.run(
                         ["schtasks", "/delete", "/tn", _task, "/f"],
-                        capture_output=True, text=True, check=False,
+                        capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
                     )
                     if delete.returncode == 0:
                         print(f"  ✓ Removed Scheduled Task: {_task}")
@@ -1228,7 +1228,7 @@ class CorvinInstaller:
                 try:
                     q = subprocess.run(
                         ["schtasks", "/query", "/tn", _bt],
-                        capture_output=True, text=True, check=False,
+                        capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
                     )
                     if q.returncode != 0:
                         continue
@@ -1238,7 +1238,7 @@ class CorvinInstaller:
                     )
                     d = subprocess.run(
                         ["schtasks", "/delete", "/tn", _bt, "/f"],
-                        capture_output=True, text=True, check=False,
+                        capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
                     )
                     if d.returncode == 0:
                         print(f"  ✓ Removed Scheduled Task: {_bt}")
@@ -1276,7 +1276,7 @@ class CorvinInstaller:
                         ["claude", "plugin", "uninstall", plugin_id],
                         capture_output=True,
                         text=True,
-                        check=False,
+                        check=False, encoding="utf-8", errors="replace",
                     )
                     if result.returncode == 0:
                         print(f"  ✓ Unregistered plugin: {plugin_id}")

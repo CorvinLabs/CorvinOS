@@ -106,11 +106,11 @@ def test_reboot_does_not_stack_seam_records(tmp_path, monkeypatch):
     _point_tripwire_at(monkeypatch, chain_path, 5)
 
     assert tripwire.audit_chain_intact().ok
-    n1 = len(chain_path.read_text().splitlines())
+    n1 = len(chain_path.read_text(encoding="utf-8").splitlines())
     tripwire._verify_cache.clear()
     r2 = tripwire.audit_chain_intact()
     assert r2.ok, r2.detail
-    assert len(chain_path.read_text().splitlines()) == n1, "second boot must not add a second seam"
+    assert len(chain_path.read_text(encoding="utf-8").splitlines()) == n1, "second boot must not add a second seam"
 
 
 def test_whole_chain_failure_refuses_boot_and_deletes_nothing(tmp_path, monkeypatch):
@@ -160,7 +160,7 @@ def test_tail_truncation_is_a_current_state_failure(tmp_path, monkeypatch):
     result = tripwire.audit_chain_intact()
     assert not result.ok
     assert "tail_truncated" in result.detail
-    assert len(chain_path.read_text().splitlines()) == 25, "no seam on a current-state failure"
+    assert len(chain_path.read_text(encoding="utf-8").splitlines()) == 25, "no seam on a current-state failure"
 
 
 def test_historical_break_outside_window_passes_without_a_seam(tmp_path, monkeypatch):
@@ -175,7 +175,7 @@ def test_historical_break_outside_window_passes_without_a_seam(tmp_path, monkeyp
 
     result = tripwire.audit_chain_intact()
     assert result.ok and "historical" in result.detail
-    assert len(chain_path.read_text().splitlines()) == 30
+    assert len(chain_path.read_text(encoding="utf-8").splitlines()) == 30
 
 
 def test_truncating_healer_is_gone():

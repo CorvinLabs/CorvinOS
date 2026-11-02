@@ -206,7 +206,7 @@ class VideoAssemblerWorker(WorkerSkillBase):
                 video_file
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 raise ValueError(f"ffprobe failed: {result.stderr}")
@@ -243,7 +243,7 @@ class VideoAssemblerWorker(WorkerSkillBase):
                 video_file
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
 
             if result.returncode != 0:
                 raise ValueError(f"ffprobe failed: {result.stderr}")

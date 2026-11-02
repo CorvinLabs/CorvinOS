@@ -17,7 +17,7 @@ def test_package_marketplace_component_exports():
     )
     assert marketplace_file.exists(), f"PackageMarketplace.tsx not found at {marketplace_file}"
 
-    content = marketplace_file.read_text()
+    content = marketplace_file.read_text(encoding="utf-8")
     assert "export const PackageMarketplace" in content, "PackageMarketplace not exported as const"
     assert "export default PackageMarketplace" in content, "PackageMarketplace not exported as default"
     assert "React.FC" in content, "Component is not a React Functional Component"
@@ -30,7 +30,7 @@ def test_packages_page_created_and_wired():
     )
     assert packages_page.exists(), f"pages/packages.tsx not found at {packages_page}"
 
-    content = packages_page.read_text()
+    content = packages_page.read_text(encoding="utf-8")
     assert "PackageMarketplace" in content, "packages.tsx does not import PackageMarketplace"
     assert "PackagesPage" in content, "pages/packages.tsx does not export PackagesPage"
     assert "<PackageMarketplace />" in content, "PackageMarketplace component not rendered in PackagesPage"
@@ -43,7 +43,7 @@ def test_packages_page_lazy_loaded_in_lazy_pages():
     )
     assert lazy_pages_file.exists(), f"lazy-pages.ts not found at {lazy_pages_file}"
 
-    content = lazy_pages_file.read_text()
+    content = lazy_pages_file.read_text(encoding="utf-8")
     assert "export const PackagesPage" in content, "PackagesPage not exported from lazy-pages.ts"
     assert 'import("@/pages/packages")' in content, "packages.tsx not lazy-imported"
 
@@ -59,13 +59,13 @@ def test_packages_route_wired_in_app():
     panel, ``mergePanelRoutes()`` turns it into a ``<Route>``, and App.tsx
     splices that array into ``<Routes>``. The old assertion on a literal
     ``<Route path="packages">`` in App.tsx was stale."""
-    registry = (_WEB / "panels" / "registry.tsx").read_text()
+    registry = (_WEB / "panels" / "registry.tsx").read_text(encoding="utf-8")
     assert re.search(r'\bPackagesPage\b', registry), "PackagesPage not imported in panels/registry.tsx"
     assert re.search(r'rc\(\s*"packages"\s*,\s*"Packages"\s*,\s*PackagesPage\b', registry), (
         "packages panel not registered in PANELS (panels/registry.tsx)"
     )
 
-    app_tsx = (_WEB / "App.tsx").read_text()
+    app_tsx = (_WEB / "App.tsx").read_text(encoding="utf-8")
     assert "mergePanelRoutes" in app_tsx, "App.tsx does not merge the panel registry routes"
     assert 'from "@/panels/registry"' in app_tsx, "App.tsx does not import the panel registry"
 
@@ -77,7 +77,7 @@ def test_packages_link_in_sidebar_navigation():
     )
     assert layout_file.exists(), f"layout.tsx not found at {layout_file}"
 
-    content = layout_file.read_text()
+    content = layout_file.read_text(encoding="utf-8")
 
     # Look for Packages navigation item
     assert '"/app/packages"' in content or '/app/packages' in content, "Packages route link not found in navigation"
@@ -96,7 +96,7 @@ def test_marketplace_routes_exist():
     )
     assert routes_file.exists(), f"packages.py routes not found at {routes_file}"
 
-    content = routes_file.read_text()
+    content = routes_file.read_text(encoding="utf-8")
 
     # Check required routes
     assert "def upload_package" in content or "@packages_bp.route" in content, "Upload route not found"
@@ -117,28 +117,28 @@ def test_e2e_call_path_is_complete():
 
     sidebar_ok = Path(
         "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/components/layout.tsx"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "/app/packages" in sidebar_ok
 
-    registry_ok = (_WEB / "panels" / "registry.tsx").read_text()
+    registry_ok = (_WEB / "panels" / "registry.tsx").read_text(encoding="utf-8")
     assert 'rc("packages", "Packages", PackagesPage' in registry_ok
 
-    app_ok = (_WEB / "App.tsx").read_text()
+    app_ok = (_WEB / "App.tsx").read_text(encoding="utf-8")
     assert "mergePanelRoutes" in app_ok
 
     lazy_ok = Path(
         "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/lazy-pages.ts"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "PackagesPage" in lazy_ok
 
     page_ok = Path(
         "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/pages/packages.tsx"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "PackageMarketplace" in page_ok
 
     backend_ok = Path(
         str(Path(__file__).resolve().parents[3] / "core" / "console" / "corvin_console" / "routes" / "packages.py")
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "upload_package" in backend_ok
 
     # All pieces verified ✓

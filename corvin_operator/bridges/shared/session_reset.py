@@ -194,6 +194,24 @@ def _sessions_root(tenant_id: str = "_default") -> Path:
     return _corvin_home_safe() / "sessions"
 
 
+def _session_chan_dir(tenant_id: str, forge_chan_id: str) -> Path:
+    """``<sessions root>/<forge_chan_id>`` named the way forge.scope names it.
+
+    forge.scope writes the session workspace through ``fs_safe_component`` —
+    on Windows ``telegram:123`` becomes ``telegram_123`` (``:`` is illegal in a
+    path component). Joining the raw id here looked at a directory that can
+    never exist there, so ``/new`` left the chat's forge workspace and
+    worker-session pins in place. ``safe_session_subdir`` is a POSIX no-op that
+    still honours a legacy un-sanitised dir.
+    """
+    base = _sessions_root(tenant_id)
+    try:
+        from forge.paths import safe_session_subdir  # type: ignore  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — forge always present in a live instance
+        return base / forge_chan_id
+    return safe_session_subdir(base, forge_chan_id)
+
+
 def forge_channel_id(channel: str, chat_id: str) -> str:
     """Mirror adapter._build_spawn_env: '<bridge>:<sanitized chat_id>' where
     only forward and back slashes are replaced. Other characters
@@ -337,7 +355,7 @@ def _purge_worker_sessions(*, forge_chan_id: str,
     subsequent rmtree of the parent directory).  Returns count of files
     removed.
     """
-    ws_dir = _sessions_root(tenant_id) / forge_chan_id / "worker_sessions"
+    ws_dir = _session_chan_dir(tenant_id, forge_chan_id) / "worker_sessions"
     if not ws_dir.is_dir():
         return 0
 
@@ -375,7 +393,7 @@ def _wipe_forge_session_dir(*, forge_chan_id: str,
     leftovers (audit.jsonl, .lock, manifest, forge/memory.md) that the
     registry deletes above don't touch. Returns True iff a directory was
     removed."""
-    target = _sessions_root(tenant_id) / forge_chan_id
+    target = _session_chan_dir(tenant_id, forge_chan_id)
     if not target.exists():
         return False
     try:
@@ -720,14 +738,14 @@ def _dialectic_session_reset(*, channel: str, chat_id: str,
     n_skills = 0
     n_tools = 0
     try:
-        sessions_root = _sessions_root(tenant_id) / forge_chan_id
+        sessions_root = _session_chan_dir(tenant_id, forge_chan_id)
         skills_dir = sessions_root / "skill-forge" / "skills"
         if skills_dir.is_dir():
             n_skills = sum(1 for _ in skills_dir.iterdir() if _.is_dir())
         tools_manifest = sessions_root / "forge" / "tools" / "manifest.json"
         if tools_manifest.is_file():
             try:
-                n_tools = len(json.loads(tools_manifest.read_text()) or {})
+                n_tools = len(json.loads(tools_manifest.read_text(encoding="utf-8")) or {})
             except (OSError, json.JSONDecodeError):
                 n_tools = 0
     except Exception:

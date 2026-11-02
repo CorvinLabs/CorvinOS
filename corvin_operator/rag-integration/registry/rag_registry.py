@@ -79,7 +79,7 @@ class RAGRegistry:
             return RegistryIndex()
 
         try:
-            with open(self.registry_file) as f:
+            with open(self.registry_file, encoding="utf-8") as f:
                 data = json.load(f)
             return RegistryIndex(
                 version=data.get("version", 1),
@@ -100,7 +100,7 @@ class RAGRegistry:
             "providers": [asdict(p) for p in self.index.providers],
             "last_updated": self.index.last_updated,
         }
-        with open(self.registry_file, "w") as f:
+        with open(self.registry_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     def register(
@@ -135,7 +135,7 @@ class RAGRegistry:
 
         # Load manifest
         try:
-            with open(manifest_path) as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 if manifest_path.suffix in [".yaml", ".yml"]:
                     manifest = yaml.safe_load(f)
                 else:
@@ -155,8 +155,8 @@ class RAGRegistry:
         # Copy manifest to registry
         try:
             dest_path = self.manifests_dir / f"{provider_id}.yaml"
-            with open(manifest_path) as src:
-                with open(dest_path, "w") as dst:
+            with open(manifest_path, encoding="utf-8") as src:
+                with open(dest_path, "w", encoding="utf-8") as dst:
                     dst.write(src.read())
         except Exception as e:
             return False, f"Failed to save manifest: {e}"
@@ -220,7 +220,7 @@ class RAGRegistry:
             return None
 
         try:
-            with open(manifest_path) as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 return yaml.safe_load(f)
         except Exception as e:
             logger.error(f"Failed to load manifest {provider_id}: {e}")

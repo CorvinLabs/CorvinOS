@@ -197,7 +197,7 @@ class TestBlocker2L10CompleteE2E:
         assert l10_trace.get("reason") == "shadow", l10_trace
 
         import json
-        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        recs = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert any(r.get("event_type") == "skill.executed"
                    and r.get("details", {}).get("skill_id") == "os.context_adapter"
                    for r in recs), [r.get("event_type") for r in recs]
@@ -337,7 +337,7 @@ class TestBlocker2SpecCompliance:
         from corvin_operator.context_engineering.stages import l10_adapter
 
         assert l10_adapter._TIMEOUT_MS <= 2000, "L10 is advisory: keep its budget small"
-        src = Path(l10_adapter.__file__).read_text()
+        src = Path(l10_adapter.__file__).read_text(encoding="utf-8")
         assert "timeout_ms=_TIMEOUT_MS" in src, "L10 must pass its bounded timeout"
         assert "except Exception" in src, "L10 must have fallback exception handler"
 

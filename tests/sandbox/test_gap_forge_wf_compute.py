@@ -259,7 +259,7 @@ def test_G6_packages_tab_store_is_not_the_skills_catalogue(server, sandbox, sess
     Skill Manager's ``installed_skills_root`` and never imports ``packages``."""
     from pathlib import Path
 
-    src = (harness.REPO_ROOT / "core/console/corvin_console/routes/marketplace_routes.py").read_text()
+    src = (harness.REPO_ROOT / "core/console/corvin_console/routes/marketplace_routes.py").read_text(encoding="utf-8")
     assert "installed_skills_root" in src and "skills_registry.json" in src
     assert "routes.packages" not in src and "from .packages" not in src and "import packages" not in src
     assert Path(harness.REPO_ROOT / "core/console/corvin_console/routes/skill_manager.py").is_file()

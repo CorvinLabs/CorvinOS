@@ -167,7 +167,7 @@ class TestPhase4bAdversarial:
 
             # Verify: Audit trail records the suspicious pattern
             audit_log = Path(tmpdir) / "learning_audit.jsonl"
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 events = [json.loads(line) for line in f if line.strip()]
                 # Should have feedback_received events
                 feedback_events = [e for e in events if e["event_type"] == "feedback_received"]
@@ -221,14 +221,14 @@ class TestPhase4bAdversarial:
             # Attack: Try to tamper with model selector state
             state_file = Path(tmpdir) / "model_selector_state.json"
             if state_file.exists():
-                data = json.loads(state_file.read_text())
+                data = json.loads(state_file.read_text(encoding="utf-8"))
                 # Attacker tries to change selected model
                 data["selected_models"]["1min"] = "gpt-4"
-                state_file.write_text(json.dumps(data))
+                state_file.write_text(json.dumps(data), encoding="utf-8")
 
             # Verify: Audit trail is unaffected (immutable)
             audit_log = Path(tmpdir) / "learning_audit.jsonl"
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 events = [json.loads(line) for line in f if line.strip()]
                 # Audit trail still shows original decisions
                 assert len(events) > 0
@@ -325,16 +325,16 @@ class TestPhase4bAdversarial:
             original_size = audit_log.stat().st_size
 
             # Attack: Delete some lines
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             # Remove middle event
             truncated = [lines[0], lines[-1]]  # Keep first and last only
-            with open(audit_log, "w") as f:
+            with open(audit_log, "w", encoding="utf-8") as f:
                 f.writelines(truncated)
 
             # Verify: Hash-chain is broken (next hash doesn't match prev)
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 events = [json.loads(line) for line in f if line.strip()]
 
                 # Last event's prev_hash should not match first's hash
@@ -375,7 +375,7 @@ class TestPhase4bCompliance:
 
             # Verify: All events logged to audit trail
             audit_log = Path(tmpdir) / "learning_audit.jsonl"
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 events = [json.loads(line) for line in f if line.strip()]
 
                 event_types = {e["event_type"] for e in events}
@@ -391,7 +391,7 @@ class TestPhase4bCompliance:
 
             # Verify: Audit events have tenant_id
             audit_log = Path(tmpdir) / "learning_audit.jsonl"
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 events = [json.loads(line) for line in f if line.strip()]
                 for event in events:
                     assert event["tenant_id"] == "tenant_a"
@@ -406,7 +406,7 @@ class TestPhase4bCompliance:
 
             # Verify: Decision is auditable (logged)
             audit_log = Path(tmpdir) / "learning_audit.jsonl"
-            with open(audit_log, "r") as f:
+            with open(audit_log, "r", encoding="utf-8") as f:
                 events = [json.loads(line) for line in f if line.strip()]
 
                 # Should have model selection event

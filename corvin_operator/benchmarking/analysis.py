@@ -273,7 +273,7 @@ class BenchmarkAnalysis:
         }
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(json.dumps(data, indent=2))
+        output_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def export_summary(self, output_file: Path):
         """Export human-readable summary."""
@@ -314,4 +314,4 @@ Results by Category:
 """
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(summary)
+        output_file.write_text(summary, encoding="utf-8")

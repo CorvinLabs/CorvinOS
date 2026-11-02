@@ -73,7 +73,7 @@ def test_deny_strengthening_feedback_is_chained_metadata_only(sb):
     assert "reasoning" not in details
     assert not details.get("_dropped_fields"), details
     # No free text anywhere on the chain file.
-    assert "Jane Roe" not in sb.chain.read_text()
+    assert "Jane Roe" not in sb.chain.read_text(encoding="utf-8")
 
     rules = _rules(sb)
     assert [(x["data_class"], x["destination_engine"], x["decision"]) for x in rules] == [
@@ -124,7 +124,7 @@ def test_audit_view_returns_no_free_text(sb):
 
 def test_feedback_is_refused_when_the_chain_cannot_commit(sb, tmp_path):
     blocker = tmp_path / "not_a_dir"
-    blocker.write_text("x")
+    blocker.write_text("x", encoding="utf-8")
     prev = os.environ.get("VOICE_AUDIT_PATH")
     os.environ["VOICE_AUDIT_PATH"] = str(blocker / "audit.jsonl")
     try:

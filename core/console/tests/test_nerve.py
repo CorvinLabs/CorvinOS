@@ -310,7 +310,7 @@ class TestLocalPluginDiscovery(unittest.TestCase):
                 "            signal_type='connector.ok',\n"
                 "            severity='OK',\n"
                 "            message='Connector OK',\n"
-                "        )]\n"
+                "        )]\n", encoding="utf-8"
             )
 
             with mock.patch(

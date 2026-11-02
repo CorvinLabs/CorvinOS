@@ -106,7 +106,7 @@ class LoadGenerator:
         start_time = datetime.now()
         prev_hash = "0" * 64  # Initial hash
 
-        with open(audit_file, "w") as f:
+        with open(audit_file, "w", encoding="utf-8") as f:
             for i in range(self.total_events):
                 # Distribute events evenly across the 7-day window
                 event_timestamp = self.start_time + timedelta(
@@ -301,7 +301,7 @@ class SoakTestMetricsCollector:
         }
 
         # Write baseline metrics
-        with open(self.metrics_file, "w") as f:
+        with open(self.metrics_file, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
 
         return metrics

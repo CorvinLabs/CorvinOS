@@ -209,7 +209,7 @@ class FeedbackPortal:
         try:
             # Step 1: Save raw report
             report_file = self.reports_dir / f"{report.feedback_id}.json"
-            with open(report_file, "w") as f:
+            with open(report_file, "w", encoding="utf-8") as f:
                 json.dump(report.to_dict(), f, indent=2)
             logger.debug(f"feedback_portal: report_saved: {report_file}")
 
@@ -218,7 +218,7 @@ class FeedbackPortal:
 
             # Step 3: Save triaged report
             triaged_file = self.triaged_dir / f"{report.feedback_id}.json"
-            with open(triaged_file, "w") as f:
+            with open(triaged_file, "w", encoding="utf-8") as f:
                 json.dump(triaged.to_dict(), f, indent=2)
             logger.debug(f"feedback_portal: triaged: {triaged_file}")
 
@@ -255,7 +255,7 @@ class FeedbackPortal:
                 "notified_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            with open(notified_file, "w") as f:
+            with open(notified_file, "w", encoding="utf-8") as f:
                 json.dump(notification_data, f, indent=2)
 
             logger.info(
@@ -287,7 +287,7 @@ class FeedbackPortal:
                 break
 
             try:
-                with open(report_file, "r") as f:
+                with open(report_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
                 if priority and data.get("priority") != priority.value:
@@ -305,7 +305,7 @@ class FeedbackPortal:
 
         for report_file in self.triaged_dir.glob("*.json"):
             try:
-                with open(report_file, "r") as f:
+                with open(report_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     priority = data.get("priority", "p3").lower()
                     if priority in counts:

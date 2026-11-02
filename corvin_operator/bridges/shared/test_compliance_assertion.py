@@ -267,7 +267,7 @@ class TestAuditEmission:
 
             assert audit_file.exists(), "Audit file not created"
             import json
-            events = [json.loads(line) for line in audit_file.read_text().splitlines() if line]
+            events = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line]
             types = [e.get("event_type") for e in events]
             assert "compliance_assertion.violated" in types, (
                 f"Expected 'compliance_assertion.violated' in {types}"

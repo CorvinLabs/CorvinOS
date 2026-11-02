@@ -44,7 +44,7 @@ def index(tmp_path):
         "by_category": by_category, "by_tier": by_tier,
     }
     path = tmp_path / "plugins.json"
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     return path
 
 

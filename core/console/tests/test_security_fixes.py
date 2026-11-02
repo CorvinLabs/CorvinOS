@@ -195,7 +195,7 @@ class TestConcurrentWrites(unittest.TestCase):
 
             # Read final state
             import json as _json
-            final = _json.loads(base_path.read_text())
+            final = _json.loads(base_path.read_text(encoding="utf-8"))
 
             # Both updates should be present (or at least one complete update, not corrupted)
             print(f"✓ Concurrent writes completed without corruption: {final}")

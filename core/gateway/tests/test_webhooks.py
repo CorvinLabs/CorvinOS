@@ -363,7 +363,8 @@ class SecretStoreTests(unittest.TestCase):
             self.assertEqual(store.get_secret("acme", "wh1"), "topsecret-abc")
             # mode 0o600
             p = home / "tenants" / "acme" / "global" / "gateway" / "webhook_secrets.json"
-            self.assertEqual(p.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":  # POSIX mode bits; NTFS reports 0o666
+                self.assertEqual(p.stat().st_mode & 0o777, 0o600)
 
     def test_unknown_ref_returns_none(self):
         with sandbox(("acme",)) as home:
@@ -392,6 +393,8 @@ class SecretStoreTests(unittest.TestCase):
                 store.set_secret("acme", "", "v")
             with self.assertRaises(ValueError):
                 store.set_secret("acme", "wh", "")
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits only (NTFS ACLs)")
 
     def test_world_readable_store_returns_none(self):
         with sandbox(("acme",)) as home:
@@ -450,7 +453,7 @@ class HappyPathTests(unittest.TestCase):
             self.assertIn("ping", payload["result"]["final_text"])
             # Audit
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             dispatched = [e for e in lines if e["event_type"] == "gateway.webhook_dispatched"]
             self.assertEqual(len(dispatched), 1)
             self.assertEqual(dispatched[0]["details"]["attempts"], 1)
@@ -481,7 +484,7 @@ class RetryTests(unittest.TestCase):
                 _wait_for_received(stub, count=3)
             self.assertEqual(len(stub.received), 3)
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             dispatched = [e for e in lines if e["event_type"] == "gateway.webhook_dispatched"]
             self.assertEqual(len(dispatched), 1)
             self.assertEqual(dispatched[0]["details"]["attempts"], 3)
@@ -504,7 +507,7 @@ class RetryTests(unittest.TestCase):
             # 1 initial + 2 retries = 3 attempts
             self.assertEqual(len(stub.received), 3)
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             failed = [e for e in lines if e["event_type"] == "gateway.webhook_delivery_failed"]
             self.assertEqual(len(failed), 1)
             self.assertEqual(failed[0]["details"]["attempts"], 3)
@@ -530,7 +533,7 @@ class PermanentFailureTests(unittest.TestCase):
                 time.sleep(0.1)
             self.assertEqual(len(stub.received), 1)
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             failed = [e for e in lines if e["event_type"] == "gateway.webhook_delivery_failed"]
             self.assertEqual(len(failed), 1)
             self.assertEqual(failed[0]["details"]["last_status"], 404)
@@ -557,7 +560,7 @@ class SecretMissingTests(unittest.TestCase):
                 time.sleep(0.1)
             self.assertEqual(stub.received, [])
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             missing = [e for e in lines if e["event_type"] == "gateway.webhook_secret_missing"]
             self.assertEqual(len(missing), 1)
             self.assertEqual(missing[0]["details"]["secret_ref"], "missing")
@@ -581,7 +584,7 @@ class NoWebhookTests(unittest.TestCase):
                     client, f"/v1/tenants/acme/runs/{run_id}", _hdr(),
                 )
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-            lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+            lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
             webhook_events = [
                 e for e in lines
                 if e["event_type"].startswith("gateway.webhook_")
@@ -644,7 +647,7 @@ class WebhookSsrfBlockTests(unittest.TestCase):
         self.assertEqual(out.attempts, 0)
         self.assertEqual(out.last_error, "ssrf-blocked")
         chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
-        lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+        lines = [json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines() if l]
         blocked = [e for e in lines if e["event_type"] == "gateway.webhook_blocked"]
         self.assertEqual(len(blocked), 1, lines)
         # No delivery / secret-lookup events for a blocked URL.

@@ -116,7 +116,7 @@ class TestAlertConversion(GoalDriftHookTestBase):
         from forge.paths import tenant_audit_chain  # noqa: PLC0415
         chain = tenant_audit_chain("_default")
         self.assertTrue(chain.is_file(), "audit chain file must exist after an alert")
-        lines = [l for l in chain.read_text().splitlines() if "goal_drift.alert_raised" in l]
+        lines = [l for l in chain.read_text(encoding="utf-8").splitlines() if "goal_drift.alert_raised" in l]
         self.assertEqual(len(lines), 1)
         import json as _json  # noqa: PLC0415
         rec = _json.loads(lines[0])
@@ -138,7 +138,7 @@ class TestAlertConversion(GoalDriftHookTestBase):
         from forge.paths import tenant_audit_chain  # noqa: PLC0415
         chain = tenant_audit_chain("_default")
         if chain.is_file():
-            self.assertNotIn("goal_drift.alert_raised", chain.read_text())
+            self.assertNotIn("goal_drift.alert_raised", chain.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

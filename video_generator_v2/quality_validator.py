@@ -45,7 +45,7 @@ MIN_AUDIO_MEAN_VOLUME_DB = -40.0
 
 
 def _run(cmd: list) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
 
 
 def validate_image_has_content(image_path: str, min_range: int = MIN_BRIGHTNESS_RANGE) -> None:

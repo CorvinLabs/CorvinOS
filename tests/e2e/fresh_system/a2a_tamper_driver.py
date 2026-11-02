@@ -14,8 +14,8 @@ import remote_trigger_sender as rts
 
 kid = sys.argv[1]
 url = sys.argv[2]
-cfg = json.load(open(f"/home/tester/CorvinOS/corvin_operator/cowork/remote_endpoints/{kid}.json"))
-iid = json.load(open("/home/tester/CorvinOS/.corvin/global/instance_id.json"))["instance_id"]
+cfg = json.load(open(f"/home/tester/CorvinOS/corvin_operator/cowork/remote_endpoints/{kid}.json", encoding="utf-8"))
+iid = json.load(open("/home/tester/CorvinOS/.corvin/global/instance_id.json", encoding="utf-8"))["instance_id"]
 env = rts.RemoteTriggerSender._build_envelope(
     task_id=str(uuid.uuid4()), nonce=uuid.uuid4().hex, origin_id=cfg["origin_id_for_send"],
     instruction="Reply with exactly the word REPLAYTEST", result_schema={"output": "string"}, ttl_s=60,

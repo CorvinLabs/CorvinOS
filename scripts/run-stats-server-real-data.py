@@ -29,7 +29,7 @@ def load_real_metrics():
     registry_file = home / '.corvin' / 'instances.json'
     if registry_file.exists():
         try:
-            with open(registry_file) as f:
+            with open(registry_file, encoding="utf-8") as f:
                 data = json.load(f)
             if 'instances' in data:
                 for inst in data['instances']:
@@ -41,7 +41,7 @@ def load_real_metrics():
     audit_file = home / '.corvin' / 'audit.jsonl'
     if audit_file.exists():
         try:
-            with open(audit_file) as f:
+            with open(audit_file, encoding="utf-8") as f:
                 for line in f:
                     try:
                         event = json.loads(line)
@@ -156,7 +156,7 @@ if HAS_FLASK:
     def stats_dashboard():
         html_path = Path(__file__).parent.parent / 'docs' / 'stats.html'
         if html_path.exists():
-            with open(html_path) as f:
+            with open(html_path, encoding="utf-8") as f:
                 html = f.read()
             html = html.replace(
                 "'https://api.corvin-labs.com/api/metrics/stats'",

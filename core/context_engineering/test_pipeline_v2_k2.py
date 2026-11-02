@@ -224,7 +224,7 @@ if __name__ == "__main__":
     print(f"\n{json.dumps(result, indent=2)}")
 
     # Log to file
-    with open("/tmp/pipeline_v2_k2_result.json", "w") as f:
+    with open("/tmp/pipeline_v2_k2_result.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
     print(f"\nResult saved to: /tmp/pipeline_v2_k2_result.json")

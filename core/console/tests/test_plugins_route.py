@@ -366,10 +366,10 @@ class TestFullLifecycle(_Base):
         with self._live() as (client, csrf, home):
             path = home / "tenants" / "_default" / "plugins" / "registry.yaml"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("plugins: {broken")
+            path.write_text("plugins: {broken", encoding="utf-8")
             resp = client.get("/v1/console/plugins")
             self.assertEqual(resp.status_code, 500, resp.text)
-            self.assertEqual(path.read_text(), "plugins: {broken", "must not be rewritten")
+            self.assertEqual(path.read_text(encoding="utf-8"), "plugins: {broken", "must not be rewritten")
 
 
 # ── CSRF ──────────────────────────────────────────────────────────────────────

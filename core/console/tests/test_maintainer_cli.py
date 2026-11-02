@@ -42,7 +42,7 @@ def test_keygen_writes_0600_priv_and_prints_pub(tmp_path, capsys):
 def test_keygen_forces_0600_on_preexisting_loose_file(tmp_path):
     # HIGH regression: a pre-existing world-readable target must end up 0600.
     priv = tmp_path / "k.priv"
-    priv.write_text("old"); priv.chmod(0o644)
+    priv.write_text("old", encoding="utf-8"); priv.chmod(0o644)
     CLI.main(["keygen", "--out-priv", str(priv)])
     assert (priv.stat().st_mode & 0o777) == 0o600
 
@@ -77,7 +77,7 @@ def test_run_denied_without_capability(tmp_path):
     repo = _git_repo(tmp_path)
     patch = tmp_path / "p.json"
     patch.write_text(json.dumps({"summary": "s", "risk_class": "platform_path",
-                                 "edits": [{"path": "app.py", "new_content": "x=2\n"}]}))
+                                 "edits": [{"path": "app.py", "new_content": "x=2\n"}]}), encoding="utf-8")
     rc = CLI.main(["run", "--repo", str(repo), "--patch", str(patch),
                    "--test-cmd", "true", "--direct-main"])
     assert rc == 1   # no pinned key / token → denied
@@ -116,7 +116,7 @@ def test_run_merges_low_risk_with_capability(tmp_path, capsys, monkeypatch):
     patch = tmp_path / "p.json"
     patch.write_text(json.dumps({"summary": "fix add", "risk_class": "platform_path",
                                  "edits": [{"path": "tests/test_add.py", "new_content": good_test},
-                                           {"path": "app.py", "new_content": fix}]}))
+                                           {"path": "app.py", "new_content": fix}]}), encoding="utf-8")
     rc = CLI.main(["run", "--repo", str(repo), "--patch", str(patch),
                    "--test-cmd", "true",       # gate green on unpatched worktree
                    "--repro-full-cmd", f"{sys.executable} -m pytest . -q",
@@ -124,7 +124,7 @@ def test_run_merges_low_risk_with_capability(tmp_path, capsys, monkeypatch):
     res = json.loads(capsys.readouterr().out)
     assert rc == 0 and res["status"] == "merged", res
     head = subprocess.run(["git", "-C", str(repo), "show", "main:app.py"],
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     assert "return a + b" in head
 
 
@@ -144,13 +144,13 @@ def test_run_direct_main_testless_patch_blocked_by_repro(tmp_path, capsys, monke
     repo = _git_repo(tmp_path)
     patch = tmp_path / "p.json"
     patch.write_text(json.dumps({"summary": "no-test fix", "risk_class": "platform_path",
-                                 "edits": [{"path": "app.py", "new_content": "x = 42\n"}]}))
+                                 "edits": [{"path": "app.py", "new_content": "x = 42\n"}]}), encoding="utf-8")
     rc = CLI.main(["run", "--repo", str(repo), "--patch", str(patch),
                    "--test-cmd", "true", "--direct-main"])
     res = json.loads(capsys.readouterr().out)
     assert rc == 1 and res["status"] == "repro_failed", res
     head = subprocess.run(["git", "-C", str(repo), "show", "main:app.py"],
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     assert "x = 42" not in head
 
 
@@ -240,7 +240,7 @@ def test_release_dryrun_bumps_when_main_advanced(tmp_path, monkeypatch):
     assert res["released"] is False and res["reason"] == "dry_run"
     assert res["would_bump"] == "0.9.0 -> 0.9.1"
     # dry-run must NOT mutate pyproject
-    assert 'version = "0.9.0"' in (repo / "pyproject.toml").read_text()
+    assert 'version = "0.9.0"' in (repo / "pyproject.toml").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

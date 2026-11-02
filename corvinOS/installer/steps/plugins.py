@@ -116,7 +116,7 @@ def _ensure_plugin(plugin_id: str, label: str) -> bool:
         return True
 
     # Install
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False, encoding="utf-8") as tmp:
         log_path = tmp.name
 
     result = _run_claude(

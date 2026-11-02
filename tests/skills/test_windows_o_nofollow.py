@@ -67,3 +67,25 @@ def test_no_bare_o_nofollow_anywhere_in_production_code():
                 if bare.search(code) and "getattr" not in code and "hasattr" not in code:
                     offenders.append(f"{path.relative_to(REPO)}:{n}")
     assert not offenders, "bare os.O_NOFOLLOW breaks Windows: " + ", ".join(offenders)
+
+
+def test_no_bare_posix_only_open_flags_in_production_code():
+    """Same AttributeError class for every other POSIX-only ``os.O_*`` flag."""
+    names = ("O_DIRECTORY", "O_CLOEXEC", "O_NOCTTY", "O_NONBLOCK", "O_NDELAY", "O_SYNC", "O_DSYNC",
+             "O_RSYNC", "O_PATH", "O_NOATIME", "O_TMPFILE", "O_DIRECT", "O_ASYNC", "O_LARGEFILE",
+             "O_SHLOCK", "O_EXLOCK", "O_EVTONLY", "O_SYMLINK")
+    missing = [n for n in names if not hasattr(os, n)] if os.name == "nt" else list(names)
+    bare = re.compile(r"(?<![\"'])\bos\.(%s)\b" % "|".join(missing))
+    offenders = []
+    for root in ("core", "corvin_operator", "corvinOS", "ops", "scripts"):
+        if not (REPO / root).is_dir():
+            continue
+        for path in (REPO / root).rglob("*.py"):
+            parts = set(path.parts)
+            if parts & {"tests", "node_modules", ".venv", "__pycache__"} or path.name.startswith("test_"):
+                continue
+            for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                code = line.split("#", 1)[0]
+                if bare.search(code) and "getattr" not in code and "hasattr" not in code:
+                    offenders.append(f"{path.relative_to(REPO)}:{n}")
+    assert not offenders, "bare POSIX-only os.O_* flag breaks Windows: " + ", ".join(offenders)

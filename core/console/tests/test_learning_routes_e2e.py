@@ -97,7 +97,7 @@ def _events_on_disk(home: Path, tenant_id: str) -> list[dict]:
     events_dir = home / "tenants" / tenant_id / "learning" / "events"
     out: list[dict] = []
     for f in sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []:
-        out.extend(json.loads(l) for l in f.read_text().splitlines() if l.strip())
+        out.extend(json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip())
     return out
 
 

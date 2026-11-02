@@ -52,7 +52,7 @@ def _run_driver(tmp_path: Path, flags: dict, port: int) -> dict:
         "CORVIN_TENANT_ID": "_default",
     })
     log_path = tmp_path / "driver.log"
-    with open(log_path, "w") as log_fh:
+    with open(log_path, "w", encoding="utf-8") as log_fh:
         proc = subprocess.Popen(
             [sys.executable, str(_DRIVER), str(home), str(port), json.dumps(flags), str(result_path)],
             env=env, cwd=str(Path(__file__).resolve().parents[2]),
@@ -71,7 +71,7 @@ def _run_driver(tmp_path: Path, flags: dict, port: int) -> dict:
             proc.kill()
             raise AssertionError(f"driver did not exit within 30s; see {log_path}")
     assert result_path.is_file(), f"driver produced no result (rc={rc}); see {log_path}"
-    return json.loads(result_path.read_text())
+    return json.loads(result_path.read_text(encoding="utf-8"))
 
 
 def test_resume_round_trips_through_real_websocket(tmp_path):

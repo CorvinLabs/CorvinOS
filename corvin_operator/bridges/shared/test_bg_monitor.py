@@ -45,7 +45,7 @@ def test_run_once_empty_state():
 def test_touch_creates_entry(tmp_path):
     m = _import()
     m.touch("discord", "uid1", "chat1")
-    state = json.loads(m._bg_watch_path().read_text())
+    state = json.loads(m._bg_watch_path().read_text(encoding="utf-8"))
     assert "discord:chat1" in state
     entry = state["discord:chat1"]
     assert entry["channel"] == "discord"
@@ -82,7 +82,7 @@ def test_injection_when_idle(tmp_path, monkeypatch):
     inbox = Path(tmp_path / "inbox")
     files = list(inbox.glob("zz_bgw_*.json"))
     assert len(files) == 1
-    envelope = json.loads(files[0].read_text())
+    envelope = json.loads(files[0].read_text(encoding="utf-8"))
     assert envelope["channel"] == "discord"
     assert envelope["from"] == "uid1"
     assert envelope["chat_id"] == "chat1"
@@ -156,7 +156,7 @@ def test_multiple_sessions(tmp_path, monkeypatch):
     inbox = Path(tmp_path / "inbox")
     files = list(inbox.glob("zz_bgw_*.json"))
     assert len(files) == 1
-    envelope = json.loads(files[0].read_text())
+    envelope = json.loads(files[0].read_text(encoding="utf-8"))
     assert envelope["chat_id"] == "chat1"
 
 
@@ -195,7 +195,7 @@ def test_completion_delivered_via_run_once(tmp_path):
     assert n == 1
     outs = list((tmp_path / "outbox").glob("cn_*.json"))
     assert len(outs) == 1
-    env = json.loads(outs[0].read_text())
+    env = json.loads(outs[0].read_text(encoding="utf-8"))
     assert env["channel"] == "discord"
     assert env["chat_id"] == "chat1"
     assert "job finished" in env["text"]
@@ -212,7 +212,7 @@ def test_tenant_id_captured_in_wakeup(tmp_path, monkeypatch):
     m._save_state(state)
     m.run_once()
     files = list((tmp_path / "inbox").glob("zz_bgw_*.json"))
-    assert json.loads(files[0].read_text())["tenant_id"] == "acme"
+    assert json.loads(files[0].read_text(encoding="utf-8"))["tenant_id"] == "acme"
 
 
 # ─── BGW_IDLE_GRACE / BGW_MAX_AGE raw env-var parsing ──────────────────────
@@ -241,7 +241,7 @@ def _run_bg_monitor_import(env_overrides: dict) -> subprocess.CompletedProcess:
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=30, encoding="utf-8", errors="replace",
     )
 
 

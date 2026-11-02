@@ -160,7 +160,7 @@ async def package_skill(
                 status_code=400, detail=f"Missing manifest: {manifest_file}"
             )
 
-        manifest_data = json.loads(manifest_file.read_text())
+        manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
         manifest = SkillManifestV2.from_dict(manifest_data)
 
         # Package Skill

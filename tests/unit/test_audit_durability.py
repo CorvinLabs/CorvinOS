@@ -107,7 +107,7 @@ class TestAuditDurabilityManager:
 
         # Read WAL and verify
         wal_file = temp_log.with_suffix(".wal")
-        with open(wal_file) as f:
+        with open(wal_file, encoding="utf-8") as f:
             wal_lines = f.readlines()
 
         # Should have at least BEGIN and COMMIT
@@ -261,7 +261,7 @@ class TestAuditDurabilityManager:
 
         # Read WAL and verify checkpoint
         wal_file = temp_log.with_suffix(".wal")
-        with open(wal_file) as f:
+        with open(wal_file, encoding="utf-8") as f:
             wal_lines = f.readlines()
 
         wal_records = [json.loads(line) for line in wal_lines if line.strip()]
@@ -439,7 +439,7 @@ class TestAuditDurabilityManager:
 
         # File should exist and have content
         assert temp_log.exists()
-        with open(temp_log) as f:
+        with open(temp_log, encoding="utf-8") as f:
             content = f.read()
         assert "event_type" in content
 

@@ -235,7 +235,7 @@ class TestSkillCreationWALF2:
         assert wal.wal_file.exists()
 
         # Read WAL and verify
-        with open(wal.wal_file, "r") as f:
+        with open(wal.wal_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
             assert len(lines) >= 1
             entry_data = json.loads(lines[-1])

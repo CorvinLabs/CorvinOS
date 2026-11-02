@@ -68,7 +68,7 @@ def _origin_file(tmp_path, origin_id, extra=None):
         **(extra or {}),
     }
     p = tmp_path / f"{origin_id}.json"
-    p.write_text(json.dumps(cfg))
+    p.write_text(json.dumps(cfg), encoding="utf-8")
     p.chmod(0o600)
     return cfg
 
@@ -129,7 +129,7 @@ class TestCrit02AttestationFailClosed(unittest.TestCase):
             "min_trust": "HARDWARE",  # requires attestation
         }
         p = td / "att-origin.json"
-        p.write_text(json.dumps(origin_cfg))
+        p.write_text(json.dumps(origin_cfg), encoding="utf-8")
         p.chmod(0o600)
 
         # Patch get_ca_pubkey_bytes to return None (CA not configured)
@@ -245,7 +245,7 @@ class TestHigh03ClassificationFailClosed(unittest.TestCase):
             "enabled": True,
             "max_data_classification": "PUBLIC",
         }
-        (td / "cls-origin.json").write_text(json.dumps(origin_cfg))
+        (td / "cls-origin.json").write_text(json.dumps(origin_cfg), encoding="utf-8")
         (td / "cls-origin.json").chmod(0o600)
 
         rec = _make_receiver(td)
@@ -751,7 +751,7 @@ class TestIter2InstanceIdPermissionWarning(unittest.TestCase):
             "instance_id": "test-uuid",
             "created_at": "2026-01-01T00:00:00+00:00",
             "label": None,
-        }))
+        }), encoding="utf-8")
         os.chmod(iid_file, 0o644)  # world-readable
 
         buf = io.StringIO()
@@ -774,7 +774,7 @@ class TestIter2InstanceIdPermissionWarning(unittest.TestCase):
             "instance_id": "test-uuid",
             "created_at": "2026-01-01T00:00:00+00:00",
             "label": None,
-        }))
+        }), encoding="utf-8")
         os.chmod(iid_file, 0o600)
 
         buf = io.StringIO()
@@ -1149,7 +1149,7 @@ class TestIter5RateLimitBeforeNonce(unittest.TestCase):
                 "spawn_worker": False,
             }
             p = origins / "rate-test.json"
-            p.write_text(json.dumps(origin))
+            p.write_text(json.dumps(origin), encoding="utf-8")
             p.chmod(0o600)
 
             receiver = RemoteTriggerReceiver(

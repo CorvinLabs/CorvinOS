@@ -143,7 +143,7 @@ class AuditChainWriter:
     def _records(self):
         if not self.log_path.exists():
             return
-        with open(self.log_path, "r") as f:
+        with open(self.log_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:

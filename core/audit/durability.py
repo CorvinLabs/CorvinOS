@@ -263,7 +263,7 @@ class AuditDurabilityManager:
 
         try:
             # Read WAL
-            with open(self.wal_file, "r") as f:
+            with open(self.wal_file, "r", encoding="utf-8") as f:
                 wal_lines = f.readlines()
 
             if not wal_lines:
@@ -385,7 +385,7 @@ class AuditDurabilityManager:
                 return True  # Nothing to truncate
 
             # Read all entries
-            with open(self.log_file, "r") as f:
+            with open(self.log_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             # Find corresponding audit log entry for this checkpoint
@@ -397,7 +397,7 @@ class AuditDurabilityManager:
 
             # Write atomically: temp file + rename
             temp_file = self.log_file.with_suffix(".recovery")
-            with open(temp_file, "w") as f:
+            with open(temp_file, "w", encoding="utf-8") as f:
                 f.writelines(lines[:truncate_at])
 
             # Atomic rename
@@ -446,7 +446,7 @@ class AuditDurabilityManager:
             record_dict["record_type"] = record.record_type.value
 
             # Append to WAL with fsync
-            with open(self.wal_file, "a") as f:
+            with open(self.wal_file, "a", encoding="utf-8") as f:
                 json.dump(record_dict, f)
                 f.write("\n")
                 f.flush()
@@ -474,7 +474,7 @@ class AuditDurabilityManager:
             return
 
         try:
-            with open(self.wal_file, "r") as f:
+            with open(self.wal_file, "r", encoding="utf-8") as f:
                 for line_no, line in enumerate(f, 1):
                     if not line.strip():
                         continue
@@ -604,13 +604,13 @@ class AuditDurabilityManager:
         try:
             if self.wal_file.exists():
                 # Keep only last N records in WAL
-                with open(self.wal_file, "r") as f:
+                with open(self.wal_file, "r", encoding="utf-8") as f:
                     lines = f.readlines()
 
                 # Keep last 50 records
                 keep_lines = lines[-50:] if len(lines) > 50 else lines
 
-                with open(self.wal_file, "w") as f:
+                with open(self.wal_file, "w", encoding="utf-8") as f:
                     f.writelines(keep_lines)
                     f.flush()
                     os.fsync(f.fileno())

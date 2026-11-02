@@ -64,7 +64,7 @@ def _install_fake_summarizer(tmp: Path) -> tuple[Path, Path]:
         # invocation.
         "if '--appendix-mode' not in argv and '--metapher-mode' not in argv:\n"
         f"    open({json.dumps(str(argv_dump))}, 'w').write(json.dumps(argv))\n"
-        "print('FAKE_SUMMARY_OUTPUT')\n"
+        "print('FAKE_SUMMARY_OUTPUT')\n", encoding="utf-8"
     )
     fake_summarize.chmod(0o755)
 
@@ -72,7 +72,7 @@ def _install_fake_summarizer(tmp: Path) -> tuple[Path, Path]:
     fake_stripper.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        "sys.stdout.write(sys.stdin.read())\n"
+        "sys.stdout.write(sys.stdin.read())\n", encoding="utf-8"
     )
     fake_stripper.chmod(0o755)
 
@@ -122,7 +122,7 @@ def test_learning_3_passes_audience_arg() -> None:
         result = adapter.build_voice_summary(long_text, max_chars=400)
         assert result, "build_voice_summary returned empty"
 
-        argv = json.loads(argv_dump.read_text())
+        argv = json.loads(argv_dump.read_text(encoding="utf-8"))
         assert "--audience" in argv, (
             f"--audience missing from argv: {argv}"
         )
@@ -167,7 +167,7 @@ def test_fresh_install_no_profile_file_seeds_defaults() -> None:
                                               max_chars=400)
         assert result, "build_voice_summary returned empty"
 
-        argv = json.loads(argv_dump.read_text())
+        argv = json.loads(argv_dump.read_text(encoding="utf-8"))
         assert "--audience" in argv, (
             f"--audience should be present, seeded from fresh-install defaults: {argv}"
         )
@@ -189,7 +189,7 @@ def test_explicit_empty_profile_file_omits_arg() -> None:
         td_path = Path(td)
         profile_dir = td_path / "voice-config"
         (profile_dir / "corvin-voice").mkdir(parents=True)
-        (profile_dir / "corvin-voice" / "profile.json").write_text("{}")
+        (profile_dir / "corvin-voice" / "profile.json").write_text("{}", encoding="utf-8")
         os.environ["XDG_CONFIG_HOME"] = str(profile_dir)
         for m in ("profile", "adapter"):
             sys.modules.pop(m, None)
@@ -201,7 +201,7 @@ def test_explicit_empty_profile_file_omits_arg() -> None:
                                               max_chars=400)
         assert result, "build_voice_summary returned empty"
 
-        argv = json.loads(argv_dump.read_text())
+        argv = json.loads(argv_dump.read_text(encoding="utf-8"))
         assert "--audience" not in argv, (
             f"--audience should NOT be present for an explicit empty profile.json: {argv}"
         )
@@ -223,7 +223,7 @@ def test_profile_module_missing_graceful() -> None:
                                               max_chars=400)
         assert result, "build_voice_summary should still work without profile"
 
-        argv = json.loads(argv_dump.read_text())
+        argv = json.loads(argv_dump.read_text(encoding="utf-8"))
         assert "--audience" not in argv, (
             f"--audience must not appear when _voice_profile is None: {argv}"
         )

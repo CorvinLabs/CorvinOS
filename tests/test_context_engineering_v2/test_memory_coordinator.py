@@ -122,7 +122,7 @@ def test_load_template_from_project():
             "typical_errors": ["syntax_error", "runtime_error"],
             "success_rate": 0.85,
         }
-        with open(project_dir / "code_fix.json", "w") as f:
+        with open(project_dir / "code_fix.json", "w", encoding="utf-8") as f:
             json.dump(template, f)
 
         coordinator = MemoryCoordinator(str(memory_root))
@@ -149,7 +149,7 @@ def test_load_template_from_global():
             "typical_errors": ["clarity", "completeness"],
             "success_rate": 0.9,
         }
-        with open(global_dir / "documentation.json", "w") as f:
+        with open(global_dir / "documentation.json", "w", encoding="utf-8") as f:
             json.dump(template, f)
 
         coordinator = MemoryCoordinator(str(memory_root))
@@ -182,9 +182,9 @@ def test_load_template_project_over_global():
             "source_marker": "global",
         }
 
-        with open(project_dir / "test_task.json", "w") as f:
+        with open(project_dir / "test_task.json", "w", encoding="utf-8") as f:
             json.dump(project_template, f)
-        with open(global_dir / "test_task.json", "w") as f:
+        with open(global_dir / "test_task.json", "w", encoding="utf-8") as f:
             json.dump(global_template, f)
 
         coordinator = MemoryCoordinator(str(memory_root))
@@ -218,7 +218,7 @@ def test_load_template_corrupted_json():
     try:
         # Create corrupted JSON
         global_dir = memory_root / "tenants" / "_default" / "global_memory"
-        with open(global_dir / "bad_task.json", "w") as f:
+        with open(global_dir / "bad_task.json", "w", encoding="utf-8") as f:
             f.write("{ invalid json }")
 
         coordinator = MemoryCoordinator(str(memory_root))
@@ -253,7 +253,7 @@ def test_load_template_with_complex_payload():
                 },
             },
         }
-        with open(global_dir / "complex_task.json", "w") as f:
+        with open(global_dir / "complex_task.json", "w", encoding="utf-8") as f:
             json.dump(template, f)
 
         coordinator = MemoryCoordinator(str(memory_root))
@@ -291,7 +291,7 @@ def test_persist_learning_event():
         events_file = memory_root / "tenants" / "tenant_a" / "learning" / "events.jsonl"
         assert events_file.exists()
 
-        with open(events_file, "r") as f:
+        with open(events_file, "r", encoding="utf-8") as f:
             line = f.readline()
             record = json.loads(line)
 
@@ -318,7 +318,7 @@ def test_persist_multiple_learning_events():
 
         # Verify all events were written
         events_file = memory_root / "tenants" / "tenant_a" / "learning" / "events.jsonl"
-        with open(events_file, "r") as f:
+        with open(events_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == 5
@@ -346,7 +346,7 @@ def test_persist_learning_events_batch():
 
         # Verify all events were written
         events_file = memory_root / "tenants" / "tenant_a" / "learning" / "events.jsonl"
-        with open(events_file, "r") as f:
+        with open(events_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         assert len(lines) == 3
@@ -534,7 +534,7 @@ def test_malformed_event_in_file():
         good_event = {"timestamp": "2026-08-17T00:00:00Z", "task_id": "t1", "event_type": "type1"}
         bad_event = "{ invalid json }"
 
-        with open(events_file, "w") as f:
+        with open(events_file, "w", encoding="utf-8") as f:
             f.write(json.dumps(good_event) + "\n")
             f.write(bad_event + "\n")
 

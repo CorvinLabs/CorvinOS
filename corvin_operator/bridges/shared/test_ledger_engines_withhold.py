@@ -100,5 +100,5 @@ def test_history_the_data_flow_policy_forbids_for_this_engine_is_withheld(monkey
         pass
     assert seen and "PAYROLL-Q3" not in seen[0] and "WEATHER-ASK" in seen[0]
     assert "data-classification policy" in seen[0]
-    assert "PAYROLL-Q3" not in (wd / ".corvin-history.md").read_text()
+    assert "PAYROLL-Q3" not in (wd / ".corvin-history.md").read_text(encoding="utf-8")
     assert len(calls) == len(set(calls)), "each class is checked once per spawn"

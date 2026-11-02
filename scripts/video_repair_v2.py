@@ -204,7 +204,7 @@ print("\n🔗 PHASE 3: Concatenate video segments")
 print("-"*80)
 
 concat_file = os.path.join(temp_dir, "concat.txt")
-with open(concat_file, 'w') as f:
+with open(concat_file, 'w', encoding="utf-8") as f:
     for seg in video_segments:
         f.write(f"file '{seg}'\n")
 
@@ -264,7 +264,7 @@ if os.path.exists(output_path) and os.path.getsize(output_path) > 1_000_000:
 
     # Get detailed info
     info_cmd = f"ffprobe -v error -show_format -show_streams {output_path} 2>&1 | grep -E 'duration|width|height|codec_name|bit_rate|channels'"
-    result = subprocess.run(info_cmd, shell=True, capture_output=True, text=True)
+    result = subprocess.run(info_cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
     print("\n" + "="*80)
     print("🎉 VIDEO REPAIR SUCCESSFUL!")

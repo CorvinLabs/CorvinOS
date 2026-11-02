@@ -58,7 +58,7 @@ def load_config() -> Dict[str, Any]:
     """Load plugin configuration from disk; defaults when absent or unreadable."""
     if CONFIG_FILE.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text())
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pass
     return DEFAULT_CONFIG.copy()
@@ -67,7 +67,7 @@ def load_config() -> Dict[str, Any]:
 def save_config(config: Dict[str, Any]) -> None:
     """Persist plugin configuration."""
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 # ────────────────────────────────────────────────────────
@@ -345,7 +345,7 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         timeout=_GIT_TIMEOUT_S,
-        env=env,
+        env=env, encoding="utf-8", errors="replace",
     )
 
 

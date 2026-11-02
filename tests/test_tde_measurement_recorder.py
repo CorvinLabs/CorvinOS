@@ -86,7 +86,7 @@ class MockMeasurementRecorder:
         self.samples.append(sample)
 
         try:
-            with open(self.log_path, "a") as f:
+            with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(asdict(sample), default=str) + "\n")
         except (IOError, OSError) as e:
             print(f"Warning: Failed to write measurement: {e}")
@@ -124,7 +124,7 @@ class MockMeasurementRecorder:
         if not os.path.exists(self.log_path):
             return
         try:
-            with open(self.log_path, "r") as f:
+            with open(self.log_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -208,7 +208,7 @@ async def test_persists_sample(temp_log):
     await r.record_sample(sample)
 
     assert os.path.exists(temp_log)
-    with open(temp_log, "r") as f:
+    with open(temp_log, "r", encoding="utf-8") as f:
         data = json.loads(f.readline())
     assert data["task_id"] == "t1"
     assert data["direct_tokens"] == 5000
@@ -235,7 +235,7 @@ async def test_appends_multiple(temp_log):
     await r.record_sample(s1)
     await r.record_sample(s2)
 
-    with open(temp_log, "r") as f:
+    with open(temp_log, "r", encoding="utf-8") as f:
         lines = f.readlines()
     assert len(lines) == 2
 
@@ -285,7 +285,7 @@ def test_load_from_log(temp_log):
         "tde_tokens": 800, "tde_output": "c", "tde_loss": 0.03,
         "quality_judge_model": "haiku", "data_source": "measured",
     }
-    with open(temp_log, "w") as f:
+    with open(temp_log, "w", encoding="utf-8") as f:
         f.write(json.dumps(sample_dict) + "\n")
 
     r = MockMeasurementRecorder(temp_log)
