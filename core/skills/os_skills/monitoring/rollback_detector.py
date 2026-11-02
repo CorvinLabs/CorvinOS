@@ -650,10 +650,10 @@ class ResetNotApplied(RuntimeError):
     """The reset did not take effect: the trip stays active. ``cause`` names why —
     ``state_not_written`` (the reset's state write failed after its record:
     ``routing.rollback_reset_not_applied`` follows the record; or the outstanding trip
-    state could not be written first, or the ledger position could not be read, and
-    no reset record was chained) or ``marker_not_removed`` (the pending marker cannot
-    be removed, so the tenant would stay held: refused before the record, review c120
-    r7b-5)."""
+    state could not be written first and no reset record was chained),
+    ``ledger_position_unreadable`` (no record) or ``marker_not_removed`` (the pending
+    marker cannot be removed, so the tenant would stay held: refused before the
+    record, review c120 r7b-5)."""
 
     def __init__(self, message: str, *, cause: str = "state_not_written") -> None:
         super().__init__(message)
@@ -715,7 +715,8 @@ def _reset_locked(tenant_id: str, *, audit: Callable[[str, dict], bool],
     # the lock before the record; without one the reset is refused (no record).
     pos = routing_ledger.ledger_position(tenant_id)
     if pos is None:
-        raise ResetNotApplied("ledger position not readable — rollback stays active")
+        raise ResetNotApplied("ledger position not readable — rollback stays active",
+                              cause="ledger_position_unreadable")
     # Review c120 r7b-5: a marker that cannot be removed keeps the tenant held after
     # the reset; refuse before the record instead of answering "not tripped".
     if not _marker_removable(tenant_id):

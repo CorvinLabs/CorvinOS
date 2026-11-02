@@ -12,6 +12,8 @@ r7b-5: the reset route answered 200 ``tripped: false`` while a marker it could n
 remove still held the tenant; it now answers 503 ``marker_not_removed``, no record.
 r7b-6: a process holding the tenant in-process re-judged over another process's
 committed judged marker and chained a second ``routing.rollback_triggered``.
+An unreadable ledger position at reset answers 503 ``ledger_position_unreadable``
+(it said ``state_not_written``).
 
 Entry points as production calls them: ``delegation_policy.record_turn_outcome``
 (starts the judge thread for a Skill-served turn), ``dual_write.decide`` (the phase
@@ -444,3 +446,20 @@ def test_a_hold_does_not_rechain_a_trip_another_process_committed(tmp_path):
         state = json.loads(rollback_detector.state_path(sb.tenant_id).read_text())
         assert state["tripped"] is True and state["skill_n"] == marker["details"]["skill_n"]
         assert not rollback_detector.pending_path(sb.tenant_id).exists()
+# ── item 6: the 503 names an unreadable ledger position ─────────────────
+
+def test_reset_with_an_unreadable_ledger_position_names_the_cause(tmp_path):
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector, routing_ledger
+
+        _trip(sb)
+        led = routing_ledger.ledger_path(sb.tenant_id)
+        os.chmod(led, 0o000)
+        try:
+            r = sb.client.post(RESET, headers=sb.csrf_headers)
+        finally:
+            os.chmod(led, 0o600)
+        assert r.status_code == 503, r.text
+        assert r.json()["detail"] == {"error": "ledger_position_unreadable"}
+        assert _events(sb) == ["routing.rollback_triggered"]
+        assert rollback_detector.rollback_active(sb.tenant_id)
