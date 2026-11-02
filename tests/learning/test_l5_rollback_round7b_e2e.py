@@ -7,6 +7,7 @@ r7b-2/-3: the post-reset window was an inode number + byte offset; a re-created 
 (reused inode) or one truncated in place and regrown hid the post-reset turns. The
 position now carries device + inode + a fingerprint of the bytes before the offset,
 and any mismatch reads the ledger whole.
+r7b-4: an EMPTY/torn marker recorded a trip over 0 samples; it is now a hold.
 
 Entry points as production calls them: ``delegation_policy.record_turn_outcome``
 (starts the judge thread for a Skill-served turn), ``dual_write.decide`` (the phase
@@ -242,3 +243,92 @@ def test_an_untouched_ledger_still_keeps_the_pre_reset_rows_out(tmp_path):
         _skill_turn(sb.tenant_id, ok=False)
         assert not rollback_detector.rollback_active(sb.tenant_id)
         assert _events(sb) == ["routing.rollback_triggered", "routing.rollback_reset"]
+
+
+# ── r7b-4: an empty / torn marker is a hold, never a 0-sample trip ───────────
+
+@pytest.mark.parametrize("content", ["", '{"pending": tr'], ids=["empty", "torn"])
+def test_an_empty_or_torn_marker_holds_without_a_zero_sample_trip(tmp_path, content):
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        m = rollback_detector.pending_path(sb.tenant_id)
+        m.parent.mkdir(parents=True, exist_ok=True)
+        m.write_text(content)
+        _skill_turn(sb.tenant_id, ok=False)           # one Skill turn: 1 sample, 0 bundled
+        assert _named(sb, "routing.rollback_triggered") == [], \
+            "a trip was recorded over a torn marker"
+        assert not rollback_detector.state_path(sb.tenant_id).exists()
+        assert rollback_detector.rollback_active(sb.tenant_id)
+        assert _phase(sb.tenant_id).reason == "rollback_active"
+
+
+def test_a_torn_marker_on_a_healthy_judgeable_window_is_released_audited(tmp_path):
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        _seed(sb.tenant_id, 120, source="skill", ok=True)
+        _seed(sb.tenant_id, 120, source="bundled", ok=True)
+        m = rollback_detector.pending_path(sb.tenant_id)
+        m.write_text("")
+        _skill_turn(sb.tenant_id, ok=True)
+        assert not rollback_detector.rollback_active(sb.tenant_id)
+        assert _events(sb) == ["routing.rollback_hold_released"]
+        rec = _named(sb, "routing.rollback_hold_released")[0]
+        assert (rec.get("details") or {}).get("cause") == "marker_torn"
+        assert not m.exists()
+
+
+def test_a_torn_marker_on_a_trailing_window_trips_on_the_judged_window(tmp_path):
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        _seed(sb.tenant_id, 120, source="skill", ok=False)
+        _seed(sb.tenant_id, 120, source="bundled", ok=True)
+        rollback_detector.pending_path(sb.tenant_id).write_text("")
+        _skill_turn(sb.tenant_id, ok=False)
+        assert rollback_detector.rollback_active(sb.tenant_id)
+        recs = _named(sb, "routing.rollback_triggered")
+        assert len(recs) == 1 and (recs[0].get("details") or {}).get("skill_n") == 121
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="/proc/self/fd")
+def test_both_marker_writers_fsync_before_the_rename(tmp_path, monkeypatch):
+    """Every fsync is attributed to the file it synced (``/proc/self/fd``): the audit
+    writer fsyncs too, so a bare count would pass without the marker writers'."""
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        synced: list[str] = []
+        real_fsync = os.fsync
+
+        def _fsync(fd):
+            try:
+                synced.append(os.path.basename(os.readlink(f"/proc/self/fd/{fd}")))
+            except OSError:
+                pass
+            return real_fsync(fd)
+        monkeypatch.setattr(os, "fsync", _fsync)
+        marker = rollback_detector.PENDING_FILENAME
+        state = rollback_detector.STATE_FILENAME
+
+        def _tmps(prefix: str, suffix: str = ".tmp") -> list[str]:
+            return [n for n in synced if n.startswith(prefix + ".") and n.endswith(suffix)]
+        lock = _lock(sb)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text("")
+        os.chmod(lock, 0o400)
+        try:
+            _skill_turn(sb.tenant_id, ok=False)       # hold marker: _create_marker_if_absent
+        finally:
+            os.chmod(lock, 0o600)
+        assert _tmps(marker, ".hold.tmp"), \
+            f"the hold marker was linked without an fsync of its temp file: {synced}"
+        synced.clear()
+        _seed(sb.tenant_id, 120, source="skill", ok=False)
+        _seed(sb.tenant_id, 120, source="bundled", ok=True)
+        _skill_turn(sb.tenant_id, ok=False)           # judged marker + state: _write_state
+        assert [n for n in _tmps(marker) if not n.endswith(".hold.tmp")], \
+            f"the judged marker was renamed without an fsync: {synced}"
+        assert _tmps(state), f"the trip state was renamed without an fsync: {synced}"
+        assert json.loads(rollback_detector.state_path(sb.tenant_id).read_text())["tripped"]

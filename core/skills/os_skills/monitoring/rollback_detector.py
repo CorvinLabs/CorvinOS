@@ -80,7 +80,7 @@ _retry_last: dict[str, float] = {}
 #: re-judged once the lock works and released (``routing.rollback_hold_released``)
 #: when a judgeable window finds no trip; a judged trip (``cause`` None, details from
 #: a judged window) is never released automatically.
-HOLD_CAUSES = frozenset({"lock_unavailable", "marker_unreadable"})
+HOLD_CAUSES = frozenset({"lock_unavailable", "marker_unreadable", "marker_torn"})
 
 
 def state_path(tenant_id: str) -> Path:
@@ -176,6 +176,11 @@ def _pending_entry(tenant_id: str) -> Optional[dict]:
         entry = _pending_trips.get(tenant_id)
         if entry is not None:
             return dict(entry)
+    return _marker_entry(tenant_id)
+
+
+def _marker_entry(tenant_id: str) -> Optional[dict]:
+    """The persisted pending marker as an entry, or None when there is none."""
     status, data = _read_json(pending_path(tenant_id), io_status="io")
     if status == "missing":
         return None
@@ -185,7 +190,11 @@ def _pending_entry(tenant_id: str) -> Optional[dict]:
         return {"generation": None, "committed": False, "details": None,
                 "cause": "marker_unreadable"}
     if status == "bad":
-        return {"generation": None, "committed": False, "details": None, "cause": None}
+        # Review c120 r7b-4: an EMPTY or torn marker (cut by a crash) says nothing
+        # about a judged window. It is a HOLD, never a trip: re-judged, tripped only
+        # when the window trips, released audited on a judgeable window that does not.
+        return {"generation": None, "committed": False, "details": None,
+                "cause": "marker_torn"}
     details = data.get("details")
     cause = data.get("cause")
     return {"generation": _gen_of(data),
@@ -316,6 +325,8 @@ def _write_state(tenant_id: str, data: dict, *, path: Optional[Path] = None) -> 
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh)
+            fh.flush()
+            os.fsync(fh.fileno())      # review c120 r7b-4: never a torn file after a crash
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -350,6 +361,8 @@ def _create_marker_if_absent(tenant_id: str, entry: dict) -> bool:
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as fh:
             json.dump({"pending": True, "at": time.time(), **entry}, fh)
+            fh.flush()
+            os.fsync(fh.fileno())      # review c120 r7b-4: the linked marker is complete
         os.link(tmp, path)
         return True
     except OSError:
@@ -469,8 +482,10 @@ def _release_hold(tenant_id: str, pending: dict, metrics, *,
     A judged trip's marker written meanwhile by another process is never removed here:
     the hold yields to it. Returns the active state."""
     status, data = _read_json(pending_path(tenant_id), io_status="io")
-    if status in ("io", "bad"):
+    if status == "io":
         return True                     # cannot see what the marker says: hold
+    # A torn marker ("bad", review c120 r7b-4) is a hold like any other: it carries no
+    # judged details, and the window just judged finds no trip.
     if status == "ok" and (data.get("cause") not in HOLD_CAUSES
                            or isinstance(data.get("details"), dict)):
         with _pending_lock:             # a judged trip is pending: it wins
@@ -545,8 +560,11 @@ def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
             "skill_success_rate": round(metrics.skill_success_rate or 0.0, 4),
             "bundled_success_rate": round(metrics.bundled_success_rate or 0.0, 4),
         }
-    generation = (pending or {}).get("generation") if pending is not None \
-        else persisted_generation(tenant_id)
+    # The entry carries the generation it was created under — staleness is decided by
+    # generations only (review c120 r7b-1). A torn marker has none: it is the current one.
+    generation = (pending or {}).get("generation")
+    if generation is None:
+        generation = persisted_generation(tenant_id)
     created = (pending or {}).get("created")
     entry = {"generation": generation, "committed": False, "details": details,
              "created": created if isinstance(created, (int, float)) else time.time()}

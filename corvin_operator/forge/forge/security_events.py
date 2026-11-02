@@ -3569,8 +3569,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "routing.rollback_reset_not_applied": frozenset({"tenant_id"}),
     # cause: closed enum ("lock_unavailable")
     "routing.rollback_unverified": frozenset({"tenant_id", "cause"}),
-    # cause: closed enum ("lock_unavailable" — the only hold that is ever released: a marker
-    # unreadable inside the lock holds without judging); skill_n / bundled_n: counts
+    # cause: closed enum ("lock_unavailable" | "marker_torn" — an empty/torn marker, review
+    # c120 r7b-4 — the only holds that are ever released: a marker unreadable inside the
+    # lock holds without judging); skill_n / bundled_n: counts
     "routing.rollback_hold_released": frozenset({"tenant_id", "cause", "skill_n", "bundled_n"}),
     # ADR-2253: closed enums, an opaque run id, a count and a flag. NEVER: the request, a file name, a message.
     "forge_run.started": frozenset({"tenant_id", "run_id", "run_kind"}),
