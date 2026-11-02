@@ -16,9 +16,10 @@ Contract:
     beyond a single aco.boot_heal event per cycle.
   * Stops cleanly when the asyncio task is cancelled (on Gateway shutdown).
 
-Usage (in gateway lifespan)::
+Usage (in the lifespan of both shipped hosts, ``corvin_console.standalone`` and
+``corvin_gateway.app``)::
 
-    from corvin_console.aco.boot_healer import start_boot_healer
+    from corvin_core.aco.boot_healer import start_boot_healer
     healer_task = start_boot_healer()
     yield
     healer_task.cancel()
@@ -41,6 +42,9 @@ _CYCLE_INTERVAL_SECS: float = 300.0
 # Max sessions repaired per cycle (safety cap).
 _MAX_REPAIRS_PER_CYCLE: int = 50
 
+# The healer task per event loop (keyed by ``id(loop)``), so a second start is a no-op.
+_tasks: dict[int, "asyncio.Task[None]"] = {}
+
 
 def start_boot_healer(
     boot_delay: float = _BOOT_DELAY_SECS,
@@ -48,10 +52,17 @@ def start_boot_healer(
 ) -> asyncio.Task[None]:
     """Schedule the boot-healer background task and return it.
 
-    The returned task can be cancelled on Gateway shutdown to stop the healer
-    cleanly without waiting for the current sleep to expire.
+    The returned task can be cancelled on host shutdown to stop the healer
+    cleanly without waiting for the current sleep to expire. Both shipped hosts
+    (``corvin_console.standalone`` and ``corvin_gateway.app``) call this; a second
+    call on the same event loop returns the task that is already running.
     """
+    loop = asyncio.get_event_loop()
+    running = _tasks.get(id(loop))
+    if running is not None and not running.done():
+        return running
     task = asyncio.ensure_future(_healer_loop(boot_delay, cycle_interval))
+    _tasks[id(loop)] = task
     task.set_name("aco-boot-healer")
     logger.info("[ACO] Boot-healer started — first cycle in %.0fs, then every %.0fs",
                 boot_delay, cycle_interval)
@@ -215,7 +226,9 @@ async def _heal_cycle() -> None:
     # gap where the /healthz watchdog only confirms the FastAPI router is
     # mounted, not that the chat/voice subsystems are actually functional.
     try:
-        from .. import chat_runtime as _cr
+        # Absolute: this module lives in corvin_core.aco since ADR-0352 P2.1, and
+        # corvin_core has no chat_runtime / audit; a relative import failed silently.
+        from corvin_console import chat_runtime as _cr
         for tenant_id in tenants:
             try:
                 _cr.list_sessions(tenant_id)
@@ -225,7 +238,7 @@ async def _heal_cycle() -> None:
                     tenant_id, _e,
                 )
                 try:
-                    from .. import audit as _a
+                    from corvin_console import audit as _a
                     _a.action_failed(
                         tenant_id=tenant_id,
                         sid_fingerprint="healer",
@@ -343,7 +356,7 @@ def _discover_tenants() -> list[str]:
 def _write_audit(sessions: int, repaired: int, delta: int) -> None:
     """Write a single aco.boot_heal event to the console audit chain."""
     try:
-        from .. import audit as console_audit
+        from corvin_console import audit as console_audit
         console_audit.system_event(
             tenant_id=None,
             event="aco.boot_heal",
@@ -360,7 +373,7 @@ def _write_audit(sessions: int, repaired: int, delta: int) -> None:
 def _write_integrity_audit(tenant_id: str, findings: list) -> None:
     """Write an aco.integrity_scan audit event when findings are detected."""
     try:
-        from .. import audit as console_audit
+        from corvin_console import audit as console_audit
         critical = [f for f in findings if f.severity == "CRITICAL"]
         high = [f for f in findings if f.severity == "HIGH"]
         console_audit.system_event(
@@ -381,7 +394,7 @@ def _write_integrity_audit(tenant_id: str, findings: list) -> None:
 def _write_engine_audit(tenant_id: str, heal_result: object) -> None:
     """Write an aco.engine_heal audit event when an action was taken or a warning issued."""
     try:
-        from .. import audit as console_audit
+        from corvin_console import audit as console_audit
         console_audit.system_event(
             tenant_id=tenant_id,
             event="aco.engine_heal",

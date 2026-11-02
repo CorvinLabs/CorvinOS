@@ -454,6 +454,18 @@ best-effort `try/except`, so those audit records silently never existed.
 `core/console/tests/test_console_audit_call_sites.py` AST-scans every call site
 against the emitters' real signatures and fails on the next one.
 
+That fix corrected the call shape but not the import: `corvin_core/aco/boot_healer.py`
+still reached the emitter as `from .. import audit`, which since the move to
+`corvin_core.aco` (ADR-0352 P2.1) names a module that does not exist, so
+`aco.boot_heal`, `aco.engine_heal` and `aco.integrity_scan` were still never written
+(0 records in the live chain on 2026-11-02). The healer now imports
+`corvin_console.audit` absolutely, like `integrity_monitor.py` and `nerve.py`, and runs
+in BOTH shipped hosts: `corvin_console.standalone` (`corvinos-serve`, every
+`install.ps1` / `install.sh` install) and `corvin_gateway.app`; before 2026-11-02 only
+the gateway started it. `core/console/tests/test_boot_healer_call_site.py` pins both
+call sites and the import; `tests/sandbox/test_boot_healer_hosts.py` boots each host
+under `uvicorn` and waits for the record (PLAN-0969 WP-1).
+
 The core writer's own denylist refuses to re-admit a content/PII key name even
 via an allowlist, which is why `aco.nerve_signal` carries `message_len` +
 `message_digest8` rather than the message, and `marketplace.skills.search`

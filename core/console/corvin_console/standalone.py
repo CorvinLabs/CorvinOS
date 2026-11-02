@@ -379,6 +379,17 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             log.warning("default plugins not started: %s", exc)
 
+        # ACO boot healer (PLAN-0969 WP-1): scan + repair sessions, engine/voice readiness,
+        # integrity scan, every 5 min. corvin_gateway.app starts the same task; until
+        # 2026-11-02 only the gateway did, so a console-only install (every Windows
+        # install) never healed. Non-blocking; cancelled after `yield`.
+        _healer_task = None
+        try:
+            from corvin_core.aco.boot_healer import start_boot_healer as _start_healer
+            _healer_task = _start_healer()
+        except Exception as exc:  # noqa: BLE001
+            log.error("ACO boot healer not started: %s (%s)", exc, type(exc).__name__)
+
         # Video Producer (ADR-2247 R2b): close and audit every job a killed console left running,
         # at boot, on a background thread. corvin_gateway.app does the same.
         try:
@@ -578,6 +589,8 @@ def create_app() -> FastAPI:
             log.exception("A2A connectivity manager failed to start (non-fatal)")
 
         yield
+        if _healer_task is not None:
+            _healer_task.cancel()
         # Persist the learning daemon's state and stop its thread (best-effort).
         try:
             import os as _os_lh2

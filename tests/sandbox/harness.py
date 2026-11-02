@@ -497,6 +497,8 @@ class Server:
 
     CONSOLE = ("corvin_console.app:create_app", True, "")
     GATEWAY = ("corvin_gateway.app:app", False, "/v1/console")
+    # What ``corvinos-serve`` (and so every install.ps1 / install.sh install) runs.
+    STANDALONE = ("corvin_console.standalone:create_app", True, "")
 
     def __init__(self, sb: Sandbox, kind: tuple[str, bool, str] = CONSOLE, name: str = "console") -> None:
         self.sb = sb
