@@ -466,6 +466,20 @@ the gateway started it. `core/console/tests/test_boot_healer_call_site.py` pins 
 call sites and the import; `tests/sandbox/test_boot_healer_hosts.py` boots each host
 under `uvicorn` and waits for the record (PLAN-0969 WP-1).
 
+**Platform probes (PLAN-0969 WP-2, CONCEPT-0125).** `corvin_core/aco/platform_probes.py` writes,
+reads and deletes one throw-away record through session memory (the real
+`memory_bridge._write_cc_memory_files`), the recall store's SQLite features (FTS5 with the recall
+tokenizer, WAL), the append-only run log (the exact `os.open` flag expression the writers use) and
+the voice-summary store (UTF-8, atomic replace over an existing file). The nerve fiber
+`platform.probe` (`nerve_builtins.PlatformProbeFiber`, in `_BUILTIN_FIBERS`) runs them every
+healer cycle and turns a failure into a content-free HIGH signal: probe, stage, exception type,
+platform, never a message or a path. `GET /v1/console/aco/platform/probe` runs them on demand and
+returns the full report, passes included, plus a closed-vocabulary host description, so a Windows
+operator can paste it back; it writes an `aco.platform_probe` audit action. Detection only: no
+repair action is attached. Proofs: `core/console/tests/test_platform_probes.py` (each probe red
+against a broken store, green without the no-follow flag, reached through
+`NerveRegistry.scan_all()`), `tests/sandbox/test_platform_probe_route.py` (real `uvicorn`).
+
 The core writer's own denylist refuses to re-admit a content/PII key name even
 via an allowlist, which is why `aco.nerve_signal` carries `message_len` +
 `message_digest8` rather than the message, and `marketplace.skills.search`

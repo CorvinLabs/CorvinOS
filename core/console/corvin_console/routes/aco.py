@@ -307,6 +307,35 @@ def get_nerve_scan(
     }
 
 
+@router.get("/aco/platform/probe")
+def get_platform_probe(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+) -> dict[str, Any]:
+    """Run the platform probes now and return the full report, passes included (CONCEPT-0125).
+
+    Read-only and content-free: per probe the name, ok, the failing stage and the exception
+    TYPE, plus a closed-vocabulary host description (platform, Python minor, SQLite version,
+    FTS5, which os flags exist). Meant to be pasted from a foreign machine. Each call writes an
+    ``aco.platform_probe`` audit action. The scratch directory the probes use is removed again.
+    """
+    from corvin_core.aco import platform_probes as _pp
+    from forge import paths as _fp
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="aco.platform_probe",
+        target_kind="system",
+        target_id="platform_probe",
+    )
+    results = _pp.run_all(_fp.corvin_home(), rec.tenant_id)
+    return {
+        "ok": all(r.ok for r in results),
+        "host": _pp.host_facts(),
+        "probes": [r.to_dict() for r in results],
+    }
+
+
 @router.post("/aco/nerve/repair")
 def trigger_nerve_repair(
     body: dict,

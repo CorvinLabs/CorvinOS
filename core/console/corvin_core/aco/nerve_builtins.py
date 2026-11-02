@@ -973,6 +973,37 @@ class TokenSavingsFiber(NerveFiber):
         return signals
 
 
+# ── Fiber: Plattform-Probes (PLAN-0969 WP-2, CONCEPT-0125) ────────────────────
+
+class PlatformProbeFiber(NerveFiber):
+    """Does the chat's persistence work on this host? Writes, reads and deletes one
+    throw-away record through session memory, the recall store's SQLite features, the
+    append-only run log and the voice-summary store. Detection only: a failed probe is a
+    content-free HIGH signal (probe, stage, exception type, platform), never a message."""
+    fiber_id = "platform.probe"
+    fiber_version = "1.0.0"
+    fiber_description = "Plattform-Probes (platform.probe): session memory, recall, run log, voice summary"
+
+    def scan(self) -> list[NerveSignal]:
+        home = _home()
+        if home is None:
+            return []
+        from . import platform_probes as _pp
+        tenant = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        out: list[NerveSignal] = []
+        for r in _pp.run_all(home, tenant):
+            if r.ok:
+                continue
+            out.append(NerveSignal(
+                fiber_id=self.fiber_id, signal_type=f"platform.{r.name}_failed",
+                severity=SEVERITY_HIGH,
+                message=f"Platform probe '{r.name}' failed at stage '{r.stage}' ({r.error_type})",
+                data={"probe": r.name, "stage": r.stage, "error_type": r.error_type,
+                      "platform": sys.platform},
+                repair_hint="Run GET /aco/platform/probe and send the report; see CONCEPT-0125"))
+        return out
+
+
 # ── Registry der Built-in Fibers (wird von nerve.py importiert) ───────────────
 
 def _make_htrace_fiber():
@@ -994,6 +1025,7 @@ _BUILTIN_FIBERS: list[NerveFiber] = [
     ResourceFiber(),      # Disk + RAM Headroom
     LogHealthFiber(),     # Log-Fehlerrate
     ConfigDriftFiber(),   # Beschädigte Configs
+    PlatformProbeFiber(), # PLAN-0969 WP-2: session memory / recall / run log / voice summary
     RemoteLogFiber(),     # Remote-Instanz-Logs, z.B. Hetzner
     TdeDelegationFiber(), # ADR-0214 TDE Delegation Runner
     WiringIntegrityFiber(), # ADR-0215 Wiring-Manifest Runtime-Proof
