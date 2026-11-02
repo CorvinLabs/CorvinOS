@@ -105,23 +105,27 @@ class TestFullScan(unittest.TestCase):
 
         written = []
 
-        def fake_action_performed(**kwargs):
+        def fake_system_event(**kwargs):
             written.append(kwargs)
 
-        # write_signals_to_audit importiert corvin_console.audit intern
+        # write_signals_to_audit emits via corvin_console.audit.system_event (since
+        # 45f5179ca; the action_performed mock here was stale and never matched).
         with mock.patch(
-            "corvin_console.audit.action_performed",
-            side_effect=fake_action_performed,
+            "corvin_console.audit.system_event",
+            side_effect=fake_system_event,
         ):
             write_signals_to_audit(signals, tenant_id="_test")
 
         # Mindestens ein Audit-Event für das HIGH-Signal
         self.assertGreater(len(written), 0, "Kein Audit-Event geschrieben")
-        # Das Event muss nerve-relevante Felder enthalten
-        actions = {c.get("action", "") for c in written}
-        nerve_actions = {a for a in actions if "nerve" in a.lower()}
-        self.assertGreater(len(nerve_actions), 0,
-                           f"Kein nerve.signal.* Event: {actions}")
+        events = {c.get("event", "") for c in written}
+        nerve_events = {e for e in events if "nerve" in e.lower()}
+        self.assertGreater(len(nerve_events), 0,
+                           f"Kein aco.nerve_signal Event: {events}")
+        self.assertTrue(all(
+            set(c["details"]) <= {"tenant_id", "fiber_id", "signal_type", "severity",
+                                   "message_len", "message_digest8"}
+            for c in written), "nerve audit carries message content, not just its digest")
 
 
 # ── Engine-Fiber: Cloud Code Engine ──────────────────────────────────────────
@@ -271,8 +275,8 @@ class TestBootHealerStepN(unittest.TestCase):
         def fake_action(**kwargs):
             written_actions.append(kwargs)
 
-        # write_signals_to_audit ruft corvin_console.audit.action_performed intern auf
-        with mock.patch("corvin_console.audit.action_performed", side_effect=fake_action):
+        # write_signals_to_audit emits through corvin_console.audit.system_event (see above)
+        with mock.patch("corvin_console.audit.system_event", side_effect=fake_action):
             with mock.patch("corvin_console.aco.boot_healer._write_audit"):
                 async def run():
                     from corvin_console.aco.boot_healer import _heal_cycle
@@ -283,7 +287,7 @@ class TestBootHealerStepN(unittest.TestCase):
         # write_signals_to_audit wurde für das CRITICAL-Signal aufgerufen
         nerve_signal_events = [
             a for a in written_actions
-            if "nerve.signal" in a.get("action", "")
+            if "nerve_signal" in a.get("event", "")
         ]
         self.assertGreater(len(nerve_signal_events), 0,
                            f"Kein nerve.signal.* Audit-Event für CRITICAL-Signal. Events: {written_actions}")

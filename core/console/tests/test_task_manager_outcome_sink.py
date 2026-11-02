@@ -61,12 +61,14 @@ def test_failed_task_reports_failure(tmp_path: Path, monkeypatch):
     assert calls[0]["status"] == "failed" and calls[0]["exit_code"] == 2
 
 
-def test_task_without_tenant_records_nothing(tmp_path: Path, monkeypatch):
+def test_task_without_tenant_is_recorded_under_default_tenant(tmp_path: Path, monkeypatch):
+    # create_task defaults tenant_id to "_default" (ADR-0007); the sink receives that
+    # default, not None. The lifecycle must still complete normally.
     calls = _capture(monkeypatch)
     tm = TaskManager(tmp_path / "tasks")
     task_id = tm.create_task(chat_key="web:s1", instruction="hi", check_quota=False)
     tm.record_event(task_id, {"event": "task.completed", "exit_code": 0})
-    assert calls and calls[0]["tenant_id"] is None  # sink drops it; lifecycle unaffected
+    assert calls and calls[0]["tenant_id"] == "_default"
     assert tm.get_task(task_id).status.value == "completed"
 
 
