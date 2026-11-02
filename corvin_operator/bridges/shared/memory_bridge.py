@@ -60,6 +60,30 @@ def _add_to_path(p: Path) -> None:
 
 _add_to_path(_shared)
 
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _session_root(tenant_id: str | None, channel: str, chat_key: str) -> Path:
+    """``<tenant sessions>/<channel>:<chat_key>`` made legal on the host OS.
+
+    ``:`` is illegal in a Windows path component (WinError 123), so the raw name made
+    every session-memory write fail on a fresh Windows install. Same SSOT as
+    acs_runtime / chat_runtime: a POSIX no-op that still honours a pre-existing
+    legacy ``channel:chat`` directory.
+    """
+    base = _tenant_sessions_dir(tenant_id or None)
+    raw = f"{channel}:{chat_key}"
+    try:
+        _add_to_path(Path(__file__).resolve().parents[2] / "forge")
+        from forge import paths as _fp  # type: ignore[import-untyped]
+        return _fp.safe_session_subdir(Path(base), raw, windows=_is_windows())
+    except ImportError:
+        if _is_windows():
+            raw = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", raw).rstrip(" .") or "_"
+        return Path(base) / raw
+
 # Tenant paths
 _tenant_global_dir: Any = None
 _tenant_sessions_dir: Any = None
@@ -519,8 +543,8 @@ def build_context_block(
     session_mem_dir: Path | None = None
     if _tenant_sessions_dir is not None:
         try:
-            # chat_key may contain ":" (bridge:chat_id) — keep as-is for the dir name
-            session_root = _tenant_sessions_dir(tenant_id or None) / f"{channel}:{chat_key}"
+            # chat_key may contain ":" (bridge:chat_id) — sanitised on Windows only
+            session_root = _session_root(tenant_id, channel, chat_key)
             session_mem_dir = session_root / ".claude" / "memory"
         except Exception:  # noqa: BLE001
             session_mem_dir = None
@@ -686,9 +710,7 @@ def _harvest_task(
     session_dir: Path | None = None
     if _tenant_sessions_dir is not None:
         try:
-            session_dir = (
-                _tenant_sessions_dir(effective_tid) / f"{channel}:{effective_ck}"
-            )
+            session_dir = _session_root(effective_tid, channel, effective_ck)
         except Exception:  # noqa: BLE001
             pass
 

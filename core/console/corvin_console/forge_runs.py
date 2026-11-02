@@ -284,7 +284,8 @@ def emit_event(run_id: str, type_: str, message: str, *, phase: Optional[str] = 
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.parent.is_symlink():
                 return None
-            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
             try:
                 os.write(fd, line)
             finally:
@@ -401,7 +402,8 @@ def snapshot(run_id: str, label: str, files: Dict[str, str]) -> Optional[int]:
             blob = base / "blobs" / sha
             if not blob.exists():
                 blob.parent.mkdir(parents=True, exist_ok=True)
-                fd = os.open(blob, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                fd = os.open(blob, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
                 try:
                     os.write(fd, data)
                 finally:
@@ -415,7 +417,8 @@ def snapshot(run_id: str, label: str, files: Dict[str, str]) -> Optional[int]:
             base.mkdir(parents=True, exist_ok=True)
             line = json.dumps({"n": n + 1, "label": _scrub(label, 80), "ts": datetime.now(timezone.utc).isoformat(),
                                "files": entries}) + "\n"
-            fd = os.open(index, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            fd = os.open(index, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
             try:
                 os.write(fd, line.encode("utf-8"))
             finally:

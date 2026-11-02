@@ -284,6 +284,56 @@ class TestBuildContextBlockCCWorker(unittest.TestCase):
             self.assertEqual(corvin_files, [])
 
 
+class TestWindowsSafeSessionDir(unittest.TestCase):
+    """A fresh Windows install: ``:`` is illegal in a path component (WinError 123).
+
+    memory_bridge composed ``sessions/<channel>:<chat>`` by hand, so on Windows the
+    session memory could never be created and the context block was never handed to
+    the worker. The session root must go through ``safe_session_subdir`` like every
+    other session path (acs_runtime, chat_runtime). Simulated here by forcing the
+    Windows branch; real mkdir calls happen on the real filesystem.
+    """
+
+    def setUp(self):
+        _make_dirs()
+        _write_memory_file(_GLOBAL_DIR / "memory", "win-fact",
+                           "The deploy target is Windows 11.", "project")
+
+    def _colon_dirs(self):
+        return [p.name for p in _SESSIONS_DIR.iterdir() if ":" in p.name and "winchat" in p.name]
+
+    def test_cc_memory_dir_has_no_colon_on_windows(self):
+        with patch.object(mb, "_is_windows", return_value=True), \
+             patch.object(mb, "_run_haiku", _null_haiku):
+            result = mb.build_context_block(
+                scope="_default:discord:winchat1",
+                workdir=Path(_SANDBOX), profile={},
+                engine_type="claude_code", instruction_hint="deploy target windows",
+            )
+        self.assertTrue(result, "the context block must still be produced")
+        self.assertEqual(self._colon_dirs(), [], "no ':' directory may be created on Windows")
+        written = list((_SESSIONS_DIR / "discord_winchat1" / ".claude" / "memory").glob("corvin_*.md"))
+        self.assertGreater(len(written), 0, "worker memory files land in the sanitised dir")
+
+    def test_posix_layout_unchanged(self):
+        with patch.object(mb, "_is_windows", return_value=False), \
+             patch.object(mb, "_run_haiku", _null_haiku):
+            mb.build_context_block(
+                scope="_default:discord:winchat2",
+                workdir=Path(_SANDBOX), profile={},
+                engine_type="claude_code", instruction_hint="deploy target windows",
+            )
+        self.assertTrue((_SESSIONS_DIR / "discord:winchat2" / ".claude" / "memory").is_dir())
+
+    def test_harvest_session_scope_has_no_colon_on_windows(self):
+        entry = {"scope": "session", "type": "project", "body": "Windows needs safe paths."}
+        with patch.object(mb, "_is_windows", return_value=True):
+            sdir = mb._session_root("_default", "discord", "winchat3")
+            self.assertNotIn(":", sdir.name)
+            self.assertTrue(mb._write_harvest_entry(entry, 0, sdir, "_default"))
+        self.assertEqual(len(list((sdir / ".claude" / "memory").glob("harvest_*.md"))), 1)
+
+
 # ── harvest_worker_output unit tests ─────────────────────────────────────────
 
 class TestHarvestWorkerOutputSmoke(unittest.TestCase):

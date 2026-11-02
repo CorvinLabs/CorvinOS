@@ -47,7 +47,8 @@ def append(
         },
         sort_keys=True,
     )
-    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                 | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         os.write(fd, (line + "\n").encode("utf-8"))

@@ -80,7 +80,7 @@ class PromptVersionCatalog:
             self.bodies.mkdir(parents=True, exist_ok=True)
             blob = self.bodies / f"{sha}.md"
             try:
-                fd = os.open(blob, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                fd = os.open(blob, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             except FileExistsError:
                 pass  # same content under another name — content-addressed, keep it
             else:
