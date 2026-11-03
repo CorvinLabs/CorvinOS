@@ -199,8 +199,35 @@ def _call(fn, *args, **kwargs):
         raise
 
 
+def _kb_bound(tenant_id: str) -> bool:
+    from .. import kb_projection  # noqa: PLC0415
+
+    return kb_projection.kb_repo(tenant_id) is not None
+
+
 @router.post("/items", status_code=201)
 def post_item(body: ItemCreate, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    """Create an item. While a knowledge base is bound to the tenant (ADR-2205) an initiative,
+    epic or task is created IN the KB (``kb new``) and returned as its projection — the board
+    has one writer. A KB parent makes a KB child too. Other kinds stay local board items."""
+    if body.kind in ("initiative", "epic", "task") and _kb_bound(rec.tenant_id):
+        from .. import kb_projection  # noqa: PLC0415
+
+        parent_is_kb = False
+        if body.parent_id:
+            from core.task_tracking import store  # noqa: PLC0415
+
+            with store.connect(rec.tenant_id) as conn:
+                parent = _call(service._fetch, conn, rec.tenant_id, body.parent_id)
+            parent_is_kb = str(parent.get("external_ref") or "").startswith(service.KB_REF_PREFIX)
+        if body.kind == "initiative" or parent_is_kb:
+            if body.status != "open":
+                raise HTTPException(status_code=409, detail={
+                    "message": "a knowledge-base item starts open — move it on the board (kb transition)",
+                    "kb_refused": True})
+            return _call(kb_projection.create_item, rec.tenant_id, kind=body.kind, title=body.title,
+                         parent_id=body.parent_id, description=body.description or "",
+                         actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
     return _call(service.create, rec.tenant_id, body, actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
 
 
@@ -288,10 +315,11 @@ def post_kb_transition(item_id: str, body: KbTransitionBody,
 def get_kb_status(rec: Annotated[session_auth.SessionRecord, Depends(require_session)]) -> dict:
     from .. import kb_projection  # noqa: PLC0415
 
+    kb_projection.ensure_started(rec.tenant_id)   # a tenant created after boot gets its projector here
     st = dict(kb_projection.status(rec.tenant_id))
     st.pop("payload", None)
     st.pop("fingerprint", None)
-    st["enabled"] = kb_projection.kb_repo() is not None and rec.tenant_id == kb_projection.kb_tenant()
+    st["enabled"] = kb_projection.kb_repo(rec.tenant_id) is not None
     return st
 
 
@@ -299,8 +327,8 @@ def get_kb_status(rec: Annotated[session_auth.SessionRecord, Depends(require_ses
 def post_kb_sync(rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
     from .. import kb_projection  # noqa: PLC0415
 
-    if rec.tenant_id != kb_projection.kb_tenant():
-        raise HTTPException(status_code=404, detail="no knowledge base is bound to this tenant")
+    # every tenant syncs ITS OWN binding (kb_repo(tenant)); without one the projector answers
+    # "off" with the reason (hint: enable_plugin), never another tenant's KB
     try:
         st = dict(kb_projection.sync(rec.tenant_id, force=True))
     except Exception as exc:  # noqa: BLE001

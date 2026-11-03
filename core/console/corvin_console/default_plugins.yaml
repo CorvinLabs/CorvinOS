@@ -24,8 +24,12 @@ plugins:
   - index_id: plugin:buildin-media-corvintv
     registry_id: video_producer       # the registry id did not change with the rename: installs, data and audit names stay valid
     name: CorvinTV
-    min_version: "1.7.0"
+    min_version: "1.8.0"
     enable: true
+    # 1.8.0 is the floor: from it on CorvinTV writes storyboards only with the native Claude Code engine and
+    # narrates only through the CorvinOS TTS chain (corvin_console.native_tts), which this console provides.
+    # A stale marketplace cache that still lists an older release is skipped (and retried next boot) rather
+    # than installed.
     # First-party (buildin tier -> origin vetted, requires_consent: false), so boot installs AND enables it,
     # exactly like the Knowledge Graph below: a fresh installation can make a video without a single operator
     # step. What it sends where is declared in its manifest (egress_hosts, pii_risk: medium) and gated per job by
@@ -34,13 +38,16 @@ plugins:
     # upgraded to this listing and enabled (PluginLifecycle.upgrade).
     replaces: plugin:contributor-media-video_producer
     reason: >-
-      CorvinTV (formerly Video Producer) turns a task description into a narrated MP4 (storyboard,
-      narration by OpenAI TTS with edge-tts as the fallback, animated web slides). First bundled plugin.
+      CorvinTV (formerly Video Producer) turns a task description into a narrated MP4 (storyboard by the
+      native Claude Code engine, narration by the CorvinOS voice chain, animated web slides). First bundled plugin.
   - index_id: plugin:buildin-knowledge_management-corvin_knowledge
     registry_id: corvin_knowledge
     name: Knowledge Graph
-    min_version: "1.2.0"
+    min_version: "1.3.0"
     enable: true
+    # 1.3.0: 1.2.0 never created a tenant KB on Windows (its CRLF checkout failed the engine hash, and
+    # the engine's text-mode fds corrupted .git/index), and as a context_retriever it was refused a
+    # provider slot on every multi-tenant install. Publish the marketplace BEFORE this file.
     # First-party (buildin tier -> origin vetted, requires_consent: false, local-only), so boot
     # enables it: the board projector then creates the tenant's own knowledge base
     # (<tenant_home>/knowledge) on its next tick — no restart, no operator step (ADR-2265).

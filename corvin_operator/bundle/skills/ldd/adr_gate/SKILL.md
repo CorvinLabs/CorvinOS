@@ -1,6 +1,6 @@
 ---
 name: adr_gate
-description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; creates it in Corvin-Knowledge through `kb.py new decision` (the shared knowledge-gate mechanism, judged by `kb check`) when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), emits ADR-0264 decision-graph frontmatter (depends_on/related/paths/docs — the three-layer Code/Docs/ADR graph) so scripts/adr_graph.py can traverse it, and generates E2E tests for every new structural invariant so LDD has a loss signal.
+description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; creates it in the tenant knowledge base through `kb.py new decision` (the shared knowledge-gate mechanism, judged by `kb check`) when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), emits ADR-0264 decision-graph frontmatter (depends_on/related/paths/docs — the three-layer Code/Docs/ADR graph) so scripts/adr_graph.py can traverse it, and generates E2E tests for every new structural invariant so LDD has a loss signal.
 ---
 
 # ADR Gate — Architectural Decision Record discipline
@@ -54,24 +54,38 @@ All three levels must appear explicitly in the ADR's **Context** and **Decision*
 ADR Gate and Concept Gate answer different questions (a decision versus a working method),
 but they write through ONE mechanism and their artifacts are judged by ONE rule source.
 
-1. **Find first.** `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py find <words> --type decision`
+**The knowledge base is this tenant's own: `{{KB_DIR}}`** — the repository the console's task
+board and Knowledge Graph panel project (created by the Knowledge Graph plugin on every install;
+an operator's `CORVIN_KB_REPO` overrides it). Every command below names its `kb.py` by that exact
+absolute path: the path gate pins it (a relative path, `~`, `$VAR` or `cd` + `scripts/kb.py` is
+refused). If the path does not exist yet, the plugin is disabled for this tenant — say so, never
+write the files by hand.
+
+1. **Find first.** `{{PYTHON}} {{KB_PY}} find <words> --type decision`
    (or `--type concept`) and `kb.py show <id>`. An existing entry is amended with a dated note
    under its Status, never duplicated.
 2. **Create with `kb new`, never by hand.**
-   `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py new decision --title "..."`
+   `{{PYTHON}} {{KB_PY}} new decision --title "..."`
    (or `new concept`), with `--link rel=target` for every real relation. It numbers across the
    whole corpus, writes `id`/`uid`/`title`/`status`/`created`/`links`, refuses a link that does not
-   resolve to exactly one entity, and commits in Corvin-Knowledge. Never pick a number with `ls`:
+   resolve to exactly one entity, and commits in the knowledge base. Never pick a number with `ls`:
    canonical names are `ADR-NNNN-...`, so a `^[0-9]{4}` scan sees only legacy files and returns a
    number that is already taken. Never commit to Corvin-ADR: it is frozen (ADR-2205), and
    `kb check` reports any commit there as `W02_frozen_source_written`. Call `kb.py` by this
    absolute path — the path gate pins it.
-3. **Fill the body and the type's own frontmatter** (below), then commit in Corvin-Knowledge.
+3. **Fill the body and the type's own frontmatter** (below), then commit it in the knowledge base
+   (`git -C {{KB_DIR}} add <file> && git -C {{KB_DIR}} commit -m "..."`).
 4. **Validate against the one rule source.**
-   `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py check` must report
+   `{{PYTHON}} {{KB_PY}} check` must report
    `blocking: 0`. The console's Quality Gates page (`/console/app/quality`) runs this same
    `kb check` over the same checkout: an `error` finding is shown as fail, a `warning` (for
    example the G1-G4 readiness gates) as warn. There is no second rule table to satisfy.
+5. **Work that follows from it is a task in the same KB** — never a note in chat, never a board card
+   typed by hand: `{{PYTHON}} {{KB_PY}} new task --title "..." --epic E-NNN --dod "..."` (an epic
+   needs `--initiative I-NN`; `new initiative --title "..."` starts one). Status changes ONLY via
+   `{{PYTHON}} {{KB_PY}} task T-NNNN in_progress|blocked|done|cancelled [--reason ...] [--dod ...]`
+   (done needs a definition of done; a code task also needs its G5 evidence). The board shows it
+   within seconds.
 <!-- knowledge-gate-mechanism:end -->
 
 ## How to write the ADR
@@ -137,13 +151,12 @@ explains it to a reader — exactly the artifacts the `docs-as-definition-of-don
 keeps in sync (matched by `adrs_for_doc()`). An empty or inaccurate list in either makes
 this ADR invisible to that specific traversal, not merely undocumented.
 
-**Step 3** — Commit the completed file in Corvin-Knowledge and validate (shared mechanism, step 4):
+**Step 3** — Commit the completed file in the knowledge base and validate (shared mechanism, step 4):
 
 ```bash
-cd /home/shumway/projects/Corvin-Knowledge
-git add decisions/ADR-NNNN-short-kebab-title.md
-git commit -m "adr: ADR-NNNN — [title]"
-python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py check   # blocking: 0
+git -C {{KB_DIR}} add decisions/ADR-NNNN-short-kebab-title.md
+git -C {{KB_DIR}} commit -m "adr: ADR-NNNN — [title]"
+{{PYTHON}} {{KB_PY}} check   # blocking: 0
 ```
 
 **Step 4** — If the ADR documents a load-bearing mechanism in Corvin, add a one-line reference at the end of the relevant CLAUDE.md section:

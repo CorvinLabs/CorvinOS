@@ -154,6 +154,36 @@ def apply_tool_bindings(bundle: Any, persona_allowed_patterns: list,
     return at, mc, dropped
 
 
+_KB_LOCATOR: Any = None
+
+
+def _bundle_tenant(bundle: Any) -> "str | None":
+    ctx = (getattr(bundle, "scratch", None) or {}).get("_ctx")
+    return getattr(ctx, "tenant_id", None) if ctx is not None else None
+
+
+def _render_kb_placeholders(body: str, tenant_id: "str | None") -> str:
+    """``bridges/shared/kb_locator.render`` loaded by FILE PATH (this package is itself loaded by
+    file path at the spawn boundaries, so a dotted import could bind another checkout). Never
+    raises: an unrendered placeholder is visible, a broken turn is not."""
+    global _KB_LOCATOR
+    if "{{" not in body:
+        return body
+    try:
+        if _KB_LOCATOR is None:
+            import importlib.util as _ilu  # noqa: PLC0415
+            from pathlib import Path  # noqa: PLC0415
+
+            src = Path(__file__).resolve().parents[2] / "bridges" / "shared" / "kb_locator.py"
+            spec = _ilu.spec_from_file_location("_kb_locator_cel_binding", src)
+            mod = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            _KB_LOCATOR = mod
+        return _KB_LOCATOR.render(body, tenant_id)
+    except Exception:  # noqa: BLE001
+        return body
+
+
 def render_skill_bindings(bundle: Any) -> str:
     """Render the bundle's SkillRefs as a system-prompt block — the skill-injection
     channel (ADR-0281 R1b: skills are NOT tools and never enter ``allowed_tools`` /
@@ -187,6 +217,11 @@ def render_skill_bindings(bundle: Any) -> str:
         # placeholder, never the raw body.
         if _skill_body_is_sensitive(body):
             body = SKILL_BODY_REDACTED
+        else:
+            # {{KB_PY}} / {{KB_DIR}} / {{PYTHON}} (the gate skills, ADR-2265) -> this tenant's own
+            # knowledge base. AFTER the PII gate: it judges the authored text; the substituted
+            # absolute path is system-derived (it names the tenant home, e.g. a user directory).
+            body = _render_kb_placeholders(body, _bundle_tenant(bundle))
         parts.append(f"### {sid[:MAX_SKILL_ID_CHARS]}\n{body}")
     if not parts:
         return ""

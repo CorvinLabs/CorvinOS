@@ -488,19 +488,18 @@ class SceneFeedbackRequest(BaseModel):
 
 class SettingsRequest(BaseModel):
     output_folder: Optional[str] = None
-    tts_engine: Optional[Literal["openai", "auto", "gtts"]] = None
+    tts_engine: Optional[Literal["auto"]] = None
     max_duration_minutes: Optional[int] = Field(None, ge=1, le=60)
     # ADR-2249 D4 (T-0113): the tenant's website-capture switch; persisted, default off
     capture_enabled: Optional[bool] = None
 
 
-# Narration engines the producer really has (skill.SUPPORTED_TTS_ENGINES):
-#   openai  OpenAI TTS (tts-1-hd, voice onyx) only; a missing key or an API failure fails the job
-#           instead of switching the narrator (opt-in, for operators who want exactly one voice)
-#   auto    the DEFAULT, the fallback chain: OpenAI -> edge-tts (ADR-2211; no Piper, no silent mock).
-#           An exhausted or invalid key must not stop a video; the job report says which voice spoke
-#   gtts    Google Translate TTS (legacy, no key)
-_TTS_ENGINES = ["openai", "auto", "gtts"]
+# Narration engines the producer really has (skill.SUPPORTED_TTS_ENGINES). Since CorvinTV 1.8.0 there is
+# exactly one: "auto" = the CorvinOS TTS chain chat TTS speaks with (corvin_console.native_tts -> say.py:
+# openai -> edge -> piper; CORVIN_TTS_PROVIDER and the tenant profile pin it, CORVIN_TTS_LOCAL_ONLY keeps it
+# on Piper). The job report names the provider that spoke each scene. A record that still stores a
+# pre-1.8 value ("openai", "gtts") reads as "auto" here and in the plugin.
+_TTS_ENGINES = ["auto"]
 _DEFAULT_SETTINGS = {"tts_engine": "auto", "max_duration_minutes": 60}
 # The panel's names -> the plugin's settings_schema keys (plugin.yaml). The tenant's plugin
 # registry record (``<tenant>/plugins/registry.yaml``) is the ONLY store: until 2026-10-24 the
@@ -563,8 +562,10 @@ def _tenant_settings(rec) -> Dict[str, Any]:
         "tts_engines": list(_TTS_ENGINES),
         # What this host can actually do, so the panel can say so instead of a job failing later.
         "openai_configured": _openai_configured(),
-        # The engine jobs really run with: "openai" degrades to "auto" (edge-tts fallback) without a key
+        # The engine jobs really run with (always the CorvinOS chain since CorvinTV 1.8.0)
         "effective_tts_engine": _effective_tts_engine(s["tts_engine"]),
+        # ... and its provider order on this host (say.py's provider_status: openai / edge / piper)
+        "tts_chain": _native_tts_status(),
         "web_slides_available": web_slides["available"],
         # ... and why not: package_missing | browser_missing | install_running (POST /video/web-slides/install)
         "web_slides": web_slides,
@@ -586,41 +587,43 @@ def _capture_host_problem() -> Optional[str]:
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────
 
-def _claude_cli_available() -> bool:
+def _claude_bin() -> Optional[str]:
+    """The claude CLI the console itself spawns (``CORVIN_CLAUDE_BIN`` pin, PATH, known install dirs,
+    Windows shims), None when there is none."""
     pinned = (os.environ.get("CORVIN_CLAUDE_BIN") or "").strip()
     if pinned:
-        return os.path.isfile(pinned) and os.access(pinned, os.X_OK)
-    if shutil.which("claude") is not None:
-        return True
+        return pinned if os.path.isfile(pinned) and os.access(pinned, os.X_OK) else None
+    found = shutil.which("claude")
+    if found:
+        return found
     try:  # the same resolver the console chat spawns (known install dirs, nvm, Windows shims)
         import helper_model  # type: ignore  # bridges/shared, same import as chat_runtime
         cand = helper_model.resolve_claude_bin()
-        return os.path.isfile(cand) and os.access(cand, os.X_OK)
+        return cand if os.path.isfile(cand) and os.access(cand, os.X_OK) else None
     except Exception:  # noqa: BLE001 - best effort
-        return False
+        return None
 
 
-_NO_CLAUDE_DETAIL = ("CorvinTV needs an internet connection and a running Claude Code (signed in) or an "
-                    "ANTHROPIC_API_KEY. Start Claude Code, check the connection, and try again.")
+def _claude_cli_available() -> bool:
+    return _claude_bin() is not None
+
+
+_NO_CLAUDE_DETAIL = ("CorvinTV writes every storyboard with the native Claude Code engine, and no `claude` CLI "
+                     "was found on this host. Install Claude Code, sign in once (`claude` in a terminal), and try again.")
 
 
 def _storyboard_backend(tenant_id: str, chat_key: str, task: str) -> tuple:
-    """Where the storyboard LLM call goes. The host decides, after its own gates:
-    the Anthropic API when a key is configured, else this host's Claude Code
-    login (the ``claude`` CLI the console already runs). There is NO local
-    fallback (Ollama was removed): CorvinTV needs to be online with Claude Code
-    available, and a job that cannot get that is refused here, before it starts.
-    Both paths send the task text to api.anthropic.com, so both need the
-    L35 egress gate AND the L34 classification of the task under the
-    ``claude_code`` engine; any refusal or doubt refuses the job.
-    Sonnet, not Opus: on the real storyboard prompt both produced fully valid,
-    equally varied template choices, Sonnet in ~14 s for ~$0.03 vs ~17-42 s
-    for ~$0.06 (measured 2026-10-08, ADR-2238 amendment)."""
-    # The subscription CorvinOS itself runs on (the Claude Code login) comes first; an API key is only
-    # the fallback for a host that has no CLI.
-    use_cli = _claude_cli_available()
-    api_key = (not use_cli) and bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if not api_key and not use_cli:
+    """Where the storyboard LLM calls go: ALWAYS this host's native Claude Code engine (the signed-in
+    ``claude`` CLI the console already runs), CorvinTV 1.8.0. There is no other backend - no API-key
+    path, no local model - and no fallback: a host without the CLI has the job refused here, before
+    it starts (503, ``_NO_CLAUDE_DETAIL``), and a CLI that fails mid-job fails the job with the reason.
+    The task text goes to api.anthropic.com, so the job needs the L35 egress gate AND the L34
+    classification of the task under the ``claude_code`` engine; any refusal or doubt refuses it.
+    The model is the console's routing decision for this tier (``model_selector.tier_model``).
+    Sonnet, not Opus: on the real storyboard prompt both produced fully valid, equally varied
+    template choices, Sonnet in ~14 s for ~$0.03 vs ~17-42 s for ~$0.06 (measured 2026-10-08,
+    ADR-2238 amendment)."""
+    if not _claude_cli_available():
         raise HTTPException(status_code=503, detail=_NO_CLAUDE_DETAIL)
     try:
         from spawn_gates import check_l34, check_l35  # type: ignore  # path set up by _spawn_gates
@@ -631,7 +634,7 @@ def _storyboard_backend(tenant_id: str, chat_key: str, task: str) -> tuple:
         if refusal is not None:
             raise HTTPException(status_code=403, detail=refusal)
         import model_selector  # type: ignore  # bridges/shared, same import as chat_runtime
-        return ("anthropic" if api_key else "claude_cli"), model_selector.tier_model("sonnet")
+        return "claude_cli", model_selector.tier_model("sonnet")
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001 — any doubt → the job is refused, never sent on unchecked
@@ -641,8 +644,9 @@ def _storyboard_backend(tenant_id: str, chat_key: str, task: str) -> tuple:
 
 # The gate must name the host the narration really goes to (ADR-2211): the engine id picks
 # the host in egress_gate.DEFAULT_ENGINE_HOSTS and the floor in data_classification.
-_TTS_GATE_ENGINE = {"openai": "video_producer_openai", "auto": "video_producer_openai", "gtts": "video_producer"}
-# "auto" may fall through to these tiers, so each of their hosts must be admitted too.
+# "auto" (the CorvinOS chain) leads with OpenAI and may fall through to edge-tts, so both hosts must be
+# admitted; Piper is local. "openai" stays as the measurement gate's key (_MEASURE_GATE_ENGINE).
+_TTS_GATE_ENGINE = {"openai": "video_producer_openai", "auto": "video_producer_openai"}
 _TTS_EXTRA_GATE_ENGINES = {"auto": ("video_producer_edge",)}
 
 
@@ -658,16 +662,6 @@ def _tts_egress_refusal(tts_engine: str, tenant_id: str, chat_key: str) -> Optio
         if refusal is not None:
             return refusal
     return None
-
-
-def _gtts_host_admitted(tenant_id: str, chat_key: str) -> bool:
-    """True when the egress gate admits translate.google.com (the gTTS tier of "auto"); any doubt is False."""
-    try:
-        from spawn_gates import check_l35  # type: ignore  # path set up by _spawn_gates
-
-        return check_l35("video_producer", tenant_id, channel="web", chat_key=chat_key) is None
-    except Exception:  # noqa: BLE001 - fail closed: the tier is skipped, narration stays with the other tiers
-        return False
 
 
 def _grounding_audit(tenant_id: str, event: str, details: Dict[str, Any]) -> bool:
@@ -787,15 +781,21 @@ def _openai_configured() -> bool:
 
 def _job_env() -> Dict[str, str]:
     """The environment a video JOB process is spawned with (``ProcessJobRunner(env=...)``): the console's
-    own, plus what only the job may have - the stored OpenAI TTS key under the name the plugin reads (an
-    export already in the environment is left as it is) and, on a host without a system ffmpeg, the
-    console-local bin directory holding the bundled binary at the front of PATH. Nothing here is ever
-    written to ``os.environ``; OS workers are spawned from the untouched console environment."""
+    own, plus what only the job may have - the stored OpenAI TTS key under the name say.py reads (an
+    export already in the environment is left as it is), the claude CLI the console resolved, pinned as
+    ``CORVIN_CLAUDE_BIN`` so the job's storyboard calls run exactly the binary the console's own chat
+    spawns (a service PATH often lacks it), and, on a host without a system ffmpeg, the console-local bin
+    directory holding the bundled binary at the front of PATH. Nothing here is ever written to
+    ``os.environ``; OS workers are spawned from the untouched console environment."""
     env = dict(os.environ)
     if not (env.get("CORVIN_TTS_OPENAI_KEY") or env.get("OPENAI_API_KEY")):
         key = _stored_openai_key()
         if key:
             env["CORVIN_TTS_OPENAI_KEY"] = key
+    if not (env.get("CORVIN_CLAUDE_BIN") or "").strip():
+        claude = _claude_bin()
+        if claude:
+            env["CORVIN_CLAUDE_BIN"] = claude
     bin_dir = _ffmpeg_bin_dir()
     if bin_dir is not None:
         env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
@@ -803,12 +803,22 @@ def _job_env() -> Dict[str, str]:
 
 
 def _effective_tts_engine(tts_engine: str) -> str:
-    """The engine a job really runs with. "openai" needs its package AND a key; on a host that
-    has neither, narration degrades to the "auto" chain (OpenAI -> edge-tts)
-    instead of refusing the job, so a fresh install produces video without any setup."""
-    if tts_engine == "openai" and (importlib.util.find_spec("openai") is None or not _openai_configured()):
-        return "auto"
-    return tts_engine
+    """The engine a job really runs with: the CorvinOS TTS chain ("auto") whatever an older record
+    stored - "openai"/"gtts" were CorvinTV's own engines before 1.8.0 and no longer exist."""
+    return "auto"
+
+
+def _native_tts_status() -> Dict[str, Any]:
+    """The CorvinOS TTS chain on this host: its provider order and each provider's readiness
+    (say.py ``provider_status``, configuration only - no network), {} when it cannot be read."""
+    try:
+        from .. import native_tts  # noqa: PLC0415
+
+        return {"order": list(native_tts.AUTO_CHAIN), "pinned": native_tts.pinned_provider(),
+                "providers": {k: {"ready": bool(v.get("ready")), "detail": str(v.get("detail") or "")[:120]}
+                              for k, v in native_tts.status().items()}}
+    except Exception:  # noqa: BLE001 - the panel must render
+        return {}
 
 
 # Microsoft changed the Read-Aloud handshake: edge-tts < 7.3.1 gets HTTP 403 and produces no
@@ -1015,22 +1025,25 @@ def _ensure_ffmpeg() -> bool:
     return bool(shutil.which("ffmpeg")) or _ffmpeg_bin_dir() is not None
 
 
-def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
-    """What a job needs on THIS host that is not there: the narration engine's package
-    (and key), Pillow (classic slides) and ffmpeg (assembly). The plugin runs inside the
+def _missing_runtime_dependencies(tts_engine: str = "auto") -> List[str]:
+    """What a job needs on THIS host that is not there: a narration voice of the CorvinOS TTS
+    chain (say.py with at least one ready provider: an OpenAI key, a current edge-tts, or Piper
+    with a voice model), Pillow (classic slides) and ffmpeg (assembly). The plugin runs inside the
     console process, so a marketplace install cannot add Python packages to it — better a
     named refusal now than a job that dies 40 s in. Playwright is NOT required: without it
     web slides fall back to the classic slide, which the panel shows (``web_slides_available``).
     ffmpeg falls back to the bundled imageio-ffmpeg binary; edge-tts is never installed from here
     (see ``_ensure_edge_tts``), a missing or outdated one is named with its install command."""
     missing: List[str] = []
-    tts_engine = _effective_tts_engine(tts_engine)
-    if tts_engine == "gtts" and importlib.util.find_spec("gtts") is None:
-        missing.append("gTTS (pip install 'gTTS>=2.5.0' into the console environment)")
-    if tts_engine == "auto" and not _ensure_edge_tts() and importlib.util.find_spec("gtts") is None and not (
-            importlib.util.find_spec("openai") is not None and _openai_configured()):
-        missing.append("a narration engine: gTTS (pip install 'gTTS>=2.5.0' into the console environment), "
-                       "edge-tts (pip install 'edge-tts>=7.3.1') or an OpenAI TTS key")
+    providers = (_native_tts_status().get("providers") or {})
+    ready = {name for name, p in providers.items() if p.get("ready")}
+    if "edge" in ready and not _ensure_edge_tts():
+        ready.discard("edge")  # importable but older than 7.3.1: Microsoft answers 403
+    if not providers:
+        missing.append("the CorvinOS TTS chain (corvin_operator/voice/scripts/say.py) - reinstall CorvinOS")
+    elif not ready:
+        missing.append("a narration voice of the CorvinOS TTS chain: an OpenAI TTS key, edge-tts "
+                       "(pip install 'edge-tts>=7.3.1' into the console environment) or a Piper voice model")
     if importlib.util.find_spec("PIL") is None:
         missing.append("Pillow (pip install 'Pillow>=10.0.0' into the console environment)")
     if not _ensure_ffmpeg():
@@ -1579,9 +1592,9 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     config = {
         "storage_base": str(_tenant_base(rec)),
         "tts_engine": settings["tts_engine"],
-        # gTTS is the last tier of "auto" and sends the narration to translate.google.com: only when L35 admits it
-        "tts_gtts_allowed": settings["tts_engine"] != "auto" or await asyncio.to_thread(
-            _gtts_host_admitted, rec.tenant_id, chat_key),
+        # A pre-1.8 CorvinTV still has a gTTS tier of its own: never admitted (the host gates only the
+        # CorvinOS chain's hosts). CorvinTV 1.8.0+ ignores the key.
+        "tts_gtts_allowed": False,
         "max_duration_minutes": settings["max_duration_minutes"],
         "storyboard_backend": backend,
         "storyboard_model": model,

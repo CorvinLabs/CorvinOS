@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed — CorvinTV 1.8.0 runs on native engines only
+- **Storyboards come only from the native Claude Code engine.** `video_producer_api._storyboard_backend` always
+  answers `claude_cli` (the console's Sonnet tier); the API-key path and every local-model path are gone, and a host
+  without the `claude` CLI has the job refused (503) before it starts. `_job_env` pins the CLI the console resolved
+  (`helper_model.resolve_claude_bin`) as `CORVIN_CLAUDE_BIN` for the job process.
+- **Narration is the chat TTS chain.** New `corvin_console/native_tts.py`: a stable, importable API over the very
+  helpers chat TTS uses (`routes/voice.py`: `_say_cmd`, `_say_env`, `_tts_timeout_for`, `_say_provider`) - say.py's
+  openai → edge → piper chain, `CORVIN_TTS_PROVIDER`, the tenant profile, `CORVIN_TTS_LOCAL_ONLY`. It loads
+  `routes/voice.py` alone in a plugin job process (no auto-import of every router). The video settings offer one
+  engine (`auto`) and report the chain (`tts_chain`); the runtime check names a missing voice of that chain.
+- **Fresh installs get CorvinTV 1.8.0** (`default_plugins.yaml` `min_version: "1.8.0"`). Live proof:
+  `core/console/tests/test_corvintv_native_live_e2e.py` (`CLAUDE_LIVE_E2E=1`) boots a console on a fresh temp home
+  and produces a real MP4 through `POST /v1/console/video/jobs`.
+
 ### Fixed — peers and A2A, round 2 (refutation of the 2026-10-21 fixes on two fresh Ubuntu 24.04 containers)
 - **A Free install answered pings and friendship acks over the relay.** The HTTP ingress refuses both with
   403 `license_required` (a2a.network is member-only), the relay listener dispatched them — so a member install

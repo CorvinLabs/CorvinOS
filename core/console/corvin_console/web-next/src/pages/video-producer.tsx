@@ -84,10 +84,10 @@ export interface Learning {
 }
 
 const BASE = "/video";
+// CorvinTV 1.8.0 narrates only through the CorvinOS TTS chain (the one chat TTS uses); "auto" is its
+// only engine. The provider order and any pin come from CORVIN_TTS_PROVIDER / the voice settings.
 const TTS_LABELS: Record<string, string> = {
-  openai: "OpenAI only (no fallback)",
-  auto: "OpenAI first, edge-tts as fallback (default)",
-  gtts: "Google TTS (gTTS, legacy)",
+  auto: "CorvinOS voice chain, same as chat: OpenAI, edge-tts, Piper (default)",
 };
 const ACTIVE = ["pending", "storyboard_generating", "skills_running"];
 const STUDIO_TABS = ["quality", "learning", "code", "canvas", "assets"] as const;
@@ -832,9 +832,9 @@ export function VideoProducerPage() {
               <select value={form.tts_engine} onChange={(e) => setForm({ ...form, tts_engine: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm">
                 {(settings.data?.tts_engines ?? [form.tts_engine]).map((t) => <option key={t} value={t}>{TTS_LABELS[t] ?? t}</option>)}
               </select>
-              {form.tts_engine !== "gtts" && settings.data && !settings.data.openai_configured ? (
+              {settings.data && !settings.data.openai_configured ? (
                 <span className="block text-xs mt-1 text-amber-600" data-testid="tts-key-warning">
-                  {form.tts_engine === "openai" ? "No OpenAI key configured: narration falls back to edge-tts (free, no key) until one is set." : "No OpenAI key in the console's environment: narration starts with edge-tts."}
+                  No OpenAI key in the console's environment: narration starts with edge-tts (Piper when offline).
                 </span>
               ) : null}</label>
             <label className="text-sm"><span className="text-xs text-muted-foreground">Max duration (minutes, 1–60)</span><Input type="number" min={1} max={60} value={form.max_duration_minutes} onChange={(e) => setForm({ ...form, max_duration_minutes: Math.min(60, Math.max(1, parseInt(e.target.value) || 1)) })} /></label>

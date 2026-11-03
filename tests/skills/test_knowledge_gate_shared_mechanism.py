@@ -39,8 +39,25 @@ def test_both_gates_are_injected_and_carry_the_identical_shared_mechanism():
     adr, concept = _block(bodies["adr_gate"]), _block(bodies["concept_gate"])
     assert adr == concept, "the shared knowledge-gate block drifted between the two skills"
     for needle in ("kb.py new decision", "new concept", "kb.py check", "blocking: 0",
-                   "/console/app/quality", "/home/shumway/projects/Corvin-Knowledge/scripts/kb.py"):
+                   "/console/app/quality", "kb.py new task", "kb.py task T-NNNN"):
         assert needle in adr, needle
+
+
+def test_the_injected_gates_name_this_tenants_kb_not_the_maintainers_checkout(tmp_path, monkeypatch):
+    """ADR-2265: every install has its own KB at <CORVIN_HOME>/tenants/<tenant>/knowledge. The gate
+    skills used to hard-code /home/shumway/projects/Corvin-Knowledge, which exists on one machine."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "acme")
+    monkeypatch.delenv("CORVIN_KB_REPO", raising=False)
+    want = (tmp_path / "home" / "tenants" / "acme" / "knowledge" / "scripts" / "kb.py").as_posix()
+    for name in ("adr_gate", "concept_gate"):
+        body = _injected()[name]
+        assert "/home/shumway" not in body, name
+        assert "{{" not in _block(body), name               # every placeholder rendered
+        assert f" {want} new decision" in body, name        # the exact path the path gate pins
+    monkeypatch.setenv("CORVIN_KB_REPO", str(tmp_path / "operator-kb"))   # explicit override, kb tenant only
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    assert (tmp_path / "operator-kb" / "scripts" / "kb.py").as_posix() in _injected()["adr_gate"]
 
 
 def test_no_gate_skill_hand_numbers_or_commits_to_the_frozen_repo():

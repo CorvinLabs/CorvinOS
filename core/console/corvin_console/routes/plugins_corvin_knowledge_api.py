@@ -203,7 +203,7 @@ _UNSET_REPO_PATHS = {"", "~/.corvin-knowledge/", "~/.corvin-knowledge"}
 def bound_repo_path(tenant_id: str) -> str:
     """The knowledge base the board projects for this tenant (or, before the first tick, the
     place the tenant's own KB is created)."""
-    repo = kb_projection.kb_repo() if tenant_id == kb_projection.kb_tenant() else None
+    repo = kb_projection.kb_repo(tenant_id)   # never another tenant's KB (tenant isolation)
     return str(repo or kb_projection.tenant_kb_path(tenant_id))
 
 
@@ -397,7 +397,8 @@ def sync_repository(
     # (ADV-10); this route reached it by its own path (R4-I-2). An explicitly
     # configured other repository is the operator's choice and stays allowed.
     sibling = (kb_projection._REPO_ROOT.parent / "Corvin-Knowledge")
-    if kb_projection.kb_repo() is None and repo_path.resolve() == sibling.resolve():
+    if kb_projection.kb_repo(getattr(session, "tenant_id", "_default")) is None and \
+            repo_path.resolve() == sibling.resolve():
         raise HTTPException(
             status_code=409,
             detail="this install runs on a sandboxed CORVIN_HOME and may not sync the operator's "

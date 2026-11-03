@@ -662,7 +662,14 @@ def _python_ast_check(code: str) -> tuple[bool, str]:
 # the hook itself, not an edit of a data file next to the tool.
 #
 # RE-PIN after a reviewed change of the tool:   sha256sum kb.py kb_lib.py kb_model.py   (in the scripts/ directory),
-# then update the three values below in the same commit that justifies the change.
+# then update the three values below in the same commit that justifies the change. The values are the engine the
+# Knowledge Graph plugin ships (Corvin-Marketplace .../corvin_knowledge/src/kb_engine/ENGINE.json): every tenant KB
+# runs exactly those bytes, so ENGINE.json and _KB_ENGINE_PIN move together.
+#
+# WHERE the bundle may sit (ADR-2265: every install gets its own KB): the static table below names the maintainers'
+# sibling checkout; ``_session_kb_pins`` adds, per hook call, the KB of THIS session's tenant
+# (<CORVIN_HOME>/tenants/<CORVIN_TENANT_ID>/knowledge/scripts/kb.py) and the operator's explicit CORVIN_KB_REPO. Same
+# hashes, same exact-path rule; another tenant's KB is never pinned for this session (tenant isolation).
 # Residual risk (stated, not hidden): the hash is checked when the hook runs, not when python opens the file; an
 # attacker who can already write the tool's directory concurrently could swap a file in between.
 def _pin_root() -> Path:
@@ -673,13 +680,49 @@ def _pin_root() -> Path:
         return Path("/nonexistent-pin-root")
 
 
-_PINNED_PYTHON_TOOLS: dict[str, dict[str, str]] = {
-    str(_pin_root() / "kb.py"): {
-        "kb.py": "1321506414271146ec8bf749548a90193f67dd71da865dce690239d0749ea027",
-        "kb_lib.py": "1e0add58952fb0e2e7af754498084796e37ef4ca5a2d510346ecf1ff154f0bea",
-        "kb_model.py": "20365628ab203c1736e4a75992e504020a05126dc299fcd4537b37dbecc15fa0",
-    },
+#: kb engine 133f98518be0 + windows-binary-io (O_BINARY fds, LF audit lines, UTF-8 graph index), 2026-11-03.
+_KB_ENGINE_PIN: dict[str, str] = {
+    "kb.py": "f38c035918e7ef6a04b6a7cc1a2bfb5db1bc8f7474c1caa0790a3bb369a1125f",
+    "kb_lib.py": "1e0add58952fb0e2e7af754498084796e37ef4ca5a2d510346ecf1ff154f0bea",
+    "kb_model.py": "0782656cbcac85f4cb97e3ff4331712c20aee4452fd56e051de1a4bd2aa5fcb3",
 }
+
+_PINNED_PYTHON_TOOLS: dict[str, dict[str, str]] = {
+    str(_pin_root() / "kb.py"): dict(_KB_ENGINE_PIN),
+}
+
+_TENANT_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
+
+
+def _session_tenant() -> str:
+    """The tenant this agent session runs for: the console sets CORVIN_TENANT_ID on every chat worker
+    (chat_runtime), an ACS worker carries CORVIN_ACS_TENANT_ID. Anything else is ``_default``."""
+    for var in ("CORVIN_TENANT_ID", "CORVIN_ACS_TENANT_ID"):
+        v = os.environ.get(var, "").strip()
+        if v:
+            return v
+    return "_default"
+
+
+def _session_kb_pins() -> dict[str, dict[str, str]]:
+    """The pinned kb.py locations of THIS session besides the static table: its tenant's own KB and an
+    explicit CORVIN_KB_REPO. A malformed tenant id pins nothing (fail closed, never a path outside the home)."""
+    out: dict[str, dict[str, str]] = {}
+    tenant = _session_tenant()
+    if _TENANT_ID_RE.match(tenant) and ".." not in tenant:
+        try:
+            out[str(_corvin_home() / "tenants" / tenant / "knowledge" / "scripts" / "kb.py")] = dict(_KB_ENGINE_PIN)
+        except Exception:  # noqa: BLE001 -- an unresolvable home pins nothing
+            pass
+    env = os.environ.get("CORVIN_KB_REPO", "").strip()
+    if env and os.path.isabs(env):
+        out[str(Path(env) / "scripts" / "kb.py")] = dict(_KB_ENGINE_PIN)
+    return out
+
+
+def _pinned_tools() -> dict[str, dict[str, str]]:
+    """Static table + this session's KB locations (the static table wins on a collision)."""
+    return {**_session_kb_pins(), **_PINNED_PYTHON_TOOLS}
 
 # PYTHON*= re-routes interpreter start-up (PYTHONPATH, PYTHONSTARTUP, PYTHONHOME, ...) and stays refused. The four
 # variables below only change stream encoding / buffering / bytecode caching, load no code, and are what a session
@@ -698,11 +741,15 @@ def _pin_hint(cmd: str) -> str:
     ``cd``: the relative form is refused by design (plain string comparison, no normalisation) and the one fix is the
     absolute path. Matching is by basename, so a look-alike script elsewhere also gets the pointer, never an exemption.
     """
-    wanted = {Path(s).name: s for s in _PINNED_PYTHON_TOOLS}
+    table = _pinned_tools()
+    wanted: dict[str, str] = {}
+    # an existing location first (on a fresh install only the tenant's own KB exists)
+    for s in sorted(table, key=lambda s: not Path(s).is_file()):
+        wanted.setdefault(Path(s).name, s)
     for m in _PY_FILE_RE.finditer(cmd):
         named = m.group(1)
         pinned = wanted.get(Path(named).name)
-        if pinned and named != pinned:
+        if pinned and _pin_key(named) not in table:
             return (f" The tool {Path(named).name!r} is runnable only when written as the exact absolute path "
                     f"(no relative, ~ or $VAR form): python3 {pinned} ...")
     return ""
@@ -732,9 +779,10 @@ def _pinned_tool_gate(cmd: str) -> tuple[frozenset[str], str]:
     import hmac  # noqa: PLC0415
 
     exempt: set[str] = set()
+    table = _pinned_tools()
     for m in _PY_FILE_RE.finditer(cmd):
         script = m.group(1)
-        bundle = _PINNED_PYTHON_TOOLS.get(_pin_key(script))  # exact string match, nothing else counts
+        bundle = table.get(_pin_key(script))  # exact string match, nothing else counts
         if bundle is None:
             continue
         if _PIN_REFUSED_CMD_RE.search(cmd):

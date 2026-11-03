@@ -31,6 +31,12 @@ then runs the plugin's ``kb_init.py`` (create, or refresh the engine once per pr
 and projects it like any other KB. Disabled plugin -> that KB is not read. No KB at all ->
 the projector is off and its status says why (``hint: enable_plugin`` when one click is
 all that is missing).
+
+Tenant isolation: the operator's KB (``CORVIN_KB_REPO`` / the sibling checkout) binds to
+ONE tenant, ``CORVIN_KB_TENANT`` (default ``_default``). Every other tenant only ever gets
+its OWN ``<tenant_home>/knowledge`` -- ``kb_repo(tenant)`` never answers another tenant's
+KB. A host process projects its process tenant (``start_process_tenant``): the audit chain
+accepts only that tenant's records, so a second tenant runs its own host process.
 """
 from __future__ import annotations
 
@@ -67,7 +73,15 @@ def code_state() -> dict[str, Any]:
         now = None
     return {"loaded": _LOADED_SHA, "on_disk": now, "stale": now is not None and now != _LOADED_SHA}
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_lock = threading.Lock()
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def _tenant_lock(tenant_id: str) -> threading.Lock:
+    """One lock per tenant: a tick, a transition and the slow loops of ONE tenant never
+    interleave; another tenant's 300-s sweep never stalls this tenant's board."""
+    with _locks_guard:
+        return _locks.setdefault(tenant_id, threading.Lock())
 _state: dict[str, dict[str, Any]] = {}
 _started: set[str] = set()
 _stops: dict[str, threading.Event] = {}
@@ -156,17 +170,29 @@ def _explicit_repo() -> Optional[Path]:
     return None
 
 
-def kb_repo() -> Optional[Path]:
-    if os.environ.get("CORVIN_KB_REPO"):
-        return _explicit_repo()   # an explicit KB is never silently replaced by another one
-    p = _explicit_repo()
-    if p is not None:
-        return p
-    t = kb_tenant()
+def kb_repo(tenant_id: Optional[str] = None) -> Optional[Path]:
+    """The knowledge base bound to *tenant_id* (default: ``CORVIN_KB_TENANT``), or None.
+
+    The operator's KB serves only ``kb_tenant()``; any other tenant gets its own
+    ``<tenant_home>/knowledge`` when the Knowledge Graph plugin is enabled FOR THAT TENANT."""
+    t = tenant_id or kb_tenant()
+    if t == kb_tenant():
+        if os.environ.get("CORVIN_KB_REPO"):
+            return _explicit_repo()   # an explicit KB is never silently replaced by another one
+        p = _explicit_repo()
+        if p is not None:
+            return p
     if kg_plugin_state(t) == "enabled":
         tp = tenant_kb_path(t)
         return tp if _is_kb(tp) else None
     return None
+
+
+def _uses_tenant_kb(tenant_id: str) -> bool:
+    """True when *tenant_id*'s KB is its own ``<tenant_home>/knowledge`` (not the operator's)."""
+    if tenant_id == kb_tenant() and (os.environ.get("CORVIN_KB_REPO") or _explicit_repo() is not None):
+        return False
+    return True
 
 
 # --- the tenant's own knowledge base (Knowledge Graph plugin) --------------------------
@@ -276,7 +302,10 @@ def _env(actor: str) -> dict[str, str]:
     tokens in os.environ) are never handed to code read from the KB repository."""
     env = {k: os.environ[k] for k in _ENV_KEEP if k in os.environ}
     env.update(KB_ACTOR=actor, KB_ACTOR_NAME=actor, KB_ACTOR_EMAIL="kb@corvin.local",
-               PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0")
+               PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0",
+               # the output is decoded as UTF-8 below; Windows' default pipe/locale codec (cp1252)
+               # garbled or refused non-ASCII titles (kb export, kb index)
+               PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     return env
 
 
@@ -343,13 +372,13 @@ def status(tenant_id: str) -> dict[str, Any]:
     try:
         return {**json.loads(_state_path(tenant_id).read_text(encoding="utf-8")), "code": code_state()}
     except (OSError, ValueError):
-        return {"state": "off" if kb_repo() is None else "idle", "code": code_state()}
+        return {"state": "off" if kb_repo(tenant_id) is None else "idle", "code": code_state()}
 
 
 def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
     """One projector tick. Serialised: the loop and a transition never interleave."""
-    repo = kb_repo()
-    if (not os.environ.get("CORVIN_KB_REPO") and _explicit_repo() is None and tenant_id == kb_tenant()
+    repo = kb_repo(tenant_id)
+    if (_uses_tenant_kb(tenant_id)
             and tenant_id not in _kg_ensured and kg_plugin_state(tenant_id) == "enabled"):
         # the tenant's own KB: create it on the first tick after the plugin was enabled, and
         # refresh its engine once per process (a plugin update ships a newer kb.py)
@@ -358,7 +387,7 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
             ens = failed[1]                     # back-off: the last outcome stands for now
         else:
             ens = ensure_tenant_kb(tenant_id)
-        repo = kb_repo()
+        repo = kb_repo(tenant_id)
         if repo is None:
             st = {"state": "error", "error": f"tenant knowledge base: {ens.get('error') or ens.get('status')}",
                   "checked_at": time.time()}
@@ -372,7 +401,7 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
                             "Marketplace to start this tenant's knowledge base"}
         _save(tenant_id, st)
         return st
-    with _lock:
+    with _tenant_lock(tenant_id):
         prev = _state.get(tenant_id) or {}
         fp = fingerprint(repo)
         now = time.time()
@@ -430,12 +459,9 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
 
 def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = "", dod: str = "",
                actor: str = "operator", sid_fingerprint: Optional[str] = None) -> dict[str, Any]:
-    repo = kb_repo()
+    repo = kb_repo(tenant_id)
     if repo is None:
-        raise service.TaskTrackingError("no knowledge base on this host")
-    if tenant_id != kb_tenant():
-        # the projector serves ONE tenant; a move from another tenant would re-project there
-        raise service.TaskTrackingError("the knowledge base is projected for another tenant")
+        raise service.TaskTrackingError("no knowledge base is bound to this tenant")
     with store.connect(tenant_id) as conn:
         cur = service._fetch(conn, tenant_id, item_id)
     ref = str(cur.get("external_ref") or "")
@@ -537,7 +563,7 @@ def guidance_bridge(tenant_id: str, repo: Path) -> dict[str, Any]:
 def periodic(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
     """The KB's slow loops, every PERIODIC_S (T-0044/T-0049). Serialised with sync and
     transitions — all of them commit to the KB."""
-    repo = kb_repo()
+    repo = kb_repo(tenant_id)
     now = time.time()
     if repo is None or (not force and now - _last_periodic.get(tenant_id, 0.0) < PERIODIC_S):
         return {}
@@ -554,7 +580,7 @@ def periodic(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
         _periodic_out[tenant_id] = {"skipped": "the KB checkout does not contain origin/main — pull it", "at": now}
         _save(tenant_id, dict(_state.get(tenant_id) or status(tenant_id)))
         return _periodic_out[tenant_id]
-    with _lock:
+    with _tenant_lock(tenant_id):
         rc, g = _run(repo, "guidance", "run", actor="kb-guidance")
         out["guidance"] = g if rc == 0 else {"error": str(g.get("error") or g)[:300]}
         rc, sw = _run(repo, "sweep", "--create-tasks", actor="kb-sweep", timeout=300)
@@ -604,8 +630,109 @@ def start(tenant_id: Optional[str] = None) -> bool:
     _stops[t] = threading.Event()
     _threads[t] = threading.Thread(target=_loop, args=(t, _stops[t]), name=f"kb-projection-{t}", daemon=True)
     _threads[t].start()
-    log.info("kb projection started for tenant %s (KB: %s)", t, kb_repo() or "none yet")
+    log.info("kb projection started for tenant %s (KB: %s)", t, kb_repo(t) or "none yet")
     return True
+
+
+def process_tenant() -> str:
+    """The tenant THIS host process serves (``CORVIN_TENANT_ID``, default ``_default``).
+
+    The forge audit writer refuses any record whose tenant is not the process tenant
+    (``AuditTenantMismatch``, ADR-0007 F-A6): every projection, transition and create writes
+    ``task_item.*`` records, so a projector can only ever run for the process tenant. A second
+    tenant is served by its own host process (its own ``CORVIN_TENANT_ID``) with its own projector."""
+    return os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+
+def start_process_tenant() -> bool:
+    """What every host calls at boot: the projector of the process tenant. It binds that tenant's
+    KB only (``kb_repo(tenant)``): the operator's KB when the process tenant is ``CORVIN_KB_TENANT``,
+    otherwise the tenant's own ``<tenant_home>/knowledge``."""
+    return start(process_tenant())
+
+
+def ensure_started(tenant_id: str) -> None:
+    """Idempotent: a board/status request of the process tenant starts its projector if a host
+    never did (a host that predates this call). Never for another tenant (see process_tenant)."""
+    if tenant_id == process_tenant() and tenant_id not in _started:
+        try:
+            start(tenant_id)
+        except Exception:  # noqa: BLE001 -- the status route answers without a projector too
+            log.debug("kb projector start for %s failed", tenant_id, exc_info=True)
+
+
+# --- creating work items from the console (the KB stays the one writer) ----------------
+
+KB_KINDS = ("initiative", "epic", "task")
+_KB_PARENT_KIND = {"epic": "initiative", "task": "epic"}
+
+
+def _kb_ref_of(tenant_id: str, item_id: str) -> tuple[str, str]:
+    """(kind, uid) of a projected KB item of this tenant; refuses a non-KB item."""
+    with store.connect(tenant_id) as conn:
+        cur = service._fetch(conn, tenant_id, item_id)
+    ref = str(cur.get("external_ref") or "")
+    if not ref.startswith(service.KB_REF_PREFIX):
+        raise KbTransitionRefused("the parent is not a knowledge-base item")
+    return cur["kind"], ref.split(":", 1)[1]
+
+
+def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[str] = None,
+                description: str = "", dod: str = "", actor: str = "operator",
+                sid_fingerprint: Optional[str] = None) -> dict[str, Any]:
+    """Create an initiative / epic / task IN the tenant's knowledge base (``kb new``, the KB's one
+    identity writer), re-project, and return the projected store item. The board gets no second
+    writer: the store row appears only through the projection."""
+    repo = kb_repo(tenant_id)
+    if repo is None:
+        raise service.TaskTrackingError("no knowledge base is bound to this tenant")
+    if kind not in KB_KINDS:
+        raise KbTransitionRefused(f"the knowledge base holds {list(KB_KINDS)}, not {kind!r}")
+    # `--opt=value`: a title starting with "-" is never read as another option
+    args = ["new", kind, f"--title={title}"]
+    want_parent = _KB_PARENT_KIND.get(kind)
+    if want_parent:
+        if not parent_id:
+            raise KbTransitionRefused(f"a {kind} needs a parent {want_parent} (the knowledge base's hierarchy)")
+        pkind, puid = _kb_ref_of(tenant_id, parent_id)
+        if pkind != want_parent:
+            raise KbTransitionRefused(f"a {kind}'s parent must be a {want_parent}, not a {pkind}")
+        rc_s, shown = _run(repo, "show", puid)
+        pid = shown.get("id") if rc_s == 0 and isinstance(shown.get("id"), str) else puid
+        args.append(f"--{want_parent}={pid}")
+    elif parent_id:
+        raise KbTransitionRefused("an initiative has no parent")
+    if dod and kind == "task":
+        args.append(f"--dod={dod}")
+    if description:
+        args.append(f"--body={description}")
+    args.append(f"--actor={actor}")
+    details = {"kind": kind, "actor_kind": actor.split(":")[0],
+               **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {})}
+    service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "requested"})  # audit-first
+    with _tenant_lock(tenant_id):
+        pending = _uncommitted_work(repo)
+        if pending:
+            service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
+            raise KbTransitionRefused(f"board writes are paused: uncommitted knowledge-base edits {pending[:5]}")
+        try:
+            rc, res = _run(repo, *args, actor=actor)
+        except Exception:
+            service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "error"})
+            raise
+    if rc != 0 or not res.get("uid"):
+        service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
+        raise KbTransitionRefused(str(res.get("error") or res)[:500])
+    service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "applied",
+                                                      "kb_id": str(res.get("id") or "")})
+    sync(tenant_id, force=True)
+    item = projection.kb_items(tenant_id).get(f"{service.KB_REF_PREFIX}{res['uid']}")
+    if item is None:
+        # created in the KB, but the projection did not take it (a red check holds the board)
+        raise service.TaskTrackingError(f"{res.get('id')} was created in the knowledge base but is not on the "
+                                        f"board yet (projector: {status(tenant_id).get('state')})")
+    with store.connect(tenant_id) as conn:
+        return service._fetch(conn, tenant_id, item["id"])
 
 
 def stop(tenant_id: Optional[str] = None, *, join_s: float = 30.0) -> None:

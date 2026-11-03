@@ -26,7 +26,7 @@ vi.mock("@/hooks/use-voice-input", () => ({ useVoiceInput: () => ({ recording: f
 import { VideoProducerPage } from "@/pages/video-producer";
 
 const B = "/v1/console/video";
-const SETTINGS = { output_folder: "x", tts_engine: "auto", tts_engines: ["openai", "auto", "gtts"], max_duration_minutes: 60, openai_configured: true };
+const SETTINGS = { output_folder: "x", tts_engine: "auto", tts_engines: ["auto"], max_duration_minutes: 60, openai_configured: true };
 const installs: Array<{ csrf: string | null }> = [];
 
 function handlers(webSlides: { available: boolean; reason: string | null }, install: () => HttpResponse) {
@@ -115,7 +115,7 @@ describe("CorvinTV settings: web slides", () => {
     cleanup();
     server.use(...handlers({ available: true, reason: null }, () => HttpResponse.json({}, { status: 500 })));
     await openSettings();
-    await screen.findByDisplayValue("OpenAI first, edge-tts as fallback (default)");
+    await screen.findByDisplayValue("CorvinOS voice chain, same as chat: OpenAI, edge-tts, Piper (default)");
     expect(screen.queryByTestId("web-slides-note")).toBeNull();
     expect(installs).toEqual([]);
   });

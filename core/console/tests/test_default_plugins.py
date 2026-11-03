@@ -22,7 +22,7 @@ def test_shipped_list_is_valid_and_starts_with_corvintv():
     first = entries[0]
     assert first["index_id"] == "plugin:buildin-media-corvintv"
     assert first["registry_id"] == "video_producer"      # the registry id did not change with the rename
-    assert first["min_version"] == "1.7.0"
+    assert first["min_version"] == "1.8.0"  # the native-engine release (Claude Code CLI + CorvinOS TTS chain)
     assert first["enable"] is True
     assert first["replaces"] == "plugin:contributor-media-video_producer"
 

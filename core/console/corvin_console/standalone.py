@@ -379,6 +379,17 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             log.warning("default plugins not started: %s", exc)
 
+        # ADR-2205/ADR-2265 — knowledge-base projector of this process tenant: creates its own
+        # knowledge base once the Knowledge Graph plugin is enabled (default_plugins above) and
+        # keeps the task board equal to it. Same call as corvin_gateway.app / corvin_console.app;
+        # until 2026-11-03 this host (every Windows install, `corvinos-serve`) never started it,
+        # so no tenant KB was ever created and the board stayed empty.
+        try:
+            from corvin_console import kb_projection as _kbp
+            _kbp.start_process_tenant()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("kb projection not started: %s", exc)
+
         # ACO boot healer (PLAN-0969 WP-1): scan + repair sessions, engine/voice readiness,
         # integrity scan, every 5 min. corvin_gateway.app starts the same task; until
         # 2026-11-02 only the gateway did, so a console-only install (every Windows
@@ -591,6 +602,13 @@ def create_app() -> FastAPI:
         yield
         if _healer_task is not None:
             _healer_task.cancel()
+        # Stop the kb projector threads (a tick in flight finishes first; best-effort).
+        try:
+            from corvin_console import kb_projection as _kbp2
+            for _t in list(_kbp2._started):
+                _kbp2.stop(_t, join_s=5.0)
+        except Exception:
+            pass
         # Persist the learning daemon's state and stop its thread (best-effort).
         try:
             import os as _os_lh2

@@ -55,7 +55,7 @@ class CorvinTVIsProvisionedAndEnabledByBoot(unittest.TestCase):
         self.assertEqual(list(by)[:2], [_NEW, _KG], "both standard plugins, CorvinTV first")
         e = by[_NEW]
         self.assertTrue(e["enable"])
-        self.assertEqual((e["replaces"], e["registry_id"], e["min_version"]), (_OLD, "video_producer", "1.7.0"))
+        self.assertEqual((e["replaces"], e["registry_id"], e["min_version"]), (_OLD, "video_producer", "1.8.0"))
         self.assertNotIn(_OLD, by, "the old listing is no longer offered under its own id")
         self.assertTrue(by[_KG]["enable"])
 

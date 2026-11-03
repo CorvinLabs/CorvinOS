@@ -197,7 +197,7 @@ async def get_gates_status(
             "events_24h": events_24h,
             "events_total": events_total,
             "as_of": as_of,
-            "source_root": str(resolve_adr_root() or ""),
+            "source_root": str(_gate_root(tenant_id) or ""),
             "last_run": last_run,
         }
     except Exception as exc:  # noqa: BLE001
@@ -415,6 +415,23 @@ async def get_artifact_history(
 # Endpoint 4: POST /api/quality/gates/run/all
 # ============================================================================
 
+def _gate_root(tenant_id: str):
+    """The knowledge base the gates judge for this tenant: an explicit ``CORVIN_ADR_ROOT``, else
+    the KB bound to the tenant's board (its own ``<tenant_home>/knowledge`` on a fresh install,
+    ADR-2265), else the maintainers' checkout / ``corvin_decisions`` mirror."""
+    import os
+    from pathlib import Path
+
+    if not os.environ.get("CORVIN_ADR_ROOT", "").strip():
+        try:
+            repo = kb_projection.kb_repo(tenant_id)
+        except Exception:  # noqa: BLE001 — no plugin subsystem: the static fallback below
+            repo = None
+        if repo is not None and (Path(repo) / "scripts" / "kb.py").is_file():
+            return Path(repo)
+    return resolve_adr_root()
+
+
 def _kb_findings(root) -> Dict[str, List[Dict[str, Any]]]:
     """``kb check --json`` of the checkout being judged, keyed by file. The checkout's own
     ``kb.py`` decides — the rules travel with the artifacts they judge."""
@@ -449,7 +466,7 @@ async def run_all_gates(
     """
     tenant_id = rec.tenant_id
     run_id = str(uuid.uuid4())[:8]
-    root = resolve_adr_root()
+    root = _gate_root(tenant_id)
     run: Dict[str, Any] = {
         "tenant_id": tenant_id,
         "run_id": run_id,

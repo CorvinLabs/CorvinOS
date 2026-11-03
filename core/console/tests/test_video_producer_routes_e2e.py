@@ -206,8 +206,10 @@ class VideoProducerRoutesE2E(unittest.TestCase):
         with _sandbox(self._tmp, tenants=("tenant_a", "tenant_b")) as (_c, _t, home, clients):
             (ca, csrf_a), (cb, _) = clients["tenant_a"], clients["tenant_b"]
             s = ca.get("/v1/console/video/settings").json()
-            self.assertEqual(s["tts_engines"], ["openai", "auto", "gtts"])
-            self.assertEqual(s["tts_engine"], "auto", "the default narration is the chain OpenAI -> edge-tts")
+            # CorvinTV 1.8.0: one engine, the CorvinOS voice chain (the chat TTS chain)
+            self.assertEqual(s["tts_engines"], ["auto"])
+            self.assertEqual(s["tts_engine"], "auto", "the narration is the CorvinOS voice chain")
+            self.assertEqual(s["tts_chain"]["order"], ["openai", "edge", "piper"])
             self.assertTrue(s["openai_configured"])
             self.assertIn("web_slides_available", s)
             self.assertFalse(s["output_folder_editable"])
@@ -216,7 +218,8 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             evil = str(home / "tenants" / "tenant_a" / "global" / "forge")
             r = ca.put("/v1/console/video/settings", json={"output_folder": evil}, headers={"X-CSRF-Token": csrf_a})
             self.assertEqual(r.status_code, 400, r.text)
-            for bad in ({"tts_engine": "azure"}, {"max_duration_minutes": 0}, {"max_duration_minutes": 10**9}):
+            for bad in ({"tts_engine": "azure"}, {"tts_engine": "gtts"}, {"tts_engine": "openai"},
+                        {"max_duration_minutes": 0}, {"max_duration_minutes": 10**9}):
                 r = ca.put("/v1/console/video/settings", json=bad, headers={"X-CSRF-Token": csrf_a})
                 self.assertEqual(r.status_code, 422, (bad, r.text))
             # echoing the current (fixed) folder back is accepted — the UI resends the form
@@ -480,23 +483,16 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             self.assertEqual(len(runner.calls), 1)
             self.assertEqual(runner.calls[0][2]["tts_engine"], "auto")
 
-            # openai (strict single tier): forbidding OpenAI refuses the job
-            put_engine("openai")
+            # the chain's first host: forbidding OpenAI refuses the job as well
             self._deny_host(home, "api.openai.com")
             r = self._create(client, csrf)
             self.assertEqual(r.status_code, 403, r.text)
-            self.assertEqual(len(runner.calls), 1)
             self.assertIn("api.openai.com", _chain_text(home))
-            self._deny_host(home, "translate.google.com")
-            self.assertEqual(self._create(client, csrf).status_code, 200)
-            self.assertEqual(runner.calls[-1][2]["tts_engine"], "openai")
             n = len(runner.calls)
-
-            # gtts: the Google host is the one that counts
-            put_engine("gtts")
-            r = self._create(client, csrf)
-            self.assertEqual(r.status_code, 403, r.text)
-            self.assertEqual(len(runner.calls), n)
+            # the pre-1.8 engines no longer exist
+            for gone in ("openai", "gtts"):
+                r = client.put("/v1/console/video/settings", json={"tts_engine": gone}, headers={"X-CSRF-Token": csrf})
+                self.assertEqual(r.status_code, 422, r.text)
 
             # auto: the edge-tts tier's host must be admitted too
             put_engine("auto")
@@ -683,20 +679,21 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
                                        headers={"X-CSRF-Token": csrf})
                 self.assertEqual(resp.status_code, 503, resp.text)
                 self.assertIn(needle, resp.text)
+            # CorvinTV 1.8.0 narrates through the CorvinOS voice chain: gTTS is never needed ...
             with mock.patch.object(mod.importlib.util, "find_spec",
-                                   lambda n, *a, **k: None if n == "gtts" else real_find(n, *a, **k)):
+                                   lambda n, *a, **k: None if n == "gtts" else real_find(n, *a, **k)), \
+                 mock.patch.object(mod, "_native_tts_status", lambda: _chain(edge=True)):
                 self._benign_l44()
                 resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
                                    headers={"X-CSRF-Token": csrf})
-            self.assertEqual(resp.status_code, 200, "the default engine must not need gTTS: " + resp.text)
-            # gtts selected: now gTTS is required
-            client.put("/v1/console/video/settings", json={"tts_engine": "gtts"}, headers={"X-CSRF-Token": csrf})
-            with mock.patch.object(mod.importlib.util, "find_spec",
-                                   lambda n, *a, **k: None if n == "gtts" else real_find(n, *a, **k)):
-                resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
-                                   headers={"X-CSRF-Token": csrf})
-            self.assertEqual(resp.status_code, 503, resp.text)
-            self.assertIn("gTTS", resp.text)
+            self.assertEqual(resp.status_code, 200, "the chain must not need gTTS: " + resp.text)
+            # ... but a chain with no ready voice, or no chain at all, is named before a job exists
+            for status, needle in ((_chain(), "narration voice"), ({}, "CorvinOS TTS chain")):
+                with mock.patch.object(mod, "_native_tts_status", lambda _s=status: _s):
+                    resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                                       headers={"X-CSRF-Token": csrf})
+                self.assertEqual(resp.status_code, 503, resp.text)
+                self.assertIn(needle, resp.text)
             # nothing was stored for the refused attempts
             self.assertEqual(client.get("/v1/console/video/jobs").json()["total"], 1)
 
@@ -719,7 +716,9 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             self.assertEqual(resp.status_code, 200, resp.text)
             self.assertEqual(runner.calls[-1][2]["tts_engine"], "auto")
 
-    def test_a_stored_openai_key_keeps_openai_and_the_job_still_starts(self):
+    def test_a_stored_openai_key_is_seen_and_the_job_runs_the_corvinos_chain(self):
+        """1.8.0: the strict "openai" engine is gone (422); a key only makes the chain's first tier
+        ready - the job still runs the one engine, the CorvinOS voice chain."""
         from unittest import mock
 
         with _sandbox(self._tmp, plugin="enabled", keep_key=False) as (client, csrf, _home, _c):
@@ -727,17 +726,18 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             runner = _RecordingRunner()
             mod.get_runner = lambda: runner
             put = client.put("/v1/console/video/settings", json={"tts_engine": "openai"}, headers={"X-CSRF-Token": csrf})
-            self.assertEqual(put.status_code, 200, put.text)  # the strict engine is an explicit choice since 1.7.0
+            self.assertEqual(put.status_code, 422, put.text)
             with mock.patch.dict(mod.os.environ, {"CORVIN_TTS_OPENAI_KEY": "sk-test-not-real"}), \
                  mock.patch.object(mod.importlib.util, "find_spec", lambda n, *a, **k: object()):
                 st = client.get("/v1/console/video/settings").json()
                 self.assertTrue(st["openai_configured"])
-                self.assertEqual(st["effective_tts_engine"], "openai")
+                self.assertEqual(st["effective_tts_engine"], "auto")
                 self._benign_l44()
                 resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
                                    headers={"X-CSRF-Token": csrf})
             self.assertEqual(resp.status_code, 200, resp.text)
-            self.assertEqual(runner.calls[-1][2]["tts_engine"], "openai")
+            cfg = runner.calls[-1][2]
+            self.assertEqual((cfg["tts_engine"], cfg["tts_gtts_allowed"]), ("auto", False))
             self.assertNotIn("sk-test-not-real", resp.text)
 
     def test_an_outdated_edge_tts_is_named_with_its_install_command_and_never_installed_from_the_route(self):
@@ -753,18 +753,17 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             runner = _RecordingRunner()
             mod.get_runner = lambda: runner
             ran: list = []
-            real_find_spec = mod.importlib.util.find_spec  # gTTS counts as a narration engine: simulate it absent
+            # the chain reports edge-tts ready (importable) and nothing else; the version check overrules it
             with mock.patch.object(mod, "_stored_openai_key", lambda: None), \
+                 mock.patch.object(mod, "_native_tts_status", lambda: _chain(edge=True)), \
                  mock.patch("importlib.metadata.version", lambda n: "7.2.8" if n == "edge-tts" else "1.0"), \
-                 mock.patch.object(mod.importlib.util, "find_spec",
-                                   lambda n, *a, **k: None if n == "gtts" else real_find_spec(n, *a, **k)), \
                  mock.patch.object(mod.subprocess, "run", lambda cmd, **k: ran.append(cmd)):
                 self._benign_l44()
                 resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
                                    headers={"X-CSRF-Token": csrf})
             self.assertEqual(resp.status_code, 503, resp.text)
             self.assertIn("edge-tts>=7.3.1", resp.text)
-            self.assertIn("gTTS>=2.5.0", resp.text)
+            self.assertNotIn("gTTS", resp.text)
             self.assertFalse(ran, "a request must never start a package install")
             self.assertFalse(runner.calls, "no job starts without a narration engine")
 
@@ -783,6 +782,12 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
                 home / "marketplace-cache" / "Corvin-Marketplace" / "plugins" / "contributor"
                 / "media" / "video_producer" / "src",
             )
+
+
+def _chain(**ready):
+    """A ``_native_tts_status`` answer: the CorvinOS chain with the named tiers ready."""
+    return {"order": ["openai", "edge", "piper"], "pinned": None,
+            "providers": {t: {"ready": bool(ready.get(t)), "detail": ""} for t in ("openai", "edge", "piper")}}
 
 
 if __name__ == "__main__":

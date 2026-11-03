@@ -174,31 +174,32 @@ class CorvinTvSettingsE2E(unittest.TestCase):
             g = client.get(f"{V}/settings").json()
             self.assertEqual((g["tts_engine"], g["max_duration_minutes"]), ("auto", 60))
 
-            r = client.put(f"{V}/settings", json={"tts_engine": "gtts", "max_duration_minutes": 7}, headers=H(csrf))
+            # CorvinTV 1.8.0 has one narration engine (the CorvinOS chain): the length is what changes
+            r = client.put(f"{V}/settings", json={"tts_engine": "auto", "max_duration_minutes": 7}, headers=H(csrf))
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(r.json()["settings"]["tts_engine"], "gtts")
+            self.assertEqual(r.json()["settings"]["tts_engine"], "auto")
 
             # single source of truth: the plugin registry record carries the very same values
             from corvin_plugins.state import TenantRegistry
             rec = TenantRegistry.load(tenant_id="_default").get("video_producer")
-            self.assertEqual(rec.settings["tts_engine"], "gtts")
+            self.assertEqual(rec.settings.get("tts_engine", "auto"), "auto")
             self.assertEqual(rec.settings["max_video_length_minutes"], 7)
 
             # a "restart" of the panel state (nothing in process memory is consulted any more)
             mod = _route_module()
             self.assertFalse(hasattr(mod, "_settings"), "settings must not live in a process dict")
             again = client.get(f"{V}/settings").json()
-            self.assertEqual((again["tts_engine"], again["max_duration_minutes"]), ("gtts", 7))
+            self.assertEqual((again["tts_engine"], again["max_duration_minutes"]), ("auto", 7))
 
             # audited with values and previous values
             ev = _events(home, "_default", "video_producer.settings_changed")
             self.assertEqual(len(ev), 1, _chain_text(home)[-800:])
             det = ev[0]["details"]
-            self.assertEqual((det["tts_engine"], det["previous_tts_engine"]), ("gtts", "auto"))
             self.assertEqual((det["max_duration_minutes"], det["previous_max_duration_minutes"]), (7, 60))
 
             # an unchanged PUT writes no record; a bad value is refused and changes nothing
-            client.put(f"{V}/settings", json={"tts_engine": "gtts"}, headers=H(csrf))
+            client.put(f"{V}/settings", json={"max_duration_minutes": 7}, headers=H(csrf))
+            self.assertEqual(client.put(f"{V}/settings", json={"tts_engine": "gtts"}, headers=H(csrf)).status_code, 422)
             self.assertEqual(len(_events(home, "_default", "video_producer.settings_changed")), 1)
             self.assertEqual(client.put(f"{V}/settings", json={"max_duration_minutes": 61}, headers=H(csrf)).status_code, 422)
             self.assertEqual(client.get(f"{V}/settings").json()["max_duration_minutes"], 7)
@@ -208,7 +209,7 @@ class CorvinTvSettingsE2E(unittest.TestCase):
             mod = _route_module()
             runner = _routes._RecordingRunner()
             mod.get_runner = lambda: runner
-            client.put(f"{V}/settings", json={"tts_engine": "gtts", "max_duration_minutes": 5}, headers=H(csrf))
+            client.put(f"{V}/settings", json={"max_duration_minutes": 5}, headers=H(csrf))
             holder = _routes.VideoProducerRoutesE2E("run")
             holder.setUp()
             try:
@@ -217,7 +218,8 @@ class CorvinTvSettingsE2E(unittest.TestCase):
                 holder.tearDown()
             self.assertEqual(r.status_code, 200, r.text)
             cfg = runner.calls[0][2]
-            self.assertEqual((cfg["tts_engine"], cfg["max_duration_minutes"]), ("gtts", 5))
+            self.assertEqual((cfg["tts_engine"], cfg["max_duration_minutes"]), ("auto", 5))
+            self.assertEqual((cfg["storyboard_backend"], cfg["tts_gtts_allowed"]), ("claude_cli", False))
 
 
 class DefaultStyleAuditE2E(unittest.TestCase):

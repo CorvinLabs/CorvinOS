@@ -22,6 +22,8 @@ Public API:
            limit=20, caller_persona="", tenant_id=None) -> list[Recall]
     forget(filter, *, tenant_id=None) -> int        # Phase 28.4 stub
     redact_text(text) -> tuple[str, dict[str, int]]
+    turn_stats / list_turns / get_turn / search_turns / delete_turn
+        — row-addressed owner view for the console memory page (ADR A-10)
 
 Persona-ACL: the optional ``memory_recall_enabled: true`` flag on the
 caller's resolved chat_profile gates the MCP / slash-command surface.
@@ -643,6 +645,132 @@ def forget(
         tenant_id,
     )
     return rows_deleted
+
+
+# ── Owner view (console memory page, ADR A-10) ─────────────────────────────
+#
+# Row-addressed reads for the tenant owner's memory page: the newest turns
+# across every chat of the tenant, one turn by its row id, a tenant-wide FTS
+# search that returns row ids, and a single-row delete. Every function resolves
+# the DB from ``tenant_id`` BEFORE it opens anything (cross-tenant access is
+# structurally impossible, as for :func:`recall`), and the read functions never
+# create a DB: a tenant that has not chatted yet has no recall.db, and reading
+# its memory must not make one.
+
+def _turn_row_dict(r: Any) -> dict[str, Any]:
+    return {
+        "id": int(r[0]), "ts": float(r[1]), "channel": str(r[2] or ""),
+        "chat_key": str(r[3] or ""), "persona": str(r[4] or ""),
+        "msg_id": str(r[5] or ""), "redacted_classes": [
+            c for c in str(r[6] or "").split(",") if c],
+        "user_text": str(r[7] or ""), "assistant_text": str(r[8] or ""),
+    }
+
+
+_TURN_COLUMNS = ("t.id, t.ts, t.channel, t.chat_key, t.persona, t.msg_id,"
+                 " t.redacted_classes, t.user_text, t.asst_text")
+
+
+def _existing_conn(tenant_id: str | None) -> sqlite3.Connection | None:
+    if not _db_path(tenant_id).is_file():
+        return None
+    return _connect(tenant_id)
+
+
+def turn_stats(*, tenant_id: str | None = None) -> dict[str, Any]:
+    """``{"turns", "chats", "last_ts"}`` for the tenant's recall store."""
+    empty = {"turns": 0, "chats": 0, "last_ts": None}
+    try:
+        conn = _existing_conn(tenant_id)
+        if conn is None:
+            return empty
+        n, chats, last = conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT chat_key), MAX(ts) FROM turns").fetchone()
+    except sqlite3.Error:
+        return empty
+    return {"turns": int(n or 0), "chats": int(chats or 0),
+            "last_ts": float(last) if last is not None else None}
+
+
+def list_turns(*, limit: int = 50, tenant_id: str | None = None) -> list[dict[str, Any]]:
+    """The tenant's newest turn-pairs across all chats, newest first (redacted text)."""
+    limit = max(1, min(int(limit), 500))
+    try:
+        conn = _existing_conn(tenant_id)
+        if conn is None:
+            return []
+        rows = conn.execute(
+            f"SELECT {_TURN_COLUMNS} FROM turns t ORDER BY t.ts DESC, t.id DESC LIMIT ?",
+            (limit,)).fetchall()
+    except sqlite3.Error:
+        return []
+    return [_turn_row_dict(r) for r in rows]
+
+
+def get_turn(row_id: int, *, tenant_id: str | None = None) -> dict[str, Any] | None:
+    try:
+        conn = _existing_conn(tenant_id)
+        if conn is None:
+            return None
+        r = conn.execute(f"SELECT {_TURN_COLUMNS} FROM turns t WHERE t.id = ?",
+                         (int(row_id),)).fetchone()
+    except sqlite3.Error:
+        return None
+    return _turn_row_dict(r) if r else None
+
+
+def search_turns(query: str, *, limit: int = 20,
+                 tenant_id: str | None = None) -> list[dict[str, Any]]:
+    """Tenant-wide FTS5 search (phrase-escaped like :func:`recall`), best first.
+
+    Audited as ``memory.recall_query`` with metadata only (never the query text).
+    """
+    limit = max(1, min(int(limit), 100))
+    if not (query or "").strip():
+        return []
+    rows: list[Any] = []
+    try:
+        conn = _existing_conn(tenant_id)
+        if conn is not None:
+            rows = conn.execute(
+                f"SELECT {_TURN_COLUMNS}, bm25(turns_fts) AS score"
+                " FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid"
+                " WHERE turns_fts MATCH ? ORDER BY score ASC LIMIT ?",
+                (_escape_fts(query), limit)).fetchall()
+    except sqlite3.Error:
+        rows = []
+    out = []
+    for r in rows:
+        d = _turn_row_dict(r)
+        d["score"] = float(r[9] or 0.0)
+        out.append(d)
+    _emit_audit("memory.recall_query", {
+        "channel": "", "chat_key": "", "query_chars": len(query or ""),
+        "result_count": len(out), "caller_persona": "console-owner",
+        "since": 0.0, "until": 0.0,
+    }, tenant_id)
+    return out
+
+
+def delete_turn(row_id: int, *, tenant_id: str | None = None) -> bool:
+    """Delete ONE turn-pair (and its FTS row via the delete trigger). Audited
+    as ``memory.turns_forgotten`` like :func:`forget`."""
+    try:
+        conn = _existing_conn(tenant_id)
+        if conn is None:
+            return False
+        row = conn.execute("SELECT channel, chat_key FROM turns WHERE id = ?",
+                           (int(row_id),)).fetchone()
+        if row is None:
+            return False
+        n = int(conn.execute("DELETE FROM turns WHERE id = ?", (int(row_id),)).rowcount or 0)
+    except sqlite3.Error:
+        return False
+    _emit_audit("memory.turns_forgotten", {
+        "channel": str(row[0] or ""), "chat_key": str(row[1] or ""),
+        "before_ts": 0.0, "rows_deleted": n,
+    }, tenant_id)
+    return n > 0
 
 
 # ── Persona-ACL helper (for the MCP edge + slash-command dispatcher) ──────

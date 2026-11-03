@@ -77,7 +77,7 @@ class KnowledgeGraphIsProvisionedAndEnabledByBoot(unittest.TestCase):
         (e,) = _entry(self.dp)
         self.assertTrue(e["enable"])
         self.assertEqual(e["replaces"], _OLD)
-        self.assertEqual(e["min_version"], "1.2.0")
+        self.assertEqual(e["min_version"], "1.3.0")   # 1.3.0: the Windows + multi-tenant fixes
 
     def test_fresh_tenant_boot_installs_enables_and_binds_without_a_step(self):
         with _sandbox(self.tmp) as (client, csrf, home, _):

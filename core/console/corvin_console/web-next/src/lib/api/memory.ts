@@ -6,27 +6,85 @@
 import { ApiError, api, isCsrfError, notifyCsrfError } from "./client";
 
 // ── Memory API ────────────────────────────────────────────────────────────
-// Read-only empty state: the per-tenant memory view is not built yet (S-1a).
+// The caller's OWN tenant memory (ADR A-10): conversation turns from the tenant
+// recall store (PII-redacted), notes the owner adds here, and the tenant's
+// topic / worker-harvest / session / forge memory files. Never the host's
+// ~/.claude (S-1a).
+
+export type MemorySource =
+  | "conversation" | "note" | "topic" | "harvest" | "session" | "forge";
+
+export type MemoryNoteType = "user" | "feedback" | "project" | "reference";
 
 export interface MemoryFileSummary {
   name: string;
-  type: "index" | "user" | "feedback" | "project" | "reference" | "other";
+  source: MemorySource;
+  type: MemoryNoteType | "conversation" | "index" | "other";
+  title: string;
   size_bytes: number | null;
   modified: number | null;
   description: string | null;
+  deletable: boolean;
+  /** chat key (conversation) or session dir (session) the entry came from */
+  origin?: string | null;
+  channel?: string | null;
 }
 
 export interface MemoryIndex {
   tenant_id: string;
   present: boolean;
   available?: boolean;
-  reason?: string;
+  reason?: string | null;
   count: number;
+  sources?: Partial<Record<MemorySource, number>>;
+  recall?: { available: boolean; turns: number; chats: number; last_ts: number | null };
+  truncated?: boolean;
   files: MemoryFileSummary[];
+}
+
+export interface MemoryEntry extends MemoryFileSummary {
+  content: string;
+  user_text?: string;
+  assistant_text?: string;
+  redacted_classes?: string[];
+}
+
+export interface MemorySearchHit extends MemoryFileSummary {
+  snippet: string;
+  score?: number | null;
+}
+
+export interface MemorySearchResult {
+  tenant_id: string;
+  query: string;
+  count: number;
+  results: MemorySearchHit[];
 }
 
 export function getMemoryIndex(signal?: AbortSignal): Promise<MemoryIndex> {
   return api("/memory", { signal });
+}
+
+export function getMemoryEntry(name: string, signal?: AbortSignal): Promise<MemoryEntry> {
+  return api(`/memory/${encodeURIComponent(name)}`, { signal });
+}
+
+export function searchMemory(q: string, signal?: AbortSignal): Promise<MemorySearchResult> {
+  return api(`/memory/search?q=${encodeURIComponent(q)}&limit=50`, { signal });
+}
+
+export function addMemoryNote(
+  body: { title: string; content: string; type: MemoryNoteType },
+  csrf: string,
+): Promise<MemoryEntry> {
+  return api("/memory", { method: "POST", body, csrf });
+}
+
+export function deleteMemoryEntry(
+  name: string,
+  csrf: string,
+): Promise<{ deleted: string; source: MemorySource }> {
+  return api(`/memory/${encodeURIComponent(name)}`, { method: "DELETE", csrf });
 }
 
 /** One segment of the FULL read-aloud (ADR-0194 Phase 3). */

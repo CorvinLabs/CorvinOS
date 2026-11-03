@@ -535,7 +535,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         import corvin_console  # noqa: F401
         from corvin_console import kb_projection as _kbp
-        _kbp.start()
+        _kbp.start_process_tenant()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("kb projection not started: %s", exc)
 

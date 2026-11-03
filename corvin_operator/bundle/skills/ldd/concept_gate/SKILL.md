@@ -1,6 +1,6 @@
 ---
 name: concept_gate
-description: Concept Gate — evaluates after non-trivial tasks whether a reusable WORKING METHOD (not a decision, not a bug fix) is worth archiving; writes to Corvin-Knowledge/concepts/ when yes (or amends an existing entry), names the skip reason when no, requires evidence citations (real commits/tasks), and mints a bootstrap-graded companion SkillForge learned-experience skill so durable methods are auto-injected into future turns, not just archived.
+description: Concept Gate — evaluates after non-trivial tasks whether a reusable WORKING METHOD (not a decision, not a bug fix) is worth archiving; writes to the tenant knowledge base's concepts/ when yes (or amends an existing entry), names the skip reason when no, requires evidence citations (real commits/tasks), and mints a bootstrap-graded companion SkillForge learned-experience skill so durable methods are auto-injected into future turns, not just archived.
 ---
 
 # Concept Gate — self-learning working-method archive
@@ -31,9 +31,9 @@ The default answer is: **no concept needed.** ADR Gate asks "does this decision 
 
 CorvinOS already has three kinds of durable, versioned knowledge:
 
-- **ADR** (`Corvin-Knowledge/decisions/`) — what did we decide, and why. Gated by `adr_gate`.
+- **ADR** (`decisions/` in the knowledge base) — what did we decide, and why. Gated by `adr_gate`.
 - **Skill** (SkillForge, `type: learned-experience`) — short (≤16 KiB), prompt-injectable, auto-graded from real usage.
-- **Concept** (`Corvin-Knowledge/concepts/`) — the narrative middle layer: *why* a way of working keeps paying off, with real evidence (cited commits/tasks), an explicit "when NOT to use" boundary, and the same three-level depth ADR-0264 models, applied to process instead of architecture.
+- **Concept** (`concepts/` in the knowledge base) — the narrative middle layer: *why* a way of working keeps paying off, with real evidence (cited commits/tasks), an explicit "when NOT to use" boundary, and the same three-level depth ADR-0264 models, applied to process instead of architecture.
 
 A concept that's durable and narrow enough SHOULD also mint a companion Skill — that's what makes the archive self-learning rather than a document nobody re-reads.
 
@@ -43,24 +43,38 @@ A concept that's durable and narrow enough SHOULD also mint a companion Skill �
 ADR Gate and Concept Gate answer different questions (a decision versus a working method),
 but they write through ONE mechanism and their artifacts are judged by ONE rule source.
 
-1. **Find first.** `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py find <words> --type decision`
+**The knowledge base is this tenant's own: `{{KB_DIR}}`** — the repository the console's task
+board and Knowledge Graph panel project (created by the Knowledge Graph plugin on every install;
+an operator's `CORVIN_KB_REPO` overrides it). Every command below names its `kb.py` by that exact
+absolute path: the path gate pins it (a relative path, `~`, `$VAR` or `cd` + `scripts/kb.py` is
+refused). If the path does not exist yet, the plugin is disabled for this tenant — say so, never
+write the files by hand.
+
+1. **Find first.** `{{PYTHON}} {{KB_PY}} find <words> --type decision`
    (or `--type concept`) and `kb.py show <id>`. An existing entry is amended with a dated note
    under its Status, never duplicated.
 2. **Create with `kb new`, never by hand.**
-   `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py new decision --title "..."`
+   `{{PYTHON}} {{KB_PY}} new decision --title "..."`
    (or `new concept`), with `--link rel=target` for every real relation. It numbers across the
    whole corpus, writes `id`/`uid`/`title`/`status`/`created`/`links`, refuses a link that does not
-   resolve to exactly one entity, and commits in Corvin-Knowledge. Never pick a number with `ls`:
+   resolve to exactly one entity, and commits in the knowledge base. Never pick a number with `ls`:
    canonical names are `ADR-NNNN-...`, so a `^[0-9]{4}` scan sees only legacy files and returns a
    number that is already taken. Never commit to Corvin-ADR: it is frozen (ADR-2205), and
    `kb check` reports any commit there as `W02_frozen_source_written`. Call `kb.py` by this
    absolute path — the path gate pins it.
-3. **Fill the body and the type's own frontmatter** (below), then commit in Corvin-Knowledge.
+3. **Fill the body and the type's own frontmatter** (below), then commit it in the knowledge base
+   (`git -C {{KB_DIR}} add <file> && git -C {{KB_DIR}} commit -m "..."`).
 4. **Validate against the one rule source.**
-   `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py check` must report
+   `{{PYTHON}} {{KB_PY}} check` must report
    `blocking: 0`. The console's Quality Gates page (`/console/app/quality`) runs this same
    `kb check` over the same checkout: an `error` finding is shown as fail, a `warning` (for
    example the G1-G4 readiness gates) as warn. There is no second rule table to satisfy.
+5. **Work that follows from it is a task in the same KB** — never a note in chat, never a board card
+   typed by hand: `{{PYTHON}} {{KB_PY}} new task --title "..." --epic E-NNN --dod "..."` (an epic
+   needs `--initiative I-NN`; `new initiative --title "..."` starts one). Status changes ONLY via
+   `{{PYTHON}} {{KB_PY}} task T-NNNN in_progress|blocked|done|cancelled [--reason ...] [--dod ...]`
+   (done needs a definition of done; a code task also needs its G5 evidence). The board shows it
+   within seconds.
 <!-- knowledge-gate-mechanism:end -->
 
 ## How to write or amend a concept
@@ -109,7 +123,7 @@ _(append-only, timestamped, human-authored. AI amendments NEVER edit or remove a
 under this heading — only add a new dated sub-entry above it.)_
 ```
 
-**Step 3** — Commit the completed file in Corvin-Knowledge (`concept: CONCEPT-NNNN — [title]`, or `concept: amend CONCEPT-NNNN — [what changed]`) and validate with `kb.py check` (shared mechanism, step 4).
+**Step 3** — Commit the completed file in the knowledge base (`git -C {{KB_DIR}} commit`; `concept: CONCEPT-NNNN — [title]`, or `concept: amend CONCEPT-NNNN — [what changed]`) and validate with `kb.py check` (shared mechanism, step 4).
 
 **Step 4** — If the method is durable and narrow enough to fit ≤16 KiB of prompt-injectable prose (ADR-2274), mint or update a companion SkillForge skill (`skill_create`/`skill_promote`, `type: learned-experience`, `scope: project`) distilling the Method section, pointing back at the full concept file for depth. Record the skill's registered name in the concept's `skills:` frontmatter field — note that a persona's namespace gate may require a prefix (e.g. `assistant.<name>`); use the ACTUAL registered name, not the name you intended.
 

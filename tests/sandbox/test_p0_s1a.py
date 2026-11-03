@@ -76,5 +76,9 @@ def test_P_S1a_get_memory_is_an_honest_empty_state_without_a_path(server, sess_a
     assert r.status_code == 200, r.text[:300]
     body = r.json()
     assert body["tenant_id"] == harness.TENANT_A
-    assert body["available"] is False and body["files"] == [] and body["count"] == 0
+    # ADR A-10: the tenant view now exists — every entry comes from a tenant store and
+    # nothing carries a path or the host's ~/.claude.
+    assert MARKER_A not in r.text
+    assert all(f.get("source") in {"conversation", "note", "topic", "harvest", "session", "forge"}
+               for f in body["files"]), body["files"][:3]
     assert "memory_dir" not in body and ".claude" not in r.text, r.text[:300]

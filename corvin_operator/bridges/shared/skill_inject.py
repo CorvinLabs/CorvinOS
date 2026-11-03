@@ -141,11 +141,37 @@ class _CoreSkillSpec:
         self.created_at = 0.0
 
 
-def _load_core_quality_skills() -> list[tuple[str, "_CoreSkillSpec"]]:
+_KB_LOCATOR: Any = None
+
+
+def _render_kb_placeholders(text: str, tenant_id: str | None = None) -> str:
+    """``{{KB_PY}}`` / ``{{KB_DIR}}`` / ``{{PYTHON}}`` -> this tenant's knowledge base
+    (``kb_locator.render``; ADR-2265: every install has its own KB, so a gate skill must not name
+    the maintainers' checkout). Loaded BY FILE PATH from this directory, like path_gate loads
+    ``paths.py``: a bare ``import kb_locator`` could bind another checkout's module. Never raises."""
+    global _KB_LOCATOR
+    if "{{" not in text:
+        return text
+    try:
+        if _KB_LOCATOR is None:
+            import importlib.util as _ilu  # noqa: PLC0415
+
+            spec = _ilu.spec_from_file_location("_kb_locator_skill_inject", _HERE / "kb_locator.py")
+            mod = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            _KB_LOCATOR = mod
+        return _KB_LOCATOR.render(text, tenant_id)
+    except Exception:  # noqa: BLE001 — an unrendered placeholder is visible, a crash is not
+        return text
+
+
+def _load_core_quality_skills(tenant_id: str | None = None) -> list[tuple[str, "_CoreSkillSpec"]]:
     """Return (scope, spec) pairs for adr_gate/e2e-wiring-proof, read
     directly from the bundled SKILL.md files. Best-effort — returns an
     empty list if the bundle directory cannot be resolved (never raises;
-    matches this module's overall optional-dependency design)."""
+    matches this module's overall optional-dependency design). The
+    knowledge-base placeholders are rendered for *tenant_id* (default: the
+    session's ``CORVIN_TENANT_ID``)."""
     bundle_dir = _resolve_bundle_skills_dir()
     if bundle_dir is None:
         return []
@@ -159,6 +185,7 @@ def _load_core_quality_skills() -> list[tuple[str, "_CoreSkillSpec"]]:
         except OSError:
             continue
         description = _frontmatter_description(text) or name
+        text = _render_kb_placeholders(text, tenant_id)
         out.append(("core", _CoreSkillSpec(name=name, description=description, body=text)))
     return out
 
@@ -586,7 +613,7 @@ def collect_active_skills(
     if profile.get("inject_skills") is False:
         return None
 
-    core_pairs = _load_core_quality_skills() if include_core else []
+    core_pairs = _load_core_quality_skills(tenant_id) if include_core else []
     core_pairs = _apply_quality_layer_filter(core_pairs)
     core_bodies = {spec.name: spec.body for _scope, spec in core_pairs}  # type: ignore[attr-defined]
 
@@ -693,7 +720,7 @@ def collect_active_skills(
                 body = can.candidate_body(spec.name)
             if body is None:
                 body = _load_body(reg, spec.name) or ""
-        body = _strip_front_matter(body).strip()
+        body = _render_kb_placeholders(_strip_front_matter(body).strip(), tenant_id)
         # Sanitize wrapper-tag escapes BEFORE capping so the cap-marker
         # ends up cleanly outside the wrapper text.
         body = _sanitize_body(body)

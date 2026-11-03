@@ -106,6 +106,12 @@ def _stand_in_claude(path: Path, storyboard: dict) -> Path:
                         "result": json.dumps(storyboard), "usage": {"input_tokens": 1, "output_tokens": 1}})
     path.write_text(f"#!{sys.executable}\nimport sys\nsys.stdin.read()\nprint({reply!r})\n", encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    if os.name == "nt":
+        # Windows cannot exec a script: wrap it like npm's claude.cmd. CorvinTV 1.8.0 spawns a .cmd shim
+        # through CorvinOS's cmd.exe-safe launcher (agents/_win_shim.py), exactly as for the real CLI.
+        shim = path.with_name("claude.cmd")
+        shim.write_text(f'@"{sys.executable}" "{path}" %*\r\n', encoding="utf-8")
+        return shim
     return path
 
 

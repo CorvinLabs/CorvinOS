@@ -1994,6 +1994,12 @@ def delete_session(tenant_id: str, sid: str) -> bool:
         except OSError:
             pass
     delete_turns(tenant_id, sid)
+    # Its indexed turns in the tenant recall store (memory page) go with it.
+    try:
+        from . import memory_store as _memory_store  # noqa: PLC0415
+        _memory_store.forget_chat(tenant_id, f"{CHANNEL}:{sid}")
+    except Exception:  # noqa: BLE001 — best-effort, like the workdir removal
+        pass
     # The chat's CEL anchor store (goal / decision facts, keyed by the sid) and
     # its ledger render state: deleting the chat removes every copy of its
     # words, not only the turn log (review R5, CEL side note).
@@ -2774,6 +2780,33 @@ def _memory_index_block() -> str:
         return ""
 
 
+_KB_BLOCK_TEMPLATE = """
+
+## Knowledge base and tasks (this workspace)
+This workspace's knowledge base (decisions/ADRs, concepts, plans, and initiatives -> epics -> tasks) is at `{{KB_DIR}}`. The console Tasks board is a projection of it. When the user asks to record, plan, track or move a task, an idea, a concept or a decision, use ONLY its CLI, with exactly this command prefix (the path gate allows nothing else, and never edit KB files by hand):
+`{{PYTHON}} {{KB_PY}} <command>`
+- look first: `find <words> [--type task]`, `show <id>`
+- create: `new task --title "..." --epic E-NNN [--dod "..."]` (an epic needs an initiative: `new initiative --title "..."`, then `new epic --title "..." --initiative I-NN`); also `new concept|decision|idea|plan --title "..."`
+- move a task: `task T-NNNN in_progress|blocked|done|cancelled [--reason "..."] [--dod "..."]` (done needs a definition of done; blocked/cancelled need a reason)
+- afterwards `check` must report `blocking: 0`."""
+
+
+def _knowledge_base_block(sess: "WebChatSession") -> str:
+    """Tells the agent where THIS tenant's knowledge base is and how to file tasks in it
+    (ADR-2205 / ADR-2265). Without it a console chat could not record a task: the gate skills
+    reach chat only through CEL, which cuts them before their KB section. Shown only once the
+    tenant's KB exists (the projector creates it at first boot). Never raises."""
+    try:
+        _load_bg_scope()  # puts corvin_operator/bridges/shared on sys.path
+        import kb_locator  # noqa: PLC0415
+        kb = kb_locator.resolve(sess.tenant_id)
+        if not (kb / "scripts" / "kb.py").is_file():
+            return ""
+        return kb_locator.render(_KB_BLOCK_TEMPLATE, sess.tenant_id)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _acs_directive_block(task_text: str) -> str:
     """Bridge-parity ACS-X directive for the console OS-turn (ADR-0203).
 
@@ -3090,6 +3123,7 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
         + _persona_prompt_block()
         + _user_profile_block()
         + _memory_index_block()
+        + _knowledge_base_block(sess)
         + _voice_audience_block()
         + _acs_directive_block(task_text)
         + _cel_brief_block(cel_brief)
@@ -4726,6 +4760,18 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            # Tenant memory (ADR A-10): index the answered turn-pair into the
+            # tenant recall store, PII-redacted like the bridge path. Inside the
+            # lock so a concurrent delete_session's forget_chat cannot miss it.
+            try:
+                from . import memory_store as _memory_store  # noqa: PLC0415
+                _memory_store.note_chat_turn(
+                    tenant_id=sess.tenant_id, sid=sess.sid, chat_key=sess.chat_key,
+                    role=role, parts=parts,
+                    answered=bool(cli_spawned or tde_progress or execution_context),
+                    refused=bool(gate_refused), aside=bool(btw or notice))
+            except Exception:  # noqa: BLE001 — memory never breaks a turn
+                pass
     except OSError:
         pass
 
