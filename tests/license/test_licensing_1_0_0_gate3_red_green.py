@@ -27,6 +27,8 @@ from _license_console_sandbox import member_tier  # noqa: E402
 
 import corvin_operator.license.capability_api as ca  # noqa: E402
 from corvin_operator.license import limits, quota_counter, validator  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 BASELINE = ["chat.turns", "voice.summaries", "bridges.all", "engines.all",
             "skills.run_vetted", "skills.run_local", "telemetry.opt_out"]
@@ -188,6 +190,7 @@ def test_counter_is_per_tenant(qhome):
         assert quota_counter.increment_and_check(qhome, "f", "tenant_b") == 1
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_counter_is_file_backed(qhome):
     with mock.patch.object(quota_counter, "get_limit", lambda f: 5):
         for _ in range(3):

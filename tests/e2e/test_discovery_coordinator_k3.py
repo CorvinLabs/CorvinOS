@@ -338,6 +338,7 @@ class TestE2ECompleteFlow:
 
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows Path.home() reads USERPROFILE
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
         monkeypatch.setenv("CORVIN_TENANT_ID", "test-tenant")
         monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)

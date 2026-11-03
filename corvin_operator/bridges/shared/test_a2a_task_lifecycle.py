@@ -30,6 +30,8 @@ import unittest.mock as mock
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -198,6 +200,7 @@ class TestStateMachine(_Base):
         self.assertEqual(ats.lookup("gone", "t")["stage"], "unknown")
         self.assertEqual(ats.lookup("kept", "t")["stage"], "completed")
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_store_is_content_free(self):
         ats.record_stage("o", "t", "completed")
         raw = (Path(os.environ["CORVIN_A2A_FEED_DIR"]) / "task_state.jsonl").read_text(encoding="utf-8")

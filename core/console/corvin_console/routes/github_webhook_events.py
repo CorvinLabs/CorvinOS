@@ -238,7 +238,7 @@ class EventProcessor:
     def _create_event_from_webhook(self, payload: Dict[str, Any]) -> WebhookEvent:
         """Convert GitHub webhook payload to internal event."""
         return WebhookEvent(
-            event_id=f"evt-{datetime.utcnow().strftime('%s')}-{hash(str(payload)) % 10000}",
+            event_id=f"evt-{int(datetime.utcnow().timestamp())}-{hash(str(payload)) % 10000}",
             event_type=EventType.WEBHOOK_RECEIVED,
             timestamp=datetime.utcnow().isoformat() + "Z",
             tenant_id=self.tenant_id,

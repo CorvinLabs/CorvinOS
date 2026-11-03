@@ -59,6 +59,7 @@ def setUpModule():
         _saved_env[k] = os.environ.get(k)
     os.environ["CORVIN_HOME"] = os.path.join(_tmp_root, "corvin")
     os.environ["HOME"] = os.path.join(_tmp_root, "home")
+    os.environ["USERPROFILE"] = os.path.join(_tmp_root, "home")  # Windows Path.home() reads USERPROFILE
     for k in ("CORVIN_TENANT_ID", "VOICE_AUDIT_PATH", "FORGE_ROOT"):
         os.environ.pop(k, None)
     _saved_sleep = irp._sleep

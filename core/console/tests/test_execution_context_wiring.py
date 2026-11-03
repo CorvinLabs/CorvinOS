@@ -68,7 +68,9 @@ class TestExecutionContextPersistence:
 
         parts = [{"kind": "text", "text": "Hello, world!"}]
 
-        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path):
+        (turns_path.parent / "meta.json").write_text("{}", encoding="utf-8")  # _append_turn skips a deleted session
+        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path), \
+             patch("corvin_console.chat_runtime._meta_path", return_value=turns_path.parent / "meta.json"):
             _append_turn(session, "assistant", parts, execution_context=execution_context)
 
         # Verify file was written
@@ -91,7 +93,9 @@ class TestExecutionContextPersistence:
 
         parts = [{"kind": "text", "text": "Response text"}]
 
-        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path):
+        (turns_path.parent / "meta.json").write_text("{}", encoding="utf-8")  # _append_turn skips a deleted session
+        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path), \
+             patch("corvin_console.chat_runtime._meta_path", return_value=turns_path.parent / "meta.json"):
             _append_turn(session, "assistant", parts, execution_context=None)
 
         # Verify file was written
@@ -139,7 +143,9 @@ class TestExecutionContextPersistence:
             f.write(json.dumps(turn1) + "\n")
             f.write(json.dumps(turn2) + "\n")
 
-        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path):
+        (turns_path.parent / "meta.json").write_text("{}", encoding="utf-8")  # _append_turn skips a deleted session
+        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path), \
+             patch("corvin_console.chat_runtime._meta_path", return_value=turns_path.parent / "meta.json"):
             turns = read_turns("t3", "sid3")
 
         assert len(turns) == 2
@@ -373,7 +379,9 @@ class TestExecutionContextBackwardCompatibility:
         with turns_path.open("w", encoding="utf-8") as f:
             f.write(json.dumps(legacy_turn) + "\n")
 
-        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path):
+        (turns_path.parent / "meta.json").write_text("{}", encoding="utf-8")  # _append_turn skips a deleted session
+        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path), \
+             patch("corvin_console.chat_runtime._meta_path", return_value=turns_path.parent / "meta.json"):
             turns = read_turns("legacy", "sid-old")
 
         assert len(turns) == 1
@@ -412,7 +420,9 @@ class TestExecutionContextBackwardCompatibility:
             f.write(json.dumps(legacy_turn) + "\n")
             f.write(json.dumps(new_turn) + "\n")
 
-        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path):
+        (turns_path.parent / "meta.json").write_text("{}", encoding="utf-8")  # _append_turn skips a deleted session
+        with patch("corvin_console.chat_runtime._turns_path", return_value=turns_path), \
+             patch("corvin_console.chat_runtime._meta_path", return_value=turns_path.parent / "meta.json"):
             turns = read_turns("mixed", "sid-mixed")
 
         assert len(turns) == 2

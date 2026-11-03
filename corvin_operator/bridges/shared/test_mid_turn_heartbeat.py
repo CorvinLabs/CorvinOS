@@ -13,6 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mid_turn_heartbeat as mth  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 def _envs(outbox: Path) -> list:
@@ -260,6 +262,7 @@ def test_adapter_wires_heartbeat_on_live_paths():
         "heartbeat markers must not be written into the repo tree")
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_default_state_dir_is_under_corvin_home_and_markers_are_private(tmp_path, monkeypatch):
     """F-B8: markers live under <CORVIN_HOME>/bridges/mid_turn_heartbeats,
     are 0600, and the filename carries a fingerprint — never the raw

@@ -99,6 +99,7 @@ class TestSyncWorker:
     def test_perform_sync_success(self, mock_head, tmp_path, monkeypatch):
         """Successful sync performance."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         tenant_path = tmp_path / '.corvin' / 'tenants' / '_default'
         tenant_path.mkdir(parents=True)
 
@@ -133,6 +134,7 @@ class TestSyncWorker:
     def test_perform_sync_repo_unreachable(self, mock_head, tmp_path, monkeypatch):
         """Sync fails when repo is unreachable."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         tenant_path = tmp_path / '.corvin' / 'tenants' / '_default'
         tenant_path.mkdir(parents=True)
 
@@ -166,6 +168,7 @@ class TestSyncWorker:
     def test_perform_sync_connection_error(self, mock_head, tmp_path, monkeypatch):
         """Sync handles connection errors gracefully."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         tenant_path = tmp_path / '.corvin' / 'tenants' / '_default'
         tenant_path.mkdir(parents=True)
 
@@ -196,6 +199,7 @@ class TestSyncWorker:
     def test_save_sync_status(self, tmp_path, monkeypatch):
         """Sync status is persisted to file."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         tenant_path = tmp_path / '.corvin' / 'tenants' / '_default'
         tenant_path.mkdir(parents=True)
 
@@ -230,6 +234,7 @@ class TestSyncWorker:
     def test_should_sync_not_configured(self, tmp_path, monkeypatch):
         """Should not sync if auto_sync is disabled."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         tenant_path = tmp_path / '.corvin' / 'tenants' / '_default'
         tenant_path.mkdir(parents=True)
 

@@ -15,6 +15,9 @@ if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
 import instance_attestation as att
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -281,6 +284,7 @@ class TestLoadSaveAttestation(unittest.TestCase):
         self.assertEqual(loaded["cert"]["instance_id"],
                          iac["cert"]["instance_id"])
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX 0600 mode bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_saved_file_is_mode_0600(self):
         iac, _, _ = _issue()
         att.save_attestation(iac)

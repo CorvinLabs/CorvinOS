@@ -30,6 +30,9 @@ import spawn_gates  # noqa: E402
 from corvin_console import auth as session_auth  # noqa: E402
 from corvin_console import deps as console_deps  # noqa: E402
 from corvin_console.routes import engine as ENG  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 HOST = "llm.acme.example"
 BASE = "/settings/engine"
@@ -116,6 +119,7 @@ class SensitiveRouteApiTests(unittest.TestCase):
 
     # ── provider-compliance ───────────────────────────────────────────────
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_declaring_a_provider_stores_it_with_the_server_filled_host_at_mode_0600(self) -> None:
         r = self.declare()
         self.assertEqual(r.status_code, 200, r.text)
@@ -169,6 +173,7 @@ class SensitiveRouteApiTests(unittest.TestCase):
 
     # ── sensitive-route ───────────────────────────────────────────────────
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_enabling_a_route_round_trips_and_lists_the_eligible_provider(self) -> None:
         self.assertEqual(self.declare().status_code, 200)
         r = self.client().put(f"{BASE}/sensitive-route",

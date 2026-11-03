@@ -59,7 +59,9 @@ class LayerForgeAnalytics:
         """Return ISO week string (YYYY-W##) for a timestamp."""
         dt = datetime.utcfromtimestamp(timestamp)
         # ISO week format
-        return dt.strftime("%Y-W%02d")
+        # glibc reads "%02d" as zero-padded day-of-month; Windows' strftime rejects it
+        # (ValueError). Same output on every platform. NB: not a true ISO week.
+        return dt.strftime("%Y-W") + f"{dt.day:02d}"
 
     def get_decisions_by_week(
         self, since_iso: str | None = None, until_iso: str | None = None

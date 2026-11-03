@@ -97,6 +97,38 @@ class TestPowerShellTool(unittest.TestCase):
             f"[System.IO.File]::WriteAllText('{self.audit}', 'x')")
         self.assertDenied(f"Invoke-Expression \"Remove-Item '{self.audit}'\"")
 
+    def test_variable_indirection_and_pipeline_denied(self):
+        pol = str(self.home / "global" / "forge" / "policy.json")
+        self.assertDenied(f"$p = '{pol}'; Set-Content $p x")
+        self.assertDenied(f'$p = "{pol}"\nAdd-Content -Path $p -Value x')
+        self.assertDenied(
+            "$p = Join-Path $env:CORVIN_HOME 'global/forge/audit.jsonl'; Remove-Item $p")
+        self.assertDenied(f"Get-ChildItem '{self.home}' -Recurse | Remove-Item -Force")
+        self.assertDenied(
+            f"Get-ChildItem '{self.home}' -Recurse -Filter audit* | "
+            "ForEach-Object { Remove-Item $_.FullName }")
+        self.assertDenied(f"attrib -r '{pol}'")
+        self.assertDenied(f"icacls '{pol}' /grant Everyone:F")
+        self.assertDenied("Remove-Item ${env:CORVIN_HOME}/global/forge/audit.jsonl")
+
+    def test_encoded_command_is_decoded(self):
+        import base64
+
+        def enc(s):
+            return base64.b64encode(s.encode("utf-16-le")).decode()
+
+        self.assertDenied(f"powershell -NoProfile -EncodedCommand {enc(f'Remove-Item {self.audit}')}")
+        self.assertDenied(f"pwsh -ec {enc(f'Set-Content {self.audit} x')}")
+        self.assertDenied("powershell -EncodedCommand !!notbase64!!")
+        self.assertAllowed(f"powershell -EncodedCommand {enc('Get-Date')}")
+
+    def test_unresolved_variable_not_over_denied(self):
+        self.assertAllowed("$f = 'C:/tmp/a.txt'; Set-Content $f 'x'")
+        self.assertAllowed(f'$x = Get-Content "{self.audit}"; Set-Content C:/tmp/out.txt $x')
+        self.assertAllowed("Get-Process | Where-Object { $_.Name -like 'forge*' }")
+        self.assertAllowed("python -m pytest core/compute/tests -q")
+        self.assertAllowed("git status")
+
     def test_harmless_commands_allowed(self):
         self.assertAllowed("Get-ChildItem C:/tmp")
         self.assertAllowed(f'Get-Content "{self.audit}"')

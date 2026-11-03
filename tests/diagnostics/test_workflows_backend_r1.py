@@ -45,6 +45,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "anchor.key"))
     monkeypatch.delenv("FORGE_ROOT", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows Path.home() reads USERPROFILE
     (tmp_path / "home").mkdir()
     return home
 

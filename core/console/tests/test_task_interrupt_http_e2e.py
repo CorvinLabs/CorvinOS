@@ -72,6 +72,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("CORVIN_TENANT_ID", _TENANT)
     monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "anchor.key"))
     monkeypatch.delenv("FORGE_ROOT", raising=False)

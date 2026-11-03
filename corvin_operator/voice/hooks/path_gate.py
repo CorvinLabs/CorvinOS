@@ -1562,6 +1562,8 @@ _PS_DESTRUCTIVE = frozenset({
     "remove-item", "ri", "rm", "rmdir", "rd", "del", "erase",
     "move-item", "mi", "mv", "move", "rename-item", "ren", "rni",
     "clear-content", "clc", "clear-item", "cli", "set-acl",
+    # native tools that change attributes / ACLs / ownership of a protected file
+    "icacls", "takeown", "cacls", "attrib",
 })
 #: Writers: every positional / ``-Param:value`` arg is checked with
 #: is_protected_path (a write target, like a redirect or a cp destination).
@@ -1571,7 +1573,20 @@ _PS_WRITERS = frozenset({
     "cp", "copy", "expand-archive", "compress-archive", "export-csv",
     "export-clixml", "invoke-webrequest", "iwr", "invoke-restmethod", "irm",
     "start-bitstransfer", "new-itemproperty", "set-itemproperty",
+    "robocopy", "xcopy",
 })
+#: Writers whose ONLY path is the first positional (or -Path/-FilePath/...);
+#: later positionals are values, so an unresolved ``$x`` there is not a path.
+_PS_FIRST_POSITIONAL_ONLY = frozenset({
+    "set-content", "sc", "add-content", "ac", "out-file", "tee-object", "tee",
+    "new-item", "ni", "set-item", "si", "export-csv", "export-clixml",
+    "new-itemproperty", "set-itemproperty",
+})
+_PS_PATH_PARAMS = frozenset({
+    "path", "filepath", "literalpath", "destination", "outfile", "target", "pspath",
+})
+_PS_ENC_RE = re.compile(
+    r"(?i)(?:^|\s)-(?:ec|" + "|".join("encodedcommand"[:k] for k in range(1, 15)) + r")\s+(\S+)")
 #: Opaque: the real target is decided at run time — fail closed when the
 #: command carries a protected hint.
 _PS_OPAQUE_RE = re.compile(
@@ -1583,6 +1598,7 @@ _PS_OPAQUE_RE = re.compile(
     r"appendalllines|delete|moveto|copyto|replace|create|createtext|"
     r"appendtext|openwrite|setaccesscontrol)\s*\("
     r"|&\s*\{|\.\s*\{|-encodedcommand\b|-enc\b"
+    r"|(?:^|[\s;|&({])(?:new-object|add-type)(?=$|[\s;|&)}])"
 )
 _PS_ENV_RE = re.compile(r"(?i)\$env:([A-Za-z_][A-Za-z0-9_]*)")
 _PS_HOME_RE = re.compile(r"(?i)\$home(?![A-Za-z0-9_])")
@@ -1595,11 +1611,43 @@ def _ps_expand(tok: str) -> str:
     return _PS_HOME_RE.sub(lambda m: str(Path.home()).replace("\\", "/"), tok)
 
 
-def _powershell_deny(cmd: str) -> str:
+def _ps_mentions_protected(text: str) -> bool:
+    """Fail-closed hint for a command whose path operand is decided at run time
+    (``$p = '...policy.json'; Set-Content $p``, ``... | Remove-Item``): does the
+    command text name the corvin home / a protected leaf at all? Narrower than
+    _looks_protected (no bare ``forge``/``compute``), so dev work in a repo
+    directory called forge/compute is not caught."""
+    low = text.lower().replace("/", "\\")
+    if any(h in low for h in (".corvin", "corvin_home", "audit.jsonl", "policy.json",
+                              "secrets.json", "license.jwt", "session_ledger")):
+        return True
+    try:
+        home = _ref(_corvin_home()).lower().replace("/", "\\")
+    except Exception:  # noqa: BLE001 - unresolvable -> fail closed
+        return True
+    return bool(home) and home in low
+
+
+def _powershell_deny(cmd: str, _depth: int = 0) -> str:
     """Return a deny target/description for a PowerShell command, or ''."""
     if _PS_OPAQUE_RE.search(cmd) and _looks_protected(cmd):
         return cmd[:80]
-    for seg in _split_segments(cmd):
+    if _depth < 3:
+        for m in _PS_ENC_RE.finditer(cmd):  # powershell -EncodedCommand <UTF-16LE base64>
+            try:
+                import base64  # noqa: PLC0415
+                inner = base64.b64decode(m.group(1), validate=True).decode("utf-16-le")
+            except Exception:  # noqa: BLE001 - undecodable payload: cannot be inspected
+                return cmd[:80]
+            hit = _powershell_deny(inner, _depth + 1)
+            if hit or _ps_mentions_protected(inner):
+                return hit or inner[:80]
+    # ``${env:X}`` -> ``$env:X``; script-block braces are statement separators
+    # (``... | ForEach-Object { Remove-Item $_.FullName }``).
+    norm = re.sub(r"\$\{(env:)?([^}]+)\}", lambda m: "$" + (m.group(1) or "") + m.group(2), cmd)
+    norm = re.sub(r"[{}]", ";", norm)
+    unresolved_hint = _ps_mentions_protected(cmd)
+    for seg in _split_segments(norm):
         try:
             toks = _split_tokens(seg)
         except ValueError:
@@ -1613,12 +1661,26 @@ def _powershell_deny(cmd: str) -> str:
             name = name[:-4]
         if name not in _PS_DESTRUCTIVE and name not in _PS_WRITERS:
             continue
+        first_only = name in _PS_FIRST_POSITIONAL_ONLY
+        positional = 0
+        has_path_arg = False
+        pending = ""  # name of a preceding ``-Param`` awaiting its value
         for raw in toks[1:]:
             cand = raw
-            if raw.startswith("-"):
-                if ":" not in raw:
+            is_path = False
+            if raw.startswith("-") and len(raw) > 1 and not raw[1].isdigit():
+                pname, colon, val = raw[1:].partition(":")
+                if not colon:
+                    pending = pname.lower()
                     continue  # a parameter name; its value is the next token
-                cand = raw.split(":", 1)[1]
+                cand = val
+                is_path = pname.lower() in _PS_PATH_PARAMS
+            elif pending:
+                is_path = pending in _PS_PATH_PARAMS
+                pending = ""
+            else:
+                is_path = (positional == 0) if first_only else True
+                positional += 1
             cand = _ps_expand(cand)
             if not cand:
                 continue
@@ -1626,13 +1688,18 @@ def _powershell_deny(cmd: str) -> str:
                 part = part.strip().strip("'\"")
                 if not part:
                     continue
-                if "$" in part and _looks_protected(part):
-                    return part  # unresolvable variable naming a protected path
+                if is_path:
+                    has_path_arg = True
+                if "$" in part and (_looks_protected(part) or (is_path and unresolved_hint)):
+                    return part  # unresolvable variable that may name a protected path
                 if name in _PS_DESTRUCTIVE:
                     if _touches_corvin_tree(part):
                         return part
                 elif is_protected_path(part):
                     return part
+        # ``Get-ChildItem <protected> | Remove-Item``: the target arrives on the pipeline.
+        if name in _PS_DESTRUCTIVE and not has_path_arg and unresolved_hint:
+            return seg[:80]
     return ""
 
 

@@ -131,3 +131,42 @@ def test_read_open_survives_concurrent_replace(tmp_path):
         open(tmp_path)
     with pytest.raises(FileNotFoundError):
         open(tmp_path / "nope")
+
+
+def _run_fresh(code: str) -> str:
+    """Run ``code`` in a fresh interpreter (the .pth hook installs the patches; the
+    repo conftest fences builtins.open in-process, so introspect out-of-process)."""
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip()
+
+
+def test_patched_open_stays_introspectable_and_picklable():
+    out = _run_fresh(
+        "import builtins, io, pickle, inspect\n"
+        "assert io.open is builtins.open\n"
+        "assert pickle.loads(pickle.dumps(builtins.open)) is builtins.open\n"
+        "print('buffering' in inspect.signature(builtins.open).parameters)\n"
+    )
+    assert out == "True"
+
+
+def test_denied_read_does_not_stall_every_probe(tmp_path):
+    """A genuinely denied path pays the retry window once, then fails fast."""
+    p = tmp_path / "locked.json"
+    p.write_text("{}", encoding="utf-8")
+    out = _run_fresh(
+        "import builtins, time\n"
+        "p = %r\n"
+        "w = builtins.open\n"
+        "cell = next(c for c in w.__closure__ if c.cell_contents is w.__wrapped__)\n"
+        "def deny(f, *a, **k):\n    raise PermissionError(13, 'denied')\n"
+        "cell.cell_contents = deny\n"
+        "for _ in range(2):\n"
+        "    try: w(p)\n    except PermissionError: pass\n"
+        "t = time.monotonic()\n"
+        "for _ in range(20):\n"
+        "    try: w(p)\n    except PermissionError: pass\n"
+        "print(time.monotonic() - t < 0.25)\n" % str(p)
+    )
+    assert out == "True"

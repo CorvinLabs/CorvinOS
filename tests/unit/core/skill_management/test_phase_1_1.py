@@ -9,6 +9,7 @@ from core.skill_management.meta_generator import generate_skill_metadata
 class TestDirectoryInit:
     def test_init_creates_all_directories(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         init = SkillDirectoryInitializer("_default")
         info = init.init_tenant_structure()
@@ -20,6 +21,7 @@ class TestDirectoryInit:
 
     def test_validate_structure_passes(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         init = SkillDirectoryInitializer("_default")
         init.init_tenant_structure()
@@ -29,6 +31,7 @@ class TestDirectoryInit:
 
     def test_create_placeholder_manifests(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         init = SkillDirectoryInitializer("_default")
         init.init_tenant_structure()
@@ -40,6 +43,7 @@ class TestDirectoryInit:
 class TestMigrator:
     def test_migrate_simple_skill(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
 
         # Create fake ~/.claude/skills/test_skill
@@ -55,6 +59,7 @@ class TestMigrator:
 
     def test_migrate_creates_backup(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         source = tmp_path / ".claude" / "skills" / "test"
         source.mkdir(parents=True)

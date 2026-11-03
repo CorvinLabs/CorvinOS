@@ -22,6 +22,7 @@ import pytest
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "fake_home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "fake_home"))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
     monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
     monkeypatch.delenv("FORGE_ROOT", raising=False)

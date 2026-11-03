@@ -24,6 +24,7 @@ if str(_HERE) not in sys.path:
 def tenant_home(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows Path.home() reads USERPROFILE
     tenant_dir = tmp_path / "tenants" / "_default" / "global"
     tenant_dir.mkdir(parents=True, exist_ok=True)
     return tenant_dir

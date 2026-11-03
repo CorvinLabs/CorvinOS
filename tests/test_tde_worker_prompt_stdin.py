@@ -44,13 +44,28 @@ exit 0
 '''
 
 
+_FAKE_CLAUDE_PY = r"""
+import json, os, sys
+out = os.environ["FAKE_CLAUDE_OUT"]
+json.dump(sys.argv[1:], open(os.path.join(out, "argv.json"), "w"))
+open(os.path.join(out, "stdin.txt"), "wb").write(sys.stdin.buffer.read())
+print('{"type":"result","subtype":"success","is_error":false,"result":"fake answer","usage":{"input_tokens":1,"output_tokens":1}}')
+"""
+
 @pytest.fixture
 def fake_claude(tmp_path, monkeypatch):
     out = tmp_path / "fake_out"
     out.mkdir()
     binary = tmp_path / "claude"
-    binary.write_text(_FAKE_CLAUDE, encoding="utf-8")
-    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    if sys.platform == "win32":
+        # same fake as _FAKE_CLAUDE, as Python behind a .cmd shim (no bash / shebangs)
+        script = tmp_path / "claude_fake.py"
+        script.write_text(_FAKE_CLAUDE_PY, encoding="utf-8")
+        binary = tmp_path / "claude.cmd"
+        binary.write_text(f'@"{sys.executable}" "{script}" %*' + chr(13) + chr(10), encoding="utf-8")
+    else:
+        binary.write_text(_FAKE_CLAUDE, encoding="utf-8")
+        binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("FAKE_CLAUDE_OUT", str(out))
     monkeypatch.setenv("CORVIN_CLAUDE_BIN", str(binary))
     return out

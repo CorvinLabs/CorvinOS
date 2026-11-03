@@ -64,6 +64,7 @@ class TestForgeCorvinHome:
 
     def test_env_var_tilde_expansion(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
         monkeypatch.setenv("CORVIN_HOME", "~/my-corvin")
         result = forge_paths.corvin_home()
         assert str(result).startswith(str(tmp_path))

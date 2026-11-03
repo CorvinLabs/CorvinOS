@@ -34,6 +34,7 @@ def _env(home: Path) -> dict:
         "CORVIN_HOME": str(home),
         "CORVIN_TENANT_ID": "_default",
         "HOME": str(home / "h"),
+        "USERPROFILE": str(home / "h"),  # Windows Path.home() reads USERPROFILE
         "CORVIN_AUDIT_ANCHOR_KEY": str(home / "keys" / "audit_anchor.key"),
         "VOICE_CONFIG_DIR": str(home / "voicecfg"),
     })

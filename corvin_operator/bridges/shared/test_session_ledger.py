@@ -23,11 +23,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import session_ledger as sl  # noqa: E402
 import session_state  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
+import sys as _sys_skip
+import pytest as _pytest_skip
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 @pytest.fixture()
 def wd(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-cfg"))
+    cfg = tmp_path / "claude-cfg"
+    if os.name == "nt":
+        # the engine's per-project transcript dir name is the whole workdir path
+        # with every non-alphanumeric char -> '-'; under pytest's long tmp_path
+        # the transcript file path exceeds MAX_PATH (260), so keep the root short.
+        import tempfile
+        cfg = Path(tempfile.mkdtemp(prefix="cc"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
     d = tmp_path / "sessions" / "voice" / "telegram" / "chat-1"
     d.mkdir(parents=True)
     return d
@@ -78,6 +91,7 @@ class TestRecord:
         assert [r["kind"] for r in recs] == ["turn", "turn", "turn", "boundary"]
         assert recs[-1]["seq"] == 4 and "n" not in recs[-1]
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX 0600 mode bits are not representable on NTFS")
     def test_file_is_private(self, wd):
         _turn(wd, 1)
         assert stat.S_IMODE(sl.ledger_path(wd).stat().st_mode) == 0o600
@@ -644,6 +658,7 @@ class TestRound4:
 
 
 class TestRound6:
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="creating a symlink needs SeCreateSymbolicLinkPrivilege (WinError 1314)")
     def test_the_view_never_writes_through_a_planted_symlink(self, wd):
         """Review R6-1: a symlink named like the view's temp file made the
         adapter overwrite the ledger with the view."""
@@ -820,6 +835,7 @@ class TestRound10:
 
 
 class TestRound5:
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX 0600 mode bits are not representable on NTFS")
     def test_ledger_stays_private_after_an_erasure(self, wd):
         import erasure_handlers as eh
         _turn(wd, 1)

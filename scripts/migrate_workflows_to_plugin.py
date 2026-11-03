@@ -171,7 +171,7 @@ async def copy_files_atomic(
     _log.info(f"[Phase 2] Atomic copy for tenant {tenant_id}")
 
     # Create backup of existing target
-    backup_dir = target_dir.parent / f"{target_dir.name}.backup.{datetime.now().strftime('%s')}"
+    backup_dir = target_dir.parent / f"{target_dir.name}.backup.{int(datetime.now().timestamp())}"
     if target_dir.exists():
         try:
             shutil.copytree(target_dir, backup_dir)

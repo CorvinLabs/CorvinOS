@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 @pytest.fixture()
@@ -83,6 +85,7 @@ class TestIncidentRecord:
 
 
 class TestOpenIncident:
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_creates_file(self, tracker, tmp_corvin_home):
         r = tracker.open_incident(
             category="chain_integrity",

@@ -13,6 +13,8 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from grant_store import GrantStore, GrantStoreError, grant_db_path
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -187,6 +189,7 @@ def test_purge_all(store):
 # ── mode 0600 ─────────────────────────────────────────────────────────────────
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_db_mode_600(tmp_path):
     db = tmp_path / "grants.db"
     GrantStore(db)

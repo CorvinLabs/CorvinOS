@@ -140,6 +140,7 @@ def _run(tier: str, tmp_path: Path) -> dict:
         "CORVIN_TENANT_ID": "_default",
         "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
         "HOME": str(tmp_path / "userhome"),
+        "USERPROFILE": str(tmp_path / "userhome"),  # Windows Path.home() reads USERPROFILE
         "CORVIN_AUDIT_ANCHOR_KEY": str(tmp_path / "anchor.key"),
         # never let an import-time vite build run (no npm on PATH)
         "PATH": os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)

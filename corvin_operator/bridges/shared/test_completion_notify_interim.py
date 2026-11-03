@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 
 import pytest
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -30,6 +32,7 @@ def _files(d: Path):
     return sorted(d.glob("*.json"))
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_an_interim_is_a_normal_message_with_routing_and_provenance(cn, tmp_path):
     out = tmp_path / "out"
     assert cn.send_interim("t1", "Tick 1 arrived", out) is True

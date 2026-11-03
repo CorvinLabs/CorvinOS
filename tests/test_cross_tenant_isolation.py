@@ -43,6 +43,7 @@ def scratch_home(tmp_path: Path, monkeypatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("CORVIN_HOME", str(home / ".corvin"))
     monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
     monkeypatch.delenv("FORGE_AUDIT_PATH", raising=False)

@@ -716,6 +716,7 @@ class HomeSpoofingCannotMakeASandboxCanonical(unittest.TestCase):
         fake_home = Path(tempfile.mkdtemp(prefix="kb-fakehome-"))
         (fake_home / ".corvin").mkdir()
         os.environ["HOME"] = str(fake_home)
+        os.environ["USERPROFILE"] = str(fake_home)  # Windows Path.home() reads USERPROFILE
         os.environ["CORVIN_HOME"] = str(fake_home / ".corvin")
         self.assertFalse(self.kp._canonical_home())
         self.assertIsNone(self.kp.kb_repo())
@@ -724,6 +725,7 @@ class HomeSpoofingCannotMakeASandboxCanonical(unittest.TestCase):
         import pwd
 
         os.environ["HOME"] = tempfile.mkdtemp(prefix="kb-fakehome-")      # spoofed, irrelevant
+        os.environ["USERPROFILE"] = tempfile.mkdtemp(prefix="kb-fakehome-")      # spoofed, irrelevant  # Windows Path.home() reads USERPROFILE
         os.environ["CORVIN_HOME"] = str(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".corvin")
         self.assertTrue(self.kp._canonical_home())                         # positive control
 

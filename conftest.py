@@ -844,3 +844,26 @@ def pytest_runtest_call(item):
             "contain:\n  " + "\n  ".join(bad),
             pytrace=False,
         )
+
+
+# Windows cannot delete a file another handle still holds open. Short-lived
+# background writers (e.g. the IBC audit thread, SQLite handles being closed)
+# can still be finishing when a ``TemporaryDirectory`` cleanup runs at test
+# teardown, so retry the removal briefly. Idempotent; no-op on POSIX.
+if _sys.platform == "win32":
+    import time as _time
+
+    _orig_td_cleanup = _tempfile.TemporaryDirectory.cleanup
+    if not getattr(_orig_td_cleanup, "_corvin_retry", False):
+        def _td_cleanup_retry(self, *a, **k):
+            for _ in range(40):
+                try:
+                    return _orig_td_cleanup(self, *a, **k)
+                except (PermissionError, OSError) as _exc:
+                    if getattr(_exc, "winerror", None) not in (5, 32, 145):
+                        raise
+                    _time.sleep(0.1)
+            return _orig_td_cleanup(self, *a, **k)
+
+        _td_cleanup_retry._corvin_retry = True
+        _tempfile.TemporaryDirectory.cleanup = _td_cleanup_retry

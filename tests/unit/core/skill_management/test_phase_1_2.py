@@ -18,6 +18,7 @@ from core.skill_management.validator import (
 def temp_tenant_dir(tmp_path, monkeypatch):
     """Create temp tenant structure."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
     tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
     (tenant_path / "_shared" / "skills").mkdir(parents=True)

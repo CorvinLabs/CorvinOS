@@ -98,6 +98,7 @@ class TaskInterruptionReportE2E(unittest.TestCase):
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": self.tmp.name,
+            "USERPROFILE": self.tmp.name,  # Windows Path.home() reads USERPROFILE
             "CORVIN_HOME": str(self.home),
             "XDG_CONFIG_HOME": str(Path(self.tmp.name) / "xdg"),
             "CORVIN_AUDIT_ANCHOR_KEY": str(Path(self.tmp.name) / "anchor.key"),

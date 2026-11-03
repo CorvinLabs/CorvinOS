@@ -28,6 +28,7 @@ def _run(tmp_path: Path, entrypoint: str | None) -> str:
     env = {
         "PATH": os.environ["PATH"],
         "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),  # Windows Path.home() reads USERPROFILE
         "XDG_CONFIG_HOME": str(tmp_path),
     }
     if entrypoint is not None:

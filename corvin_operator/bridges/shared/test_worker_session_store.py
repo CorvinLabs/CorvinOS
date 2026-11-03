@@ -42,6 +42,9 @@ from worker_session_store import (  # noqa: E402
     load_session, save_session, delete_session, list_sessions,
     read_session_record, worker_sessions_dir,
 )
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +139,7 @@ class TestWorkerSessionStore(unittest.TestCase):
         save_session(ws, "myworker", "ses_abc123", "assistant")
         self.assertEqual(load_session(ws, "myworker"), "ses_abc123")
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_save_sets_mode_0600(self) -> None:
         ws = self._ws()
         save_session(ws, "myworker", "ses_abc123", "assistant")

@@ -15,6 +15,8 @@ import threading
 from pathlib import Path
 
 import pytest
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 _here = Path(__file__).resolve().parent
 if str(_here) not in sys.path:
@@ -82,16 +84,13 @@ class TestF3AuditWriteOrDie:
 
     def test_raises_AuditChainFull_on_ioerror(self, tmp_path):
         from forge.security_events import audit_write_or_die, AuditChainFull
-        # Make the directory read-only so write fails
-        audit_dir = tmp_path / "ro_dir"
-        audit_dir.mkdir()
-        os.chmod(audit_dir, 0o555)
-        audit_file = audit_dir / "audit.jsonl"
-        try:
-            with pytest.raises((AuditChainFull, OSError)):
-                audit_write_or_die(audit_file, "test.event")
-        finally:
-            os.chmod(audit_dir, 0o755)  # restore for cleanup
+        # Make the write fail: the parent "directory" is a regular file. (A read-only
+        # directory, chmod 0o555, does not stop file creation on NTFS.)
+        blocker = tmp_path / "not_a_dir"
+        blocker.write_text("x", encoding="utf-8")
+        audit_file = blocker / "audit.jsonl"
+        with pytest.raises((AuditChainFull, OSError)):
+            audit_write_or_die(audit_file, "test.event")
 
     def test_AuditChainFull_is_OSError_subclass(self):
         from forge.security_events import AuditChainFull
@@ -398,6 +397,7 @@ class TestF10InstanceIdentity:
             os.environ.pop("CORVIN_INSTANCE_ID_PATH", None)
             os.environ.pop("CORVIN_HOME", None)
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX 0600 mode bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_file_mode_is_0600(self, tmp_path):
         import stat as _stat
         id_path = tmp_path / "instance_id.json"

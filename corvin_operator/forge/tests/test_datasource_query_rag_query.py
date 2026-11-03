@@ -100,6 +100,7 @@ def _env(tmp: Path) -> dict[str, str]:
            if k in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT", "TEMP", "TMP")}
     env.update({
         "HOME": str(tmp / "home"),
+        "USERPROFILE": str(tmp / "home"),  # DuckDB resolves its home dir from USERPROFILE on Windows
         "CORVIN_HOME": str(home),
         "XDG_CONFIG_HOME": str(tmp / "xdg"),
         "CORVIN_SECRET_VAULT": str(tmp / "xdg" / "corvin-voice" / "secrets.json"),

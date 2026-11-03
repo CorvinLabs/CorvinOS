@@ -22,6 +22,9 @@ if str(_HERE) not in sys.path:
 
 import a2a_invite as inv
 import a2a_invite_registry as reg
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 def _isolated_invite(**kwargs):
@@ -299,6 +302,7 @@ class RegistryTests(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertEqual(found.ikey, "abc")
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_file_mode_is_0600(self):
         with tempfile.TemporaryDirectory() as d:
             r = self._registry(d)

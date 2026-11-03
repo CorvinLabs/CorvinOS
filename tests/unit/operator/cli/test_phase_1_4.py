@@ -158,6 +158,7 @@ class TestCliMigrate:
     def test_migrate_dry_run(self, cli_runner, tmp_path, monkeypatch):
         """CLI dry-run shows what would be migrated."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
 
         # Create fake ~/.claude/skills
         source_dir = tmp_path / ".claude" / "skills" / "test-skill"
@@ -171,6 +172,7 @@ class TestCliMigrate:
     def test_migrate_confirm(self, cli_runner, tmp_path, monkeypatch):
         """CLI confirms and executes migration."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
 
         # Create fake ~/.claude/skills
         source_dir = tmp_path / ".claude" / "skills" / "test-skill"

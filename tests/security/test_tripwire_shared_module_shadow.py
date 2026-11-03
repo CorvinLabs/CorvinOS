@@ -38,6 +38,7 @@ def _probe(tmp_path: Path, pre_import: str = "") -> dict:
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),  # Windows Path.home() reads USERPROFILE
         "CORVIN_HOME": str(tmp_path / "corvin"),
         "PYTHONPATH": os.pathsep.join(str(REPO / p) for p in _UNIT_PYTHONPATH),
     }

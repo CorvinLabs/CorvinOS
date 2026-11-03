@@ -140,6 +140,20 @@ def test_call_manager_sync_still_works_without_a_proc_holder():
 # multi-tool ACS runs). Fixed the same way: system via
 # --append-system-prompt-file, prompt via stdin.
 
+def _executable_script(script) -> str:
+    """Path of something `subprocess` can launch directly: the script itself on
+    POSIX (shebang), a .cmd wrapper around the current interpreter on Windows
+    (CreateProcess ignores shebangs -> WinError 193)."""
+    import stat
+    import sys as _sys
+    if _sys.platform == "win32":
+        wrapper = script.with_suffix(".cmd")
+        wrapper.write_text(f'@"{_sys.executable}" "{script}" %*' + chr(13) + chr(10), encoding="utf-8")
+        return str(wrapper)
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return str(script)
+
+
 def _fake_claude_reads_stdin(tmp_path) -> str:
     """A real (not mocked) tiny script standing in for `claude`: echoes back
     a JSON envelope shaped like --output-format json, with the ACTUAL stdin
@@ -154,8 +168,7 @@ def _fake_claude_reads_stdin(tmp_path) -> str:
         "stdin_text = sys.stdin.read()\n"
         "print(json.dumps({'result': 'ECHO:' + stdin_text}))\n", encoding="utf-8"
     )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    return str(script)
+    return _executable_script(script)
 
 
 def test_call_worker_sync_prompt_delivered_via_stdin(tmp_path):
@@ -227,8 +240,7 @@ def _fake_claude_huge_output(tmp_path, total_chars: int) -> str:
         f"payload = 'X' * {total_chars}\n"
         "sys.stdout.write(json.dumps({'result': payload}))\n", encoding="utf-8"
     )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    return str(script)
+    return _executable_script(script)
 
 
 def test_call_worker_sync_caps_huge_output(tmp_path):

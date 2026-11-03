@@ -291,6 +291,7 @@ def _install_rmtree_readonly() -> None:
 
 _READ_RETRY_MARK = "_corvin_read_retry"
 _READ_RETRY_SECONDS = 0.3
+_READ_RETRY_DENIED_TTL = 5.0
 
 
 def _install_read_retry() -> None:
@@ -317,6 +318,10 @@ def _install_read_retry() -> None:
         if getattr(original, _READ_RETRY_MARK, False):
             return
 
+        # Paths whose retry window already expired (a real ACL denial / a lock held
+        # for minutes): fail fast for a few seconds instead of stalling every probe.
+        denied: dict = {}
+
         def open(file, mode="r", *args, **kwargs):  # noqa: A001 - mirrors builtins.open
             try:
                 return original(file, mode, *args, **kwargs)
@@ -325,6 +330,10 @@ def _install_read_retry() -> None:
                         or any(c in mode for c in "wax+")
                         or kwargs.get("opener") is not None or os.path.isdir(file)
                         or not os.path.exists(file)):
+                    raise
+                key = os.fspath(file)
+                stamp = denied.get(key)
+                if stamp is not None and time.monotonic() - stamp < _READ_RETRY_DENIED_TTL:
                     raise
             deadline = time.monotonic() + _READ_RETRY_SECONDS
             delay = 0.002
@@ -335,8 +344,15 @@ def _install_read_retry() -> None:
                     return original(file, mode, *args, **kwargs)
                 except PermissionError:
                     if time.monotonic() >= deadline:
+                        if len(denied) > 256:
+                            denied.clear()
+                        denied[key] = time.monotonic()
                         raise
 
+        # Keep ``open`` introspectable/picklable like the builtin (io.open).
+        open.__module__ = "io"  # pickle resolves io.open -> this function
+        open.__qualname__ = open.__name__ = "open"
+        open.__wrapped__ = original
         setattr(open, _READ_RETRY_MARK, True)
         open.__doc__ = original.__doc__
         builtins.open = open

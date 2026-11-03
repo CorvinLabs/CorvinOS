@@ -33,6 +33,9 @@ if str(_here) not in sys.path:
 import a2a_http_server  # noqa: E402
 import remote_trigger_sender as rts  # noqa: E402
 import spawn_gates  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 _SAVED_LICENSE_MODULES: dict[str, object | None] = {}
 _L44_PATCH = mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None)
@@ -148,6 +151,7 @@ class TestInboundWorkerIsolationContract(unittest.TestCase):
         for tool in ("Bash", "WebFetch", "WebSearch", "Write"):
             self.assertIn(tool, granted, f"{tool} must stay denied when only reading was granted")
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_d_the_worker_runs_in_a_private_scratch_directory(self):
         kw = self._run()
         wd = Path(str(kw.get("working_dir")))

@@ -89,8 +89,8 @@ def test_sessions_dry_run():
     print("\n[sessions cleanup — dry-run lists, doesn't rm]")
     with tempfile.TemporaryDirectory() as td:
         sess_root = Path(td) / "sessions"
-        old_chan = sess_root / "discord:test-old" / "skill-forge"
-        young_chan = sess_root / "discord:test-young" / "skill-forge"
+        old_chan = sess_root / ("discord:test-old".replace(":", "_") if os.name == "nt" else "discord:test-old") / "skill-forge"
+        young_chan = sess_root / ("discord:test-young".replace(":", "_") if os.name == "nt" else "discord:test-young") / "skill-forge"
         old_chan.mkdir(parents=True)
         young_chan.mkdir(parents=True)
         _set_old_mtime(old_chan, 86400 * 60)
@@ -115,8 +115,8 @@ def test_sessions_actual_rm():
     print("\n[sessions cleanup — real rm of old]")
     with tempfile.TemporaryDirectory() as td:
         sess_root = Path(td) / "sessions"
-        old_chan = sess_root / "discord:test-real" / "skill-forge"
-        young_chan = sess_root / "discord:test-young" / "skill-forge"
+        old_chan = sess_root / ("discord:test-real".replace(":", "_") if os.name == "nt" else "discord:test-real") / "skill-forge"
+        young_chan = sess_root / ("discord:test-young".replace(":", "_") if os.name == "nt" else "discord:test-young") / "skill-forge"
         old_chan.mkdir(parents=True)
         young_chan.mkdir(parents=True)
         (old_chan / "skills_registry.json").write_text("{}", encoding="utf-8")

@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 
 from corvin_workflows import node_profile as np
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 _FORGE = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "forge")
 
@@ -81,6 +83,7 @@ def test_a_non_ok_status_is_recorded_as_error():
 
 # ── how it is written ────────────────────────────────────────────────────────
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_append_writes_one_line_to_the_dated_segment_and_never_rewrites(tmp_path):
     e1 = np.build_entry(meta(), "agent|n|<8k|json", "ok", now=at(day()))
     e2 = np.build_entry(meta(run_id="second"), "agent|n|<8k|json", "ok", now=at(day()))

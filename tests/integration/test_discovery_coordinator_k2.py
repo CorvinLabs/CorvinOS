@@ -26,6 +26,7 @@ from core.discovery.discovery_coordinator import (
 def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
     monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
     monkeypatch.delenv("FORGE_ROOT", raising=False)

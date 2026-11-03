@@ -74,6 +74,7 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
         os.environ["CORVIN_HOME"] = str(root / "corvin")
         os.environ["XDG_CONFIG_HOME"] = str(root / "xdg")
         os.environ["HOME"] = str(root / "home")
+        os.environ["USERPROFILE"] = str(root / "home")  # Windows Path.home() reads USERPROFILE
         os.environ["CORVIN_TENANT_ID"] = "_default"
         os.environ["CORVIN_AUDIT_ANCHOR_KEY"] = str(root / "anchor.key")
         os.environ["ANTHROPIC_API_KEY"] = "sk-ant-sandbox-dummy"

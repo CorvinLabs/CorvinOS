@@ -19,6 +19,7 @@ def adscale_ldd_zip():
 def pm(monkeypatch, tmp_path):
     """Create PackageManager with temp CORVIN_HOME."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
     return PackageManager(tenant_id="_default")
 
 
@@ -131,6 +132,7 @@ class TestAdscaleLddE2E:
         import os
 
         os.environ["HOME"] = str(tmp_path)
+        os.environ["USERPROFILE"] = str(tmp_path)  # Windows Path.home() reads USERPROFILE
         pm2 = PackageManager(tenant_id="_default")
 
         # Should still see the package

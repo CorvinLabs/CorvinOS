@@ -66,8 +66,8 @@ def test_sessions_dry_run():
     with tempfile.TemporaryDirectory() as td:
         os.environ["CORVIN_HOME"] = td
         sess_root = Path(td) / "sessions"
-        old_chan = sess_root / "discord:test-old"
-        young_chan = sess_root / "discord:test-young"
+        old_chan = sess_root / ("discord:test-old".replace(":", "_") if os.name == "nt" else "discord:test-old")
+        young_chan = sess_root / ("discord:test-young".replace(":", "_") if os.name == "nt" else "discord:test-young")
         old_chan.mkdir(parents=True); young_chan.mkdir(parents=True)
         _set_old_mtime(old_chan, 86400 * 60)   # 60d
         _set_old_mtime(young_chan, 86400 * 1)  # 1d
@@ -92,8 +92,8 @@ def test_sessions_actual_rm():
     with tempfile.TemporaryDirectory() as td:
         os.environ["CORVIN_HOME"] = td
         sess_root = Path(td) / "sessions"
-        old_chan = sess_root / "discord:test-real"
-        young_chan = sess_root / "discord:test-young"
+        old_chan = sess_root / ("discord:test-real".replace(":", "_") if os.name == "nt" else "discord:test-real")
+        young_chan = sess_root / ("discord:test-young".replace(":", "_") if os.name == "nt" else "discord:test-young")
         old_chan.mkdir(parents=True); young_chan.mkdir(parents=True)
         # Add a file so we know rmtree works
         (old_chan / "tool.json").write_text("{}", encoding="utf-8")

@@ -42,6 +42,7 @@ def test_boot_skills_in_fresh_interpreter(tmp_path: Path) -> None:
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),  # Windows Path.home() reads USERPROFILE
         "CORVIN_HOME": str(home),
         "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
         "CORVIN_TENANT_ID": "_default",
@@ -139,6 +140,7 @@ def _run(script: str, tmp_path: Path, *, extra_env: dict | None = None) -> dict:
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),  # Windows Path.home() reads USERPROFILE
         "CORVIN_HOME": str(home),
         "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
         "CORVIN_TENANT_ID": "_default",

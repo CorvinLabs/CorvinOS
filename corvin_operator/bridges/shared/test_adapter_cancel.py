@@ -115,9 +115,14 @@ def test_cancel_chat_kills_running_subproc() -> None:
     adapter = _fresh_adapter({"ADAPTER_CANCEL_GRACE_SEC": "1.5"})
 
     # A deliberately slow subproc that ignores stdin and just sleeps.
-    proc = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    if sys.platform == "win32":  # no `sleep`, no getpgid / sessions
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        print(f"started sleep pid={proc.pid}")
+    else:
+        proc = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        print(f"started sleep pid={proc.pid} pgid={os.getpgid(proc.pid)}")
     adapter._register_subproc("chatX", proc)
-    print(f"started sleep pid={proc.pid} pgid={os.getpgid(proc.pid)}")
 
     t0 = time.time()
     n = adapter._cancel_chat("chatX")
@@ -128,8 +133,9 @@ def test_cancel_chat_kills_running_subproc() -> None:
     assert proc.poll() is not None, "subproc still alive after _cancel_chat"
     assert elapsed < 2.5, f"_cancel_chat took {elapsed:.1f}s — should be sub-second"
     # SIGTERM = -15, but the grace path may so see -9. Either is a kill.
-    assert proc.returncode in (-signal.SIGTERM, -signal.SIGKILL), \
-        f"unexpected returncode {proc.returncode}"
+    if sys.platform != "win32":  # Windows has no signal exit codes
+        assert proc.returncode in (-signal.SIGTERM, -signal.SIGKILL), \
+            f"unexpected returncode {proc.returncode}"
     # Registry must be cleared — _cancel_chat itself doesn't unregister, but
     # the registry is per-Popen and we registered exactly one. Real callers
     # unregister via the call_claude finally-block; here we just check the

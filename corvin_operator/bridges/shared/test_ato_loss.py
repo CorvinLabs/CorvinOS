@@ -26,6 +26,9 @@ if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
 import ato_loss as al
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 class TestEMAHelper(unittest.TestCase):
@@ -65,6 +68,7 @@ class TestRecordOutcome(unittest.TestCase):
         p = al._stats_path()
         self.assertTrue(p.exists())
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_file_mode_0600(self):
         al.record_outcome("iterative_fix", did_converge=True)
         p = al._stats_path()

@@ -35,6 +35,7 @@ def _isolated_home(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows Path.home() reads USERPROFILE
     yield home
 
 
@@ -361,6 +362,7 @@ class TestPluginConfiguration:
         path and https://test.git (found 2026-09-26)."""
         with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as fake_home:
             monkeypatch.setenv("HOME", fake_home)
+            monkeypatch.setenv("USERPROFILE", fake_home)  # Windows Path.home() reads USERPROFILE
             real_file = Path(os.path.expanduser("~")) / ".claude" / "plugins" / "corvin-knowledge.json"
             assert str(real_file).startswith(fake_home), "HOME isolation did not take effect"
             config = {

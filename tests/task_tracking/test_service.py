@@ -17,6 +17,8 @@ import pytest
 
 from core.task_tracking import service, store
 from core.task_tracking.models import ItemCreate, ItemPatch
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 T = "_default"
 
@@ -39,6 +41,7 @@ def _mk(kind="task", title="t", **kw):
     return service.create(T, ItemCreate(kind=kind, title=title, **kw), actor="test")
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_store_file_and_directory_are_private(chain):
     _mk()
     p = store.db_path(T)

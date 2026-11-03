@@ -23,6 +23,8 @@ import test_remote_trigger_sender as h  # harness + module-level forge mocks
 
 import a2a_feed
 import remote_trigger_sender as rts
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"feed-test-image" * 20
 
@@ -64,6 +66,7 @@ class _Harness(unittest.TestCase):
 
 class TestExchangeRecordsBothSides(_Harness):
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_roundtrip_with_image_leaves_four_records(self):
         sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
         result = sender.send(h.ENDPOINT_ID, "describe this", attachments=[_png_att()])

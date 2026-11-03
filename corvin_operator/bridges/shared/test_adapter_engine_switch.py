@@ -43,6 +43,8 @@ sys.path.insert(0, str(ROOT))
 # test_adapter_house_rules_binary.py::_run_escalate_message for the same
 # pattern with an escalate verdict).
 import house_rules as _hr  # type: ignore  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 _allow = _hr.HouseRulesDecision("allow", "", "clear", 1.0)
 
@@ -140,6 +142,7 @@ def _local_coder_profile() -> dict:
 # ---------------------------------------------------------------------------
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="fake opencode is a shebang script on a ':'-joined PATH; CreateProcess cannot run it (WinError 193)")
 def test_opencode_dispatch_runs_fake_binary() -> None:
     _section("opencode pre-dispatch — fake opencode → echo final_text")
     work, bin_dir = _setup_fake_opencode("dispatch")

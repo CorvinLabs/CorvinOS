@@ -48,6 +48,9 @@ from license.limits import (  # noqa: E402
     LicenseLimitError,
 )
 import license.compute_quota as _cq  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 def _reload():
@@ -302,6 +305,7 @@ class TestComputeQuotaCounter(unittest.TestCase):
             _cq.increment_and_check(self._home)
         self.assertEqual(ctx.exception.limit, FREE_TIER["compute_units_per_day"])
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_quota_file_mode_0600(self):
         self._set_limit(5)
         _cq.increment_and_check(self._home)

@@ -56,6 +56,7 @@ def isolated_home(tmp_path, monkeypatch):
     home.mkdir()
     corvin_home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
     return home, corvin_home
 

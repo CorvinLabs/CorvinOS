@@ -97,7 +97,13 @@ class _Recorder:
         self.out.mkdir(parents=True, exist_ok=True)
         self.binary = tmp_path / "claude-recorder"
         self.binary.write_text(_STDIN_RECORDER, encoding="utf-8")
-        self.binary.chmod(self.binary.stat().st_mode | stat.S_IXUSR)
+        if sys.platform == "win32":
+            # CreateProcess ignores shebangs (WinError 193): run it through a .cmd shim
+            script, self.binary = self.binary, tmp_path / "claude-recorder.cmd"
+            self.binary.write_text(
+                f'@"{sys.executable}" "{script}" %*' + chr(13) + chr(10), encoding="utf-8")
+        else:
+            self.binary.chmod(self.binary.stat().st_mode | stat.S_IXUSR)
 
     @property
     def argv(self) -> list[str]:

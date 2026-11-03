@@ -49,6 +49,7 @@ from core.remediation.orchestrator import (
 def _scratch_home(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     # tests/conftest.py redirects the chain via VOICE_AUDIT_PATH; these tests
     # assert on the CANONICAL tenant chain, so drop the redirect.

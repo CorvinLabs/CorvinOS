@@ -32,7 +32,7 @@ learning_signal:
 
 
 def _bundle(root: Path, name: str, version: str = "1.0.0", trigger: str = "before_delegation_decision") -> Path:
-    d = root / "bundles" / f"{name.replace('/', '_')}_{version}"
+    d = root / "bundles" / f"{name.replace('/', '_')}_{version.replace('/', '_').rstrip('.')}"  # the manifest keeps the raw version
     d.mkdir(parents=True, exist_ok=True)
     (d / "manifest.yaml").write_text(MANIFEST_TMPL.format(name=name, version=version, trigger=trigger), encoding="utf-8")
     (d / "SKILL.md").write_text("# skill\n", encoding="utf-8")

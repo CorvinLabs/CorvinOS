@@ -48,6 +48,9 @@ from agents.claude_code import (  # noqa: E402
 from agents.codex_cli import CodexCliEngine  # noqa: E402
 from agents.copilot_cli import CopilotCliEngine  # noqa: E402
 from agents.opencode_cli import OpenCodeEngine  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +402,7 @@ class GrandchildLeakTests(unittest.TestCase):
         except Exception:
             pass
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "bash-script fake claude + process-group grandchild reaping (killpg/pgid) is POSIX-only; Windows tree kill (taskkill /T) is covered elsewhere")
     def test_cancel_reaps_tool_use_grandchild(self):
         """cancel() must kill the WHOLE process group (killpg), not just
         the direct child, or a live tool-use grandchild (Bash, MCP
@@ -442,6 +446,7 @@ class GrandchildLeakTests(unittest.TestCase):
         finally:
             self._drain_quietly(gen)
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "bash-script fake claude + process-group grandchild reaping (killpg/pgid) is POSIX-only; Windows tree kill (taskkill /T) is covered elsewhere")
     def test_cleanup_proc_reaps_tool_use_grandchild_on_generator_close(self):
         """The streaming idle-timeout path (adapter.py) stops iterating
         and drops the generator, which drives spawn()'s
@@ -547,6 +552,7 @@ class CopilotTimeoutGrandchildLeakTests(unittest.TestCase):
             time.sleep(0.05)
         raise AssertionError(f"grandchild pidfile {pidfile} never appeared")
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "bash-script fake claude + process-group grandchild reaping (killpg/pgid) is POSIX-only; Windows tree kill (taskkill /T) is covered elsewhere")
     def test_timeout_path_reaps_tool_use_grandchild(self):
         """spawn()'s TimeoutExpired handler must kill the WHOLE process
         group (killpg), not just the direct child via a bare proc.kill(),

@@ -44,6 +44,7 @@ print(json.dumps({
 def _probe(home: Path) -> dict:
     env = {
         "HOME": str(home),
+        "USERPROFILE": str(home),  # Windows Path.home() reads USERPROFILE
         "PATH": STRIPPED_PATH,
         "CORVIN_HOME": str(home / ".corvin"),
         "PYTHONPATH": os.pathsep.join(str(REPO / p) for p in SERVICE_PYTHONPATH),

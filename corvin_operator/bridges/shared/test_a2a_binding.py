@@ -20,6 +20,9 @@ from unittest import mock
 
 import a2a_binding as bind
 import a2a_friendship as ft
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 A_IID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 B_IID = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
@@ -55,6 +58,7 @@ class TestBindingPrimitives(unittest.TestCase):
         with keys.use("C"):
             self.assertFalse(bind.verify_bind_mac(a, "kid1", b"msg", mac_a))
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_key_file_is_private_and_stable(self):
         root = Path(tempfile.mkdtemp())
         keys = _Keys(root)
@@ -223,7 +227,11 @@ class TestKeyFileRobustness(unittest.TestCase):
         self.assertEqual(pub, keys.pub("A"), "stable after the repair")
 
     def test_unwritable_location_means_no_key_not_an_exception(self):
-        keys = _Keys(Path("/proc/nonexistent-dir"))
+        # a directory under a regular file can be created on no OS ("/proc/..." is
+        # creatable on the current drive root on Windows)
+        blocker = Path(tempfile.mkdtemp()) / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        keys = _Keys(blocker / "nonexistent-dir")
         self.assertIsNone(keys.pub("A"))
 
 

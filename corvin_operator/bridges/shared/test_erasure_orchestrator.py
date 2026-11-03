@@ -33,6 +33,9 @@ from erasure_orchestrator import (  # noqa: E402
     StubHandler,
     validate_subject_id,
 )
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 # ----- fake handlers used across multiple test classes ----------------
@@ -190,6 +193,7 @@ class TestOrchestratorHappyPath(unittest.TestCase):
         self.assertEqual(self.events[1][1], "INFO")     # applied
         self.assertEqual(self.events[-1][1], "WARNING")  # completed
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_trail_file_persisted(self):
         self.orch.register_handler(_CountingHandler("L28-recall", 3))
         req = ErasureRequest(subject_id="user_42", requester="dpo")

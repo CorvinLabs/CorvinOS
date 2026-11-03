@@ -46,6 +46,7 @@ def pm(monkeypatch, tmp_path):
     """Create PackageManager with temp CORVIN_HOME."""
     corvin_home = tmp_path / ".corvin"
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
     return PackageManager(tenant_id="_default")
 
 

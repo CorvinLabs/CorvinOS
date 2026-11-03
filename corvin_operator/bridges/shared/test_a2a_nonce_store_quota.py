@@ -69,11 +69,13 @@ class _Contract:
         self.assertEqual(self.store.check_and_add_ex("A0", origin_id="A"), ns.REPLAY)
 
     def test_expired_rows_free_capacity(self):
-        store = self.make(ttl_s=0.05)
+        # 0.05 s was shorter than ten SQLite inserts take on Windows (rows expired
+        # while still being added); keep the TTL clear of the insert time.
+        store = self.make(ttl_s=1.0)
         for i in range(10):
             self.assertTrue(store.check_and_add(f"x{i}", origin_id="A"))
         self.assertEqual(store.check_and_add_ex("x10", origin_id="A"), ns.ORIGIN_QUOTA)
-        time.sleep(0.2)
+        time.sleep(1.2)
         self.assertTrue(store.check_and_add("x11", origin_id="A"))
 
     def test_remove_frees_quota_slot_and_allows_retry(self):
@@ -116,8 +118,11 @@ class TestPersistentStoreQuota(_Contract, unittest.TestCase):
         con.close()
         store = ns.PersistentNonceStore(db)
         self.assertIsNone(store._fallback)
-        cols = [r[1] for r in sqlite3.connect(db).execute(
-            "PRAGMA table_info(nonces)")]
+        _con = sqlite3.connect(db)
+        try:
+            cols = [r[1] for r in _con.execute("PRAGMA table_info(nonces)")]
+        finally:
+            _con.close()  # an open handle blocks the temp-dir cleanup on Windows
         self.assertIn("origin_id", cols)
         self.assertEqual(store.check_and_add_ex("old", origin_id="A"), ns.REPLAY)
         self.assertTrue(store.check_and_add("fresh", origin_id="A"))
@@ -128,7 +133,11 @@ class TestInMemoryFallbackQuota(_Contract, unittest.TestCase):
         return ns._InMemoryNonceStore(ttl_s=ttl_s)
 
     def test_persistent_store_uses_it_on_bad_path(self):
-        store = ns.PersistentNonceStore("/proc/definitely/not/writable/n.db")
+        # a path UNDER A REGULAR FILE cannot be created on any OS ("/proc/..." is a
+        # creatable directory on the current drive root on Windows)
+        blocker = self.dir / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        store = ns.PersistentNonceStore(str(blocker / "sub" / "n.db"))
         self.assertIsNotNone(store._fallback)
         for i in range(10):
             store.check_and_add(f"f{i}", origin_id="A")

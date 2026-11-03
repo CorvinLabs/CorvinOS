@@ -404,7 +404,7 @@ def test_writer_loads_when_forge_prebound_as_namespace_package(tmp_path):
                        env=env, cwd=str(tmp_path), timeout=60, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr[-2000:]
     assert "WRITER True" in r.stdout, r.stdout + r.stderr[-2000:]
-    assert "corvin_operator/forge/forge/security_events.py" in r.stdout, r.stdout
+    assert "corvin_operator/forge/forge/security_events.py" in r.stdout.replace("\\", "/"), r.stdout
 
 
 def test_broken_writer_import_is_logged_at_error_level():

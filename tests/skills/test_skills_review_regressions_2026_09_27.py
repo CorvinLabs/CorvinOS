@@ -102,6 +102,7 @@ def test_skill_manager_upload_route_cannot_escape_install_root(tmp_path, monkeyp
     from fastapi.testclient import TestClient
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows Path.home() reads USERPROFILE
     from corvin_console.routes import skill_manager
 
     app = fastapi.FastAPI()

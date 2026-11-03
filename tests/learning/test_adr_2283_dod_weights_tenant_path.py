@@ -12,6 +12,8 @@ import pytest
 from core.skills.os_skills.definition_of_done_verifier.weight_persistence import (
     WeightPersistence,
 )
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 @pytest.fixture
@@ -21,9 +23,11 @@ def sandbox(tmp_path, monkeypatch):
     fake_user_home.mkdir()
     monkeypatch.setenv("CORVIN_HOME", str(home))
     monkeypatch.setenv("HOME", str(fake_user_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_user_home))  # Windows Path.home() reads USERPROFILE
     return home, fake_user_home
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_two_tenants_get_two_files_under_corvin_home(sandbox):
     home, user_home = sandbox
     a = WeightPersistence(tenant_id="tenant_a")

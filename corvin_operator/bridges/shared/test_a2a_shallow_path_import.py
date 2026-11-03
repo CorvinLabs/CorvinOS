@@ -52,6 +52,9 @@ _MIN_FILES = (
     "_compat_fcntl.py",   # imported by _bounded_lock
     "a2a_attachments.py",
     "a2a_manifest.py",
+    "a2a_usage.py",
+    "a2a_objects.py",
+    "endpoint_role.py",
     "paths.py",
 )
 
