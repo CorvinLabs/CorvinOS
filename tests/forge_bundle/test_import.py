@@ -32,6 +32,8 @@ from core.forge_bundle import tool_quarantine as tq
 from core.forge_bundle.audit import ForgeBundleAuditError
 from core.forge_bundle.envelope import Requirement
 from core.forge_bundle.import_module import BundleImportAborted
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 T = "_default"
 
@@ -439,6 +441,7 @@ def test_C3_tool_meta_survives_the_round_trip(tmp_corvin_home):
     assert meta["requirements"] == ["numpy>=1.26"] and meta["deterministic"] is True
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_quarantine_files_are_owner_only(tool_bundle):
     qid = _qid(_import(tool_bundle))
     entry_dir = ToolQuarantine(T).root / qid

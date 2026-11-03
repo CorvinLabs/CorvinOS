@@ -400,3 +400,55 @@ def test_closing_line_never_claims_success_for_a_child_that_ended_without_a_resu
     assert line == "■ Background work ended: 1 of 2 tasks ended without a clear result."
     assert bgs.closing_line([{"kind": "bash", "state": "failed"}, {"kind": "x", "state": "unknown"}]).startswith("❌")
 
+
+
+def test_agent_resumed_by_sendmessage_is_open_again_when_the_turn_answers():
+    """CLI 2.1.317: SendMessage resumes a finished sub-agent under the SAME task_id with a
+    new run_id. It must count as open at the turn's own answer, or stdin is closed and
+    the CLI cuts the resumed run (captured 2026-11-03, agent_resumed_sendmessage)."""
+    # In print mode the CLI emits the `result` events at the end, so the state is read at
+    # the main model's own messages (no parent_tool_use_id), which ARE in stream order.
+    tr = bgs.ScopeTracker(scope_id="t", tenant_id="_default")
+    open_at_answer = {}
+    for e in kit.load_fixture("agent_resumed_sendmessage"):
+        if e.get("type") == "assistant":
+            for b in (e.get("message") or {}).get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    tr.note_tool_use(b.get("id", ""), b.get("name", ""))
+                elif isinstance(b, dict) and b.get("type") == "text" and not e.get("parent_tool_use_id"):
+                    open_at_answer[b["text"].strip()] = len(tr.open_children)
+        elif e.get("type") == "result":
+            tr.note_result(e)
+        else:
+            tr.feed(e, e.get("_t", 0.0))
+    assert open_at_answer["WAITING"] == 1   # the resumed run is open at the turn's answer
+    assert open_at_answer["DONE2"] == 0     # and closed once it reported back
+    starts = [c for c in tr.all_children if c.kind == "agent"]
+    assert len(starts) == 1 and starts[0].state == bgs.COMPLETED
+
+
+def test_a_late_report_of_the_earlier_run_does_not_end_the_resumed_run():
+    tr = bgs.ScopeTracker()
+    base = {"type": "system", "task_id": "a", "task_type": "local_agent"}
+    tr.feed({**base, "subtype": "task_started", "run_id": "r1", "is_backgrounded": True}, 1.0)
+    tr.feed({**base, "subtype": "task_notification", "run_id": "r1", "status": "completed"}, 2.0)
+    assert not tr.open_children
+    tr.feed({**base, "subtype": "task_started", "run_id": "r2", "is_backgrounded": True}, 3.0)
+    assert [c.run_id for c in tr.open_children] == ["r2"]
+    tr.feed({**base, "subtype": "task_notification", "run_id": "r1", "status": "completed"}, 4.0)
+    assert [c.run_id for c in tr.open_children] == ["r2"]
+    # a duplicate task_started of the SAME run stays idempotent
+    tr.feed({**base, "subtype": "task_started", "run_id": "r2", "is_backgrounded": True}, 5.0)
+    assert len(tr.open_children) == 1
+
+
+def test_cli_env_aligns_the_cli_background_ceiling_with_the_scope_cap(monkeypatch):
+    monkeypatch.delenv(bgs.CLI_BG_WAIT_ENV, raising=False)
+    monkeypatch.delenv("CORVIN_BG_CHILD_MAX", raising=False)
+    assert bgs.cli_env({}) == {bgs.CLI_BG_WAIT_ENV: str(int(bgs.CHILD_MAX_DEFAULT_S * 1000))}
+    monkeypatch.setenv("CORVIN_BG_CHILD_MAX", "1800")
+    assert bgs.cli_env({}) == {bgs.CLI_BG_WAIT_ENV: "1800000"}
+    # an operator's own value wins, in the spawn env or in the process env
+    assert bgs.cli_env({bgs.CLI_BG_WAIT_ENV: "0"}) == {}
+    monkeypatch.setenv(bgs.CLI_BG_WAIT_ENV, "5000")
+    assert bgs.cli_env() == {}

@@ -37,6 +37,8 @@ from corvin_plugins.state import (  # noqa: E402
     instance_dir,
     registry_path,
 )
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 #: The module name a plugin ``class_path`` must use to reach the fakes below.
 #:
@@ -114,6 +116,7 @@ class TestPersistence(_Base):
         self.assertIn("acme-notify", again.records)
         self.assertEqual(again.records["acme-notify"].settings, {"channel": "ops"})
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_registry_is_mode_0600(self):
         reg = self._reg()
         reg.records["acme-notify"] = _record()
@@ -866,6 +869,7 @@ class TestConcurrentMutations(_Base):
         # The lock context re-raises without saving a partial state.
         self.assertEqual(len(self._reg().records), 1)
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_the_lock_file_is_not_world_readable(self):
         import stat
 

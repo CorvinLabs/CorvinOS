@@ -71,8 +71,8 @@ class _SandboxBase(unittest.TestCase):
         (self.home / "global" / "roles" / "discord__chatA.json").write_text(
             '{"chatA":{}}', encoding="utf-8"
         )
-        (self.home / "sessions" / "discord:chatA").mkdir(parents=True, exist_ok=True)
-        (self.home / "sessions" / "discord:chatA" / "session.json").write_text(
+        (self.home / "sessions" / ("discord_chatA" if os.name == "nt" else "discord:chatA")).mkdir(parents=True, exist_ok=True)
+        (self.home / "sessions" / ("discord_chatA" if os.name == "nt" else "discord:chatA") / "session.json").write_text(
             '{"started":true}', encoding="utf-8"
         )
 
@@ -131,10 +131,15 @@ class E2E_B_LegacyMigrationTests(_SandboxBase):
         # Legacy path is now a symlink
         legacy_global = self.home / "global"
         self.assertTrue(legacy_global.is_symlink() or legacy_global.is_junction())  # junction on Windows
-        self.assertEqual(
-            os.readlink(str(legacy_global)),
-            str(Path("tenants") / DEFAULT_TENANT_ID / "global"),
-        )
+        if os.name == "nt":
+            # A junction's target is stored (and read back) as an absolute \?\ path.
+            self.assertTrue(os.path.samefile(
+                legacy_global, self.home / "tenants" / DEFAULT_TENANT_ID / "global"))
+        else:
+            self.assertEqual(
+                os.readlink(str(legacy_global)),
+                str(Path("tenants") / DEFAULT_TENANT_ID / "global"),
+            )
 
         # Real data lives under tenants/_default/global
         moved_audit = (

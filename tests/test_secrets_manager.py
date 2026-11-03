@@ -30,6 +30,8 @@ for _p in (
 
 import provider_keys as provider_keys_module
 from provider_keys import SecretsStore, resolve_key, resolve_by_env_var
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 class TestSecretsStoreBasics:
@@ -66,6 +68,7 @@ class TestSecretsStoreBasics:
         result = store.decrypt_secrets()
         assert result == {}
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_master_key_generation(self, tmp_path, monkeypatch):
         """First call generates tenant_master.key with 0o600 permissions."""
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path))

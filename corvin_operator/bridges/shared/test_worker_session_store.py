@@ -273,7 +273,7 @@ class TestSpawnA2aWorkerSessionPinning(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="test-a2a-pin-"))
-        self.session_home = self.tmp / "sessions" / "discord:999"
+        self.session_home = self.tmp / "sessions" / ("discord_999" if os.name == "nt" else "discord:999")
         self.session_home.mkdir(parents=True)
 
     def tearDown(self) -> None:
@@ -354,7 +354,7 @@ class TestSessionResetPurgesWorkerSessions(unittest.TestCase):
         only layout ``session_reset._sessions_root`` purges since 2026-08-28.
         The pre-migration ``<corvin_home>/sessions/`` fixture this test used to
         build was never reached (fixture drift, fixed 2026-09-07)."""
-        d = self.tmp / "tenants" / "_default" / "sessions" / chan_id / "worker_sessions"
+        d = self.tmp / "tenants" / "_default" / "sessions" / (chan_id.replace(":", "_") if os.name == "nt" else chan_id) / "worker_sessions"
         d.mkdir(parents=True)
         return d
 

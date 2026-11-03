@@ -373,6 +373,15 @@ _CHAT_STATUS = {"pending": "queued", "running": "running", "completed": "done",
 def _chat_channel(rel_parts: tuple[str, ...]) -> tuple[str, str]:
     """(type, subtype) from the session directory under sessions/."""
     head = rel_parts[0] if rel_parts else ""
+    if os.name == "nt":
+        # Windows: ':' is illegal in a path component, so the session dir is
+        # written ``web_<sid>`` / ``discord_<id>`` (fs_safe_component) - map the
+        # known channel prefixes back so a web turn is still recognised as the
+        # operator's own and a bridge turn as that bridge's.
+        for _ch in ("web", "cli", "discord", "telegram", "slack", "whatsapp", "signal", "matrix"):
+            if head.startswith(_ch + "_"):
+                head = _ch + ":" + head[len(_ch) + 1:]
+                break
     if head == "voice" and len(rel_parts) >= 3:
         bridge, chat = rel_parts[1], rel_parts[2]
         if chat.startswith("bgtask"):

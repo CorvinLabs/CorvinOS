@@ -177,12 +177,14 @@ class ScopeTracker:
             out += self._on_started(raw, now)
         elif sub == "task_updated":
             patch = raw.get("patch")
-            out += self._on_update(str(raw.get("task_id") or ""),
-                                   patch.get("status") if isinstance(patch, dict) else None,
-                                   None, now, final=False)
+            if not self._stale_run(raw):
+                out += self._on_update(str(raw.get("task_id") or ""),
+                                       patch.get("status") if isinstance(patch, dict) else None,
+                                       None, now, final=False)
         elif sub == "task_notification":
-            out += self._on_update(str(raw.get("task_id") or ""), raw.get("status"),
-                                   parse_exit_code(raw.get("summary")), now, final=True)
+            if not self._stale_run(raw):
+                out += self._on_update(str(raw.get("task_id") or ""), raw.get("status"),
+                                       parse_exit_code(raw.get("summary")), now, final=True)
         elif sub == "background_tasks_changed":
             out += self._on_snapshot(raw.get("tasks"), now)
         after = len(self.open_children)
@@ -192,6 +194,12 @@ class ScopeTracker:
         return out
 
     # -- reducers ---------------------------------------------------------
+
+    def _stale_run(self, raw: dict) -> bool:
+        """A late report of an EARLIER run of a resumed child must not end the new run."""
+        child = self._children.get(str(raw.get("task_id") or ""))
+        run_id = str(raw.get("run_id") or "")
+        return bool(child is not None and child.run_id and run_id and run_id != child.run_id)
 
     def _kind_for(self, tool_use_id: str, task_type: str) -> str:
         name = self._tool_names.get(str(tool_use_id or ""), "").lower()
@@ -206,6 +214,19 @@ class ScopeTracker:
         task_type = str(raw.get("task_type") or "")
         kind = self._kind_for(raw.get("tool_use_id") or "", task_type)
         existing = self._children.get(tid)
+        run_id = str(raw.get("run_id") or "")
+        if existing is not None and existing.state in TERMINAL and run_id \
+                and existing.run_id and run_id != existing.run_id:
+            # SendMessage resumes a finished sub-agent under the SAME task_id with a new
+            # run_id: a new run of the child, open again (it was left "completed", so stdin
+            # was closed and the run was cut). Measured on CLI 2.1.317.
+            child = Child(task_id=tid, kind=kind, task_type=task_type or existing.task_type,
+                          description=str(raw.get("description") or existing.description),
+                          started_at=now, run_id=run_id)
+            self._children[tid] = child
+            self._pending_end.pop(tid, None)
+            self._unannounced.pop(tid, None)
+            return [Transition("child_started", child, len(self.open_children))]
         if existing is not None:
             # The snapshot saw this child first: enrich it in place (`prompt` is
             # deliberately dropped) and announce it exactly once, now that the tool is known.
@@ -370,6 +391,28 @@ def _bounded_env(name: str, default: float, bounds: tuple[float, float]) -> floa
 
 def child_max_s() -> float:
     return _bounded_env("CORVIN_BG_CHILD_MAX", CHILD_MAX_DEFAULT_S, _CHILD_MAX_BOUNDS)
+
+
+#: The claude CLI in print mode (-p) STOPS every background child this long after
+#: its last turn ("Background tasks still running 600s after the last turn ...;
+#: stopping them"), independent of stdin and of the scope cap above. Its default
+#: is 600 s (measured on CLI 2.1.317), so a sub-agent that ran longer than ten
+#: minutes after the model's last answer was cut and reported "stopped", and the
+#: turn ended without its result. The scope cap (child_max_s, enforced by the
+#: watchdog of every tracker) is the bound; the CLI's own ceiling is aligned to it.
+CLI_BG_WAIT_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+
+def cli_env(env: Any = None) -> dict[str, str]:
+    """Env overrides for a claude CLI spawn whose background children this module tracks.
+
+    An operator's own ``CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`` (in *env*, else in
+    ``os.environ``) is kept: only a missing or empty value is filled in.
+    """
+    src = os.environ if env is None else env
+    if str(src.get(CLI_BG_WAIT_ENV) or "").strip():
+        return {}
+    return {CLI_BG_WAIT_ENV: str(int(child_max_s() * 1000))}
 
 
 def wakeup_max() -> int:

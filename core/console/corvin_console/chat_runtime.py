@@ -8373,6 +8373,10 @@ async def _stream_turn_impl(
     # stored OpenAI TTS key to the video JOB process only (``video_producer_api._job_env``), so
     # ``os.environ`` carries nothing to strip (review 2026-10-21, T-0245).
     _spawn_env = {**os.environ, "CORVIN_SESSION_DIR": str(sess.workdir), "CORVIN_TENANT_ID": str(sess.tenant_id)}
+    # ADR-2236: without this the CLI stops a background sub-agent 600 s after the
+    # model's last answer, whatever the scope cap says (bg_scope.cli_env).
+    if (_bgs_env := _load_bg_scope()) is not None and hasattr(_bgs_env, "cli_env"):
+        _spawn_env.update(_bgs_env.cli_env(_spawn_env))
     # T-0230 — the spawn must go where the L35 gate looked. `check_console_spawn_or_refusal`
     # validates the host of the provider assigned to claude_code, so the env carries that
     # provider's route (the bridge does the same through the same function) and an inherited
@@ -8693,10 +8697,14 @@ async def _stream_turn_impl(
             elif etype == "assistant":
                 # Stream-json assistant event — extract text deltas.
                 msg = evt.get("message") or {}
+                # A sub-agent's own messages carry parent_tool_use_id: its narration is not
+                # the answer, so it is neither streamed nor saved as the main model's text
+                # (its tool calls still are: visibility and the turn-recovery effect class).
+                _from_subagent = bool(evt.get("parent_tool_use_id"))
                 for block in (msg.get("content") or []):
                     if isinstance(block, dict):
                         btype = block.get("type")
-                        if btype == "text" and block.get("text"):
+                        if btype == "text" and block.get("text") and not _from_subagent:
                             text = str(block["text"])
                             final_text_parts.append(text)
                             assistant_parts.append({"kind": "text", "text": text})
@@ -8786,9 +8794,10 @@ async def _stream_turn_impl(
                     _btw_stdin_registered = False
                     with _running_stdins_web_guard:
                         _btw_stdin_closed.add(sess.chat_key)
-                    # The CLI kills its background children 600 s after stdin EOF (measured
-                    # 2026-10-21), so with a child still running stdin stays open and is
-                    # closed below once the last child has ended.
+                    # With a child still running stdin stays open and is closed below once
+                    # the last child has ended. (The 600 s cut measured on 2026-10-21 is the
+                    # CLI's print-mode background-wait ceiling, counted from the last turn,
+                    # not from stdin EOF; _spawn_env aligns it with the scope cap.)
                     if _bg is not None and _bg.open_children:
                         _bg_stdin_held = True
                     else:

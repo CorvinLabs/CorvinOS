@@ -23,6 +23,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -291,7 +292,7 @@ class ToolQuarantine:
         """Remove claim/staging leftovers older than an hour (a decision takes seconds)."""
         cutoff = time.time() - _STALE_SECONDS
         for d in self.root.iterdir():
-            if d.name.startswith((".claimed-", ".staging-")):
+            if d.name.startswith((".claimed-", ".staging-", ".claimlock-")):
                 try:
                     if d.stat().st_mtime < cutoff:
                         shutil.rmtree(d, ignore_errors=True)
@@ -316,11 +317,27 @@ class ToolQuarantine:
         """Atomically take an entry out of the queue. Only one caller wins."""
         _check_qid(qid)
         claimed = self.root / f".claimed-{qid}"
+        # Windows: two racing directory renames of the same source can BOTH
+        # succeed (observed: two concurrent accepts both won). mkdir is exclusive
+        # everywhere, so it serialises the claim there; POSIX keeps the single
+        # atomic rename.
+        lock = self.root / f".claimlock-{qid}" if sys.platform == "win32" else None
+        if lock is not None:
+            try:
+                os.mkdir(lock)
+            except FileExistsError:
+                raise QuarantineNotFound("unknown quarantine id") from None
+            except OSError as exc:
+                raise QuarantineError(f"could not claim quarantine entry: {type(exc).__name__}") from None
         try:
             (self.root / qid).rename(claimed)
         except FileNotFoundError:
+            if lock is not None:
+                shutil.rmtree(lock, ignore_errors=True)
             raise QuarantineNotFound("unknown quarantine id") from None
         except OSError as exc:
+            if lock is not None:
+                shutil.rmtree(lock, ignore_errors=True)
             raise QuarantineError(f"could not claim quarantine entry: {type(exc).__name__}") from None
         try:
             os.utime(claimed)  # rename keeps the staging mtime; the sweep must age the CLAIM
@@ -337,11 +354,15 @@ class ToolQuarantine:
         try:
             claimed.rename(self.root / qid)
         except OSError:
-            pass  # stays claimed: invisible, never decided twice
+            return  # stays claimed: invisible, never decided twice
+        if sys.platform == "win32":
+            shutil.rmtree(self.root / f".claimlock-{qid}", ignore_errors=True)
 
     @staticmethod
     def discard(claimed: Path) -> None:
         shutil.rmtree(claimed, ignore_errors=True)
+        if sys.platform == "win32" and not claimed.exists():
+            shutil.rmtree(claimed.parent / (".claimlock-" + claimed.name[len(".claimed-"):]), ignore_errors=True)
 
     def read_impl(self, entry: QuarantinedTool, entry_dir: Path) -> str:
         try:

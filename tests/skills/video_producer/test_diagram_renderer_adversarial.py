@@ -16,6 +16,8 @@ import pytest
 from core.skills.video_producer.maestro import MaestroOrchestrator, VideoJobPhase
 from core.skills.video_producer.workers.diagram.compiler import Compiled, SpecError, compile_spec
 from core.skills.video_producer.workers.diagram_renderer import DiagramRendererWorker
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 BOX = {"id": "x", "type": "box", "label": "X", "at": [100, 100]}
 
@@ -178,6 +180,7 @@ def test_job_id_cannot_escape_out_dir(tmp_path, bad_id):
     assert not Path("/tmp/abs_escape").exists()
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_default_out_dir_is_private_not_shared_tmp():
     w = DiagramRendererWorker(diagram_specs={0: _spec()})
     assert w.out_dir.name.startswith("diagram_renderer_")

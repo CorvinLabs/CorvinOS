@@ -37,6 +37,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from corvin_gateway import runs  # noqa: E402
 from corvin_gateway.app import app  # noqa: E402
 from forge import security_events as _security_events  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 # ── Fixture: isolated corvin_home + provisioned tenants ─────────────
@@ -88,6 +91,7 @@ class HealthzTests(unittest.TestCase):
 
 
 class SubmitRunHappyTests(unittest.TestCase):
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_post_returns_202_and_run_id(self):
         with sandbox(("acme",)) as home:
             r = _client().post(

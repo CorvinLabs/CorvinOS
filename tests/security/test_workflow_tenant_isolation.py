@@ -20,6 +20,8 @@ from typing import Dict, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 # ============================================================================
@@ -205,6 +207,7 @@ class TestCrossTenantAccessBlocking:
 class TestStorageIsolation:
     """Verify storage directories are tenant-isolated with proper permissions."""
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_storage_permissions_0o700(
         self,
         isolated_storage: Dict,
@@ -248,6 +251,7 @@ class TestStorageIsolation:
         assert len(list(tenant_a_path.glob("*"))) > 0  # Tenant A has files
         assert len(list(tenant_b_path.glob("*"))) == 0  # Tenant B empty
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_workflow_metadata_not_world_readable(
         self,
         isolated_storage: Dict,

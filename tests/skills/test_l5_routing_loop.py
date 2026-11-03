@@ -27,6 +27,8 @@ from core.skills.os_skills.monitoring import (  # noqa: E402
     rollback_detector,
     routing_ledger,
 )
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 TENANT = "_default"
 
@@ -68,6 +70,7 @@ def _seed(n: int, *, surface="console", source="bundled", bundled="native", used
 # ── ledger ──────────────────────────────────────────────────────────────────
 
 class TestLedger:
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_decision_and_outcome_join_and_file_is_private(self):
         tid = routing_ledger.new_turn_id()
         assert routing_ledger.record_decision(

@@ -24,6 +24,8 @@ from memory_bridge import (
     _validate_memory_write_path,
     _write_cc_memory_files,
 )
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 class TestValidateMemoryWritePath:
@@ -50,8 +52,8 @@ class TestValidateMemoryWritePath:
 
     def test_deny_sibling_session(self, tmp_path):
         sessions = tmp_path / "sessions"
-        session_a = sessions / "bridge:chat_a" / ".claude" / "memory"
-        session_b = sessions / "bridge:chat_b" / ".claude" / "memory"
+        session_a = sessions / ("bridge_chat_a" if os.name == "nt" else "bridge:chat_a") / ".claude" / "memory"
+        session_b = sessions / ("bridge_chat_b" if os.name == "nt" else "bridge:chat_b") / ".claude" / "memory"
         session_a.mkdir(parents=True)
         session_b.mkdir(parents=True)
         # Worker in session A should not write to session B
@@ -68,6 +70,7 @@ class TestValidateMemoryWritePath:
 
 
 class TestWriteCcMemoryFiles:
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_creates_directory_mode_0700(self, tmp_path):
         session_mem_dir = tmp_path / ".claude" / "memory"
         _write_cc_memory_files(

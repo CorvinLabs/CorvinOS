@@ -12,6 +12,7 @@ chat_runtime instrumentation is wired (Phase 2.K=1 implementation).
 import pytest
 import asyncio
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Any, AsyncIterator
@@ -103,7 +104,7 @@ class MockTokenMetricsStore:
 @pytest.fixture
 def temp_workdir(tmp_path: Path) -> Path:
     """Fixture: temporary session working directory."""
-    workdir = tmp_path / "sessions" / "web:test_session"
+    workdir = tmp_path / "sessions" / ("web_test_session" if os.name == "nt" else "web:test_session")
     workdir.mkdir(parents=True, exist_ok=True)
     return workdir
 

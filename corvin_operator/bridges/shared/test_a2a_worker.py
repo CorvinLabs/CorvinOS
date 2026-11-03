@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -591,7 +592,7 @@ class TestSpawnA2AWorkerWorkspaceCleanup(unittest.TestCase):
 
         tmp = Path(tempfile.mkdtemp(prefix="test-a2a-ws-cleanup-"))
         try:
-            session_home = tmp / "sessions" / "discord:999"
+            session_home = tmp / "sessions" / ("discord_999" if os.name == "nt" else "discord:999")
             session_home.mkdir(parents=True)
             ws_dir = worker_sessions_dir(session_home)
             save_session(ws_dir, "review", "ses_stale", "assistant")
@@ -617,7 +618,7 @@ class TestSpawnA2AWorkerWorkspaceCleanup(unittest.TestCase):
 
         tmp = Path(tempfile.mkdtemp(prefix="test-a2a-ws-cleanup-"))
         try:
-            session_home = tmp / "sessions" / "discord:999"
+            session_home = tmp / "sessions" / ("discord_999" if os.name == "nt" else "discord:999")
             session_home.mkdir(parents=True)
             ws_dir = worker_sessions_dir(session_home)
             save_session(ws_dir, "review", "ses_stale", "assistant")

@@ -286,7 +286,7 @@ def test_generate_report_include_content_no_key():
         lines = [json.dumps(ev) + "\n" for ev in _mock_events("run-001")]
         audit_path.write_text("".join(lines), encoding="utf-8")
         # Set run_dir so traces dir lookup succeeds (matches acs_runtime session path)
-        run_dir = Path(td) / "tenants" / "_test" / "sessions" / "discord:test" / "acs" / "runs" / "run-001"
+        run_dir = Path(td) / "tenants" / "_test" / "sessions" / ("discord_test" if os.name == "nt" else "discord:test") / "acs" / "runs" / "run-001"
         run_dir.mkdir(parents=True)
         (run_dir / "traces").mkdir()
         with patch.object(_wr, "_audit_path", return_value=audit_path), \

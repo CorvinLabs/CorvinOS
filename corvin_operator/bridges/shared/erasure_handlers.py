@@ -80,6 +80,21 @@ def _tenant_sessions(tenant_id: str = "_default") -> Path:
     return home / "sessions"  # legacy single-tenant layout
 
 
+def _session_subdir(tenant_id: str, subject_id: str) -> Path:
+    """``<sessions>/<session_key>`` as the WRITER names it. POSIX: the raw key
+    (unchanged). Windows: ':' is illegal in a path component, so the writer
+    stores ``web:abc`` as ``web_abc`` - looking up the raw key would report a clean
+    SKIPPED while the data survives an Art. 17 erasure."""
+    base = _tenant_sessions(tenant_id)
+    if os.name != "nt":
+        return base / subject_id
+    try:
+        from corvin_operator.forge.forge.paths import safe_session_subdir  # noqa: PLC0415
+        return safe_session_subdir(base, subject_id)
+    except Exception:  # noqa: BLE001 - forge may not be importable here
+        return base / subject_id.replace(":", "_")
+
+
 def _tenant_workflow_runs(tenant_id: str = "_default") -> Path:
     """Resolve ``<tenant>/workflow_runs`` (ADR-0188 M5 paused-run checkpoints).
 
@@ -347,7 +362,7 @@ class L33ArtifactHandler:
 
     def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
         t0 = time.time()
-        session_dir = _tenant_sessions(self.tenant_id) / subject_id / "artifacts"
+        session_dir = _session_subdir(self.tenant_id, subject_id) / "artifacts"
         if not session_dir.is_dir():
             return ErasureLayerResult(
                 layer_id=self.layer_id,
@@ -427,7 +442,7 @@ class ACSTraceHandler:
 
     def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
         t0 = time.time()
-        acs_dir = _tenant_sessions(self.tenant_id) / subject_id / "acs"
+        acs_dir = _session_subdir(self.tenant_id, subject_id) / "acs"
         if not acs_dir.is_dir():
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,

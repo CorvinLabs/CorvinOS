@@ -67,6 +67,9 @@ from erasure_orchestrator import (  # noqa: E402
     StubHandler,
     builtin_stub_chain,
 )
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 
 # Path to the bundled EU_PRODUCTION preset templates
@@ -265,6 +268,7 @@ class TestThreeLayerDefence(unittest.TestCase):
 class TestErasureCrossLayer(unittest.TestCase):
     """Test #4: erasure orchestrator audits and persists per request."""
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_full_erasure_pipeline(self):
         events: list[tuple[str, str, dict]] = []
 

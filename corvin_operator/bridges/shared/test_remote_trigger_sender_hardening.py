@@ -44,6 +44,8 @@ if str(_here) not in sys.path:
 import a2a_friendship as ft  # noqa: E402
 import remote_trigger_receiver as rtr  # noqa: E402
 import remote_trigger_sender as rts  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 IID_A = "aaaaaaaa-0000-4000-8000-00000000000a"
 IID_B = "bbbbbbbb-0000-4000-8000-00000000000b"
@@ -203,6 +205,7 @@ class TestTofuInstancePin(_Base):
                                staticmethod(lambda url, env, t: receiver.receive(env).to_dict())):
             return sender.send(self.pair.kid, "hi")
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_first_verified_response_pins_then_other_instance_is_rejected(self):
         se = _RecordingSE()
         sender = self.pair.sender(IID_A, se)

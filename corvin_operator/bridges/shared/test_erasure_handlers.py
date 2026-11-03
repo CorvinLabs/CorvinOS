@@ -13,6 +13,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+
+def _fs(key: str) -> str:
+    """Session dir name as the product creates it (fs_safe_component): ':' is illegal on NTFS."""
+    return key.replace(":", "_") if os.name == "nt" else key
+
+
 from erasure_handlers import (  # noqa: E402
     IdentityMappingHandlerBase,
     L7SkillForgeHandler,
@@ -119,7 +125,7 @@ class TestL33ArtifactHandler(unittest.TestCase):
             try:
                 session_key = "discord:user_42"
                 art_dir = (Path(td) / "tenants" / "_default" / "sessions"
-                           / session_key / "artifacts")
+                           / _fs(session_key) / "artifacts")
                 art_dir.mkdir(parents=True)
                 # Two files + a manifest entry
                 (art_dir / "report.pdf").write_bytes(b"x" * 100)
@@ -155,7 +161,7 @@ class TestL33ArtifactHandler(unittest.TestCase):
             try:
                 session_key = "discord:user_42"
                 art_dir = (Path(td) / "tenants" / "_default" / "sessions"
-                           / session_key / "artifacts")
+                           / _fs(session_key) / "artifacts")
                 art_dir.mkdir(parents=True)
                 handler = L33ArtifactHandler()
                 result = handler.purge(session_key, "er-test")
@@ -550,7 +556,7 @@ class TestWebChatHandler(unittest.TestCase):
 
     def _seed(self, td: str, session_key: str = "web:abc123"):
         sid = session_key.split(":", 1)[1]
-        vdir = Path(td) / "tenants" / "_default" / "sessions" / session_key / "voice"
+        vdir = Path(td) / "tenants" / "_default" / "sessions" / _fs(session_key) / "voice"
         vdir.mkdir(parents=True)
         (vdir / "deadbeefdeadbeef.ogg").write_bytes(b"OggS" + b"\0" * 96)
         (vdir / "deadbeefdeadbeef-f00.ogg").write_bytes(b"OggS" + b"\0" * 96)
@@ -607,7 +613,7 @@ class TestWebChatHandler(unittest.TestCase):
         with self._corvin_home() as td:
             os.environ["CORVIN_HOME"] = td
             try:
-                workdir = Path(td) / "tenants" / "_default" / "sessions" / "web:abc123"
+                workdir = Path(td) / "tenants" / "_default" / "sessions" / _fs("web:abc123")
                 attach = workdir / "attachments"
                 attach.mkdir(parents=True)
                 (attach / "befund-scan.pdf").write_bytes(b"%PDF-1.4 patient data")
@@ -634,7 +640,7 @@ class TestWebChatHandler(unittest.TestCase):
         with self._corvin_home() as td:
             os.environ["CORVIN_HOME"] = td
             try:
-                workdir = Path(td) / "tenants" / "_default" / "sessions" / "web:abc123"
+                workdir = Path(td) / "tenants" / "_default" / "sessions" / _fs("web:abc123")
                 briefs = workdir / "cel-briefs"
                 briefs.mkdir(parents=True)
                 (briefs / "9f2bdeadbeef.txt").write_text(

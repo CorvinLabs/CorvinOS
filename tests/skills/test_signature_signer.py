@@ -20,6 +20,8 @@ from cryptography.hazmat.backends import default_backend
 from core.skills.signature.signer import SkillManifestSigner
 from core.skills.signature.validator import SkillManifestValidator
 from core.skills.manifest_validator import SkillManifest, ManifestParameter, ManifestDependency
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 @pytest.fixture
@@ -119,6 +121,7 @@ class TestKeySerialization:
             with open(key_path, "rb") as f:
                 assert b"BEGIN ENCRYPTED PRIVATE KEY" in f.read()
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_save_key_sets_permissions(self, signer):
         """Saved key file has restricted permissions (0o600)."""
         _, private_key = signer.generate_operator_keypair()

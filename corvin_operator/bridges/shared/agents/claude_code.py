@@ -51,11 +51,14 @@ from . import StreamEvent, parse_jsonl_line, terminate_process_tree
 
 try:  # ADR-2236: background children decide when stdin may be closed
     from ..bg_scope import ScopeTracker as _ScopeTracker
+    from ..bg_scope import cli_env as _bg_cli_env
 except ImportError:  # loaded flat
     try:
         from bg_scope import ScopeTracker as _ScopeTracker  # type: ignore
+        from bg_scope import cli_env as _bg_cli_env  # type: ignore
     except ImportError:  # pragma: no cover - feature inert, old behaviour
         _ScopeTracker = None  # type: ignore
+        _bg_cli_env = None  # type: ignore
 
 try:  # ADR-2269 one icon vocabulary
     from ..status_markers import icon as _icon
@@ -784,6 +787,10 @@ class ClaudeCodeEngine:
         spawn_env = os.environ.copy()
         if env:
             spawn_env.update(env)
+        # ADR-2236: align the CLI's own background-wait ceiling (600 s by default)
+        # with the scope cap, or a long sub-agent is stopped mid-run.
+        if _bg_cli_env is not None:
+            spawn_env.update(_bg_cli_env(spawn_env))
 
         # Test fixture: ADAPTER_FAKE_CLAUDE=1 short-circuits the binary
         # spawn and emits a synthetic event sequence so the adapter's
@@ -1286,7 +1293,9 @@ class ClaudeCodeEngine:
                     tool_blocks.append(block)
             events: list[StreamEvent] = []
             text = "".join(text_pieces)
-            if text:
+            # A sub-agent's own messages carry parent_tool_use_id: its narration is not
+            # the answer and must not reach the chat as if the main model wrote it.
+            if text and not obj.get("parent_tool_use_id"):
                 events.append(StreamEvent(type="text_delta", text=text, raw=obj))
             if tool_blocks:
                 # Single tool_call event carries the full assistant

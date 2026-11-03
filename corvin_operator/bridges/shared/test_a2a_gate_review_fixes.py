@@ -18,6 +18,9 @@ if str(_here) not in sys.path:
 
 import a2a_attachments  # noqa: E402
 import a2a_worker  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 SECRET = b"TOP-SECRET-HOST-FILE"
 
@@ -216,6 +219,7 @@ class TestErasureVersusInFlightStaging(unittest.TestCase):
 
 
 class TestStageFileFifo(unittest.TestCase):
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "os.mkfifo does not exist on Windows")
     def test_a_fifo_swapped_in_is_unreadable_and_never_blocks(self):
         import threading
         import unittest.mock as mock

@@ -491,15 +491,15 @@ class TestBootHealer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             # Simulate sessions/ with web, discord, voice, cli channels
-            (tmp_path / "web:abc123").mkdir()
-            (tmp_path / "web:abc123" / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
-            (tmp_path / "discord:12345").mkdir()
-            (tmp_path / "discord:12345" / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
+            (tmp_path / "web_abc123").mkdir()
+            (tmp_path / "web_abc123" / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
+            (tmp_path / "discord_12345").mkdir()
+            (tmp_path / "discord_12345" / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
             voice_dir = tmp_path / "voice" / "telegram" / "user42"
             voice_dir.mkdir(parents=True)
             (voice_dir / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
             # cli session with no chat_debug.jsonl — must NOT appear
-            (tmp_path / "cli:test").mkdir()
+            (tmp_path / "cli_test").mkdir()
 
             import unittest.mock as mock
             with mock.patch(
@@ -512,8 +512,8 @@ class TestBootHealer(unittest.TestCase):
 
             self.assertEqual(len(result), 3)
             names = {p.name for p in result}
-            self.assertIn("web:abc123", names)
-            self.assertIn("discord:12345", names)
+            self.assertIn("web_abc123", names)
+            self.assertIn("discord_12345", names)
             self.assertIn("user42", names)
 
     def test_heal_cycle_does_not_raise(self):

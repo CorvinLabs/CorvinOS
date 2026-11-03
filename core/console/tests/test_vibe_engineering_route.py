@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -91,7 +92,7 @@ class VibeRouteTests(unittest.TestCase):
         (d / "audit.jsonl").write_text("\n".join(events) + "\n", encoding="utf-8")
 
     def _write_brief(self, tenant, session, sha, text):
-        d = self.base / tenant / "sessions" / session / "cel-briefs"
+        d = self.base / tenant / "sessions" / (session.replace(":", "_") if os.name == "nt" else session) / "cel-briefs"  # NTFS: no ":"
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{sha}.txt").write_text(text, encoding="utf-8")
 

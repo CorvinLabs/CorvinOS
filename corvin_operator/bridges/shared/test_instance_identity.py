@@ -19,6 +19,9 @@ if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
 import instance_identity  # type: ignore[import-not-found]
+import sys as _sys_skip
+import pytest as _pytest_skip
+import unittest as _unittest_skip
 
 try:
     from cryptography.hazmat.primitives import serialization as _ser
@@ -66,6 +69,7 @@ class TestFirstCall(_TempHomeMixin, unittest.TestCase):
         # Validate UUID4 shape
         uuid.UUID(iid, version=4)
 
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_file_mode_is_0600(self) -> None:
         instance_identity.get_instance_id()
         mode = self.id_path.stat().st_mode & 0o777
@@ -153,6 +157,7 @@ class TestLabel(_TempHomeMixin, unittest.TestCase):
 
 
 class TestSelfHeal(_TempHomeMixin, unittest.TestCase):
+    @_unittest_skip.skipIf(_sys_skip.platform == "win32", "POSIX permission bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_world_readable_file_gets_tightened(self) -> None:
         instance_identity.get_instance_id()
         os.chmod(self.id_path, 0o644)
