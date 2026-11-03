@@ -1428,7 +1428,10 @@ class MCPServer:
 
         try:
             sock = _compute_socket_path_for()
-            if not sock.exists():
+            # Windows workers publish <sock>.port (TCP loopback) instead
+            # of a Unix socket; either marks a started worker.
+            if not (sock.exists()
+                    or sock.with_name(sock.name + ".port").exists()):
                 self._error(
                     msgid, INVALID_PARAMS,
                     "compute worker socket not present — bootstrap + start "
@@ -2011,7 +2014,10 @@ class MCPServer:
             return
         try:
             sock = _compute_socket_path_for()
-            if not sock.exists():
+            # Windows workers publish <sock>.port (TCP loopback) instead
+            # of a Unix socket; either marks a started worker.
+            if not (sock.exists()
+                    or sock.with_name(sock.name + ".port").exists()):
                 self._error(
                     msgid, INVALID_PARAMS,
                     "compute worker socket not present — start the plugin "

@@ -17,7 +17,7 @@ Use these schemas to:
   4. Communicate with frontend (web-next/src/types/forge.ts)
 
 Example:
-  from core.console.corvin_console.api_schemas.forge_unified import (
+  from corvin_console.api_schemas.forge_unified import (
       ToolListResponse, SkillFeedbackRequest, OSSkillConfigResponse
   )
 

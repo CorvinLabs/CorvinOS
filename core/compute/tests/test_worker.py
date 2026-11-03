@@ -29,6 +29,7 @@ from corvin_compute.transport import (  # noqa: E402
     MAX_FRAME_BYTES, TransportError, recv_frame_sync, send_frame_sync,
 )
 from corvin_compute.worker import WorkerServer  # noqa: E402
+from corvin_compute.endpoint import endpoint_exists  # noqa: E402
 
 
 def _identity_runner(slow_ms: int = 0):
@@ -79,7 +80,7 @@ class _WorkerHarness:
             async def _serve():
                 ready_task = asyncio.create_task(self.server.serve_forever())
                 # Wait for socket to exist
-                while not self.socket_path.exists():
+                while not endpoint_exists(self.socket_path):
                     await asyncio.sleep(0.01)
                 ready.set()
                 await ready_task
@@ -307,6 +308,9 @@ class TenantBindingTests(unittest.TestCase):
 
 
 class SocketSecurityTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32" or not hasattr(socket, "AF_UNIX"),
+                     "no Unix socket on Windows (TCP loopback + token, see "
+                     "test_worker_tcp_loopback.py)")
     def test_socket_mode_0600(self) -> None:
         h = _WorkerHarness()
         h.start()

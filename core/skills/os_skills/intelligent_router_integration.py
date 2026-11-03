@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # "phase2_conservative" — the pre-ADR-0867-Phase-3 default — never as an
 # unconfigured opt-in to the judge path.
 try:
-    from core.gateway.corvin_gateway.tenant_config import load_or_default as _load_tenant_config
+    from corvin_gateway.tenant_config import load_or_default as _load_tenant_config
 except ImportError:  # pragma: no cover — exercised only on hosts without corvin_gateway
     _load_tenant_config = None
     logger.debug("corvin_gateway.tenant_config unavailable; routing strategy fixed at phase2_conservative")

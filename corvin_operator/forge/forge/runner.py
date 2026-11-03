@@ -520,7 +520,13 @@ def run_tool(
     if spec.runtime == "python":
         inner = [sys.executable, str(impl_path)]
     elif spec.runtime == "bash":
-        inner = ["/bin/bash", str(impl_path)]
+        # POSIX: /bin/bash (unchanged). Windows: Git Bash, never WSL's launcher;
+        # none installed -> a clear ToolError instead of FileNotFoundError.
+        from ._winproc import BashNotFoundError, resolve_bash
+        try:
+            inner = [resolve_bash(), str(impl_path)]
+        except BashNotFoundError as exc:
+            raise ToolError(str(exc)) from exc
     else:
         raise ToolError(f"unsupported runtime: {spec.runtime}")
 
@@ -933,23 +939,31 @@ def run_tool(
         env=env,
         preexec_fn=None if _is_windows else (lambda: apply_rlimits(limits)),
     )
+    # Windows: a Job Object stands in for RLIMIT_CPU + killpg (see _winproc).
+    # Without it a CPU-spinning tool ran the full wall budget, and the timeout
+    # kill reached only the direct child, so grandchildren kept the pipes open.
+    _win_job = None
+    if _is_windows:
+        from ._winproc import WinJob
+        _win_job = WinJob(cpu_seconds=limits.cpu_seconds)
+        _win_job.assign(proc)
     try:
         stdout_b, stderr_b = proc.communicate(input=payload_bytes, timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            if _is_windows:
-                # No process-group leader was created (setsid() never ran)
-                # — a plain kill() is the correct/only Windows equivalent.
-                proc.kill()
-            else:
+        if _is_windows:
+            from ._winproc import kill_and_drain
+            kill_and_drain(proc, _win_job)
+            _win_job.close()
+        else:
+            try:
                 os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            proc.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.communicate()
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
         _dur_to = _time.monotonic() - t0
         end_run(
             ctx, status="timeout", exit_code=-1,
@@ -960,6 +974,8 @@ def run_tool(
         _emit_tool_executed(ctx, status="timeout", exit_code=-1,
                             duration_s=_dur_to, sandbox=sandbox_label)
         raise ToolError(f"tool {name!r} timed out after {timeout}s")
+    if _win_job is not None:
+        _win_job.close()  # KILL_ON_JOB_CLOSE reaps leftovers; frees the handle
 
     duration = _time.monotonic() - t0
     stdout = stdout_b or b""

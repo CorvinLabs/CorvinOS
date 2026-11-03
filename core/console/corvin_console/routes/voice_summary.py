@@ -22,16 +22,16 @@ from corvin_console import audit as console_audit
 from corvin_console import auth as session_auth
 from corvin_console.deps import require_session_csrf_on_mutation
 
-from core.console.corvin_console.services.type_detector import (
+from corvin_console.services.type_detector import (
     detect_message_type,
     get_summary_strategy_for_type,
     MessageType,
 )
-from core.console.corvin_console.services.stt_engine import (
+from corvin_console.services.stt_engine import (
     get_stt_engine,
     is_stt_available,
 )
-from core.console.corvin_console.services.voice_feedback_loop import (
+from corvin_console.services.voice_feedback_loop import (
     get_feedback_store,
     get_collision_detector,
     SummaryFeedback,

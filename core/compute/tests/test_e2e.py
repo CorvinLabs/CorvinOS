@@ -32,6 +32,7 @@ sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "forge"))
 
 from corvin_compute.client import WorkerClient  # noqa: E402
 from corvin_compute.worker import WorkerServer  # noqa: E402
+from corvin_compute.endpoint import endpoint_exists  # noqa: E402
 
 
 def _quadratic_runner(tool_name, payload):
@@ -82,7 +83,7 @@ class _E2EHarness:
 
             async def _serve():
                 t = asyncio.create_task(self.server.serve_forever())
-                while not self.socket_path.exists():
+                while not endpoint_exists(self.socket_path):
                     await asyncio.sleep(0.01)
                 ready.set()
                 await t

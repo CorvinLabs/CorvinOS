@@ -73,7 +73,7 @@ class TestComputeCostEfficiencyWindowAndReference:
             compute_cost_efficiency("_default", chain_path=chain, reference="not-a-model")
 
     def test_an_explicit_since_ignores_the_counting_epoch(self, chain, monkeypatch):
-        from core.console.corvin_console import usage_epoch as UE
+        from corvin_console import usage_epoch as UE
 
         monkeypatch.setattr(UE, "epoch_ts", lambda tid: _ts("2026-10-01", 0))
         assert sum(d.total_turns for d in compute_cost_efficiency("_default", chain_path=chain).daily) == 1
@@ -125,7 +125,7 @@ class TestReceiptCli:
     def test_without_since_the_tenant_chain_and_its_counting_epoch_are_used(self, chain, tmp_path, monkeypatch):
         """No ``--chain``: the chain comes from ``tenant_audit_chain()`` under CORVIN_HOME; no ``--since``:
         the tenant's usage epoch applies (ADR-0760); ``--since`` overrides it."""
-        from core.console.corvin_console import usage_epoch as UE
+        from corvin_console import usage_epoch as UE
         from core.paths.tenant import tenant_audit_chain
 
         home = tmp_path / "home"

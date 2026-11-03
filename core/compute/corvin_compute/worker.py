@@ -25,6 +25,7 @@ from .driver import ComputeRun, ComputeRunSpec, RunnerFn
 from .state import RunStore, new_run_id, validate_run_id
 from . import strategies as strat_pkg
 from .transport import recv_frame, send_frame, TransportError
+from . import endpoint as _endpoint
 
 # ADR-0029 — import engine types lazily to avoid circular imports at module level
 _PIPELINE_JOB_PREFIX = "pipeline_"
@@ -170,20 +171,57 @@ class WorkerServer:
             await asyncio.to_thread(self._recover_pending)
         except Exception:  # noqa: BLE001
             log.exception("recovery sweep crashed (continuing anyway)")
-        self._server = await asyncio.start_unix_server(
-            self._handle_client, path=str(self.socket_path),
-        )
-        # Tighten socket to owner-only AFTER bind.
-        try:
-            os.chmod(self.socket_path, 0o600)
-        except OSError:
-            pass
-        log.info("worker listening at %s (tenant=%s)", self.socket_path, self.tenant_id)
+        if _endpoint.use_tcp_loopback():
+            # Windows: no AF_UNIX. Bind loopback on an ephemeral port and
+            # publish port + auth token in an owner-only <sock>.port file.
+            await self._start_tcp_loopback()
+        else:
+            self._server = await asyncio.start_unix_server(
+                self._handle_client, path=str(self.socket_path),
+            )
+            # Tighten socket to owner-only AFTER bind.
+            try:
+                os.chmod(self.socket_path, 0o600)
+            except OSError:
+                pass
+            log.info("worker listening at %s (tenant=%s)", self.socket_path, self.tenant_id)
         try:
             async with self._server:
                 await self._server.serve_forever()
         except asyncio.CancelledError:
             pass
+
+    async def _start_tcp_loopback(self) -> None:
+        self._auth_token = _endpoint.new_token()
+        self._server = await asyncio.start_server(
+            self._handle_tcp_client, host=_endpoint.LOOPBACK_HOST, port=0,
+        )
+        port = self._server.sockets[0].getsockname()[1]
+        _endpoint.write_port_file(self.socket_path, port, self._auth_token)
+        log.info("worker listening at %s:%d (tenant=%s, port file %s)",
+                 _endpoint.LOOPBACK_HOST, port, self.tenant_id,
+                 _endpoint.port_file_for(self.socket_path))
+
+    async def _handle_tcp_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+    ) -> None:
+        """Authenticate the token line, then hand off to _handle_client."""
+        import hmac  # noqa: PLC0415
+        try:
+            line = await asyncio.wait_for(
+                reader.readexactly(_endpoint.AUTH_LINE_LEN), timeout=5.0,
+            )
+        except (asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):
+            line = b""
+        expected = (getattr(self, "_auth_token", "") + "\n").encode("ascii")
+        if not line or not hmac.compare_digest(line, expected):
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        await self._handle_client(reader, writer)
 
     async def stop(self) -> None:
         # Idempotent: the CLI calls stop() from a finally, a host may call it
@@ -222,6 +260,11 @@ class WorkerServer:
                 self.socket_path.unlink()
         except OSError:
             pass
+        if _endpoint.use_tcp_loopback():
+            try:
+                _endpoint.port_file_for(self.socket_path).unlink()
+            except OSError:
+                pass
         self._stopped.set()
 
     # -- request dispatch --------------------------------------------------------

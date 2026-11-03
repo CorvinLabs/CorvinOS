@@ -29,6 +29,7 @@ from corvin_compute.mcp_bridge import (  # noqa: E402
     compute_tool_definitions,
 )
 from corvin_compute.worker import WorkerServer  # noqa: E402
+from corvin_compute.endpoint import endpoint_exists  # noqa: E402
 
 
 def _identity_runner(slow_ms: int = 0):
@@ -91,7 +92,7 @@ class _SandboxedForge:
             )
             async def _serve():
                 t = asyncio.create_task(self.server.serve_forever())
-                while not self.socket_path.exists():
+                while not endpoint_exists(self.socket_path):
                     await asyncio.sleep(0.01)
                 ready.set()
                 await t

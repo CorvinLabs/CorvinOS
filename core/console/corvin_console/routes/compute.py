@@ -291,12 +291,23 @@ def _runs_today_count(tid: str) -> int:
 def _probe_socket(path: Path, timeout_s: float = 0.3) -> dict[str, Any]:
     """Best-effort connectivity check. Returns shape:
     ``{exists: bool, reachable: bool, error: str|None}``."""
+    if not hasattr(socket, "AF_UNIX"):
+        # Windows has no AF_UNIX — the compute worker binds TCP loopback and
+        # publishes "<port>\n<token>\n" in <sock>.port (corvin_compute.endpoint).
+        port_file = path.with_name(path.name + ".port")
+        try:
+            port = int(port_file.read_text(encoding="ascii").split()[0])
+        except FileNotFoundError:
+            return {"exists": False, "reachable": False, "error": None}
+        except (OSError, ValueError, IndexError) as e:
+            return {"exists": True, "reachable": False, "error": f"invalid port file: {e}"}
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=timeout_s).close()
+            return {"exists": True, "reachable": True, "error": None}
+        except OSError as e:
+            return {"exists": True, "reachable": False, "error": str(e)}
     if not path.exists():
         return {"exists": False, "reachable": False, "error": None}
-    if not hasattr(socket, "AF_UNIX"):
-        # Windows has no AF_UNIX — the compute worker uses TCP-loopback there
-        # (ADR-0159 M4); a unix-socket probe is simply not applicable.
-        return {"exists": True, "reachable": False, "error": "AF_UNIX unsupported on this platform"}
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout_s)
     try:
@@ -1129,7 +1140,9 @@ def submit_run(
         raise HTTPException(http_status.HTTP_401_UNAUTHORIZED, "re-auth failed")
 
     sock_path = _socket_path(rec.tenant_id)
-    if not sock_path.exists():
+    # Windows workers publish <sock>.port (TCP loopback) instead of a socket.
+    if not (sock_path.exists()
+            or sock_path.with_name(sock_path.name + ".port").exists()):
         raise HTTPException(
             http_status.HTTP_503_SERVICE_UNAVAILABLE,
             "compute worker is not running — start it via Settings "

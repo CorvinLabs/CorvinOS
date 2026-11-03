@@ -120,3 +120,55 @@ def hard_kill(proc, *, reason: str, tenant_id: str = "_default",
         return                              # proc.kill() alone missed the shim's node.exe
     else:
         proc.kill()
+
+
+def run_tree_safe(argv, *, timeout: float, drain_timeout: float = 5.0, **kwargs):
+    """``subprocess.run(argv, timeout=..., **kwargs)`` that cannot hang on Windows.
+
+    CPython's ``run()`` on timeout does ``kill()`` (one pid) and then an UNBOUNDED
+    ``communicate()`` on Windows; a grandchild that inherited the pipes (``.cmd`` shim
+    -> node, a CLI's tool children, npm, pytest) keeps them open and the caller blocks
+    forever. Here the whole tree is killed (``kill_tree_windows``) and the drain is
+    bounded. POSIX — or a test that replaced ``subprocess.run`` — delegates to
+    ``subprocess.run`` unchanged, so Linux behaviour is identical.
+    """
+    import subprocess  # noqa: PLC0415
+
+    if os.name != "nt" or subprocess.run is not _ORIG_SUBPROCESS_RUN:
+        return subprocess.run(argv, timeout=timeout, **kwargs)
+    input_ = kwargs.pop("input", None)
+    check = kwargs.pop("check", False)
+    if kwargs.pop("capture_output", False):
+        kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    if input_ is not None:
+        kwargs["stdin"] = subprocess.PIPE
+    with subprocess.Popen(argv, **kwargs) as proc:
+        try:
+            out, err = proc.communicate(input_, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            if not kill_tree_windows(proc.pid):
+                proc.kill()
+            try:
+                exc.stdout, exc.stderr = proc.communicate(timeout=drain_timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                for f in (proc.stdout, proc.stderr):
+                    try:
+                        if f is not None:
+                            f.close()
+                    except OSError:
+                        pass
+            raise exc from None
+        except BaseException:
+            if not kill_tree_windows(proc.pid):
+                proc.kill()
+            raise
+        rc = proc.poll()
+    if check and rc:
+        raise subprocess.CalledProcessError(rc, argv, output=out, stderr=err)
+    return subprocess.CompletedProcess(argv, rc, out, err)
+
+
+import subprocess as _subprocess_for_identity  # noqa: E402
+
+_ORIG_SUBPROCESS_RUN = _subprocess_for_identity.run

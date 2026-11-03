@@ -17,7 +17,7 @@ Usage (plugin on_load):
     ctx.user_registry.set_active(self)
 
 Usage (caller):
-    from core.plugins.corvin_plugins.providers import user_backend
+    from corvin_plugins.providers import user_backend
     result = await user_backend.authenticate(creds)      # None => deny
     if result is None and not user_backend.is_installed():
         ...fall through to core auth...

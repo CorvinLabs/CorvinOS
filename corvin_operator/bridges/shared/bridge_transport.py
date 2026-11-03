@@ -70,8 +70,10 @@ def read_port_file(sock_path: Path) -> int | None:
     """
     port_file = _port_file_for(sock_path)
     try:
+        # First line is the port; the compute worker appends an auth-token
+        # line (corvin_compute.endpoint) which this liveness probe ignores.
         text = port_file.read_text(encoding="ascii").strip()
-        port = int(text)
+        port = int(text.splitlines()[0]) if text else int(text)
         if 1 <= port <= 65535:
             return port
         return None

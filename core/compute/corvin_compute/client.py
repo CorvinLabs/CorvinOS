@@ -16,6 +16,7 @@ import socket
 from pathlib import Path
 from typing import Any, Mapping
 
+from . import endpoint as _endpoint
 from .transport import recv_frame_sync, send_frame_sync, TransportError
 
 # Messenger channels whose completions can be routed back to a chat. Kept in
@@ -54,10 +55,10 @@ class WorkerClient:
         self.timeout_s = timeout_s
 
     def _call(self, op: str, params: Mapping[str, Any] | None = None) -> dict:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout_s)
+        # AF_UNIX on Linux/macOS (unchanged); token-authenticated TCP
+        # loopback on Windows (see corvin_compute.endpoint).
+        sock = _endpoint.connect(self.socket_path, timeout_s=self.timeout_s)
         try:
-            sock.connect(str(self.socket_path))
             send_frame_sync(sock, {"op": op, "params": dict(params or {})})
             response = recv_frame_sync(sock)
         finally:
@@ -124,17 +125,14 @@ class WorkerClient:
 
 def is_socket_reachable(socket_path: Path, *, timeout_s: float = 0.1) -> bool:
     """Cheap probe — non-blocking connect with a tight timeout."""
-    if not Path(socket_path).exists():
+    if not _endpoint.endpoint_exists(Path(socket_path)):
         return False
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout_s)
     try:
-        sock.connect(str(socket_path))
-        return True
+        sock = _endpoint.connect(Path(socket_path), timeout_s=timeout_s)
     except (OSError, socket.timeout):
         return False
-    finally:
-        try:
-            sock.close()
-        except OSError:
-            pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+    return True

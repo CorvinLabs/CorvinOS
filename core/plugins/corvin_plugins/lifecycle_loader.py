@@ -52,7 +52,7 @@ def _emit_audit_event(event_type: str, **kwargs: Any) -> None:
     """Emit audit event (audit-first) via plugin lifecycle module."""
     try:
         # Use new plugin lifecycle emitters (ADR-0682)
-        from core.plugins.corvin_plugins import lifecycle as plugin_lifecycle
+        from corvin_plugins import lifecycle as plugin_lifecycle
 
         plugin_id = kwargs.get("plugin_id", "unknown")
         tenant_id = kwargs.get("tenant_id", "_default")

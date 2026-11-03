@@ -361,7 +361,7 @@ class TestOneUsageNormaliser:
 class TestCostReaderPricesTheRun:
     def _priced(self, chain: Path, monkeypatch):
         import core.learning.model_selection_learner as msl
-        from core.console.corvin_console import usage_epoch
+        from corvin_console import usage_epoch
 
         monkeypatch.setattr(msl, "_acs_chain_paths", lambda tid: [chain])
         monkeypatch.setattr(usage_epoch, "epoch_ts", lambda tid: 0.0)
@@ -421,7 +421,7 @@ class TestConsoleReportsTheWorkerRun:
 
     def _status(self, chain: Path, monkeypatch, cost_client):
         import core.learning.model_selection_learner as msl
-        from core.console.corvin_console import usage_epoch
+        from corvin_console import usage_epoch
 
         monkeypatch.setattr(msl, "_acs_chain_paths", lambda tid: [chain])
         monkeypatch.setattr(

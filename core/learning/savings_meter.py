@@ -89,7 +89,7 @@ def reset_cache() -> None:
 def _epoch_ts(tenant_id: str) -> float:
     """ADR-0760: the SAME counting epoch every other cost reader applies."""
     try:
-        from core.console.corvin_console import usage_epoch  # noqa: PLC0415
+        from corvin_console import usage_epoch  # noqa: PLC0415
 
         return float(usage_epoch.epoch_ts(tenant_id))
     except Exception:  # noqa: BLE001 — no console in this process: count everything

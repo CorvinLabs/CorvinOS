@@ -237,7 +237,7 @@ def _acs_chain_paths(tenant_id: str) -> list[Path]:
     de-duplicated by the caller on (ts, model, tokens), so a record that
     somehow exists in both is counted once.
     """
-    from core.console.corvin_console import _bootstrap
+    from corvin_console import _bootstrap
 
     global_dir = _bootstrap.forge_paths.tenant_global_dir(tenant_id)
     return [global_dir / "audit.jsonl", global_dir / "forge" / "audit.jsonl"]
@@ -581,7 +581,7 @@ def compute_cost_efficiency(
     priced at (default ``_BASELINE_MODEL_PREFIX``); must be in the rate card.
     """
     if chain_path is None:
-        from core.console.corvin_console import _bootstrap
+        from corvin_console import _bootstrap
 
         chain_path = _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
 
@@ -592,7 +592,7 @@ def compute_cost_efficiency(
         # screen deriving their numbers from different windows is worse than no
         # reset at all, so the window is read from one place, never re-decided here.
         try:
-            from core.console.corvin_console import usage_epoch  # noqa: PLC0415
+            from corvin_console import usage_epoch  # noqa: PLC0415
 
             since_ts = usage_epoch.epoch_ts(tenant_id)
         except Exception:  # noqa: BLE001
@@ -806,7 +806,7 @@ def compute_learned_thresholds(
     not write to the store — see ``refresh_store`` for persistence.
     """
     if chain_path is None:
-        from core.console.corvin_console import _bootstrap
+        from corvin_console import _bootstrap
 
         chain_path = _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
 
@@ -815,7 +815,7 @@ def compute_learned_thresholds(
     # prevent; the honest consequence — few samples right after a reset — is the
     # one the cost section already carries.
     try:
-        from core.console.corvin_console import usage_epoch  # noqa: PLC0415
+        from corvin_console import usage_epoch  # noqa: PLC0415
 
         since_ts = usage_epoch.epoch_ts(tenant_id)
     except Exception:  # noqa: BLE001

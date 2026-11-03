@@ -443,8 +443,12 @@ class ArtifactOutputE2E(DelegatedWorkflowE2EBase):
         names = [a.get("name") for a in artifacts]
         self.assertIn("marktbericht.md", names, events)
         # ACS also attaches its own delegation graph; that is the only extra chip.
-        self.assertEqual([n for n in names if n != "marktbericht.md"],
-                         ["acs_delegation_graph.png"], events)
+        # The graph needs matplotlib (optional `compute` extra); without it
+        # _render_acs_graph returns None by design and no chip is attached.
+        import importlib.util  # noqa: PLC0415
+        graph = (["acs_delegation_graph.png"]
+                 if importlib.util.find_spec("matplotlib") is not None else [])
+        self.assertEqual([n for n in names if n != "marktbericht.md"], graph, events)
         self.assertLess(max(i for i, t in enumerate(types_) if t == "artifact"),
                         types_.index("done"))
         run_dirs = sorted((self.sess.workdir / "acs" / "runs").iterdir())

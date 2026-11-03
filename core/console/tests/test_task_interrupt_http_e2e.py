@@ -58,6 +58,23 @@ printf '%s\n' '{"type":"system","subtype":"init"}'
 exec sleep 60
 """
 
+# Windows: no shebang exec, no SIGKILL. A claude.cmd shim runs this Python fake; it
+# records its own pid so the test can end IT (cmd.exe only waits on it) with
+# TerminateProcess(137) -- the exit code a SIGKILLed process reports through a
+# shell / container, which the worker counts as INTERRUPTED like -9.
+_FAKE_CLAUDE_HANGS_PY = r"""import os, sys, time
+out = os.environ["FAKE_CLAUDE_OUT"]
+with open(os.path.join(out, "stdin.txt"), "wb") as fh:
+    fh.write(sys.stdin.buffer.read())
+with open(os.path.join(out, "pid.txt"), "w") as fh:
+    fh.write(str(os.getpid()))
+sys.stdout.write('{"type":"system","subtype":"init"}\n')
+sys.stdout.flush()
+time.sleep(60)
+"""
+_WIN = sys.platform == "win32"
+_KILLED_RC = 137 if _WIN else -9
+
 
 class _Rec:
     tenant_id = _TENANT
@@ -82,6 +99,11 @@ def client(tmp_path, monkeypatch):
     binary = tmp_path / "claude"
     binary.write_text(_FAKE_CLAUDE_HANGS, encoding="utf-8")
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    if _WIN:
+        fake = tmp_path / "fake_claude.py"
+        fake.write_text(_FAKE_CLAUDE_HANGS_PY, encoding="utf-8")
+        binary = tmp_path / "claude.cmd"
+        binary.write_text(f'@echo off\r\n"{sys.executable}" "{fake}" %*\r\n', encoding="utf-8")
     monkeypatch.setenv("FAKE_CLAUDE_OUT", str(out))
     monkeypatch.setenv("CORVIN_CLAUDE_BIN", str(binary))
     monkeypatch.setenv("CLAUDE_BIN", str(binary))
@@ -126,7 +148,15 @@ def _run_worker_and_kill(queue: TaskQueue, task_id: str) -> int | None:
             assert not run.done(), "worker finished before the engine was spawned"
             assert time.monotonic() < deadline, "engine process never registered"
             await asyncio.sleep(0.05)
-        os.kill(twp._active_procs[task_id].pid, signal.SIGKILL)
+        if _WIN:
+            pid_file = Path(os.environ["FAKE_CLAUDE_OUT"]) / "pid.txt"
+            while not pid_file.exists() or not pid_file.read_text().strip():
+                assert not run.done(), "worker finished before the fake engine started"
+                assert time.monotonic() < deadline, "fake engine never started"
+                await asyncio.sleep(0.05)
+            os.kill(int(pid_file.read_text()), _KILLED_RC)  # TerminateProcess(pid, 137)
+        else:
+            os.kill(twp._active_procs[task_id].pid, signal.SIGKILL)
         await asyncio.wait_for(run, 30)
 
     asyncio.run(drive())
@@ -137,13 +167,13 @@ def test_killed_worker_is_interrupted_and_get_shows_it(client):
     task_id = _create(client, "summarise the long report")
 
     rc = _run_worker_and_kill(_queue(), task_id)
-    assert rc == -9
+    assert rc == _KILLED_RC
 
     resp = client.get(f"/v1/console/tasks/{task_id}")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == TaskState.INTERRUPTED.value == "interrupted"
-    assert body["exit_code"] == -9
+    assert body["exit_code"] == _KILLED_RC
     assert body["ended_at"] is None  # interrupted is not terminal
 
 

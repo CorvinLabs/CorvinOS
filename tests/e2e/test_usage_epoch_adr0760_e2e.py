@@ -42,10 +42,10 @@ for _p in (
 
 import engine_span as ESPAN  # noqa: E402
 
-from core.console.corvin_console import auth as session_auth  # noqa: E402
-from core.console.corvin_console import deps as console_deps  # noqa: E402
-from core.console.corvin_console import model_usage as MU  # noqa: E402
-from core.console.corvin_console import usage_epoch as UE  # noqa: E402
+from corvin_console import auth as session_auth  # noqa: E402
+from corvin_console import deps as console_deps  # noqa: E402
+from corvin_console import model_usage as MU  # noqa: E402
+from corvin_console import usage_epoch as UE  # noqa: E402
 
 
 # ── fixtures ─────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ class TestWorkerAndCombinedArithmetic:
 
     @pytest.fixture
     def client(self):
-        from core.console.corvin_console.routes import model_cost_optimizer_api as api
+        from corvin_console.routes import model_cost_optimizer_api as api
 
         app = FastAPI()
         app.include_router(api.router, prefix="/v1/console")

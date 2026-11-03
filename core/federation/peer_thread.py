@@ -79,7 +79,7 @@ def auto_register_enabled(tenant_id: str) -> bool:
     operator delegates it once, so ``/ask @mine`` and ``/talk`` register the standard
     Claude Code agent instead of refusing. It never turns on sharing with peers."""
     from core.paths import corvin_home
-    from core.plugins.corvin_plugins.bootstrap import load_tenant_spec
+    from corvin_plugins.bootstrap import load_tenant_spec
 
     spec = (load_tenant_spec(tenant_id, corvin_home()).get("spec") or {})
     fed = spec.get("federation") if isinstance(spec, dict) else None

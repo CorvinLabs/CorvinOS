@@ -24,6 +24,10 @@ _SHARED = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges
 
 FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, sys
+# Windows: a claude.cmd shim gets a multi-line/'%' prompt on stdin (cmd.exe cuts argv at a newline)
+_i = sys.argv.index("-p") + 1 if "-p" in sys.argv else 0
+if _i and (_i == len(sys.argv) or sys.argv[_i].startswith("-")) and not sys.stdin.isatty():
+    sys.argv.insert(_i, sys.stdin.buffer.read().decode("utf-8"))
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps(sys.argv[1:]) + "\\n")
 classifier = "--max-turns" in sys.argv

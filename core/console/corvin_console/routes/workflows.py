@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Callable
 
 import anyio
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe
 
 _log = logging.getLogger(__name__)
 
@@ -633,7 +634,7 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None, *, model: str 
             span_id = _ec.span_start(tenant, meta, model)
             span_open = True
             _ec.emit_resolution(tenant, meta, prompt, span_id)
-        result = subprocess.run(
+        result = _run_tree_safe(
             _cli_argv(cmd),
             # R4: whole-payload guard - workflow node instructions are authored
             # in the console and can embed forwarded chat/mail content. STDIN is
@@ -4499,7 +4500,7 @@ def explain_workflow(
         "Be concise. Do NOT output YAML, code, or JSON."
     )
     try:
-        result = subprocess.run(
+        result = _run_tree_safe(
             _cli_argv(
             ["claude", "-p", "--max-turns", "1", "--tools", "", "--model", _explain_model(),
              # R4: the workflow YAML is user-authored and rides POSITIONALLY
@@ -4755,7 +4756,7 @@ def _tts_b64(text: str, lang: str = "en") -> str | None:
 def _run_claude_for_design(prompt: str) -> str:
     """Call claude -p with the full prompt via stdin to avoid arg-length limits."""
     try:
-        result = subprocess.run(
+        result = _run_tree_safe(
             # The planner only writes text. Without this flag `claude -p` kept its tools: a task that said
             # "read <file> and copy it into the description" made it read a host file and print the
             # content into the chat reply (live test ad21_file_read). Same tool-less form as every other
