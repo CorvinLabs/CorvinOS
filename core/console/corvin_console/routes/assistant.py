@@ -23,6 +23,7 @@ from .. import audit as console_audit
 from .. import auth as session_auth
 from .. import _spawn_gates  # shared fail-closed pre-spawn chokepoint (CRITICAL compliance)
 from ..deps import require_csrf, require_session
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 # ── shared prompt neutraliser (R3-C1, adversarial review 2026-09-07) ────────
 # This route spawns `claude -p` on operator text and was the ONE spawn site
@@ -288,7 +289,7 @@ def assistant_message(
     from corvin_core import cli_args as _cli_args  # noqa: PLC0415
     _sp_args, _sp_tmp = _cli_args.system_prompt_args(_SYSTEM_PROMPT)
     try:
-        result = subprocess.run(
+        result = _run_tree_safe(
             _cli_argv([
                 "claude",
                 "-p",

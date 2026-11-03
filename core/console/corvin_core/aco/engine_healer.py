@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ def _piper_available() -> bool:
 def _try_install_edge_tts() -> bool:
     """Silently install edge-tts via pip. Fast — no model download."""
     try:
-        result = subprocess.run(
+        result = _run_tree_safe(
             [sys.executable, "-m", "pip", "install", "edge-tts", "-q"],
             capture_output=True,
             timeout=60,

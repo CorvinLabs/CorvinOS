@@ -42,6 +42,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 # A test edit: lives under a tests/ dir OR its file basename is test_*.py / *_test.py
 _TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]+\.py$|(^|/)[^/]+_test\.py$")
@@ -250,7 +251,7 @@ def build_repro_runner(repo: str | Path, *, full_cmd: list[str],
 
     def _run(cmd: list[str]) -> tuple[int, str]:
         try:
-            p = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True,
+            p = _run_tree_safe(cmd, cwd=str(repo), capture_output=True, text=True,
                                timeout=1800, env=scrubbed, encoding="utf-8", errors="replace")
             return p.returncode, (p.stdout + p.stderr)[-400:]
         except Exception as exc:  # noqa: BLE001

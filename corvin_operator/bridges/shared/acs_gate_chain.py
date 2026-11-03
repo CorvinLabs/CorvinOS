@@ -37,6 +37,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+
+def _run_tree_safe(argv, **kwargs):
+    """``subprocess.run`` that cannot hang on a Windows timeout (grandchild holding the pipes).
+
+    Delegates to ``corvin_core.process_signals.run_tree_safe``; identical to
+    ``subprocess.run`` on POSIX or when corvin_core is not importable.
+    """
+    try:
+        from corvin_core.process_signals import run_tree_safe  # noqa: PLC0415 - leaf module
+    except ImportError:
+        import subprocess as _subprocess  # noqa: PLC0415
+        return _subprocess.run(argv, **kwargs)
+    return run_tree_safe(argv, **kwargs)
+
 # ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
 # Every payload handed to the claude CLI goes through the ONE shared
 # neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
@@ -407,7 +421,7 @@ def _run_critique_sync(result_text: str, goal: str, model: str) -> dict[str, Any
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
     try:
-        out = subprocess.run(
+        out = _run_tree_safe(
             [
                 _bin, "-p", *([] if sys.platform == "win32" else [prompt]),
                 "--append-system-prompt", _CRITIQUE_SYSTEM,

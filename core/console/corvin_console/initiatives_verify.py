@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from . import initiatives as board_mod
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 REPO = Path(__file__).resolve().parents[3]
 _TIMEOUT_S = 900
@@ -80,7 +81,7 @@ def run_tests(targets: list[str]) -> dict[str, Any]:
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "CORVIN_HOME": sandbox,
            "VOICE_AUDIT_PATH": os.path.join(sandbox, "audit.jsonl"), "CORVIN_TENANT_ID": "_default"}
     try:
-        proc = subprocess.run(
+        proc = _run_tree_safe(
             [_python(), "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:logging",
              "--continue-on-collection-errors", *safe],
             cwd=str(REPO), env=env, capture_output=True, text=True, timeout=_TIMEOUT_S, encoding="utf-8", errors="replace",

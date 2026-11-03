@@ -68,6 +68,20 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+
+def _run_tree_safe(argv, **kwargs):
+    """``subprocess.run`` that cannot hang on a Windows timeout (grandchild holding the pipes).
+
+    Delegates to ``corvin_core.process_signals.run_tree_safe``; identical to
+    ``subprocess.run`` on POSIX or when corvin_core is not importable.
+    """
+    try:
+        from corvin_core.process_signals import run_tree_safe  # noqa: PLC0415 - leaf module
+    except ImportError:
+        import subprocess as _subprocess  # noqa: PLC0415
+        return _subprocess.run(argv, **kwargs)
+    return run_tree_safe(argv, **kwargs)
+
 # ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
 # Every payload handed to the claude CLI goes through the ONE shared
 # neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
@@ -372,7 +386,7 @@ def _default_judge(cluster: Cluster, draft: str, *, timeout_s: int = 20) -> bool
         # anywhere in a STDIN prompt exactly as in a positional one.
         # Reply contract unaffected: the FAITHFUL/OVERFIT verdict is read from
         # stdout, which the guard never touches.
-        r = subprocess.run(
+        r = _run_tree_safe(
             [cli, "-p", "--max-turns", "1", "--tools", "", *model_args],
             input=_guard_prompt_head(prompt), capture_output=True, text=True,
             timeout=timeout_s, check=False, encoding="utf-8", errors="replace",

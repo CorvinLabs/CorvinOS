@@ -39,7 +39,22 @@ def _is_wsl_launcher(path: str) -> bool:
     return p.startswith(windir + os.sep) or (os.sep + "windowsapps" + os.sep) in p
 
 
-def resolve_bash(*, which=shutil.which, exists=os.path.isfile) -> str:
+def _which_abs(name: str) -> str | None:
+    """``shutil.which`` without the Windows current-directory search and without
+    relative PATH entries: on Windows ``shutil.which`` probes ``.\\<name>`` FIRST, so a
+    ``git.exe``/``bash.exe`` dropped into the server's working directory (a session
+    or upload dir) would be picked as the tool interpreter."""
+    for d in (os.environ.get("PATH") or "").split(os.pathsep):
+        d = d.strip().strip('"')
+        if not d or not os.path.isabs(d):
+            continue
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def resolve_bash(*, which=_which_abs, exists=os.path.isfile) -> str:
     """Return the bash executable for bash-runtime tools.
 
     POSIX: ``/bin/bash`` (unchanged). Windows: Git Bash, never WSL's launcher.
@@ -91,6 +106,7 @@ class WinJob:
     def __init__(self, cpu_seconds: int | None = None) -> None:
         self._handle = None
         self._k32 = None
+        self._assigned = False
         if os.name != "nt":
             return
         try:
@@ -153,12 +169,15 @@ class WinJob:
         if self._handle is None:
             return False
         try:
-            return bool(self._k32.AssignProcessToJobObject(self._handle, int(proc._handle)))
+            self._assigned = bool(self._k32.AssignProcessToJobObject(self._handle, int(proc._handle)))
         except (OSError, AttributeError, ValueError):
-            return False
+            self._assigned = False
+        return self._assigned
 
     def terminate(self) -> bool:
-        if self._handle is None:
+        # An empty job "terminates" successfully; report False when the process was
+        # never assigned so the caller falls back to killing the tree itself.
+        if self._handle is None or not getattr(self, "_assigned", False):
             return False
         try:
             return bool(self._k32.TerminateJobObject(self._handle, 1))
@@ -199,10 +218,9 @@ def kill_and_drain(proc: subprocess.Popen, job: WinJob | None, *, drain_timeout:
     try:
         return proc.communicate(timeout=drain_timeout)
     except subprocess.TimeoutExpired:
-        for f in (proc.stdin, proc.stdout, proc.stderr):
-            try:
-                if f is not None:
-                    f.close()
-            except OSError:
-                pass
+        # A survivor outside the job/tree still holds the pipes. Do NOT close()
+        # them: communicate()'s reader threads are blocked in read() holding the
+        # buffer lock, so close() would block forever. Detach; the reader threads
+        # end when the survivor exits.
+        proc.stdin = proc.stdout = proc.stderr = None
         return b"", b""

@@ -27,6 +27,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+
+def _run_tree_safe(argv, **kwargs):
+    """``subprocess.run`` that cannot hang on a Windows timeout (grandchild holding the pipes).
+
+    Delegates to ``corvin_core.process_signals.run_tree_safe``; identical to
+    ``subprocess.run`` on POSIX or when corvin_core is not importable.
+    """
+    try:
+        from corvin_core.process_signals import run_tree_safe  # noqa: PLC0415 - leaf module
+    except ImportError:
+        import subprocess as _subprocess  # noqa: PLC0415
+        return _subprocess.run(argv, **kwargs)
+    return run_tree_safe(argv, **kwargs)
+
 _VERSION = "1.0.0"
 _CYCLONEDX_SPEC = "1.5"
 _SERIAL_PREFIX = "urn:uuid:"
@@ -202,7 +216,7 @@ def build_hash_requirements(req_path: Path) -> str:
         import tempfile, shutil
         tmpdir = Path(tempfile.mkdtemp())
         try:
-            result = subprocess.run(
+            result = _run_tree_safe(
                 [
                     sys.executable, "-m", "pip", "download",
                     "--no-deps", "--no-cache-dir",

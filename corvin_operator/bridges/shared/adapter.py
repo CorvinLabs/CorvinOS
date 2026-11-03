@@ -33,6 +33,20 @@ import uuid
 import secrets
 import traceback
 
+
+def _run_tree_safe(argv, **kwargs):
+    """``subprocess.run`` that cannot hang on a Windows timeout (grandchild holding the pipes).
+
+    Delegates to ``corvin_core.process_signals.run_tree_safe``; identical to
+    ``subprocess.run`` on POSIX or when corvin_core is not importable.
+    """
+    try:
+        from corvin_core.process_signals import run_tree_safe  # noqa: PLC0415 - leaf module
+    except ImportError:
+        import subprocess as _subprocess  # noqa: PLC0415
+        return _subprocess.run(argv, **kwargs)
+    return run_tree_safe(argv, **kwargs)
+
 # V-005: Session-scoped token generated once at startup. Prevents observers
 # from forging the framing delimiters used in _format_observer_block().
 _OBSERVER_SESSION_TOKEN: str = secrets.token_hex(8)
@@ -9064,7 +9078,7 @@ def _append_lern_zugabe(text: str, *, lang: str = "de") -> str:
            if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
     env["VOICE_HOOK_RECURSION"] = "1"
     try:
-        out = subprocess.run(
+        out = _run_tree_safe(
             [sys.executable, str(summarizer),
              "--lang", lang, "--appendix-mode"],
             input=text, capture_output=True, text=True,
@@ -9100,7 +9114,7 @@ def _append_metapher(text: str, *, lang: str = "de") -> str:
            if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
     env["VOICE_HOOK_RECURSION"] = "1"
     try:
-        out = subprocess.run(
+        out = _run_tree_safe(
             [sys.executable, str(summarizer),
              "--lang", lang, "--metapher-mode"],
             input=text, capture_output=True, text=True,
@@ -10080,7 +10094,7 @@ def _build_voice_summary_pipeline(text: str, max_chars: int,
             cmd += ["--stdin-json"]
             summarizer_input = json.dumps({"text": pre, "task": task_text},
                                           ensure_ascii=False)
-        proc = subprocess.run(
+        proc = _run_tree_safe(
             cmd,
             input=summarizer_input, capture_output=True, text=True,
             encoding="utf-8", errors="replace",

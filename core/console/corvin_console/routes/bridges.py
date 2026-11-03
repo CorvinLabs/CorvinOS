@@ -44,6 +44,7 @@ from pydantic import AfterValidator, BaseModel, Field
 from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session, verify_reauth
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
@@ -341,7 +342,7 @@ def _run_bridge_sh_up() -> dict[str, Any]:
     env = os.environ.copy()
     env.setdefault("CORVIN_HOME", str(_corvin_home()))
     try:
-        proc = subprocess.run(
+        proc = _run_tree_safe(
             ["bash", str(script), "up"],
             capture_output=True, text=True, timeout=120, check=False,
             env=env, encoding="utf-8", errors="replace",
@@ -439,7 +440,7 @@ def _ensure_npm_modules(channel: str) -> None:
     if (chan_dir / "node_modules").exists():
         return
     try:
-        subprocess.run(
+        _run_tree_safe(
             [_resolve_npm(), "install", "--prefer-offline", "--no-audit", "--no-fund"],
             cwd=chan_dir, capture_output=True, text=True, timeout=300, check=False, encoding="utf-8", errors="replace",
         )

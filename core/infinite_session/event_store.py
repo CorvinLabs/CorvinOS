@@ -93,6 +93,12 @@ class SnapshotLockBusy(TimeoutError):
 
 
 def _fsync_dir(path: Path) -> None:
+    # Windows cannot open a directory with os.open ([Errno 13] Permission denied)
+    # and NTFS needs no directory fsync for the rename to be durable. Raising here
+    # left the snapshot file written but the index not -> every task turn logged
+    # "infinite-session snapshot NOT written" and the chain never advanced.
+    if os.name == "nt":
+        return
     fd = os.open(str(path), os.O_RDONLY)
     try:
         os.fsync(fd)

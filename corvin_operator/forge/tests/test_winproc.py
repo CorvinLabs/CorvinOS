@@ -101,3 +101,47 @@ def test_job_cpu_limit_stops_spinner():
             proc.kill()
         job.close()
     assert rc != 0
+
+
+@win_only
+def test_which_ignores_cwd_and_relative_path_entries(tmp_path, monkeypatch):
+    # shutil.which on Windows probes .\git.exe / .\bash.exe first: a binary planted
+    # in the server's working directory must never become the tool interpreter.
+    planted = tmp_path / "work"
+    planted.mkdir()
+    (planted / "bash.exe").write_bytes(b"MZ")
+    (planted / "git.exe").write_bytes(b"MZ")
+    monkeypatch.chdir(planted)
+    monkeypatch.setenv("PATH", os.pathsep.join([".", "work", ""]))
+    assert _winproc._which_abs("bash.exe") is None
+    assert _winproc._which_abs("git.exe") is None
+    good = tmp_path / "abs"
+    good.mkdir()
+    (good / "bash.exe").write_bytes(b"MZ")
+    monkeypatch.setenv("PATH", os.pathsep.join([".", str(good)]))
+    assert _winproc._which_abs("bash.exe") == str(good / "bash.exe")
+
+
+@win_only
+def test_terminate_reports_false_when_never_assigned():
+    # An empty job terminates "successfully"; the caller must then kill the tree itself.
+    job = WinJob(cpu_seconds=None)
+    try:
+        assert job.active
+        assert job.terminate() is False
+    finally:
+        job.close()
+
+
+@win_only
+def test_kill_and_drain_orphaned_pipe_holder_does_not_hang():
+    # Parent exits at once; its orphan (outside any job, unreachable by taskkill /T)
+    # keeps the pipes. Closing them under the blocked reader threads deadlocked.
+    code = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(40)'])"
+    proc = subprocess.Popen([sys.executable, "-c", code],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    with pytest.raises(subprocess.TimeoutExpired):
+        proc.communicate(timeout=2)
+    t0 = time.monotonic()
+    kill_and_drain(proc, None, drain_timeout=1)
+    assert time.monotonic() - t0 < 15

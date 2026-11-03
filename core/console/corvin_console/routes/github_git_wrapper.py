@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 import logging
 import re
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class GitHubGitWrapper:
         logger.debug(f"Running: {' '.join(cmd)} in {cwd} (attempt {retry+1}/{self.max_retries})")
 
         try:
-            result = subprocess.run(
+            result = _run_tree_safe(
                 cmd,
                 cwd=cwd,
                 capture_output=True,

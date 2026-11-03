@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import maintainer_capability as _cap
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class LoopResult:
 
 def _git(repo: Path, *args: str) -> tuple[int, str]:
     try:
-        p = subprocess.run(["git", "-C", str(repo), *args],
+        p = _run_tree_safe(["git", "-C", str(repo), *args],
                            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
         return p.returncode, (p.stdout + p.stderr).strip()
     except Exception as exc:  # noqa: BLE001

@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as _StarletteHTTPException
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 
 def _is_asset_path(path: str) -> bool:
@@ -755,14 +756,14 @@ def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
         npm_cmd = shutil.which("npm")
         if npm_cmd is None:
             raise FileNotFoundError("npm not found on PATH")
-        subprocess.run(
+        _run_tree_safe(
             [npm_cmd, "install"],
             cwd=web_next_dir,
             check=True,
             capture_output=True,
             timeout=300,  # 5-min timeout for npm install
         )
-        subprocess.run(
+        _run_tree_safe(
             [npm_cmd, "run", "build"],
             cwd=web_next_dir,
             check=True,

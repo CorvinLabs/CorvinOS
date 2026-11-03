@@ -24,6 +24,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from .marks import Observation
 from .session import BrowserActionError, BrowserSession
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 logger = logging.getLogger("corvin.browser.agent")
 
@@ -178,7 +179,7 @@ def _spawn_claude(prompt: str, *, timeout: int = 60) -> str:
     from corvin_core import cli_args as _cli_args  # noqa: PLC0415
     _sp_args, _sp_tmp = _cli_args.system_prompt_args(_SYSTEM)
     try:
-        r = subprocess.run(
+        r = _run_tree_safe(
             [*_claude_argv(), "-p", "--max-turns", "1", "--tools", "",
              *_sp_args],
             # R4: whole-payload guard - the planner prompt embeds the operator

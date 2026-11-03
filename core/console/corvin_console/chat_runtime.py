@@ -101,6 +101,7 @@ web-chat and surface an honest up-front mismatch message naming the
 configured engine.
 """
 from __future__ import annotations
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 # Token Measurement Integration (ADR-0365)
 try:
@@ -660,7 +661,7 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
         try:
             _in = annotated
             out = await asyncio.to_thread(
-                lambda: subprocess.run(
+                lambda: _run_tree_safe(
                     [sys.executable, str(summarizer), "--lang", "de", "--appendix-mode"],
                     input=_in, capture_output=True, text=True,
                     # Pin the codec. `text=True` alone encodes stdin with the
@@ -698,7 +699,7 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
                 # what "total budget" implies.
                 _remaining = max(1.0, _ANN_CALL_TIMEOUT_S - (time.monotonic() - _t0))
                 out = await asyncio.to_thread(
-                    lambda: subprocess.run(
+                    lambda: _run_tree_safe(
                         [sys.executable, str(summarizer), "--lang", "de", "--metapher-mode"],
                         input=_in, capture_output=True, text=True,
                         # Pin the codec — see the appendix call above.
@@ -5554,7 +5555,7 @@ def upgrade_session_title(tenant_id: str, sid: str) -> str:
     if not transcript:
         return ""
     try:
-        proc = subprocess.run(
+        proc = _run_tree_safe(
             [sys.executable, str(script), "--title-mode",
              "--max-chars", str(_AUTO_TITLE_MAX_CHARS)],
             input=transcript, capture_output=True, text=True,

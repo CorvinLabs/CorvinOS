@@ -134,7 +134,12 @@ def run_tree_safe(argv, *, timeout: float, drain_timeout: float = 5.0, **kwargs)
     """
     import subprocess  # noqa: PLC0415
 
-    if os.name != "nt" or subprocess.run is not _ORIG_SUBPROCESS_RUN:
+    # A replaced run() is detected by identity AND by origin: this module is often
+    # imported lazily, AFTER a test patched subprocess.run, and then the snapshot
+    # below IS the fake — identity alone would spawn a real process past the fake.
+    _replaced = (subprocess.run is not _ORIG_SUBPROCESS_RUN
+                 or getattr(subprocess.run, "__module__", None) != "subprocess")
+    if os.name != "nt" or _replaced:
         return subprocess.run(argv, timeout=timeout, **kwargs)
     input_ = kwargs.pop("input", None)
     check = kwargs.pop("check", False)
@@ -152,12 +157,13 @@ def run_tree_safe(argv, *, timeout: float, drain_timeout: float = 5.0, **kwargs)
                 exc.stdout, exc.stderr = proc.communicate(timeout=drain_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                for f in (proc.stdout, proc.stderr):
-                    try:
-                        if f is not None:
-                            f.close()
-                    except OSError:
-                        pass
+                # A survivor outside the killed tree (orphaned grandchild whose parent
+                # already exited, so taskkill /T cannot reach it) still holds the pipes.
+                # Do NOT close() them: communicate()'s reader thread is blocked in
+                # read() holding the buffer lock, so close() (and Popen.__exit__'s
+                # close) would block forever. Detach instead; the reader threads end
+                # when the survivor exits.
+                proc.stdout = proc.stderr = None
             raise exc from None
         except BaseException:
             if not kill_tree_windows(proc.pid):

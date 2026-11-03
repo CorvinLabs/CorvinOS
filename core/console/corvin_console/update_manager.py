@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 # In the ``corvin.`` namespace: the hosts' journal/file handlers are attached
 # to the ``corvin`` logger, so ``corvin_console.update_manager`` (the module
@@ -278,7 +279,7 @@ def record_result(state_path: Path, rc: int, src: Path | None = None) -> None:
 
 
 def _git(src: Path, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(src), *args], capture_output=True, text=True,
+    return _run_tree_safe(["git", "-C", str(src), *args], capture_output=True, text=True,
                           timeout=timeout, stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace")
 
 

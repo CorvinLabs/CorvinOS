@@ -151,6 +151,11 @@ _active_procs: dict[str, "asyncio.subprocess.Process"] = {}
 # to CANCELLED first; that terminal state wins (see _finish_queue).
 _INTERRUPT_EXIT_CODES: frozenset[int] = frozenset({-9, 137, 143, -15})
 
+# Windows: TerminateProcess / ``taskkill /F`` leave exit code 1, indistinguishable
+# from a genuine failure. Task ids the console itself killed (signal_abort) are
+# remembered so that rc is classified as an interruption, never as FAILED.
+_self_killed: set[str] = set()
+
 
 def signal_abort(task_id: str) -> bool:
     """Signal a running task subprocess to terminate (M6).
@@ -162,6 +167,7 @@ def signal_abort(task_id: str) -> bool:
     if proc is None:
         return False
     if sys.platform == "win32":
+        _self_killed.add(task_id)
         # terminate() is TerminateProcess on the CLI pid alone there: no SIGTERM the CLI
         # could use to end its tool children, so they outlived the abort. End the tree.
         from corvin_core.process_signals import kill_tree_windows  # noqa: PLC0415
@@ -757,7 +763,8 @@ class TaskWorkerPool:
                     queue_now = self.task_queue.get_task(task.task_id)
                     if queue_now is not None and queue_now.status == TaskStatus.CANCELLED:
                         state, final_status = "cancelled", TaskStatus.CANCELLED
-                    elif rc in _INTERRUPT_EXIT_CODES:
+                    elif rc in _INTERRUPT_EXIT_CODES or (
+                            sys.platform == "win32" and task.task_id in _self_killed):
                         state, final_status = "interrupted", TaskStatus.INTERRUPTED
                     else:
                         state, final_status = "failed", TaskStatus.FAILED
@@ -832,6 +839,7 @@ class TaskWorkerPool:
                                            duration_ms=int((time.time() - start_time) * 1000))
             finally:
                 _active_procs.pop(task.task_id, None)
+                _self_killed.discard(task.task_id)
 
     async def _cleanup_loop(self) -> None:
         """Background cleanup: mark expired tasks as FAILED."""

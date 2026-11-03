@@ -66,6 +66,20 @@ from pathlib import Path
 from typing import Any, Literal
 
 
+def _run_tree_safe(argv, **kwargs):
+    """``subprocess.run`` that cannot hang on a Windows timeout (grandchild holding the pipes).
+
+    Delegates to ``corvin_core.process_signals.run_tree_safe``; identical to
+    ``subprocess.run`` on POSIX or when corvin_core is not importable.
+    """
+    try:
+        from corvin_core.process_signals import run_tree_safe  # noqa: PLC0415 - leaf module
+    except ImportError:
+        import subprocess as _subprocess  # noqa: PLC0415
+        return _subprocess.run(argv, **kwargs)
+    return run_tree_safe(argv, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -365,7 +379,7 @@ def _spawn_judge(prompt: str, output: str, *,
         cmd.extend(["--model", model])
     cmd.append(judge_prompt)
     try:
-        result = subprocess.run(
+        result = _run_tree_safe(
             cmd, capture_output=True, text=True,
             timeout=timeout_s, check=False, encoding="utf-8", errors="replace",
         )

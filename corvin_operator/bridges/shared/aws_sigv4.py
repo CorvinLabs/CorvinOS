@@ -44,6 +44,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+
+def _run_tree_safe(argv, **kwargs):
+    """``subprocess.run`` that cannot hang on a Windows timeout (grandchild holding the pipes).
+
+    Delegates to ``corvin_core.process_signals.run_tree_safe``; identical to
+    ``subprocess.run`` on POSIX or when corvin_core is not importable.
+    """
+    try:
+        from corvin_core.process_signals import run_tree_safe  # noqa: PLC0415 - leaf module
+    except ImportError:
+        import subprocess as _subprocess  # noqa: PLC0415
+        return _subprocess.run(argv, **kwargs)
+    return run_tree_safe(argv, **kwargs)
+
 _ALGORITHM = "AWS4-HMAC-SHA256"
 
 #: Bound on the operator-configured ``credential_process`` helper. Long enough
@@ -191,7 +205,7 @@ def _credentials_from_process(profile: str) -> tuple[Credentials | None, str]:
         return None, ""
 
     try:
-        completed = subprocess.run(  # noqa: S602 — operator-configured AWS mechanism
+        completed = _run_tree_safe(  # noqa: S602 — operator-configured AWS mechanism
             _expand_windows_vars(command),
             shell=True,
             capture_output=True,

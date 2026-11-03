@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from ..deps import require_csrf, require_session
 from .. import kb_projection
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 router = APIRouter(
     prefix="/plugins/corvin-knowledge",
@@ -339,7 +340,7 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     # (API keys, tokens) is not handed to git.
     env = {k: os.environ[k] for k in _GIT_ENV_KEEP if k in os.environ}
     env["GIT_TERMINAL_PROMPT"] = "0"
-    return subprocess.run(
+    return _run_tree_safe(
         ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", *args],
         cwd=str(cwd),
         capture_output=True,

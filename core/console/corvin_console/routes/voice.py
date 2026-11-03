@@ -44,6 +44,7 @@ from .. import voice_interpreter as _voice_interpreter
 from ..deps import require_csrf, require_session
 
 import logging
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 _log = logging.getLogger(__name__)
 
 
@@ -2949,7 +2950,7 @@ def voice_summarize(
 
     try:
         # Call summarize.py with stdin input
-        proc = subprocess.run(
+        proc = _run_tree_safe(
             [
                 sys.executable,
                 str(summarize_path),

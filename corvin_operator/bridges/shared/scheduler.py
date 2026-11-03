@@ -47,6 +47,20 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+
+def _run_tree_safe(argv, **kwargs):
+    """``subprocess.run`` that cannot hang on a Windows timeout (grandchild holding the pipes).
+
+    Delegates to ``corvin_core.process_signals.run_tree_safe``; identical to
+    ``subprocess.run`` on POSIX or when corvin_core is not importable.
+    """
+    try:
+        from corvin_core.process_signals import run_tree_safe  # noqa: PLC0415 - leaf module
+    except ImportError:
+        import subprocess as _subprocess  # noqa: PLC0415
+        return _subprocess.run(argv, **kwargs)
+    return run_tree_safe(argv, **kwargs)
+
 try:  # ADR-2269: one icon vocabulary for every chat surface
     from status_markers import icon as _icon
 except ImportError:  # loaded as a package member
@@ -486,7 +500,7 @@ def _run_workflow_to_outbox(
         pass  # best-effort — don't block the actual run
 
     try:
-        result = subprocess.run(
+        result = _run_tree_safe(
             cmd, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace"
         )
     except (subprocess.TimeoutExpired, OSError) as e:

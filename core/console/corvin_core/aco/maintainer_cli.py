@@ -26,6 +26,7 @@ from pathlib import Path
 
 from . import maintainer_capability as MC
 from . import maintenance_loop as ML
+from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
 
 
 def _b64(b: bytes) -> str:
@@ -126,7 +127,7 @@ def _file_patch_source(patch_path: str):
 
 def _pytest_gate(test_cmd: list[str], repo: str):
     def g() -> tuple[bool, str]:
-        p = subprocess.run(test_cmd, cwd=repo, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
+        p = _run_tree_safe(test_cmd, cwd=repo, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
         return (p.returncode == 0, (p.stdout + p.stderr)[-1200:])
     return g
 
@@ -235,7 +236,7 @@ def _append_rotating(path: Path, line: str, *, cap_bytes: int = 4 * 1024 * 1024)
 
 
 def _git_q(repo, *args: str) -> tuple[int, str]:
-    p = subprocess.run(["git", "-C", str(repo), *args],
+    p = _run_tree_safe(["git", "-C", str(repo), *args],
                        capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
     return p.returncode, (p.stdout + p.stderr).strip()
 
@@ -347,17 +348,17 @@ def _release(repo: Path, *, dry_run: bool = False) -> dict:
     import shutil as _sh
     # shutil.which: on Windows npm is npm.cmd, which CreateProcess never finds
     # from the bare name (no PATHEXT) -> FileNotFoundError after the bump above.
-    subprocess.run([_sh.which("npm") or "npm", "run", "build"], cwd=spa,
+    _run_tree_safe([_sh.which("npm") or "npm", "run", "build"], cwd=spa,
                    capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace")
     for d in ("dist", "build"):
         _sh.rmtree(repo / d, ignore_errors=True)
-    b = subprocess.run([sys.executable, "-m", "build"], cwd=repo,
+    b = _run_tree_safe([sys.executable, "-m", "build"], cwd=repo,
                        capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace")
     if b.returncode != 0:
         _git_q(repo, "checkout", "--", "pyproject.toml")  # revert bump on failure
         return {"released": False, "reason": "build failed", "detail": b.stderr[-300:]}
     arts = [str(p) for p in (repo / "dist").glob(f"corvinos-{new}*")]
-    up = subprocess.run([sys.executable, "-m", "twine", "upload", "--non-interactive",
+    up = _run_tree_safe([sys.executable, "-m", "twine", "upload", "--non-interactive",
                          "-u", "__token__", "-p", token, *arts],
                         cwd=repo, capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace")
     if up.returncode != 0:

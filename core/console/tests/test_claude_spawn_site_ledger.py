@@ -469,7 +469,9 @@ def test_the_assistant_route_no_longer_puts_the_prompt_on_argv():
     src = (_REPO / "core/console/corvin_console/routes/assistant.py").read_text(encoding="utf-8")
     # the `-p` spawn, not the `--version` availability probe of /assistant/ping
     idx = src.index('"-p",')
-    spawn = src[src.rindex("subprocess.run(", 0, idx):]
+    # _run_tree_safe = subprocess.run that cannot hang on a Windows timeout
+    start = max(src.rfind("subprocess.run(", 0, idx), src.rfind("_run_tree_safe(", 0, idx))
+    spawn = src[start:]
     spawn = spawn[: spawn.index("capture_output")]
     argv_literal = spawn[spawn.index("[") + 1: spawn.index("]")]
     for banned in ("full_prompt", "body.message", "ctx_tag", "history_block"):

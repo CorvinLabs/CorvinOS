@@ -57,6 +57,20 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+
+def _run_tree_safe(argv, **kwargs):
+    """``subprocess.run`` that cannot hang on a Windows timeout (grandchild holding the pipes).
+
+    Delegates to ``corvin_core.process_signals.run_tree_safe``; identical to
+    ``subprocess.run`` on POSIX or when corvin_core is not importable.
+    """
+    try:
+        from corvin_core.process_signals import run_tree_safe  # noqa: PLC0415 - leaf module
+    except ImportError:
+        import subprocess as _subprocess  # noqa: PLC0415
+        return _subprocess.run(argv, **kwargs)
+    return run_tree_safe(argv, **kwargs)
+
 # ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
 # Every payload handed to the claude CLI goes through the ONE shared
 # neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
@@ -519,7 +533,7 @@ def _run_cli_judge(*, site: str, thesis: Any, antithesis: Any) -> str:
     # `@` must be disarmed. Reply contract unaffected: the verdict is the LAST
     # stdout line (`A | …` / `B | …`), which the guard never touches.
     try:
-        proc = subprocess.run(
+        proc = _run_tree_safe(
             [_bin, "-p", "--max-turns", "1", "--tools", "",
              *model_args,
              "--output-format", "text", _guard_prompt_head(prompt)],
@@ -612,7 +626,7 @@ def _run_summary_judge(source: str, candidate: str, lang: str) -> str:
     # summarised — the direct attacker channel for `@<path>`. Reply contract
     # unaffected: the verdict is the LAST stdout line (`FAITHFUL | …`).
     try:
-        proc = subprocess.run(
+        proc = _run_tree_safe(
             [_bin, "-p", "--max-turns", "1", "--tools", "",
              *model_args,
              "--output-format", "text", _guard_prompt_head(prompt)],

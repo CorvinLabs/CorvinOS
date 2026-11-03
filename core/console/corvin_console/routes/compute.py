@@ -317,6 +317,21 @@ def _probe_socket(path: Path, timeout_s: float = 0.3) -> dict[str, Any]:
     except OSError as e:
         return {"exists": True, "reachable": False, "error": str(e)}
 
+
+def _worker_not_running_detail(tenant_id: str) -> str:
+    """503 hint for a missing compute worker, correct for this platform.
+
+    Linux runs the worker as the ``corvin-compute@<tenant>`` systemd user unit.
+    Windows has no service/scheduled task for it (the installer does not create
+    one), so the only start path is running the CLI by hand.
+    """
+    if os.name == "nt":
+        return ("compute worker is not running — on Windows it is not installed as a "
+                "service; start it manually in a terminal: "
+                f"\"{sys.executable}\" -m corvin_compute serve --tenant {tenant_id}")
+    return ("compute worker is not running — start it via Settings "
+            "(systemctl --user start corvin-compute@<tenant>)")
+
 @router.get("/compute")
 def compute_status(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -1145,8 +1160,7 @@ def submit_run(
             or sock_path.with_name(sock_path.name + ".port").exists()):
         raise HTTPException(
             http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            "compute worker is not running — start it via Settings "
-            "(systemctl --user start corvin-compute@<tenant>)",
+            _worker_not_running_detail(rec.tenant_id),
         )
 
     # ADR-0094 / ADR-0147 R3-CON-RUNS-DRIFT-01 / ADR-0703: the compute.run
