@@ -3,11 +3,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|WebFetch",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|WebFetch",
         "hooks": [
           {
             "type": "command",
-            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh path_gate.py",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh\" path_gate.py",
             "timeout": 3
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh auth_elevation_gate.py",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh\" auth_elevation_gate.py",
             "timeout": 3
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh web_trust_gate.py",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh\" web_trust_gate.py",
             "timeout": 3
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh artifact_register.py",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh\" artifact_register.py",
             "timeout": 3
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop_hook.sh",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/stop_hook.sh\"",
             "timeout": 10
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh notification_relay.py",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh\" notification_relay.py",
             "timeout": 5
           }
         ]
@@ -72,17 +72,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh ldd_auto_optin.py",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh\" ldd_auto_optin.py",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh notification_relay.py",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh\" notification_relay.py",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/autoupdate.sh --async",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/autoupdate.sh\" --async",
             "timeout": 3
           }
         ]

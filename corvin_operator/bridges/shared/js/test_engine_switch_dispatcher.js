@@ -168,7 +168,8 @@ for (const tok of ['CLAUDE', 'Claude', 'CoDeX']) {
 // ── 11: Audit chain receives metadata-only entries ───────────────────
 console.log('\n[audit chain emits engine.pref_switched]');
 {
-  const chainPath = path.join(process.env.CORVIN_HOME, 'global', 'forge', 'audit.jsonl');
+  // ADR-0650: one canonical chain per tenant (engine_switch._audit_path), not <home>/global/forge.
+  const chainPath = path.join(process.env.CORVIN_HOME, 'tenants', (process.env.CORVIN_TENANT_ID || '_default'), 'global', 'forge', 'audit.jsonl');
   const present = fs.existsSync(chainPath);
   ok(present, 'audit chain file exists', chainPath);
   if (present) {

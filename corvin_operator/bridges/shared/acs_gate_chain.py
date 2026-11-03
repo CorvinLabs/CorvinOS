@@ -409,13 +409,15 @@ def _run_critique_sync(result_text: str, goal: str, model: str) -> dict[str, Any
     try:
         out = subprocess.run(
             [
-                _bin, "-p", prompt,
+                _bin, "-p", *([] if sys.platform == "win32" else [prompt]),
                 "--append-system-prompt", _CRITIQUE_SYSTEM,
                 "--model", model,
                 "--disallowedTools", "*",
                 "--max-turns", "1",
                 "--output-format", "text",
             ],
+            # Windows: multi-line positional is cut by cmd.exe for a .cmd shim -> stdin.
+            input=prompt if sys.platform == "win32" else None,
             capture_output=True, text=True, env=env, timeout=60, check=False, encoding="utf-8", errors="replace",
         )
         if out.returncode != 0:

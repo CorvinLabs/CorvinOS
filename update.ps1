@@ -513,8 +513,36 @@ if ($Src -and (Test-Path -LiteralPath (Join-Path $Src "pyproject.toml"))) {
 }
 # Port: explicit, else the console task's own --port, else the env, else 8765.
 $ConsoleTask = Get-ConsoleTask
-if ($Port -le 0 -and $ConsoleTask) {
-    foreach ($a in @($ConsoleTask.Actions)) { if ([string]$a.Arguments -match '--port\s+(\d+)') { $Port = [int]$Matches[1] } }
+# install.ps1 and this script register the task as wscript.exe //B "<x>.vbs":
+# --port and CORVIN_HOME live INSIDE that launcher (and the watchdog .ps1 it
+# runs), not in the task arguments. Read them from there too, so an install
+# with a custom port or CORVIN_HOME is not updated against 8765 / the default
+# root (and its launcher rewritten to point the console at an empty root).
+$LauncherText = ""
+if ($ConsoleTask) {
+    foreach ($a in @($ConsoleTask.Actions)) {
+        $LauncherText += "`n" + [string]$a.Arguments
+        if ([string]$a.Arguments -match '"([^"]+\.vbs)"' -and (Test-Path -LiteralPath $Matches[1])) {
+            $vbsText = [string](Get-Content -LiteralPath $Matches[1] -Raw -ErrorAction SilentlyContinue)
+            $LauncherText += "`n" + $vbsText
+            if ($vbsText -match '-File ""([^"]+\.ps1)""' -and (Test-Path -LiteralPath $Matches[1])) {
+                $LauncherText += "`n" + [string](Get-Content -LiteralPath $Matches[1] -Raw -ErrorAction SilentlyContinue)
+            }
+        }
+    }
+}
+if ($Port -le 0 -and $LauncherText -match '--port\s+(\d+)|\$port = (\d+)') {
+    $Port = if ($Matches[1]) { [int]$Matches[1] } else { [int]$Matches[2] }
+}
+if (-not $env:CORVIN_HOME) {
+    $launcherHome = $null
+    if ($LauncherText -match '\("CORVIN_HOME"\) = "((?:[^"]|"")+)"') { $launcherHome = $Matches[1].Replace('""', '"') }
+    elseif ($LauncherText -match "\`$env:CORVIN_HOME = '((?:[^']|'')+)'") { $launcherHome = $Matches[1].Replace("''", "'") }
+    if ($launcherHome) {
+        $CorvinHome = $launcherHome
+        $env:CORVIN_HOME = $CorvinHome
+        $env:PATH = (Join-Path $CorvinHome "node") + ';' + $env:PATH
+    }
 }
 if ($Port -le 0 -and $env:CORVIN_CONSOLE_PORT -match '^\d+$') { $Port = [int]$env:CORVIN_CONSOLE_PORT }
 if ($Port -le 0) { $Port = 8765 }
@@ -707,6 +735,21 @@ if (-not (Test-Path -LiteralPath $NodeExe) -and (Test-Path -LiteralPath (Join-Pa
     $nodeStage = Join-Path $LogDir "node-stage"
     if (Invoke-Retry 3 { Invoke-Download -Uri "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-$arch.zip" -OutFile $nodeZip }) {
         try {
+            # Verify before extracting (as install.ps1): no pinned hash for an
+            # .nvmrc-driven version, so check the release's SHASUMS256.txt.
+            $nodeSums = Join-Path $LogDir "node-SHASUMS256.txt"
+            $nodeZipName = "node-v$NodeVersion-win-$arch.zip"
+            $expectedNodeSha = $null
+            if (Invoke-Retry 3 { Invoke-Download -Uri "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt" -OutFile $nodeSums }) {
+                foreach ($line in (Get-Content -LiteralPath $nodeSums)) {
+                    $parts = $line.Trim() -split '\s+'
+                    if ($parts.Count -eq 2 -and $parts[1] -eq $nodeZipName) { $expectedNodeSha = $parts[0]; break }
+                }
+                Remove-Item -LiteralPath $nodeSums -Force -ErrorAction SilentlyContinue
+            }
+            if (-not $expectedNodeSha) { throw "no SHA256 for $nodeZipName in SHASUMS256.txt" }
+            $nodeHash = (Get-FileHash -LiteralPath $nodeZip -Algorithm SHA256).Hash
+            if ($nodeHash -ne $expectedNodeSha.ToUpper()) { throw "Node.js SHA256 mismatch (expected $($expectedNodeSha.ToLower()), got $($nodeHash.ToLower()))" }
             Expand-Archive -LiteralPath $nodeZip -DestinationPath $nodeStage -Force -ErrorAction Stop
             $inner = @(Get-ChildItem -LiteralPath $nodeStage -Directory)
             if ($inner.Count -eq 1) {
@@ -914,9 +957,13 @@ function New-HiddenConsoleAction {
     $vbsPath = Join-Path $vbsDir "$TaskName.vbs"
     $targetCmd = "`"$ExePath`" --no-browser --port $ServePort"
     $vbsEscaped = $targetCmd.Replace('"', '""')
-    # PYTHONUTF8=1 into wscript's process env, inherited by the console it
-    # starts (same as install.ps1's wrapper).
+    # CORVIN_HOME and PYTHONUTF8=1 into wscript's process env, inherited by
+    # the console it starts (same as install.ps1's wrapper): Task Scheduler
+    # passes no CORVIN_HOME, and without it the console resolves a different
+    # root than the one this install uses.
+    $homeEscaped = $CorvinHome.Replace('"', '""')
     $vbs = @(
+        "CreateObject(""WScript.Shell"").Environment(""PROCESS"")(""CORVIN_HOME"") = ""$homeEscaped""",
         "CreateObject(""WScript.Shell"").Environment(""PROCESS"")(""PYTHONUTF8"") = ""1""",
         "CreateObject(""WScript.Shell"").Run ""$vbsEscaped"", 0, False"
     )
@@ -958,6 +1005,8 @@ function Install-ConsoleWatchdog {
             'if (Test-Path -LiteralPath (Join-Path $env:TEMP "corvinos-setup.lock")) { exit 0 }',
             "`$port = $Port",
             "`$serve = '$($serve.Source -replace "'", "''")'",
+            "`$env:CORVIN_HOME = '$($CorvinHome -replace "'", "''")'",
+            '$env:PYTHONUTF8 = "1"',
             'try { $c = New-Object Net.Sockets.TcpClient; $c.Connect("127.0.0.1", $port); $c.Close(); exit 0 } catch { }',
             '$me = Get-CimInstance Win32_Process -Filter "Name=''corvinos-serve.exe''" -ErrorAction SilentlyContinue |',
             '      Where-Object { $_.CreationDate -gt (Get-Date).AddMinutes(-3) }',

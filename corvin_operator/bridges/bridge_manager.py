@@ -945,7 +945,7 @@ def _adapter_running_pid(adapter_py: Path) -> int:
 
     # System-wide scan (POSIX: /proc; else pgrep -f).
     proc_dir = Path("/proc")
-    if proc_dir.is_dir():
+    if os.name != "nt" and proc_dir.is_dir():
         for entry in proc_dir.iterdir():
             if not entry.name.isdigit():
                 continue
@@ -954,6 +954,16 @@ def _adapter_running_pid(adapter_py: Path) -> int:
                 continue
             if marker in _pid_cmdline(other):
                 return other
+    elif os.name == "nt":
+        # No /proc and no pgrep: an adapter started by bridge.ps1 (which never
+        # writes our pidfile) was invisible here, so the console started a
+        # SECOND adapter double-processing the inbox.
+        procs, confident = _win_process_snapshot()
+        if confident:
+            norm_marker = marker.replace("\\", "/").lower()
+            for other, cmdline in procs.items():
+                if other != os.getpid() and norm_marker in cmdline.replace("\\", "/").lower():
+                    return other
     else:
         try:
             out = _run(
@@ -1073,7 +1083,7 @@ def _scan_channel_daemon_pid(channel: str) -> tuple[int, bool]:
     and a caller that conflates them starts a second daemon.
     """
     proc_dir = Path("/proc")
-    if proc_dir.is_dir():
+    if os.name != "nt" and proc_dir.is_dir():
         try:
             entries = list(proc_dir.iterdir())
         except OSError:
@@ -1145,6 +1155,41 @@ def channel_daemon_running(channel: str) -> dict:
     if pid:
         return {"running": True, "via": "process", "pid": pid, "confident": True}
     return {"running": False, "via": "", "pid": 0, "confident": confident}
+
+
+def stop_channel_detached(channel: str) -> dict:
+    """Stop ONE bridge daemon on a host without systemd (native Windows).
+
+    routes/bridges.py only knew ``systemctl --user stop``; on Windows that is
+    "systemctl not on PATH", so toggling a bridge off (or deleting its
+    connection) left the daemon running and the console reported
+    ``restart_needed``. The Scheduled Task that supervises the daemon
+    (``CorvinOS-Bridge-<channel>``, restart-forever) is ended FIRST, else it
+    relaunches the daemon five seconds after the kill. Never raises.
+    """
+    if os.name != "nt":
+        return {"applied": False, "reason": "no non-systemd stop path on this platform"}
+    stopped: list[str] = []
+    try:
+        rc = _run(["schtasks", "/End", "/TN", f"CorvinOS-Bridge-{channel}"],
+                  capture_output=True, text=True, check=False, timeout=15).returncode
+        if rc == 0:
+            stopped.append("scheduled-task")
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    pid, confident = _scan_channel_daemon_pid(channel)
+    if pid:
+        try:
+            from corvin_core.process_signals import kill_tree_windows  # type: ignore[import]
+        except ImportError:
+            kill_tree_windows = None  # type: ignore[assignment]
+        if not (kill_tree_windows and kill_tree_windows(pid)):
+            _run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                 capture_output=True, check=False, timeout=15)
+        stopped.append(f"pid {pid}")
+    elif not confident and not stopped:
+        return {"applied": False, "reason": "cannot enumerate processes to find the daemon"}
+    return {"applied": True, "via": "stop_channel_detached", "stopped": stopped}
 
 
 def ensure_adapter_detached() -> dict:

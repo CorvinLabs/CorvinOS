@@ -70,7 +70,9 @@ _DEFAULT_CONFIG: dict[str, Any] = {
 
 _NAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _TAG_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]+")
-_NAME_MAX_LEN = 200
+# Windows MAX_PATH (260, LongPathsEnabled=0): <session dir ~75 chars>/artifacts/ab/<sha8>_<name>
+# overflowed with a 200-char name (FileNotFoundError on the rename); POSIX unchanged.
+_NAME_MAX_LEN = 200 if os.name != "nt" else 100
 _TAG_MAX_LEN = 40
 _TAGS_MAX = 16
 

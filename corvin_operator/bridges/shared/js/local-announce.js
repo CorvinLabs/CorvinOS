@@ -25,7 +25,7 @@ function makeAnnouncer({ pluginRoot, channelLabel, currentSettings, logger }) {
     // an unhandled 'error' event crashed the whole daemon on the next inbound
     // message. Every spawn here therefore gets an error listener.
     const fire = (cmd, args) => {
-      const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+      const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
       child.on('error', (e) => { if (logger) logger(`announce failed: ${e.message}`); });
       child.unref();
     };

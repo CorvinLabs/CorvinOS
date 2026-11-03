@@ -237,7 +237,8 @@ class TestActivate:
         servers = activate.get_active_mcp_servers(TID)
         assert "brave-search" in servers
         srv = servers["brave-search"]
-        assert srv["command"] == "npx"
+        # native Windows launches npx through `cmd /c` (activate._win_cmd_wrap)
+        assert srv["command"] == ("cmd" if sys.platform == "win32" else "npx")
         assert "brave-search@1.0.0" in srv["args"]
 
     def test_get_active_mcp_servers_with_secrets(self, tmp_corvin, monkeypatch, tmp_path):

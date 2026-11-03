@@ -4,6 +4,7 @@ The plan's LDD review (F1/F4) scrutinised two things: grades must merge by ARRAY
 (not by summing n_grades, which double-counts overlaps), and the PII backstop must
 actually catch a poisoned payload. These tests pin both through the real merge path.
 """
+import os
 import json
 from pathlib import Path
 
@@ -165,16 +166,19 @@ def test_pat_never_in_argv_or_remote_url(tmp_path: Path, monkeypatch):
     assert clone_call["env"]["GIT_ASKPASS"].endswith(".git-askpass.sh")
     assert clone_call["env"]["CORVIN_SYNC_GIT_PAT"] == "ghp_SECRET_TOKEN_123"
     helper = Path(clone_call["env"]["GIT_ASKPASS"])
-    assert helper.is_file() and (helper.stat().st_mode & 0o777) == 0o700
+    assert helper.is_file()
+    if os.name != "nt":  # NTFS has no POSIX mode bits
+        assert (helper.stat().st_mode & 0o777) == 0o700
     assert "SECRET_TOKEN" not in helper.read_text(encoding="utf-8")
     # local-only git commands (config) never receive the PAT
     cfg_call = next(c for c in seen if c["argv"][1] == "config")
     assert "CORVIN_SYNC_GIT_PAT" not in cfg_call["env"]
     # the helper answers username/password prompts from the environment
     env = {"CORVIN_SYNC_GIT_PAT": "ghp_SECRET_TOKEN_123", "PATH": "/usr/bin:/bin"}
-    assert real_run([str(helper), "Username for 'https://x': "], env=env, capture_output=True,
+    _sh = ["sh"] if os.name == "nt" else []  # Git for Windows runs the helper via its own sh
+    assert real_run([*_sh, str(helper), "Username for 'https://x': "], env=env, capture_output=True,
                     text=True).stdout.strip() == "x-access-token"
-    assert real_run([str(helper), "Password for 'https://x': "], env=env, capture_output=True,
+    assert real_run([*_sh, str(helper), "Password for 'https://x': "], env=env, capture_output=True,
                     text=True).stdout.strip() == "ghp_SECRET_TOKEN_123"
 
 

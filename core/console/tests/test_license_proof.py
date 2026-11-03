@@ -26,6 +26,8 @@ _LIC_PATH = str(_REPO / "corvin_operator" / "license")
 
 from license import validator as _v  # noqa: E402
 from license.limits import FREE_TIER, TIER_RESOURCE_LIMITS, LicenseLimitError  # noqa: E402
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -361,6 +363,7 @@ class TestComputeQuotaCounter:
         for i in range(100):
             increment_and_check(corvin_home, channel="test", chat_key=f"test-{i}")
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX 0600 mode bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_counter_file_created_mode_0600(self, tmp_path):
         from license.compute_quota import increment_and_check
         corvin_home = tmp_path / ".corvin"

@@ -19,6 +19,7 @@ import pytest
 def isolated_home(tmp_path, monkeypatch):
     """Point the hard-coded `~/.corvin/token_metrics.db` at a throwaway home."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
     import core.learning.token_measurement_hook as hook_mod
     # Drop any hook (and the one-shot latch) left by an earlier test.

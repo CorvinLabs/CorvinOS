@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,21 @@ _active_cache: dict[str, dict] = {}  # tid -> {"mtime": float, "data": dict}
 _active_lock = threading.RLock()
 
 
+def _win_cmd_wrap(cfg: dict) -> dict:
+    """Native Windows: Claude Code spawns an MCP ``command`` without a shell, so the
+    npm shims ``npx``/``npm``/``pnpm``/``yarn`` (``*.cmd``) cannot be started and the
+    server fails with "Connection closed". Claude Code's documented fix is
+    ``cmd /c <shim> ...``. No-op elsewhere and for any other command."""
+    import sys  # noqa: PLC0415
+    cmd = cfg.get("command")
+    if (sys.platform == "win32" and isinstance(cmd, str)
+            and cmd.lower() in ("npx", "npm", "pnpm", "yarn", "npx.cmd", "npm.cmd")):
+        cfg = dict(cfg)
+        cfg["command"] = "cmd"
+        cfg["args"] = ["/c", cmd, *list(cfg.get("args") or [])]
+    return cfg
+
+
 def active_path(tid: str = "_default") -> Path:
     from .catalog import catalog_dir  # local import avoids circular at module level
     return catalog_dir(tid) / "active.json"
@@ -64,6 +80,10 @@ def _session_active_path(tid: str, session_key: str) -> Path:
     home = _cat._corvin_home()
     # Sanitise the session_key to avoid path-traversal.
     safe = session_key.replace("/", "_").replace("..", "_").replace("\\", "_")
+    if os.name == "nt":
+        # "discord:123" is not a legal NTFS directory name (':' = stream separator /
+        # drive spec): mkdir raised and session-scoped activation never persisted.
+        safe = re.sub(r'[:*?"<>|]', "_", safe)
     return home / "tenants" / tid / "sessions" / safe / "mcp-session-active.json"
 
 
@@ -341,10 +361,10 @@ def get_active_mcp_servers(
         if not isinstance(runtime, dict) or not runtime.get("command"):
             continue
 
-        server_cfg: dict[str, Any] = {
+        server_cfg: dict[str, Any] = _win_cmd_wrap({
             "command": runtime["command"],
             "args": list(runtime.get("args") or []),
-        }
+        })
 
         # Plaintext env passthrough declared on the catalog entry itself
         # (ADR-0191: CORVIN_HOME / CORVIN_TENANT_ID for builtin servers —

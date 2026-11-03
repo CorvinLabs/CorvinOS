@@ -1287,6 +1287,31 @@ if (-not $nodeInstalled) {
             Write-Log -Message "Downloading Node.js v$nodeVersion ($nodeArch)..." -Level "Info"
             Invoke-DownloadWithRetry -Uri $nodeUrl -OutFile $nodeZip -TimeoutSeconds 300
 
+            # Verify BEFORE extracting: node.exe from this zip runs every bridge.
+            # The version comes from .nvmrc, so there is no pinned hash; check it
+            # against the release's SHASUMS256.txt (fetched over TLS, like uv).
+            $nodeSums = Join-Path $env:TEMP "node-v$nodeVersion-SHASUMS256-$InstallTimestamp.txt"
+            try {
+                Invoke-DownloadWithRetry -Uri "https://nodejs.org/dist/v$nodeVersion/SHASUMS256.txt" `
+                    -OutFile $nodeSums -TimeoutSeconds 60
+                $nodeZipName = "node-v$nodeVersion-win-$nodeArch.zip"
+                $expectedNodeSha = $null
+                foreach ($line in (Get-Content -LiteralPath $nodeSums)) {
+                    $parts = $line.Trim() -split '\s+'
+                    if ($parts.Count -eq 2 -and $parts[1] -eq $nodeZipName) { $expectedNodeSha = $parts[0]; break }
+                }
+            } finally {
+                Remove-Item -LiteralPath $nodeSums -Force -ErrorAction SilentlyContinue
+            }
+            if (-not $expectedNodeSha) {
+                throw "no SHA256 for $nodeZipName in SHASUMS256.txt -- refusing to extract it"
+            }
+            $nodeHash = (Get-FileHash -LiteralPath $nodeZip -Algorithm SHA256).Hash
+            if ($nodeHash -ne $expectedNodeSha.ToUpper()) {
+                throw "Node.js SHA256 mismatch (expected $($expectedNodeSha.ToLower()), got $($nodeHash.ToLower())) -- refusing to extract it"
+            }
+            Write-Log -Message "Node.js checksum verified" -Level "Success"
+
             Write-Log -Message "Extracting Node.js..." -Level "Info"
             $null = New-Item -ItemType Directory -Path $nodeStage -Force -ErrorAction Stop
             Expand-Archive -LiteralPath $nodeZip -DestinationPath $nodeStage -Force -ErrorAction Stop
@@ -1729,8 +1754,8 @@ if ($DryRun) {
 
 Write-Step "Reporting firewall state"
 if ($Lan) {
-    Write-Log -Message "LAN access requires an inbound rule on TCP 8765 (needs admin):" -Level "Warn"
-    Write-Log -Message "  netsh advfirewall firewall add rule name=`"CorvinOS Console`" dir=in action=allow protocol=TCP localport=8765" -Level "Info"
+    Write-Log -Message "LAN access requires an inbound rule on TCP $Port (needs admin):" -Level "Warn"
+    Write-Log -Message "  netsh advfirewall firewall add rule name=`"CorvinOS Console`" dir=in action=allow protocol=TCP localport=$Port" -Level "Info"
 } else {
     Write-Log -Message "Firewall untouched (console listens on 127.0.0.1). Re-run with -Lan for the LAN instructions." -Level "Info"
 }

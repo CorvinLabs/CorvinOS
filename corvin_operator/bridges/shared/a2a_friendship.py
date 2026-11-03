@@ -47,8 +47,11 @@ except ImportError:  # non-Windows — no msvcrt module.
 
 try:
     import fcntl  # type: ignore
-except ImportError:  # Windows — no fcntl module.
-    fcntl = None  # type: ignore[assignment]
+except ImportError:  # Windows — no fcntl module: use the LockFileEx flock shim.
+    try:
+        from _compat_fcntl import fcntl  # type: ignore
+    except ImportError:
+        fcntl = None  # type: ignore[assignment]
 
 from _bounded_lock import (  # noqa: E402
     LockBusy as FriendshipLockBusy,
@@ -712,15 +715,15 @@ def config_file_lock(*dirs: Path):
                 continue  # fail-soft: no lock file → advisory no-op for this dir
             locked = False
             try:
-                if _IS_WINDOWS and msvcrt is not None:
-                    lf.seek(0)
-                    msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
-                    locked = True
-                elif fcntl is not None:
+                if fcntl is not None:
                     _acquire_exclusive(
                         lf, f"a2a friendship config ({d.name})",
                         timeout=LOCK_TIMEOUT_SECONDS,
                     )
+                    locked = True
+                elif _IS_WINDOWS and msvcrt is not None:
+                    lf.seek(0)
+                    msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
                     locked = True
             except FriendshipLockBusy:
                 # NOT fail-soft: another writer holds it. Release what we
@@ -735,11 +738,11 @@ def config_file_lock(*dirs: Path):
         for lf, locked in reversed(handles):
             if locked:
                 try:
-                    if _IS_WINDOWS and msvcrt is not None:
+                    if fcntl is not None:
+                        fcntl.flock(lf, fcntl.LOCK_UN)
+                    elif _IS_WINDOWS and msvcrt is not None:
                         lf.seek(0)
                         msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
-                    elif fcntl is not None:
-                        fcntl.flock(lf, fcntl.LOCK_UN)
                 except OSError:
                     pass
             lf.close()

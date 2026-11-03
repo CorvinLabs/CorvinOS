@@ -498,16 +498,16 @@ function writeInbox(payload) {
       const fromShort = (payload.from || '').replace('@s.whatsapp.net', '').replace('@lid', '');
       if (mode === 'earcon') {
         spawn(require('../shared/js/python_bin').pythonBin(), [path.join(PLUGIN_ROOT, 'scripts', 'earcon.py'), 'play', 'tool'], {
-          detached: true, stdio: 'ignore',
+          detached: true, stdio: 'ignore', windowsHide: true,
         }).on('error', (e) => log(`local_announce_inbound failed: ${e.message}`)).unref();
       } else if (mode === 'voice') {
         const intro = kind === 'text' ? `Neue message von ${fromShort}: ${snippet}` : `Neue ${kind}-message von ${fromShort}.${snippet ? ' ' + snippet : ''}`;
         spawn(path.join(PLUGIN_ROOT, 'scripts', 'speak.sh'), ['--lang', 'de', '--text', intro], {
-          detached: true, stdio: 'ignore',
+          detached: true, stdio: 'ignore', windowsHide: true,
         }).on('error', (e) => log(`local_announce_inbound failed: ${e.message}`)).unref();
       } else if (mode === 'text') {
         spawn('notify-send', ['-a', 'WhatsApp', `${fromShort}`, snippet || `[${kind}]`], {
-          detached: true, stdio: 'ignore',
+          detached: true, stdio: 'ignore', windowsHide: true,
         }).on('error', (e) => log(`local_announce_inbound failed: ${e.message}`)).unref();
       }
     } catch (e) {

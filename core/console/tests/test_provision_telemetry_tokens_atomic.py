@@ -20,6 +20,8 @@ from unittest.mock import patch
 import pytest
 
 from corvin_console.aco import htrace_consent as hc
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 
 def _mode(path: Path) -> int:
@@ -43,6 +45,7 @@ class _FakeResponse:
         return False
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX 0600 mode bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_both_tokens_are_written_at_0600_atomically(tmp_path):
     home = tmp_path / ".corvin"
     (home / "aco" / "telemetry").mkdir(parents=True, exist_ok=True)

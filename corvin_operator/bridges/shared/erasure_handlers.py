@@ -35,6 +35,7 @@ import os
 import re
 import sqlite3
 import sys
+import contextlib
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -131,7 +132,9 @@ class L28RecallHandler:
                 duration_ms=int((time.time() - t0) * 1000),
             )
 
-        with sqlite3.connect(str(db)) as conn:
+        # closing(): ``with sqlite3.connect()`` only commits; an open handle
+        # blocks deleting/replacing recall.db on Windows (WinError 32).
+        with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
             # Two DELETEs: turns_fts is automatically updated by the
             # delete trigger declared in conversation_recall.py.
             cur = conn.execute(
@@ -724,6 +727,38 @@ class IdentityMappingHandlerBase:
         )
 
 
+def _unlink_with_sqlite_sidecars(path: "Path", *, wait_seconds: float = 2.0) -> None:
+    """Delete ``path`` plus its SQLite ``-wal``/``-shm``/``-journal`` sidecars.
+
+    The sidecars hold the not-yet-checkpointed copy of the very rows being
+    erased (Art. 17), so leaving them behind after deleting the main file is a
+    data leftover on every platform. On Windows an open connection (the social
+    HTTP server keeps registry.db open for its lifetime) makes the unlink fail
+    with WinError 32/5 where POSIX unlinks at once; a closing connection is
+    waited for briefly, then the PermissionError propagates so the layer is
+    reported FAILED rather than falsely APPLIED.
+    """
+    import time as _time  # noqa: PLC0415
+
+    for suffix in ("-wal", "-shm", "-journal"):
+        side = path.with_name(path.name + suffix)
+        try:
+            side.unlink(missing_ok=True)
+        except PermissionError:
+            pass  # still mapped by an open connection; removed with the db below
+    deadline = _time.monotonic() + wait_seconds
+    while True:
+        try:
+            path.unlink()
+            break
+        except PermissionError:
+            if _time.monotonic() >= deadline:
+                raise
+            _time.sleep(0.05)
+    for suffix in ("-wal", "-shm", "-journal"):
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
+
+
 # ── L39 social participation handler ────────────────────────────────
 
 
@@ -772,7 +807,7 @@ class L39SocialParticipationHandler:
         for name in targets:
             p = social_dir / name
             if p.exists():
-                p.unlink()
+                _unlink_with_sqlite_sidecars(p)
                 removed += 1
 
         # Remove empty social dir itself

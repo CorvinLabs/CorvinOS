@@ -89,9 +89,10 @@ function casePerLeafEnvOverride() {
   cleanEnv();
   process.env.CORVIN_HOME = '/should/not/be/used';
   process.env.CORVIN_BRIDGE_DISCORD_INBOX = '/sandbox/inbox-override';
+  const expectedOverride = path.resolve('/sandbox/inbox-override'); // drive-qualified on Windows
   const p = fresh();
-  assertEq(p.bridgeRuntimeDir('discord', 'inbox'), '/sandbox/inbox-override');
-  if (p.bridgeRuntimeDir('discord', 'outbox') === '/sandbox/inbox-override') {
+  assertEq(p.bridgeRuntimeDir('discord', 'inbox'), expectedOverride);
+  if (p.bridgeRuntimeDir('discord', 'outbox') === expectedOverride) {
     throw new Error('per-leaf override leaked to a different kind');
   }
 }

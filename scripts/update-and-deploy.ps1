@@ -220,16 +220,29 @@ try {
     if (Test-Path $consoleDeployPs1) {
         $buildOk = Invoke-Logged -Exe "powershell" -ArgList @("-ExecutionPolicy", "Bypass", "-File", $consoleDeployPs1) -FailMessage "Frontend build failed"
     } elseif (Test-Path $consoleDeploySh) {
-        if (Test-Command "bash") {
-            $buildOk = Invoke-Logged -Exe "bash" -ArgList @($consoleDeploySh) -FailMessage "Frontend build failed"
+        # Prefer Git Bash. A bare "bash" usually resolves to the WSL launcher
+        # (C:\Windows\System32\bash.exe or the WindowsApps alias), which runs the
+        # script inside the Linux distro, where this Windows path does not exist.
+        $bashExe = $null
+        $gitCmd = Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($gitCmd) {
+            $candidate = Join-Path (Split-Path -Parent (Split-Path -Parent $gitCmd.Source)) "bin\bash.exe"
+            if (Test-Path -LiteralPath $candidate) { $bashExe = $candidate }
+        }
+        if (-not $bashExe -and (Test-Path -LiteralPath "C:\Program Files\Git\bin\bash.exe")) {
+            $bashExe = "C:\Program Files\Git\bin\bash.exe"
+        }
+        if (-not $bashExe) {
+            $bashCmd = Get-Command bash -CommandType Application -ErrorAction SilentlyContinue |
+                Where-Object { $_.Source -notlike "$env:WINDIR\*" -and $_.Source -notlike "*\WindowsApps\*" } |
+                Select-Object -First 1
+            if ($bashCmd) { $bashExe = $bashCmd.Source }
+        }
+        if ($bashExe) {
+            $buildOk = Invoke-Logged -Exe $bashExe -ArgList @($consoleDeploySh) -FailMessage "Frontend build failed"
         } else {
-            $gitBash = "C:\Program Files\Git\bin\bash.exe"
-            if (Test-Path $gitBash) {
-                $buildOk = Invoke-Logged -Exe $gitBash -ArgList @($consoleDeploySh) -FailMessage "Frontend build failed"
-            } else {
-                Write-Log -Message "Neither bash nor Git Bash found; cannot run console-deploy.sh" -Level "Error"
-                exit 1
-            }
+            Write-Log -Message "Git Bash not found (WSL bash cannot run console-deploy.sh on a Windows checkout)" -Level "Error"
+            exit 1
         }
     } else {
         Write-Log -Message "No console-deploy script found (expected scripts\console-deploy.ps1 or .sh)" -Level "Error"

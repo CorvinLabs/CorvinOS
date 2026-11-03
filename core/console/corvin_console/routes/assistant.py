@@ -285,6 +285,8 @@ def assistant_message(
         )}
     full_prompt = _guard_prompt_head(f"{ctx_tag}{history_block}{body.message}")
 
+    from corvin_core import cli_args as _cli_args  # noqa: PLC0415
+    _sp_args, _sp_tmp = _cli_args.system_prompt_args(_SYSTEM_PROMPT)
     try:
         result = subprocess.run(
             _cli_argv([
@@ -292,7 +294,7 @@ def assistant_message(
                 "-p",
                 "--max-turns", "1",
                 "--tools", "",
-                "--system-prompt", _SYSTEM_PROMPT,
+                *_sp_args,
             ]),
             input=full_prompt,
             capture_output=True,
@@ -313,6 +315,8 @@ def assistant_message(
         response = "The request timed out (60 s). Please try again with a shorter question."
     except Exception:
         response = "An unexpected error occurred. Please try again."
+    finally:
+        _cli_args.cleanup(_sp_tmp)
 
     console_audit.action_performed(
         tenant_id=_rec.tenant_id,

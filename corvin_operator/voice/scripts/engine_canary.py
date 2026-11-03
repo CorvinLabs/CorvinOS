@@ -353,10 +353,15 @@ def _spawn_probe(probe_text: str, *,
     # `@<path>` is consumed by the CLI and never reaches the model at all, so
     # guarding makes the measurement more faithful, not less. Reply contract
     # unaffected: `classify_output` reads stdout.
-    cmd.append(_guard_prompt_head(probe_text))
+    # Windows: a multi-line positional is cut at its first line by cmd.exe when
+    # `claude` is an npm .cmd shim; `claude -p` reads the prompt from stdin instead.
+    _stdin_prompt = _guard_prompt_head(probe_text) if sys.platform == "win32" else None
+    if _stdin_prompt is None:
+        cmd.append(_guard_prompt_head(probe_text))
     try:
         result = subprocess.run(
             cmd,
+            input=_stdin_prompt,
             capture_output=True,
             text=True,
             timeout=timeout_s,

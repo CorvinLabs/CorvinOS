@@ -40,6 +40,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Iterator
@@ -272,7 +273,7 @@ class CopilotCliEngine:
                 # CREATE_NO_WINDOW (2026-08-02, reported live) — without this,
                 # every turn on Windows flashes up a brand-new, visible
                 # console for this child. 0 (a safe no-op) on POSIX.
-                creationflags=no_console_window_flags(),
+                creationflags=no_console_window_flags() | (0x00000200 if sys.platform.startswith("win") else 0),  # CREATE_NEW_PROCESS_GROUP: terminate_process_tree sends CTRL_BREAK to this group only
             )
         except FileNotFoundError:
             yield StreamEvent(

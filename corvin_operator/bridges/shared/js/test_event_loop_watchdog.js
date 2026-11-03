@@ -22,7 +22,9 @@ setTimeout(() => {
 }, 400);
 `;
 const r = spawnSync(process.execPath, ['-e', frozen], { encoding: 'utf8', timeout: 15000 });
-if (r.signal !== 'SIGKILL' && r.signal !== 'SIGTERM' && r.status !== 137 && r.status !== 143) {
+// Windows has no signals: process.kill(pid,'SIGKILL') is TerminateProcess, seen as exit status 1.
+const killedWin = process.platform === 'win32' && r.status === 1 && !(r.stdout || '').includes('LEAK');
+if (!killedWin && r.signal !== 'SIGKILL' && r.signal !== 'SIGTERM' && r.status !== 137 && r.status !== 143) {
   fail(`frozen loop not killed (signal=${r.signal} status=${r.status})`);
 }
 if ((r.stdout || '').includes('LEAK')) fail('frozen loop resumed — watchdog too slow');

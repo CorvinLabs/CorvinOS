@@ -115,8 +115,25 @@ except ImportError:
 _LOCK_SENTINEL_OFFSET = 1 << 40
 
 
-def _lock_chain(fh, shared: bool = False) -> None:  # noqa: ARG001 - no distinct shared mode on Windows
+def _win_blocking_flock() -> bool:
+    """True when ``fcntl`` is a Corvin Windows shim whose ``flock`` is a real,
+    blocking ``LockFileEx`` on the same 1 TiB sentinel byte.
+
+    ``msvcrt.locking(LK_LOCK)`` is NOT a blocking lock: it retries once per
+    SECOND and raises ``OSError`` (EDEADLOCK) after 10 attempts. Every contended
+    audit write therefore stalled >= 1 s, and one that waited > 10 s was lost
+    (``write_event`` raised). Prefer the shim; msvcrt stays the fallback.
+    """
+    # Both sys.modules shims (corvin_core/_wincompat.py, forge/_wincompat.py)
+    # install the same LockFileEx-backed ``_win_flock``.
+    return getattr(getattr(fcntl, "flock", None), "__name__", "") == "_win_flock"
+
+
+def _lock_chain(fh, shared: bool = False) -> None:
     if msvcrt is not None:
+        if _win_blocking_flock():
+            fcntl.flock(fh.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+            return
         fd = fh.fileno()
         saved = os.lseek(fd, 0, os.SEEK_CUR)
         os.lseek(fd, _LOCK_SENTINEL_OFFSET, os.SEEK_SET)
@@ -130,6 +147,9 @@ def _lock_chain(fh, shared: bool = False) -> None:  # noqa: ARG001 - no distinct
 
 def _unlock_chain(fh) -> None:
     if msvcrt is not None:
+        if _win_blocking_flock():
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            return
         fd = fh.fileno()
         saved = os.lseek(fd, 0, os.SEEK_CUR)
         os.lseek(fd, _LOCK_SENTINEL_OFFSET, os.SEEK_SET)

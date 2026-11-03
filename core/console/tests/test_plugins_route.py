@@ -15,6 +15,8 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
@@ -353,6 +355,7 @@ class TestFullLifecycle(_Base):
             self.assertEqual(resp.status_code, 200, resp.text)
             self.assertEqual(resp.json()["defaults"], {"channel": "ops"})
 
+    @_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX 0600 mode bits are not representable on NTFS (os.chmod only toggles read-only)")
     def test_registry_file_is_0600(self):
         import stat
 

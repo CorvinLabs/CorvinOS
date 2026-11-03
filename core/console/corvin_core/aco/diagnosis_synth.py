@@ -25,6 +25,7 @@ proof before any commit). Everything else → ``reports/`` for human eyes only.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -86,6 +87,14 @@ def _log_sources(home: Path) -> list[tuple[str, str]]:
                 except OSError:
                     pass
     return out
+
+
+def _fname(sigid: str) -> str:
+    """File stem for a signature id. Windows rejects ``<>:"|?*`` in names (a
+    signature like ``sig::x`` raised OSError 22); POSIX keeps the id verbatim."""
+    if sys.platform == "win32":
+        return "".join("_" if (c in '<>:"/\|?*' or ord(c) < 32) else c for c in sigid)
+    return sigid
 
 
 def _existing_ids(home: Path) -> set[str]:
@@ -190,14 +199,14 @@ def synthesize(home: str | Path, *, min_occurrences: int = 3,
     queued, reported, skipped = [], [], 0
 
     for sigid, slot in agg.items():
-        if sigid in known:
+        if _fname(sigid) in known:
             skipped += 1
             continue
         recurring = slot["count"] >= min_occurrences
         localized = slot["localized"] and slot["sig"].top_repo_file
         if recurring and localized:
             diag = _build_diagnosis(slot, now=now)
-            (pending / f"{sigid}.json").write_text(
+            (pending / f"{_fname(sigid)}.json").write_text(
                 json.dumps(diag, indent=2, ensure_ascii=False), encoding="utf-8")
             queued.append(sigid)
         else:
@@ -210,7 +219,7 @@ def synthesize(home: str | Path, *, min_occurrences: int = 3,
             rec["confidence"] = "low"
             rec["report_reason"] = reason
             rec.pop("requires_repro_test", None)
-            rp = reports / f"{sigid}.json"
+            rp = reports / f"{_fname(sigid)}.json"
             is_new = not rp.exists()
             rp.write_text(json.dumps(rec, indent=2, ensure_ascii=False), encoding="utf-8")
             if is_new:                      # only count NEW reports (overwrites are idempotent)

@@ -1,6 +1,7 @@
 """Tests for the per-layer ErasureHandler implementations."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -38,7 +39,7 @@ class TestL28RecallHandler(unittest.TestCase):
 
     def _build_db(self, path: Path, rows: list[tuple[str, str]]) -> None:
         """rows: [(chat_key, user_text), ...] — simplified turns table."""
-        with sqlite3.connect(str(path)) as conn:
+        with contextlib.closing(sqlite3.connect(str(path))) as conn:
             conn.execute("""
                 CREATE TABLE turns (
                     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +78,7 @@ class TestL28RecallHandler(unittest.TestCase):
             self.assertEqual(result.status, LayerStatus.APPLIED)
             self.assertEqual(result.count, 2)
             # Verify the other user's rows are still there
-            with sqlite3.connect(str(db)) as conn:
+            with contextlib.closing(sqlite3.connect(str(db))) as conn:
                 row = conn.execute("SELECT COUNT(*) FROM turns").fetchone()
             self.assertEqual(row[0], 1)
 
@@ -774,3 +775,22 @@ class TestErasureRewritesAreCrashAtomic(unittest.TestCase):
                 os.replace = real_replace
             self.assertEqual(target.read_text(encoding="utf-8"), '["old"]')
             self.assertEqual(sorted(x.name for x in Path(td).iterdir()), ["index.json"])
+
+
+def test_unlink_with_sqlite_sidecars_removes_wal_family(tmp_path):
+    """L39 erasure must not leave the -wal/-shm copy of erased rows behind, and
+    must delete a db whose connection was just closed (Windows file locking)."""
+    import sqlite3
+
+    import erasure_handlers as eh
+
+    db = tmp_path / "registry.db"
+    con = sqlite3.connect(str(db))
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("CREATE TABLE t (x)")
+    con.execute("INSERT INTO t VALUES ('secret')")
+    con.commit()
+    con.close()
+    (tmp_path / "registry.db-wal").write_bytes(b"leftover")
+    eh._unlink_with_sqlite_sidecars(db)
+    assert list(tmp_path.iterdir()) == []

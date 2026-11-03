@@ -357,7 +357,13 @@ class Supervisor:
             st.proc = None
             st.pid = None
             return
-        st.proc.terminate()
+        if os.name == "nt":
+            # shell=True made st.proc the cmd.exe wrapper: terminate()/kill() end only
+            # that, and the service itself keeps running. End the whole tree.
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(st.proc.pid)],
+                           capture_output=True, check=False)
+        else:
+            st.proc.terminate()
         try:
             st.proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
@@ -382,6 +388,8 @@ class Supervisor:
         st = self.states[name]
         if st.proc is None or st.sd.hot_reload is None:
             return False
+        if os.name == "nt":
+            return False  # os.kill(pid, <any signal>) is TerminateProcess there, not a reload
         sig_name = st.sd.hot_reload
         sig_num = getattr(signal, sig_name, None)
         if sig_num is None:

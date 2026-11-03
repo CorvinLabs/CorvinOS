@@ -34,6 +34,14 @@ sys.path.insert(0, str(ROOT))
 from forge import security_events as se  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _msvcrt_fallback_path(monkeypatch):
+    """These tests pin the msvcrt fallback; where the Windows fcntl shim (real
+    blocking LockFileEx) is loaded, security_events prefers it, so disable that
+    preference here. test_lock_chain_prefers_blocking_flock_shim covers it."""
+    monkeypatch.setattr(se, "_win_blocking_flock", lambda: False)
+
+
 def _fake_msvcrt():
     """A minimal stand-in for the Windows-only msvcrt module, recording
     every locking() call so tests can assert on mode/byte-count without a
@@ -295,3 +303,19 @@ def test_write_event_reraises_when_the_file_was_never_created():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_lock_chain_prefers_blocking_flock_shim():
+    """msvcrt LK_LOCK retries 1/s and gives up after 10 s; the shim's flock is a
+    truly blocking LockFileEx on the same sentinel byte and must be preferred."""
+    fake = _fake_msvcrt()
+    calls = []
+    shim = types.SimpleNamespace(LOCK_SH=1, LOCK_EX=2, LOCK_UN=8,
+                                 flock=lambda fd, op: calls.append(op))
+    with tempfile.TemporaryDirectory() as tmp:
+        with (Path(tmp) / "a.jsonl").open("w+b") as fh:
+            with mock.patch.object(se, "msvcrt", fake), mock.patch.object(se, "fcntl", shim),                     mock.patch.object(se, "_win_blocking_flock", lambda: True):
+                se._lock_chain(fh)
+                se._unlock_chain(fh)
+    assert calls == [2, 8]
+    assert fake.calls == []

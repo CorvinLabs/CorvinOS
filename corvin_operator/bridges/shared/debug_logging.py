@@ -38,11 +38,38 @@ import os
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
 # Sentinel that marks our handlers so we can find them on reconfigure.
 _HANDLER_MARK = "_corvin_debug_logging_handler"
+
+
+class _TolerantRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler that survives a rename the OS refuses.
+
+    corvin.log is appended to by every Corvin process (adapter, bridges, hooks,
+    daemons). On Windows ``os.rename(corvin.log, corvin.log.1)`` raises
+    PermissionError (WinError 32) while any other process has the file open, and
+    stdlib then reports a logging error for EVERY following record (the file
+    never shrinks, so ``shouldRollover`` stays true) and may leave the stream
+    closed. Keep appending instead and retry the rotation later."""
+
+    _retry_at = 0.0
+
+    def shouldRollover(self, record):  # noqa: D102
+        if self._retry_at and time.monotonic() < self._retry_at:
+            return False
+        return super().shouldRollover(record)
+
+    def doRollover(self):  # noqa: D102
+        try:
+            super().doRollover()
+        except PermissionError:
+            self._retry_at = time.monotonic() + 60.0
+            if self.stream is None:
+                self.stream = self._open()
 _ROOT_LOGGER_NAME = "corvin"
 _setup_lock = threading.Lock()
 _setup_done = False
@@ -249,7 +276,7 @@ def setup_root(force: bool = False) -> logging.Logger:
                 )
             except ValueError:
                 backups = 5
-            fh = logging.handlers.RotatingFileHandler(
+            fh = _TolerantRotatingFileHandler(
                 log_file,
                 maxBytes=max_bytes,
                 backupCount=backups,

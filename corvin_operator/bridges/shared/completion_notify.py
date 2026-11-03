@@ -92,16 +92,23 @@ def _pid_alive(pid: int) -> bool:
     if sys.platform.startswith("win"):
         try:
             import ctypes  # noqa: PLC0415
-            k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            import ctypes.wintypes as wt  # noqa: PLC0415
+            # use_last_error + explicit HANDLE restype: the default c_int restype
+            # truncates a 64-bit handle, and GetLastError() may be another call's.
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+            k32.OpenProcess.restype = wt.HANDLE
+            k32.OpenProcess.argtypes = (wt.DWORD, wt.BOOL, wt.DWORD)
+            k32.GetExitCodeProcess.argtypes = (wt.HANDLE, ctypes.POINTER(wt.DWORD))
+            k32.CloseHandle.argtypes = (wt.HANDLE,)
+            h = k32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
             if not h:
-                return False  # no such process (or access denied → treat as gone)
-            exit_code = ctypes.c_ulong(0)
+                # 5 = access denied: the process EXISTS (a producer of another
+                # user / elevated). Treating it as gone reaped a live task.
+                return ctypes.get_last_error() == 5
+            exit_code = wt.DWORD(0)
             ok = k32.GetExitCodeProcess(h, ctypes.byref(exit_code))
             k32.CloseHandle(h)
-            STILL_ACTIVE = 259
-            return bool(ok) and exit_code.value == STILL_ACTIVE
+            return bool(ok) and exit_code.value == 259  # STILL_ACTIVE
         except Exception:  # noqa: BLE001 — unknown → assume alive (don't reap)
             return True
     try:

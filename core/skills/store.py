@@ -1,6 +1,7 @@
 """Skill Store — CRUD operations for skill objects (ADR-0306)."""
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Protocol
@@ -8,6 +9,9 @@ from typing import Protocol
 from .skill import Skill
 
 # A skill name / version becomes ONE path component: no separators, no dot-dirs.
+_WIN_DEVICE_NAMES = (
+    {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
+)
 _COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
@@ -16,6 +20,9 @@ def _safe_component(value: str, what: str) -> str:
     if not isinstance(value, str) or ".." in value or "/" in value or "\\" in value \
             or _COMPONENT_RE.match(value) is None:
         raise ValueError(f"{what} is not a safe path component: {value!r}")
+    if os.name == "nt" and (value.endswith(".") or value.split(".", 1)[0].upper() in _WIN_DEVICE_NAMES):
+        # Windows: "con", "nul.1" address a device; a trailing dot is dropped by the OS.
+        raise ValueError(f"{what} is not a safe path component on Windows: {value!r}")
     return value
 
 

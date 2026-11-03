@@ -213,7 +213,7 @@ def _alive(entry: dict[str, Any]) -> bool:
         pid = int(entry.get("pid"))
     except (TypeError, ValueError):
         return False
-    if Path("/proc").is_dir():
+    if os.name != "nt" and Path("/proc").is_dir():
         start = _proc_start(pid)
         if start is None:
             return False

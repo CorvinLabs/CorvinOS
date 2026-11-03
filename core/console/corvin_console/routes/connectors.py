@@ -663,6 +663,21 @@ def resolve_channel_name(channel_name: str, bridge_channel: str = "discord") -> 
     return None
 
 
+def _win_cmd_wrap(cfg: dict) -> dict:
+    """Native Windows: Claude Code spawns an MCP ``command`` without a shell, so the
+    npm shims ``npx``/``npm``/``pnpm``/``yarn`` (``*.cmd``) cannot be started and the
+    server fails with "Connection closed". Claude Code's documented fix is
+    ``cmd /c <shim> ...``. No-op elsewhere and for any other command."""
+    import sys  # noqa: PLC0415
+    cmd = cfg.get("command")
+    if (sys.platform == "win32" and isinstance(cmd, str)
+            and cmd.lower() in ("npx", "npm", "pnpm", "yarn", "npx.cmd", "npm.cmd")):
+        cfg = dict(cfg)
+        cfg["command"] = "cmd"
+        cfg["args"] = ["/c", cmd, *list(cfg.get("args") or [])]
+    return cfg
+
+
 def build_mcp_config_for_node(tenant_id: str, tool_ids: list[str]) -> dict[str, Any]:
     """Build the mcpServers dict for workflow node execution. Called by the runner."""
     enabled_cfg = _read_enabled(tenant_id)
@@ -697,6 +712,6 @@ def build_mcp_config_for_node(tenant_id: str, tool_ids: list[str]) -> dict[str, 
                     else a
                     for a in cfg["args"]
                 ]
-            servers[cid] = cfg
+            servers[cid] = _win_cmd_wrap(cfg)
 
     return {"mcpServers": servers}

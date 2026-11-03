@@ -175,10 +175,12 @@ def _spawn_claude(prompt: str, *, timeout: int = 60) -> str:
     # stays on argv because it is a trusted module constant, never attacker-
     # derived; if it ever carried untrusted data it would have to move to stdin
     # too.
+    from corvin_core import cli_args as _cli_args  # noqa: PLC0415
+    _sp_args, _sp_tmp = _cli_args.system_prompt_args(_SYSTEM)
     try:
         r = subprocess.run(
             [*_claude_argv(), "-p", "--max-turns", "1", "--tools", "",
-             "--system-prompt", _SYSTEM],
+             *_sp_args],
             # R4: whole-payload guard - the planner prompt embeds the operator
             # task AND live page text scraped from an untrusted site, so the
             # `@<path>` half is the load-bearing one here. STDIN is expanded by
@@ -193,6 +195,8 @@ def _spawn_claude(prompt: str, *, timeout: int = 60) -> str:
         # from a genuine empty completion (""), so the loop reports an ERROR
         # instead of silently "completing" the task (was reported as done).
         return None
+    finally:
+        _cli_args.cleanup(_sp_tmp)
 
 
 async def _claude_planner(task: str, obs: Observation, transcript: list) -> dict:

@@ -213,6 +213,26 @@ def gpg_available() -> bool:
 def _gpg(args: list[str], *, data: bytes, passphrase: str) -> bytes:
     """Run gpg with the passphrase on fd 3 (never argv/env) and ``data`` on stdin."""
     import os  # noqa: PLC0415
+    if os.name == "nt":
+        # subprocess rejects pass_fds on Windows (ValueError) so every encrypt/decrypt
+        # failed there. Hand gpg a user-private temp file instead, removed right after.
+        import tempfile  # noqa: PLC0415
+        fd, pp = tempfile.mkstemp(prefix="corvin-gpg-", suffix=".pw")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write((passphrase + "\n").encode("utf-8"))
+            proc = subprocess.run(
+                ["gpg", "--batch", "--yes", "--quiet", "--passphrase-file", pp,
+                 "--pinentry-mode", "loopback", *args],
+                input=data, capture_output=True, timeout=120)
+        finally:
+            try:
+                os.unlink(pp)
+            except OSError:
+                pass
+        if proc.returncode != 0:
+            raise SyncError(f"gpg failed: {proc.stderr.decode('utf-8', 'replace')[:200]}")
+        return proc.stdout
     r_fd, w_fd = os.pipe()
     try:
         os.write(w_fd, (passphrase + "\n").encode("utf-8"))
@@ -302,8 +322,16 @@ def _git(args: list[str], cwd: Path, *, pat: "str | None" = None,
     ``https://<PAT>@host`` injection did exactly that)."""
     env = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "true",
            "HOME": str(cwd), "PATH": "/usr/bin:/bin"}
+    if os.name == "nt":
+        # A POSIX PATH finds neither git's own tools nor gpg, and git/Winsock need
+        # SYSTEMROOT; keep the real PATH + the minimal Windows runtime variables.
+        for _k in ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+                   "USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+            if os.environ.get(_k):
+                env[_k] = os.environ[_k]
     if pat:
-        env["GIT_ASKPASS"] = str(_askpass_helper(cache_dir or Path(cwd)))
+        # Git runs GIT_ASKPASS through ITS sh; forward slashes survive that unmangled.
+        env["GIT_ASKPASS"] = str(_askpass_helper(cache_dir or Path(cwd))).replace("\\", "/")
         env["CORVIN_SYNC_GIT_PAT"] = pat
     proc = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
                           text=True, timeout=180, env=env, encoding="utf-8", errors="replace")

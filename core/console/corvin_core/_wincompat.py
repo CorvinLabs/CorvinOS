@@ -347,3 +347,14 @@ install_no_console_window()
 install_batch_argv_quoting()
 install_replace_retry()
 install_binary_os_open()
+
+# Read-only-safe shutil.rmtree + read-open retry (transient EACCES while a writer
+# os.replace()s the file) also for runs without the
+# corvinOS_path_fix.pth (source checkout started via PYTHONPATH). Idempotent.
+try:
+    from corvinOS import _win_path_fix as _wpf  # noqa: E402
+
+    _wpf._install_rmtree_readonly()
+    _wpf._install_read_retry()
+except Exception:  # noqa: BLE001 - package not importable: stdlib rmtree
+    pass

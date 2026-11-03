@@ -38,6 +38,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import sys as _sys_skip
+import pytest as _pytest_skip
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
@@ -227,6 +229,7 @@ def test_chat_settings_patch_refuses_503_when_lock_is_wedged(tmp_path):
             assert settings_path.read_text(encoding="utf-8") == before
 
 
+@_pytest_skip.mark.skipif(_sys_skip.platform == "win32", reason="POSIX 0600 mode bits are not representable on NTFS (os.chmod only toggles read-only)")
 def test_chat_settings_write_never_exposes_the_token_file(tmp_path):
     """The file this route writes is the daemon's settings file — it holds the
     bridge token. It must be 0o600 from its first byte, not chmod-ed after the

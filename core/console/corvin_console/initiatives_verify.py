@@ -249,6 +249,10 @@ def start_background(tenant_id: str) -> bool:
         [_python(), "-m", "corvin_console.initiatives_verify", "--tenant", tenant_id],
         cwd=str(REPO), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, start_new_session=True,
+        # Windows ignores start_new_session: without these the child allocates a
+        # visible console (console-less parent) and shares the parent's ctrl-event
+        # group. CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP; 0 elsewhere.
+        creationflags=(0x08000000 | 0x00000200) if sys.platform == "win32" else 0,
     )
     return True
 

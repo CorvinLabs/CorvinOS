@@ -237,6 +237,8 @@ def _resolve_safe(root: Path, rel: str) -> Path:
     if not rel:
         return root
     try:
+        if "\x00" in rel:  # Windows' resolve() does not reject an embedded NUL
+            raise ValueError("embedded null byte")
         candidate = (root / rel).resolve()
         candidate.relative_to(root.resolve())
     except ValueError:

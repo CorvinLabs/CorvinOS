@@ -4504,7 +4504,11 @@ def explain_workflow(
             ["claude", "-p", "--max-turns", "1", "--tools", "", "--model", _explain_model(),
              # R4: the workflow YAML is user-authored and rides POSITIONALLY
              # in argv. Reply contract unaffected: stdout is the explanation.
-             "--system-prompt", system, _guard_prompt_head(yaml_text)]),
+             "--system-prompt", system]
+            # Windows: a multi-line positional is cut at its first line by cmd.exe
+            # when `claude` is an npm .cmd shim; stdin carries it whole.
+            + ([] if sys.platform == "win32" else [_guard_prompt_head(yaml_text)])),
+            input=_guard_prompt_head(yaml_text) if sys.platform == "win32" else None,
             capture_output=True, text=True, timeout=30, encoding="utf-8",
         )
         explanation = result.stdout.strip() or "Erklärung nicht verfügbar."

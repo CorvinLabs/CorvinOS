@@ -106,15 +106,23 @@ def _win_lockf(fd, cmd, *_range):
 try:  # Linux / macOS — use the real module unchanged.
     import fcntl as fcntl  # type: ignore  # noqa: F401
 except ImportError:  # pragma: no cover - exercised only on Windows
-    class _NoFcntl:
-        # Constant values mirror CPython's POSIX fcntl so any code that ORs them
-        # behaves identically.
-        LOCK_SH = 1
-        LOCK_EX = 2
-        LOCK_NB = 4
-        LOCK_UN = 8
+    import sys as _sys
+    import types as _types
 
-        flock = staticmethod(_win_flock)
-        lockf = staticmethod(_win_lockf)
-
-    fcntl = _NoFcntl()  # type: ignore[assignment]
+    # (A shim already in sys.modules was returned by the import above.)
+    # Register the stand-in for the rest of the process too. shared/ code
+    # puts corvin_operator/forge/forge on sys.path and imports ``clag`` /
+    # ``security_events`` as top-level modules, bypassing forge/__init__'s
+    # shim -- their bare ``import fcntl`` then raised ImportError and the
+    # fail-closed L19 CLAG gate refused every disclosure mark_seen on
+    # Windows. Same shape as corvin_core/_wincompat.install().
+    _m = _types.ModuleType("fcntl")
+    _m.LOCK_SH, _m.LOCK_EX, _m.LOCK_NB, _m.LOCK_UN = 1, 2, 4, 8
+    _m.F_GETLK, _m.F_SETLK, _m.F_SETLKW = 5, 6, 7
+    _m.F_GETFD, _m.F_SETFD, _m.F_GETFL, _m.F_SETFL = 1, 2, 3, 4
+    _m.flock = _win_flock
+    _m.lockf = _win_lockf
+    _m.fcntl = _m.ioctl = lambda *_a, **_k: 0
+    _m._corvin_win_shim = True
+    _sys.modules["fcntl"] = _m
+    fcntl = _m  # type: ignore[assignment]

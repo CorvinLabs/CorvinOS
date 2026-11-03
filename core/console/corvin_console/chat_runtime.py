@@ -2021,8 +2021,8 @@ def _meta_update_lock_for(tenant_id: str):
     the two host processes (gateway + standalone console) on one home: the
     thread lock alone let two processes interleave a touch and a rename into
     an unreadable meta file, and a delete land between a read and a write
-    (review R4). POSIX flock; the Windows fcntl shim makes it a no-op, where
-    the console is documented single-process."""
+    (review R4). POSIX flock; on Windows the fcntl shim is a LockFileEx lock,
+    so it excludes the other host process there too."""
     import fcntl  # noqa: PLC0415
     d = _store_dir(tenant_id)
     d.mkdir(parents=True, exist_ok=True)
@@ -2878,6 +2878,14 @@ def _compress_acs_result_for_context(res: Any, task_text: str, run_id: str,
     )
 
 
+def _kill_proc_tree(proc: Any, reason: str) -> None:
+    """Hard-kill *proc*; on Windows the whole tree. A bare ``proc.kill()`` there is
+    TerminateProcess on the top process only, so a ``claude.cmd`` shim dies while its
+    node.exe engine keeps running (and keeps writing the transcript)."""
+    from corvin_core.process_signals import hard_kill  # noqa: PLC0415 - leaf module, no cycle
+    hard_kill(proc, reason=reason)
+
+
 class _ContextSyncProcHolder:
     """Mutable holder so an awaiting caller can kill the sync subprocess
     spawned inside ``_sync_acs_result_to_transcript``'s ``to_thread`` call
@@ -2898,7 +2906,7 @@ class _ContextSyncProcHolder:
             proc = self.popen
         if proc is not None and proc.poll() is None:
             try:
-                proc.kill()
+                _kill_proc_tree(proc, "context_sync_cancel")
             except Exception:  # noqa: BLE001 — best-effort, never raise from cleanup
                 pass
 
@@ -8590,7 +8598,7 @@ async def _stream_turn_impl(
         if _ev_flush is not None:
             _ev_flush.set()
         with contextlib.suppress(Exception):
-            proc.kill()
+            _kill_proc_tree(proc, "btw_flush_cancelled")
         raise
     _btw_flush_events = (_btw_record(sess, _btw_written, "injected")
                          + _btw_record(sess, _btw_rest, "undelivered"))

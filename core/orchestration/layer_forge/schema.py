@@ -154,6 +154,10 @@ def _check_repo_relpath(value, *, field_name: str, required_prefix: str | None =
     """
     if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
         raise LayerSchemaValidationError(f"{field_name}: invalid path")
+    if ":" in value:
+        # Windows: ``D:x`` is drive-relative (``root / "D:x"`` escapes root while
+        # PurePosixPath calls it relative); ``a.py:stream`` is an alternate data stream.
+        raise LayerSchemaValidationError(f"{field_name}: ':' not allowed in a repo-relative path")
     pure = PurePosixPath(value)
     if pure.is_absolute() or ".." in pure.parts:
         raise LayerSchemaValidationError(f"{field_name}: path must be repo-relative without '..'")

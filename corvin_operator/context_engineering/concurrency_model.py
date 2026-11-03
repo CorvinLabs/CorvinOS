@@ -7,6 +7,7 @@ Explicit contracts and implementations to prevent race conditions.
 """
 
 import os
+import shutil
 import time
 import threading
 from pathlib import Path
@@ -198,12 +199,21 @@ class AtomicSymlinkManager:
             if temp_symlink.exists() or temp_symlink.is_symlink():
                 temp_symlink.unlink()
 
-            # Create temp symlink
-            os.symlink(symlink_target, str(temp_symlink))
-
-            # Atomic rename (POSIX atomic on most filesystems)
             symlink_path = profile_dir / f"{profile_basename}.json"
-            os.rename(str(temp_symlink), str(symlink_path))
+            # Create temp symlink. Windows: creating symlinks needs
+            # SeCreateSymbolicLinkPrivilege (admin / developer mode), so an
+            # ordinary user got OSError WinError 1314 and NO profile could ever
+            # be activated -> fall back to an atomically replaced file copy.
+            try:
+                os.symlink(symlink_target, str(temp_symlink))
+            except (OSError, NotImplementedError):
+                if os.name != "nt":
+                    raise
+                shutil.copyfile(new_file, temp_symlink)
+
+            # Atomic replace (os.rename raises FileExistsError on Windows when
+            # the target exists; os.replace is identical on POSIX).
+            os.replace(str(temp_symlink), str(symlink_path))
 
             logger.info(f"Atomically updated {symlink_path} → {symlink_target}")
             return True
@@ -223,6 +233,17 @@ class AtomicSymlinkManager:
         symlink_path = profile_dir / f"{profile_basename}.json"
 
         if not symlink_path.is_symlink():
+            # Windows copy fallback of atomic_symlink_update: the newest
+            # versioned file with identical bytes is the active version.
+            if os.name == "nt" and symlink_path.is_file():
+                try:
+                    cur = symlink_path.read_bytes()
+                    prefix = f"{profile_basename}.v"
+                    for cand in sorted(profile_dir.glob(f"{prefix}*.json"), reverse=True):
+                        if cand.read_bytes() == cur:
+                            return cand.name[len(prefix):-len(".json")]
+                except OSError:
+                    pass
             return None
 
         target = os.readlink(str(symlink_path))

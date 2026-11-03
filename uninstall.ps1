@@ -798,7 +798,7 @@ function Invoke-Backup {
                 } catch { }
             }
         }
-        Set-Content -LiteralPath (Join-Path $staging "RESTORE.txt") -Value $restore -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $staging "RESTORE.txt") -Value $restore -Encoding UTF8
 
         # Compress-Archive skips Hidden/System files; clear those bits on the
         # COPY so nothing is silently left out.

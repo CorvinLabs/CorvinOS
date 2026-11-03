@@ -376,6 +376,11 @@ def _apply_runtime_change(
         return sup
 
     if enabled is False:
+        if sys.platform == "win32":
+            # No systemd: end the Scheduled-Task supervisor + the daemon tree.
+            bm = _import_bridge_manager()
+            if bm is not None and hasattr(bm, "stop_channel_detached"):
+                return bm.stop_channel_detached(channel)
         return _systemctl_action(channel, "stop")
 
     if _unit_installed(channel):

@@ -58,15 +58,15 @@ console.log('\n=== /ldd-status: lists every layer ===');
   const f = tmpSettings();
   const r = inChat.dispatch({ ...baseCtx(f), text: '/ldd-status' });
   truthy(r, '/ldd-status returns a reply');
-  // Default-OFF since the policy switch.
-  contains(r && r.reply, 'enabled=False', '/ldd-status reports enabled=False');
+  // Default-ON (ldd.py default config enabled=True; the /help text says default-on).
+  contains(r && r.reply, 'enabled=True', '/ldd-status reports enabled=True');
   contains(r && r.reply, 'loop_driven_engineering', '/ldd-status lists loop_driven_engineering');
   contains(r && r.reply, 'dialectical_reasoning', '/ldd-status lists dialectical_reasoning');
   contains(r && r.reply, 'per_subtask_e2e', '/ldd-status lists per_subtask_e2e');
   // First call wrote the default config to disk.
   const cfg = readLddConfig(dir);
   truthy(cfg, 'ldd.json written on first invocation');
-  eq(cfg.enabled, false, 'cfg.enabled defaults to false (default-off policy)');
+  eq(cfg.enabled, true, 'cfg.enabled defaults to true (default-on policy)');
 }
 
 // ── 2. /ldd-off and /ldd-on flip the master ───────────────────────────────

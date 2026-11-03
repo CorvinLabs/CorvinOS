@@ -48,7 +48,15 @@ ATTACH_MAX_BYTES = 50 * 1024 * 1024
 ATTACH_MAX_FILES = 10
 
 
-def safe_attach_name(raw: str) -> str:
+_WIN_NAME_MAX = 100
+_WIN_RESERVED = (
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def safe_attach_name(raw: str, *, windows: bool | None = None) -> str:
     """Return a sanitised attachment filename (ASCII-safe, no path separators).
 
     ``Path(raw).name`` strips any directory components (path traversal), and
@@ -58,6 +66,24 @@ def safe_attach_name(raw: str) -> str:
     """
     name = Path(raw).name
     clean = re.sub(r"[^\w.\- ]", "_", name).strip()
+    if (os.name == "nt") if windows is None else windows:
+        # Windows: no trailing dot/space (silently dropped by the OS, so the
+        # stored name differs from the one recorded), and a device name - also
+        # with an extension ("nul.txt", "COM1 .log") - opens the device, not a
+        # file: the upload would be swallowed or hang.
+        clean = clean.rstrip(". ")
+        if len(clean) > _WIN_NAME_MAX:
+            # MAX_PATH (260, LongPathsEnabled=0 by default): the name is appended
+            # to <home>\tenants\<t>\sessions\<sid>\attachments\ (~100 chars);
+            # a long German document title otherwise fails the upload. Keep the
+            # extension; truncating an already-truncated name is a no-op.
+            stem, dot, ext = clean.rpartition(".")
+            if not dot or len(ext) > 16:
+                stem, ext = clean, ""
+            keep = _WIN_NAME_MAX - (len(ext) + 1 if ext else 0)
+            clean = (stem[:keep].rstrip(". ") or "file") + ("." + ext if ext else "")
+        if clean.split(".", 1)[0].rstrip(" ").upper() in _WIN_RESERVED:
+            clean = "_" + clean
     return clean or "file"
 
 

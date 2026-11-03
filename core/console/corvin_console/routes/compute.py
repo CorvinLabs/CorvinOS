@@ -65,9 +65,14 @@ def _read_system_resources() -> dict[str, Any]:
     except OSError:
         resources["cpu"] = None
     try:
-        st = os.statvfs("/")
-        total = st.f_blocks * st.f_frsize
-        free  = st.f_bavail * st.f_frsize
+        if hasattr(os, "statvfs"):
+            st = os.statvfs("/")
+            total = st.f_blocks * st.f_frsize
+            free  = st.f_bavail * st.f_frsize
+        else:  # Windows: no statvfs (AttributeError, not OSError -> the route 500'd)
+            import shutil
+            _du = shutil.disk_usage(os.path.abspath(os.sep))
+            total, free = _du.total, _du.free
         resources["disk"] = {
             "total_gb": round(total / 1_073_741_824, 1),
             "free_gb":  round(free  / 1_073_741_824, 1),

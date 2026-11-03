@@ -1544,9 +1544,101 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
     return targets, False
 
 
+# ----- PowerShell tool (native Windows) -----------------------------------
+#
+# Claude Code on native Windows exposes its shell tool as ``PowerShell`` (not
+# ``Bash``) when it runs commands through PowerShell. Neither hooks.json's
+# matcher nor check() knew that tool name, so on such a host
+# ``Remove-Item ~\.corvin\...\audit.jsonl`` or ``Set-Content <forge>\policy.json``
+# never reached a single L10 check (2026-11-02, verified live: the PowerShell
+# tool is what Claude Code 2.1.x offers on Windows without Git Bash). The Bash
+# checks still apply (redirects ``>``, inline interpreters, pinned tools, the
+# Python AST gate); on top, the cmdlets / aliases that write are mapped onto
+# the same target classes the Bash parser uses.
+
+#: Destructive: every positional arg is checked with _touches_corvin_tree, as
+#: for rm/mv/chmod in _bash_targets.
+_PS_DESTRUCTIVE = frozenset({
+    "remove-item", "ri", "rm", "rmdir", "rd", "del", "erase",
+    "move-item", "mi", "mv", "move", "rename-item", "ren", "rni",
+    "clear-content", "clc", "clear-item", "cli", "set-acl",
+})
+#: Writers: every positional / ``-Param:value`` arg is checked with
+#: is_protected_path (a write target, like a redirect or a cp destination).
+_PS_WRITERS = frozenset({
+    "set-content", "sc", "add-content", "ac", "out-file", "tee-object", "tee",
+    "new-item", "ni", "md", "mkdir", "set-item", "si", "copy-item", "cpi",
+    "cp", "copy", "expand-archive", "compress-archive", "export-csv",
+    "export-clixml", "invoke-webrequest", "iwr", "invoke-restmethod", "irm",
+    "start-bitstransfer", "new-itemproperty", "set-itemproperty",
+})
+#: Opaque: the real target is decided at run time — fail closed when the
+#: command carries a protected hint.
+_PS_OPAQUE_RE = re.compile(
+    r"(?i)(?:^|[\s;|&({])(?:invoke-expression|iex|start-process|saps|start|"
+    r"invoke-command|icm|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|"
+    r"wsl(?:\.exe)?|bash(?:\.exe)?|sh(?:\.exe)?)(?=$|[\s;|&)}])"
+    r"|\[[\w.]*(?:file|directory|stream|writer|path)[\w.]*\]\s*::"
+    r"|\.(?:writealltext|writeallbytes|writealllines|appendalltext|"
+    r"appendalllines|delete|moveto|copyto|replace|create|createtext|"
+    r"appendtext|openwrite|setaccesscontrol)\s*\("
+    r"|&\s*\{|\.\s*\{|-encodedcommand\b|-enc\b"
+)
+_PS_ENV_RE = re.compile(r"(?i)\$env:([A-Za-z_][A-Za-z0-9_]*)")
+_PS_HOME_RE = re.compile(r"(?i)\$home(?![A-Za-z0-9_])")
+
+
+def _ps_expand(tok: str) -> str:
+    """PowerShell variable forms ``_abs`` (os.path.expandvars) does not know."""
+    tok = tok.strip("'\"")
+    tok = _PS_ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), tok)
+    return _PS_HOME_RE.sub(lambda m: str(Path.home()).replace("\\", "/"), tok)
+
+
+def _powershell_deny(cmd: str) -> str:
+    """Return a deny target/description for a PowerShell command, or ''."""
+    if _PS_OPAQUE_RE.search(cmd) and _looks_protected(cmd):
+        return cmd[:80]
+    for seg in _split_segments(cmd):
+        try:
+            toks = _split_tokens(seg)
+        except ValueError:
+            if _looks_protected(seg):
+                return seg[:80]
+            continue
+        if not toks:
+            continue
+        name = toks[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if name.endswith(".exe"):
+            name = name[:-4]
+        if name not in _PS_DESTRUCTIVE and name not in _PS_WRITERS:
+            continue
+        for raw in toks[1:]:
+            cand = raw
+            if raw.startswith("-"):
+                if ":" not in raw:
+                    continue  # a parameter name; its value is the next token
+                cand = raw.split(":", 1)[1]
+            cand = _ps_expand(cand)
+            if not cand:
+                continue
+            for part in cand.split(","):  # -Path a,b
+                part = part.strip().strip("'\"")
+                if not part:
+                    continue
+                if "$" in part and _looks_protected(part):
+                    return part  # unresolvable variable naming a protected path
+                if name in _PS_DESTRUCTIVE:
+                    if _touches_corvin_tree(part):
+                        return part
+                elif is_protected_path(part):
+                    return part
+    return ""
+
+
 # ----- main check ---------------------------------------------------------
 
-_OTA_GATED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "WebFetch")
+_OTA_GATED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell", "WebFetch")
 
 
 def _ota_license_token_present() -> bool:
@@ -1677,10 +1769,14 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
         if isinstance(p, str) and is_protected_path(p):
             return False, _deny_msg(tool, p)
 
-    elif tool == "Bash":
+    elif tool in ("Bash", "PowerShell"):
         cmd = inp.get("command", "")
         if not isinstance(cmd, str) or not cmd:
             return True, ""
+        if tool == "PowerShell":
+            _ps_t = _powershell_deny(cmd)
+            if _ps_t:
+                return False, _deny_msg("PowerShell", _ps_t, command=cmd[:80])
         targets, fail_closed = _bash_targets(cmd)
         if fail_closed:
             return False, (
@@ -1822,7 +1918,7 @@ def _emit_audit(payload: dict, reason: str) -> None:
         inp.get("file_path") or inp.get("path")
         or inp.get("notebook_path") or inp.get("url") or ""
     )
-    cmd = inp.get("command", "") if tool == "Bash" else ""
+    cmd = inp.get("command", "") if tool in ("Bash", "PowerShell") else ""
     details = {
         "tool_name":  tool,
         "target":     target if isinstance(target, str) else "",
@@ -1948,7 +2044,7 @@ def _emit_dialectic(payload: dict, reason: str) -> None:
         inp = payload.get("tool_input") or {}
         target = (inp.get("file_path") or inp.get("path")
                   or inp.get("notebook_path") or "")
-        cmd = inp.get("command", "") if tool == "Bash" else ""
+        cmd = inp.get("command", "") if tool in ("Bash", "PowerShell") else ""
         # The "deny" decision; antithesis records what we suspect could be
         # a false-positive so the audit can later inform threshold tuning.
         d = _dialectic.decide(

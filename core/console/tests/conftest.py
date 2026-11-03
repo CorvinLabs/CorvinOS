@@ -199,6 +199,26 @@ _A2A_TEST_FILE_MARKERS = ("a2a", "remote_trigger", "friendship", "agent_hub", "p
 
 
 def pytest_configure(config):
+    # Windows cannot delete a file another handle still holds open. The IBC audit
+    # writer appends from a short-lived "ibc-audit-deferred" thread that may still
+    # be finishing when a unittest ``TemporaryDirectory`` cleanup runs, so retry
+    # the removal briefly (product behaviour is correct; this is teardown timing).
+    if sys.platform == "win32":
+        import tempfile
+        import time
+
+        _orig = tempfile.TemporaryDirectory.cleanup
+        if not getattr(_orig, "_corvin_retry", False):
+            def cleanup(self, *a, **k):
+                for _ in range(40):
+                    try:
+                        return _orig(self, *a, **k)
+                    except PermissionError:
+                        time.sleep(0.1)
+                return _orig(self, *a, **k)
+
+            cleanup._corvin_retry = True
+            tempfile.TemporaryDirectory.cleanup = cleanup
     config.addinivalue_line("markers", "licence_tier(name): tier capability_api resolves for an A2A console test")
 
 
