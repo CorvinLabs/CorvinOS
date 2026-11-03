@@ -216,6 +216,20 @@ def _restore_claude_bin_pins(saved: dict) -> None:
             os.environ[k] = v
 
 
+def _win_cmd_shim(script: Path) -> Path:
+    """Windows: ``shutil.which("claude")`` only resolves PATHEXT names, so an
+    extensionless shebang fake is skipped and the REAL installed claude CLI
+    (billable, non-hermetic) runs instead. Add a ``claude.cmd`` beside the
+    fake that runs it with this interpreter. POSIX: no-op (returns *script*).
+    Returns the path a pin/fallback should name on this platform."""
+    if sys.platform != "win32":
+        return script
+    shim = script.with_name(script.name + ".cmd")
+    shim.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
+                    encoding="utf-8")
+    return shim
+
+
 def _setup_fake(name: str, script: str) -> tuple[Path, Path]:
     work = Path(tempfile.mkdtemp(prefix=f"engine-path-{name}-"))
     fake_dir = work / "bin"
@@ -223,6 +237,7 @@ def _setup_fake(name: str, script: str) -> tuple[Path, Path]:
     fake_claude = fake_dir / "claude"
     fake_claude.write_text(script, encoding="utf-8")
     fake_claude.chmod(0o755)
+    _win_cmd_shim(fake_claude)
     return work, fake_dir
 
 
@@ -238,7 +253,7 @@ def test_engine_path_simple_prompt() -> None:
     saved_home = os.environ.get("CORVIN_HOME")
     saved_claude_bin = _pop_claude_bin_pins()
     try:
-        os.environ["PATH"] = f"{fake_dir}:{saved_path}"
+        os.environ["PATH"] = f"{fake_dir}{os.pathsep}{saved_path}"
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
         os.environ["CORVIN_USE_ENGINE_LAYER"] = "1"
         os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "10"
@@ -277,7 +292,7 @@ def test_engine_path_tool_use_status() -> None:
     saved_home = os.environ.get("CORVIN_HOME")
     saved_claude_bin = _pop_claude_bin_pins()
     try:
-        os.environ["PATH"] = f"{fake_dir}:{saved_path}"
+        os.environ["PATH"] = f"{fake_dir}{os.pathsep}{saved_path}"
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
         os.environ["CORVIN_USE_ENGINE_LAYER"] = "1"
         os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "10"
@@ -330,7 +345,7 @@ def test_engine_path_mid_stream_cancel() -> None:
     saved_home = os.environ.get("CORVIN_HOME")
     saved_claude_bin = _pop_claude_bin_pins()
     try:
-        os.environ["PATH"] = f"{fake_dir}:{saved_path}"
+        os.environ["PATH"] = f"{fake_dir}{os.pathsep}{saved_path}"
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
         os.environ["CORVIN_USE_ENGINE_LAYER"] = "1"
         # Watchdog generous so the timeout doesn't fire before cancel
@@ -433,7 +448,7 @@ def test_engine_path_btw_routes_through_engine() -> None:
     saved_home = os.environ.get("CORVIN_HOME")
     saved_claude_bin = _pop_claude_bin_pins()
     try:
-        os.environ["PATH"] = f"{fake_dir}:{saved_path}"
+        os.environ["PATH"] = f"{fake_dir}{os.pathsep}{saved_path}"
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
         os.environ["CORVIN_USE_ENGINE_LAYER"] = "1"
         os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "10"
@@ -644,7 +659,7 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
         # The known-location fallback list the resolver probes. In production
         # this is the built-in ~/.local/bin/claude; here we point it at the
         # off-PATH fake so the test is hermetic and platform-independent.
-        os.environ["CORVIN_CLAUDE_BIN_FALLBACKS"] = str(fake_claude)
+        os.environ["CORVIN_CLAUDE_BIN_FALLBACKS"] = str(_win_cmd_shim(fake_claude))
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
         os.environ["CORVIN_USE_ENGINE_LAYER"] = "1"
         os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "10"

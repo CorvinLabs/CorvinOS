@@ -16,7 +16,8 @@ def test_windows_hint_has_no_systemctl(monkeypatch):
     monkeypatch.setattr(compute.os, "name", "nt")
     msg = compute._worker_not_running_detail("acme")
     assert "systemctl" not in msg
-    assert "-m corvin_compute serve --tenant acme" in msg
+    assert "-m corvin_compute --corvin-home " in msg
+    assert " serve --tenant acme" in msg
 
 
 def _status(monkeypatch, tmp_path, reachable: bool, os_name: str):
@@ -39,3 +40,19 @@ def test_status_carries_platform_hint_when_worker_down(monkeypatch, tmp_path):
 
 def test_status_hint_absent_when_worker_up(monkeypatch, tmp_path):
     assert _status(monkeypatch, tmp_path, reachable=True, os_name="nt")["worker_hint"] is None
+
+
+def test_windows_hint_names_effective_corvin_home(monkeypatch, tmp_path):
+    """A console on a non-default home must point the user at a worker on the
+    SAME home (the CLI default could resolve elsewhere); --corvin-home is a
+    top-level option so it precedes the ``serve`` subcommand."""
+    home = tmp_path / "my home"
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setattr(compute.os, "name", "nt")
+    msg = compute._worker_not_running_detail("acme")
+    assert f'-m corvin_compute --corvin-home "{home}" serve --tenant acme' in msg
+    # The suggested argv must parse with the real CLI parser.
+    from corvin_compute.cli import build_parser
+    args = build_parser().parse_args(
+        ["--corvin-home", str(home), "serve", "--tenant", "acme"])
+    assert args.corvin_home == str(home) and args.cmd == "serve"

@@ -49,6 +49,20 @@ def _fresh_adapter():
     return adapter
 
 
+def _win_cmd_shim(script: Path) -> Path:
+    """Windows: ``shutil.which("claude")`` only resolves PATHEXT names, so an
+    extensionless shebang fake is skipped and the REAL installed claude CLI
+    (billable, non-hermetic) runs instead. Add a ``claude.cmd`` beside the
+    fake that runs it with this interpreter. POSIX: no-op (returns *script*).
+    Returns the path a pin/fallback should name on this platform."""
+    if sys.platform != "win32":
+        return script
+    shim = script.with_name(script.name + ".cmd")
+    shim.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
+                    encoding="utf-8")
+    return shim
+
+
 def _make_two_phase_claude(tmp: Path, *, naked: bool) -> Path:
     """Fake `claude` that emits api-error on first call, "ok" on second.
 
@@ -101,6 +115,7 @@ def _make_two_phase_claude(tmp: Path, *, naked: bool) -> Path:
     ''')
     script.write_text(body, encoding="utf-8")
     script.chmod(0o755)
+    _win_cmd_shim(script)
     return bin_dir
 
 
@@ -218,6 +233,7 @@ def test_429_retry_preserves_session() -> None:
             sys.stdout.flush()
         '''), encoding="utf-8")
         script.chmod(0o755)
+        _win_cmd_shim(script)
         _common_setup(tmp, bin_dir)
         adapter = _fresh_adapter()
 
@@ -282,6 +298,7 @@ def test_500_retry_preserves_session() -> None:
             sys.stdout.flush()
         '''), encoding="utf-8")
         script.chmod(0o755)
+        _win_cmd_shim(script)
         _common_setup(tmp, bin_dir)
         adapter = _fresh_adapter()
 
@@ -337,6 +354,7 @@ def test_idle_path_still_works() -> None:
             sys.stdout.flush()
         '''), encoding="utf-8")
         script.chmod(0o755)
+        _win_cmd_shim(script)
         _common_setup(tmp, bin_dir)
         adapter = _fresh_adapter()
 

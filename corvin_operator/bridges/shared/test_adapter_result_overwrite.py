@@ -47,6 +47,20 @@ def _section(title: str) -> None:
     print(f"\n=== {title} ===")
 
 
+def _win_cmd_shim(script: Path) -> Path:
+    """Windows: ``shutil.which("claude")`` only resolves PATHEXT names, so an
+    extensionless shebang fake is skipped and the REAL installed claude CLI
+    (billable, non-hermetic) runs instead. Add a ``claude.cmd`` beside the
+    fake that runs it with this interpreter. POSIX: no-op (returns *script*).
+    Returns the path a pin/fallback should name on this platform."""
+    if sys.platform != "win32":
+        return script
+    shim = script.with_name(script.name + ".cmd")
+    shim.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
+                    encoding="utf-8")
+    return shim
+
+
 def _make_fake_claude(tmp: Path, events: list[str]) -> Path:
     bin_dir = tmp / "fake-bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -63,6 +77,7 @@ def _make_fake_claude(tmp: Path, events: list[str]) -> Path:
     ''')
     script.write_text(body, encoding="utf-8")
     script.chmod(0o755)
+    _win_cmd_shim(script)
     return bin_dir
 
 

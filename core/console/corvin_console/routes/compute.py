@@ -326,9 +326,15 @@ def _worker_not_running_detail(tenant_id: str) -> str:
     one), so the only start path is running the CLI by hand.
     """
     if os.name == "nt":
+        # Name the console's effective home explicitly: the CLI's own default
+        # ($CORVIN_HOME or ~/.corvin) can differ from the home this console
+        # resolved (repo-relative .corvin, a non-default CORVIN_HOME), and a
+        # worker on the wrong home never binds the socket probed here.
+        home = _forge_paths.corvin_home()
         return ("compute worker is not running — on Windows it is not installed as a "
                 "service; start it manually in a terminal: "
-                f"\"{sys.executable}\" -m corvin_compute serve --tenant {tenant_id}")
+                f"\"{sys.executable}\" -m corvin_compute --corvin-home \"{home}\" "
+                f"serve --tenant {tenant_id}")
     return ("compute worker is not running — start it via Settings "
             "(systemctl --user start corvin-compute@<tenant>)")
 

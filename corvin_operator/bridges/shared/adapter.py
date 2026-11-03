@@ -1520,6 +1520,18 @@ def _cancel_requested(chat_key: str) -> bool:
         return str(chat_key) in _TURN_CANCEL_REQUESTS
 
 
+def _operator_stopped(rc: int | None, chat_key: str) -> bool:
+    """The CLI exit means "stopped", not "crashed": a SIGTERM/SIGKILL code, or on
+    Windows any non-zero exit of a turn whose /cancel was stamped before the kill.
+
+    Windows has no signal exit codes: taskkill /F and TerminateProcess give 1, so
+    an operator /cancel used to be reported as "Claude API call failed".
+    """
+    if rc in _STOPPED_EXIT_CODES:
+        return True
+    return os.name == "nt" and rc not in (0, None) and bool(chat_key) and _cancel_requested(chat_key)
+
+
 def _cancel_chat_impl(chat_key: str) -> int:
     """SIGTERM every running claude subprocess for a chat (escalating to
     SIGKILL), AND cancel() any registered subprocess-less engine.
@@ -6495,10 +6507,10 @@ def _call_claude_streaming_via_engine(
             except Exception as e:  # noqa: BLE001
                 log(f"bg_scope finalize failed: {e!r}")
             _open_at_eof = list(_scope.open_children)
-            # A SIGTERM/SIGKILL we did not send is an operator /cancel (or an external stop). The
-            # /cancel flag is set only AFTER the process is already gone, so it cannot be relied on
-            # here: the established contract (see the rc<0 branch below) is silence either way.
-            _signal_stop = (rc in _STOPPED_EXIT_CODES and not timed_out and not _scope_end)
+            # A SIGTERM/SIGKILL we did not send is an operator /cancel (or an external stop):
+            # silence either way (see the rc<0 branch below). On Windows there are no signal exit
+            # codes, so the /cancel flag (stamped before the kill, see _cancel_chat) decides.
+            _signal_stop = (_operator_stopped(rc, chat_key) and not timed_out and not _scope_end)
             if _scope_end:
                 # We ended it on purpose: not an error, not a retry, and the user is
                 # told exactly what was cut (ADR-2236 D5/D6).
@@ -6865,7 +6877,7 @@ def _call_claude_streaming_via_engine(
             _TURN_OUTCOME.exit_code = rc
             _TURN_OUTCOME.timed_out = bool(timed_out)
             if (
-                rc in _STOPPED_EXIT_CODES        # -15/-9 and the real CLI's 143/137
+                _operator_stopped(rc, chat_key)  # -15/-9, the real CLI's 143/137, a Windows /cancel
                 and not timed_out
             ):
                 return ""
@@ -6908,7 +6920,7 @@ def _call_claude_streaming_via_engine(
             _TURN_OUTCOME.exit_code = rc
             _TURN_OUTCOME.timed_out = bool(timed_out)
             if (
-                rc in _STOPPED_EXIT_CODES        # -15/-9 and the real CLI's 143/137
+                _operator_stopped(rc, chat_key)  # -15/-9, the real CLI's 143/137, a Windows /cancel
                 and not timed_out
             ):
                 return ""
