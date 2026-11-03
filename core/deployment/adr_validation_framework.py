@@ -44,7 +44,7 @@ audit_sink.register_events({
 
 # ADRs whose FAIL blocks a phase transition. ADR-0186 carries the geo-consent
 # check: a consent violation must block, not merely lower the overall status.
-BLOCKING_ADRS = ("ADR-0206", "ADR-0205", "ADR-0369", "ADR-0186")
+BLOCKING_ADRS = ("ADR-0206", "ADR-2165", "ADR-0369", "ADR-0186")
 
 
 class ComplianceStatus(Enum):
@@ -93,7 +93,7 @@ class WeeklyComplianceReport:
         # Update overall status
         if check.status == ComplianceStatus.FAIL:
             self.overall_status = ComplianceStatus.FAIL
-            # Critical ADRs that block phase progression: canary (0206), learning (0205), edge cases (0369)
+            # Critical ADRs that block phase progression: canary (0206), learning (2165), edge cases (0369)
             if check.adr_id in BLOCKING_ADRS:
                 self.blocking_violations.append(f"{check.adr_id}/{check.check_name}")
         elif check.status == ComplianceStatus.WARNING and self.overall_status == ComplianceStatus.PASS:
@@ -132,7 +132,7 @@ class ADRComplianceValidator:
         },
     }
 
-    # ADR-0205: Learning Loop thresholds
+    # ADR-2165: Learning Loop thresholds
     LEARNING_THRESHOLDS = {
         "confidence_convergence_sigma": 0.05,  # σ < 5% indicates convergence
         "feedback_count_minimum": 1000,  # Minimum feedback events per skill
@@ -308,7 +308,7 @@ class ADRComplianceValidator:
         metrics: Dict[str, Dict[str, float]],  # per-skill metrics
     ) -> List[ADRComplianceCheck]:
         """
-        Validate ADR-0205: Phase 7 Learning Loop compliance (F023, F024).
+        Validate ADR-2165: Phase 7 Learning Loop compliance (F023, F024).
 
         Checks confidence convergence, feedback signal emission, parameter optimization.
         F024: Edge case handling for empty metrics
@@ -320,7 +320,7 @@ class ADRComplianceValidator:
         if not metrics:
             logger.warning("No learning metrics available, marking as FAIL")
             checks.append(ADRComplianceCheck(
-                adr_id="ADR-0205",
+                adr_id="ADR-2165",
                 check_name="feedback_count",
                 status=ComplianceStatus.FAIL,
                 actual_value=0,
@@ -548,7 +548,7 @@ class ADRComplianceValidator:
             for check in canary_checks:
                 report.add_check(check)
 
-            # ADR-0205: Learning Loop
+            # ADR-2165: Learning Loop
             learning_checks = self.validate_adr_0205_learning_loop(
                 metrics.get("learning_metrics", {}),
             )

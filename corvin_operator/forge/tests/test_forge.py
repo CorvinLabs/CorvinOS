@@ -97,7 +97,7 @@ def test_happy_path():
           r.data and r.data.get("ok") is True and
           r.data.get("echo", {}).get("msg") == "hi")
         t("call_count bumped", reg.get("echo").call_count == 1)
-        t("sandbox label set", r.sandbox in ("bwrap", "rlimits"))
+        t("sandbox label set", r.sandbox in ("bwrap", "rlimits", "none"))
         reg.delete("echo")
         t("delete clears entry", reg.get("echo") is None)
 
@@ -311,6 +311,10 @@ def test_windows_preexec_fn_skipped():
         t("preexec_fn is None when sys.platform == 'win32'",
           captured.get("preexec_fn") is None,
           detail=f"got {captured.get('preexec_fn')!r}")
+        # The rlimit layer is skipped on Windows, so the audit label must not
+        # claim it ran ("rlimits" recorded a protection that never applied).
+        t("sandbox label is 'none' (no rlimits) under simulated Windows",
+          r.sandbox == "none", detail=f"got {r.sandbox!r}")
     finally:
         _runner_mod.sys.platform = orig_platform
         _runner_mod.subprocess.Popen = orig_popen

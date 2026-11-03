@@ -603,7 +603,7 @@ class TestADRCompliance:
         assert any(c.status == ComplianceStatus.PASS for c in checks)
 
     def test_adr_0205_learning_loop_compliance(self):
-        """Test ADR-0205: Learning loop compliance"""
+        """Test ADR-2165 (was ADR-0205 before the KB migration): Learning loop compliance"""
         validator = ADRComplianceValidator()
 
         metrics = {
@@ -617,7 +617,7 @@ class TestADRCompliance:
 
         checks = validator.validate_adr_0205_learning_loop(metrics["learning_metrics"])
 
-        assert all(c.adr_id == "ADR-0205" for c in checks)
+        assert all(c.adr_id == "ADR-2165" for c in checks)
 
     def test_adr_0186_heartbeat_compliance(self):
         """Test ADR-0186: Presence heartbeat compliance"""

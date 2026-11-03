@@ -101,7 +101,7 @@ def test_deterministic_cache_hit_on_second_identical_call():
             s1 = r1["result"]["structuredContent"]
             t("call 1 ok", r1["result"].get("isError") is False)
             t("call 1 sandbox is bwrap or rlimits (not cache)",
-              s1.get("sandbox") in ("bwrap", "rlimits"))
+              s1.get("sandbox") in ("bwrap", "rlimits", "none"))
             t("call 1 has primes count", s1["data"].get("primes") > 0,
               detail=f"primes={s1['data']['primes']}")
             primes_seen = s1["data"]["primes"]
@@ -134,7 +134,7 @@ def test_deterministic_cache_hit_on_second_identical_call():
             })
             s3 = r3["result"]["structuredContent"]
             t("different input → real sandbox again",
-              s3.get("sandbox") in ("bwrap", "rlimits"))
+              s3.get("sandbox") in ("bwrap", "rlimits", "none"))
             t("different input → different result",
               s3["data"]["primes"] != primes_seen)
         finally:
@@ -208,7 +208,7 @@ def test_cache_invalidates_on_tool_recreation_with_different_impl():
                                  "arguments": {"n": 200}})
             sandbox1 = r1["result"]["structuredContent"]["sandbox"]
             t("first run not cached (fresh)",
-              sandbox1 in ("bwrap", "rlimits"))
+              sandbox1 in ("bwrap", "rlimits", "none"))
 
             # Now overwrite with a slightly modified impl (different sha)
             modified = PRIME_IMPL.replace("primes", "primes_v2")
@@ -229,7 +229,7 @@ def test_cache_invalidates_on_tool_recreation_with_different_impl():
                                  "arguments": {"n": 200}})
             sandbox2 = r2["result"]["structuredContent"]["sandbox"]
             t("after overwrite → cache miss (sandbox != cache)",
-              sandbox2 in ("bwrap", "rlimits"),
+              sandbox2 in ("bwrap", "rlimits", "none"),
               detail=f"sandbox={sandbox2}")
         finally:
             client.close()

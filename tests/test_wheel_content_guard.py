@@ -178,7 +178,10 @@ def test_windows_docs_never_tell_the_user_to_wrap_ps1_in_a_subshell() -> None:
     # filename. The explanatory prose this change adds ("no `...Bypass
     # -File` wrapper") mentions the same words but never followed by a
     # filename, so it does not trip this guard.
-    pattern = re.compile(r"-File\s+\S*\.ps1")
+    # The filename is a plain path token (optionally quoted), so a regex that
+    # merely PARSES such a line (update.ps1 reading the VBS launcher's text:
+    # `-match '-File ""([^"]+\.ps1)""'`) is not an invocation.
+    pattern = re.compile(r"""-File\s+["']?[\w.\\/:$%{}()-]+\.ps1""")
     offenders = []
     for rel in ("install.ps1", "update.ps1", "uninstall.ps1",
                 "scripts/update-and-deploy.ps1", "scripts/install_repair.ps1",

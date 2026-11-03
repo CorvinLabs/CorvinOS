@@ -418,8 +418,12 @@ class ClaudeCliEngine:
         meta.setdefault("workflow_id", str((call.state or {}).get("__workflow__", "")))
         # the guard can refuse (it raises): build the argv first, so a refused payload leaves no
         # open span and no resolution event naming a spawn that never happened
+        # The resolved path, not the bare name: on Windows CreateProcess appends only ".exe"
+        # and searches the system dirs first, so a bare "claude" skips the npm `claude.cmd`
+        # that shutil.which (PATHEXT, PATH order) found in __post_init__ - and may start a
+        # different claude than the one checked. POSIX: identical (which == execvp lookup).
         cmd = [
-            "claude", "-p", _guard_prompt_head(prompt),
+            shutil.which("claude") or "claude", "-p", _guard_prompt_head(prompt),
             "--model", model,
             "--output-format", "json",
             "--disallowedTools", _DENIED_TOOLS,

@@ -446,7 +446,7 @@ def test_call_forged_tool(client: MCPClient, root: Path) -> None:
     t("data echoes payload",
       echoed.get("msg") == "hello")
     t("sandbox label present",
-      structured.get("sandbox") in ("bwrap", "rlimits"))
+      structured.get("sandbox") in ("bwrap", "rlimits", "none"))
 
 
 @with_client()

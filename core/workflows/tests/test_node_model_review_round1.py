@@ -52,6 +52,9 @@ def cli_log(tmp_path, monkeypatch):
     claude = bindir / "claude"
     claude.write_text(FAKE_CLAUDE, encoding="utf-8")
     claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
+    if sys.platform == "win32":  # no shebang exec on Windows: a claude.cmd shim around the fake
+        (bindir / "claude.cmd").write_text(
+            f'@echo off\r\n"{sys.executable}" "{claude}" %*\r\n', encoding="utf-8")
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
@@ -168,7 +171,7 @@ def test_a_missing_cli_closes_the_span_it_opened(cli_log, monkeypatch):
     real_run = ec.subprocess.run
 
     def gone(cmd, *a, **kw):
-        if cmd and cmd[0] == "claude" and "--max-turns" not in cmd:
+        if cmd and os.path.splitext(os.path.basename(cmd[0]))[0].lower() == "claude" and "--max-turns" not in cmd:
             raise FileNotFoundError("claude")
         return real_run(cmd, *a, **kw)
     monkeypatch.setattr(ec.subprocess, "run", gone)

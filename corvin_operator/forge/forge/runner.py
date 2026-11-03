@@ -547,7 +547,11 @@ def run_tool(
                     )
 
     # Wrap in bwrap if available and requested
-    sandbox_label = "rlimits"
+    # The audit label must name the isolation that ACTUALLY applies. The rlimit
+    # layer is a POSIX preexec_fn that is skipped on Windows (see the Popen call
+    # below), so a bwrap-less Windows run has NO sandbox layer at all — labelling
+    # it "rlimits" made the hash-chained audit record a protection that never ran.
+    sandbox_label = "none" if sys.platform == "win32" else "rlimits"
     if use_sandbox and have_bwrap():
         ro_extras = list(extra_ro_paths or [])
         rw_extras = list(extra_rw_paths or [])
