@@ -213,3 +213,76 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ── multi-line / %VAR% / long text through a real .cmd shim (cmd.exe truncation) ──
+
+from _win_shim import feed_stdin, is_cmd_shim, prepare_cli_argv  # noqa: E402
+
+_DUMP = (
+    "import json, os, sys\n"
+    "d = sys.argv[1]\n"
+    "sp = next((a for i, a in enumerate(sys.argv) if sys.argv[i-1] == '--append-system-prompt-file'), None)\n"
+    "json.dump({'argv': sys.argv[2:], 'stdin': sys.stdin.read(),\n"
+    "           'sysfile': open(sp, encoding='utf-8').read() if sp else None},\n"
+    "          open(os.path.join(d, 'out.json'), 'w', encoding='utf-8'))\n"
+)
+
+
+def _shim(tmp_path):
+    script = tmp_path / "dump.py"
+    script.write_text(_DUMP, encoding="utf-8")
+    shim = tmp_path / "claude.cmd"
+    shim.write_text(f'@"{sys.executable}" "{script}" "{tmp_path}" %*\r\n', encoding="utf-8")
+    return shim
+
+
+def _run(tmp_path, argv, prompt):
+    prep = prepare_cli_argv(argv, prompt)
+    try:
+        cmd = resolve_cli_argv(prep.argv)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        feed_stdin(proc, prep.stdin_text)
+        proc.wait(timeout=60)
+        tmpdir = prep._tmpdir
+        got = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    finally:
+        prep.cleanup()
+    return prep, tmpdir, got
+
+
+from _win_shim import resolve_cli_argv  # noqa: E402
+
+_NASTY = "User input:\nline2 %PATH% & echo PWN\r\nthird \"quoted\" ^ | > x\n" + "y" * 9000
+
+
+@pytest.mark.skipif(os.name != "nt", reason="needs a real cmd.exe .cmd shim")
+def test_multiline_prompt_and_system_prompt_survive_cmd_shim(tmp_path) -> None:
+    shim = _shim(tmp_path)
+    assert is_cmd_shim(str(shim))
+    sysp = "SYS line1\nSYS %USERPROFILE% line2"
+    argv = [str(shim), "-p", "--append-system-prompt", sysp, "--max-turns", "1", "--", _NASTY]
+    prep, tmpdir, got = _run(tmp_path, argv, _NASTY)
+    assert got["stdin"].replace("\r\n", "\n") == _NASTY.replace("\r\n", "\n")
+    assert _NASTY not in got["argv"] and "--" not in got["argv"]
+    assert got["argv"][:1] == ["-p"] and "--max-turns" in got["argv"]
+    assert got["sysfile"] == sysp  # moved to --append-system-prompt-file, newline/% intact
+    assert "--append-system-prompt" not in got["argv"]
+    assert tmpdir and not os.path.exists(tmpdir), "private temp dir must be deleted"
+    assert not (tmp_path / "PWN").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="needs a real cmd.exe .cmd shim")
+def test_positional_after_dash_p_moves_to_stdin(tmp_path) -> None:
+    shim = _shim(tmp_path)
+    prep, _, got = _run(tmp_path, [str(shim), "-p", "a\nb", "--model", "m"], "a\nb")
+    assert got["stdin"].replace("\r\n", "\n") == "a\nb"
+    assert got["argv"] == ["-p", "--model", "m"]
+
+
+def test_prepare_cli_argv_is_identity_for_non_shim(tmp_path) -> None:
+    exe = [sys.executable, "-p", "--append-system-prompt", "x\ny", "--", "multi\nline"]
+    prep = prepare_cli_argv(exe, "multi\nline")
+    assert prep.argv == exe and prep.stdin_text is None
+    prep.cleanup()

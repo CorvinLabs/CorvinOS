@@ -135,7 +135,7 @@ class BuildArgsTests(unittest.TestCase):
             "opencode", "run", "--format", "json",
             "--dangerously-skip-permissions",
             "--model", "anthropic/claude-sonnet-5",
-            "--dir", "/tmp/sandbox",
+            "--dir", str(Path("/tmp/sandbox")),
         ])
 
     def test_with_agent_overrides_default(self) -> None:
@@ -356,6 +356,7 @@ class NormalisationTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@unittest.skipIf(sys.platform == "win32", "bash-shebang fake binary: CreateProcess cannot run it (test-side POSIX assumption)")
 class FakeOpencodeStreamTests(unittest.TestCase):
     """Drive the engine against a fake `opencode` binary that emits a
     canned JSON-event stream. Exercises the full subprocess + stream-

@@ -236,6 +236,12 @@ class CopilotCliEngine:
         # Build command: `copilot -p "<effective_prompt>"`.
         # List-form prevents shell-metacharacter injection — NEVER shell=True.
         cmd = [bin_path, "-p", effective_prompt]
+        # `copilot -p` has no stdin / prompt-file form, and cmd.exe ends the command
+        # line at the first line break of a .cmd shim (the prompt would arrive as its
+        # first line only): on a Windows shim the line breaks become spaces.
+        from ._win_shim import is_cmd_shim as _is_cmd_shim
+        if _is_cmd_shim(bin_path):
+            cmd[2] = " ".join(effective_prompt.splitlines())
 
         yield StreamEvent(
             type="session_started",

@@ -155,3 +155,119 @@ def no_console_window_flags() -> int:
         return 0
     import subprocess  # noqa: PLC0415 — only needed on the Windows branch
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+# ---------------------------------------------------------------------------
+# Text transport for a ``.cmd``/``.bat`` shim: keep prompts OFF the command line
+# ---------------------------------------------------------------------------
+# cmd.exe (a) ends the command line at the first line break, (b) caps it at 8191
+# characters and (c) expands ``%VAR%`` even inside double quotes. A multi-line
+# prompt / system prompt on argv therefore arrives truncated ("User input:" and
+# nothing else), a long one fails outright, and ``%PATH%``-style text is rewritten.
+# A native ``claude.exe`` takes argv verbatim through CreateProcess, so this only
+# engages when the resolved executable is a shim on Windows -- POSIX and ``.exe``
+# argv stay byte-identical.
+
+import contextlib  # noqa: E402
+import dataclasses  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+
+_SYSTEM_PROMPT_FLAGS = ("--system-prompt", "--append-system-prompt")
+_UNSAFE_CHARS = ("\n", "\r", "\x00", "%")
+_MAX_INLINE = 1500  # well below cmd's 8191 even with several such args
+
+
+def _unsafe_for_cmdline(text: str) -> bool:
+    return len(text) > _MAX_INLINE or any(c in text for c in _UNSAFE_CHARS)
+
+
+def is_cmd_shim(exe: str | None) -> bool:
+    """True when *exe* (bare names resolved via PATH/PATHEXT) is a ``.cmd``/``.bat`` on Windows."""
+    if os.name != "nt" or not isinstance(exe, str) or not exe:
+        return False
+    if not exe.lower().endswith((".cmd", ".bat")) and not os.path.dirname(exe):
+        exe = shutil.which(exe) or exe
+    return exe.lower().endswith((".cmd", ".bat"))
+
+
+@dataclasses.dataclass
+class ShimArgs:
+    """Result of :func:`prepare_cli_argv`. ``argv`` is spawn-ready *before*
+    :func:`resolve_cli_argv`/:func:`windows_shim_command`; ``stdin_text`` (or ``None``)
+    must be fed to the child's stdin by the caller (see :func:`feed_stdin`);
+    ``cleanup()`` removes the private temp dir and is safe to call repeatedly."""
+
+    argv: list
+    stdin_text: str | None = None
+    _tmpdir: str | None = None
+
+    def cleanup(self) -> None:
+        d, self._tmpdir = self._tmpdir, None
+        if d:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def prepare_cli_argv(argv: list, prompt: str | None = None) -> ShimArgs:
+    """Move text that cmd.exe would mangle off the command line.
+
+    Only when ``argv[0]`` is a Windows ``.cmd``/``.bat`` shim:
+
+    * *prompt* (the positional prompt: the element equal to it, plus a directly
+      preceding ``--``) is removed from argv and returned as ``stdin_text`` -- ``claude -p``
+      reads the prompt from stdin when no positional prompt is given (always moved,
+      so quotes, ``%``, newlines and length are all irrelevant);
+    * ``--system-prompt``/``--append-system-prompt`` values that hold a line
+      break, ``%`` or are long become ``<flag>-file <path>`` in a private temp dir.
+
+    Elsewhere returns ``argv`` unchanged with no stdin and nothing to clean up.
+    """
+    argv = list(argv)
+    if not argv or not is_cmd_shim(argv[0]):
+        return ShimArgs(argv)
+    res = ShimArgs(argv)
+    try:
+        for i in range(len(argv) - 1):
+            flag = argv[i]
+            if flag in _SYSTEM_PROMPT_FLAGS and isinstance(argv[i + 1], str) and _unsafe_for_cmdline(argv[i + 1]):
+                if res._tmpdir is None:
+                    res._tmpdir = tempfile.mkdtemp(prefix="corvin-cli-")
+                path = os.path.join(res._tmpdir, f"sysprompt-{i}.txt")
+                with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(argv[i + 1])
+                argv[i], argv[i + 1] = flag + "-file", path
+        if prompt is not None:
+            for j in range(len(argv) - 1, 0, -1):
+                if argv[j] == prompt:
+                    del argv[j]
+                    if j > 1 and argv[j - 1] == "--":
+                        del argv[j - 1]
+                    res.stdin_text = prompt
+                    break
+    except BaseException:
+        res.cleanup()
+        raise
+    res.argv = argv
+    return res
+
+
+def feed_stdin(proc, text: str | None) -> None:
+    """Write *text* to ``proc.stdin`` and close it (text or binary pipe). No-op for ``None``."""
+    if text is None or proc.stdin is None:
+        return
+    try:
+        # A text-mode pipe translates LF to CRLF on Windows: write the raw
+        # UTF-8 bytes to the underlying buffer so the child sees the prompt verbatim.
+        out = getattr(proc.stdin, "buffer", None)
+        if out is not None:
+            proc.stdin.flush()
+            out.write(text.encode("utf-8"))
+            out.flush()
+        else:
+            proc.stdin.write(text.encode("utf-8"))
+            proc.stdin.flush()
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        with contextlib.suppress(OSError, ValueError):
+            proc.stdin.close()

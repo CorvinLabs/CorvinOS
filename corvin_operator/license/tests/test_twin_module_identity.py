@@ -107,6 +107,19 @@ r = client.post("/v1/console/skills/manual", headers=h,
                 json={"name": "assistant.twin_probe",
                       "body": "# twin probe\n\nSay hello.\n"})
 out["skills_manual_status"] = r.status_code
+# ADR-2095: the free tier gets a DAILY skill quota (skill_forge_per_day), so
+# the first writes are 200; once it is used up the endpoint answers 402
+# ``limit_reached``. Keep creating until refused (bounded).
+out["skills_manual_statuses"] = [r.status_code]
+out["skills_manual_last_error"] = None
+for i in range(12):
+    r = client.post("/v1/console/skills/manual", headers=h,
+                    json={"name": f"assistant.twin_probe_{i}",
+                          "body": "# twin probe\n\nSay hello.\n"})
+    out["skills_manual_statuses"].append(r.status_code)
+    if r.status_code != 200:
+        out["skills_manual_last_error"] = r.json()
+        break
 print("RESULT " + json.dumps(out))
 '''
 
@@ -172,4 +185,11 @@ def test_free_tier_stays_refused(tmp_path):
     assert out["capability_tier"] == "free", out
     assert out["registry_create"] == "denied", out
     assert out["verify_status"] == 200 and out["verify"]["allowed"] is False, out
-    assert out["skills_manual_status"] == 402, out
+    # Free tier: within the ADR-2095 daily quota the write is allowed; the
+    # quota MUST then run out (fail closed) with a 402 limit_reached.
+    statuses = out["skills_manual_statuses"]
+    assert statuses[0] == 200, out
+    assert statuses[-1] == 402, out
+    assert statuses.count(200) == 5, out  # limits.py skill_forge_per_day == 5
+    detail = out["skills_manual_last_error"]["detail"]
+    assert detail["error"] == "limit_reached", out

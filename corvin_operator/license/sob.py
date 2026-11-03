@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -109,7 +110,11 @@ class SobClient:
         for p in (self._sob_path, self._sub_key_path):
             try:
                 mode = p.stat().st_mode & 0o777
-                if mode & 0o077:
+                # Windows: NTFS has no POSIX group/other bits (st_mode is
+                # always permissive), so the check would reject every SOB
+                # there. Integrity is unaffected: the SOB is an authenticated seal
+                # keyed to instance_id/device_fp (unseal below fails closed on tamper).
+                if not sys.platform.startswith("win") and mode & 0o077:
                     log.warning("sob: %s has too-permissive mode 0o%o — skipping", p.name, mode)
                     _audit("license.sob_mode_error", file=p.name)
                     return None

@@ -418,7 +418,6 @@ class TestA2APeerLimitHttp(unittest.TestCase):
         _gate = patch.object(_ft, "_ack_url_rejection_reason", return_value=None)
         _gate.start()
         self.addCleanup(_gate.stop)
-
     def tearDown(self):
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
@@ -452,6 +451,12 @@ class TestA2APeerLimitHttp(unittest.TestCase):
 
         with _sandbox(Path(self._tmp)) as (client, home, tid, csrf):
             with (
+                # a2a.network is member-only (2026-10-21): the pairing endpoints
+                # 402 member_seat_required BEFORE the peer-limit gate under test,
+                # so model an active member seat. (Patched inside the sandbox:
+                # it re-imports the console modules.)
+                patch("corvin_console.routes.a2a_pair.a2a_network_status",
+                      return_value={"allowed": True, "reason": None, "detail": None}),
                 patch("corvin_console.routes.a2a_pair._lic_get_limit",
                       side_effect=lambda f: 1 if f == "a2a_peers_max" else None),
                 patch("corvin_console.routes.a2a_pair._origins_dir",
@@ -481,6 +486,12 @@ class TestA2APeerLimitHttp(unittest.TestCase):
         # No existing origin files — count is 0.
         with _sandbox(Path(self._tmp)) as (client, home, tid, csrf):
             with (
+                # a2a.network is member-only (2026-10-21): the pairing endpoints
+                # 402 member_seat_required BEFORE the peer-limit gate under test,
+                # so model an active member seat. (Patched inside the sandbox:
+                # it re-imports the console modules.)
+                patch("corvin_console.routes.a2a_pair.a2a_network_status",
+                      return_value={"allowed": True, "reason": None, "detail": None}),
                 patch("corvin_console.routes.a2a_pair._lic_get_limit",
                       side_effect=lambda f: 1 if f == "a2a_peers_max" else None),
                 patch("corvin_console.routes.a2a_pair._origins_dir",
@@ -511,6 +522,12 @@ class TestA2APeerLimitHttp(unittest.TestCase):
 
         with _sandbox(Path(self._tmp)) as (client, home, tid, csrf):
             with (
+                # a2a.network is member-only (2026-10-21): the pairing endpoints
+                # 402 member_seat_required BEFORE the peer-limit gate under test,
+                # so model an active member seat. (Patched inside the sandbox:
+                # it re-imports the console modules.)
+                patch("corvin_console.routes.a2a_pair.a2a_network_status",
+                      return_value={"allowed": True, "reason": None, "detail": None}),
                 patch("corvin_console.routes.a2a_pair._lic_get_limit", return_value=None),
                 patch("corvin_console.routes.a2a_pair._origins_dir",
                       return_value=self._origins_dir),

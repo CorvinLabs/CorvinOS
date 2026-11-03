@@ -855,7 +855,30 @@ if _sys.platform == "win32":
 
     _orig_td_cleanup = _tempfile.TemporaryDirectory.cleanup
     if not getattr(_orig_td_cleanup, "_corvin_retry", False):
+        def _release_logfiles_under(root):
+            # A logging FileHandler (corvin.log) opened under a per-test CORVIN_HOME
+            # pins the file; close its stream (FileHandler reopens lazily on emit).
+            import logging as _lg
+            root = _os.path.normcase(_os.path.abspath(str(root)))
+            seen = [_lg.getLogger()] + [lg for lg in _lg.root.manager.loggerDict.values()
+                                        if isinstance(lg, _lg.Logger)]
+            for lg in seen:
+                for h in list(lg.handlers):
+                    bf = getattr(h, "baseFilename", None)
+                    if bf and _os.path.normcase(_os.path.abspath(bf)).startswith(root + _os.sep):
+                        try:
+                            h.acquire()
+                            try:
+                                if h.stream:
+                                    h.stream.close()
+                                    h.stream = None
+                            finally:
+                                h.release()
+                        except Exception:
+                            pass
+
         def _td_cleanup_retry(self, *a, **k):
+            _release_logfiles_under(self.name)
             for _ in range(40):
                 try:
                     return _orig_td_cleanup(self, *a, **k)
@@ -867,3 +890,27 @@ if _sys.platform == "win32":
 
         _td_cleanup_retry._corvin_retry = True
         _tempfile.TemporaryDirectory.cleanup = _td_cleanup_retry
+
+
+# Windows without Developer Mode / SeCreateSymbolicLinkPrivilege cannot create
+# symlinks at all (WinError 1314). The symlink-escape tests exercise POSIX
+# link semantics the OS refuses to set up, so a test that FAILS purely because
+# the fixture's os.symlink() was denied is reported as skipped with that
+# precise reason (any other failure still fails).
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    if (_sys.platform == "win32" and rep.failed and call.excinfo is not None
+            and call.when in ("setup", "call")):
+        exc = call.excinfo.value
+        seen = set()
+        while exc is not None and id(exc) not in seen:
+            seen.add(id(exc))
+            if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 1314:
+                rep.outcome = "skipped"
+                rep.longrepr = (str(item.fspath), item.location[1] or 0,
+                                "Skipped: symlink creation needs Developer Mode or "
+                                "SeCreateSymbolicLinkPrivilege (WinError 1314)")
+                break
+            exc = exc.__cause__ or exc.__context__

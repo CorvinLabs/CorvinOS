@@ -56,9 +56,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 try:
-    import fcntl  # POSIX only; the store degrades to a thread lock without it
+    from _compat_fcntl import fcntl  # real fcntl on POSIX, LockFileEx flock on Windows
 except ImportError:  # pragma: no cover
-    fcntl = None  # type: ignore[assignment]
+    try:
+        import fcntl  # POSIX only; the store degrades to a thread lock without it
+    except ImportError:
+        fcntl = None  # type: ignore[assignment]
 
 FEED_DIRNAME = "a2a_feed"
 RETENTION_DAYS = 30
@@ -154,7 +157,17 @@ def _write_atomic(path: Path, data: bytes) -> None:
         os.fsync(fd)  # a power loss must not leave a zero-length seq/store
     finally:
         os.close(fd)
-    os.replace(tmp, path)
+    # Windows: replacing a file another process is reading (seq, store) raises
+    # PermissionError (no FILE_SHARE_DELETE); readers hold it only briefly.
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            if getattr(exc, "winerror", None) not in (5, 32) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 def _store_attachments(root: Path, attachments: Iterable[Any] | None) -> list[dict]:

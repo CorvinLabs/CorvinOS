@@ -39,6 +39,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Protocol, runtime_checkable
 
+# Windows: every direct `[claude.cmd, "-p", <multi-line prompt>]` spawn (helper-model
+# calls, delegate judges, dialectic, ...) imports this package for guard_prompt_head();
+# make sure the Popen-level cmd.exe text transport (prompt -> stdin, system prompt ->
+# file) is installed in THAT process too. No-op on POSIX / when corvin_core is absent.
+if sys.platform == "win32":
+    try:
+        from corvin_core import _wincompat as _corvin_wincompat  # noqa: F401
+        _corvin_wincompat.install_batch_argv_quoting()
+    except Exception:  # noqa: BLE001 - stdlib spawn defaults
+        pass
+
 # One line per process-group kill: pid, pgid, and the function that asked for it.
 # The caller name is what tells a Python-side kill apart from a 143 nobody here sent.
 _kill_log = logging.getLogger("corvin.engine.process_kill")

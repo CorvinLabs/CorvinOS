@@ -216,11 +216,23 @@ def _do_increment_and_check(
         try:
             # File-level locking for cross-process atomicity
             with open(lock_path, "w", encoding="utf-8") as lock_file:
-                try:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                except (AttributeError, OSError):
-                    # Windows or fcntl unavailable — rely on the module-level lock
-                    pass
+                _win_locked = False
+                if _IS_WINDOWS and msvcrt is not None:
+                    # Windows: the fcntl shim is a no-op, so take a real
+                    # cross-process byte-range lock. Failing to get it must
+                    # NOT proceed unlocked (two processes could both read
+                    # count=N and write N+1, exceeding the cap): raise, and
+                    # increment_and_check() retries then fails closed for a
+                    # finite (free-tier) limit.
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                    _win_locked = True
+                else:
+                    try:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                    except (AttributeError, OSError):
+                        # fcntl unavailable — rely on the module-level lock
+                        pass
 
                 try:
                     limit = get_limit(feature)
@@ -274,10 +286,17 @@ def _do_increment_and_check(
                     return new_count
 
                 finally:
-                    try:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                    except (AttributeError, OSError):
-                        pass
+                    if _win_locked:
+                        try:
+                            lock_file.seek(0)
+                            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                        except OSError:
+                            pass
+                    else:
+                        try:
+                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                        except (AttributeError, OSError):
+                            pass
 
         except LicenseLimitError:
             raise

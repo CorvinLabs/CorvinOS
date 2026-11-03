@@ -190,7 +190,7 @@ class ProtocolContractTests(unittest.TestCase):
         fake_proc.returncode = 0
         with patch("agents.copilot_cli.subprocess.Popen", return_value=fake_proc) as popen:
             list(engine.spawn("test", working_dir=Path("/tmp/some-hermetic-dir")))
-        self.assertEqual(popen.call_args.kwargs.get("cwd"), "/tmp/some-hermetic-dir")
+        self.assertEqual(popen.call_args.kwargs.get("cwd"), str(Path("/tmp/some-hermetic-dir")))
 
     def test_no_working_dir_passes_cwd_none(self) -> None:
         engine = CopilotCliEngine()

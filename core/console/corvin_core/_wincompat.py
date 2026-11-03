@@ -250,6 +250,83 @@ def batch_safe_command(args):
     return 'cmd /d /s /c "' + " ".join(_cmd_quote(a) for a in argv) + '"'
 
 
+# cmd.exe ends a command line at the first line break, caps it at 8191 characters
+# and expands %VAR% inside quotes -- so a multi-line / long / %-bearing prompt or
+# system prompt handed to an npm `claude.cmd` shim arrives truncated or rewritten
+# (the A2A framed prompt arrived as just "User input:"). Mirror of
+# agents/_win_shim.prepare_cli_argv for call sites that spawn the CLI directly
+# (backstop; the engine uses the explicit helper): the system prompt moves to
+# --<flag>-file, the positional prompt to a delete-on-close stdin file.
+_SHIM_SYSPROMPT_FLAGS = ("--system-prompt", "--append-system-prompt")
+_SHIM_VALUE_FLAGS = frozenset(_SHIM_SYSPROMPT_FLAGS) | {
+    "--mcp-config", "--settings", "--json-schema", "--agents", "--plugin-dir",
+}
+_SHIM_MAX_INLINE = 1500
+
+
+def _shim_unsafe(text: str) -> bool:
+    return len(text) > _SHIM_MAX_INLINE or any(c in text for c in ("\n", "\r", "\0", "%"))
+
+
+def shim_text_transport(args, stdin):
+    """``(argv, stdin_file|None, cleanup|None)``. Identity unless *args* is a list
+    whose program is a ``claude*.cmd``/``.bat`` shim holding text cmd.exe mangles."""
+    import os  # noqa: PLC0415
+
+    if not isinstance(args, (list, tuple)) or not args:
+        return args, None, None
+    try:
+        argv = [os.fspath(a) for a in args]
+    except TypeError:
+        return args, None, None
+    exe = argv[0]
+    if not (all(isinstance(a, str) for a in argv)
+            and exe.lower().endswith((".cmd", ".bat"))
+            and os.path.basename(exe).lower().startswith("claude")):
+        return args, None, None
+    sys_idx = [i for i in range(len(argv) - 1)
+               if argv[i] in _SHIM_SYSPROMPT_FLAGS and _shim_unsafe(argv[i + 1])]
+    prompt_idx = None
+    if stdin is None and ("-p" in argv or "--print" in argv):
+        for i in range(len(argv) - 1, 0, -1):
+            if (_shim_unsafe(argv[i]) and argv[i - 1] not in _SHIM_VALUE_FLAGS
+                    and i - 1 not in sys_idx and not argv[i].startswith("-")):
+                prompt_idx = i
+                break
+    if not sys_idx and prompt_idx is None:
+        return args, None, None
+    import shutil  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    tmpdir = tempfile.mkdtemp(prefix="corvin-cli-")
+
+    def cleanup() -> None:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    try:
+        for i in sys_idx:
+            path = os.path.join(tmpdir, f"sysprompt-{i}.txt")
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(argv[i + 1])
+            argv[i], argv[i + 1] = argv[i] + "-file", path
+        fh_in = None
+        if prompt_idx is not None:
+            text = argv[prompt_idx]
+            path = os.path.join(tmpdir, "prompt.txt")
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0) | getattr(os, "O_TEMPORARY", 0), 0o600)
+            fh_in = os.fdopen(fd, "r+b")
+            fh_in.write(text.encode("utf-8"))
+            fh_in.flush()
+            fh_in.seek(0)
+            del argv[prompt_idx]
+            if prompt_idx > 1 and argv[prompt_idx - 1] == "--":
+                del argv[prompt_idx - 1]
+    except BaseException:
+        cleanup()
+        raise
+    return argv, fh_in, cleanup
+
+
 def install_batch_argv_quoting() -> None:
     """Route every list-argv ``.cmd``/``.bat`` spawn through
     :func:`batch_safe_command` on Windows. Idempotent; no-op on POSIX."""
@@ -262,9 +339,25 @@ def install_batch_argv_quoting() -> None:
         return
 
     def __init__(self, args, *rest, **kwargs):
+        stdin_fh = None
+        cleanup = None
         if not rest and not kwargs.get("shell") and kwargs.get("executable") is None:
+            args, stdin_fh, cleanup = shim_text_transport(args, kwargs.get("stdin"))
+            if stdin_fh is not None:
+                kwargs["stdin"] = stdin_fh
             args = batch_safe_command(args)
-        original_init(self, args, *rest, **kwargs)
+        try:
+            original_init(self, args, *rest, **kwargs)
+        except BaseException:
+            if cleanup:
+                cleanup()
+            raise
+        finally:
+            if stdin_fh is not None:
+                stdin_fh.close()
+        if cleanup:
+            import weakref  # noqa: PLC0415
+            weakref.finalize(self, cleanup)
 
     setattr(__init__, _BATCH_ARGV_MARK, True)
     setattr(__init__, _NO_WINDOW_MARK, getattr(original_init, _NO_WINDOW_MARK, False))

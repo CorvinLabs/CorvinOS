@@ -512,6 +512,7 @@ class ClaudeCodeEngine:
         self.binary = _resolve_claude_bin(binary or _configured_claude_bin())
         self._proc: subprocess.Popen | None = None
         self._system_prompt_tmp_path: str | None = None
+        self._shim_prep = None  # _win_shim.ShimArgs (temp dir for a .cmd-shim spawn)
         self._stdin: IO | None = None
         self._stdin_guard = threading.Lock()
         self._stderr_buf: deque[str] = deque()
@@ -811,7 +812,15 @@ class ClaudeCodeEngine:
         # caller (and `inject()`, Phase 2.3) can write user-message
         # JSONL lines into the live stream. text=True keeps the
         # adapter's `inject_btw` (which writes str) wire-compatible.
-        stdin_pipe = subprocess.PIPE if prompt_via_stdin else None
+        # Windows .cmd shim: cmd.exe truncates the command line at the first
+        # newline, caps it at 8191 chars and expands %VAR% inside quotes, so the
+        # positional prompt (and any unsafe inline system prompt) is moved to
+        # stdin / a private temp file. No-op on POSIX and for a native .exe.
+        from ._win_shim import prepare_cli_argv, feed_stdin
+        _shim = prepare_cli_argv(args, None if prompt_via_stdin else prompt)
+        self._shim_prep = _shim
+        args = _shim.argv
+        stdin_pipe = subprocess.PIPE if (prompt_via_stdin or _shim.stdin_text is not None) else None
 
         # Windows: npm installs the `claude` CLI as a `claude.cmd` shim, and
         # CreateProcess cannot launch a .cmd/.bat directly (FileNotFoundError /
@@ -862,6 +871,11 @@ class ClaudeCodeEngine:
                 error=_format_binary_not_found_error(self.binary),
             )
             return
+        except BaseException:
+            self._cleanup_system_prompt_tmp_file()
+            raise
+
+        feed_stdin(self._proc, _shim.stdin_text)
 
         # Drain stderr concurrently so the pipe buffer can never fill
         # (4096-byte default on Linux) and stall the subprocess. The
@@ -962,6 +976,9 @@ class ClaudeCodeEngine:
         """Best-effort unlink of the temp file spawn() wrote the system
         prompt into (Windows fresh-install fix — see spawn()'s docstring).
         Idempotent; safe to call even when no temp file was written."""
+        prep, self._shim_prep = self._shim_prep, None
+        if prep is not None:
+            prep.cleanup()
         path = self._system_prompt_tmp_path
         self._system_prompt_tmp_path = None
         if path:

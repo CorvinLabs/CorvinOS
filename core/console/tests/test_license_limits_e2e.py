@@ -201,6 +201,7 @@ class TestComputeQuotaCounterIntegration(unittest.TestCase):
             except LicenseLimitError:
                 self.fail(f"Enterprise unlimited: call {i+1} should never be blocked")
 
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX mode bits: NTFS st_mode is always 0o666")
     def test_quota_file_mode_0600_after_write(self):
         from license.compute_quota import increment_and_check, _quota_path
         increment_and_check(self._corvin_home)
