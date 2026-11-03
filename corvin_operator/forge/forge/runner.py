@@ -952,8 +952,10 @@ def run_tool(
     except subprocess.TimeoutExpired:
         if _is_windows:
             from ._winproc import kill_and_drain
-            kill_and_drain(proc, _win_job)
-            _win_job.close()
+            try:
+                kill_and_drain(proc, _win_job)
+            finally:
+                _win_job.close()
         else:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -974,8 +976,12 @@ def run_tool(
         _emit_tool_executed(ctx, status="timeout", exit_code=-1,
                             duration_s=_dur_to, sandbox=sandbox_label)
         raise ToolError(f"tool {name!r} timed out after {timeout}s")
-    if _win_job is not None:
-        _win_job.close()  # KILL_ON_JOB_CLOSE reaps leftovers; frees the handle
+    finally:
+        # Every exit path (normal, timeout, or communicate raising anything
+        # else, e.g. BrokenPipe/KeyboardInterrupt): KILL_ON_JOB_CLOSE reaps
+        # leftovers and the handle is freed. close() is idempotent.
+        if _win_job is not None:
+            _win_job.close()
 
     duration = _time.monotonic() - t0
     stdout = stdout_b or b""

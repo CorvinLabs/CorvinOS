@@ -19,6 +19,8 @@ export interface ComputeStatus {
   ts: number;
   enabled: boolean;
   worker_socket: { exists: boolean; reachable: boolean; error: string | null };
+  /** Platform-correct "start the worker" hint; null/absent when reachable. */
+  worker_hint?: string | null;
   run_count: number;
   runs: ComputeRun[];
   pipeline_count: number;

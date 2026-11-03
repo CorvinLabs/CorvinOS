@@ -117,3 +117,97 @@ def test_client_without_port_file_raises_typed_error(tmp_path, monkeypatch):
     with pytest.raises(endpoint.WorkerEndpointError):
         client.ping()
     assert not is_socket_reachable(tmp_path / "worker.sock")
+
+
+# -- fail-closed token publication (Windows icacls) ---------------------------
+
+class _Proc:
+    def __init__(self, rc: int) -> None:
+        self.returncode = rc
+        self.stderr = b"Access is denied."
+
+
+def _force_windows_acl_path(monkeypatch, run):
+    monkeypatch.setattr(endpoint.sys, "platform", "win32")
+    monkeypatch.setenv("USERNAME", "alice")
+    monkeypatch.setenv("USERDOMAIN", "HOST")
+    monkeypatch.setattr(endpoint.subprocess, "run", run)
+
+
+def test_icacls_failure_does_not_publish_token(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return _Proc(5)
+
+    _force_windows_acl_path(monkeypatch, fake_run)
+    sock_path = tmp_path / "worker.sock"
+    with pytest.raises(endpoint.WorkerEndpointError, match="icacls failed"):
+        endpoint.write_port_file(sock_path, 1234, endpoint.new_token())
+    assert calls and calls[0][0] == "icacls" and "HOST\\alice:F" in calls[0]
+    assert list(tmp_path.iterdir()) == []  # neither tmp nor target left behind
+
+
+def test_icacls_missing_does_not_publish_token(tmp_path, monkeypatch):
+    def fake_run(argv, **kw):
+        raise FileNotFoundError("icacls")
+
+    _force_windows_acl_path(monkeypatch, fake_run)
+    sock_path = tmp_path / "worker.sock"
+    # A stale port file from an earlier run must not survive either.
+    endpoint.port_file_for(sock_path).write_text("1\n" + "a" * 64 + "\n", encoding="ascii")
+    with pytest.raises(endpoint.WorkerEndpointError):
+        endpoint.write_port_file(sock_path, 1234, endpoint.new_token())
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_icacls_success_publishes(tmp_path, monkeypatch):
+    _force_windows_acl_path(monkeypatch, lambda argv, **kw: _Proc(0))
+    sock_path = tmp_path / "worker.sock"
+    tok = endpoint.new_token()
+    endpoint.write_port_file(sock_path, 1234, tok)
+    assert endpoint.read_port_file(sock_path) == (1234, tok)
+
+
+def test_worker_start_fails_closed_when_port_file_cannot_be_secured(tmp_path, monkeypatch):
+    monkeypatch.setattr(endpoint, "use_tcp_loopback", lambda: True)
+
+    def boom(*a, **kw):
+        raise endpoint.WorkerEndpointError("icacls failed (test)")
+
+    monkeypatch.setattr(endpoint, "write_port_file", boom)
+    sock_path = tmp_path / "worker.sock"
+    server = WorkerServer(tenant_id="_default", corvin_home=tmp_path,
+                          socket_path=sock_path,
+                          runner_fn=lambda tool, payload: {})
+
+    async def _go():
+        with pytest.raises(endpoint.WorkerEndpointError, match="icacls failed"):
+            await asyncio.wait_for(server.serve_forever(), timeout=10.0)
+
+    asyncio.run(_go())
+    assert server._server is None
+    assert not endpoint.port_file_for(sock_path).exists()
+
+
+def test_unauthenticated_connection_cap(tcp_worker, monkeypatch):
+    import time
+
+    from corvin_compute import worker as worker_mod
+    monkeypatch.setattr(worker_mod, "_MAX_UNAUTH_TCP", 1)
+    port, token = endpoint.read_port_file(tcp_worker)
+    idle = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+    try:
+        time.sleep(0.3)  # let the handler enter the token wait
+        with socket.create_connection(("127.0.0.1", port), timeout=5.0) as s:
+            # Over the cap the worker drops the connection unread; depending
+            # on timing the send or the receive sees it.
+            with pytest.raises((TransportError, OSError)):
+                s.sendall(token.encode("ascii") + b"\n")
+                send_frame_sync(s, {"op": "ping", "params": {}})
+                recv_frame_sync(s)
+    finally:
+        idle.close()
+    time.sleep(0.3)
+    assert WorkerClient(tcp_worker, timeout_s=10.0).ping().get("pong") is True

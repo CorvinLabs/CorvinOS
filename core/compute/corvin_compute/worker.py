@@ -32,6 +32,8 @@ _PIPELINE_JOB_PREFIX = "pipeline_"
 _HAC_JOB_PREFIX = "hac_"
 _ABATCH_JOB_PREFIX = "abatch_"  # ADR-0099 — Anthropic Batch Compute
 _MULTI_ENGINE_PREFIXES = (_PIPELINE_JOB_PREFIX, _HAC_JOB_PREFIX, _ABATCH_JOB_PREFIX)
+# Windows TCP transport: max concurrent connections still in the token wait.
+_MAX_UNAUTH_TCP = 32
 
 
 log = logging.getLogger(__name__)
@@ -193,11 +195,19 @@ class WorkerServer:
 
     async def _start_tcp_loopback(self) -> None:
         self._auth_token = _endpoint.new_token()
+        self._unauth_inflight = 0
         self._server = await asyncio.start_server(
-            self._handle_tcp_client, host=_endpoint.LOOPBACK_HOST, port=0,
+            self._handle_tcp_client, sock=_endpoint.make_loopback_listener(),
         )
         port = self._server.sockets[0].getsockname()[1]
-        _endpoint.write_port_file(self.socket_path, port, self._auth_token)
+        try:
+            _endpoint.write_port_file(self.socket_path, port, self._auth_token)
+        except BaseException:
+            # Fail closed: never serve on a port whose token could not be
+            # published owner-only (icacls failure on Windows).
+            self._server.close()
+            self._server = None
+            raise
         log.info("worker listening at %s:%d (tenant=%s, port file %s)",
                  _endpoint.LOOPBACK_HOST, port, self.tenant_id,
                  _endpoint.port_file_for(self.socket_path))
@@ -207,12 +217,20 @@ class WorkerServer:
     ) -> None:
         """Authenticate the token line, then hand off to _handle_client."""
         import hmac  # noqa: PLC0415
-        try:
-            line = await asyncio.wait_for(
-                reader.readexactly(_endpoint.AUTH_LINE_LEN), timeout=5.0,
-            )
-        except (asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):
+        # Cap concurrent not-yet-authenticated connections so a local process
+        # cannot pin unbounded handlers in the 5 s token wait.
+        if getattr(self, "_unauth_inflight", 0) >= _MAX_UNAUTH_TCP:
             line = b""
+        else:
+            self._unauth_inflight = getattr(self, "_unauth_inflight", 0) + 1
+            try:
+                line = await asyncio.wait_for(
+                    reader.readexactly(_endpoint.AUTH_LINE_LEN), timeout=5.0,
+                )
+            except (asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):
+                line = b""
+            finally:
+                self._unauth_inflight -= 1
         expected = (getattr(self, "_auth_token", "") + "\n").encode("ascii")
         if not line or not hmac.compare_digest(line, expected):
             try:

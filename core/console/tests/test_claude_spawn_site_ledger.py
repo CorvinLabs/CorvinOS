@@ -105,7 +105,6 @@ _MUST_GUARD = {
     "corvin_operator/bridges/shared/house_rules.py",
     "corvin_operator/bridges/shared/memory_bridge.py",
     "corvin_operator/bridges/shared/output_sentinel.py",
-    "corvin_operator/bridges/shared/router.py",
     "corvin_operator/bridges/shared/ulo_compliance.py",
     "corvin_operator/bridges/shared/user_model.py",
     "corvin_operator/bridges/shared/user_style.py",
@@ -150,6 +149,18 @@ _NO_CLI_TEXT = {
     "corvin_operator/bridges/shared/engine_registry.py":
         "engine factory/registry — the `WorkerEngine.spawn()` occurrence is a "
         "docstring; the registry hands back engine INSTANCES, never a prompt.",
+    "core/console/corvin_console/routes/skill_creator_api.py":
+        "console route for the Skill Creator; `forge_runs.spawn(...)` starts a "
+        "worker THREAD (not a process) and `claude_code`/`CORVIN_CLAUDE_BIN` "
+        "occur only in a comment and an error string. The `claude -p` spawn on "
+        "the user's request happens in corvin_operator/skill_creator/llm_client.py, "
+        "which is in _MUST_GUARD.",
+    "core/console/corvin_core/_wincompat.py":
+        "Windows Popen backstop, not a spawn site: `shim_text_transport` "
+        "rewrites an argv the CALLER already built (and guarded) for a "
+        "`claude*.cmd` shim, moving the prompt byte-exact from argv to a "
+        "stdin file so cmd.exe cannot mangle it. It authors no prompt text; "
+        "the `\"-p\"` it matches is a membership test on that argv.",
 }
 
 #: R4-F4 — sites that never build a claude argv of their own: they hand a

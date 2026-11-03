@@ -403,6 +403,10 @@ def compute_status(
         "compute_dir_hash": hashlib.sha256(str(compute_root).encode()).hexdigest()[:16],
         "enabled":        enabled_on_disk,
         "worker_socket":  sock_status,
+        # Platform-correct start hint (systemd unit on Linux, manual CLI on
+        # Windows) for the page's "Worker not running" bar; None when up.
+        "worker_hint":    (None if sock_status.get("reachable")
+                           else _worker_not_running_detail(tid)),
         "run_count":      len(runs),
         "runs":           runs,
         "pipeline_count": pipeline_count,

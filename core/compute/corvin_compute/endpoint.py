@@ -54,8 +54,14 @@ def new_token() -> str:
 
 
 def _restrict_owner_only(path: Path) -> None:
-    """Best-effort owner-only ACL. POSIX: chmod 0600. Windows: icacls
-    (drop inherited ACEs, grant the current user full control only)."""
+    """Owner-only ACL. POSIX: chmod 0600 (best-effort). Windows: icacls (drop
+    inherited ACEs, grant the current user full control only).
+
+    Windows fails CLOSED: the file carries the auth token, and without the
+    icacls rewrite it keeps the inherited profile ACL (readable by anything
+    the parent directory grants). Any icacls failure raises
+    ``WorkerEndpointError`` so the token is never published.
+    """
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -64,21 +70,32 @@ def _restrict_owner_only(path: Path) -> None:
         return
     user = os.environ.get("USERNAME")
     if not user:
-        return
+        raise WorkerEndpointError(
+            f"cannot restrict {path}: USERNAME is not set (refusing to publish the worker token)")
     domain = os.environ.get("USERDOMAIN")
     principal = f"{domain}\\{user}" if domain else user
     try:
-        subprocess.run(
+        proc = subprocess.run(
             ["icacls", str(path), "/inheritance:r", "/grant:r", f"{principal}:F"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             timeout=10, check=False,
         )
-    except (OSError, subprocess.SubprocessError):
-        pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorkerEndpointError(
+            f"icacls could not restrict {path} ({exc}); refusing to publish the worker token") from exc
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", "replace").strip()[:200]
+        raise WorkerEndpointError(
+            f"icacls failed to restrict {path} (rc={proc.returncode}: {err}); "
+            "refusing to publish the worker token")
 
 
 def write_port_file(sock_path: Path, port: int, token: str) -> Path:
-    """Atomically write ``<sock_path>.port`` with owner-only permissions."""
+    """Atomically write ``<sock_path>.port`` with owner-only permissions.
+
+    Raises ``WorkerEndpointError`` (and leaves no token file behind) when the
+    owner-only ACL cannot be applied on Windows.
+    """
     target = port_file_for(sock_path)
     tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
     try:
@@ -90,9 +107,37 @@ def write_port_file(sock_path: Path, port: int, token: str) -> Path:
         os.write(fd, f"{int(port)}\n{token}\n".encode("ascii"))
     finally:
         os.close(fd)
-    _restrict_owner_only(tmp)
+    try:
+        _restrict_owner_only(tmp)
+    except BaseException:
+        for stale in (tmp, target):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+        raise
     os.replace(tmp, target)
     return target
+
+
+def make_loopback_listener() -> socket.socket:
+    """Bound + listening loopback socket on an ephemeral port.
+
+    Windows: ``SO_EXCLUSIVEADDRUSE`` so no other local process can bind the
+    same port alongside us (Windows ``SO_REUSEADDR`` semantics allow port
+    hijacking otherwise). Other platforms: plain bind, unchanged.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        sock.bind((LOOPBACK_HOST, 0))
+        sock.listen(100)
+        sock.setblocking(False)
+    except BaseException:
+        sock.close()
+        raise
+    return sock
 
 
 def read_port_file(sock_path: Path) -> tuple[int, str] | None:

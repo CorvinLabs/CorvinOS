@@ -479,7 +479,7 @@ function ComputeKpiStrip({ runs, pipelineCount, hacCount, hacRootLoss }: {
 
 // ── Worker status ─────────────────────────────────────────────────────────
 
-function WorkerStatusBar({ enabled, socketOk }: { enabled: boolean; socketOk: boolean }) {
+function WorkerStatusBar({ enabled, socketOk, hint }: { enabled: boolean; socketOk: boolean; hint?: string | null }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border bg-card/50 px-4 py-2.5 text-sm">
       <div className={cn("w-2 h-2 rounded-full shrink-0", socketOk ? "bg-emerald-500" : "bg-muted-foreground/40")} />
@@ -487,8 +487,8 @@ function WorkerStatusBar({ enabled, socketOk }: { enabled: boolean; socketOk: bo
         {socketOk ? "Worker running" : enabled ? "Worker not running" : "Worker disabled"}
       </span>
       {!socketOk && enabled && (
-        <span className="text-xs text-muted-foreground font-mono hidden md:block">
-          systemctl --user start corvin-compute@_default
+        <span className="text-xs text-muted-foreground font-mono hidden md:block truncate max-w-md" title={hint ?? undefined}>
+          {hint || "systemctl --user start corvin-compute@_default"}
         </span>
       )}
     </div>
@@ -3222,7 +3222,7 @@ export function ComputePage() {
           <p className="mt-1 text-sm text-muted-foreground">Run batch jobs, optimization experiments, and long-running AI tasks.</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <WorkerStatusBar enabled={enabled} socketOk={socketOk} />
+          <WorkerStatusBar enabled={enabled} socketOk={socketOk} hint={statusQ.data?.worker_hint} />
           <Button size="sm" variant="outline" onClick={() => setSettingsOpen(true)}
             className="gap-1.5">
             <Settings className="h-3.5 w-3.5" />Settings
