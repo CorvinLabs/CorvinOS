@@ -33,12 +33,18 @@ class TestPosixRealGracefulSignal(unittest.TestCase):
         # that has nothing to do with bridge_manager's own code. Python's
         # own signal handling interrupts a blocking call immediately, so
         # it is used here as a reliable graceful-shutdown test target.
+        # On Windows _graceful_signal sends CTRL_BREAK_EVENT, which is only
+        # deliverable to a child in its own process group (as start_fg spawns
+        # it) and arrives as SIGBREAK; the short sleeps let the handler run.
+        kw = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+              if sys.platform.startswith("win") else {})
         proc = subprocess.Popen([
             sys.executable, "-c",
             "import signal, time, sys\n"
+            "signal.signal(getattr(signal, 'SIGBREAK', signal.SIGTERM), lambda *a: sys.exit(0))\n"
             "signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))\n"
-            "time.sleep(30)\n",
-        ])
+            "for _ in range(300): time.sleep(0.1)\n",
+        ], **kw)
         time.sleep(0.3)
         self.assertIsNone(proc.poll())
         bridge_manager._graceful_signal(proc)
@@ -100,6 +106,24 @@ class TestSourceHasCreateNewProcessGroupOnWindowsSpawn(unittest.TestCase):
         src = Path(bridge_manager.__file__).read_text(encoding="utf-8")
         self.assertIn("CREATE_NEW_PROCESS_GROUP", src)
         self.assertIn('sys.platform.startswith("win")', src)
+
+
+class TestFgCreationFlags(unittest.TestCase):
+    """CTRL_BREAK_EVENT only reaches a child on the caller's console, so
+    start_fg must not give its children a console of their own
+    (CREATE_NO_WINDOW) while it has one."""
+
+    def test_with_console_child_shares_it(self):
+        with mock.patch.object(bridge_manager, "_win_has_console", return_value=True):
+            flags = bridge_manager._fg_creationflags()
+        self.assertTrue(flags & 0x00000200)          # CREATE_NEW_PROCESS_GROUP
+        self.assertFalse(flags & 0x08000000)         # no CREATE_NO_WINDOW
+
+    def test_without_console_no_window_is_kept(self):
+        with mock.patch.object(bridge_manager, "_win_has_console", return_value=False):
+            flags = bridge_manager._fg_creationflags()
+        self.assertTrue(flags & 0x00000200)
+        self.assertTrue(flags & 0x08000000)
 
 
 if __name__ == "__main__":

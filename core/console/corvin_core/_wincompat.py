@@ -166,7 +166,11 @@ def _parent_has_console() -> bool:
     import ctypes  # noqa: PLC0415 — Windows-only path
 
     try:
-        return bool(ctypes.windll.kernel32.GetConsoleWindow())
+        # GetConsoleCP, not GetConsoleWindow: a HIDDEN console (CREATE_NO_WINDOW, a
+        # ConPTY) has no window but is attached; children share it invisibly, and
+        # giving them CREATE_NO_WINDOW instead puts each in its own console, which a
+        # CTRL_BREAK to their process group can no longer reach (graceful stop dies).
+        return bool(ctypes.windll.kernel32.GetConsoleCP())
     except Exception:  # noqa: BLE001 — cannot tell: assume none, add the flag
         return False
 
@@ -260,6 +264,13 @@ def batch_safe_command(args):
 _SHIM_SYSPROMPT_FLAGS = ("--system-prompt", "--append-system-prompt")
 _SHIM_VALUE_FLAGS = frozenset(_SHIM_SYSPROMPT_FLAGS) | {
     "--mcp-config", "--settings", "--json-schema", "--agents", "--plugin-dir",
+    # Value flags whose value may be long (tool lists) or hold '%' (a path): such a
+    # value is not the positional prompt and must stay right after its flag.
+    "--model", "--fallback-model", "--resume", "-r", "--session-id",
+    "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools",
+    "--tools", "--add-dir", "--output-format", "--input-format", "--permission-mode",
+    "--permission-prompt-tool", "--max-turns", "--max-budget-usd", "--setting-sources",
+    "--betas", "--system-prompt-file", "--append-system-prompt-file",
 }
 _SHIM_MAX_INLINE = 1500
 
@@ -290,7 +301,8 @@ def shim_text_transport(args, stdin):
     if stdin is None and ("-p" in argv or "--print" in argv):
         for i in range(len(argv) - 1, 0, -1):
             if (_shim_unsafe(argv[i]) and argv[i - 1] not in _SHIM_VALUE_FLAGS
-                    and i - 1 not in sys_idx and not argv[i].startswith("-")):
+                    and i - 1 not in sys_idx
+                    and (not argv[i].startswith("-") or argv[i - 1] == "--")):
                 prompt_idx = i
                 break
     if not sys_idx and prompt_idx is None:

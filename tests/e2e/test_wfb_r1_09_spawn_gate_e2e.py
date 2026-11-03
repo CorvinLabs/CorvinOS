@@ -48,6 +48,22 @@ esac
 printf '%s' '{"confirmed": true, "ok": true}'
 """
 
+_FAKE_CLAUDE_PY = """import os, sys, threading
+text = " ".join(sys.argv[1:])
+if not sys.stdin.isatty():
+    box = []
+    t = threading.Thread(target=lambda: box.append(sys.stdin.read()), daemon=True)
+    t.start(); t.join(5)
+    text += " " + "".join(box)
+with open(os.environ["SPAWN_LOG"], "a", encoding="utf-8") as fh:
+    worker = "single JSON object and nothing else — no markdown fences" in text
+    # the classifier embeds the task text but runs tool-less: --tools ""
+    if "--tools" in sys.argv and sys.argv[sys.argv.index("--tools") + 1:][:1] == [""]:
+        worker = False
+    fh.write("WORKER\\n" if worker else "CLASSIFIER\\n")
+sys.stdout.write('{"confirmed": true, "ok": true}')
+"""
+
 _WORKFLOW_YAML = """awp: "1.1.0"
 workflow:
   name: gate_probe
@@ -82,9 +98,20 @@ def gate_sandbox(tmp_path, monkeypatch):
     (home / "tenants" / "_default" / "global").mkdir(parents=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    fake = bin_dir / "claude"
-    fake.write_text(_FAKE_CLAUDE, encoding="utf-8")
-    fake.chmod(0o755)
+    if sys.platform == "win32":
+        # No shebang scripts on Windows: a claude.cmd shim around the same fake in
+        # Python. A .cmd spawn may carry the prompt on stdin (_wincompat shim
+        # transport), so the fake looks at argv AND stdin - and the house-rules
+        # classifier prompt (always on stdin) also says "single JSON object", so
+        # the marker is the worker-only tail of engines_claude.py's prompt.
+        fake_py = bin_dir / "fake_claude.py"
+        fake_py.write_text(_FAKE_CLAUDE_PY, encoding="utf-8")
+        (bin_dir / "claude.cmd").write_text(
+            f'@echo off\r\n"{sys.executable}" "{fake_py}" %*\r\n', encoding="utf-8")
+    else:
+        fake = bin_dir / "claude"
+        fake.write_text(_FAKE_CLAUDE, encoding="utf-8")
+        fake.chmod(0o755)
     spawn_log = tmp_path / "spawn.log"
     monkeypatch.setenv("CORVIN_HOME", str(home))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")

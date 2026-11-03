@@ -310,7 +310,7 @@ def test_video_producer_audit_writer_resolves_in_a_fresh_process():
 
     repo = Path(__file__).resolve().parents[2]
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    env["PYTHONPATH"] = f"{repo}:{repo / 'corvin_operator'}"
+    env["PYTHONPATH"] = os.pathsep.join((str(repo), str(repo / 'corvin_operator')))
     proc = subprocess.run(
         [sys.executable, "-c",
          "import forge; from core.skills.os_skills.video_producer.audit import _core_write_event;"

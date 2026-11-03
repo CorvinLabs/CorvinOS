@@ -89,3 +89,28 @@ def test_multiline_prompt_reaches_claude_cmd_shim_whole(tmp_path, positional_sty
     assert not (tmp_path / "PWN").exists()
     import gc
     gc.collect()
+
+
+@pytest.mark.parametrize("argv, kept, moved", [
+    # a '%'-bearing / long VALUE of a value flag is not the positional prompt
+    (["-p", "Summarize", "--add-dir", "C:\a%b\proj"],
+     ["-p", "Summarize", "--add-dir", "C:\a%b\proj"], None),
+    (["-p", "Summarize", "--disallowedTools", "T" * 2000],
+     ["-p", "Summarize", "--disallowedTools", "T" * 2000], None),
+    (["-p", "a\nb", "--allowedTools", "Bash(echo %x)"],
+     ["-p", "--allowedTools", "Bash(echo %x)"], b"a\nb"),
+    # after the end-of-options sentinel a prompt may start with '-'
+    (["-p", "--output-format", "json", "--", "- one\n- two"],
+     ["-p", "--output-format", "json"], b"- one\n- two"),
+])
+def test_shim_text_transport_picks_the_positional_not_a_flag_value(argv, kept, moved) -> None:
+    out, fh, cleanup = _wincompat.shim_text_transport([r"C:\npm\claude.cmd", *argv], None)
+    try:
+        data = fh.read() if fh is not None else None
+    finally:
+        if fh is not None:
+            fh.close()
+        if cleanup:
+            cleanup()
+    assert list(out)[1:] == kept
+    assert data == moved

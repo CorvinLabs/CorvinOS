@@ -25,6 +25,11 @@ _REPO = Path(__file__).resolve().parents[3]
 SCRIPT = _REPO / "scripts" / "task_interruption_report.py"
 SHUTDOWN_AT = 1_800_000_000.0
 
+_FORGE = str(_REPO / "corvin_operator" / "forge")
+if _FORGE not in sys.path:
+    sys.path.insert(0, _FORGE)
+from forge import paths as _forge_paths  # type: ignore  # noqa: E402
+
 
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -32,7 +37,9 @@ def _write(path: Path, text: str) -> None:
 
 
 def _task(sessions: Path, chat: str, tid: str, meta: dict, events: list[dict]) -> None:
-    tasks = sessions / chat / "tasks"
+    # Same dir naming as the product (chat_runtime._workdir): ``web:<id>`` on POSIX,
+    # ``web_<id>`` on Windows, where ':' is illegal in a path component.
+    tasks = _forge_paths.safe_session_subdir(sessions, chat) / "tasks"
     _write(tasks / f"{tid}.json", json.dumps({"task_id": tid, "chat_key": chat, "created_at": 1.0, **meta}))
     _write(tasks / f"{tid}.events.jsonl", "\n".join(json.dumps(e) for e in events) + "\n")
 
@@ -104,8 +111,12 @@ class TaskInterruptionReportE2E(unittest.TestCase):
             "CORVIN_AUDIT_ANCHOR_KEY": str(Path(self.tmp.name) / "anchor.key"),
             "CORVIN_TENANT_ID": "_default",
         }
+        # Windows: the interpreter needs SYSTEMROOT (``import asyncio`` -> WinError 10106 without it).
+        env.update({k: os.environ[k] for k in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP")
+                    if os.name == "nt" and k in os.environ})
         return subprocess.run(
-            [sys.executable, "-I", str(SCRIPT), "--tenant", "_default"],
+            # -X utf8: -I ignores PYTHONIOENCODING, and a Windows pipe would otherwise carry cp1252.
+            [sys.executable, "-I", "-X", "utf8", str(SCRIPT), "--tenant", "_default"],
             cwd=self.tmp.name, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
         )
 

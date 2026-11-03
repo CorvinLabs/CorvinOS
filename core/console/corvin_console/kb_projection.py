@@ -101,13 +101,44 @@ def _canonical_home() -> bool:
 def _real_user_home() -> Path:
     """The account's home from the passwd database, NOT $HOME: a sandbox that sets
     HOME=<tmp> must not make <tmp>/.corvin look like the operator's install
-    (R4-I-1). Platforms without ``pwd`` (Windows) fall back to ``Path.home()``."""
+    (R4-I-1). On Windows ``Path.home()`` follows the equally spoofable
+    USERPROFILE, so the profile dir is read from the process token instead."""
+    if os.name == "nt":
+        win = _win_token_profile_dir()
+        if win is not None:
+            return win
     try:
         import pwd
 
         return Path(pwd.getpwuid(os.getuid()).pw_dir)
     except (ImportError, KeyError, OSError):
         return Path.home()
+
+
+def _win_token_profile_dir() -> "Path | None":
+    """The current account's profile dir via ``GetUserProfileDirectoryW`` on the
+    process token (registry-backed, ignores USERPROFILE/HOME). None on failure."""
+    try:
+        import ctypes  # noqa: PLC0415
+        from ctypes import wintypes  # noqa: PLC0415
+
+        adv, ue, k32 = ctypes.windll.advapi32, ctypes.windll.userenv, ctypes.windll.kernel32
+        adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        tok = wintypes.HANDLE()
+        if not adv.OpenProcessToken(wintypes.HANDLE(-1), 0x0008, ctypes.byref(tok)):  # TOKEN_QUERY
+            return None
+        try:
+            n = wintypes.DWORD(0)
+            ue.GetUserProfileDirectoryW(tok, None, ctypes.byref(n))
+            buf = ctypes.create_unicode_buffer(max(n.value, 260))
+            n = wintypes.DWORD(len(buf))
+            if not ue.GetUserProfileDirectoryW(tok, buf, ctypes.byref(n)) or not buf.value:
+                return None
+            return Path(buf.value)
+        finally:
+            k32.CloseHandle(tok)
+    except Exception:  # noqa: BLE001 — fall back to the pwd / Path.home() chain
+        return None
 
 
 def _is_kb(p: Path) -> bool:

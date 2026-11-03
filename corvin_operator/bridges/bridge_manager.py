@@ -644,6 +644,25 @@ def _load_service_env(env: dict) -> None:
             env[k] = v  # service.env wins (matches bridge.sh set-a semantics)
 
 
+def _win_has_console() -> bool:
+    """True when this (Windows) process is attached to a console, visible or
+    hidden. ``GetConsoleWindow()`` is 0 for a hidden (CREATE_NO_WINDOW /
+    ConPTY) console, so the console code page is used instead: 0 = none."""
+    try:
+        import ctypes  # noqa: PLC0415
+        return bool(ctypes.windll.kernel32.GetConsoleCP())
+    except Exception:  # noqa: BLE001 — cannot tell: treat as console-less
+        return False
+
+
+def _fg_creationflags() -> int:
+    """Windows creationflags for start_fg's children (see the comment there)."""
+    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+    if not _win_has_console():
+        flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return flags
+
+
 def _graceful_signal(p: subprocess.Popen) -> None:
     """Ask *p* to shut itself down cleanly, platform-appropriately.
 
@@ -736,11 +755,14 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
     # process group on Windows. Also: CREATE_NO_WINDOW suppresses the visible
     # console window when the bridge daemon starts (2026-08-05, reported live:
     # "an extra Terminal window opens when Discord starts").
+    # CREATE_NO_WINDOW only when this process has NO console: it gives the
+    # child a console of its own, and GenerateConsoleCtrlEvent cannot reach a
+    # process on another console — CTRL_BREAK_EVENT then silently does nothing
+    # and every stop fell through to _hard_kill (no graceful drain). With a
+    # console (visible or hidden) the child shares it and opens no window.
     _spawn_kwargs: dict = {}
     if sys.platform.startswith("win"):
-        _spawn_kwargs["creationflags"] = (
-            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-        )
+        _spawn_kwargs["creationflags"] = _fg_creationflags()
 
     def _spawn(label: str, cmd: list[str], cwd: Path,
                mutate_env: Optional["callable"] = None) -> None:  # type: ignore[name-defined]

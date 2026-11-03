@@ -41,17 +41,27 @@ except ModuleNotFoundError:
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 class _FakeHome:
-    """Context manager that patches Path.home() to return a tmp path."""
+    """Context manager that patches Path.home() to return a tmp path.
+
+    Also hides ``XDG_CONFIG_HOME`` / ``VOICE_CONFIG_DIR``: the root conftest
+    pins ``XDG_CONFIG_HOME`` to a session sandbox, and both override the
+    ``~/.config`` default these tests assert.
+    """
     def __init__(self, tmp_path: Path):
         self.tmp = tmp_path
         self._patch = mock.patch.object(Path, "home", return_value=tmp_path)
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("XDG_CONFIG_HOME", "VOICE_CONFIG_DIR")}
+        self._env = mock.patch.dict(os.environ, env, clear=True)
 
     def __enter__(self):
+        self._env.start()
         self._patch.start()
         return self.tmp
 
     def __exit__(self, *_):
         self._patch.stop()
+        self._env.stop()
 
 
 # ── forge/paths.py — corvin_home() ───────────────────────────────────────

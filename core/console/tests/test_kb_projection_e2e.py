@@ -701,7 +701,7 @@ class HomeSpoofingCannotMakeASandboxCanonical(unittest.TestCase):
         from corvin_console import kb_projection
 
         self.kp = kb_projection
-        self.saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_KB_REPO", "HOME", "PYTEST_CURRENT_TEST")}
+        self.saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_KB_REPO", "HOME", "USERPROFILE", "PYTEST_CURRENT_TEST")}
         os.environ.pop("PYTEST_CURRENT_TEST", None)
         os.environ.pop("CORVIN_KB_REPO", None)
 
@@ -722,11 +722,16 @@ class HomeSpoofingCannotMakeASandboxCanonical(unittest.TestCase):
         self.assertIsNone(self.kp.kb_repo())
 
     def test_the_real_account_home_is_still_canonical(self):
-        import pwd
+        if os.name == "nt":  # no pwd: the account profile comes from the process token
+            real = self.kp._win_token_profile_dir()
+            self.assertIsNotNone(real)
+        else:
+            import pwd
 
+            real = Path(pwd.getpwuid(os.getuid()).pw_dir)
         os.environ["HOME"] = tempfile.mkdtemp(prefix="kb-fakehome-")      # spoofed, irrelevant
         os.environ["USERPROFILE"] = tempfile.mkdtemp(prefix="kb-fakehome-")      # spoofed, irrelevant  # Windows Path.home() reads USERPROFILE
-        os.environ["CORVIN_HOME"] = str(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".corvin")
+        os.environ["CORVIN_HOME"] = str(real / ".corvin")
         self.assertTrue(self.kp._canonical_home())                         # positive control
 
 

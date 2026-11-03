@@ -11,6 +11,7 @@ the skills package can never ship silently again.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -36,17 +37,27 @@ print(json.dumps({
 """
 
 
+# Minimal clean env for the child.  On Windows the interpreter needs SYSTEMROOT
+# (else ``import asyncio`` -> ``_overlapped`` fails with WinError 10106) and the
+# path lists use ``;`` (``C:\...`` contains ``:``).
+_MIN_PATH = ([os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32")]
+             if os.name == "nt" else ["/usr/bin", "/bin"])
+_WIN_ENV = ({k: os.environ[k] for k in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP")
+             if k in os.environ} if os.name == "nt" else {})
+
+
 def test_boot_skills_in_fresh_interpreter(tmp_path: Path) -> None:
     home = tmp_path / "corvin-home"
     home.mkdir()
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": os.pathsep.join(_MIN_PATH),
+        **_WIN_ENV,
         "HOME": str(tmp_path),
         "USERPROFILE": str(tmp_path),  # Windows Path.home() reads USERPROFILE
         "CORVIN_HOME": str(home),
         "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
         "CORVIN_TENANT_ID": "_default",
-        "PYTHONPATH": ":".join(str(REPO / p) for p in (
+        "PYTHONPATH": os.pathsep.join(str(REPO / p) for p in (
             ".", "corvin_operator/bridges/shared", "corvin_operator/forge", "core/plugins", "core/console",
         )),
     }
@@ -138,13 +149,14 @@ def _run(script: str, tmp_path: Path, *, extra_env: dict | None = None) -> dict:
     home.mkdir(exist_ok=True)
     parts = [".", "corvin_operator/bridges/shared", "corvin_operator/forge", "core/plugins", "core/console"]
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": os.pathsep.join(_MIN_PATH),
+        **_WIN_ENV,
         "HOME": str(tmp_path),
         "USERPROFILE": str(tmp_path),  # Windows Path.home() reads USERPROFILE
         "CORVIN_HOME": str(home),
         "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
         "CORVIN_TENANT_ID": "_default",
-        "PYTHONPATH": ":".join(str(REPO / p) for p in parts),
+        "PYTHONPATH": os.pathsep.join(str(REPO / p) for p in parts),
     }
     env.update(extra_env or {})
     proc = subprocess.run(
