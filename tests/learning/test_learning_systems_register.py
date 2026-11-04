@@ -545,8 +545,8 @@ def test_every_ref_shifted_by_two_or_more_lines_fails(delta):
 @pytest.mark.parametrize(("real", "swapped"), [
     # the needle re-pointed at a REAL call next to it (review c120 r3_s3-2)
     ("core/console/corvin_console/routes/chat.py:772:grade_followup", "register_live_turn"),
-    ("corvin_operator/bridges/shared/adapter.py:9698:record_turn_outcome", "meta.get"),
-    ("core/console/corvin_console/app.py:289:autonomous_forge_route", "monitoring_route"),
+    ("corvin_operator/bridges/shared/adapter.py:9726:record_turn_outcome", "meta.get"),
+    ("core/console/corvin_console/app.py:290:autonomous_forge_route", "monitoring_route"),
 ])
 def test_a_needle_swapped_to_a_neighbouring_real_call_fails(real, swapped):
     m = _REF.match(real)
@@ -578,10 +578,10 @@ def _delete_statement(tmp_path: Path, ref: str) -> Path:
 
 @pytest.mark.parametrize("needle", [
     # review c120 r3_s3-1: each call has its own ``from x import needle`` 1-3 lines above
-    "chat_runtime.py:4617:route_and_record",
-    "chat_runtime.py:4655:record_turn_outcome",
-    "adapter.py:9698:record_turn_outcome",
-    "adapter.py:9785:resolve_delegation_route",
+    "chat_runtime.py:4660:route_and_record",
+    "chat_runtime.py:4698:record_turn_outcome",
+    "adapter.py:9726:record_turn_outcome",
+    "adapter.py:9813:resolve_delegation_route",
     "orchestrator.py:211:emit_review_confidence",
 ])
 def test_a_deleted_call_whose_import_survives_fails(tmp_path, needle):
@@ -634,7 +634,7 @@ def test_a_route_registration_is_no_reader():
     """Review c120 r3_s3-3 (c): L19 naming its router registration as its reader."""
     import copy
 
-    reg = "core/console/corvin_console/app.py:289:autonomous_forge_route"
+    reg = "core/console/corvin_console/app.py:290:autonomous_forge_route"
     assert _ref_violation(reg) is None, "positive control: it is a valid CALLER (a registration)"
     assert "has no" in (_ref_violation(reg, kind="reader") or "")
     broken = copy.deepcopy(_load())
@@ -697,8 +697,8 @@ def test_a_ref_into_a_test_file_never_proves_a_caller_or_reader():
     """Review c120 r4_s3-3: an A entry kept live by a test's call. Copies only."""
     import copy
 
-    test_ref = "tests/skills/test_l5_routing_loop.py:879:dp.route_and_record"
-    assert "route_and_record" in _lines(REPO / "tests/skills/test_l5_routing_loop.py")[878], (
+    test_ref = "tests/skills/test_l5_routing_loop.py:882:dp.route_and_record"
+    assert "route_and_record" in _lines(REPO / "tests/skills/test_l5_routing_loop.py")[881], (
         "positive control: the cited test line really calls it")
     for kind in ("caller", "reader", "consumer"):
         assert "is a test file" in (_ref_violation(test_ref, kind=kind) or ""), kind
