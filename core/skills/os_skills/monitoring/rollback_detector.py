@@ -46,7 +46,11 @@ Every authoritative state write carries a ``generation`` one higher than the one
 replaces (review r3_s2-4/-5). Other processes compare it: the readiness cache drops a
 verdict computed under another generation, and an in-process pending trip created
 under an older generation than the persisted one is dropped — a reset (or trip) by
-another process came after it and wins.
+another process came after it and wins. A write over a state that cannot be read
+(torn, not an object, EACCES) does not know the generation it replaces; it takes one
+above every counter value — a nanosecond clock reading, never below the highest
+generation still visible — so it still outranks every older pending trip (review c120
+M1-1: it restarted at 1 and another process's older trip overrode the operator's reset).
 """
 from __future__ import annotations
 
@@ -314,11 +318,35 @@ def rollback_active(tenant_id: str) -> bool:
     return data["tripped"]
 
 
+def _next_generation(tenant_id: str) -> int:
+    """The generation the next authoritative state write carries: one above the
+    persisted one. Review c120 M1-1: when the persisted state cannot be read (torn, not
+    an object, EACCES) its generation is unknown, and restarting at 1 made every older
+    pending trip of another process outrank the new state — an operator's reset of a
+    torn state was overridden by that process's next judge. Then the generation jumps
+    above every counter value instead: a nanosecond clock reading, never below the
+    highest generation still visible (the marker, this process's entries). Only a
+    clock that stepped back further than the time since an earlier such jump can make
+    it lower than that jump's successors (a second unreadable state needed too)."""
+    current = persisted_generation(tenant_id)
+    if current is not None:
+        return current + 1
+    seen = [time.time_ns()]
+    _status, marker = _read_json(pending_path(tenant_id))
+    if _gen_of(marker) is not None:
+        seen.append(_gen_of(marker) + 1)
+    with _pending_lock:
+        seen += [g + 1 for g in (_gen_of(e) for e in _pending_trips.values())
+                 if g is not None]
+    return max(seen)
+
+
 def _write_state(tenant_id: str, data: dict, *, path: Optional[Path] = None) -> None:
-    """Atomic write. The authoritative state (``path`` None) gets the next generation."""
+    """Atomic write. The authoritative state (``path`` None) gets the next generation
+    (:func:`_next_generation`)."""
     if path is None:
         path = state_path(tenant_id)
-        data = {**data, "generation": (persisted_generation(tenant_id) or 0) + 1}
+        data = {**data, "generation": _next_generation(tenant_id)}
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     try:
