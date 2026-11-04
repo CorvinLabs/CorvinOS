@@ -643,6 +643,65 @@ try:
     import user_model as _user_model  # type: ignore
 except Exception:  # noqa: BLE001
     _user_model = None
+
+# PLAN-0969 WP-4: a recall-index failure is said in the chat (text AND voice), once per chat
+# per process. index_turn() never raises; it returns {"ok": False, "reason": <closed token>}.
+# A lock is transient and stays silent; a store that cannot be written is not.
+_RECALL_SILENT_REASONS = frozenset({"db-locked", "missing-required"})
+_RECALL_NOTICE_SENT: set[tuple[str, str]] = set()
+_RECALL_NOTICE_TEXT = {
+    "de": ("Hinweis: Dieses Gespräch konnte auf dieser Installation nicht im Gedächtnis "
+           "gespeichert werden ({reason}). Frühere Gespräche werden eventuell nicht erinnert."),
+    "en": ("Note: this install could not save this conversation to its memory ({reason}). "
+           "Earlier conversations may not be recalled."),
+}
+
+
+def _index_turn_for_recall(*, channel, chat_key, prompt, answer, msg_id, profile) -> dict | None:
+    """Index one turn-pair (Layer 28.1, ADR-0016); None when recall is off or unavailable.
+
+    Default-on; ``conversation_recall_indexing_enabled: false`` in the chat profile opts out.
+    Goes through the provider registry when available (ADR-0033). Never raises: an exception
+    from a provider comes back as ``{"ok": False, "reason": "indexing-failed"}``.
+    """
+    if _conversation_recall is None:
+        return None
+    try:
+        enabled = (profile.get("conversation_recall_indexing_enabled", True)
+                   if isinstance(profile, dict) else True)
+    except Exception:  # noqa: BLE001
+        enabled = True
+    if not enabled:
+        return None
+    try:
+        persona_name = ""
+        if isinstance(profile, dict):
+            persona_name = str(profile.get("persona") or profile.get("name") or "")
+        prov = globals().get("_recall_prov")
+        index_fn = (prov.get_active().index_turn if prov is not None
+                    else _conversation_recall.index_turn)
+        return index_fn(
+            channel=str(channel or ""), chat_key=str(chat_key or ""),
+            user_text=prompt or "", assistant_text=answer or "",
+            msg_id=str(msg_id or ""), persona=persona_name, run_id=str(msg_id or ""),
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"conversation_recall index_turn failed: {e}")
+        return {"ok": False, "reason": "indexing-failed"}
+
+
+def _recall_degraded_notice(result: object, channel: str, chat_key: str, lang: str) -> str:
+    """The notice for a failed recall write, or "" (healthy, transient, or already said)."""
+    if not isinstance(result, dict) or result.get("ok") is not False:
+        return ""
+    reason = str(result.get("reason") or "indexing-failed")
+    if reason in _RECALL_SILENT_REASONS or not re.fullmatch(r"[a-z0-9-]{1,40}", reason):
+        return ""
+    key = (str(channel), str(chat_key))
+    if key in _RECALL_NOTICE_SENT:
+        return ""
+    _RECALL_NOTICE_SENT.add(key)
+    return _RECALL_NOTICE_TEXT.get(lang, _RECALL_NOTICE_TEXT["en"]).format(reason=reason)
 try:
     import goal as _goal  # type: ignore
 except Exception:  # noqa: BLE001
@@ -10981,6 +11040,7 @@ def _synthesize_voice_for_turn(
     voice_task: str,
     profile: dict | None,
     scope_facts: dict | None = None,
+    spoken_notice: str = "",
 ) -> tuple[Path | None, bool]:
     """Decide whether this turn should get a spoken voice-note and, if so,
     run the synth pipeline. Returns ``(voice_path, voice_was_expected)``.
@@ -11034,6 +11094,9 @@ def _synthesize_voice_for_turn(
                                                   scope_facts.get("end_reason")))
         except Exception:  # noqa: BLE001
             _bad_ending = False
+    # PLAN-0969 WP-4: a system notice (memory could not be saved) is said aloud like a bad
+    # ending: it forces the note and is appended after the summariser, which could drop it.
+    _bad_ending = _bad_ending or bool(spoken_notice)
     if not (voice_mode == "always" or _bad_ending
             or len(answer) > settings.get("voice_threshold_chars", 200)):
         return None, False
@@ -11078,6 +11141,8 @@ def _synthesize_voice_for_turn(
                 spoken = f"{spoken} {_facts}".strip()
         except Exception as e:  # noqa: BLE001
             log(f"voice facts skipped: {e!r}")
+    if spoken_notice:
+        spoken = f"{spoken} {spoken_notice}".strip()
     # Resolve per-persona TTS voice from the chat profile. tts_voice_<lang>
     # wins over tts_voice (lang-agnostic); missing → synthesize_voice_note
     # falls back to the hardcoded language default.
@@ -13355,6 +13420,24 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
 
+    # Layer 28.1 (ADR-0016) — index the (user, assistant) turn-pair into the per-tenant
+    # conversation_recall FTS5 store, BEFORE delivery. Redaction runs inside index_turn()
+    # before any text touches disk; it audits its own failures (memory.indexing_failed) and
+    # never raises. PLAN-0969 WP-4: a failed write is said in the answer and the voice note,
+    # once per chat; the ledger entry above already holds the answer without the notice.
+    _recall_notice = ""
+    if answer:
+        _recall_result = _index_turn_for_recall(
+            channel=channel, chat_key=chat_key, prompt=prompt, answer=answer,
+            msg_id=msg_id, profile=profile)
+        _recall_notice = _recall_degraded_notice(
+            _recall_result, str(channel or ""), str(chat_key or ""),
+            _resolve_voice_output_language(prompt or answer) or "en")
+        if _recall_notice:
+            log(f"ERROR conversation_recall degraded for {channel}:{chat_key}: "
+                f"{(_recall_result or {}).get('reason') if isinstance(_recall_result, dict) else 'raised'}")
+            answer = f"{answer}\n\n{_recall_notice}"
+
     # Per-channel chunk limits. Discord caps at 2000 chars/message, so
     # we stay well below it here — the daemon would otherwise re-split
     # mid-stream and turn one reply into two Discord messages.
@@ -13374,7 +13457,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # branch resets the thread-local skip-reason mirror.
     voice_path, voice_was_expected = _synthesize_voice_for_turn(
         answer, settings, voice_override, _voice_task, profile,
-        scope_facts=scope_facts,
+        scope_facts=scope_facts, spoken_notice=_recall_notice,
     )
 
     # If voice was expected (mode + length / always) but the synth path
@@ -13480,45 +13563,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         except Exception as e:  # noqa: BLE001
             log(f"auto_grade failed (non-fatal): {e}")
 
-    # Layer 28.1 (ADR-0016) — index the (user, assistant) turn-pair into
-    # the per-tenant conversation_recall FTS5 store. Redaction runs
-    # INSIDE index_turn() before any text touches disk; original text
-    # never persists. Default-on; chat_profile can opt out via
-    # `conversation_recall_indexing_enabled: false`. Best-effort:
-    # indexing failures land in the audit chain (memory.indexing_failed)
-    # and never block the bridge turn.
-    if _conversation_recall is not None and answer:
-        try:
-            indexing_enabled = (
-                profile.get("conversation_recall_indexing_enabled", True)
-                if isinstance(profile, dict) else True
-            )
-        except Exception:  # noqa: BLE001
-            indexing_enabled = True
-        if indexing_enabled:
-            try:
-                persona_name = ""
-                if isinstance(profile, dict):
-                    persona_name = str(
-                        profile.get("persona") or profile.get("name") or ""
-                    )
-                # ADR-0033: index through provider registry when available.
-                _index_fn = (
-                    _recall_prov.get_active().index_turn
-                    if _recall_prov is not None
-                    else _conversation_recall.index_turn
-                )
-                _index_fn(
-                    channel=str(channel or ""),
-                    chat_key=str(chat_key or ""),
-                    user_text=prompt or "",
-                    assistant_text=answer or "",
-                    msg_id=str(msg_id or ""),
-                    persona=persona_name,
-                    run_id=str(msg_id or ""),
-                )
-            except Exception as e:  # noqa: BLE001
-                log(f"conversation_recall index_turn failed (non-fatal): {e}")
+    # Layer 28.1 (ADR-0016) recall indexing runs BEFORE delivery now (see
+    # `_index_turn_for_recall` above the chunking), so a failure can be said in the answer.
 
     # ADR-0163 M2 — ULO post-turn compliance check. Fires on a daemon thread
     # so the bridge turn returns immediately. Disabled when no objectives are

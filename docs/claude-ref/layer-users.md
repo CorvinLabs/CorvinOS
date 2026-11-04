@@ -617,12 +617,22 @@ chat_profile**, both routed through the unified audit hash chain.
   `redact_text(text) -> (redacted, counts)`,
   `is_recall_permitted_for_persona(profile) -> bool`.
 - **Adapter integration:** `process_one()` in `adapter.py` calls
-  `index_turn()` directly AFTER auto-grade and BEFORE the local
-  announce. Default-on; flip
+  `index_turn()` (through `_index_turn_for_recall`) after the ledger
+  entry and BEFORE the answer is chunked and delivered (moved there
+  2026-11-04, PLAN-0969 WP-4). Default-on; flip
   `chat_profile.conversation_recall_indexing_enabled = false` to
-  opt out. The hook is best-effort: every failure path emits
-  `memory.indexing_failed` into the chain and returns silently —
-  the bridge turn never fails because indexing did.
+  opt out. The hook never fails the turn: every failure path emits
+  `memory.indexing_failed` into the chain and returns
+  `{"ok": False, "reason": ...}`. It is no longer silent: for
+  `db-error`, `redact-failed` or `indexing-failed` the answer gets a
+  one-line notice (German or English, from the same language resolver
+  as the voice note) and the voice note says it after the summary
+  (`_synthesize_voice_for_turn(spoken_notice=...)`, which forces the
+  note even under `long_only`), once per chat per process
+  (`_recall_degraded_notice`). `db-locked` stays silent (transient).
+  The ledger keeps the answer without the notice. Proof:
+  `corvin_operator/bridges/shared/test_adapter_recall_degraded.py`
+  (real `process_one`, memory dir made unwritable on disk).
 - **Audit events** (registered in `EVENT_SEVERITY`, metadata only):
   `memory.turn_indexed`, `memory.recall_query`,
   `memory.indexing_failed`. Per-event `_AUDIT_ALLOWED_FIELDS`

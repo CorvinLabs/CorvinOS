@@ -213,6 +213,7 @@ run "Python: memory tier-2 (topics)"   python3 shared/test_memory.py >/dev/null 
 run "Python: conversation recall (L28.1)" python3 shared/test_conversation_recall.py >/dev/null || fails=$((fails+1))
 run "Python: user-model distill (L28.2)" python3 shared/test_user_model.py >/dev/null          || fails=$((fails+1))
 run "Python: adapter recall + user-model wiring (L28)" python3 shared/test_adapter_recall.py >/dev/null || fails=$((fails+1))
+run "Python: recall write failure is said in text + voice (PLAN-0969 WP-4)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_adapter_recall_degraded.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: engine trust (L30.1)" python3 shared/test_engine_trust.py >/dev/null || fails=$((fails+1))
 run "Python: engine trust adapter (L30.1b)" python3 shared/test_engine_trust_adapter.py >/dev/null || fails=$((fails+1))
 run "Python: engine canary (L30.2)" python3 ../voice/scripts/test_engine_canary.py >/dev/null || fails=$((fails+1))
