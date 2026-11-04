@@ -12,9 +12,11 @@ before calling this endpoint.
 """
 from __future__ import annotations
 
-from typing import Annotated, Any
+import logging
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 from starlette import status as http_status
 
 from .. import audit as console_audit
@@ -23,6 +25,7 @@ from .. import auth as session_auth
 from ..deps import require_csrf, require_session  # noqa: F401 (used via Depends)
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 # ── Layer 3: Anomaly scan ─────────────────────────────────────────────────────
@@ -334,6 +337,44 @@ def get_platform_probe(
         "host": _pp.host_facts(),
         "probes": [r.to_dict() for r in results],
     }
+
+
+class ClientErrorReport(BaseModel):
+    """A front-end render failure as a content-free signature (PLAN-0969 WP-3).
+
+    Every field is a closed vocabulary or a short token, so neither an error message, a path,
+    a chat id nor a user agent can be recorded. Unknown fields are refused.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    #: "react-185" for a minified React invariant, else the error class name ("TypeError").
+    code: Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,39}$")]
+    #: Route pattern: the first two path segments only ("/app/chat"), never an id.
+    route: Annotated[str, Field(pattern=r"^/[a-z0-9_-]{1,40}(/[a-z0-9_-]{1,40})?$")]
+    #: Entry bundle hash ("DzBPfJtL"), or "dev".
+    build: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,32}$")]
+    os_family: Literal["windows", "macos", "linux", "android", "ios", "other"]
+    #: True when the boundary had already reloaded once for this route and gave up.
+    auto_reloaded: bool
+
+
+@router.post("/aco/client-error")
+def report_client_error(
+    body: ClientErrorReport,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
+) -> dict[str, Any]:
+    """Record one front-end render failure in the tenant's audit chain (CONCEPT-0125, WP-3).
+
+    The route error boundary calls this before its single automatic reload, and again if the
+    page fails a second time. A repeating failure on one platform (e.g. React 185 on Windows)
+    becomes countable instead of reaching the maintainer only as a screenshot.
+    """
+    details = {"tenant_id": rec.tenant_id, **body.model_dump()}
+    console_audit.system_event(
+        tenant_id=rec.tenant_id, event="console.client_error", details=details, severity="WARNING")
+    log.warning("console client error: code=%s route=%s build=%s os=%s reloaded=%s",
+                body.code, body.route, body.build, body.os_family, body.auto_reloaded)
+    return {"recorded": True}
 
 
 @router.post("/aco/nerve/repair")

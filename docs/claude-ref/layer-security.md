@@ -480,6 +480,18 @@ repair action is attached. Proofs: `core/console/tests/test_platform_probes.py` 
 against a broken store, green without the no-follow flag, reached through
 `NerveRegistry.scan_all()`), `tests/sandbox/test_platform_probe_route.py` (real `uvicorn`).
 
+**Render-crash recovery (PLAN-0969 WP-3).** The route error boundary
+(`web-next/src/components/error-boundary.tsx`, logic in `src/lib/render-error-recovery.ts`)
+reloads a page that crashed while rendering ONCE per route pattern inside 60 s (guard in
+`sessionStorage`); a second crash in that window shows the existing error card. A running chat
+turn survives the reload through the live-turn hub (ADR-2244). Every crash is reported with
+`POST /v1/console/aco/client-error` (session + CSRF) as `console.client_error` (WARNING) with
+exactly `code` (`react-185` or the error class), `route` (first two segments, never an id),
+`build` (entry bundle hash), `os_family` (closed enum), `auto_reloaded`. The route refuses
+anything message-, path- or id-shaped (pydantic patterns, `extra="forbid"`). Chunk-load errors keep
+their own hard-reload boundary. Proofs: `web-next/tests/unit/render-error-recovery.test.tsx`
+(real boundary, throwing child), `tests/sandbox/test_client_error_report.py` (real `uvicorn`).
+
 The core writer's own denylist refuses to re-admit a content/PII key name even
 via an allowlist, which is why `aco.nerve_signal` carries `message_len` +
 `message_digest8` rather than the message, and `marketplace.skills.search`

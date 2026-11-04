@@ -1462,6 +1462,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "aco.boot_heal": "INFO",
     "aco.engine_heal": "INFO",
     "aco.integrity_alert": "INFO",
+    # PLAN-0969 WP-3: a front-end render failure, content-free signature only.
+    "console.client_error": "WARNING",
     "aco.integrity_scan": "INFO",
     "aco.nerve_signal": "INFO",
     "agent.charter_created": "INFO",
@@ -5134,6 +5136,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "acl.persona_denied": frozenset({"reason"}),
     "acl.persona_secret_denied": frozenset({"persona"}),
     "aco.boot_heal": frozenset({"sessions_repaired", "sessions_scanned", "tenant_id", "total_delta_loss"}),
+    "console.client_error": frozenset({"auto_reloaded", "build", "code", "os_family", "route", "tenant_id"}),
     "aco.engine_heal": frozenset({"engine_action", "engine_id", "engine_ok", "stt_ok", "stt_provider", "tenant_id", "tts_action", "tts_ok", "tts_provider"}),
     "aco.integrity_alert": frozenset({"checks_failed", "critical_count", "tenant_id"}),
     "aco.integrity_scan": frozenset({"checks_failed", "critical_count", "high_count", "tenant_id"}),

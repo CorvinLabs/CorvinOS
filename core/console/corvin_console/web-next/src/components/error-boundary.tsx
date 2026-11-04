@@ -2,6 +2,7 @@ import * as React from "react";
 import { AlertTriangle, ChevronDown, RefreshCw, RotateCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { recoverFromRenderError } from "@/lib/render-error-recovery";
 
 function isChunkLoadError(e: Error): boolean {
   const msg = e.message ?? "";
@@ -70,6 +71,8 @@ export class ChunkErrorBoundary extends React.Component<
 interface RouteErrorBoundaryState {
   error: Error | null;
   showDetails: boolean;
+  /** The one automatic reload for this route is under way (render-error-recovery.ts). */
+  reloading?: boolean;
 }
 
 interface RouteErrorBoundaryProps {
@@ -112,12 +115,26 @@ export class RouteErrorBoundary extends React.Component<
       error.message,
       info.componentStack,
     );
+    // PLAN-0969 WP-3: a render crash that a reload clears (React 185 on Windows) recovers by
+    // itself once per route; a second crash inside the guard window shows the card below.
+    // Every crash is reported as a content-free signature.
+    if (recoverFromRenderError(error, window.location.pathname)) {
+      this.setState({ reloading: true });
+      window.location.reload();
+    }
   }
 
-  reset = () => this.setState({ error: null, showDetails: false });
+  reset = () => this.setState({ error: null, showDetails: false, reloading: false });
   toggleDetails = () => this.setState((s) => ({ showDetails: !s.showDetails }));
 
   render() {
+    if (this.state.error && this.state.reloading) {
+      return (
+        <div className="mx-auto max-w-3xl py-8 text-sm text-muted-foreground" role="status">
+          This page hit an error. Reloading…
+        </div>
+      );
+    }
     if (this.state.error) {
       return (
         <div className="mx-auto max-w-3xl py-8">
