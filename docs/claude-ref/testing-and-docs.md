@@ -234,6 +234,25 @@ If no diagram exists yet for a new feature that introduces a visual architecture
 | `docs/issues/` | Beta-tester issue templates (one Markdown per issue) |
 | `docs/audit-and-compliance.md` | Compliance architecture + audit events |
 
+## Windows-like mode and Windows ratchets (PLAN-0969 WP-5)
+
+`tests/platform/` runs on every Linux pytest run (`testpaths = tests`) and catches the two Windows
+defect classes before they reach a Windows install:
+
+- **`windows_like` fixture** (`tests/platform/conftest.py`): installs the real `corvin_core._wincompat`
+  stand-ins for `fcntl` / `resource`, removes POSIX-only attributes from `os` (open flags,
+  `getuid`, `killpg`, `fork`, ...) and `signal` (`SIGKILL`, `SIGALRM`, ...), re-imports the modules
+  under test fresh and sets `memory_bridge._is_windows`. `test_windows_like_mode.py` drives the
+  platform probes, session memory, the recall store, the skill-feedback history and the prompt
+  version catalog through it. It cannot change `os.name` (pathlib refuses), NTFS rules beyond `:`,
+  file locking or ACLs: a probe report from a real Windows host is the proof for those.
+- **Ratchets** (`tests/platform/test_windows_ratchets.py`, AST-based, docstrings never count):
+  no session directory named `<a>:<b>` (use `forge.paths.safe_session_subdir`), and no POSIX-only
+  `os` function, `signal` constant or `preexec_fn=` without a platform guard within 8 lines. Each
+  has an allowlist with a reason per entry that may only shrink (a stale entry fails), and a
+  planted-offender positive control. The bare open-flag classes live in
+  `tests/skills/test_windows_o_nofollow.py`.
+
 ## Related
 
 - [layer-summary.md](layer-summary.md) — Layer reference index

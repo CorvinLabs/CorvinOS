@@ -746,7 +746,9 @@ def _run_dir(tenant_id: str, bridge: str, chat: str, run_id: str) -> Path:
         from forge import paths as _fp  # type: ignore[import-untyped]
         session_dir = _fp.safe_session_subdir(sessions_base, f"{bridge}:{chat}")
     except Exception:  # noqa: BLE001 — forge.paths always present in a live instance
-        session_dir = sessions_base / f"{bridge}:{chat}"
+        # Same rule without forge: ':' is illegal in a Windows path component.
+        sep = "_" if os.name == "nt" else ":"
+        session_dir = sessions_base / (str(bridge) + sep + str(chat))
     return session_dir / "acs" / "runs" / run_id
 
 

@@ -46,17 +46,25 @@ def _register_audit_allowlist() -> None:
 
 @contextmanager
 def skill_call_timeout(seconds=5):
-    """Timeout handler for Skill calls (fail-closed guarantee)."""
+    """Timeout handler for Skill calls: a call that overruns raises ``TimeoutError``.
+
+    POSIX only. Windows has no ``SIGALRM``; there the body runs without a timeout (no
+    production caller exists today, 2026-11-04).
+    """
     def timeout_handler(signum, frame):
         raise TimeoutError(f"Skill call timed out after {seconds}s")
 
-    original_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    sigalrm = getattr(signal, "SIGALRM", None)
+    if sigalrm is None:  # Windows has no SIGALRM / alarm(): run without the timeout
+        yield
+        return
+    original_handler = signal.signal(sigalrm, timeout_handler)
     signal.alarm(seconds)
     try:
         yield
     finally:
         signal.alarm(0)
-        signal.signal(signal.SIGALRM, original_handler)
+        signal.signal(sigalrm, original_handler)
 
 
 @dataclass(frozen=True)
