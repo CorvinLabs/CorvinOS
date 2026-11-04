@@ -17,7 +17,9 @@ Trip order (review r3_s2-3) — restrictive first, unlocking never before its re
 A failure at any step leaves the marker (Phase 2 stays off) and the trip is retried —
 by the next phase decision of any turn (:func:`maybe_retry_pending`, throttled) and by
 the next readiness refresh. A retry after a committed record (step 3 failed) only
-writes the trip state; it does not chain a second record. A reset is audit-first too:
+writes the trip state; it does not chain a second record — also when ANOTHER process
+committed the record: an uncommitted in-process entry yields to a committed judged
+marker under the lock (review c120 M1-2). A reset is audit-first too:
 ``routing.rollback_reset`` commits before the state is written. A trip (steps 1-3) and
 a reset run under one per-tenant rollback lock (``rollback.lock``, ``flock``) and so
 never interleave in any process (review r4_s2-3); a trip or reset invalidates only its
@@ -551,15 +553,18 @@ def _release_hold(tenant_id: str, pending: dict, metrics, *,
 def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
                      since_ts: float) -> bool:
     pending = _pending_entry(tenant_id)
-    if pending is not None and pending.get("cause") in HOLD_CAUSES \
-            and pending.get("details") is None:
-        # Review c120 r7b-6: this process's in-process HOLD is read first, but another
+    if pending is not None and not pending.get("committed"):
+        # Review c120 r7b-6: this process's in-process entry is read first, but another
         # process may have judged the trip meanwhile (its record committed, its state
-        # write failed: a judged marker). Re-read the committed marker under the lock;
-        # a judged one wins over the hold, so its record is never chained twice.
+        # write failed: a judged marker). Re-read the marker under the lock: a judged
+        # one wins over a HOLD, and a COMMITTED judged one also wins over this
+        # process's own judged-but-unrecorded trip (review c120 M1-2), so one trip's
+        # record is never chained twice.
         marker = _marker_entry(tenant_id)
+        is_hold = pending.get("cause") in HOLD_CAUSES and pending.get("details") is None
         if marker is not None and marker.get("cause") is None \
-                and marker.get("details") is not None:
+                and marker.get("details") is not None \
+                and (is_hold or marker.get("committed")):
             with _pending_lock:
                 _pending_trips.pop(tenant_id, None)
             pending = marker
