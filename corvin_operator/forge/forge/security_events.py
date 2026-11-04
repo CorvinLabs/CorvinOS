@@ -165,6 +165,10 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2092 — L5 routing loop (delegation_policy.route_and_record + monitoring/)
     "routing.phase2_decision":   "INFO",
     "routing.phase2_refused":    "INFO",
+    # ADR-0251 D2 — a hook answered an engine/route outside the permitted set
+    # (delegation_policy._resolve_worker_engine / _resolve_delegation_route): refused
+    "plugin.extension_engine_refused": "WARNING",
+    "plugin.extension_route_refused":  "WARNING",
     # Plugin-Builder development workflow (core/plugins/plugin_builder/v2_integration.py)
     "plugin_builder.development": "INFO",
     "plugin_builder.build": "INFO",
@@ -3545,6 +3549,15 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "routing.phase2_refused": frozenset({
         "tenant_id", "surface", "phase_requested", "reason",
+    }),
+    # ADR-0251 D2 refusals. point: the extension-point id; operator_mode / bundled: engine
+    # or route ids (closed enums); refused: the rejected value, already folded by the
+    # emitter to an engine id or "<not-an-engine>" / "<not-a-route>". NEVER the request.
+    "plugin.extension_engine_refused": frozenset({
+        "tenant_id", "point", "operator_mode", "bundled", "refused",
+    }),
+    "plugin.extension_route_refused": frozenset({
+        "tenant_id", "point", "bundled", "refused",
     }),
     # One record per stage of a Plugin-Builder development run. ``stage`` is a closed identifier
     # (development_started, phase_<step>_started|completed|failed, development_completed);

@@ -11,13 +11,14 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from core.paths.tenant import tenant_home
 
-_MAX_READ = 5000  # cap what a read walks; the file itself is append-only
+_MAX_READ = 5000  # cap what read_all() returns; counts stream the whole append-only file
 
 
 def _path(tenant_id: str) -> Path:
@@ -57,35 +58,58 @@ def append(
         os.close(fd)
 
 
-def read_all(tenant_id: str) -> list[dict[str, Any]]:
-    """Newest-last list of stored events (torn or foreign lines are skipped)."""
+def _iter_records(tenant_id: str) -> Iterator[dict[str, Any]]:
+    """Every stored event, oldest first, streamed line by line under the shared lock
+    (torn or foreign lines are skipped). Memory is bounded by one line, not the file."""
     p = _path(tenant_id)
     if not p.is_file():
-        return []
-    out: list[dict[str, Any]] = []
+        return
     with open(p, "r", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_SH)
-        for raw in fh.readlines()[-_MAX_READ:]:
+        for raw in fh:
             try:
                 rec = json.loads(raw)
             except ValueError:
                 continue
             if isinstance(rec, dict) and rec.get("feedback_id"):
-                out.append(rec)
-    return out
+                yield rec
+
+
+def read_all(tenant_id: str) -> list[dict[str, Any]]:
+    """Newest-last list of the last ``_MAX_READ`` stored events."""
+    return list(deque(_iter_records(tenant_id), maxlen=_MAX_READ))
+
+
+def _rating(rec: dict[str, Any]) -> int:
+    try:
+        return int(rec.get("rating", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def history(tenant_id: str, skill_id: str, limit: int) -> tuple[int, list[dict[str, Any]], float]:
-    """``(total_count, newest-first events up to limit, avg_rating)`` for one skill."""
-    mine = [r for r in read_all(tenant_id) if r.get("skill_id") == skill_id]
-    avg = (sum(int(r.get("rating", 0)) for r in mine) / len(mine)) if mine else 0.0
-    return len(mine), list(reversed(mine))[:limit], avg
+    """``(total_count, newest-first events up to limit, avg_rating)`` for one skill.
+
+    ``total_count`` and ``avg_rating`` cover EVERY stored event of the skill — a
+    count capped at the read window reported 5 000 for a tenant that had more."""
+    total, rating_sum = 0, 0
+    newest: deque[dict[str, Any]] = deque(maxlen=max(int(limit), 0))
+    for rec in _iter_records(tenant_id):
+        if rec.get("skill_id") != skill_id:
+            continue
+        total += 1
+        rating_sum += _rating(rec)
+        newest.append(rec)
+    return total, list(reversed(newest)), (rating_sum / total) if total else 0.0
 
 
 def status(tenant_id: str) -> tuple[int, str | None]:
-    """``(total_received, last_timestamp)`` over every skill of the tenant."""
-    recs = read_all(tenant_id)
-    return len(recs), (recs[-1].get("timestamp") if recs else None)
+    """``(total_received, last_timestamp)`` over every stored event of the tenant."""
+    total, last = 0, None
+    for rec in _iter_records(tenant_id):
+        total += 1
+        last = rec
+    return total, (last.get("timestamp") if last is not None else None)
 
 
 def now_iso() -> str:
