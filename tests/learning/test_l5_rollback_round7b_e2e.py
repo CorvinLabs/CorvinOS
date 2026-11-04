@@ -434,8 +434,13 @@ def test_a_hold_does_not_rechain_a_trip_another_process_committed(tmp_path):
         finally:
             os.chmod(lock, 0o600)
         assert rollback_detector._pending_trips[sb.tenant_id]["cause"] == "lock_unavailable"
+        # P2 imports what P1 imports: the detector's audit writer is the bridges' ``audit``
+        # module, which console_client() put on THIS process's sys.path only. Without it
+        # the child's record cannot commit and its marker says ``committed: false``.
+        child_env = {**os.environ,
+                     "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
         child = subprocess.run([sys.executable, "-c", _CHILD, sb.tenant_id],
-                               env=dict(os.environ), capture_output=True, text=True,
+                               env=child_env, capture_output=True, text=True,
                                timeout=120)
         assert child.returncode == 0, child.stderr[-4000:]
         marker = json.loads(rollback_detector.pending_path(sb.tenant_id).read_text())
