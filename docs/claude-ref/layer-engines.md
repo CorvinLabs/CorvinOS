@@ -3106,6 +3106,18 @@ events and is never the span's source. Guarded by
 `corvin_operator/bridges/shared/test_acs_worker_span_attestation.py` (4 tests:
 a stub `claude` binary, the real `_dispatch_workers` and `_call_worker_sync`).
 
+**Review 2026-11-05 (DX-1..DX-4) closed four more gaps on these paths:**
+
+| Path | Rule now |
+|---|---|
+| ACS manager span (`_end_mgr_span`) | closes on the model the manager CLI REPORTED and the SUMMED `usage_split` of every manager turn (`_WorkerProcessHolder` keeps the parsed envelope). The configured model is used only when no turn reported anything (dry run). Before: configured model, zero tokens, every manager turn $0.00 |
+| ACS manager + worker L34 | `check_l34` receives the PROMPT content, not only the workflow's declared class: the worker prompt is built before the gate, the manager prompt (state, snapshot, earlier worker results) is checked every iteration; a gate error refuses the spawn. Before: a credential in an `acs_delegate` task reached a cloud worker |
+| inbound A2A worker env | `_secret_env_overrides` blanks every name `acs_runtime._strip_worker_secrets` removes (pattern catch-all, then `_restore_platform_credentials` for the active platform) — including `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` when set as env vars, exactly like ACS workers; the CLI's credentials FILE is unaffected. No helper → no spawn |
+| `core/delegate` `run_delegate` | writes its `engine.span` pair on EVERY surface; `CORVIN_SESSION_DIR` gates only the WDAT run directory and its `acs.*` records. Before: bridge-OS and ACS-adapter delegations had no span at all. Still open: no span on a FAILED delegation, and TDE workers (`worker_ipc.SubprocessWorkerIPC`) emit none |
+
+Guarded by `corvin_operator/bridges/shared/test_review_20261105_dx_e2e.py` and
+`core/delegate/tests/test_review_20261105_dx_e2e.py`.
+
 Guarded by `tests/e2e/test_a2a_worker_span_priceable_adr0759_e2e.py` (20 tests):
 the real `spawn_a2a_worker` against a stub engine and the REAL chain writer,
 then `compute_cost_efficiency` off that chain, then the status route over

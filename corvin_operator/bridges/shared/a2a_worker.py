@@ -85,6 +85,33 @@ except ImportError:
         attested_model = None  # type: ignore[assignment]
 
 
+def _secret_env_overrides(base: "dict[str, str]") -> dict[str, str]:
+    """``{name: ""}`` for every secret-shaped variable of ``base`` a worker must not see.
+
+    The SAME rule as the ACS worker/manager spawn (``acs_runtime._strip_worker_secrets``
+    — explicit list + name-pattern catch-all, public keys and location pointers kept),
+    followed by ``_restore_platform_credentials`` so a Bedrock/Vertex/Foundry host keeps
+    the one credential chain its engine signs with. The engine merges its ``env`` over
+    ``os.environ``, so an empty string is how a name is removed. Raises when the helpers
+    are unimportable — the caller refuses the spawn.
+    """
+    try:
+        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
+            _restore_platform_credentials, _strip_worker_secrets,
+        )
+    except ImportError:
+        _shared = str(Path(__file__).resolve().parent)
+        if _shared not in sys.path:
+            sys.path.insert(0, _shared)
+        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
+            _restore_platform_credentials, _strip_worker_secrets,
+        )
+    kept = dict(base)
+    _strip_worker_secrets(kept)
+    _restore_platform_credentials(kept, dict(base))
+    return {name: "" for name in base if name not in kept}
+
+
 def _attested_model_of(result: Any) -> str:
     """The engine-reported model for a drained spawn, ``""`` when unknown.
 
@@ -1032,6 +1059,24 @@ def spawn_a2a_worker(
         "CORVIN_TEST_MODE": "",        # prevents test-mode bypass if adapter runs in CI
         "CORVIN_FEATURES_URL": "",     # prevents SSRF to mock-features server via Forge MCP
     }
+    # The fixed list above cannot enumerate an operator's secrets (GITHUB_TOKEN,
+    # PGPASSWORD, CORVIN_WDAT_KEY, a bot token, any *_API_KEY): the engine copies
+    # os.environ, so every one of them reached a worker a REMOTE peer drives —
+    # readable with Read(/proc/self/environ) or Bash once the origin opts in. Clear
+    # everything the ACS worker strip removes (same name-pattern rule), restoring
+    # only the active platform's own credential chain (ADR-0759). Fail-closed: no
+    # strip helper, no spawn.
+    try:
+        _ENV_CLEAR = {**_secret_env_overrides(os.environ), **_ENV_CLEAR}
+    except Exception as exc:  # noqa: BLE001
+        shutil.rmtree(workspace, ignore_errors=True)
+        return WorkerResult(
+            status="rejected", raw_output="",
+            parsed_output={}, duration_ms=_ms(start),
+            persona=persona, engine_name=engine_name,
+            reason_code="engine_failed",
+            error=f"env_isolation_unavailable:{type(exc).__name__}",
+        )
     _spawn_kwargs: dict[str, Any] = dict(
         system=system,
         timeout=float(ttl_s),

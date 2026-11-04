@@ -667,6 +667,10 @@ class RunContext:
     # (recursive sub-budgets), so a tool forged once is visible to the whole tree.
     run_forge: Any | None = None
     forge_feedback: list = field(default_factory=list)     # results of the manager's last `forge` request
+    # ADR-0759 — what the MANAGER engine reported across its turns: the model id
+    # (last non-empty) and the summed four-way token split, for the manager span.
+    manager_reported_model: str = ""
+    manager_usage: dict = field(default_factory=dict)
     # Adversarial review finding: BudgetEnvelope.check() was called ONLY at
     # the top-level manager loop, against the ROOT budget. Recursive
     # delegation (_dispatch_workers → _run_one → DELEGATE → _dispatch_workers
@@ -1941,7 +1945,9 @@ def _call_manager_sync(
             extracted = resp.get("result") or resp.get("text") or ""
             if extracted:
                 output = str(extracted)
-        except (json.JSONDecodeError, TypeError):
+            if proc_holder is not None and isinstance(resp, dict):
+                proc_holder.envelope = resp
+        except (json.JSONDecodeError, TypeError, AttributeError):
             pass
     tokens_est = max(len(prompt.split()) + len(output.split()), 100)
     return output, tokens_est
@@ -2068,6 +2074,10 @@ class _WorkerProcessHolder:
     def __init__(self) -> None:
         self.popen: "subprocess.Popen | None" = None
         self.lock = threading.Lock()
+        # The parsed CLI JSON envelope of the call (manager path), so the caller
+        # can close its span on the model + usage the ENGINE reported (ADR-0759)
+        # without changing the (text, tokens) return contract.
+        self.envelope: "dict | None" = None
 
     def kill(self) -> None:
         with self.lock:
@@ -2479,9 +2489,16 @@ async def _dispatch_workers(
 
             # L34/L35 gates (ADR-0158 M2: canonical spawn_gates SSOT)
             _cls = _workflow_classification(ctx.workflow_spec)
+            # The prompt is built BEFORE the gate and handed to it: the declared
+            # workflow class may only RAISE the content's class, never hide it
+            # (T-0254 / review L34-3). Gating the label alone let a credential in
+            # an acs_delegate task — or in a manager-written subtask — reach a
+            # tool-capable cloud worker while every other spawn surface refused it.
+            prompt = _build_worker_prompt(st, ctx)
             try:
                 from spawn_gates import check_l34 as _sg_l34, check_l35 as _sg_l35  # type: ignore
-                _l34_result = _sg_l34(_engine_id, ctx.tenant_id, classification=_cls)
+                _l34_result = _sg_l34(_engine_id, ctx.tenant_id, classification=_cls,
+                                      prompt=prompt, persona="orchestrator")
                 if _l34_result is not None:
                     _write_audit(ctx.tenant_id, "acs.worker_l34_blocked", {
                         "run_id": ctx.run_id, "worker_id": wid, "engine": _engine_id,
@@ -2529,7 +2546,6 @@ async def _dispatch_workers(
             # M4: workers with can_delegate at max_depth get it stripped
             can_delegate = bool(st.get("can_delegate")) and depth < ctx.budget.max_depth
 
-            prompt = _build_worker_prompt(st, ctx)
             _skills_block, _skill_names = _worker_skills_block(st, ctx)
             system = _build_worker_system(st, ctx, depth, can_delegate,
                                           skills_block=_skills_block)
@@ -2938,6 +2954,27 @@ async def _manager_loop(
 
         # Build manager prompt and call
         prompt = _build_manager_prompt(ctx)
+        # L34 on the CONTENT of this iteration's prompt (the gate above judged the
+        # engine against the declared class only). The prompt carries the task, the
+        # run state, the datasource snapshot and the previous workers' results, so it
+        # is re-judged every iteration: a credential a worker returned must not ride
+        # into the next manager turn. Fail-closed on a gate error, like the gate above.
+        try:
+            _mgr_content_l34 = _sg_l34(_mgr_engine, ctx.tenant_id, classification=_mgr_cls,
+                                       prompt=prompt, persona="orchestrator")
+        except Exception as _mgr_content_exc:  # noqa: BLE001 — gate error → refuse
+            _mgr_content_l34 = (f"L34 gate error ({type(_mgr_content_exc).__name__}); "
+                                "refusing to spawn the manager")
+        if _mgr_content_l34 is not None:
+            _write_audit(ctx.tenant_id, "acs.manager_l34_blocked", {
+                "run_id": ctx.run_id, "engine": _mgr_engine,
+            })
+            return ACSResult(
+                run_id=ctx.run_id, workflow_id=ctx.workflow_id, status="failed",
+                error="L34 data classification gate blocked the manager prompt",
+                iterations=ctx.iteration, workers_spawned=ctx.budget.workers_used,
+                run_dir=ctx.run_dir, elapsed_s=time.monotonic() - start,
+            )
         _write_audit(ctx.tenant_id, "acs.manager_call", {
             "run_id": ctx.run_id, "iteration": ctx.iteration,
         })
@@ -2972,6 +3009,16 @@ async def _manager_loop(
             )
 
         ctx.budget.tokens_used += tok
+        # ADR-0759 — the manager turn is billed like any other: keep the model and
+        # the four-way split the ENGINE reported, so the manager span is priceable.
+        _mgr_env = _mgr_proc_holder.envelope
+        if isinstance(_mgr_env, dict):
+            _mgr_model = _reported_model(_mgr_env)
+            if _mgr_model:
+                ctx.manager_reported_model = _mgr_model
+            if _espan is not None:
+                for _k, _v in _espan.usage_split(_mgr_env.get("usage")).items():
+                    ctx.manager_usage[_k] = ctx.manager_usage.get(_k, 0) + _v
 
         # Parse decision
         decision = _parse_manager_decision(mgr_text)
@@ -3646,12 +3693,23 @@ class ACSRuntime:
         def _end_mgr_span(status: str) -> None:
             if _espan is None:
                 return
-            _write_audit(self._tenant_id, _espan.ENGINE_SPAN_END,
-                         _espan.end_details(
-                             span_id=_mgr_span_id, role="manager",
-                             engine_id=_mgr_engine_id, model_id=self._manager_model,
-                             run_id=rid, status=status,
-                             duration_ms=int((time.monotonic() - _mgr_start_t) * 1000)))
+            # ADR-0759 — close on the model the manager engine REPORTED plus the
+            # summed four-way split of its turns. The configured id remains only
+            # for a run in which no manager turn reported anything (dry run, a
+            # spawn failure); such a span carries no tokens.
+            _reported = ctx.manager_reported_model
+            _mgr_end = _espan.end_details(
+                span_id=_mgr_span_id, role="manager",
+                engine_id=_mgr_engine_id, model_id=_reported or self._manager_model,
+                run_id=rid, status=status,
+                duration_ms=int((time.monotonic() - _mgr_start_t) * 1000),
+                **{k: int(ctx.manager_usage.get(k, 0)) for k in (
+                    "input_tokens", "output_tokens",
+                    "cache_read_tokens", "cache_write_tokens")})
+            _write_audit(self._tenant_id, _espan.ENGINE_SPAN_END, _mgr_end)
+            if _reported:
+                # ADR-2286 — live signal, engine-REPORTED model only.
+                _espan.send_live_model_usage(_mgr_end)
 
         if dry_run:
             _end_mgr_span("ok")

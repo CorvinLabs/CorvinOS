@@ -1167,23 +1167,26 @@ def _write_wdat_run_for_delegation(
     Best-effort — never raises. Called from run_delegate() after a successful
     spawn so the WDAT Audit panel in the console can render the delegation graph.
 
-    Requires CORVIN_SESSION_DIR to be set in os.environ (chat_runtime.py injects
-    it for each web-console subprocess). Without it this function is a no-op so
-    CLI / Discord delegate calls are unaffected.
+    The run directory and its acs.* records need CORVIN_SESSION_DIR (chat_runtime.py
+    injects it for each web-console subprocess). The engine.span start/end pair is
+    written on EVERY surface — bridge, CLI and ACS-adapter delegations included —
+    because it is the record that prices the run.
 
     Audit events written to the per-tenant L16 chain (metadata only per GDPR Art.5):
-      acs.manager_decided  — one synthetic manager decision
-      acs.worker_spawned   — the single worker (this engine)
-      acs.engine_completed — timing/token metadata
-      acs.worker_traced    — final status
+      acs.manager_decided  — one synthetic manager decision      (session dir only)
+      acs.worker_spawned   — the single worker (this engine)     (session dir only)
+      acs.engine_completed — timing/token metadata               (session dir only)
+      acs.worker_traced    — final status                        (session dir only)
+      engine.span.start / engine.span.end (role=worker)          (always)
     """
+    # Without a console session dir there is no WDAT run directory to draw — but
+    # the engine.span pair is still written: it is what prices the run, and a
+    # bridge / CLI / ACS-adapter delegation is billed exactly like a console one
+    # (review 2026-11-05 DX-4: those runs left no span and read as $0.00).
     session_dir_str = os.environ.get("CORVIN_SESSION_DIR", "").strip()
-    if not session_dir_str:
-        return
-
-    session_dir = Path(session_dir_str)
-    if not session_dir.is_absolute():
-        return
+    session_dir: "Path | None" = Path(session_dir_str) if session_dir_str else None
+    if session_dir is not None and not session_dir.is_absolute():
+        session_dir = None
 
     tenant_id = (os.environ.get("CORVIN_TENANT_ID") or "_default").strip() or "_default"
     # THE tenant chain via forge.paths (honours CORVIN_HOME, validates the
@@ -1215,6 +1218,51 @@ def _write_wdat_run_for_delegation(
     cache_read  = int(usage.get("cache_read_input_tokens", 0) or 0)
     tokens_used = tokens_in + tokens_out
 
+    if session_dir is not None:
+        _write_wdat_run_records(
+            _sec, audit_path, session_dir=session_dir, run_id=run_id, worker_id=worker_id,
+            spawn_nonce=spawn_nonce, instruction_hash=instruction_hash, engine=engine,
+            model_id=model_id, tenant_id=tenant_id, start_wall=start_wall,
+            duration_s=duration_s, duration_ms=duration_ms, tokens_used=tokens_used,
+            tokens_in=tokens_in, tokens_out=tokens_out, cache_read=cache_read,
+            cache_write=cache_write)
+
+    # ADR-0171 — universal engine span (role=worker) on the SAME chain + IDs as
+    # the acs.* records, so the console renders the delegation engine
+    # engine-agnostically (any engine_id), not only via acs.* heuristics.
+    try:
+        _shared_dir = str(Path(__file__).resolve().parents[3]
+                          / "corvin_operator" / "bridges" / "shared")
+        if _shared_dir not in sys.path:
+            sys.path.insert(0, _shared_dir)
+        import engine_span as _espan  # type: ignore
+        _span_id = f"spn-{run_id}-{worker_id}"
+        _sec.write_event(audit_path, _espan.ENGINE_SPAN_START,
+                         details=_espan.start_details(
+                             span_id=_span_id, role="worker",
+                             engine_id=engine, model_id=model_id or "",
+                             run_id=run_id))
+        _end = _espan.end_details(
+            span_id=_span_id, role="worker",
+            engine_id=engine, model_id=reported_model or "",
+            run_id=run_id, status="ok",
+            duration_ms=duration_ms, tokens_used=tokens_used,
+            input_tokens=tokens_in, output_tokens=tokens_out,
+            cache_read_tokens=cache_read, cache_write_tokens=cache_write)
+        _sec.write_event(audit_path, _espan.ENGINE_SPAN_END, details=_end)
+        # ADR-2286 — live model-usage signal from the same span details.
+        _espan.send_live_model_usage(_end)
+    except Exception as exc:  # noqa: BLE001 — audit is observability, never enforcement
+        _log.error("ACS delegation engine span not written: %s", exc)
+
+
+def _write_wdat_run_records(
+    _sec: Any, audit_path: Path, *, session_dir: Path, run_id: str, worker_id: str,
+    spawn_nonce: str, instruction_hash: str, engine: str, model_id: str, tenant_id: str,
+    start_wall: float, duration_s: float, duration_ms: int, tokens_used: int,
+    tokens_in: int, tokens_out: int, cache_read: int, cache_write: int,
+) -> None:
+    """The console's WDAT run directory + its acs.* records (needs a session dir)."""
     # 1. Run directory + manifest.json
     run_dir = session_dir / "acs" / "runs" / run_id
     try:
@@ -1292,33 +1340,6 @@ def _write_wdat_run_for_delegation(
             "duration_ms": duration_ms,
             "engine_attestation": {"engine": engine, "model_id": model_id},
         })
-        # ADR-0171 — universal engine span (role=worker) on the SAME chain + IDs
-        # as the acs.* events, so the console renders the delegation engine
-        # engine-agnostically (any engine_id), not only via acs.* heuristics.
-        try:
-            _shared_dir = str(Path(__file__).resolve().parents[3]
-                              / "corvin_operator" / "bridges" / "shared")
-            if _shared_dir not in sys.path:
-                sys.path.insert(0, _shared_dir)
-            import engine_span as _espan  # type: ignore
-            _span_id = f"spn-{run_id}-{worker_id}"
-            _sec.write_event(audit_path, _espan.ENGINE_SPAN_START,
-                             details=_espan.start_details(
-                                 span_id=_span_id, role="worker",
-                                 engine_id=engine, model_id=model_id or "",
-                                 run_id=run_id))
-            _end = _espan.end_details(
-                span_id=_span_id, role="worker",
-                engine_id=engine, model_id=reported_model or "",
-                run_id=run_id, status="ok",
-                duration_ms=duration_ms, tokens_used=tokens_used,
-                input_tokens=tokens_in, output_tokens=tokens_out,
-                cache_read_tokens=cache_read, cache_write_tokens=cache_write)
-            _sec.write_event(audit_path, _espan.ENGINE_SPAN_END, details=_end)
-            # ADR-2286 — live model-usage signal from the same span details.
-            _espan.send_live_model_usage(_end)
-        except Exception as exc:  # noqa: BLE001
-            _log.error("ACS delegation engine span not written: %s", exc)
     except Exception as exc:  # noqa: BLE001 — audit is observability, never enforcement
         _log.error("ACS delegation audit record lost: %s", exc)
 
