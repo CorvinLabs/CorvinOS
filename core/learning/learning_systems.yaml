@@ -198,9 +198,9 @@ systems:
     name: Skill grades, injection gate, promotion
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:3356:collect_active_skills
-      - corvin_operator/bridges/shared/adapter.py:12820:grade_from_user_followup
-      - corvin_operator/bridges/shared/adapter.py:13462:auto_grade_from_output
+      - corvin_operator/bridges/shared/adapter.py:3415:collect_active_skills
+      - corvin_operator/bridges/shared/adapter.py:12885:grade_from_user_followup
+      - corvin_operator/bridges/shared/adapter.py:13545:auto_grade_from_output
       - corvin_operator/skill-forge/skill_forge/mcp_server.py:516:promote
       - core/console/corvin_console/routes/chat.py:772:grade_followup
       - core/console/corvin_console/chat_runtime.py:8741:record_turn_skills
@@ -247,9 +247,9 @@ systems:
     name: Model selector learner (descriptive only, shown on the Models page)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:5426:shadow_classify_task
-      - corvin_operator/bridges/shared/adapter.py:6916:report_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:6955:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:5485:shadow_classify_task
+      - corvin_operator/bridges/shared/adapter.py:6975:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:7014:report_turn_outcome
       - core/console/corvin_core/task_manager.py:676:_update_model_selection_confidence
       # reader: GET /v1/console/v1/engine/config -> the Models page task cards
       - core/console/corvin_console/routes/engine_api.py:667:optimizer.get_stats
@@ -295,10 +295,10 @@ systems:
     name: User model distillation (L28, opt-in per chat)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:13586:_user_model_distill_async
+      - corvin_operator/bridges/shared/adapter.py:13632:_user_model_distill_async
     readers:
       # the distilled model is loaded into the prompt of the opted-in chat
-      - corvin_operator/bridges/shared/adapter.py:3675:_user_model.load
+      - corvin_operator/bridges/shared/adapter.py:3734:_user_model.load
     tests:
       - corvin_operator/bridges/shared/test_user_model.py
       - corvin_operator/bridges/shared/test_adapter_recall.py
@@ -311,7 +311,7 @@ systems:
     name: Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter)
     state: B
     callers:
-      - corvin_operator/bridges/shared/adapter.py:3252:_wo_shadow
+      - corvin_operator/bridges/shared/adapter.py:3311:_wo_shadow
       - corvin_operator/bridges/shared/spawn_gates.py:350:_fg_shadow
       - corvin_operator/bridges/shared/auth_elevation.py:220:_so_shadow
       - corvin_operator/context_engineering/stages/l10_adapter.py:138:adapt_context_l10
@@ -375,12 +375,12 @@ systems:
       - core/console/corvin_console/chat_runtime.py:4323:resolve_delegation_route
       - core/console/corvin_console/chat_runtime.py:4622:_shared_target
       - core/console/corvin_console/chat_runtime.py:4660:route_and_record
-      - corvin_operator/bridges/shared/adapter.py:9813:resolve_delegation_route
-      - corvin_operator/bridges/shared/adapter.py:9464:resolve_worker_engine
-      - corvin_operator/bridges/shared/adapter.py:9672:route_and_record
+      - corvin_operator/bridges/shared/adapter.py:9872:resolve_delegation_route
+      - corvin_operator/bridges/shared/adapter.py:9523:resolve_worker_engine
+      - corvin_operator/bridges/shared/adapter.py:9731:route_and_record
       # outcome record, joined to the decision by turn_id
       - core/console/corvin_console/chat_runtime.py:4698:record_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:9726:record_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:9785:record_turn_outcome
       # console engine guard: a cleared Phase 2 Skill route onto an unavailable engine
       # records its decision and a judged ok:false outcome (the bridge does the same)
       - core/console/corvin_console/routes/chat.py:1006:record_unavailable_skill_route
