@@ -15,6 +15,14 @@ trip (its marker says ``committed: true``, its state write failed). r7b-6 re-rea
 marker only for an in-process HOLD; now every uncommitted in-process entry yields to a
 committed judged marker under the lock.
 
+M1-3: an entry created while the state could not be read (a lock-failure hold, or a
+trip judged from it) carried ``generation: None`` and so never read as stale: after an
+operator reset written by another process, the process holding it (the bridge has no
+reset route) stayed held until it restarted. Such an entry now records the inode of the
+unreadable state file; once the state is readable again under ANOTHER inode (it was
+replaced by a write: a reset or a trip), the entry is dropped. The same inode readable
+again (a transient EACCES/EMFILE) keeps it.
+
 Entry points as production calls them: ``delegation_policy.record_turn_outcome``
 (starts the judge thread for a Skill-served turn) and ``POST
 /v1/console/learning/routing/rollback/reset`` through the real console router with a
@@ -147,3 +155,59 @@ def test_a_judged_unrecorded_trip_does_not_rechain_a_trip_another_process_commit
         assert state["tripped"] is True and state["skill_n"] == marker["details"]["skill_n"]
         assert not rollback_detector.pending_path(sb.tenant_id).exists()
         assert sb.tenant_id not in rollback_detector._pending_trips
+
+
+# ── M1-3: an entry created over an unreadable state is not immortal ─────────
+
+def _hold_over_unreadable_state(sb):
+    """A lock-failure hold taken while the state file cannot be parsed."""
+    from core.skills.os_skills.monitoring import rollback_detector, routing_ledger
+
+    _trip(sb)
+    r = sb.client.post(RESET, headers=sb.csrf_headers)
+    assert r.status_code == 200, r.text
+    rollback_detector.state_path(sb.tenant_id).write_text("{")
+    lock = routing_ledger.routing_dir(sb.tenant_id) / rollback_detector.LOCK_FILENAME
+    os.chmod(lock, 0o400)
+    try:
+        _skill_turn(sb.tenant_id, ok=False)       # the judge: lock unavailable -> hold
+    finally:
+        os.chmod(lock, 0o600)
+    entry = dict(rollback_detector._pending_trips[sb.tenant_id])
+    assert entry["cause"] == "lock_unavailable" and entry["generation"] is None
+    return entry
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes (read-only lock file)")
+def test_a_hold_taken_over_an_unreadable_state_yields_to_a_later_reset(tmp_path):
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import dual_write, rollback_detector
+
+        entry = _hold_over_unreadable_state(sb)
+        r = sb.client.post(RESET, headers=sb.csrf_headers)   # the operator, "elsewhere"
+        assert r.status_code == 200, r.text
+        rollback_detector._pending_trips[sb.tenant_id] = entry   # the bridge's memory
+        assert rollback_detector.rollback_active(sb.tenant_id) is False, \
+            "a hold from an unreadable state outlived the operator's reset"
+        assert sb.tenant_id not in rollback_detector._pending_trips
+        dual_write.reset_for_tests()
+        assert dual_write.decide(tenant_id=sb.tenant_id, surface="console",
+                                 skill_available=True).reason != "rollback_active"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes (read-only lock file)")
+def test_a_hold_taken_over_an_unreadable_state_survives_the_same_file_turning_readable(
+        tmp_path):
+    """Negative control of M1-3: no write happened — the same state file (same inode)
+    is readable again — so the hold is NOT stale and keeps restricting."""
+    with console_client(tmp_path) as sb:
+        from core.skills.os_skills.monitoring import rollback_detector
+
+        _hold_over_unreadable_state(sb)
+        path = rollback_detector.state_path(sb.tenant_id)
+        ino = path.stat().st_ino
+        with open(path, "w") as fh:                   # in place: the inode is kept
+            fh.write(json.dumps({"tripped": False, "at": 1.0, "generation": 2}))
+        assert path.stat().st_ino == ino
+        assert rollback_detector.rollback_active(sb.tenant_id) is True
+        assert sb.tenant_id in rollback_detector._pending_trips

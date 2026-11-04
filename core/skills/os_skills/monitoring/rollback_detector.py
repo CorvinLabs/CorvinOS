@@ -53,6 +53,9 @@ another process came after it and wins. A write over a state that cannot be read
 above every counter value — a nanosecond clock reading, never below the highest
 generation still visible — so it still outranks every older pending trip (review c120
 M1-1: it restarted at 1 and another process's older trip overrode the operator's reset).
+A pending entry created while the state could not be read has no generation; it
+records that file's inode and is dropped once the state is readable under another
+inode (review c120 M1-3).
 """
 from __future__ import annotations
 
@@ -120,6 +123,20 @@ def _gen_of(data: Optional[dict]) -> Optional[int]:
     return g if isinstance(g, int) and not isinstance(g, bool) and g >= 0 else None
 
 
+def _creation_stamp(tenant_id: str) -> dict:
+    """What a new pending entry records about the state it is created under: its
+    ``generation`` and — only when that cannot be read (review c120 M1-3) — the inode
+    of the unreadable state file (``state_ino``, None when it cannot be stat'ed)."""
+    gen = persisted_generation(tenant_id)
+    if gen is not None:
+        return {"generation": gen}
+    try:
+        ino: Optional[int] = state_path(tenant_id).stat().st_ino
+    except OSError:
+        ino = None
+    return {"generation": None, "state_ino": ino}
+
+
 def persisted_generation(tenant_id: str) -> Optional[int]:
     """Generation of the authoritative rollback state: 0 when it never changed (or a
     pre-generation file), None when the file cannot be read."""
@@ -155,19 +172,35 @@ def _drop_stale_pending(tenant_id: str) -> None:
     reading is compared — a reset taken while the clock was ahead used to erase every
     later hold and every judged-but-unrecorded trip. A marker without a generation, a
     state without one (it reads as generation 0) or an unreadable state keeps
-    restricting."""
+    restricting.
+
+    Review c120 M1-3: an entry created while the state could not be read has no
+    generation; it carries the inode of that unreadable file (``state_ino``) instead.
+    It is stale once the state is readable under ANOTHER inode — every state write is
+    a fresh ``os.replace``, so a reset or trip replaced it. The same inode readable
+    again (a transient read failure) keeps it; without ``state_ino`` it keeps
+    restricting, as before."""
     current = persisted_generation(tenant_id)
     if current is None:
         return
+    try:
+        current_ino: Optional[int] = state_path(tenant_id).stat().st_ino
+    except OSError:
+        current_ino = None
 
-    def _stale(gen) -> bool:
-        return gen is not None and current > gen
+    def _stale(data: Optional[dict]) -> bool:
+        gen = _gen_of(data)
+        if gen is not None:
+            return current > gen
+        ino = (data or {}).get("state_ino")
+        return (isinstance(ino, int) and not isinstance(ino, bool)
+                and current_ino is not None and ino != current_ino)
     with _pending_lock:
         entry = _pending_trips.get(tenant_id)
-        if entry is not None and _stale(entry.get("generation")):
+        if entry is not None and _stale(entry):
             _pending_trips.pop(tenant_id, None)
     status, data = _read_json(pending_path(tenant_id))
-    if status == "ok" and _stale(_gen_of(data)):
+    if status == "ok" and _stale(data):
         try:
             pending_path(tenant_id).unlink()
         except OSError:
@@ -207,6 +240,7 @@ def _marker_entry(tenant_id: str) -> Optional[dict]:
             "committed": data.get("committed") is True,
             "details": details if isinstance(details, dict) else None,
             "created": data.get("created"),
+            "state_ino": data.get("state_ino"),
             "cause": cause if cause in HOLD_CAUSES else None}
 
 
@@ -455,7 +489,7 @@ def _hold_unverified(tenant_id: str, *, audit: Optional[AuditFn]) -> bool:
         have_entry = tenant_id in _pending_trips
     if not have_entry and not _state_says_tripped(tenant_id):
         status, _ = _read_json(pending_path(tenant_id), io_status="io")
-        entry = {"generation": persisted_generation(tenant_id), "committed": False,
+        entry = {**_creation_stamp(tenant_id), "committed": False,
                  "details": None, "created": time.time(), "cause": "lock_unavailable"}
         if status != "ok":
             with _pending_lock:
@@ -607,11 +641,17 @@ def _evaluate_locked(tenant_id: str, *, audit: Optional[AuditFn],
         }
     # The entry carries the generation it was created under — staleness is decided by
     # generations only (review c120 r7b-1). A torn marker has none: it is the current one.
-    generation = (pending or {}).get("generation")
-    if generation is None:
-        generation = persisted_generation(tenant_id)
+    # An entry created over an unreadable state keeps that state's inode instead
+    # (review c120 M1-3).
+    prior = pending or {}
+    if prior.get("generation") is not None:
+        stamp = {"generation": prior["generation"]}
+    elif prior.get("state_ino") is not None:
+        stamp = {"generation": None, "state_ino": prior["state_ino"]}
+    else:
+        stamp = _creation_stamp(tenant_id)
     created = (pending or {}).get("created")
-    entry = {"generation": generation, "committed": False, "details": details,
+    entry = {**stamp, "committed": False, "details": details,
              "created": created if isinstance(created, (int, float)) else time.time()}
     if pending is None or pending["details"] is None:
         # Step 1: restrictive first. A hold (or a torn marker) judged trailing just now
