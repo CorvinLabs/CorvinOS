@@ -495,6 +495,24 @@ class SkillForgeMCPServer:
         if from_scope is None:
             self._tool_envelope(msgid, ok=False, error=f"unknown skill: {name}")
             return
+        # force=True waives every promotion gate (an undefined path such as
+        # session->user passes on force alone). It is the operator's override,
+        # exactly like force on a project/user create: a namespaced persona
+        # must EARN higher scopes through the grade gates (D-05, review
+        # 2026-11-05 LR-1 — the create gate was routed around through promote).
+        if force and self._is_namespaced_persona():
+            reason = (
+                f"scope-gate: persona {self.caller_persona!r} may not pass "
+                f"force=True to skill_promote; earn {to!r} through the grade gates"
+            )
+            self._emit_audit_event(
+                "skill.scope_denied", tool=name,
+                details={"reason": reason, "operation": "skill_promote",
+                         "requested_scope": to,
+                         "caller_persona": self.caller_persona},
+            )
+            self._tool_envelope(msgid, ok=False, error=reason)
+            return
         spec = self.multi.promote(name, to=to, force=force)
         self._tool_envelope(msgid, ok=True, data={
             "ok": True, "from": from_scope, "to": to,
@@ -506,16 +524,21 @@ class SkillForgeMCPServer:
         name = args.get("name", "")
         if self._deny_if_outside_namespace(msgid, name, tool="skill_grade"):
             return
-        # A grade with a run_id is the documented usage-grade path (the
-        # persona graded a skill it applied in THAT run); without one it is a
-        # self-award and the registry clamps it to AUTO_GRADE_CAP_MAX.
+        # A NAMESPACED persona grading through this tool is the graded party
+        # grading itself: its run_id is a string it chose, not evidence of a
+        # run, so the grade is a self-award and the registry clamps it to
+        # AUTO_GRADE_CAP_MAX (review 2026-11-05 LR-2: three made-up run ids at
+        # 1.0 lifted a persona's own skill over the session->project bar). The
+        # organic quality signal is the operator's follow-up
+        # (skill_inject.grade_from_user_followup). Only the wildcard/operator
+        # caller keeps the run_id-backed organic grade.
         run_id = str(args.get("run_id", "") or "")
         spec = self.multi.grade(
             name=name,
             run_id=run_id,
             score=float(args.get("score", 0.0)),
             notes=args.get("notes", ""),
-            organic=bool(run_id),
+            organic=bool(run_id) and not self._is_namespaced_persona(),
         )
         self._tool_envelope(msgid, ok=True, data={
             "ok": True, "n_grades": spec.n_grades,

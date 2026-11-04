@@ -399,6 +399,11 @@ def _log_audit_dropped(action: str, path: Path) -> None:
 #: (adversarial review F-K8: ``grade()`` accepted 1.0 from anyone).
 AUTO_GRADE_CAP_MAX = 0.3
 
+#: Note prefix reserved for ORGANIC outcome grades (``skill_inject``'s
+#: follow-up grade writes ``outcome (<signal>) prev_run=...``); readers such as
+#: ``skill_creator.autonomous`` classify a grade as an outcome by it.
+OUTCOME_NOTE_PREFIX = "outcome"
+
 
 @dataclass
 class Grade:
@@ -1055,6 +1060,15 @@ class SkillRegistry:
         if not organic and score > AUTO_GRADE_CAP_MAX:
             score = AUTO_GRADE_CAP_MAX
         capped = score != requested
+        # The ``outcome (`` note prefix is how readers recognise an ORGANIC
+        # outcome grade (autonomous.py loss signal, the Autonomous Forge panel).
+        # The grade record stores no organic flag, so a non-organic caller must
+        # never be able to write that prefix: otherwise three self-awarded
+        # "outcome (rejection)" notes were a loss signal that made the
+        # autopilot fork the skill (review 2026-11-05 LR-3).
+        notes = str(notes or "")
+        if not organic and notes.lstrip().lower().startswith(OUTCOME_NOTE_PREFIX):
+            notes = f"self-reported: {notes.lstrip()}"
         marker_tok = f"dd={dedupe_marker}" if dedupe_marker else ""
         if marker_tok:
             notes = f"{notes} {marker_tok}".strip()

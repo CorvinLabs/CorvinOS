@@ -699,9 +699,13 @@ share of chats while the live body keeps serving the rest. Console:
 
 **Gates** (`canary.evaluate`, pure): below `MIN_SAMPLES` (5) candidate outcome
 grades → hold. Reference = the live variant's outcome mean during the canary
-once it has 5 grades, else the live mean recorded at start. Candidate ≥
-reference → next step of `10 → 25 → 50`; at 50 → `ready` (awaits approval).
-Candidate < reference − 0.15 → rollback. Usage auto-grades (capped 0.3) are
+once it has 5 grades, else the live mean recorded at start. Candidate <
+reference − 0.15 → rollback (needs only the first 5). Candidate ≥ reference →
+next step of `10 → 25 → 50`; at 50 → `ready` (awaits approval). Moving forward
+needs `MIN_SAMPLES` grades PER STEP REACHED (`required_candidate_samples`: 5 at
+10 %, 10 at 25 %, 15 at 50 %), so each step decides on grades the previous one
+did not see — a flat 5 let the same five grades walk 10 → 25 → 50 → ready in
+three autopilot passes (review 2026-11-05 LR-5). Usage auto-grades (capped 0.3) are
 counted, never averaged.
 
 **Approve** replaces the registry body AND its grades with the candidate's

@@ -201,7 +201,7 @@ systems:
       - corvin_operator/bridges/shared/adapter.py:3356:collect_active_skills
       - corvin_operator/bridges/shared/adapter.py:12820:grade_from_user_followup
       - corvin_operator/bridges/shared/adapter.py:13462:auto_grade_from_output
-      - corvin_operator/skill-forge/skill_forge/mcp_server.py:498:promote
+      - corvin_operator/skill-forge/skill_forge/mcp_server.py:516:promote
       - core/console/corvin_console/routes/chat.py:772:grade_followup
       - core/console/corvin_console/chat_runtime.py:8741:record_turn_skills
     readers:

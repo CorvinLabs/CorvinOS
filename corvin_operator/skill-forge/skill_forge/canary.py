@@ -154,6 +154,18 @@ def reference_mean(state: dict) -> tuple[float | None, str]:
     return None, "none"
 
 
+def required_candidate_samples(traffic_percent: int) -> int:
+    """Candidate outcome grades the gate needs at ``traffic_percent``:
+    ``MIN_SAMPLES`` per traffic step reached (5 at 10 %, 10 at 25 %, 15 at 50 %).
+
+    Cumulative, so every step decides on ``MIN_SAMPLES`` grades that did not
+    exist when the previous step was decided. A flat ``MIN_SAMPLES`` let the
+    SAME five grades escalate 10 -> 25 -> 50 -> ready on three consecutive
+    autopilot passes without one new observation (review 2026-11-05 LR-5)."""
+    reached = sum(1 for step in TRAFFIC_STEPS if step <= int(traffic_percent))
+    return MIN_SAMPLES * max(1, reached)
+
+
 def evaluate(state: dict) -> dict[str, str]:
     """The gate verdict for an active canary — pure, shown in the console and
     executed by the autopilot.
@@ -173,9 +185,16 @@ def evaluate(state: dict) -> dict[str, str]:
     if ref is None:
         return {"decision": "hold", "reason": "no reference measurement for the live skill"}
     mean = float(cand["outcome_mean"])
+    # Rolling back (the safe direction) needs MIN_SAMPLES at any step; moving
+    # FORWARD needs MIN_SAMPLES new grades per step reached.
     if mean < ref - ROLLBACK_MARGIN:
         return {"decision": "rollback",
                 "reason": f"candidate {mean:.2f} < reference {ref:.2f} - {ROLLBACK_MARGIN}"}
+    needed = required_candidate_samples(int(state.get("traffic_percent", 0)))
+    if mean >= ref and cand["outcome_n"] < needed:
+        return {"decision": "hold",
+                "reason": f"{cand['outcome_n']}/{needed} candidate outcome grades for this "
+                          f"traffic step"}
     if mean >= ref:
         if int(state.get("traffic_percent", 0)) >= TRAFFIC_STEPS[-1]:
             return {"decision": "ready",
