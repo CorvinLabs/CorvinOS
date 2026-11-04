@@ -22,6 +22,15 @@ path is denied, not allowed.
   `ln`, `rm`/`rmdir`/`unlink`/`shred`, `chmod`/`chown`/`chgrp`/`chattr`,
   `mv`/`cp`/`install`/`rsync`, `find` mutating actions, `xargs`, and Python
   `open(..., 'w')` one-liners.
+- **Learning state** (review 2026-11-05 DR-3): everything under
+  `<corvin_home>/tenants/<tid>/learning/` (routing ledger, rollback judge
+  state/pending, learned thresholds, event store) and
+  `<corvin_home>/tenants/<tid>/skills/` (SkillAdapter learned configs such as
+  `os_delegation_router_config.json`) is protected — a worker deleting
+  `rollback_state.json` cleared a tripped L5 rollback without the audited
+  operator reset, and appended ledger lines could pass the ADR-2092 readiness
+  gate. The rule is anchored at the tenant root, so a project folder named
+  `learning` inside a session workdir stays writable.
 
 ## Protected-tree semantics (`_touches_corvin_tree`)
 

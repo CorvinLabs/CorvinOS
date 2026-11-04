@@ -132,28 +132,53 @@ def test_dr2_feedback_status_and_history_count_every_stored_record(tmp_path):
 
 # ── DR-3 (OPEN): the L5 gate state is not protected against a naive worker write ───
 
-@_OPEN
+def _run_path_gate_hook(home, payload: dict) -> int:
+    """Run the REAL PreToolUse hook as Claude Code does: a subprocess reading the
+    tool call as JSON on stdin; exit 0 = allow, 2 = deny."""
+    import json as _json
+    import pathlib
+    import subprocess
+    import sys as _sys
+
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    hook = repo / "corvin_operator" / "voice" / "hooks" / "path_gate.py"
+    env = dict(os.environ, CORVIN_HOME=str(home), CORVIN_TENANT_ID="_default")
+    proc = subprocess.run([_sys.executable, str(hook)], input=_json.dumps(payload),
+                          capture_output=True, text=True, env=env, timeout=60)
+    return proc.returncode
+
+
 @pytest.mark.parametrize("leaf", [
     ("learning", "routing", "rollback_state.json"),
     ("learning", "routing", "rollback_pending.json"),
     ("learning", "routing", "routing_ledger.jsonl"),
+    ("learning", "learned_thresholds.json"),
     ("skills", "os_delegation_router_config.json"),
 ])
-def test_dr3_phase2_gate_state_is_write_protected(tmp_path, monkeypatch, leaf):
-    """A worker that deletes ``rollback_state.json`` clears a tripped rollback without
-    the audited operator reset; 500 appended ledger lines clear the readiness gate."""
-    import importlib.util
-    import pathlib
-
+def test_dr3_phase2_gate_state_is_write_protected(tmp_path, leaf):
+    """A worker that deletes ``rollback_state.json`` cleared a tripped rollback without
+    the audited operator reset; 500 appended ledger lines cleared the readiness gate.
+    Both a Write and a Bash ``rm``/append through the real hook must be denied."""
     home = tmp_path / "corvin_home"
-    monkeypatch.setenv("CORVIN_HOME", str(home))
-    repo = pathlib.Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location(
-        "_dr_path_gate", repo / "corvin_operator" / "voice" / "hooks" / "path_gate.py")
-    pg = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(pg)
     target = home.joinpath("tenants", "_default", *leaf)
-    assert pg.is_protected_path(str(target)), target
+    target.parent.mkdir(parents=True)
+    target.write_text("{}\n")
+    write = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "{}"}}
+    rm = {"tool_name": "Bash", "tool_input": {"command": f"rm -f {target}"}}
+    append = {"tool_name": "Bash", "tool_input": {"command": f"echo '{{}}' >> {target}"}}
+    assert _run_path_gate_hook(home, write) == 2, target
+    assert _run_path_gate_hook(home, rm) == 2, target
+    assert _run_path_gate_hook(home, append) == 2, target
+
+
+def test_dr3_a_learning_folder_in_a_session_workdir_stays_writable(tmp_path):
+    """The rule is anchored at <home>/tenants/<tid>/{learning,skills}: a project the
+    operator works on inside a session workdir may be called ``learning``."""
+    home = tmp_path / "corvin_home"
+    target = home.joinpath("tenants", "_default", "sessions", "voice", "discord", "1",
+                           "learning", "notes.md")
+    write = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "x"}}
+    assert _run_path_gate_hook(home, write) == 0
 
 
 # ── DR-5 (OPEN): an operator's "correct" rating switches the router's advice off ───

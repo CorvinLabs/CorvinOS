@@ -333,6 +333,18 @@ def is_protected_path(path: str | Path) -> bool:
         # via Forge's runner, not via Claude's Bash/Write/Edit gate.
         if "compute" in rel_parts:
             return True
+        # ADR-2092 / ADR-2281 — a tenant's learning state and learned Skill
+        # configs: the routing ledger, the rollback judge's state/pending files
+        # (Phase-2 readiness gates), learned thresholds, the event store, and
+        # the SkillAdapter configs (e.g. os_delegation_router_config.json). A
+        # worker deleting rollback_state.json cleared a tripped rollback without
+        # the audited operator reset, and 500 appended ledger lines passed the
+        # readiness gate (review 2026-11-05 DR-3). Only the learning code writes
+        # here. Anchored at <home>/tenants/<tid>/{learning,skills}/ so a project
+        # directory named "learning" inside a session workdir stays writable.
+        if (len(rel_parts) >= 3 and rel_parts[0] == "tenants"
+                and rel_parts[2] in ("learning", "skills")):
+            return True
         # ADR-0014 — admin-UI plugin operator-token store + session
         # records + CSRF secrets. Operator-managed via the plugin's
         # CLI / auth module; an LLM-side overwrite could mint a fake
