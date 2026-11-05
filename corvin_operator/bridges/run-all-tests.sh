@@ -790,8 +790,11 @@ run "Python: corvin-compute end-to-end (ADR-0013 Phase 13.10)" bash -c '
 # ── Layer 38 — RemoteTriggerReceiver + A2A protocol (ADR-0048) ─────────
 # Run with a sandboxed instance_id path so the test machine never sees a
 # persistent /global/instance_id.json written into ~/.corvin/.
-_A2A_IID_DIR=$(mktemp -d)
-trap "rm -rf $_A2A_IID_DIR" EXIT
+# Inside the suite sandbox: a second `trap … EXIT` here used to REPLACE the
+# sandbox trap above, so the whole suite sandbox under /tmp was never deleted
+# (review 2026-11-05).
+_A2A_IID_DIR="$_SUITE_SANDBOX/a2a_iid"
+mkdir -p "$_A2A_IID_DIR"
 export CORVIN_INSTANCE_ID_PATH="$_A2A_IID_DIR/instance_id.json"
 
 run "Python: L38 instance identity (ADR-0048)"         python3 shared/test_instance_identity.py >/dev/null            || fails=$((fails+1))
