@@ -17,13 +17,27 @@ This module owns the three rules every writer must keep:
 * **atomicity** - temp file in the same directory + ``os.replace``;
 * **no wipe** - a file that exists but cannot be read or parsed as a mapping is
   refused (:class:`TenantYamlUnreadable`), never treated as an empty config; the
-  read-modify-write runs under one lock (:func:`update`) so two console writers
-  cannot interleave.
+  read-modify-write runs under one lock (:func:`update`) so two writers that both
+  use it cannot interleave.
+
+A read-modify-write MUST be :func:`update` (the lock is held from the read to
+the replace); a bare :func:`load_for_write` followed by :func:`write_mapping`
+lets a concurrent locked update land in between and be silently undone (review
+RC-3). The gateway's writer (``corvin_gateway.tenant_config.save``) imports this
+module, so the console and the CLI take the same ``flock``.
+
+**Symlinks** - a ``tenant.corvin.yaml`` that is a symlink (a shared config) is
+written THROUGH to its target; the link itself is never replaced by a file.
+
+**Comments are not preserved** by :func:`write_mapping` / :func:`update`: the
+document is re-dumped with ``yaml.safe_dump``, so it starts with
+:data:`MANAGED_HEADER` saying so. Only the raw editor (:func:`write_text`, used
+by the Settings page's YAML editor) keeps the text, comments included.
 
 Callers keep their own path resolver (tests patch those); every write of this
 file goes through :func:`write_mapping` / :func:`write_text` / :func:`update`.
-``core/console/tests/test_tenant_yaml_writer.py`` fails on a new console writer
-of this file that bypasses it.
+``core/console/tests/test_tenant_yaml_writer.py`` fails on a new console or
+gateway writer of this file that bypasses it.
 """
 from __future__ import annotations
 
@@ -40,6 +54,8 @@ T = TypeVar("T")
 
 FILENAME = "tenant.corvin.yaml"
 MODE = 0o600
+MANAGED_HEADER = ("# managed by console - rewritten by the CorvinOS console and CLI; "
+                  "comments in this file are not preserved\n")
 
 _locks_guard = threading.Lock()
 _locks: dict[str, threading.RLock] = {}
@@ -47,6 +63,12 @@ _locks: dict[str, threading.RLock] = {}
 
 class TenantYamlUnreadable(RuntimeError):
     """The file exists but is not a readable YAML mapping - refuse the mutation."""
+
+
+def target_path(path: Path) -> Path:
+    """The file a write of *path* lands in: a symlink is followed to its final
+    target (written through, never replaced); anything else is *path* itself."""
+    return Path(os.path.realpath(path)) if os.path.islink(path) else path
 
 
 def _thread_lock(path: Path) -> threading.RLock:
@@ -63,6 +85,7 @@ def locked(path: Path) -> Iterator[None]:
     """Serialise read-modify-write of *path*: an in-process lock plus, on POSIX,
     an advisory ``flock`` on a sidecar file so a second console process (gateway +
     standalone on one home) cannot interleave either."""
+    path = target_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _thread_lock(path):
         try:
@@ -103,12 +126,16 @@ def load_for_write(path: Path) -> dict[str, Any]:
 
 
 def write_text(path: Path, text: str) -> None:
-    """Atomically replace *path* with *text* at mode 0o600 (chmod before replace)."""
+    """Atomically replace *path* with *text* at mode 0o600 (chmod before replace).
+    A symlinked *path* is written through to its target."""
+    path = target_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tenant.corvin.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.chmod(tmp, MODE)
         os.replace(tmp, path)
     except BaseException:
@@ -121,8 +148,8 @@ def write_text(path: Path, text: str) -> None:
 
 def write_mapping(path: Path, data: dict[str, Any]) -> None:
     """Dump *data* as YAML and write it through :func:`write_text`."""
-    write_text(path, yaml.safe_dump(data, default_flow_style=False, sort_keys=False,
-                                    allow_unicode=True))
+    write_text(path, MANAGED_HEADER + yaml.safe_dump(data, default_flow_style=False,
+                                                     sort_keys=False, allow_unicode=True))
 
 
 def update(path: Path, mutate: Callable[[dict[str, Any]], T]) -> T:

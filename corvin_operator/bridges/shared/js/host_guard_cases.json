@@ -1,0 +1,50 @@
+{
+  "_comment": "One table, two implementations: core/console/corvin_console/host_guard.py (parse_entry, host_allowed) and shared/js/host_guard.js (parseEntry, hostAllowed). Read by test_host_guard.js and core/console/tests/test_refute_console_host_guard.py. 'entries': raw allowlist entry -> parsed [kind, value] or null (ignored). 'hosts': with CORVIN_ALLOWED_HOSTS = allowlist, Host header -> allowed?",
+  "entries": [
+    [" corvin.lan ", ["exact", "corvin.lan"]],
+    ["", null],
+    ["   ", null],
+    [".", null],
+    ["..", null],
+    ["...", null],
+    [".corvin.lan", ["suffix", ".corvin.lan"]],
+    [".corvin.lan.", ["suffix", ".corvin.lan"]],
+    [".corvin.lan:8765", null],
+    ["..corvin.lan", null],
+    ["corvin.lan:8765", ["exact", "corvin.lan"]],
+    ["CORVIN.Example.com", ["exact", "corvin.example.com"]],
+    ["corvin.lan.", ["exact", "corvin.lan"]],
+    ["a..b", null],
+    ["http://corvin.lan", null],
+    ["corvin lan", null],
+    ["[::1]:8765", ["exact", "::1"]],
+    ["*", ["exact", "*"]]
+  ],
+  "hosts": {
+    "allowlist": "corvin.example.com, .corvin.lan ,.,, .x.lan:1, ",
+    "cases": [
+      ["localhost:8765", true],
+      ["LOCALHOST", true],
+      ["127.0.0.1:8765", true],
+      ["[::1]:8765", true],
+      ["[::ffff:127.0.0.1]:1", true],
+      ["app.localhost", true],
+      ["192.168.1.5:8765", true],
+      ["", true],
+      ["evil.example", false],
+      ["evil.example.", false],
+      ["localhost.", false],
+      ["localhost.evil.example", false],
+      ["127.0.0.1.evil.com", false],
+      ["127.1", false],
+      ["0x7f000001", false],
+      ["*", false],
+      ["corvin.example.com:443", true],
+      ["corvin.example.com.", false],
+      ["box.corvin.lan", true],
+      ["corvin.lan:8765", true],
+      ["box.x.lan", false],
+      ["x.lan", false]
+    ]
+  }
+}

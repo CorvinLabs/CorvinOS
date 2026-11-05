@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable
 
 import yaml  # type: ignore[import-not-found]
 from fastapi import APIRouter, Depends, HTTPException
@@ -132,24 +132,33 @@ def _load_tenant_yaml(tenant_id: str) -> dict[str, Any]:
         return {}
 
 
-def _load_tenant_yaml_for_write(tenant_id: str) -> dict[str, Any]:
-    """Load the tenant YAML before a writer rewrites it.
+def _update_tenant_yaml(tenant_id: str, mutate: Callable[[dict[str, Any]], Any],
+                        on_unreadable: Callable[[], HTTPException]) -> Any:
+    """Locked read-modify-write of the tenant YAML (``tenant_yaml.update``).
 
-    A missing file is an empty config. An UNPARSEABLE file must refuse the write:
-    returning {} here (as the reader does) makes the writer replace the whole file
-    with its one section and drop everything else in it, including the L34
-    data-residency policy. The refusal leaves the file byte-identical (T-0227).
-    The rule lives in ``corvin_console.tenant_yaml`` (the one console writer).
+    The lock is held from the read to the replace, so a concurrent writer that also
+    goes through ``tenant_yaml.update`` (features toggle, compute config, healing,
+    the gateway CLI) can never land in between and be silently undone - which is
+    what the former load -> mutate -> ``_save_tenant_yaml`` sequence allowed
+    (review RC-3). *mutate* edits the document in place; an ``HTTPException`` it
+    raises aborts before anything is written. A missing file is an empty config;
+    an UNPARSEABLE one refuses the write with ``on_unreadable()`` and stays
+    byte-identical (T-0227): returning {} would replace the whole file with one
+    section and drop the L34 data-residency policy with everything else.
     """
     path = _tenant_yaml_path(tenant_id)
     try:
-        return _tenant_yaml.load_for_write(path)
+        return _tenant_yaml.update(path, mutate)
     except _tenant_yaml.TenantYamlUnreadable as exc:
         _log.error("tenant YAML at %s is unreadable; refusing to overwrite it (%s)", path, exc)
-        raise HTTPException(
-            http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "tenant configuration is unparseable; fix or restore it before changing engine settings",
-        ) from exc
+        raise on_unreadable() from exc
+
+
+def _engine_yaml_unreadable() -> HTTPException:
+    return HTTPException(
+        http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "tenant configuration is unparseable; fix or restore it before changing engine settings",
+    )
 
 
 def _save_tenant_yaml(tenant_id: str, data: dict[str, Any]) -> None:
@@ -174,7 +183,9 @@ def _save_tenant_yaml(tenant_id: str, data: dict[str, Any]) -> None:
     writer, which had this right).
 
     The writer itself is ``corvin_console.tenant_yaml.write_mapping`` - the one
-    console writer of this file (review SRF-3).
+    console writer of this file (review SRF-3). It is a whole-document write
+    with no read: a route that edits part of the file must use
+    :func:`_update_tenant_yaml` (locked read-modify-write, review RC-3).
     """
     _tenant_yaml.write_mapping(_tenant_yaml_path(tenant_id), data)
 
@@ -391,18 +402,19 @@ def put_engine_setting(
                           f"Choose from: {sorted(known_providers)}",
                 )
 
-    # Load, update, and save tenant config (an unparseable file refuses the write)
-    data = _load_tenant_yaml_for_write(_rec.tenant_id)
-    if "spec" not in data or not isinstance(data.get("spec"), dict):
-        data["spec"] = {}
+    # Locked read-modify-write (an unparseable file refuses the write)
+    def _apply(doc: dict[str, Any]) -> dict[str, Any]:
+        if "spec" not in doc or not isinstance(doc.get("spec"), dict):
+            doc["spec"] = {}
+        doc["spec"]["default_engine"] = "claude_code"
+        if body.engine_models is not None:
+            doc["spec"]["engine_models"] = {
+                eid: {k: v for k, v in cfg.model_dump().items() if v is not None}
+                for eid, cfg in body.engine_models.items()
+            }
+        return doc
 
-    data["spec"]["default_engine"] = "claude_code"
-    if body.engine_models is not None:
-        data["spec"]["engine_models"] = {
-            eid: {k: v for k, v in cfg.model_dump().items() if v is not None}
-            for eid, cfg in body.engine_models.items()
-        }
-    _save_tenant_yaml(_rec.tenant_id, data)
+    data = _update_tenant_yaml(_rec.tenant_id, _apply, _engine_yaml_unreadable)
 
     # Audit the change
     try:
@@ -909,6 +921,12 @@ def _load_policy(rec: session_auth.SessionRecord, target_id: str) -> dict[str, A
     return data
 
 
+def _policy_unreadable(rec: session_auth.SessionRecord, target_id: str) -> HTTPException:
+    """``422 policy_invalid`` for a tenant YAML a locked writer cannot read as a mapping."""
+    return _refuse(rec, target_id, "policy_invalid",
+                   "tenant configuration is unparseable; fix or restore it first")
+
+
 def _dc_section(rec: session_auth.SessionRecord, target_id: str, data: dict[str, Any]) -> dict[str, Any]:
     """``spec.data_classification`` as a mutable mapping, created when absent, refused when mistyped."""
     spec = data.setdefault("spec", {})
@@ -993,13 +1011,6 @@ def put_provider_compliance(
     if not ok:
         raise _refuse(_rec, target, why, f"provider {body.provider!r} cannot be a sensitive target ({why})")
 
-    data = _load_policy(_rec, target)
-    section = _dc_section(_rec, target, data)
-    entries = section.get("provider_compliance")
-    if entries is None:
-        entries = []
-    if not isinstance(entries, list):
-        raise _refuse(_rec, target, "policy_invalid", "provider_compliance is not a list")
     entry: dict[str, Any] = {
         "provider": body.provider, "locality": body.locality,
         "network_egress": body.network_egress, "endpoint_host": host,
@@ -1011,11 +1022,21 @@ def put_provider_compliance(
             entry[key] = getattr(body, key)
     if body.models:
         entry["models"] = list(body.models)
-    # Replace this provider's entry, keep every other one (even ones this parser rejects).
-    section["provider_compliance"] = [
-        e for e in entries if not (isinstance(e, dict) and e.get("provider") == body.provider)
-    ] + [entry]
-    _save_tenant_yaml(_rec.tenant_id, data)
+
+    def _apply(data: dict[str, Any]) -> dict[str, Any]:
+        section = _dc_section(_rec, target, data)
+        entries = section.get("provider_compliance")
+        if entries is None:
+            entries = []
+        if not isinstance(entries, list):
+            raise _refuse(_rec, target, "policy_invalid", "provider_compliance is not a list")
+        # Replace this provider's entry, keep every other one (even ones this parser rejects).
+        section["provider_compliance"] = [
+            e for e in entries if not (isinstance(e, dict) and e.get("provider") == body.provider)
+        ] + [entry]
+        return data
+
+    data = _update_tenant_yaml(_rec.tenant_id, _apply, lambda: _policy_unreadable(_rec, target))
     _audit_updated(_rec, target)
     return _route_payload(_rec, target, data)
 
@@ -1032,26 +1053,29 @@ def put_sensitive_route(
     from engine_models import load_providers  # type: ignore  # noqa: PLC0415
 
     target = "sensitive_route"
-    data = _load_policy(_rec, target)
-    section = _dc_section(_rec, target, data)
     well_formed = bool(_sr.PROVIDER_ID_RE.fullmatch(body.provider) and _sr.MODEL_ID_RE.fullmatch(body.model_id))
-    if body.enabled:
-        if not well_formed:
-            raise _refuse(_rec, target, "policy_invalid",
-                          "provider and model_id are required (model_id: letters, digits and . _ : @ / -, up to 200)")
-        declared, _rejected = _dc.parse_provider_compliance(data)
-        providers = load_providers()
-        ok, why = _sr.provider_eligibility(body.provider, declared=declared, providers=providers)
-        if not ok:
-            raise _refuse(_rec, target, "target_not_eligible",
-                          f"provider {body.provider!r} cannot be a sensitive target ({why})")
-        if not _sr.model_allowed(body.provider, body.model_id, declared=declared, providers=providers):
-            raise _refuse(_rec, target, "target_not_eligible",
-                          f"model {body.model_id!r} is not served by provider {body.provider!r}")
-    route: dict[str, Any] = {"enabled": body.enabled}
-    if well_formed:
-        route.update(provider=body.provider, model_id=body.model_id)
-    section["sensitive_route"] = route
-    _save_tenant_yaml(_rec.tenant_id, data)
+    providers = load_providers() if body.enabled else {}
+
+    def _apply(data: dict[str, Any]) -> dict[str, Any]:
+        section = _dc_section(_rec, target, data)
+        if body.enabled:
+            if not well_formed:
+                raise _refuse(_rec, target, "policy_invalid",
+                              "provider and model_id are required (model_id: letters, digits and . _ : @ / -, up to 200)")
+            declared, _rejected = _dc.parse_provider_compliance(data)
+            ok, why = _sr.provider_eligibility(body.provider, declared=declared, providers=providers)
+            if not ok:
+                raise _refuse(_rec, target, "target_not_eligible",
+                              f"provider {body.provider!r} cannot be a sensitive target ({why})")
+            if not _sr.model_allowed(body.provider, body.model_id, declared=declared, providers=providers):
+                raise _refuse(_rec, target, "target_not_eligible",
+                              f"model {body.model_id!r} is not served by provider {body.provider!r}")
+        route: dict[str, Any] = {"enabled": body.enabled}
+        if well_formed:
+            route.update(provider=body.provider, model_id=body.model_id)
+        section["sensitive_route"] = route
+        return data
+
+    data = _update_tenant_yaml(_rec.tenant_id, _apply, lambda: _policy_unreadable(_rec, target))
     _audit_updated(_rec, target)
     return _route_payload(_rec, target, data)

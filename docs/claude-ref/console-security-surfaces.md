@@ -36,38 +36,95 @@ the process tenant `_default`.
 Local login is credential-less ("the TCP peer is 127.0.0.1" is the authorisation). A page that
 rebinds its own name to 127.0.0.1 used to get a session cookie for its origin from
 `/auth/local-login` and the CSRF token from `/auth/whoami`. Now every request on every host must
-name a Host this install answers to: `localhost`, `*.localhost`, a loopback or ANY IP literal
-(rebinding needs a name; an address is the server itself, which keeps a LAN bind working), or the
-operator allowlist — env `CORVIN_ALLOWED_HOSTS` (comma separated, `.example.com` = suffix) plus
-`spec.console.allowed_hosts` in the `_default` tenant's `tenant.corvin.yaml` (for a reverse-proxy
-name or LAN hostname). A WebSocket that carries an `Origin` must match its own host:port, the vite
-dev server, or `CORVIN_ALLOWED_ORIGINS`. `/auth/local-login` additionally requires a LOOPBACK Host —
-an allowlisted public name never earns a credential-less session.
+name a Host this install answers to (the Host's port never matters):
+
+| Source | Allows |
+|---|---|
+| always | `localhost`, `*.localhost`, a loopback or ANY IP literal (rebinding needs a name; an address is the server itself, which keeps a LAN-IP bind working) |
+| bind host | `CORVIN_BIND_HOST`, the `--host` of the uvicorn process serving the app (`uvicorn …` / `python -m uvicorn …`, as every unit and `corvin serve` start it), `spec.console.bind` — when it is a NAME |
+| `CORVIN_DOMAIN` | that name and `www.<name>` (the Caddy deployment, `ops/docker-compose.yml` passes it to the app) |
+| `CORVIN_TS_HOSTNAME` | the Tailscale MagicDNS short name `<name>` and exactly `<name>.<tailnet>.ts.net` (one tailnet label; no other `.ts.net` name) — set by `ops/tailscale/docker-compose.yml` |
+| LAN bind (bind host `0.0.0.0`/`::`/a non-loopback address or name) | the machine's own hostname, its short name and `<short>.local` (mDNS) |
+| operator allowlist | env `CORVIN_ALLOWED_HOSTS` (comma separated) + `spec.console.allowed_hosts` (list) in the `_default` tenant's `tenant.corvin.yaml` |
+
+Allowlist entries (`parse_entry`, one table for Python and JS: `corvin_operator/bridges/shared/js/host_guard_cases.json`):
+whitespace is stripped; a host name (a port on it is dropped, as is one trailing dot) or a domain
+suffix with a leading dot (`.corvin.lan`, never with a port); empty entries, `.`, a suffix with a
+port, a path or an empty label are IGNORED and logged once. A Host with a trailing dot
+(`corvin.lan.`) is not normalised: it is refused unless listed so.
+
+Not guarded: the signed A2A wire routes on the console/gateway app (`POST /v1/a2a/receive`,
+`/v1/a2a/ping`, `/v1/a2a/friendship-ack`) — a paired peer reaches them by DNS name and each request
+is authenticated by the pairing HMAC (no cookie, no session). The stdlib A2A listener
+(`a2a_http_server.py`, also the ingress) has no Host guard on those routes either; only its
+`/metrics` additionally requires a loopback Host (a rebound page has a loopback PEER but a foreign
+Host, review RC-4).
+
+A WebSocket that carries an `Origin` must have the same host as its Host header and the same
+explicit port (a port written on one side only is a mismatch), or be the vite dev server, or be in
+`CORVIN_ALLOWED_ORIGINS`. The scheme is NEVER compared: behind a TLS-terminating proxy (Caddy) the
+browser sends `Origin: https://corvin.example.com` on a socket the app sees as plain `ws`
+(review RC-6). `/auth/local-login` additionally requires a LOOPBACK Host — an allowlisted public
+name never earns a credential-less session.
+
+**Reverse proxies (nginx, Caddy, Traefik): pass the client's Host through.** nginx needs
+`proxy_set_header Host $host;` (its default rewrites Host to the upstream, e.g. `127.0.0.1:8765`).
+With the Host rewritten, every proxied visitor looks like a loopback browser: the guard passes AND
+`/auth/local-login` hands out an owner session. The loopback check on local-login is by design —
+it is the whole authorisation — so never put it behind a proxy that rewrites Host or forwards
+anonymous traffic. Caddy v2 passes Host through by default (`ops/Caddyfile.template`).
 
 | Where | How |
 |---|---|
 | gateway (`corvin_gateway/app.py`, what `corvin-service` runs) | `HostGuardMiddleware` on the whole app (console API, SPA, `/local-stats`, gateway routes) |
 | console `create_app()` | the same middleware |
-| standalone (`corvinos-serve`) and every host mounting the console router | router-level dependency `require_allowed_host` on `corvin_console.app.router` (HTTP + WebSocket) |
+| standalone (`corvinos-serve`) | the same middleware (`/local-stats`, `/`, `/console`, the SPA) + the router dependency |
+| every host mounting the console router | router-level dependency `require_allowed_host` on `corvin_console.app.router` (HTTP + WebSocket) |
 | `/auth/local-login` | `require_loopback_host` |
-| bridge daemons (`shared/js/host_guard.js`) | the WhatsApp daemon's HTTP API (`/pair`, `/qr.png`, `/status`) and `shared/js/health-server.js` |
+| bridge daemons (`shared/js/host_guard.js`) | the WhatsApp daemon's HTTP API (`/pair`, `/qr.png`, `/status`) and `shared/js/health-server.js`; reads `CORVIN_ALLOWED_HOSTS` + `spec.console.allowed_hosts` (via the bridge Python, mtime-cached), not the console's deployment names (the daemons bind loopback) |
 
-Refused: HTTP 400 `host not allowed` (local-login: 403), WebSocket close 1008. Recorded as
-`http.host_rejected` (`surface`, `reason` = `host_not_allowed`/`origin_not_allowed`/
+Refused: HTTP 400 `{"detail":"host not allowed","hint":"… add it to CORVIN_ALLOWED_HOSTS or
+spec.console.allowed_hosts in tenant.corvin.yaml"}` (local-login: 403), WebSocket close 1008.
+Recorded as `http.host_rejected` (`surface`, `reason` = `host_not_allowed`/`origin_not_allowed`/
 `local_login_host`, `scope_type`, `path_class` = first two path segments, `host_fp`/`origin_fp` =
-16-hex sha256 fingerprints — never the value) in the `_default` chain, at most once a minute per
-reason and host. In tests, the repo-root `conftest.py` makes every Starlette `TestClient`
+16-hex sha256 fingerprints — never the value, `suppressed_count`) in the `_default` chain. The
+throttle is per (reason, host) — once a minute — AND global — at most 20 records a minute across
+all hosts — so a page rotating names cannot turn each refusal into an fsync'd chain write;
+`suppressed_count` on every record says how many refusals were not recorded since the previous
+one. The per-host map is LRU-bounded (4096); eviction never resets the global window. Same rule in
+the JS twin. In tests, the repo-root `conftest.py` makes every Starlette `TestClient`
 default to `http://127.0.0.1` (HTTP and `websocket_connect`, which hard-codes
 `ws://testserver` otherwise) and allowlists the test-only names `testserver`/`test` for the API
-(httpx `ASGITransport` clients); production code knows no test hostname. Proofs: `core/console/tests/test_host_guard_dns_rebinding.py`
-(gateway app AND standalone app over TestClient with a crafted Host/Origin; chain record),
-`corvin_operator/bridges/shared/js/test_host_guard.js` (real health server over loopback HTTP).
+(httpx `ASGITransport` clients); production code knows no test hostname. Proofs:
+`core/console/tests/test_host_guard_dns_rebinding.py` and `test_refute_console_host_guard.py`
+(gateway app AND standalone app over TestClient with a crafted Host/Origin; every deployment
+source; throttle; TLS-proxy WebSocket; a mutation check that removing the standalone middleware is
+noticed; the shared parse table), `corvin_operator/bridges/shared/js/test_host_guard.js` (real
+health server over loopback HTTP, the same table, the YAML source),
+`corvin_operator/bridges/shared/test_a2a_get_routes_gated.py` (`/metrics` vs a rebound Host).
+
+Operator docs that name a non-loopback URL say which setting admits it: `ops/README.md`,
+`ops/.env.example`, `ops/docker-compose.yml`, `ops/tailscale/{README.md,docker-compose.yml,.env.template}`,
+`ops/Caddyfile.template`, `docs/DOCKER.md`, `docs/docker-headless-setup.md`, `docs/docker-setup-guide.md`.
 
 ## tenant.corvin.yaml writes
 
 Every console writer goes through `corvin_console/tenant_yaml.py` (0o600 before `os.replace`,
-atomic, locked read-modify-write, an unreadable file is refused with 409 and never rewritten from
-`{}`) — `layer-engines.md` § "the console's own save re-broke it".
+atomic, an unreadable file is refused with 409/422 and never rewritten from `{}`) —
+`layer-engines.md` § "the console's own save re-broke it". A read-modify-write is ONE
+`tenant_yaml.update(path, mutate)` call: the lock (thread lock + `flock` on
+`.tenant.corvin.yaml.lock`) is held from the read to the replace. `routes/engine.py` (PUT
+`/settings/engine`, `/provider-compliance`, `/sensitive-route`) read and wrote unlocked until
+review RC-3, so a concurrent locked update landing in between was silently undone; the gateway's
+`tenant_config.save` (CLI `corvin tenant …`) now imports the same module and takes the same lock.
+Open: `corvin_gateway/plugin_cmd.py::save_tenant_config` still writes the file itself (exempted
+with a reason in `test_tenant_yaml_writer.py`, which fails on any other writer that dumps the
+tenant YAML or reads-then-writes it outside `update`).
+
+A symlinked `tenant.corvin.yaml` is written THROUGH to its target (the link stays). Comments are
+NOT preserved: a rewrite re-dumps the mapping and starts with `# managed by console - … comments
+in this file are not preserved`. Only the Settings page's raw YAML editor (`write_text`) keeps the
+text as typed.
 
 ## Unauthenticated routes trimmed / file serving
 

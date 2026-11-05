@@ -167,6 +167,16 @@ environment — deny-by-default".
 | **Tailscale** | `https://corvin-hostname/console/` (encrypted) | Private, no firewall |
 | **Public domain** | `https://corvin.example.com/console/` (Let's Encrypt) | Production |
 
+**Which host names answer.** The console refuses a request whose `Host` it does not
+know with `400 host not allowed` (DNS-rebinding guard). Allowed without configuration:
+`localhost`, any IP address (`192.168.1.X`, the `100.x` tailnet address), `CORVIN_DOMAIN`
+and `www.<it>`, the Tailscale names `<CORVIN_TS_HOSTNAME>` / `<CORVIN_TS_HOSTNAME>.<tailnet>.ts.net`
+(set by `ops/tailscale/docker-compose.yml`), and on a `0.0.0.0` bind the machine's own
+hostname and `<hostname>.local`. Any other name: `CORVIN_ALLOWED_HOSTS=name1,.example.com`
+in `.env` (passed to the container by both compose files) or `spec.console.allowed_hosts`
+in `tenant.corvin.yaml`. A reverse proxy must pass the client's `Host` through (nginx:
+`proxy_set_header Host $host;`).
+
 ---
 
 ## Key Features Included

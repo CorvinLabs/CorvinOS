@@ -144,6 +144,7 @@ _OBJECT_PULL_RPM = 600.0
 _PING_SEEN: "collections.OrderedDict[tuple[str, str], float]" = collections.OrderedDict()
 _PING_SEEN_MAX = 4096
 _PING_WINDOW_S = 300  # == remote_trigger_receiver._TIME_WINDOW_S (pinned by a test)
+_PING_SEEN_TTL_S = 2 * _PING_WINDOW_S + 30.0
 
 
 def _is_loopback_addr(addr: str) -> bool:
@@ -156,7 +157,33 @@ def _is_loopback_addr(addr: str) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return ip.is_loopback
-_PING_SEEN_TTL_S = 2 * _PING_WINDOW_S + 30.0
+
+
+def _is_loopback_host_header(value: "str | None") -> bool:
+    """True when a Host header names loopback (``localhost``, ``*.localhost``, a
+    loopback address, any port) or is absent (a non-browser client).
+
+    ``/metrics`` is the one route of this listener a browser could be aimed at:
+    under DNS rebinding the TCP peer IS 127.0.0.1 and only the Host still says
+    ``evil.example`` (review RC-4). The signed POST routes and ``audit-head``
+    authenticate by pairing signature and are reached by DNS name from paired
+    peers, so they get no Host check (the console's host_guard has the same rule
+    for its own surface)."""
+    if value is None or value == "":
+        return True
+    v = value.strip().lower()
+    if v.startswith("["):
+        end = v.find("]")
+        host = v[1:end] if end > 0 else ""
+    elif v.count(":") > 1:
+        host = v
+    else:
+        host = v.rsplit(":", 1)[0] if ":" in v else v
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    return _is_loopback_addr(host)
 
 
 def _ping_seen(origin_id: str, ping_id: str) -> bool:
@@ -580,10 +607,11 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             return
 
         # Prometheus metrics endpoint (Layer 38 Observability) - a local scrape
-        # target, never answered to a network peer.
+        # target, never answered to a network peer nor to a DNS-rebound page (whose
+        # peer is loopback but whose Host is the attacker's name - review RC-4).
         if route == "/metrics":
             peer = self.client_address[0] if self.client_address else ""
-            if not _is_loopback_addr(peer):
+            if not _is_loopback_addr(peer) or not _is_loopback_host_header(self.headers.get("Host")):
                 self._respond(404, b'{"reason":"not_found"}\n')
                 return
             try:

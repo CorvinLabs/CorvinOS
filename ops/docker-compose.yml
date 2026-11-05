@@ -35,6 +35,12 @@ services:
       CORVIN_BRIDGE_EMAIL:    ${CORVIN_BRIDGE_EMAIL:-false}
       CORVIN_GATEWAY_ENABLED: ${CORVIN_GATEWAY_ENABLED:-false}
 
+      # ── host names the console answers to (DNS-rebinding guard) ──
+      # CORVIN_DOMAIN (+ www.<it>) is allowed as a Host; list any other name in
+      # CORVIN_ALLOWED_HOSTS (comma separated, ".domain" = suffix). Others get 400.
+      CORVIN_DOMAIN:        ${CORVIN_DOMAIN:-}
+      CORVIN_ALLOWED_HOSTS: ${CORVIN_ALLOWED_HOSTS:-}
+
       # ── observability ──
       CORVIN_DEBUG:     ${CORVIN_DEBUG:-0}
       CORVIN_LOG_LEVEL: ${CORVIN_LOG_LEVEL:-INFO}

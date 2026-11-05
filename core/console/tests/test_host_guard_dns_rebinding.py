@@ -21,15 +21,17 @@ LOOPBACK_PEER = ("127.0.0.1", 40000)
 def audit_calls(monkeypatch):
     from corvin_console import host_guard
 
+    # Spy on the chain write every admitted refusal goes through (the middleware
+    # and the router dependency both end there; the throttle sits in front).
     calls: list[dict] = []
-    real = host_guard.audit_refusal
+    real = host_guard.write_refusal
 
     def _spy(**kw):
         calls.append(kw)
         return real(**kw)
 
-    monkeypatch.setattr(host_guard, "audit_refusal", _spy)
-    monkeypatch.setattr(host_guard, "_audit_last", {})
+    monkeypatch.setattr(host_guard, "write_refusal", _spy)
+    host_guard.reset_audit_throttle()
     return calls
 
 
@@ -133,7 +135,7 @@ def test_refusal_is_recorded_in_the_audit_chain(gateway_app, monkeypatch):
 
     from corvin_console import host_guard
 
-    monkeypatch.setattr(host_guard, "_audit_last", {})
+    host_guard.reset_audit_throttle()
     chain = forge_paths.tenant_audit_chain("_default")
     before = chain.read_text(encoding="utf-8").count("\n") if chain.exists() else 0
     c = _hosts(gateway_app)

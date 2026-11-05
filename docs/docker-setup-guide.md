@@ -155,6 +155,12 @@ OPENAI_API_KEY=sk-org-...
 CORVIN_DOMAIN=corvin.example.com
 CORVIN_ACME_EMAIL=admin@example.com
 
+# Any other Host name the console is opened under (comma separated,
+# ".example.com" = whole domain). localhost, IPs and CORVIN_DOMAIN need no entry;
+# an unknown name answers "400 host not allowed" (DNS-rebinding guard).
+# Same list possible as spec.console.allowed_hosts in tenant.corvin.yaml.
+CORVIN_ALLOWED_HOSTS=
+
 # Enable specific bridges (default: all false)
 CORVIN_BRIDGE_DISCORD=true
 CORVIN_BRIDGE_TELEGRAM=true
@@ -412,6 +418,34 @@ Host          Container         Service
 80/443  →  caddy    →  corvin:8000    (gateway + console UI)
                      9090             (Prometheus metrics, internal only)
 ```
+
+### Host names and reverse proxies (nginx, Traefik, your own Caddy)
+The console answers only a `Host` it knows and refuses any other with
+`400 host not allowed` (DNS-rebinding guard; the body names the setting):
+`localhost`, any IP address, `CORVIN_DOMAIN` + `www.<it>`, the Tailscale names when
+`CORVIN_TS_HOSTNAME` is set, and on a `0.0.0.0` bind the machine's hostname and
+`<hostname>.local`. Everything else goes into `CORVIN_ALLOWED_HOSTS` (comma separated,
+`.example.com` = whole domain) or `spec.console.allowed_hosts` in `tenant.corvin.yaml`.
+
+A proxy in front of the console **must pass the client's Host through**. nginx does not
+by default — add:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8765;
+    proxy_set_header Host $host;               # required
+    proxy_http_version 1.1;                    # chat WebSocket
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+Without `proxy_set_header Host $host`, nginx sends `Host: 127.0.0.1:8765`: the guard sees a
+loopback name, and `/v1/console/auth/local-login` — which authorises by "loopback Host from a
+loopback peer" and asks for no credential, by design — hands every proxied visitor an owner
+session. Never put the console behind a proxy that rewrites Host or forwards anonymous traffic
+to it. The chat WebSocket's `Origin` check compares host and port only, never the scheme, so a
+TLS-terminating proxy (`https` outside, plain `ws` inside) works as is.
 
 ---
 

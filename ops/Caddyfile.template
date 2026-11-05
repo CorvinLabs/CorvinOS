@@ -18,6 +18,12 @@
 
     # Single backend: gateway serves REST API + console UI under /v1/console
     # and /console (ADR-0015 mount). Caddy proxies everything to it.
+    #
+    # Caddy passes the client's Host header through unchanged (v2 default) - keep
+    # it that way (no `header_up Host ...`). The console's DNS-rebinding guard
+    # answers only Hosts it knows: CORVIN_DOMAIN (+ www.), localhost, any IP, and
+    # CORVIN_ALLOWED_HOSTS / spec.console.allowed_hosts; everything else gets 400.
+    # A proxy that rewrites Host to the upstream makes every visitor look local.
     reverse_proxy corvin:8000 {
         header_up X-Forwarded-Proto https
         header_up X-Real-IP {remote_host}

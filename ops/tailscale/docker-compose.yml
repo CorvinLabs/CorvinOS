@@ -80,6 +80,13 @@ services:
       CORVIN_BRIDGE_SLACK:    ${CORVIN_BRIDGE_SLACK:-false}
       CORVIN_BRIDGE_EMAIL:    ${CORVIN_BRIDGE_EMAIL:-false}
 
+      # ── host names the console answers to (DNS-rebinding guard) ──
+      # CORVIN_TS_HOSTNAME admits the MagicDNS names http://<it>:8000 and
+      # http://<it>.<tailnet>.ts.net:8000 (keep it equal to the sidecar hostname
+      # above). Any other name: CORVIN_ALLOWED_HOSTS (comma separated). Others: 400.
+      CORVIN_TS_HOSTNAME:   ${CORVIN_TS_HOSTNAME:-corvin}
+      CORVIN_ALLOWED_HOSTS: ${CORVIN_ALLOWED_HOSTS:-}
+
       # ── observability ──
       CORVIN_LOG_LEVEL: ${CORVIN_LOG_LEVEL:-INFO}
     volumes:

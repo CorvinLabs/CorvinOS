@@ -39,7 +39,8 @@ Edit `/opt/corvin/.env`:
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Claude engine | Or mount `~/.claude/.credentials.json` |
 | `OPENAI_API_KEY` | Voice STT/TTS | Whisper API + TTS |
-| `CORVIN_DOMAIN` | TLS | Must resolve to this host before first start |
+| `CORVIN_DOMAIN` | TLS | Must resolve to this host before first start. Also the Host name the console answers to (with `www.`) |
+| `CORVIN_ALLOWED_HOSTS` | Any other name | Comma separated; `.example.com` allows a domain. The console answers `400 host not allowed` to a Host that is not `localhost`, an IP, `CORVIN_DOMAIN` or listed here / in `spec.console.allowed_hosts` of `tenant.corvin.yaml` (DNS-rebinding guard) |
 | `CORVIN_ACME_EMAIL` | Let's Encrypt | Used for cert renewal notices |
 | `CORVIN_BRIDGE_TELEGRAM=true` | Telegram | Plus a populated `settings.json` under the bind-mounted home |
 | `CORVIN_BRIDGE_DISCORD=true` | Discord | Same |

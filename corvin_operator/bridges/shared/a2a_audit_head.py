@@ -13,6 +13,11 @@ Two halves of a single advisory mechanism:
     chain that does not advance across multiple turns is flagged as
     ``a2a.peer_audit_anomaly`` (WARNING).
 
+Wiring status (2026-11-05): the server half is live (``GET /v1/a2a/audit-head``
+in ``a2a_http_server.py``, signed request + nonce + manifest revocation); the
+sender half has NO production caller - nothing fetches a peer's head or calls
+:func:`check_peer_audit_head` outside tests.
+
 This tier is **advisory by design** — it never hard-blocks (Tier 1/2 do that).
 False positives are possible on a genuinely idle peer, so the anomaly fires only
 after repeated non-advancement, never on a single observation.
@@ -191,9 +196,66 @@ _DECOY_KEY = _secrets.token_bytes(32)
 # any caller. Only a paired origin may ask: it signs
 # {"op":"audit_head","origin_id","issued_at","nonce"} with the pairing hmac_key
 # (the key a ping is signed with), and issued_at must be inside the same window
-# as a ping/task envelope. A replay inside the window only re-reads a head the
-# key holder could read anyway.
+# as a ping/task envelope. Each (origin_id, nonce) is accepted once: the nonce is
+# remembered for the whole window (both sides of it), so a request captured from
+# a URL in a proxy or access log cannot be replayed (review RC-7). A pairing
+# revoked in the network manifest (revoked_pairing_ids / revoked_instance_ids,
+# the lists the receive path enforces) is refused like an unknown origin.
+#
+# Consumer: there is NO production caller yet. Nothing in this repo fetches a
+# peer's head (sign_head_request + check_peer_audit_head are exercised by tests
+# only), so the route is a hardened server half of an advisory check whose
+# sender half is not wired. Wire the fetcher in the same commit that gives it a
+# caller (CLAUDE.md "E2E Wiring Proof").
 HEAD_REQUEST_WINDOW_S = 300
+_HEAD_NONCES: "dict[tuple[str, str], float]" = {}
+_HEAD_NONCES_MAX = 4096
+import threading as _threading  # noqa: E402
+_HEAD_NONCES_LOCK = _threading.Lock()
+
+
+def _claim_nonce(origin_id: str, nonce: str, now: float) -> bool:
+    """Record (origin_id, nonce); False when it was already used in the window.
+    Entries expire after 2 x window (a request may be dated up to one window
+    ahead or behind). Only signature-verified requests reach this, so only a
+    pairing-key holder can fill it; when full the oldest entry is evicted."""
+    ttl = 2 * HEAD_REQUEST_WINDOW_S
+    key = (origin_id, nonce)
+    with _HEAD_NONCES_LOCK:
+        for k in [k for k, t in _HEAD_NONCES.items() if now - t > ttl]:
+            del _HEAD_NONCES[k]
+        if key in _HEAD_NONCES:
+            return False
+        _HEAD_NONCES[key] = now
+        while len(_HEAD_NONCES) > _HEAD_NONCES_MAX:
+            del _HEAD_NONCES[next(iter(_HEAD_NONCES))]
+        return True
+
+
+def _pairing_revoked(cfg: dict) -> bool:
+    """True when the network manifest revokes this origin's pairing or its peer
+    instance. A manifest that cannot be loaded cannot revoke (same rule as the
+    receive path's revocation lists)."""
+    pairing_id = str(cfg.get("pairing_id") or "")
+    instance_ids = {str(cfg.get(k) or "") for k in
+                    ("_peer_instance_id", "sender_instance_id_pin", "instance_id")} - {""}
+    if not pairing_id and not instance_ids:
+        return False
+    try:
+        import sys as _sys
+        here = str(Path(__file__).resolve().parent)
+        if here not in _sys.path:
+            _sys.path.insert(0, here)
+        from a2a_manifest import load_manifest  # type: ignore[import-not-found]
+        manifest = load_manifest()
+    except Exception as exc:  # noqa: BLE001 - no manifest: nothing to revoke against (logged)
+        import logging as _logging
+        _logging.getLogger(__name__).warning("audit-head: network manifest unavailable (%s); "
+                                             "revocation not checked", type(exc).__name__)
+        return False
+    if pairing_id and pairing_id in manifest.revoked_pairing_ids:
+        return True
+    return bool(instance_ids & set(manifest.revoked_instance_ids))
 
 
 def _head_request_canonical(origin_id: str, issued_at: int, nonce: str) -> bytes:
@@ -247,7 +309,11 @@ def verify_head_request(params: dict, *, registry=None, now: "float | None" = No
     if not _hmac.compare_digest(sig, expected):
         return False
     current = _t.time() if now is None else now
-    return abs(current - issued_at) <= HEAD_REQUEST_WINDOW_S
+    if abs(current - issued_at) > HEAD_REQUEST_WINDOW_S:
+        return False
+    if _pairing_revoked(cfg):
+        return False
+    return _claim_nonce(origin_id, nonce, current)
 
 
 # ── Sender side (anomaly detection) ─────────────────────────────────────────

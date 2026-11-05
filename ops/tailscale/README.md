@@ -105,6 +105,16 @@ http://corvin:8000/console/
 doesn't, use the full `corvin.tail-XXXX.ts.net` FQDN —
 `tailscale status` on the server prints it.)
 
+Both names work without extra configuration: the compose file passes
+`CORVIN_TS_HOSTNAME` to the corvin container, and the console's
+DNS-rebinding guard answers exactly `<CORVIN_TS_HOSTNAME>` and
+`<CORVIN_TS_HOSTNAME>.<tailnet>.ts.net` (plus `localhost` and any IP, e.g.
+the `100.x.y.z` tailnet address). Any other name — a Tailscale Serve/Funnel
+name, a CNAME of your own — answers `400 host not allowed` until you list
+it in `CORVIN_ALLOWED_HOSTS` in `.env` (comma separated; `.example.com`
+allows a whole domain) or in `spec.console.allowed_hosts` of
+`tenant.corvin.yaml`. If you rename `CORVIN_TS_HOSTNAME`, the guard follows.
+
 Paste the owner-token, sign in. You're done.
 
 ## Operations

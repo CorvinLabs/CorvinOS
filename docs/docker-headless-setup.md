@@ -212,6 +212,12 @@ tailscale:
 
 Then access from any device on your Tailnet: `https://corvin-hostname/console/`
 
+The console answers only Host names it knows (DNS-rebinding guard; anything else is
+`400 host not allowed`). Set `CORVIN_TS_HOSTNAME=corvin-hostname` in the corvin
+service's environment (`ops/tailscale/docker-compose.yml` does) to admit
+`corvin-hostname` and `corvin-hostname.<tailnet>.ts.net`, or list the names in
+`CORVIN_ALLOWED_HOSTS` (comma separated) / `spec.console.allowed_hosts`.
+
 ### Public internet (Let's Encrypt — requires domain)
 
 Edit `/opt/corvin/.env`:
@@ -228,6 +234,13 @@ CORVIN_ACME_EMAIL=admin@example.com
 Caddy auto-provisions a Let's Encrypt cert on first request.
 
 Access: `https://corvin.example.com/console/`
+
+`CORVIN_DOMAIN` (and `www.<it>`) is also the Host the console answers to; any other
+name you use (a second domain, an internal alias) must be listed in
+`CORVIN_ALLOWED_HOSTS` (comma separated, `.example.com` = whole domain) or the console
+answers `400 host not allowed`. Behind your own nginx instead of Caddy, keep
+`proxy_set_header Host $host;` — a proxy that rewrites Host to `127.0.0.1` makes every
+visitor look like a local operator to the credential-less local login.
 
 ### Localhost (SSH tunnel — for testing)
 

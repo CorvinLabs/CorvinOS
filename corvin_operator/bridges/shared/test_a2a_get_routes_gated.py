@@ -130,6 +130,75 @@ class TestA2AGetRoutes(unittest.TestCase):
         self.assertEqual(head["chain_head"], "ab" * 32)
         self.assertEqual(len(head["signature"]), 64)
 
+    # ── refutation round 2026-11-05 (RC-4, RC-7) ─────────────────────────
+
+    def test_signed_audit_head_request_is_not_replayable(self):
+        url = self._head_url()
+        code, _ = _get(url)
+        self.assertEqual(code, 200)
+        for _ in range(2):  # the very same URL, e.g. lifted from a proxy log
+            code, body = _get(url)
+            self.assertEqual(code, 403, body)
+            self.assertEqual(json.loads(body), {"reason": "audit_head_rejected"})
+        code, _ = _get(self._head_url())  # a fresh nonce still works
+        self.assertEqual(code, 200)
+
+    def test_pairing_revoked_in_the_network_manifest_is_refused(self):
+        p = self.origins / "peer1.json"
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+        cfg["pairing_id"] = "pair-123"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        p.chmod(0o600)
+        import a2a_manifest
+
+        revoked = a2a_manifest.A2AManifest({"revoked_pairing_ids": ["pair-123"]})
+        with mock.patch.object(a2a_manifest, "load_manifest", lambda **kw: revoked):
+            code, body = _get(self._head_url())
+        self.assertEqual(code, 403, body)
+        clean = a2a_manifest.A2AManifest({})
+        with mock.patch.object(a2a_manifest, "load_manifest", lambda **kw: clean):
+            code, body = _get(self._head_url())
+        self.assertEqual(code, 200, body)
+
+    def test_metrics_refuses_a_dns_rebound_host_even_from_a_loopback_peer(self):
+        port = self.srv.server_address[1]
+        for host in (f"evil.example:{port}", "evil.example", "localhost.evil.example"):
+            req = urllib.request.Request(self.base + "/metrics", headers={"Host": host})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    code = r.status
+            except urllib.error.HTTPError as e:
+                code = e.code
+            self.assertEqual(code, 404, host)
+        # the scrape target itself (loopback Host) is still served (200, or 503
+        # when prometheus_client is not installed) - never refused as not_found
+        for host in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            req = urllib.request.Request(self.base + "/metrics", headers={"Host": host})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    code = r.status
+            except urllib.error.HTTPError as e:
+                code = e.code
+            self.assertIn(code, (200, 503), host)
+
+    def test_signed_post_routes_carry_no_host_check(self):
+        # A paired peer reaches the listener by DNS name: the signed POST route
+        # answers a foreign Host exactly like a loopback one (judged by the body
+        # and its signature only).
+        def post(host):
+            body = json.dumps({"origin_id": "nobody"}).encode()
+            req = urllib.request.Request(self.base + "/v1/a2a/ping", data=body, method="POST",
+                                         headers={"Host": host,
+                                                  "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status, r.read()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()
+
+        port = self.srv.server_address[1]
+        self.assertEqual(post("peer.example.net"), post(f"127.0.0.1:{port}"))
+
 
 if __name__ == "__main__":
     unittest.main()

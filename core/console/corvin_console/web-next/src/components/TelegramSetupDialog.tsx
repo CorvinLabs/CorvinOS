@@ -142,7 +142,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
         {/* Header — Telegram brand blue is intentional here (third-party service identity, not app chrome) */}
         <div className="sticky top-0 bg-sky-600 dark:bg-sky-700 text-white px-6 py-4 flex items-start justify-between">
           <div>
-            <h2 className="text-xl font-bold">🤖 Telegram Bot Aktivierung</h2>
+            <h2 className="text-xl font-bold">🤖 Telegram Bot Activation</h2>
             <p className="text-sm text-sky-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
           </div>
           {onClose && (
@@ -238,7 +238,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
               <div className="flex justify-center mb-4">
                 <CheckCircle className="w-12 h-12 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Bot erfolgreich aktiviert! 🎉</h3>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Bot activated successfully! 🎉</h3>
               <p className="text-sm text-muted-foreground mb-4">
                 Your Telegram bot is ready. The daemon restarts and connects to Telegram.
               </p>

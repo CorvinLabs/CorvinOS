@@ -156,7 +156,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
             people.tsx: fixed per-service hue, not a themeable surface). */}
         <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-4 flex items-start justify-between">
           <div>
-            <h2 className="text-xl font-bold">🤖 Discord Bot Aktivierung</h2>
+            <h2 className="text-xl font-bold">🤖 Discord Bot Activation</h2>
             <p className="text-sm text-indigo-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
           </div>
           <button
@@ -293,7 +293,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
               <div className="flex justify-center mb-4">
                 <CheckCircle className="w-12 h-12 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Bot erfolgreich aktiviert! 🎉</h3>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Bot activated successfully! 🎉</h3>
               <p className="text-sm text-muted-foreground mb-4">
                 Your Discord bot is ready. The daemon restarts and connects to Discord.
               </p>

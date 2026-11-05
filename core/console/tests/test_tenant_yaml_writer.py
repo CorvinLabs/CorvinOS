@@ -243,3 +243,221 @@ def test_no_console_module_dumps_the_tenant_yaml_outside_the_shared_writer():
     assert offenders == [], (
         f"{offenders} dump YAML next to a tenant.corvin.yaml reference - write the tenant "
         "spec through corvin_console.tenant_yaml (0o600, atomic, refuse-unreadable)")
+
+
+# ── the gateway CLI writes through the same module (review RC-3) ────────────
+
+_GATEWAY = Path(__file__).resolve().parents[2] / "gateway" / "corvin_gateway"
+_GATEWAY_DUMP_ALLOWED = {
+    "cli.py": "prints a config to stdout (`corvin tenant show`), writes nothing",
+    "packaging.py": "dumps a plugin package manifest, not the tenant spec",
+    # Open (2026-11-05): plugin_cmd.save_tenant_config still writes the file itself
+    # (without the shared flock). It is being reworked in a concurrent change; route
+    # it through corvin_console.tenant_yaml.update and delete this entry.
+    "plugin_cmd.py": "PENDING - concurrent rework; must move to tenant_yaml.update",
+}
+
+
+def test_no_gateway_module_dumps_the_tenant_yaml_outside_the_shared_writer():
+    files = [p for p in _GATEWAY.rglob("*.py") if "tests" not in p.parts]
+    assert len(files) >= 15, "positive control: the scan must reach the gateway package"
+    offenders = []
+    reached = False
+    for p in files:
+        src = p.read_text(encoding="utf-8")
+        if "tenant.corvin" not in src and "CONFIG_FILENAME" not in src:
+            continue
+        rel = p.relative_to(_GATEWAY).as_posix()
+        if rel == "tenant_config.py":
+            reached = True
+            assert "_tenant_yaml_writer()" in src and "write_mapping" in src, \
+                "tenant_config.save must write through corvin_console.tenant_yaml"
+        if _yaml_dump_calls(ast.parse(src)) and rel not in _GATEWAY_DUMP_ALLOWED:
+            offenders.append(rel)
+    assert reached, "positive control: tenant_config.py must be among the scanned modules"
+    assert offenders == [], f"{offenders} dump YAML next to a tenant.corvin.yaml reference"
+
+
+def test_gateway_save_is_0600_locked_and_keeps_console_sections(home, monkeypatch):
+    from corvin_console import tenant_yaml
+    from corvin_gateway import tenant_config
+
+    p = _seed(home)
+    taken: list[Path] = []
+    real_locked = tenant_yaml.locked
+
+    def _spy(path):
+        taken.append(path)
+        return real_locked(path)
+
+    monkeypatch.setattr(tenant_yaml, "locked", _spy)
+    cfg = tenant_config.load("_default")
+    tenant_config.save(cfg)
+    assert taken == [p], "save() must take the shared tenant-YAML lock"
+    assert _mode(p) == 0o600
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+    assert doc["spec"]["web_chat"] == {"worker_engine": "acs"}
+
+
+# ── no unlocked read-modify-write (review RC-3) ──────────────────────────────
+
+_READS = {"load_for_write", "_load_tenant_yaml_for_write", "_load_policy", "_read_tenant_yaml",
+          "_read_tenant_config", "_load_tenant_yaml", "safe_load"}
+_WRITES = {"write_mapping", "_save_tenant_yaml", "_write_tenant_yaml", "_write_tenant_config"}
+
+
+def _called_names(fn: ast.AST) -> set[str]:
+    names = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call):
+            f = node.func
+            names.add(f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", ""))
+    return names
+
+
+def test_no_function_reads_then_writes_the_tenant_yaml_without_update():
+    """A function that both loads the tenant YAML and writes it whole is an
+    unlocked read-modify-write: a concurrent ``tenant_yaml.update`` landing in
+    between is silently undone. It must be ONE ``tenant_yaml.update(path, mutate)``."""
+    files = [p for p in _CONSOLE.rglob("*.py") if "web-next" not in p.parts and "tests" not in p.parts]
+    files += [p for p in _GATEWAY.rglob("*.py") if "tests" not in p.parts]
+    offenders = []
+    scanned_engine = False
+    for p in files:
+        src = p.read_text(encoding="utf-8")
+        if "tenant" not in src or p.name in ("tenant_yaml.py", "plugin_cmd.py"):
+            continue
+        if p.name == "engine.py":
+            scanned_engine = True
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names = _called_names(node)
+                if names & _READS and names & _WRITES:
+                    offenders.append(f"{p.name}:{node.name}")
+    assert scanned_engine, "positive control: routes/engine.py must be scanned"
+    assert offenders == [], f"unlocked read-modify-write of tenant.corvin.yaml: {offenders}"
+
+
+def test_engine_put_holds_the_lock_across_its_read_modify_write(home, rec, monkeypatch):
+    """Two threads: PUT /settings/engine (real route) and a features-style
+    ``tenant_yaml.update``. The update is started while the engine route is inside
+    its read-modify-write; it must wait for the lock and keep both changes. Before
+    RC-3 the engine route read, the update committed, and the engine wrote its stale
+    copy - ``features_whitelist`` was gone without an error."""
+    import threading
+
+    from corvin_console import tenant_yaml
+    from corvin_console.routes import engine
+
+    p = _seed(home)
+    inside = threading.Event()
+    other_started = threading.Event()
+    real_load = tenant_yaml.load_for_write
+
+    def _slow_load(path):
+        data = real_load(path)
+        if threading.current_thread().name == "engine-put":
+            inside.set()
+            other_started.wait(5)
+            import time as _t
+            _t.sleep(0.3)  # the other writer is now blocked on the lock
+        return data
+
+    monkeypatch.setattr(tenant_yaml, "load_for_write", _slow_load)
+    client = _client(engine.router, rec)
+    result: dict = {}
+
+    def put():
+        result["r"] = client.put("/v1/console/settings/engine", json={"default_engine": "claude_code"})
+
+    def toggle():
+        inside.wait(5)
+        other_started.set()
+
+        def _m(doc):
+            doc["spec"]["features_whitelist"] = ["vibe_engineering"]
+        tenant_yaml.update(p, _m)
+
+    a = threading.Thread(target=put, name="engine-put")
+    b = threading.Thread(target=toggle, name="features-toggle")
+    a.start()
+    b.start()
+    a.join(10)
+    b.join(10)
+    assert result["r"].status_code == 200, result["r"].text
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+    assert doc["spec"]["default_engine"] == "claude_code"
+    assert doc["spec"]["features_whitelist"] == ["vibe_engineering"], doc
+    assert doc["spec"]["data_residency"] == {"zone": "eu"}
+
+
+def test_engine_put_refuses_an_unreadable_file(home, rec):
+    from corvin_console.routes import engine
+
+    p = _seed(home, MALFORMED)
+    r = _client(engine.router, rec).put("/v1/console/settings/engine",
+                                        json={"default_engine": "claude_code"})
+    assert r.status_code == 422, r.text
+    assert p.read_text(encoding="utf-8") == MALFORMED
+
+
+# ── mode, symlink, comments (review RC-9 / RC-13) ────────────────────────────
+
+
+def test_chmod_before_replace_is_what_makes_the_file_0600(home, monkeypatch):
+    """The temp file is widened to 0o664 right after mkstemp (what an ``open()``-
+    based writer would create) and the target pre-exists at 0o664; only the
+    explicit chmod can bring the result to 0o600. Patching that chmod away fails
+    this test (mutation-checked below)."""
+    import tempfile
+
+    from corvin_console import tenant_yaml
+
+    p = _seed(home)
+    os.chmod(p, 0o664)
+    real_mkstemp = tempfile.mkstemp
+    real_chmod = os.chmod
+
+    def _wide_mkstemp(*a, **kw):
+        fd, name = real_mkstemp(*a, **kw)
+        real_chmod(name, 0o664)
+        return fd, name
+
+    monkeypatch.setattr(tenant_yaml.tempfile, "mkstemp", _wide_mkstemp)
+    tenant_yaml.write_mapping(p, {"spec": {"a": 1}})
+    assert _mode(p) == 0o600
+
+    # mutation: without the chmod the same write leaves 0o664 behind
+    os.chmod(p, 0o664)
+    monkeypatch.setattr(tenant_yaml.os, "chmod",
+                        lambda path, mode, *a, **k: None if str(path).endswith(".tmp")
+                        else real_chmod(path, mode, *a, **k))
+    tenant_yaml.write_mapping(p, {"spec": {"a": 2}})
+    assert _mode(p) == 0o664, "positive control: the chmod is the only thing making it 0o600"
+
+
+def test_a_symlinked_tenant_yaml_is_written_through(home, tmp_path):
+    from corvin_console import tenant_yaml
+
+    p = _seed(home)
+    real = tmp_path / "shared-tenant.yaml"
+    real.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+    os.chmod(real, 0o600)
+    p.unlink()
+    p.symlink_to(real)
+    tenant_yaml.update(p, lambda d: d["spec"].__setitem__("x", 1))
+    assert p.is_symlink(), "the link must stay a link"
+    assert yaml.safe_load(real.read_text(encoding="utf-8"))["spec"]["x"] == 1
+    assert _mode(real) == 0o600
+    assert not [x for x in real.parent.iterdir() if x.name.endswith(".tmp")]
+
+
+def test_rewrites_carry_the_managed_by_console_header(home):
+    from corvin_console import tenant_yaml
+
+    p = _seed(home, "# operator note\n" + yaml.safe_dump(SEED))
+    tenant_yaml.update(p, lambda d: None)
+    text = p.read_text(encoding="utf-8")
+    assert text.startswith("# managed by console")
+    assert "operator note" not in text  # documented: comments are not preserved
+    assert yaml.safe_load(text)["spec"]["data_residency"] == {"zone": "eu"}

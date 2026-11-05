@@ -406,17 +406,26 @@ def save(config: TenantConfig) -> Path:
             f"tenant directory does not exist: {target.parent}"
         )
     data = config.model_dump(mode="python")
-    body = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _REQUIRED_MODE)
-    try:
-        os.write(fd, body.encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(tmp, target)
-    os.chmod(target, _REQUIRED_MODE)
+    # The console co-owns this file: write it through the ONE writer module both
+    # hosts share (0o600 before os.replace, atomic, symlink written through), under
+    # the same lock + flock the console's read-modify-writes take (review RC-3).
+    _ty = _tenant_yaml_writer()
+    with _ty.locked(target):
+        _ty.write_mapping(target, data)
     return target
+
+
+def _tenant_yaml_writer():
+    """``corvin_console.tenant_yaml`` - imported, never copied. A source checkout
+    without the console on ``sys.path`` gets it from ``<repo>/core/console``."""
+    try:
+        from corvin_console import tenant_yaml  # noqa: PLC0415
+    except ImportError:
+        console = str(_REPO / "core" / "console")
+        if console not in sys.path:
+            sys.path.insert(0, console)
+        from corvin_console import tenant_yaml  # noqa: PLC0415
+    return tenant_yaml
 
 
 # ── Convenience: init a fresh config ──────────────────────────────────
