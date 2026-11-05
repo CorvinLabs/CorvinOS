@@ -1090,7 +1090,10 @@ def resolve_os_model_with_source(
     # existing tiers (adaptive Tier 3 / subscription Tier 4) — ADR-2104 says
     # "respect the user's model choice", and hard-pinning the full tier for
     # CODE would bypass ADR-0112 adaptive selection.
-    if workload_hint:
+    # Gated on autoselect_enabled() exactly like Tiers 2.8 / 2.9 / 3: the
+    # machine picks the model here (``workload`` is in _AUTOMATIC_SOURCES), so
+    # CORVIN_OS_MODEL_AUTOSELECT=off must stop it (review DLG-7, 2026-11-05).
+    if workload_hint and autoselect_enabled():
         try:
             from engine_models import _load_tenant_spec, resolve_model_for_workload  # type: ignore  # noqa: PLC0415,I001,I001
         except ImportError:
@@ -1178,7 +1181,10 @@ def resolve_os_model_with_source(
     # Injected from the adapter's ATO classification phase, applied before
     # the generic autoselect heuristic. If a recommendation exists and has
     # sufficient confidence, use it; otherwise fall through to Tier 3.
-    if ato_plan_hint:
+    # Gated on autoselect_enabled(): an ATO recommendation is an AUTOMATIC
+    # choice (``ato`` is in _AUTOMATIC_SOURCES) — with the kill-switch off a
+    # confidence-0.01 hint used to pick Haiku anyway (review DLG-7).
+    if ato_plan_hint and autoselect_enabled():
         try:
             recommended = ato_plan_hint.get("recommended_model")
             confidence = float(ato_plan_hint.get("confidence", 0.0))
@@ -1228,7 +1234,8 @@ def resolve_os_model_with_source(
     # CORVIN_OS_MODEL_AUTOSELECT=off means "do not pick a model for me", and a
     # kill-switch that silently stops killing is worse than none. An explicit
     # pin (Tiers 1 / 2 / 1.5 / 2.5) is unaffected — the switch is about
-    # AUTOMATIC selection, not about the operator's own choice.
+    # AUTOMATIC selection, not about the operator's own choice. Tiers 2.7 and
+    # 2.8 above are behind the same gate.
     # Guard: test_adapter_os_model.py::test_autoselect_off_no_model_flag.
     if task_input and autoselect_enabled():
         try:

@@ -1706,7 +1706,7 @@ Disable: `CORVIN_OS_MODEL_RETRY_ON_THRASH=off`.
 | Env-Var | Default | Effect |
 |---|---|---|
 | `CORVIN_OS_MODEL_OVERRIDE` | _(unset)_ | Kill-switch, beats `model:` field |
-| `CORVIN_OS_MODEL_AUTOSELECT` | `on` | `off` → Tier 4 (subscription default) |
+| `CORVIN_OS_MODEL_AUTOSELECT` | `on` | `off` → Tier 4 (subscription default); stops every AUTOMATIC tier (2.7 workload, 2.8 ATO, 2.9 classifier, 3 autoselect), never a pin |
 | `CORVIN_OS_MODEL_LOW` | `claude-haiku-4-5-20251001` | Low-tier model |
 | `CORVIN_OS_MODEL_HIGH` | `claude-sonnet-4-6` | High-tier model |
 | `CORVIN_OS_MODEL_THRESHOLD_CHARS` | `60000` | Switch threshold [20k, 200k] |
@@ -3001,7 +3001,7 @@ Three changes, all load-bearing:
 | Change | Why |
 |---|---|
 | `dispatcher._resolve_worker_model()` reads `spec.engine_models.<engine>.worker_model` — the SAME key the console writes — and passes it to `engine.spawn(model=…)` | the console offered a worker-model choice that applied to ACS delegation only; gateway runs used the CLI default |
-| the span closes on the model the engine REPORTS in its `session_started` init frame, falling back to the requested id | an alias, a Bedrock inference profile or a CLI default resolves to something else; auditing the request instead of the fact makes the usage panel confidently wrong |
+| the span closes on the model the engine REPORTS in its `session_started` init frame; when it reported none the END span carries `""` (unpriced) — the requested id only ever rides on the START span (review DLG-20, 2026-11-05; it used to be the fallback) | an alias, a Bedrock inference profile or a CLI default resolves to something else; auditing the request instead of the fact makes the usage panel confidently wrong |
 | `engine_span.END_FIELDS` gains `input_tokens`/`output_tokens`/`cache_read_tokens`/`cache_write_tokens`; `tokens_used` is DERIVED from them when not passed | a single total cannot be priced — four components, four rates. One real worker turn: 2 input vs 57 353 cache-write |
 
 **`model=` is PROBED on the engine, never passed blindly**
@@ -3112,11 +3112,52 @@ a stub `claude` binary, the real `_dispatch_workers` and `_call_worker_sync`).
 |---|---|
 | ACS manager span (`_end_mgr_span`) | closes on the model the manager CLI REPORTED and the SUMMED `usage_split` of every manager turn (`_WorkerProcessHolder` keeps the parsed envelope). The configured model is used only when no turn reported anything (dry run). Before: configured model, zero tokens, every manager turn $0.00 |
 | ACS manager + worker L34 | `check_l34` receives the PROMPT content, not only the workflow's declared class: the worker prompt is built before the gate, the manager prompt (state, snapshot, earlier worker results) is checked every iteration; a gate error refuses the spawn. Before: a credential in an `acs_delegate` task reached a cloud worker |
-| inbound A2A worker env | `_secret_env_overrides` blanks every name `acs_runtime._strip_worker_secrets` removes (pattern catch-all, then `_restore_platform_credentials` for the active platform) — including `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` when set as env vars, exactly like ACS workers; the CLI's credentials FILE is unaffected. No helper → no spawn |
+| inbound A2A worker env | `_secret_env_overrides` blanks every name `acs_runtime._strip_worker_secrets` removes (pattern catch-all; `_restore_platform_credentials` only for an origin that can read neither files nor a shell — DLG-25 below) — including `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` when set as env vars, exactly like ACS workers; the CLI's credentials FILE is unaffected. No helper → no spawn |
 | `core/delegate` `run_delegate` | writes its `engine.span` pair on EVERY surface; `CORVIN_SESSION_DIR` gates only the WDAT run directory and its `acs.*` records. Before: bridge-OS and ACS-adapter delegations had no span at all. Still open: no span on a FAILED delegation, and TDE workers (`worker_ipc.SubprocessWorkerIPC`) emit none |
 
 Guarded by `corvin_operator/bridges/shared/test_review_20261105_dx_e2e.py` and
 `core/delegate/tests/test_review_20261105_dx_e2e.py`.
+
+**Refutation of that round (review DLG, 2026-11-05):**
+
+| Path | Rule now |
+|---|---|
+| L34 declared class (DLG-1) | `spawn_gates.check_l34(classification=…, prompt=…)` classifies the prompt EVEN WITH a tenant policy and judges `max(declared, content)`; a classifier error refuses. Before: with a `tenant.corvin.yaml` the declared `internal` replaced the content's class, so DX-1 held only on no-policy installs. `acs_runtime._l34_content_gate` is one call again |
+| worker env strip (DLG-2) | `_WORKER_SECRET_ENV_STRIP` adds the webhook/DSN names the repo reads (`DISCORD_WEBHOOK_URL`, `SLACK_WEBHOOK_URL`, `CORVIN_SLACK_WEBHOOK_URL`, `SLACK_WEBHOOK_URL_MARKETPLACE_SLO`, `SENTRY_DSN`) plus `DATABASE_URL`, `GPG_PASSPHRASE`; `_url_value_carries_credential` strips any `*_URL`/`*_URI`/`*_DSN` whose VALUE carries `user:pass@`, `/api/webhooks/`, `hooks.slack.com/` or a `token=`/`key=`/`sig=`-style query, any `*_DSN` with userinfo, and any `*PASSPHRASE*`. A value rule, not a widening of `_SECRET_NAME_RE`. ACS workers/managers and the A2A worker share it |
+| A2A worker on a platform host (DLG-25) | decision: the Bedrock/Vertex/Foundry chain is restored ONLY when the origin can read neither files nor a shell (`_worker_can_read_env`: Bash, PowerShell, Monitor, Read, Grep, NotebookRead, Task, Agent all denied); otherwise the spawn is refused (`reason_code: gate`) and audited as `A2A.worker_platform_credentials_refused` (task, origin, platform, reason). No per-origin opt-in — a remote peer is never handed the cloud account; the long-term route is a signing proxy |
+| inbound A2A tenant (DLG-23) | `spawn_a2a_worker(tenant_id=…)` decides the tenant once (`_receiver_tenant`: explicit id validated, else `forge.tenants.current_tenant()`) and passes it to L34, L35 and L44; the receiver does not pass it yet (open, `remote_trigger_receiver.py`) |
+| ACS manager usage (DLG-22) | `_communicate_capped(stdout_tail=…)` keeps the last 16 KiB of stdout, so a manager answer over `_MANAGER_OUTPUT_CAP` is still priced from the envelope's `usage`/`modelUsage` (`_envelope_usage_from_tail`); `_absorb_manager_envelope` sums a turn on the success AND the raise path; the run's `tokens` budget is charged the REPORTED input+output (`_manager_tokens`, the worker's definition), the word estimate only when nothing was reported |
+| `run_delegate` span (DLG-21) | the four counts come from `engine_span.usage_split()` — the private normaliser (`tokens_in`, raw cache names only) is gone |
+
+Guarded by `corvin_operator/bridges/shared/test_review_20261105_dlg_e2e.py` and
+`core/delegate/tests/test_review_20261105_dx_e2e.py::test_dlg21_*`.
+
+**The three other worker spawns (review DLG, 2026-11-05).** Every tool-capable
+`claude -p` that runs a task now gets the ACS worker environment, built by the
+SAME `acs_runtime` helpers (imported, never copied): a copy of the process env →
+`_strip_worker_secrets` → `_restore_platform_credentials` →
+`_apply_provider_redirect(tenant)`. Helpers unimportable → no spawn. Consequence
+shared with ACS workers: an `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` set
+as an ENV VAR is stripped too (re-set only in explicit provider mode); the CLI's
+credentials FILE is unaffected.
+
+| Path | Rule now |
+|---|---|
+| gateway run (`corvin_gateway/dispatcher.py`, DLG-3) | `_worker_spawn_env` builds the OVERLAY `ClaudeCodeEngine.spawn` merges over `os.environ`, so every stripped name is passed as `""`; plus `CORVIN_TENANT_ID`/`CORVIN_CALLER_PERSONA`/`CORVIN_CHANNEL_ID`. claude_code gets `extra_args=["--strict-mcp-config"]` (probed like `model=`): no user/project MCP server loads for a tenant's run. Before: the operator's full env (API keys, bot tokens, the anchor key) on a multi-tenant API surface |
+| gateway routing audit (DLG-5) | `intelligent_routing_decision` is written by `write_event` onto `tenant_audit_chain(<run tenant>)` with closed fields `model, tier, confidence, engine, run_id` — registered in `EVENT_SEVERITY` + `_EVENT_ALLOWLIST`. The router's free-text `reasoning` is never written; no `tenant_id` field, because the chokepoint refuses a tenant-tagged record for any tenant but the process tenant (`AuditTenantMismatch`) and the chain IS the tenant. Before: a call to a non-existent `security_events.audit_event`, swallowed — no routing decision was ever audited. `gateway.engine_denied`/`zone_denied` got real registry entries instead of an import-time `setdefault` (DLG-16); `_audit_policy` resolves `tenant_audit_chain` instead of composing the path |
+| gateway model (DLG-6, DLG-19) | `_newest_haiku(tenant_id)` reads the RUN tenant's Console `SIMPLE` choice (it read the process tenant's). `_model_is_available(model, engine)` is the registry check `engine_models.model_is_registered`: a definite miss on a registered engine is unavailable; an engine the registry does not describe passes. It applies to the router's pick and the engine default — never to a pin (`console_selection.pinned_model`, normalised, never dropped: absence from the registry is not retirement) |
+| gateway prompt (DLG-18) | the engine receives the `strip_delegate_prefix`-cleaned prompt; L34/L44 judged the raw one, a superset |
+| gateway spans (DLG-20) | the START record carries the requested model; every END record carries only what the engine REPORTED (`outcome["model"] or ""`; `""` on timeout/cancel/exception) — never the configured id |
+| console `/task` worker (`task_worker_pool.py`, DLG-8) | `_worker_spawn_env(task.tenant_id)` (strip + restore + redirect + `CORVIN_TENANT_ID=<task tenant>`), built before the audit-first `task.spawn_started`; refused → `task.spawn_denied reason=worker-env-unavailable`. `--model` = `acs_runtime._resolve_worker_model(None, tenant)` — the Models-page worker pin via `console_selection.pinned_model`, then the tenant default, then the SIMPLE tier. `bypassPermissions` stays, deliberately: the same mode as the console OS turn (`_web_permission_mode`) — a headless background worker has no prompt UI and every tool request would hang; the guardrails are the L10 path gate, the pre-spawn L34/L35/L44 gates and the stripped env. Note: a task for a tenant other than the console process tenant is still refused at the audit-first record (`AuditTenantMismatch`) |
+| workflow node (`engines_claude.ClaudeCliEngine.spawn`, DLG-9/23) | `--strict-mcp-config` (the built-in `_DENIED_TOOLS` list never covered `mcp__*`, and a node's prompt carries upstream — possibly remote peer — output) and `env=_worker_spawn_env(tenant)`. The tenant is the engine's own (`tenant_id=`); an engine without one refuses the spawn instead of reading `CORVIN_TENANT_ID`. `corvin-workflows` binds its process tenant once in `cli._build_engine` |
+
+Guarded by `core/gateway/tests/test_dispatcher_worker_env.py` (real FastAPI
+route + real `ClaudeCodeEngine` against a recording binary: blanked secrets,
+`--strict-mcp-config`, `--model` = the audited routing decision, no `/delegate`,
+span END `model_id: ""`), `core/console/tests/test_task_worker_pool_worker_env.py`
+(real `TaskWorkerPool._execute_task`) and
+`core/workflows/tests/test_engine_worker_env.py` (real `DAGRunner` +
+`ClaudeCliEngine`).
 
 Guarded by `tests/e2e/test_a2a_worker_span_priceable_adr0759_e2e.py` (20 tests):
 the real `spawn_a2a_worker` against a stub engine and the REAL chain writer,
@@ -3415,9 +3456,16 @@ subject: a guard whose condition nothing can satisfy reads as a safety property
 and is not one. `_CLASSIFY_MIN_CONFIDENCE = 0.7` survives as the bar for a
 verdict this module does not model.
 
-**`CORVIN_OS_MODEL_AUTOSELECT=off` gates Tier 2.9 as well as Tier 3.** It means
+**`CORVIN_OS_MODEL_AUTOSELECT=off` gates Tiers 2.7 (workload), 2.8 (ATO) and 2.9
+as well as Tier 3** — every source in `_AUTOMATIC_SOURCES`. It means
 "do not pick a model for me". `test_adapter_os_model.py::test_autoselect_off_no_model_flag`
-caught this as a real regression before it shipped. Explicit pins are
+caught this as a real regression before it shipped; until 2026-11-05 (review DLG-7)
+Tiers 2.7 and 2.8 still ran with the switch off — a confidence-0.01 ATO hint picked
+Haiku — and the test now passes both hints, with a positive control that the same
+ATO hint routes when the switch is on. Their decisions are chained as
+`bridge.workload_model_selection` / `bridge.ato_model_selection`, registered in
+`EVENT_SEVERITY` + `_EVENT_ALLOWLIST` with the emitters' closed field sets (before,
+the floor dropped `selected_model`, `tier` and `confidence`). Explicit pins are
 unaffected — the switch is about automatic selection, not the operator's own
 choice, and Tier 2.5 keeps winning outright (*"the classifier overrode my pin"*
 would be a worse defect than the one being fixed).
@@ -3503,6 +3551,12 @@ narrow: only when the HOST is in platform mode, only names the registry declares
 for that platform, only from the parent's own environment. The OS turn already
 runs with exactly those variables. `OPENAI_API_KEY`, `GITHUB_TOKEN`, `PGPASSWORD`
 and every other operator secret stay stripped — asserted in the E2E.
+
+That reasoning ("no less trusted than the process that spawned it") holds for an
+ACS worker, which runs the OPERATOR's task. It does not hold for the inbound A2A
+worker, which runs a REMOTE peer's: there the chain is restored only when the
+origin can read neither files nor a shell, and the spawn is refused (audited,
+`A2A.worker_platform_credentials_refused`) otherwise (review DLG-25, 2026-11-05).
 
 ### `model_catalog_refresh_failed` was the loudest event in the chain
 

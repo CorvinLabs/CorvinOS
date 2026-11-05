@@ -76,6 +76,10 @@ class Readiness:
     #: NOT-JUDGED turns (cancelled / orphaned by a restart / no engine ran): counted
     #: here and excluded from ``decisions``, the join rate and every success rate.
     not_judged: int = 0
+    #: The ledger's read tail (``routing_ledger._READ_TAIL_BYTES``) began INSIDE the
+    #: ``WINDOW_S`` window: every number above covers only the visible part of it
+    #: (``routing_ledger.read_window``; review DLG-24). Reported on every verdict.
+    window_truncated: bool = False
 
 
 def _complexity(row: dict) -> str:
@@ -118,10 +122,27 @@ def console_soak_start(records: list[dict], tenant_id: str, *,
 
 
 def evaluate(tenant_id: str, surface: str, *, now: Optional[float] = None) -> Readiness:
+    """The verdict over the last ``WINDOW_S`` of the ledger.
+
+    When the ledger's read tail starts inside the window (a busy install: the tail
+    holds ~17 k turns) the verdict says so with ``window_truncated`` — and on the
+    bridge, whose console-soak gate needs ``CONSOLE_SOAK_S`` of contiguous history,
+    a soak that cannot be established on the visible part answers
+    ``window_truncated`` instead of ``console_soak_incomplete``: the evidence was
+    cut, not missing (review DLG-24, 2026-11-05).
+    """
     now = time.time() if now is None else now
     if rollback_detector.rollback_active(tenant_id):
         return Readiness(False, "rollback_active", 0, None, 0)
-    records = routing_ledger.read_records(tenant_id, since_ts=now - WINDOW_S)
+    records, truncated_from = routing_ledger.read_window(tenant_id, since_ts=now - WINDOW_S)
+    verdict = _judge(records, tenant_id, surface, now=now, truncated_from=truncated_from)
+    if truncated_from is not None:
+        verdict = dataclasses.replace(verdict, window_truncated=True)
+    return verdict
+
+
+def _judge(records: list[dict], tenant_id: str, surface: str, *, now: float,
+           truncated_from: Optional[float]) -> Readiness:
     # NOT-JUDGED turns (cancelled, orphaned, no engine) leave every number below.
     joined = routing_ledger.judged(routing_ledger.join(records, surface=surface))
     summary = routing_ledger.summarize(records, surface=surface)
@@ -142,6 +163,12 @@ def evaluate(tenant_id: str, surface: str, *, now: Optional[float] = None) -> Re
         if soak_start is None or now - soak_start < CONSOLE_SOAK_S:
             # Report the surface's REAL counts: a hard 0 here read as "the bridge
             # produced no decisions" when it had hundreds.
+            # A soak the visible tail is too short to contain is unprovable, not
+            # incomplete: name the cut (DLG-24) — with less than CONSOLE_SOAK_S
+            # visible, waiting can never complete it.
+            if truncated_from is not None and now - truncated_from < CONSOLE_SOAK_S:
+                return Readiness(False, "window_truncated", n, join_rate,
+                                 len(disagree), delegating, nj)
             return Readiness(False, "console_soak_incomplete", n, join_rate,
                              len(disagree), delegating, nj)
     if n < MIN_READY_SAMPLES:

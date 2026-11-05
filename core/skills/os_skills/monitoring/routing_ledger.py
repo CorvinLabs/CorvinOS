@@ -60,7 +60,8 @@ FEATURE_VOCAB: dict[str, Any] = {
 }
 
 LEDGER_FILENAME = "routing_ledger.jsonl"
-#: Reads look at the tail only; the file is append-only and never rewritten.
+#: Reads look at the tail only; the file is append-only and never rewritten (nor
+#: rotated — see :func:`read_window` for why, and for how a cut window is reported).
 _READ_TAIL_BYTES = 8 * 1024 * 1024
 
 
@@ -283,17 +284,11 @@ def _position_holds(fh, st, pos: dict) -> bool:
     return _fingerprint(fh, off) == pos["fp"]
 
 
-def read_records(tenant_id: str, *, since_ts: float = 0.0,
-                 since_pos: Optional[dict] = None) -> list[dict]:
-    """Well-formed records with ``ts >= since_ts``; with ``since_pos`` (a
-    :func:`ledger_position`) only the records appended AFTER that position — the
-    ledger is append-only, so the position bounds a window independently of the wall
-    clock. The position is trusted only while it still names the same content (same
-    device + inode, file not shorter, the fingerprint of the bytes before the offset
-    unchanged); a ledger that was replaced, re-created (even under a reused inode
-    number) or truncated — also one that regrew past the offset — is read WHOLE, no
-    row skipped: the restrictive direction for the rollback judge (review c120
-    r7b-2/-3)."""
+def _read(tenant_id: str, *, since_ts: float,
+          since_pos: Optional[dict]) -> tuple[list[dict], bool]:
+    """``(records, tail_cut)`` — ``tail_cut`` is True when the bytes the caller asked
+    for (from ``since_pos``, else from the start) were longer than
+    :data:`_READ_TAIL_BYTES` and the read began later than they did."""
     path = ledger_path(tenant_id)
     start = 0
     try:
@@ -308,7 +303,7 @@ def read_records(tenant_id: str, *, since_ts: float = 0.0,
                 fh.readline()  # drop the partial first line
             raw = fh.read()
     except OSError:
-        return []
+        return [], False
     out: list[dict] = []
     for line in raw.splitlines():
         try:
@@ -317,7 +312,51 @@ def read_records(tenant_id: str, *, since_ts: float = 0.0,
             continue
         if _well_formed(rec) and rec["ts"] >= since_ts:
             out.append(rec)
-    return out
+    return out, begin > start
+
+
+def read_records(tenant_id: str, *, since_ts: float = 0.0,
+                 since_pos: Optional[dict] = None) -> list[dict]:
+    """Well-formed records with ``ts >= since_ts``; with ``since_pos`` (a
+    :func:`ledger_position`) only the records appended AFTER that position — the
+    ledger is append-only, so the position bounds a window independently of the wall
+    clock. The position is trusted only while it still names the same content (same
+    device + inode, file not shorter, the fingerprint of the bytes before the offset
+    unchanged); a ledger that was replaced, re-created (even under a reused inode
+    number) or truncated — also one that regrew past the offset — is read WHOLE, no
+    row skipped: the restrictive direction for the rollback judge (review c120
+    r7b-2/-3).
+
+    Only the last :data:`_READ_TAIL_BYTES` are read. A caller that needs to know
+    whether that cut its window uses :func:`read_window`."""
+    return _read(tenant_id, since_ts=since_ts, since_pos=since_pos)[0]
+
+
+def read_window(tenant_id: str, *, since_ts: float) -> tuple[list[dict], Optional[float]]:
+    """``(records, truncated_from)`` for the window ``ts >= since_ts``.
+
+    ``truncated_from`` is the timestamp of the OLDEST readable line when the
+    :data:`_READ_TAIL_BYTES` tail began inside the window — the window's evidence
+    before that moment exists on disk but was not read (review DLG-24, 2026-11-05:
+    ~17 k turns fit the tail, so above ~570 turns/day a 30-day window was cut
+    silently). ``None`` when the whole window was read: no cut, or a cut that only
+    dropped lines older than ``since_ts``.
+
+    Why there is no rotation (yet): the rollback judge bounds its window by a
+    :func:`ledger_position` — device + inode + offset + fingerprint of ONE file — and
+    a position that no longer holds is answered by reading the file WHOLE, which is
+    "no row skipped" only while there is one file. A rotated segment holds exactly the
+    rows after an older position, so rotation needs a segment-aware position and a
+    migration of every stored ``ledger_pos`` first. Until then growth is unbounded
+    (~480 B per turn) and a cut window is reported, never hidden.
+    """
+    records, cut = _read(tenant_id, since_ts=0.0, since_pos=None)
+    truncated_from: Optional[float] = None
+    if cut and records:
+        oldest = min(r["ts"] for r in records)
+        if oldest > since_ts:
+            truncated_from = oldest
+    return [r for r in records if r["ts"] >= since_ts], truncated_from
 
 
 def _well_formed(rec: Any) -> bool:

@@ -143,7 +143,9 @@ orchestration:
         _drive(server, [_call("workflow_run", {
             "workflow_id": "m5_smoke", "inputs": {"a": 1, "b": 1},
         })])
-        audit_path = self.home / "tenants" / "_default" / "audit.jsonl"
+        # THE tenant chain (ADR-0654), never the hand-composed <tenant>/audit.jsonl (DLG-4).
+        audit_path = self.home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        self.assertFalse((self.home / "tenants" / "_default" / "audit.jsonl").exists())
         self.assertTrue(audit_path.exists())
         self.assertIn("workflow.run.started", audit_path.read_text(encoding="utf-8"))
 

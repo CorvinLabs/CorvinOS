@@ -148,8 +148,22 @@ def _audit(event_type: str, details: dict, *, tenant_id: str) -> bool:
         return False
 
 
-def _router_registry():
-    """The booted Skill registry when it carries the router, else None."""
+def _router_registry(tenant_id: str | None = None):
+    """The booted Skill registry when it can run the router FOR ``tenant_id``, else None.
+
+    "Can run" is what ``SkillsRegistry.execute`` would accept: the router is
+    registered AND the tenant is admitted to the registry AND the router is not
+    auto-/manually disabled for that tenant (``SkillsRegistry.serves``). Until
+    2026-11-05 this checked registration only, so ``skill_available`` was True
+    for every tenant of a multi-tenant console although the registry admits only
+    its boot tenant — every such turn executed the router into a "Tenant
+    isolation violation" error record, the ledger said ``skill: null`` forever
+    and the phase gate never said why (review DLG-10) — and for a router the
+    registry had auto-disabled after three failures, which kept a cleared
+    Phase 2 and the bridge's console soak alive while the Skill never ran
+    (DLG-11). Now both yield ``skill_not_booted``. ``tenant_id=None`` means the
+    registry's own boot tenant.
+    """
     try:
         from core.skills import skill_registry_phase1 as _reg  # noqa: PLC0415
     except Exception:  # noqa: BLE001 — bridge-only deployment without core.skills
@@ -157,9 +171,10 @@ def _router_registry():
     registry = getattr(_reg, "_global_registry", None)
     if registry is None:
         return None
+    tid = tenant_id or getattr(registry, "tenant_id", None) or "_default"
     try:
-        return registry if registry.get("os.delegation_router") is not None else None
-    except Exception:  # noqa: BLE001
+        return registry if registry.serves("os.delegation_router", tid) else None
+    except Exception:  # noqa: BLE001 — a registry that cannot answer cannot run the Skill
         return None
 
 
@@ -280,7 +295,7 @@ def turn_phase_decision(*, tenant_id: str, surface: str) -> object | None:
 
         surface = surface if surface in ROUTING_SURFACES else "console"
         return dual_write.decide(tenant_id=tenant_id, surface=surface,
-                                 skill_available=_router_registry() is not None)
+                                 skill_available=_router_registry(tenant_id) is not None)
     except Exception:  # noqa: BLE001
         return None
 
@@ -344,7 +359,7 @@ def route_and_record(
     def _audit_fn(event_type: str, details: dict) -> bool:
         return _audit(event_type, details, tenant_id=tenant_id)
 
-    registry = _router_registry()
+    registry = _router_registry(tenant_id)
     gate = "verdict"
     try:
         carried = phase_decision
@@ -592,6 +607,7 @@ def resolve_delegation_route(
     surface: str | None = None,
     features: dict | None = None,
     sink: dict | None = None,
+    phase_decision: object | None = None,
 ) -> bool:
     """:func:`_resolve_delegation_route`, plus the routing record for turns that
     STAY native.
@@ -602,6 +618,13 @@ def resolve_delegation_route(
     one decision per turn either way. Only a call that carries the turn (``sink``
     or ``turn_id``) records; a surface that consults the triage more than once
     per turn passes the turn on exactly one of those calls.
+
+    ``phase_decision`` carries the turn's ONE phase decision from an earlier
+    reader (the console engine guard) to the native-turn record, exactly as
+    :func:`resolve_worker_engine` does for the delegating branch. Without it the
+    native branch — the majority of console turns — re-decided the phase and,
+    on the readiness-cache TTL boundary, recorded ``shadow`` for a turn whose
+    guard used ``dual_write`` (review DLG-15, 2026-11-05).
     """
     verdict = _resolve_delegation_route(bundled_delegate, tenant_id=tenant_id, request=request)
     if not verdict and (sink is not None or turn_id is not None):
@@ -610,6 +633,7 @@ def resolve_delegation_route(
             tenant_id=tenant_id, bundled=WORKER_ENGINE_DEFAULT, force_delegate=False,
             is_big_data=False, mode=str((features or {}).get("mode") or WORKER_ENGINE_DEFAULT),
             surface=surf, turn_id=turn_id, features=features, sink=sink,
+            phase_decision=phase_decision,
         )
     return verdict
 

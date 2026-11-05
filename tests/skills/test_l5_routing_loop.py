@@ -531,6 +531,47 @@ def _backdated_console_dual_write(*, days: float):
     _backdated_console_decision(days=days, phase="dual_write")
 
 
+def _tail_to_last_lines(monkeypatch, n: int) -> None:
+    """Shrink the ledger read tail so it holds exactly the last ``n`` lines."""
+    raw = routing_ledger.ledger_path(TENANT).read_bytes()
+    lines = raw.splitlines(keepends=True)
+    # +1: the reader drops the (partial) first line of a cut tail.
+    monkeypatch.setattr(routing_ledger, "_READ_TAIL_BYTES",
+                        sum(len(x) for x in lines[-n:]) + 1)
+
+
+class TestWindowTruncation:
+    """Review DLG-24: the 8 MiB read tail silently cut the 30-day readiness window."""
+
+    def test_a_tail_that_starts_inside_the_window_is_reported(self, monkeypatch):
+        for d in (20, 15, 10, 5, 2, 1):
+            _backdated_console_dual_write(days=d)
+        _tail_to_last_lines(monkeypatch, 2)
+        records, cut_from = routing_ledger.read_window(
+            TENANT, since_ts=time.time() - readiness.WINDOW_S)
+        assert len(records) == 2 and cut_from is not None
+        assert readiness.evaluate(TENANT, "console").window_truncated is True
+
+    def test_a_cut_that_drops_only_lines_older_than_the_window_is_no_truncation(self, monkeypatch):
+        for d in (60, 45, 31, 5, 2, 1):
+            _backdated_console_dual_write(days=d)
+        _tail_to_last_lines(monkeypatch, 4)        # keeps 31 d (outside) .. 1 d
+        _records, cut_from = routing_ledger.read_window(
+            TENANT, since_ts=time.time() - readiness.WINDOW_S)
+        assert cut_from is None
+        assert readiness.evaluate(TENANT, "console").window_truncated is False
+
+    def test_a_bridge_soak_the_visible_tail_cannot_contain_says_window_truncated(self, monkeypatch):
+        # Twenty days of continuous console dual_write: a complete soak on disk.
+        for half_days in range(40, 0, -1):
+            _backdated_console_dual_write(days=half_days / 2)
+        control = readiness.evaluate(TENANT, "bridge")
+        assert control.reason != "console_soak_incomplete" and not control.window_truncated
+        _tail_to_last_lines(monkeypatch, 6)        # ~3 days visible
+        cut = readiness.evaluate(TENANT, "bridge")
+        assert (cut.ready, cut.reason, cut.window_truncated) == (False, "window_truncated", True)
+
+
 def _backdated_console_decision(*, days: float, phase: str, gate: str | None = None):
     _ledger_decision(ts=time.time() - days * 86400, phase=phase, gate=gate)
 
@@ -933,6 +974,87 @@ class TestRouteAndRecord:
         (rec,) = routing_ledger.read_records(TENANT)
         assert rec["skill"] is None
 
+    def test_a_tenant_the_registry_does_not_admit_is_skill_not_booted(self, booted_registry,
+                                                                       monkeypatch):
+        """Review DLG-10: a console turn of tenant ``acme`` on a registry booted for
+        ``_default``. The registry cannot run the router for acme (tenant whitelist), so the
+        phase gate must say ``skill_not_booted`` — before, it reported the Skill available,
+        executed it into a "Tenant isolation violation" error record on every turn, and the
+        refusal never named the real reason."""
+        import delegation_policy as dp
+        from core.skills import skill_registry_phase1 as reg
+
+        monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+        executed: list[str] = []
+        real_execute = reg._global_registry.execute
+        monkeypatch.setattr(reg._global_registry, "execute",
+                            lambda *a, **k: executed.append(k.get("tenant_id")) or real_execute(*a, **k))
+        spy = AuditSpy()
+        monkeypatch.setattr(dp, "_audit", lambda et, d, tenant_id: spy(et, d))
+        engine, sink = self._route(dp, tenant_id="acme")
+        assert engine == "acs" and sink["route_source"] == "bundled"
+        decision = sink["phase_decision"]
+        assert (decision.phase, decision.reason) == ("shadow", "skill_not_booted")
+        assert [(c[0], c[1]["reason"], c[1]["tenant_id"]) for c in spy.calls] == [
+            ("routing.phase2_refused", "skill_not_booted", "acme")]
+        assert executed == []                       # no isolation-violation error record
+        (row,) = routing_ledger.read_records("acme")
+        assert row["skill"] is None and row["phase"] == "shadow"
+        # Positive control: the boot tenant on the same registry still runs the Skill.
+        _, own = self._route(dp)
+        assert executed == [TENANT]
+        assert own["phase_decision"].reason != "skill_not_booted"
+
+    def test_an_auto_disabled_router_ends_a_cleared_phase2(self, booted_registry, monkeypatch):
+        """Review DLG-11: three failures auto-disable the router for the tenant. A cleared
+        Phase 2 must turn into shadow/``skill_not_booted`` — fresh AND carried decisions —
+        so the console soak breaks instead of counting dual_write rows the Skill never saw."""
+        import delegation_policy as dp
+        from core.skills import skill_registry_phase1 as reg
+
+        monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        readiness.cached_evaluate(TENANT, "console", background=False)
+        monkeypatch.setattr(dp, "_audit", lambda et, d, tenant_id: True)
+        carried = dp.turn_phase_decision(tenant_id=TENANT, surface="console")
+        assert carried.phase == "dual_write"
+        registry = reg._global_registry
+        for _ in range(registry.AUTO_DISABLE_THRESHOLD):
+            registry._track_failure("os.delegation_router", TENANT)
+        assert not registry.serves("os.delegation_router", TENANT)
+        fresh = dp.turn_phase_decision(tenant_id=TENANT, surface="console")
+        assert (fresh.phase, fresh.reason) == ("shadow", "skill_not_booted")
+        engine, sink = self._route(dp, phase_decision=carried)
+        assert engine == "acs"
+        assert (sink["phase_decision"].phase, sink["phase_decision"].reason) == (
+            "shadow", "skill_not_booted")
+        row = [r for r in routing_ledger.read_records(TENANT) if r["turn_id"] == sink["turn_id"]][0]
+        assert row["phase"] == "shadow"
+
+    def test_a_native_triage_turn_records_the_carried_phase_decision(self, booted_registry,
+                                                                      monkeypatch):
+        """Review DLG-15: the console's triage-native branch (``resolve_delegation_route``)
+        used to re-decide the phase. With the readiness cache gone in between, the re-read
+        answered ``evaluating`` → shadow while the guard had used dual_write."""
+        import delegation_policy as dp
+
+        monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+        monkeypatch.setattr(dp, "_audit", lambda et, d, tenant_id: True)
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="native")
+        readiness.cached_evaluate(TENANT, "console", background=False)
+        decision = dp.turn_phase_decision(tenant_id=TENANT, surface="console")
+        assert decision.phase == "dual_write"
+        readiness.clear_cache()                       # the TTL boundary, made certain
+        sink: dict = {"turn_id": routing_ledger.new_turn_id()}
+        assert dp.resolve_delegation_route(
+            False, tenant_id=TENANT, request={"surface": "console"}, surface="console",
+            sink=sink, turn_id=sink["turn_id"], phase_decision=decision) is False
+        assert sink["phase_decision"] is decision
+        row = [r for r in routing_ledger.read_records(TENANT) if r["turn_id"] == sink["turn_id"]][0]
+        assert (row["phase"], row["gate"]) == ("dual_write", "verdict")
+
     def test_outcome_on_a_skill_served_turn_runs_the_judge(self, booted_registry, monkeypatch):
         import delegation_policy as dp
 
@@ -1092,7 +1214,7 @@ class TestSkillInputIsPiiGated:
                 seen.append(dict(input_data))
                 return real.execute(skill_id, input_data, **kw)
 
-        monkeypatch.setattr(dp, "_router_registry", lambda: Capturing())
+        monkeypatch.setattr(dp, "_router_registry", lambda *_a, **_k: Capturing())
         dp.route_and_record(
             tenant_id=TENANT, bundled="native", force_delegate=False, is_big_data=False,
             mode="native", surface="console", sink={},

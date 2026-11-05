@@ -197,3 +197,225 @@ def test_a_workspace_outside_corvin_home_keeps_its_sibling_chain(tmp_path: Path)
     """, home)
     assert out["resolved"] != out["canonical"], out
     assert out["resolved"] == str(sandbox.parent / "audit.jsonl"), out
+
+
+# ── core/orchestration (DLG-4, 2026-11-05) ──────────────────────────────────
+#
+# The orchestration MCP server (``workflow_run`` / ``workflow_resume``) composed
+# ``<home>/tenants/<tid>/audit.jsonl`` by hand — one more sibling no reader
+# opened. The caller scan covers the whole package tree so the next
+# hand-composed chain path fails here, not in an auditor's report.
+
+_ORCHESTRATION = REPO / "core" / "orchestration"
+_CHAIN_LITERAL = "audit" + ".jsonl"
+
+
+def test_orchestration_composes_no_chain_path_by_hand():
+    """No production module under core/orchestration names the chain file
+    itself — every writer resolves ``tenant_audit_chain()``."""
+    scanned = 0
+    offenders = []
+    for p in sorted(_ORCHESTRATION.rglob("*.py")):
+        if "tests" in p.relative_to(_ORCHESTRATION).parts:
+            continue
+        scanned += 1
+        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            code = line.split("#", 1)[0]
+            if _CHAIN_LITERAL in code:
+                offenders.append(f"{p.relative_to(REPO)}:{n}: {line.strip()}")
+    # Positive control: the scan reached the module this guard exists for.
+    assert (_ORCHESTRATION / "corvin_orchestration" / "mcp_server.py").is_file()
+    assert scanned > 5, scanned
+    assert not offenders, (
+        "hand-composed audit-chain path(s) — resolve tenant_audit_chain() instead:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_orchestration_mcp_sink_writes_the_tenant_chain(home: Path):
+    """A real ``workflow.*`` record from the MCP server's sink lands on THE
+    tenant chain and nowhere else."""
+    out = _run("""
+        import os
+        from core.orchestration.corvin_orchestration import mcp_server
+        from corvin_operator.forge.forge.paths import tenant_audit_chain
+        home = Path(os.environ["CORVIN_HOME"])
+        OUT["forge"] = mcp_server._FORGE_AVAILABLE
+        sink = mcp_server._audit_sink_for("_default", "workflow")
+        sink({"event": "node_started", "run_id": "r1"})
+        OUT["canonical"] = str(tenant_audit_chain("_default").relative_to(home))
+        OUT["files"] = sorted(str(p.relative_to(home)) for p in home.rglob("audit.jsonl"))
+        lines = tenant_audit_chain("_default").read_text().splitlines()
+        OUT["events"] = [json.loads(l)["event_type"] for l in lines]
+    """, home)
+    assert out["forge"] is True, out
+    assert out["files"] == [out["canonical"]], out
+    assert "workflow.node_started" in out["events"], out
+
+
+def test_stray_orchestration_chain_is_seamed_not_merged(home: Path):
+    """The pre-fix file ``<home>/tenants/<tid>/audit.jsonl`` already exists on
+    installs. It is ``legacy_audit_chains()['tenant_root']``, so the boot
+    tripwire links it with an ``audit.chain_supersedes`` seam — its bytes stay
+    untouched (append-only history is never merged, rewritten or deleted)."""
+    out = _run("""
+        import os
+        from forge.security_events import write_event, chain_seam_links
+        from corvin_operator.forge.forge.paths import tenant_audit_chain, legacy_audit_chains
+        from core.compliance.corvin_compliance_reports import tripwire
+        home = Path(os.environ["CORVIN_HOME"])
+        stray = home / "tenants" / "_default" / "audit.jsonl"
+        write_event(stray, "workflow.node_started", severity="INFO", details={"run_id": "old"})
+        before = stray.read_bytes()
+        OUT["is_legacy"] = legacy_audit_chains("_default")["tenant_root"] == stray
+        tripwire._check_audit_unification()
+        OUT["unchanged"] = stray.read_bytes() == before
+        links = chain_seam_links(tenant_audit_chain("_default"))
+        OUT["forward"] = [l for l in links if l["direction"] == "supersedes"]
+        OUT["backward"] = [l["direction"] for l in chain_seam_links(stray)]
+    """, home)
+    assert out["is_legacy"] is True, out
+    assert out["unchanged"] is True, out
+    assert len(out["forward"]) == 1 and out["forward"][0]["records"] == 1, out
+    assert out["backward"] == ["superseded_by"], out
+
+
+# ── Review 2026-11-05 (SEC-7): no writer composes the host-wide chain ─────────
+#
+# incident_tracker (EU AI Act Art. 73), anthropic_batch, the forge runner's
+# fallback and the corvinid erasure fallback each built
+# ``corvin_home()/"global"/.../audit.jsonl`` by hand and so wrote records no
+# verifier, report or panel reads. This scan finds every such expression in
+# PRODUCTION source: a ``/`` chain rooted at a corvin-home resolver (the call,
+# or a local name bound to it) whose first literal is ``"global"`` and which
+# names ``audit.jsonl`` — directly, or through a name bound to
+# ``<home>/"global"/"forge"``. The only modules allowed such an expression
+# READ the historical file or protect it; each is listed with its reason.
+
+import ast as _ast
+
+_HOME_RESOLVERS = frozenset({"corvin_home", "_corvin_home", "get_corvin_home",
+                             "_default_corvin_home"})
+_SCAN_DIRS = ("core", "corvin_operator", "scripts", "ops", "corvinOS")
+_HOST_CHAIN_READERS = {
+    "corvin_operator/bridges/shared/audit_view.py": "/audit me|chat reads the pre-tenancy history for _default",
+    "corvin_operator/voice/hooks/path_gate.py": "protects the historical chain from writes",
+    "ops/launcher/corvin/migrate_cmd.py": "migration reads the historical chain",
+    "scripts/e2e_full_audit_fixture.py": "builds a throwaway fixture home, never a live root",
+}
+
+
+def _call_name(node):
+    if isinstance(node, _ast.Call):
+        f = node.func
+        return f.id if isinstance(f, _ast.Name) else (f.attr if isinstance(f, _ast.Attribute) else None)
+    return None
+
+
+def _div_chain(node):
+    parts = []
+    cur = node
+    while isinstance(cur, _ast.BinOp) and isinstance(cur.op, _ast.Div):
+        parts.append(cur.right)
+        cur = cur.left
+    parts.reverse()
+    if _call_name(cur) == "Path" and getattr(cur, "args", None):
+        cur = cur.args[0]
+    return cur, [p.value if isinstance(p, _ast.Constant) and isinstance(p.value, str) else None
+                 for p in parts]
+
+
+def _host_chain_lines(src: str) -> list[int]:
+    try:
+        tree = _ast.parse(src)
+    except SyntaxError:
+        return []
+    homes: set[str] = set()
+    forge_dirs: set[str] = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Assign) and _call_name(node.value) in _HOME_RESOLVERS:
+            homes |= {t.id for t in node.targets if isinstance(t, _ast.Name)}
+    def _is_home(base):
+        return _call_name(base) in _HOME_RESOLVERS or (isinstance(base, _ast.Name) and base.id in homes)
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Assign) and isinstance(node.value, _ast.BinOp):
+            base, lits = _div_chain(node.value)
+            if _is_home(base) and lits == ["global", "forge"]:
+                forge_dirs |= {t.id for t in node.targets if isinstance(t, _ast.Name)}
+    hits = []
+    for node in _ast.walk(tree):
+        if not (isinstance(node, _ast.BinOp) and isinstance(node.op, _ast.Div)):
+            continue
+        base, lits = _div_chain(node)
+        if _is_home(base) and lits[:1] == ["global"] and "audit.jsonl" in lits:
+            hits.append(node.lineno)
+        elif isinstance(base, _ast.Name) and base.id in forge_dirs and "audit.jsonl" in lits:
+            hits.append(node.lineno)
+    return sorted(set(hits))
+
+
+def _is_test_source(p: Path) -> bool:
+    s = p.as_posix()
+    return ("/tests/" in s or "/test/" in s or p.name.startswith("test_")
+            or p.name.endswith("_test.py") or p.name == "conftest.py")
+
+
+def test_scanner_finds_the_hand_built_host_chain_shapes():
+    """Positive control: both shapes the review found are detected."""
+    direct = 'from p import corvin_home\nx = corvin_home() / "global" / "forge" / "audit.jsonl"\n'
+    bound = ('def f():\n    audit_dir = _corvin_home() / "global" / "forge"\n'
+             '    return str(audit_dir / "audit.jsonl")\n')
+    local = 'home = corvin_home()\ny = home / "global" / "audit.jsonl"\n'
+    canonical = 'z = corvin_home() / "tenants" / t / "global" / "forge" / "audit.jsonl"\n'
+    assert _host_chain_lines(direct) == [2]
+    assert _host_chain_lines(bound) == [3]
+    assert _host_chain_lines(local) == [2]
+    assert _host_chain_lines(canonical) == []
+
+
+def test_no_production_writer_composes_the_host_wide_chain():
+    scanned = 0
+    offenders = []
+    for d in _SCAN_DIRS:
+        for p in sorted((REPO / d).rglob("*.py")):
+            if _is_test_source(p) or "node_modules" in p.parts:
+                continue
+            scanned += 1
+            rel = p.relative_to(REPO).as_posix()
+            if rel in _HOST_CHAIN_READERS:
+                continue
+            for n in _host_chain_lines(p.read_text(encoding="utf-8", errors="replace")):
+                offenders.append(f"{rel}:{n}")
+    # The scan reached the modules the review named.
+    assert (REPO / "corvin_operator/bridges/shared/incident_tracker.py").is_file()
+    assert scanned > 500, scanned
+    assert not offenders, (
+        "hand-built <corvin_home>/global/.../audit.jsonl — resolve tenant_audit_chain(tid) "
+        "instead (or, for a READER of the historical file, add it to _HOST_CHAIN_READERS "
+        "with the reason):\n" + "\n".join(offenders))
+
+
+def test_allowlisted_readers_still_need_their_exemption():
+    """A stale exemption hides the next writer added to that module."""
+    stale = [rel for rel in _HOST_CHAIN_READERS
+             if not _host_chain_lines((REPO / rel).read_text(encoding="utf-8"))]
+    assert not stale, f"exemption no longer needed, remove it: {stale}"
+
+
+def test_incident_opened_lands_in_the_tenant_chain(home: Path):
+    """SEC-7 repro: incident.opened (EU AI Act Art. 73) is written to THE chain,
+    not to <home>/global/forge/audit.jsonl."""
+    out = _run("""
+        import os, sys
+        sys.path.insert(0, str(R / "corvin_operator" / "bridges" / "shared"))
+        os.environ.pop("VOICE_AUDIT_PATH", None)
+        import incident_tracker
+        from corvin_operator.forge.forge.paths import tenant_audit_chain
+        home = Path(os.environ["CORVIN_HOME"])
+        incident_tracker.open_incident(category="chain_integrity", trigger_event="x.y",
+                                       trigger_chain_hash="ab" * 16, description="d")
+        chain = tenant_audit_chain("_default")
+        OUT["canonical"] = chain.is_file() and "incident.opened" in chain.read_text()
+        OUT["host"] = (home / "global" / "forge" / "audit.jsonl").exists()
+    """, home)
+    assert out == {"canonical": True, "host": False}, out

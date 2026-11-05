@@ -2939,7 +2939,18 @@ _CHAIN_WITNESS_MAX_PROBLEMS = 20000
 
 
 def _verify_no_key_ok() -> bool:
-    return os.environ.get("CORVIN_AUDIT_VERIFY_NO_KEY_OK", "").strip() in ("1", "true", "yes")
+    """The witness's ``no_key_ok`` flag — always ``False`` (review 2026-11-05, SEC-12).
+
+    ``CORVIN_AUDIT_VERIFY_NO_KEY_OK`` used to be read HERE, inside the library,
+    so the variable set in a service environment relaxed every verifier in that
+    process — including the boot tripwire's (``verify_chain_incremental``) — and
+    a missing or emptied anchor key passed the chain on hashes alone. The
+    relaxation is now an explicit ``verify_chain(..., allow_missing_key=True)``
+    argument that only the ``voice-audit`` cross-host CLI passes; the witness
+    path (tripwire / integrity monitor) never relaxes, and a witness written
+    under the old relaxed mode no longer matches and forces a full walk.
+    """
+    return False
 
 
 def _resolved_str(path: Path) -> str:
@@ -6822,6 +6833,7 @@ def audit_write_or_die(
 
 
 def verify_chain(path: Path, *, initial_prev: str = "",
+                 allow_missing_key: bool = False,
                  _resume: dict | None = None,
                  _state_out: dict | None = None) -> tuple[bool, list[dict]]:
     """Walk the audit file and verify hash-chain integrity.
@@ -6865,7 +6877,13 @@ def verify_chain(path: Path, *, initial_prev: str = "",
     """
     if not path.exists():
         return True, []
-    _no_key_ok = _verify_no_key_ok()
+    # ``allow_missing_key`` suppresses ONLY ``mac_unverifiable_key_absent`` (a
+    # mac'd record checked on a host without the anchor key — legitimate for a
+    # cross-host ``voice-audit verify``). It is an explicit argument, never an
+    # environment read: the boot tripwire must not be relaxable by a service
+    # environment variable (review 2026-11-05, SEC-12). A resumed walk (witness)
+    # is always strict.
+    _no_key_ok = bool(allow_missing_key) and _resume is None
     if _resume is None:
         problems: list[dict] = []
         prev = initial_prev
@@ -7010,7 +7028,8 @@ def verify_chain(path: Path, *, initial_prev: str = "",
             #    "mac_missing"). The legacy prefix before the first mac is exempt.
             #  * key-absent: a record that carries a mac but cannot be verified
             #    because the key is gone is a problem ("mac_unverifiable_key_absent")
-            #    UNLESS CORVIN_AUDIT_VERIFY_NO_KEY_OK=1 (legitimate cross-host verify).
+            #    UNLESS the caller passed allow_missing_key=True (only the
+            #    voice-audit cross-host CLI does; SEC-12).
             _ak = _anchor_key()
             if "mac" in rec:
                 mac_seen_count += 1
@@ -7287,7 +7306,8 @@ def verify_chain_incremental(path: Path, *,
       all fail the size or digest check the same way.
     * A missing, unreadable, malformed, version-mismatched or MAC-invalid
       witness, a rotated/absent/refused anchor key, a different ``initial_prev``
-      or a different ``CORVIN_AUDIT_VERIFY_NO_KEY_OK`` all force a full walk.
+      or a witness written in the retired relaxed no-key mode all force a full
+      walk. This path never relaxes ``mac_unverifiable_key_absent`` (SEC-12).
     * The memoised problems are the prefix's LINE-NUMBERED ones. Current-state
       problems (``tail_truncated``, ``chain_replaced``, ``records_prepended``,
       ``unanchored_genesis``, ``mac_stripped_chain``, ``anchor_key_insecure_mode``,

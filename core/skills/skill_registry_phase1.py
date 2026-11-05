@@ -684,7 +684,18 @@ class SkillsRegistry:
         return list(self._metadata_by_id.values())
 
     def add_tenant(self, tenant_id: str) -> None:
-        """Register a tenant for isolation (GDPR Art. 5, 6)."""
+        """Register a tenant for isolation (GDPR Art. 5, 6).
+
+        No production host calls this, deliberately (review DLG-10, 2026-11-05):
+        the booted registry's audit and learning backends are bound to the BOOT
+        tenant, and the chain chokepoint (``security_events.write_event``, F-A6)
+        refuses a record tagged with any tenant other than the PROCESS tenant.
+        Admitting a second tenant in a host process therefore writes that
+        tenant's ``skill.executed`` into the boot tenant's chain under the boot
+        tenant's id and turns every learning record into an
+        ``audit.tenant_mismatch`` ERROR (measured). A host serves a second
+        tenant's Skills only with a registry booted in a process of that tenant.
+        """
         if not tenant_id:
             raise ValueError("tenant_id must be non-empty")
         self._allowed_tenants.add(tenant_id)
@@ -972,6 +983,23 @@ class SkillsRegistry:
         if skill_id not in self._skills:
             return False
         return (skill_id, tenant_id) not in self._auto_disabled
+
+    def serves(self, skill_id: str, tenant_id: Optional[str]) -> bool:
+        """True when :meth:`execute` can run ``skill_id`` for ``tenant_id``.
+
+        Registered AND the tenant is admitted (``_validate_tenant_id``) AND the
+        Skill is not auto-/manually disabled for that tenant — the same three
+        checks ``execute`` refuses on, without executing, auditing or touching
+        the failure counters. A caller that reports a Skill as available (the
+        L5 phase gate's ``skill_available``) must use this, not ``get()``:
+        registration alone said "available" for every non-boot tenant and for
+        an auto-disabled router (review DLG-10/DLG-11, 2026-11-05).
+        """
+        if not tenant_id or not isinstance(tenant_id, str):
+            return False
+        if tenant_id not in self._allowed_tenants:
+            return False
+        return self._is_skill_enabled_for_tenant(skill_id, tenant_id)
 
     def enable_skill(self, skill_id: str, tenant_id: Optional[str] = None) -> bool:
         """Manually re-enable an auto-disabled Skill for one tenant (FIX #6, #12).

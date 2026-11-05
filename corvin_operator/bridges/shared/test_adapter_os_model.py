@@ -270,6 +270,26 @@ class BuildClaudeArgsPhase3Tests(_EnvGuard, unittest.TestCase):
             channel="discord", chat_key="test-chat",
         )
         self.assertNotIn("--model", argv)
+        # Tiers 2.7 (workload) and 2.8 (ATO) are AUTOMATIC sources too: the
+        # kill-switch must stop them as well (review DLG-7, 2026-11-05). Before
+        # the fix a confidence-0.01 ATO hint still picked Haiku here.
+        hinted = {**profile, "fast_chat_mode": True}
+        workload = {"workload": "chat", "confidence": 0.99}
+        ato = {"recommended_model": "haiku", "confidence": 0.01, "task_type": "chat"}
+        argv = adapter._build_claude_args(
+            "hi", "unrestricted", hinted, None,
+            channel="discord", chat_key="test-chat", workload_hint=workload,
+        )
+        self.assertNotIn("--model", argv)
+        model, source = _ms.resolve_os_model_with_source(
+            hinted, workload_hint=workload, ato_plan_hint=ato, task_input="hi")
+        self.assertEqual((model, source), (None, "subscription_default"))
+        # Positive control: with the switch ON the same hints DO route, so the
+        # assertions above measured the gate, not a dead hint.
+        os.environ["CORVIN_OS_MODEL_AUTOSELECT"] = "on"
+        _m, on_source = _ms.resolve_os_model_with_source(
+            {"name": "coder"}, ato_plan_hint=ato, task_input="hi")
+        self.assertEqual(on_source, "ato")
 
 
 class ForgePersonaShapeTests(_EnvGuard, unittest.TestCase):

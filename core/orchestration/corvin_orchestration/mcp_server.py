@@ -56,7 +56,7 @@ _WID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 # crashing the whole server on import.
 # ---------------------------------------------------------------------------
 try:
-    from corvin_operator.forge.forge.paths import corvin_home as _corvin_home  # type: ignore[import]
+    from corvin_operator.forge.forge.paths import tenant_audit_chain as _tenant_audit_chain  # type: ignore[import]
     from forge.security_events import write_event as _write_event  # type: ignore[import]
     from corvin_operator.forge.forge.tenants import current_tenant as _current_tenant  # type: ignore[import]
     from corvin_operator.forge.forge.tenants import tenant_home as _tenant_home  # type: ignore[import]
@@ -77,17 +77,32 @@ def _audit_sink_for(tenant_id: str, prefix: str) -> Callable[[dict], None] | Non
     ``audit_sink=None`` as "skip" don't pay a wasted call."""
     if not _FORGE_AVAILABLE:
         return None
+    # THE tenant chain (CLAUDE.md "ONE audit chain per tenant", ADR-0654) —
+    # resolved, never composed by hand. Until 2026-11-05 this wrote
+    # ``<home>/tenants/<tid>/audit.jsonl``, a sibling the boot tripwire,
+    # ``audit_query`` and every compliance report never read. Records already
+    # in that file are NOT merged, moved or deleted: it is the ``tenant_root``
+    # entry of ``forge.paths.legacy_audit_chains()``, so the boot tripwire's
+    # ``audit_unification`` check links it to this chain with an
+    # ``audit.chain_supersedes`` seam (``security_events.chain_seam_links``).
     try:
-        audit_path = _corvin_home() / "tenants" / tenant_id / "audit.jsonl"
-    except Exception:  # noqa: BLE001
+        audit_path = _tenant_audit_chain(tenant_id)
+    except ValueError as exc:  # InvalidTenantID — there is no chain to write to
+        print(f"[corvin-orchestration] audit disabled: {exc}", file=sys.stderr)
         return None
 
     def _sink(event: dict) -> None:
+        ev = event.get("event", "event")
         try:
-            ev = event.get("event", "event")
             _write_event(audit_path, f"{prefix}.{ev}", severity="INFO", details=event)
-        except Exception:  # noqa: BLE001
-            pass  # never let audit shaping abort a live run
+        except Exception as exc:  # noqa: BLE001 — never let audit shaping abort a live run
+            # Visible, never silent: stdout is the JSON-RPC channel, stderr
+            # is the MCP host's log.
+            print(
+                f"[corvin-orchestration] audit write failed for {prefix}.{ev}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
 
     return _sink
 
