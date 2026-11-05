@@ -77,7 +77,7 @@ class KnowledgeGraphIsProvisionedAndEnabledByBoot(unittest.TestCase):
         (e,) = _entry(self.dp)
         self.assertTrue(e["enable"])
         self.assertEqual(e["replaces"], _OLD)
-        self.assertEqual(e["min_version"], "1.3.0")   # 1.3.0: the Windows + multi-tenant fixes
+        self.assertEqual(e["min_version"], "1.2.0")   # the PUBLISHED build (review 2026-11-05: a 1.3.0 pin skipped the plugin on every fresh install)
 
     def test_fresh_tenant_boot_installs_enables_and_binds_without_a_step(self):
         with _sandbox(self.tmp) as (client, csrf, home, _):

@@ -43,11 +43,15 @@ plugins:
   - index_id: plugin:buildin-knowledge_management-corvin_knowledge
     registry_id: corvin_knowledge
     name: Knowledge Graph
-    min_version: "1.3.0"
+    min_version: "1.2.0"
     enable: true
-    # 1.3.0: 1.2.0 never created a tenant KB on Windows (its CRLF checkout failed the engine hash, and
-    # the engine's text-mode fds corrupted .git/index), and as a context_retriever it was refused a
-    # provider slot on every multi-tenant install. Publish the marketplace BEFORE this file.
+    # Review 2026-11-05: this pin said "1.3.0" since 0105fa870 (2026-11-03) while the marketplace
+    # publishes 1.2.0 (6df5837) and no 1.3.0 build exists in any repo — so EVERY fresh install
+    # skipped the Knowledge Graph ("marketplace lists 1.2.0, below min_version 1.3.0"). 1.2.0 is
+    # the published build again. Known limit of 1.2.0, to be fixed by a published 1.3.0: on
+    # Windows its CRLF checkout failed the engine hash and the engine's text-mode fds corrupted
+    # .git/index, so no tenant KB was created there; and as a context_retriever it was refused a
+    # provider slot on every multi-tenant install. Publish the marketplace BEFORE raising this pin.
     # First-party (buildin tier -> origin vetted, requires_consent: false, local-only), so boot
     # enables it: the board projector then creates the tenant's own knowledge base
     # (<tenant_home>/knowledge) on its next tick — no restart, no operator step (ADR-2265).
