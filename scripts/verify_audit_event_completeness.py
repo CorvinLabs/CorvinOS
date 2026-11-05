@@ -197,31 +197,90 @@ _WRITER_CALLEES = {"write_event", "_write_event", "_log_security_event", "log_se
                    "audit_event", "_audit", "_emit", "emit_event",
                    "_audit_event", "audit_emit", "_audit_log", "_emit_audit",
                    "_audit_write", "_write_audit", "emit", "audit"}
+#: Injected writer CALLABLES (a parameter or attribute holding the chain writer, never a
+#: ``def``), so :func:`derive_writer_callees` cannot see them by definition (refutation
+#: 2026-11-05, RS-10: ``awp_walker``'s ``audit_writer``, ``rollback_manager``'s
+#: ``audit_callback``, ``browser.compliance``'s ``audit_fn``).
+_INJECTED_WRITERS = {"audit_writer", "_audit_writer", "audit_callback", "audit_fn", "_audit_fn"}
 _EVENT_KEYWORDS = {"event_type", "event"}
+_FACTORY_RE = re.compile(r"audit|emit", re.IGNORECASE)
+#: A dotted literal ending like this is a FILE name a helper was handed, not an event.
+_FILE_SUFFIXES = (".jsonl", ".json", ".ndjson", ".py", ".md", ".yaml", ".yml", ".toml", ".txt",
+                  ".sig", ".sha256")
 _EVENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$")
 
 
+def _passes_param_as_event(call: ast.Call, params: set[str]) -> bool:
+    cands = list(call.args[:2]) + [kw.value for kw in call.keywords if kw.arg in _EVENT_KEYWORDS]
+    return any(isinstance(a, ast.Name) and a.id in params for a in cands)
+
+
+def derive_writer_callees(trees: "list[ast.AST]") -> set[str]:
+    """Every function that hands one of its parameters to a writer callee as the event
+    name, to a fixpoint (``_hr_classifier_audit(event_type, …)`` → ``_audit_write`` →
+    ``write_event``). A fixed name list missed 40+ such helpers - L44's
+    ``house_rules.denied``, ``social.signature_invalid``, ``plugin.load_refused``,
+    ``license.key_integrity_mismatch`` were written at INFO with floored details and the
+    gate passed (RS-10)."""
+    defs: list[tuple[str, set[str], list[ast.Call]]] = []
+    for tree in trees:
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            a = fn.args
+            params = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
+            params.discard("self")
+            params.discard("cls")
+            if not params:
+                continue
+            calls = [c for c in ast.walk(fn) if isinstance(c, ast.Call)]
+            defs.append((fn.name, params, calls))
+    callees = set(_WRITER_CALLEES) | _INJECTED_WRITERS
+
+    def _is_writer(c: ast.Call) -> bool:
+        if _call_name(c) in callees:
+            return True
+        # A writer factory called inline: ``_default_audit_emit(tid)(event_type, details)``.
+        inner = c.func
+        return isinstance(inner, ast.Call) and bool(_FACTORY_RE.search(_call_name(inner)))
+
+    changed = True
+    while changed:
+        changed = False
+        for name, params, calls in defs:
+            if name in callees:
+                continue
+            if any(_is_writer(c) and _passes_param_as_event(c, params) for c in calls):
+                callees.add(name)
+                changed = True
+    return callees
+
+
 def find_unregistered_emissions(severity: set[str]) -> dict[str, list[str]]:
-    """Heuristic: literal event names passed to a known writer callee that have
-    NO ``EVENT_SEVERITY`` entry (the writer defaults them to INFO and floors
-    their details). Informational — a literal scan cannot tell a
-    ``security_events`` writer from a same-named helper of another sink, so
-    it reports, it does not gate."""
+    """Heuristic: literal event names passed to a writer callee - the fixed
+    :data:`_WRITER_CALLEES`, the injected writers and every helper
+    :func:`derive_writer_callees` finds - that have NO ``EVENT_SEVERITY`` entry
+    (the writer defaults them to INFO and floors their details). A literal scan
+    cannot tell a ``security_events`` writer from a same-named helper of another
+    sink; the shrink-only baseline absorbs those."""
     found: dict[str, list[str]] = {}
+    parsed: list[tuple[Path, ast.AST]] = []
     for path in _py_sources():
         try:
-            tree = ast.parse(path.read_text("utf-8", errors="ignore"))
+            parsed.append((path, ast.parse(path.read_text("utf-8", errors="ignore"))))
         except SyntaxError:
             continue
+    callees = derive_writer_callees([t for _p, t in parsed])
+    for path, tree in parsed:
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or _call_name(node) not in _WRITER_CALLEES:
+            if not isinstance(node, ast.Call) or _call_name(node) not in callees:
                 continue
             cands = list(node.args[:2]) + [kw.value for kw in node.keywords
                                            if kw.arg in _EVENT_KEYWORDS]
             for arg in cands:
                 v = arg.value if isinstance(arg, ast.Constant) else None
                 if (isinstance(v, str) and _EVENT_NAME_RE.match(v) and v not in severity
-                        and not v.endswith((".jsonl", ".json", ".py"))):
+                        and not v.endswith(_FILE_SUFFIXES)):
                     rel = str(path.relative_to(REPO_ROOT))
                     if rel not in found.setdefault(v, []):
                         found[v].append(rel)

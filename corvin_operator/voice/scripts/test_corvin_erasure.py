@@ -293,8 +293,10 @@ class TestExitCodes(unittest.TestCase):
             # any layer the chain gains that is not forced to fail turns the
             # expected FAILED (3) into PARTIAL (2).
             from erasure_orchestrator import builtin_stub_chain
+            from erasure_handlers import root_routing_store_handlers
 
-            for handler in builtin_stub_chain():
+            # --use-stubs still runs the four root-level routing stores (RS-16): force them too.
+            for handler in builtin_stub_chain() + root_routing_store_handlers():
                 corvin_erasure.register_handler(_FailAll(handler.layer_id))
             with redirect_stdout(io.StringIO()), \
                  redirect_stderr(io.StringIO()) as err:

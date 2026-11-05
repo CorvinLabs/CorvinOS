@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import os
 import time
 import unittest
 from pathlib import Path
@@ -60,7 +61,9 @@ def _emit_outcome(audit_path: Path, *, signal: str, skill: str,
 class _Base(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="us-cli-"))
-        self.audit = self.tmp / "global" / "forge" / "audit.jsonl"
+        # THE tenant chain under the --corvin-home root (RS-9: no longer the host-wide file).
+        tid = (os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default"
+        self.audit = self.tmp / "tenants" / tid / "global" / "forge" / "audit.jsonl"
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)

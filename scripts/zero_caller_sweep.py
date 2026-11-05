@@ -83,6 +83,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 BASELINE = Path(__file__).resolve().parent / "zero_caller_baseline.json"
 SCAN_DIRS = ("core", "corvin_operator", "ops", "corvinOS", "scripts", "tools")
+#: Shipped/installed Python OUTSIDE ``SCAN_DIRS`` that must still parse on MIN_PYTHON:
+#: ``hatch_build.py`` runs on every pip/uv install of the wheel, ``build_wheels.py`` builds
+#: it, ``monitoring/`` and ``compliance/`` ship with the repo. They take part in the
+#: 3.11 parse gate only - not in the reachability analysis, which has no entry point
+#: for them (refutation 2026-11-05, RS-14: the parse ratchet did not cover them).
+PARSE_ONLY = ("hatch_build.py", "build_wheels.py", "monitoring", "compliance")
 EXCLUDE_PARTS = {"tests", "test", "node_modules", ".venv", "venv", "__pycache__",
                  "worktrees", ".claude", "archived_v2", "dist", "build",
                  # The live runtime tree: worker-written outputs are not
@@ -175,6 +181,19 @@ def production_files() -> list[Path]:
                 continue
             out.append(f)
     return sorted(out)
+
+
+def parse_only_files() -> list[Path]:
+    out = []
+    for name in PARSE_ONLY:
+        base = REPO / name
+        cands = [base] if base.is_file() else (sorted(base.rglob("*.py")) if base.is_dir() else [])
+        for f in cands:
+            rel = f.relative_to(REPO)
+            if EXCLUDE_PARTS & set(rel.parts[:-1]) or _is_test(f):
+                continue
+            out.append(f)
+    return out
 
 
 def module_name(f: Path) -> str:
@@ -989,6 +1008,9 @@ def sweep() -> dict:
     dead += [{"file": str(f.relative_to(REPO)), "class": "<unparseable>",
               "contract": "-", "kind": f"does not parse on Python {ver}"}
              for f in idx.files if idx.tree(f) is None]
+    dead += [{"file": str(f.relative_to(REPO)), "class": "<unparseable>",
+              "contract": "-", "kind": f"does not parse on Python {ver}"}
+             for f in parse_only_files() if _parse(f) is None]
     return {"modules": len(idx.files), "reachable": len(live),
             "implementations": len(impls), "dead": sorted(dead, key=lambda d: (d["file"], d["class"])),
             "min_python_checked": sys.version_info[:2] == MIN_PYTHON}

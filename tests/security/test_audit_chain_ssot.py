@@ -313,16 +313,36 @@ def _call_name(node):
 
 
 def _div_chain(node):
+    """``(base, literals, wrapped)``: the root of a ``/`` chain, its string literals, and
+    whether the root sat inside ``Path(...)``. ``Path.home() / ".corvin"`` is one root."""
     parts = []
     cur = node
     while isinstance(cur, _ast.BinOp) and isinstance(cur.op, _ast.Div):
         parts.append(cur.right)
         cur = cur.left
     parts.reverse()
+    wrapped = False
     if _call_name(cur) == "Path" and getattr(cur, "args", None):
         cur = cur.args[0]
-    return cur, [p.value if isinstance(p, _ast.Constant) and isinstance(p.value, str) else None
-                 for p in parts]
+        wrapped = True
+    lits = [p.value if isinstance(p, _ast.Constant) and isinstance(p.value, str) else None
+            for p in parts]
+    if _call_name(cur) == "home" and lits[:1] == [".corvin"]:  # Path.home() / ".corvin"
+        lits = lits[1:]
+        wrapped = True
+    return cur, lits, wrapped
+
+
+def _is_env_home(node) -> bool:
+    """``os.environ.get("CORVIN_HOME")`` / ``os.getenv("CORVIN_HOME")`` /
+    ``os.environ["CORVIN_HOME"]`` (RS-9: the ``Path(env)`` shape was invisible)."""
+    if isinstance(node, _ast.Call) and _call_name(node) in ("get", "getenv") and node.args:
+        a = node.args[0]
+        return isinstance(a, _ast.Constant) and a.value == "CORVIN_HOME"
+    if isinstance(node, _ast.Subscript):
+        sl = node.slice
+        return isinstance(sl, _ast.Constant) and sl.value == "CORVIN_HOME"
+    return False
 
 
 def _host_chain_lines(src: str) -> list[int]:
@@ -333,21 +353,29 @@ def _host_chain_lines(src: str) -> list[int]:
     homes: set[str] = set()
     forge_dirs: set[str] = set()
     for node in _ast.walk(tree):
-        if isinstance(node, _ast.Assign) and _call_name(node.value) in _HOME_RESOLVERS:
+        if isinstance(node, _ast.Assign) and (_call_name(node.value) in _HOME_RESOLVERS
+                                              or _is_env_home(node.value)):
             homes |= {t.id for t in node.targets if isinstance(t, _ast.Name)}
-    def _is_home(base):
-        return _call_name(base) in _HOME_RESOLVERS or (isinstance(base, _ast.Name) and base.id in homes)
+
+    def _is_home(base, wrapped=False):
+        # A resolver call, a name bound to one or to the CORVIN_HOME env value, the env
+        # value itself, and - inside ``Path(...)`` - ANY call (``Path(_ch())``, RS-9).
+        if _call_name(base) in _HOME_RESOLVERS or _is_env_home(base):
+            return True
+        if isinstance(base, _ast.Name) and base.id in homes:
+            return True
+        return wrapped and isinstance(base, _ast.Call)
     for node in _ast.walk(tree):
         if isinstance(node, _ast.Assign) and isinstance(node.value, _ast.BinOp):
-            base, lits = _div_chain(node.value)
-            if _is_home(base) and lits == ["global", "forge"]:
+            base, lits, wrapped = _div_chain(node.value)
+            if _is_home(base, wrapped) and lits == ["global", "forge"]:
                 forge_dirs |= {t.id for t in node.targets if isinstance(t, _ast.Name)}
     hits = []
     for node in _ast.walk(tree):
         if not (isinstance(node, _ast.BinOp) and isinstance(node.op, _ast.Div)):
             continue
-        base, lits = _div_chain(node)
-        if _is_home(base) and lits[:1] == ["global"] and "audit.jsonl" in lits:
+        base, lits, wrapped = _div_chain(node)
+        if _is_home(base, wrapped) and lits[:1] == ["global"] and "audit.jsonl" in lits:
             hits.append(node.lineno)
         elif isinstance(base, _ast.Name) and base.id in forge_dirs and "audit.jsonl" in lits:
             hits.append(node.lineno)
@@ -371,6 +399,18 @@ def test_scanner_finds_the_hand_built_host_chain_shapes():
     assert _host_chain_lines(bound) == [3]
     assert _host_chain_lines(local) == [2]
     assert _host_chain_lines(canonical) == []
+    # RS-9 (refutation 2026-11-05): the shapes user_style.py used were invisible.
+    env_bound = ('import os\nfrom pathlib import Path\ndef p():\n'
+                 '    env = os.environ.get("CORVIN_HOME")\n'
+                 '    return Path(env) / "global" / "forge" / "audit.jsonl"\n')
+    env_direct = 'z = Path(os.environ["CORVIN_HOME"]) / "global" / "forge" / "audit.jsonl"\n'
+    any_call = 'z = Path(_ch()) / "global" / "forge" / "audit.jsonl"\n'
+    user_home = 'z = Path.home() / ".corvin" / "global" / "forge" / "audit.jsonl"\n'
+    assert _host_chain_lines(env_bound) == [5]
+    assert _host_chain_lines(env_direct) == [1]
+    assert _host_chain_lines(any_call) == [1]
+    assert _host_chain_lines(user_home) == [1]
+    assert _host_chain_lines('z = Path(x) / "tenants" / t / "global" / "audit.jsonl"\n') == []
 
 
 def test_no_production_writer_composes_the_host_wide_chain():

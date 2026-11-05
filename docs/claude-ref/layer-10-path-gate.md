@@ -76,6 +76,19 @@ returned `False` for the home root, an intermediate dir, or a glob pattern:
    *at-or-under* (not ancestor) semantics, so ordinary `cd ~ && rm -rf
    Downloads/x` or `cd <repo> && rm -rf dist` (which descend AWAY from the tree)
    are NOT over-blocked.
+4. **MCP-server self-start (`_MCP_SERVER_SELF_START_RE`, refutation 2026-11-05 RL-5).**
+   A Bash command in which an interpreter (`python*`, `pypy*`, `py`, `uv`, `uvx`) is
+   followed, in the same segment, by `-m skill_forge.mcp_server`,
+   `…skill_forge/mcp_server.py`, `forge.py mcp` or `-m forge mcp` is denied (quotes and
+   backslashes removed first): such a server takes its caller persona from the env the
+   WORKER gives it (`CORVIN_CALLER_PERSONA=skill-forge python3 -m skill_forge.mcp_server`).
+   Reading or testing the file (`grep`, `cat`, `pytest …/skill-forge/tests`) stays
+   allowed. A naive-start guard only: the skill-forge server itself honours the
+   operator's wildcard solely for a resolver-recorded launch
+   (`skill_forge/launch_record.py`), and both are ATTRIBUTION, not isolation — a worker
+   that writes and runs its own launcher is the residual below. Proof:
+   `corvin_operator/voice/hooks/test_path_gate_mcp_self_start.py` (the real hook
+   process) and `test_path_gate.py` § 3c.
 
 ## Known residual (by design)
 
@@ -153,11 +166,15 @@ venv → `python`). The three PreToolUse gates — `path_gate.py`,
 `with_python.sh --fail-closed <gate>.py`: when no Python 3 resolves, the launcher
 exits **2** (the only blocking exit code) and names the gate as denied. Before, it
 exited 1 for every hook — a non-blocking error, so on a host without an interpreter
-every gated tool call ran ungated. The best-effort hooks (`artifact_register`,
+every gated tool call ran ungated. Under `--fail-closed` the launcher does not `exec`
+the interpreter: it runs the gate and passes through only 0 (allow) and 2 (deny); any
+other status - a Python that resolves but cannot start (stale `PYTHONHOME`, a broken
+venv stdlib, a stub that exits 1), a traceback, 126/127, a signal - becomes 2 (RS-2).
+The best-effort hooks (`artifact_register`,
 `notification_relay`, `ldd_auto_optin`) keep exit 1. A hand-registered hook in
 `~/.claude/settings.json` that calls the gate through the launcher must pass
 `--fail-closed` as well. Test: `tests/security/test_review_20261105_sec_e2e.py`
-(`test_sec2_*`, the manifest's own command line through `/bin/sh -c`).
+(`test_sec2_*`, `test_rs2_*`, the manifest's own command line through `/bin/sh -c`).
 
 ## Must NOT do
 

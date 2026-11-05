@@ -187,12 +187,15 @@ def test_l44_error_and_unimportable_gate_refuse_fail_closed(home, monkeypatch):
 
 
 def test_classifier_error_refuses(home, monkeypatch):
+    """The grader's banks (secret, personal data) are consulted directly (RS-1); a bank that
+    raises refuses, never grades the payload PUBLIC."""
     import data_classification
 
-    def boom(*a, **k):
-        raise RuntimeError("classifier exploded")
+    class _Boom:
+        def search(self, _text):
+            raise RuntimeError("classifier exploded")
 
-    monkeypatch.setattr(data_classification, "classify_task", boom)
+    monkeypatch.setattr(data_classification, "_SECRET_PATTERNS", [_Boom()])
     assert _evaluate("x").reason_code == "gate_unavailable"
 
 

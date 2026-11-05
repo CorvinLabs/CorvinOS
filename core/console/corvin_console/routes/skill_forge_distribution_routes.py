@@ -319,7 +319,7 @@ async def install_skill(
     url: Optional[str] = Query(None, description="Not supported — see below"),
 ) -> Dict:
     """
-    Install a packaged Skill into the host's installed-skill store.
+    Install a packaged Skill into the session tenant's installed-skill store (RS-11).
 
     **Phase 4 Operation.** Owner/admin only. The package must sit in the
     packages root (where ``/package`` writes it); its identity comes from its
@@ -372,7 +372,7 @@ async def install_skill(
     metadata = _manifest_from_zip(pkg_path)
     target = f"{metadata['skill_id']}@{metadata['version']}"
     try:
-        ok, msg = get_installer().install_skill(pkg_path, zip_hash, metadata)
+        ok, msg = get_installer(rec.tenant_id).install_skill(pkg_path, zip_hash, metadata)
     except Exception:  # noqa: BLE001
         logger.exception("skill install failed")
         ok, msg = False, "Error: install failed"
@@ -395,7 +395,7 @@ async def install_skill(
 @router.get("/installed")
 async def list_installed_skills(rec: Annotated[Any, Depends(require_session)]) -> Dict:
     """
-    List all installed Skills (the same store ``/skills-manager`` manages).
+    List the session tenant's installed Skills (the same store ``/skills-manager`` manages).
 
     Returns:
         {"skills": [{"skill_id", "version", "boot_layer", "verified", "status"}]}
@@ -403,7 +403,7 @@ async def list_installed_skills(rec: Annotated[Any, Depends(require_session)]) -
     ``status`` is ``healthy`` only when the version's directory exists on disk.
     """
     try:
-        installer = get_installer()
+        installer = get_installer(rec.tenant_id)
         registry = installer._load_registry()
     except Exception:
         logger.exception("Error listing installed skills")

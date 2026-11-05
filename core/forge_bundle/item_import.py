@@ -189,8 +189,7 @@ def _import_single_skill(
         import shutil
         import tempfile
 
-        from forge import paths as _forge_paths
-
+        from core.skills.installed_prompt_skills import installed_store_root  # RS-11: per tenant
         from core.skills.manifest_v2 import SkillManifestV2
         from core.skills.skill_installer import SkillInstaller
         from core.skills.skill_packager import SkillPackager
@@ -236,7 +235,7 @@ def _import_single_skill(
             if not prompt_only:
                 manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text(encoding="utf-8")))
                 zip_path, zip_hash, _meta = SkillPackager(Path(tmp) / "out").package(work, manifest)
-                ok, message = SkillInstaller(_forge_paths.corvin_home() / "skills_installed").install_skill(
+                ok, message = SkillInstaller(installed_store_root(tenant_id)).install_skill(
                     zip_path, zip_hash,
                     {"skill_id": detected.item_id, "version": detected.item_version, "dependencies": []})
                 if not ok:

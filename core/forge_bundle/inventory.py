@@ -72,8 +72,10 @@ def _forged_skills(*, strict: bool = False) -> list[dict[str, Any]]:
     return out
 
 
-def _installed_skills() -> dict[str, list[str]]:
-    reg = _corvin_home() / "skills_installed" / "skills_registry.json"
+def _installed_skills(tenant_id: str) -> dict[str, list[str]]:
+    from core.skills.installed_prompt_skills import installed_store_root  # noqa: PLC0415
+
+    reg = installed_store_root(tenant_id) / "skills_registry.json"  # RS-11: the tenant's store
     if not reg.exists():
         return {}
     try:
@@ -118,7 +120,7 @@ def _known(tenant_id: str) -> dict[str, dict[str, Any]]:
     skills: dict[str, set[str]] = {}
     for s in _forged_skills(strict=True):
         skills.setdefault(s["id"], set()).add(s["version"])
-    for sid, versions in _installed_skills().items():
+    for sid, versions in _installed_skills(tenant_id).items():
         skills.setdefault(sid, set()).update(v for v in versions if isinstance(v, str))
     layers: dict[str, set[str]] = {}
     for m in _layers(tenant_id):

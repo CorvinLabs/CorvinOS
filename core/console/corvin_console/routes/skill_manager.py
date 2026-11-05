@@ -24,7 +24,7 @@ from core.skills.skill_installer import SkillInstaller
 
 from .. import audit
 from .. import auth as session_auth
-from ..deps import require_csrf, require_session_csrf_on_mutation
+from ..deps import require_csrf, require_session, require_session_csrf_on_mutation
 
 log = logging.getLogger(__name__)
 
@@ -33,15 +33,17 @@ router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
 _MAX_ZIP_BYTES = 100 * 1024 * 1024
 
 
-def installed_skills_root() -> Path:
-    """The host's installed-skill store — the same directory SkillInstaller
-    defaults to, but resolved through ``corvin_home()`` so ``CORVIN_HOME`` is
-    honoured (a hard-wired ``~/.corvin`` let tests write into the live install)."""
-    return _forge_paths.corvin_home() / "skills_installed"
+def installed_skills_root(tenant_id: str) -> Path:
+    """The session tenant's installed-skill store (``installed_store_root``): resolved
+    through ``corvin_home()`` so ``CORVIN_HOME`` is honoured, and per tenant since RS-11
+    (one host-wide store let any tenant's owner install into every tenant's boot)."""
+    from core.skills.installed_prompt_skills import installed_store_root  # noqa: PLC0415
+
+    return installed_store_root(tenant_id)
 
 
-def get_installer() -> SkillInstaller:
-    return SkillInstaller(installed_skills_root())
+def get_installer(tenant_id: str) -> SkillInstaller:
+    return SkillInstaller(installed_skills_root(tenant_id))
 
 
 def _owner_mutation(
@@ -56,10 +58,12 @@ Mutation = Annotated[session_auth.SessionRecord, Depends(_owner_mutation)]
 
 
 @router.get("/skills/installed", tags=["skill-manager"])
-async def list_installed_skills():
-    """List all installed skills."""
+async def list_installed_skills(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+):
+    """List the session tenant's installed skills."""
     try:
-        registry = get_installer()._load_registry()
+        registry = get_installer(rec.tenant_id)._load_registry()
     except Exception:
         log.exception("skill registry unreadable")
         raise HTTPException(status_code=500, detail="skill registry unreadable")
@@ -93,7 +97,7 @@ async def install_skill(
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(content)
-        success, msg = get_installer().install_skill(
+        success, msg = get_installer(rec.tenant_id).install_skill(
             Path(tmp_name),
             hashlib.sha256(content).hexdigest(),
             {"skill_id": skill_id, "version": version},
@@ -125,7 +129,7 @@ async def install_skill(
 @router.delete("/skills/uninstall/{skill_id}/{version}", tags=["skill-manager"])
 async def uninstall_skill(skill_id: str, version: str, rec: Mutation):
     """Uninstall skill version."""
-    success, msg = get_installer().uninstall_skill(skill_id, version)
+    success, msg = get_installer(rec.tenant_id).uninstall_skill(skill_id, version)
     target = f"{skill_id}@{version}"[:200]
     if not success:
         audit.action_failed(
@@ -143,10 +147,12 @@ async def uninstall_skill(skill_id: str, version: str, rec: Mutation):
 
 
 @router.get("/skills/health", tags=["skill-manager"])
-async def health_check():
-    """Health check for skill manager."""
+async def health_check(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+):
+    """Health check for skill manager (the session tenant's store)."""
     try:
-        registry = get_installer()._load_registry()
+        registry = get_installer(rec.tenant_id)._load_registry()
     except Exception:
         log.exception("skill registry unreadable")
         raise HTTPException(status_code=500, detail={"status": "error"})

@@ -123,6 +123,20 @@ def _maybe_register_real_handlers(tenant_id: str) -> None:
             register_handler(h)
 
 
+def _register_root_routing_handlers(tenant_id: str) -> None:
+    """``--use-stubs`` keeps the stub chain for the per-layer handlers, but the four
+    root-level routing stores (bg_watch.json, pending_notifications/, task_progress/,
+    task_runs/) are real stores with no stub: they are always purged (RS-16)."""
+    try:
+        from erasure_handlers import root_routing_store_handlers  # type: ignore
+    except ImportError:
+        return
+    existing = {h.layer_id for h in _REGISTERED_HANDLERS}
+    for h in root_routing_store_handlers(tenant_id=tenant_id):
+        if h.layer_id not in existing:
+            register_handler(h)
+
+
 def _build_orchestrator(home: Path, tenant_id: str) -> Any:
     from erasure_orchestrator import (  # type: ignore
         ErasureOrchestrator,
@@ -181,6 +195,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Disable via --use-stubs to fall back to the M4-shipped stub chain.
     if not args.use_stubs:
         _maybe_register_real_handlers(tenant_id)
+    else:
+        _register_root_routing_handlers(tenant_id)
 
     try:
         orch = _build_orchestrator(home, tenant_id)

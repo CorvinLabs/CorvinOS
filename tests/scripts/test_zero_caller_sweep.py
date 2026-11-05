@@ -534,3 +534,23 @@ def test_every_production_file_parses_on_the_oldest_supported_python():
     of MIN_PYTHON (fully enforced when this runs on 3.11, as in CI)."""
     bad = [str(f.relative_to(z.REPO)) for f in z.production_files() if z._parse(f) is None]
     assert bad == []
+
+
+def test_parse_gate_covers_files_outside_the_scan_dirs(tmp_path, monkeypatch):
+    """RS-14: ``hatch_build.py`` runs on every pip/uv install, ``monitoring/`` ships; a
+    3.12-only construct there was invisible to the 3.11 ratchet."""
+    _tree(tmp_path, {"core/main.py": "x = 1\n", "hatch_build.py": "type Alias = int\n",
+                     "monitoring/probe.py": "type Other = str\n",
+                     "monitoring/tests/test_x.py": "type T = int\n"})
+    _sandbox(monkeypatch, tmp_path)
+    dead = _dead()
+    assert ("hatch_build.py", "<unparseable>") in dead
+    assert ("monitoring/probe.py", "<unparseable>") in dead
+    assert ("monitoring/tests/test_x.py", "<unparseable>") not in dead  # tests stay out
+
+
+def test_parse_only_files_parse_on_the_oldest_supported_python():
+    files = z.parse_only_files()
+    names = {str(f.relative_to(z.REPO)) for f in files}
+    assert "hatch_build.py" in names and any(n.startswith("monitoring/") for n in names)
+    assert [str(f.relative_to(z.REPO)) for f in files if z._parse(f) is None] == []

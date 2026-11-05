@@ -59,7 +59,7 @@ def registry(tmp_path, monkeypatch) -> Path:
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     root = tmp_path / "skills_installed"
     from core.console.corvin_console.routes.skill_manager import installed_skills_root
-    assert installed_skills_root().resolve() == root.resolve()  # positive control
+    assert installed_skills_root("_default").resolve() == root.resolve()  # positive control
     return root
 
 

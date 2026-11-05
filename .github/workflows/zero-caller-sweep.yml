@@ -65,6 +65,12 @@ jobs:
           python3 -m pip install --quiet pytest
           python3 -m pytest -q -p no:tests.fixtures_console tests/scripts/test_zero_caller_sweep.py
 
+      # SRF-2 / RS-14: the installer and the maintainer CLI must import in a FRESH 3.11
+      # interpreter (the test spawns sys.executable). Only a 3.11 job proves anything: the
+      # suite job (test.yml) runs 3.12, where PEP 701 f-strings parse.
+      - name: Installer imports on Python 3.11
+        run: python3 -m pytest -q -p no:tests.fixtures_console tests/test_installer_py311_import.py
+
   # C-1 path composition guard (measuring mode): no NEW hand-built tenant/chain
   # path composition, counts only shrink. Baseline:
   # scripts/path_composition_baseline.json (ratcheted; additions need

@@ -215,6 +215,19 @@ def main():
     p_export.set_defaults(func=cmd_export)
 
     args = parser.parse_args()
+    # RS-4 (refutation 2026-11-05): the command runs AS the tenant it names. The audit chokepoint
+    # compares a record's tenant tag with the PROCESS tenant (CORVIN_TENANT_ID); a shell without
+    # the variable is ``_default``, so ``open --tenant acme`` had its Art. 73 record refused.
+    # Validated first: the id also names the incident store directory.
+    _forge = _HERE.parent.parent / "forge"
+    if _forge.is_dir() and str(_forge) not in sys.path:
+        sys.path.insert(0, str(_forge))
+    try:
+        from forge.tenants import validate_tenant_id  # noqa: PLC0415
+        args.tenant = validate_tenant_id(args.tenant)
+    except ValueError as exc:
+        sys.exit(f"Error: invalid --tenant: {exc}")
+    os.environ["CORVIN_TENANT_ID"] = args.tenant
     try:
         args.func(args)
     except FileNotFoundError as exc:

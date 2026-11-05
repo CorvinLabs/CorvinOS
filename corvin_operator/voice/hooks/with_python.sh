@@ -9,6 +9,8 @@
 # denies the tool call instead of running it ungated. Without the flag (the
 # best-effort hooks: artifact_register, notification_relay, ldd_auto_optin)
 # it exits 1, a non-blocking hook error, as before (review 2026-11-05, SEC-2).
+# Under --fail-closed ANY failure to start or run the gate (exit status other
+# than 0 or 2, incl. a signal) is mapped to 2 as well (RS-2).
 #
 # hooks.json ran every hook as `python3 …`. A fresh system installed per the
 # README has NO python3 on PATH: the installer brings uv's Python only inside
@@ -69,4 +71,19 @@ fi
 case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*) PYTHONUTF8="${PYTHONUTF8:-1}"; export PYTHONUTF8 ;;
 esac
+# --fail-closed: do NOT exec. A Python that resolves but cannot start (a stale
+# PYTHONHOME, a broken venv stdlib, a stub that exits 1) or a gate that crashes
+# with a traceback exits 1 — NON-blocking for Claude Code, so the gated tool call
+# would proceed ungated. Only a gate that ran and decided (0 = allow, 2 = deny)
+# passes its own code through; every other status — 1, 126/127, a signal
+# (128+n) — becomes 2 (refutation round 2026-11-05, RS-2).
+if [ "$_miss_rc" = 2 ]; then
+    "$_py" "$here/$script" "$@"
+    _rc=$?
+    if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
+        echo "corvin hooks: $script did not run to a decision ($_py exited $_rc) — fail-closed gate: tool call DENIED" >&2
+        _rc=2
+    fi
+    exit "$_rc"
+fi
 exec "$_py" "$here/$script" "$@"

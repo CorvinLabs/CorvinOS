@@ -33,7 +33,10 @@ Storage
 -------
 Single JSON file per (channel, chat) at::
 
-    <corvin_home>/global/roles/<safe_channel>__<safe_chat>.json
+    <corvin_home>/tenants/<tid>/global/roles/<safe_channel>__<safe_chat>.json
+
+(a pre-2026-11-05 file at ``<corvin_home>/global/roles/`` is a read-only legacy
+layer, read as the fallback and never moved — see :func:`_store_path`.)
 
 ::
 
@@ -176,12 +179,14 @@ def _store_path(channel: str, chat_key: str, *, tenant_id: str | None = None) ->
     (``CORVIN_TENANT_ID``), else ``_default``. Until 2026-11-05 every caller
     passed no tenant and the store sat at the pre-tenancy root
     ``<home>/global/roles/`` — outside every tenant's Art. 17 sweep (review
-    SEC-6). Records there carry no tenant id, so (like the console's members
-    view) they belong to ``_default``: the first access of the default tenant
-    MOVES a root-level chat file into the tenant path, once (``os.replace``,
-    same filesystem). If that move fails the legacy file is returned so the
-    state is still READ (a lost roles record would re-show the card / drop the
-    role) and the failure is logged; the next access retries the move.
+    SEC-6). Records there carry no tenant id and may have been written by ANY
+    tenant's process, so they are never moved or re-attributed (refutation
+    2026-11-05, RS-7: moving them into ``_default`` handed another tenant's
+    records to ``_default``). The root store is a read-only LEGACY layer:
+    :func:`_load_store` reads it as the fallback while a tenant has no file of
+    its own for that chat (the tenant's first write then creates its file from
+    that view), and every tenant's Art. 17 erasure scans it
+    (``erasure_handlers.UidKeyedStoreHandler``).
     """
     safe_channel = _safe_component(channel or "unknown")
     safe_chat = _safe_component(str(chat_key) if chat_key is not None else "anon")
@@ -189,21 +194,6 @@ def _store_path(channel: str, chat_key: str, *, tenant_id: str | None = None) ->
     tid = _process_tenant(tenant_id)
     name = f"{safe_channel}__{safe_chat}.json"
     path = home / "tenants" / tid / "global" / "roles" / name
-    if tid == "_default" and not path.exists():
-        legacy = home / "global" / "roles" / name
-        if legacy.is_file() and not legacy.is_symlink():
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(legacy, path)
-                legacy.with_suffix(legacy.suffix + ".lock").unlink(missing_ok=True)
-            except FileNotFoundError:
-                pass  # a concurrent process moved it first; ``path`` now exists
-            except OSError as exc:
-                import logging as _lg
-                _lg.getLogger("corvin.roles").warning(
-                    "roles store migration to the tenant path failed (%s); "
-                    "reading the legacy file", type(exc).__name__)
-                return legacy
     return path
 
 
@@ -273,9 +263,26 @@ def _audit(event_type: str, *, channel: str, chat_key: str,
 
 # ── Store I/O ──────────────────────────────────────────────────────────
 
+def _legacy_root_path(path: Path) -> "Path | None":
+    """The pre-tenancy root file ``<home>/global/roles/<name>`` for a tenant store path
+    ``<home>/tenants/<tid>/global/roles/<name>`` (``None`` for any other path)."""
+    try:
+        if (path.parent.name == "roles" and path.parent.parent.name == "global"
+                and path.parents[3].name == "tenants"):
+            return path.parents[4] / "global" / "roles" / path.name
+    except IndexError:
+        return None
+    return None
+
+
 def _load_store(path: Path) -> dict[str, dict]:
     if not path.exists():
-        return {}
+        # RS-7: the read-only LEGACY layer - never written, never moved.
+        legacy = _legacy_root_path(path)
+        if legacy is not None and legacy.is_file() and not legacy.is_symlink():
+            path = legacy
+        else:
+            return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}

@@ -407,7 +407,41 @@ def _count_running_workflows(tenant_id: str) -> int:
         # WF-CONC-02: cannot enumerate the runs tree — re-raise so the caller's
         # gate denies (fail-closed) instead of granting unlimited concurrency.
         raise
-    return count
+    return count + _count_mcp_running_workflows(wf_root)
+
+
+def _count_mcp_running_workflows(wf_root: Path) -> int:
+    """Runs a chat turn started through the orchestration MCP server's ``workflow_run``.
+
+    They write no run meta; each holds a slot file ``<workflows>/.mcp_running/<slot>.json``
+    (``{"pid", "started"}``) for as long as it runs (``corvin_orchestration.mcp_server.
+    _acquire_workflow_slot``, RS-12). Counted here so a console start sees them too. A
+    slot whose process is gone is not counted (the MCP side reaps it); an unreadable one
+    is (fail-closed)."""
+    d = wf_root / ".mcp_running"
+    if not d.is_dir():
+        return 0
+    n = 0
+    for f in d.glob("*.json"):
+        try:
+            pid = int(json.loads(f.read_text(encoding="utf-8")).get("pid", 0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            n += 1
+            continue
+        if pid <= 0:
+            continue
+        if os.name == "nt":
+            n += 1  # liveness is reaped by the MCP side; count it
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            pass
+        n += 1
+    return n
+
 
 def _write_atomic(path: Path, data: dict[str, Any] | str) -> None:
     _ensure_dir(path.parent)
@@ -445,8 +479,29 @@ def _append_chat_line(tenant_id: str, wid: str, line: dict[str, Any]) -> None:
         # umask mode, 0o664 on this host (GDPR Art. 32).
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
                      | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        _repair_chat_log_mode(fd, tenant_id, wid)
         with os.fdopen(fd, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+def _repair_chat_log_mode(fd: int, tenant_id: str, wid: str) -> None:
+    """An EXISTING chat log keeps its mode - ``O_CREAT``'s 0o600 applies only to a new
+    file, so every log created before the fix stayed 0o664 on every append (refutation
+    2026-11-05, RS-13). Tighten it on the first append that finds it group/other
+    accessible, and record that once (afterwards the mode is 0o600, so it never
+    repeats). POSIX only; on Windows ``st_mode`` carries no such bits."""
+    if os.name == "nt":
+        return
+    st = os.fstat(fd)
+    if not st.st_mode & 0o077:
+        return
+    os.fchmod(fd, 0o600)
+    # Untagged: the record lands on the tenant's own chain (the chain IS the tenant), and
+    # a tag would be refused for a non-default tenant in the multi-tenant console process.
+    console_audit.system_event(
+        tenant_id=tenant_id, event="workflow.chat_log_mode_repaired",
+        details={"workflow_id": wid, "prior_mode": oct(st.st_mode & 0o777)},
+        severity="INFO")
 
 
 async def _append_chat_line_async(tenant_id: str, wid: str, line: dict[str, Any]) -> bool:

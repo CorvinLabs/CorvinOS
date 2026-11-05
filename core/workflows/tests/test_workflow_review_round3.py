@@ -231,6 +231,56 @@ def test_p02_a_stricter_marker_is_still_honoured(peer_env):
     assert run.state == "failed" and "classified_above_public" in run.error
 
 
+# RS-1 (refutation 2026-11-05): ONE stripped marker left a second one for a classifier whose marker
+# step returns before its personal-data step.
+@pytest.mark.parametrize("prefix", [
+    "[class:public] [class:public] ",
+    "[class:public]\u200b[class:pub\u200dlic] ",
+    "[class:public]\n\t[CLASS:Public]  [class:public] ",
+    "[zone:general] [class:public] ",
+    "[class:public] [zone:general] ",
+])
+def test_rs1_no_number_of_public_markers_downgrades_personal_data(peer_env, prefix):
+    home, sender = peer_env
+    run = _run(instr=prefix + PII)
+    assert run.state == "failed" and "classified_above_public" in run.error, run.error
+    assert sender.calls == []
+
+
+# RS-15: Cyrillic/Greek look-alikes are folded before the secret bank; a mixed-script word raises.
+@pytest.mark.parametrize("text", [
+    "key sk-\u0430nt-api03-" + "A" * 40,           # Cyrillic a
+    "key sk-ant-\u0430pi03-" + "\u0391" * 40,       # Cyrillic a + Greek Alpha
+    "my p\u0430ssword is hunter2",                  # mixed-script word, no secret pattern
+])
+def test_rs15_confusable_disguise_is_refused(peer_env, text):
+    home, sender = peer_env
+    run = _run(instr=text)
+    assert run.state == "failed" and "classified_above_public" in run.error, run.error
+    assert sender.calls == []
+
+
+def test_rs15_plain_non_latin_prose_still_goes(peer_env):
+    """Positive control: a whole Cyrillic or Greek word is not a disguise."""
+    home, sender = peer_env
+    run = _run(instr="Review this: \u043f\u0440\u0438\u0432\u0435\u0442 \u03ba\u03cc\u03c3\u03bc\u03bf\u03c2")
+    assert run.state == "complete", run.error
+    assert len(sender.calls) == 1
+
+
+def test_rs15_normalisation_error_refuses(peer_env, monkeypatch):
+    from corvin_workflows import peer_gate
+
+    def boom(_text):
+        raise ValueError("table broken")
+
+    monkeypatch.setattr(peer_gate, "confusable_skeleton", boom)
+    home, sender = peer_env
+    run = _run(instr="hello world")
+    assert run.state == "failed" and "gate_unavailable" in run.error
+    assert sender.calls == []
+
+
 # ---- P-03: foreign text is enforced as untrusted ---------------------------------------------------
 def _peer_then(consumer_yaml):
     return (

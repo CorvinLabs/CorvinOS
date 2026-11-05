@@ -26,14 +26,18 @@ from ..deps import require_session
 
 router = APIRouter(dependencies=[Depends(require_session)])
 
-def get_marketplace_index() -> SkillMarketplaceIndex:
+Session = Annotated[Any, Depends(require_session)]
+
+
+def get_marketplace_index(tenant_id: str) -> SkillMarketplaceIndex:
     """A fresh read per request: the registry changes whenever a skill is
     installed or removed, and a process-lifetime copy went stale on the first.
 
-    Same file the Skill Manager writes (``skill_manager.installed_skills_root``),
-    resolved through ``corvin_home()`` so ``CORVIN_HOME`` is honoured."""
+    Same file the Skill Manager writes (``skill_manager.installed_skills_root``)
+    for the SESSION tenant (RS-11: one host-wide store listed every tenant's
+    installs to every tenant), resolved through ``corvin_home()``."""
     from .skill_manager import installed_skills_root
-    return SkillMarketplaceIndex(installed_skills_root() / "skills_registry.json")
+    return SkillMarketplaceIndex(installed_skills_root(tenant_id) / "skills_registry.json")
 
 
 def _card(m: Any) -> dict[str, Any]:
@@ -52,11 +56,12 @@ def _card(m: Any) -> dict[str, Any]:
 
 @router.get("/index")
 async def marketplace_index(
+    rec: Session,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
     """List installed skills (paginated)."""
-    index = get_marketplace_index()
+    index = get_marketplace_index(rec.tenant_id)
     results = index.search(SkillSearchQuery(limit=limit, offset=offset))
     return {
         "total": len(index._registry),
@@ -68,6 +73,7 @@ async def marketplace_index(
 
 @router.get("/search")
 async def marketplace_search(
+    rec: Session,
     q: str = Query("", min_length=0, max_length=100),
     domain: Optional[str] = None,
     tier: Optional[str] = None,
@@ -83,7 +89,7 @@ async def marketplace_search(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid filter: {e}")
 
-    index = get_marketplace_index()
+    index = get_marketplace_index(rec.tenant_id)
     results = index.search(SkillSearchQuery(
         text=q, domain=domain_enum, tier=tier_enum, min_rating=min_rating,
         sort_by=sort_by, limit=limit, offset=offset,
@@ -102,9 +108,9 @@ async def marketplace_search(
 
 
 @router.get("/trending")
-async def marketplace_trending(days: int = Query(7, ge=1, le=365)):
+async def marketplace_trending(rec: Session, days: int = Query(7, ge=1, le=365)):
     """Skills ranked by install_count × rating."""
-    trending = get_marketplace_index().get_trending(days)
+    trending = get_marketplace_index(rec.tenant_id).get_trending(days)
     return {
         "trending_window_days": days,
         "skills": [
@@ -114,9 +120,9 @@ async def marketplace_trending(days: int = Query(7, ge=1, le=365)):
 
 
 @router.get("/newest")
-async def marketplace_newest(limit: int = Query(5, ge=1, le=20)):
+async def marketplace_newest(rec: Session, limit: int = Query(5, ge=1, le=20)):
     """Most recently created skills."""
-    newest = get_marketplace_index().get_newest(limit)
+    newest = get_marketplace_index(rec.tenant_id).get_newest(limit)
     return {
         "limit": limit,
         "skills": [
@@ -126,9 +132,9 @@ async def marketplace_newest(limit: int = Query(5, ge=1, le=20)):
 
 
 @router.get("/{skill_id}")
-async def marketplace_detail(skill_id: str):
+async def marketplace_detail(skill_id: str, rec: Session):
     """Full metadata of one skill."""
-    m = get_marketplace_index().get_detail(skill_id)
+    m = get_marketplace_index(rec.tenant_id).get_detail(skill_id)
     if not m:
         raise HTTPException(status_code=404, detail=f"Skill not found: {skill_id}")
     return {

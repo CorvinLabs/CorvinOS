@@ -3216,13 +3216,26 @@ class UidKeyedStoreHandler:
     """GDPR Art. 17 for the uid-keyed chat stores (:data:`_UID_KEYED_STORES`).
 
     Removes the subject's top-level entry from every chat file under
-    ``<tenant>/global/{consent,disclosure,roles,quota}/`` — and, for the
-    default tenant, from the pre-tenancy root ``<home>/global/{disclosure,
-    roles,quota}/`` the stores used until 2026-11-05 (records there carry no
-    tenant and belong to ``_default``). ``subject_id == tenant_id`` removes the
-    tenant's files whole. Each file is rewritten under the SAME ``.json.lock``
-    flock its writer holds (bounded; a busy lock FAILS the layer), atomically
-    via :func:`_atomic_replace_text`.
+    ``<tenant>/global/{consent,disclosure,roles,quota}/`` — and, for EVERY
+    tenant, from the pre-tenancy root ``<home>/global/{disclosure,roles,quota,
+    …}/`` the stores used until 2026-11-05. Records there carry no tenant and
+    may have been written by any tenant's process, so the root is a read-only
+    LEGACY layer the uid is erased from whichever tenant files the request (the
+    uid is the attribution, the location is not - refutation 2026-11-05, RS-7).
+    ``subject_id == tenant_id`` removes the tenant's files whole (the legacy root
+    only for ``_default``: it is not attributable to any other tenant).
+
+    Matching is EXACT (RS-5): the subject's own top-level key, and a chat file
+    whose name is exactly ``<channel>__<subject>.json`` is deleted only when the
+    strip leaves it empty. The generic file-name rule of :func:`_purge_path` is
+    NOT applied here - it matched the uid as a token inside a GROUP chat's file
+    name (Telegram ``-123456789`` is stored as ``telegram___123456789.json``, a
+    legacy WhatsApp group as ``whatsapp__<creator-phone>_<ts>_g_us.json``) and
+    deleted every other member's consent and roles with it.
+
+    Each file is rewritten under the SAME ``.json.lock`` flock its writer holds
+    (bounded; a busy lock FAILS the layer), atomically via
+    :func:`_atomic_replace_text`.
 
     Consent and Art. 7(1): the store entry is the LIVE grant, which the
     subject's erasure request withdraws anyway; the proof that consent was
@@ -3234,23 +3247,39 @@ class UidKeyedStoreHandler:
     layer_id: str = "L-uid-stores"
 
     def _dirs(self) -> list[Path]:
-        dirs = [_tenant_global(self.tenant_id) / kind for kind in _UID_KEYED_STORES]
-        if self.tenant_id == "_default":
-            dirs += [_corvin_home() / "global" / kind for kind in _UID_KEYED_LEGACY_ROOT]
-        return dirs
+        return [_tenant_global(self.tenant_id) / kind for kind in _UID_KEYED_STORES]
+
+    @staticmethod
+    def _legacy_dirs() -> list[Path]:
+        return [_corvin_home() / "global" / kind for kind in _UID_KEYED_LEGACY_ROOT]
+
+    @staticmethod
+    def _names_subject_exactly(f: Path, subject_id: str) -> bool:
+        """``<channel>__<subject>.json`` with the subject sanitised the way every writer
+        sanitises a chat key (alnum kept, everything else ``_``, 64 chars) - an exact
+        match of the WHOLE chat part, never a token inside it."""
+        stem = f.stem
+        if "__" not in stem:
+            return False
+        chat = stem.split("__", 1)[1]
+        safe = "".join(ch if ch.isalnum() else "_" for ch in subject_id)[:64]
+        return bool(safe) and chat == safe
 
     def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
         from _bounded_lock import acquire_exclusive  # noqa: PLC0415 - bridges/shared
         from _compat_fcntl import fcntl  # noqa: PLC0415
 
         t0 = time.time()
-        present = [d for d in self._dirs() if d.is_dir() and not d.is_symlink()]
+        whole = subject_id == self.tenant_id
+        legacy = [d for d in self._legacy_dirs() if d.is_dir() and not d.is_symlink()]
+        if whole and self.tenant_id != "_default":
+            legacy = []  # the legacy root is not attributable to a non-default tenant
+        present = [d for d in self._dirs() if d.is_dir() and not d.is_symlink()] + legacy
         if not present:
             return _result(self.layer_id, t0, 0, absent=True,
                            absent_reason="uid-keyed chat stores absent",
                            empty_reason="", applied_reason="")
         removed = 0
-        whole = subject_id == self.tenant_id
         try:
             for d in present:
                 for f in sorted(d.glob("*.json")):
@@ -3268,6 +3297,16 @@ class UidKeyedStoreHandler:
                             continue
                         doc = _load_json(f)
                         changed, delete = _strip_uid_keyed(d.name, doc, subject_id)
+                        # RS-5: the subject's OWN chat file (exact name) goes when nothing
+                        # of anyone else is left in it; a group file keeps the others.
+                        if (not delete and self._names_subject_exactly(f, subject_id)
+                                and isinstance(doc, dict) and not doc):
+                            delete, changed = True, True
+                        # A file whose WHOLE name is the subject (``<subject>.json``) is
+                        # the subject's own record - the exact-name half of the generic
+                        # rule, never a token match inside another chat's name.
+                        if not delete and f.stem == subject_id:
+                            delete, changed = True, True
                         if delete:
                             f.unlink()
                         elif changed:
@@ -3279,9 +3318,6 @@ class UidKeyedStoreHandler:
                         if locked:
                             fcntl.flock(fd, fcntl.LOCK_UN)
                         os.close(fd)
-            # The documented generic rule as well (file names / identity fields).
-            for d in present:
-                removed += _purge_path(d, subject_id)
         except Exception as exc:  # noqa: BLE001 - reported as FAILED, never swallowed
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
@@ -3345,6 +3381,16 @@ class RootRoutingStoreHandler:
 
 
 # ── default chain factory ────────────────────────────────────────────
+
+
+def root_routing_store_handlers(tenant_id: str = "_default") -> list:
+    """The four root-level routing-store layers (:data:`_ROOT_ROUTING_STORES`).
+
+    Real stores, not stubs: ``corvin-erasure run --use-stubs`` registers them too
+    (refutation 2026-11-05, RS-16 - under ``--use-stubs`` they ran nowhere and the
+    stub chain did not even name them)."""
+    return [RootRoutingStoreHandler(layer_id=lid, module=mod, item=item, tenant_id=tenant_id)
+            for lid, mod, item in _ROOT_ROUTING_STORES]
 
 
 def real_handler_chain(tenant_id: str = "_default") -> list:
@@ -3414,10 +3460,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
     chain.append(UidKeyedStoreHandler(tenant_id=tenant_id))
     # SEC-5 (review 2026-11-05): the four root-level routing stores, shared by
     # the CLI and the console through this one chain.
-    chain.extend(
-        RootRoutingStoreHandler(layer_id=lid, module=mod, item=item, tenant_id=tenant_id)
-        for lid, mod, item in _ROOT_ROUTING_STORES
-    )
+    chain.extend(root_routing_store_handlers(tenant_id))
     chain.append(UnattributableStoreHandler(tenant_id=tenant_id))
     if _ulo_handler is not None:
         chain.append(_ulo_handler)

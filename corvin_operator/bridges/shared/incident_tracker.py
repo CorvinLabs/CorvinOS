@@ -136,8 +136,18 @@ def _emit(event_type: str, details: dict[str, Any], *, tenant_id: str,
         override = os.environ.get("VOICE_AUDIT_PATH")
         audit_file = Path(override) if override else tenant_audit_chain(tenant_id)
         audit_file.parent.mkdir(parents=True, exist_ok=True)
+        # RS-4 (refutation 2026-11-05): the forge chokepoint refuses a record TAGGED with a
+        # tenant other than the process tenant (AuditTenantMismatch), so an incident opened for
+        # tenant acme from a ``_default`` process (console, operator shell) was dropped and only
+        # the type-only mismatch record landed. The tag is written only when it IS the process
+        # tenant; otherwise the record lands untagged on acme's own chain - the chain is the
+        # tenant (same rule as the gateway's config audit, 35f8e4e8b). ``corvin-incident
+        # --tenant X`` sets the process tenant to X, so the CLI writes tagged records.
+        rec_details = dict(details)
+        if tenant_id == _se._current_tenant_id():
+            rec_details["tenant_id"] = tenant_id
         _se.write_event(audit_file, event_type, severity=severity,
-                        tool="", run_id="", details={**details, "tenant_id": tenant_id},
+                        tool="", run_id="", details=rec_details,
                         hash_chain=True)
     except Exception as exc:  # noqa: BLE001 - never break incident handling
         import logging as _logging  # noqa: PLC0415

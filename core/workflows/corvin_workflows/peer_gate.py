@@ -5,8 +5,13 @@ runs on OUR side, before anything is sent, on the exact payload - normalised fir
 and control characters removed), and that normalised text is the one that is sent (P-01):
 
 1. L44 acceptable use (``spawn_gates.check_l44`` - fail-closed by contract);
-2. the data grade of the payload (``data_classification.classify_task``; a ``[class:...]`` marker
-   may only raise it, never lower it - P-02): ``PUBLIC`` may go;
+2. the data grade of the payload: the secret bank (``data_classification._SECRET_PATTERNS``)
+   and the personal-data bank (``compliance_zone_classifier._PII_PATTERNS``) run on the content
+   with EVERY leading ``[class:...]`` marker stripped, on the text as sent AND on its confusable
+   skeleton (Cyrillic/Greek look-alikes folded to Latin, diacritics dropped); a mixed-script word
+   raises the grade to at least ``INTERNAL``; a marker can only RAISE the result, never lower it
+   (P-02, RS-1, RS-15). Neither classifier's own marker override (``[class:...]``,
+   ``[zone:...]``) is consulted. ``PUBLIC`` may go;
    anything above is refused unless the tenant policy releases that one endpoint
    (``spec.workflows.peer_policy.endpoints.<endpoint_id>.max_classification``: ``internal`` or
    ``confidential``; ``SECRET`` never) AND the operator stated the endpoint's GDPR role
@@ -61,6 +66,95 @@ class PeerGateDecision:
 
 
 _MARKER_RE = re.compile(r"^\s*\[class:(public|internal|confidential|secret)\]\s*", re.IGNORECASE)
+
+# Confusables (RS-15): letters of other scripts that render like a Latin letter. NFKC does not fold
+# them (U+0430 CYRILLIC SMALL LETTER A stays U+0430), so ``sk-\u0430nt-api03-...`` read as no secret.
+# A small explicit table of the Cyrillic and Greek look-alikes (the UTS #39 skeleton for these
+# scripts); everything else is NFKD-decomposed with combining marks dropped (accented Latin -> Latin).
+_CONFUSABLES = str.maketrans({
+    # Cyrillic lower case
+    "\u0430": "a", "\u0432": "b", "\u0435": "e", "\u043a": "k", "\u043c": "m", "\u043d": "h",
+    "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0442": "t", "\u0443": "y", "\u0445": "x",
+    "\u0456": "i", "\u0458": "j", "\u0455": "s", "\u0501": "d", "\u051b": "q", "\u051d": "w",
+    "\u04bb": "h", "\u0457": "i", "\u04cf": "l", "\u0491": "r",
+    # Cyrillic upper case
+    "\u0410": "A", "\u0412": "B", "\u0415": "E", "\u041a": "K", "\u041c": "M", "\u041d": "H",
+    "\u041e": "O", "\u0420": "P", "\u0421": "C", "\u0422": "T", "\u0423": "Y", "\u0425": "X",
+    "\u0406": "I", "\u0408": "J", "\u0405": "S", "\u051a": "Q", "\u051c": "W", "\u04c0": "I",
+    # Greek
+    "\u0391": "A", "\u0392": "B", "\u0395": "E", "\u0396": "Z", "\u0397": "H", "\u0399": "I",
+    "\u039a": "K", "\u039c": "M", "\u039d": "N", "\u039f": "O", "\u03a1": "P", "\u03a4": "T",
+    "\u03a5": "Y", "\u03a7": "X", "\u03b1": "a", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v",
+    "\u03bf": "o", "\u03c1": "p", "\u03c5": "u", "\u03c7": "x", "\u03f2": "c", "\u03f3": "j",
+})
+_WORD_RE = re.compile(r"\w+")
+
+
+def confusable_skeleton(text: str) -> str:
+    """``text`` with Cyrillic/Greek look-alikes folded to Latin and combining marks dropped. Used
+    only for JUDGING (the text that is sent stays ``normalize_outbound``'s output). Raises on any
+    error - the caller refuses (fail-closed)."""
+    folded = unicodedata.normalize("NFKD", text.translate(_CONFUSABLES))
+    return "".join(ch for ch in folded if unicodedata.category(ch) != "Mn")
+
+
+def _script(ch: str) -> str:
+    # The first word of the Unicode name is the script for every letter this check cares about
+    # (LATIN / CYRILLIC / GREEK / ARMENIAN / ...). A nameless letter counts as its own script.
+    return unicodedata.name(ch, "UNNAMED").split(" ", 1)[0]
+
+
+def has_mixed_script_word(text: str) -> bool:
+    """True when one word mixes letters of two scripts (``p\u0430ssword``). A disguise signal: it
+    can only RAISE the grade (RS-15). Plain Cyrillic or Greek prose is not mixed."""
+    for word in _WORD_RE.findall(text):
+        scripts = {_script(ch) for ch in word if ch.isalpha()}
+        if len(scripts) > 1:
+            return True
+    return False
+
+
+def strip_class_markers(text: str) -> "tuple[list[str], str]":
+    """Every leading ``[class:...]`` marker (any count, separated by whitespace - zero-width and
+    other format characters are already removed by ``normalize_outbound``) and the content after
+    them. RS-1: stripping ONE marker left ``[class:public] <PII>`` for a classifier whose marker
+    step returns before its personal-data step."""
+    markers: list[str] = []
+    while True:
+        m = _MARKER_RE.match(text)
+        if not m:
+            return markers, text
+        markers.append(m.group(1).upper())
+        text = text[m.end():]
+
+
+def _content_grade(text: str, dc: Any) -> Any:
+    """Secret bank, then personal-data bank - no marker of any kind is honoured here. Raises when a
+    bank is unavailable (the caller refuses)."""
+    import compliance_zone_classifier as _czc  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    for pat in dc._SECRET_PATTERNS:
+        if pat.search(text):
+            return dc.DataClassification.SECRET
+    for _tag, pat in _czc._PII_PATTERNS:
+        if pat.search(text):
+            return dc.DataClassification.CONFIDENTIAL
+    return dc.DataClassification.PUBLIC
+
+
+def grade_outbound(payload: str, dc: Any) -> Any:
+    """The grade of the normalised ``payload``: ``max`` of every leading marker, the content of the
+    text as sent, the content of its confusable skeleton, and ``INTERNAL`` for a mixed-script
+    word. Personal data and credentials are judged first and independently of any marker, so a
+    marker can only raise the grade (P-02, RS-1, RS-15)."""
+    markers, content = strip_class_markers(payload)
+    skel_markers, skel_content = strip_class_markers(confusable_skeleton(payload))
+    grade = max(_content_grade(content, dc), _content_grade(skel_content, dc))
+    for name in markers + skel_markers:
+        grade = max(grade, dc.DataClassification[name])
+    if has_mixed_script_word(content):
+        grade = max(grade, dc.DataClassification.INTERNAL)
+    return grade
 
 
 def normalize_outbound(text: str) -> str:
@@ -157,14 +251,12 @@ def evaluate_peer_outbound(
         if hr is not None:
             return PeerGateDecision(False, REASON_L44, grade_name)
 
-        # P-02: a `[class:...]` marker may only RAISE the grade. The content is judged without it
-        # (secret patterns, personal data) and the stricter of the two counts; otherwise a leading
-        # `[class:public]` - writable by any upstream node - downgraded personal data to PUBLIC.
-        marker = _MARKER_RE.match(payload)
-        content = payload[marker.end():] if marker else payload
-        grade = _dc.classify_task(content, persona="assistant")
-        if marker:
-            grade = max(grade, _dc.DataClassification[marker.group(1).upper()])
+        # P-02 / RS-1 / RS-15: a `[class:...]` marker may only RAISE the grade. EVERY leading
+        # marker is stripped and the content is judged first (secret bank, personal-data bank, on
+        # the text as sent and on its confusable skeleton); `classify_task` is not used because
+        # its marker step returns before its personal-data step (`[class:public] [class:public]
+        # <PII>` was sent as PUBLIC).
+        grade = grade_outbound(payload, _dc)
         grade_name = grade.name
         released = None
         if grade > _dc.DataClassification.PUBLIC:

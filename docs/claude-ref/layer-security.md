@@ -336,6 +336,36 @@ deletes a history file.
   `audit_emit`, `_audit_log`, `_emit_audit`, `_audit_write`, `_write_audit`, `emit`,
   `audit` and the `event_type=` / `event=` keyword; the ~90 names that became
   visible were rebaselined once (shrink-only semantics unchanged).
+- **Refutation round (RS-4/6/9/10, 2026-11-05).** `incident_tracker` tags a record
+  with `tenant_id` only when it IS the process tenant (otherwise the chokepoint
+  refused it and the Art. 73 record was dropped); `corvin-incident --tenant X` runs as
+  X. `engine_trust`: an empty tenant config, a misspelt block name (edit distance <= 2
+  of `engine_trust`) or a duplicated mapping key enforce the strictest tier; the
+  CRITICAL `engine_trust.config_invalid` record is written once per config state
+  (tenant, code, inode/mtime/size), not per spawn. `user_style` reads/writes
+  `tenant_audit_chain()`; the SSOT scan also sees `Path(<CORVIN_HOME env>)`,
+  `Path(<any call>)` and `Path.home()/".corvin"` roots. The completeness ratchet
+  DERIVES its writer callees (every function handing a parameter to a writer as the
+  event name, to a fixpoint, plus injected `audit_writer`/`audit_callback`/`audit_fn`
+  and inline writer factories); the ~90 names that became visible were rebaselined
+  once, and the L44 decisions `house_rules.{denied,escalated,warned,allowed}` are
+  registered (CRITICAL/WARNING/WARNING/INFO, closed fields). Note:
+  `corvin_gateway.plugin_cmd.emit_audit_event` only LOGS - its
+  `plugin.signature_verification_failed` never reaches the chain (open).
+- **Refutation round (RS-11..RS-14, 2026-11-05).** The installed-skill store is per tenant
+  (`core.skills.installed_prompt_skills.installed_store_root`: `_default` keeps
+  `<home>/skills_installed`, every other tenant `<tenant_home>/skills/installed`); every
+  reader/writer (skill manager, `/v1/skill-forge/install|installed`, the marketplace skill
+  catalogue, Forge-bundle import/inventory, the boot catch-up) resolves it there, so no tenant
+  lists, installs into or activates another tenant's skills. The MCP `workflow_run`
+  `workflows_concurrent` slot is a slot file per run under
+  `<tenant_home>/workflows/.mcp_running/` (pid + start), counted and created under one file
+  lock across EVERY per-turn tool-server process and counted by the console too; a dead
+  process's slot is reaped. An existing workflow chat log found group/other accessible is
+  tightened to 0o600 on its next append (`workflow.chat_log_mode_repaired`, once). The 3.11
+  parse ratchet (`zero_caller_sweep.py`) also parses `hatch_build.py`, `build_wheels.py`,
+  `monitoring/` and `compliance/`, and the 3.11 CI job runs
+  `tests/test_installer_py311_import.py`.
 
 ### F — Linter NFKC + confusable normalisation
 

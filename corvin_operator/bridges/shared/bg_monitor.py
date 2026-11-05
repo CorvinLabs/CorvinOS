@@ -198,17 +198,96 @@ def _deliver_completions() -> int:
 # ─── state I/O (atomic tmp+rename) ────────────────────────────────────────
 
 
-def _load_state() -> dict:
-    p = _bg_watch_path()
+#: Deadline for the bg_watch.json writer lock (patchable by tests).
+LOCK_TIMEOUT_SECONDS = 5.0
+
+
+class StaleStateError(OSError):
+    """``_save_state`` was handed a state read before another writer replaced the file.
+
+    Every read-modify-write of bg_watch.json runs under :func:`_state_lock`, so this only
+    fires for a writer that skipped the lock - its stale copy would RESURRECT an entry an
+    Art. 17 erasure just removed (refutation 2026-11-05, RS-8). An ``OSError``: the
+    best-effort writers already degrade on I/O failure.
+    """
+
+
+class _State(dict):
+    """bg_watch.json content plus the file version it was read at (None = no file)."""
+
+    version: "tuple | None" = None
+
+
+def _file_version(p: Path) -> "tuple | None":
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        st = p.stat()
+    except FileNotFoundError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+class _state_lock:
+    """Exclusive, bounded flock on ``bg_watch.json.lock`` around one read-modify-write
+    (touch, run_once's prune/notify pass, the Art. 17 purge). A busy lock raises
+    ``LockBusy`` (an ``OSError``)."""
+
+    def __enter__(self) -> "_state_lock":
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from _bounded_lock import acquire_exclusive  # noqa: PLC0415 - bridges/shared
+
+        p = _bg_watch_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._fd = os.open(str(p) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            acquire_exclusive(self._fd, "bg_watch.json", timeout=LOCK_TIMEOUT_SECONDS)
+        except BaseException:
+            os.close(self._fd)
+            raise
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        from _compat_fcntl import fcntl  # noqa: PLC0415
+
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self._fd)
+
+
+def _load_state(*, strict: bool = False) -> dict:
+    """The current state. A missing file is ``{}``. A torn/unparseable file is ``{}`` for the
+    best-effort writers, but RAISES with ``strict`` (the erasure path: an unreadable store
+    may still name the subject, so it is never "no match" - RS-8)."""
+    p = _bg_watch_path()
+    state = _State()
+    try:
+        version = _file_version(p)
+        raw = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return state
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        if strict:
+            raise
+        state.version = version
+        return state
+    if not isinstance(data, dict):
+        if strict:
+            raise ValueError("bg_watch.json is not a mapping")
+        data = {}
+    state.update(data)
+    state.version = version
+    return state
 
 
 def _save_state(state: dict) -> None:
     p = _bg_watch_path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(state, _State) and _file_version(p) != state.version:
+        raise StaleStateError("bg_watch.json changed since it was read - not overwritten")
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(p)
@@ -222,28 +301,29 @@ def touch(channel: str, from_: str, chat_id: str | None,
     """Record/refresh a session after a real user turn.
 
     Resets notified_at to 0 so a new activity cycle re-arms the wakeup.
-    Uses read-modify-write with atomic save; benign under concurrent
-    adapter workers (last writer wins per key, state is small).
+    Read-modify-write under the bg_watch.json writer lock with an atomic save
+    (an unlocked RMW could resurrect an entry an erasure just removed - RS-8).
 
     `tenant_id` is captured so a wakeup turn runs in the RIGHT tenant's
     session/persona/consent context (multi-tenant fix — previously the wakeup
     envelope carried no tenant and fell back to `_default`).
     """
     key = f"{channel}:{chat_id or from_}"
-    state = _load_state()
-    entry = state.get(key, {})
-    entry.update(
-        {
-            "channel": channel,
-            "from": from_,
-            "chat_id": chat_id,
-            "tenant_id": tenant_id or "_default",
-            "last_activity": time.time(),
-            "notified_at": 0.0,
-        }
-    )
-    state[key] = entry
-    _save_state(state)
+    with _state_lock():
+        state = _load_state()
+        entry = state.get(key, {})
+        entry.update(
+            {
+                "channel": channel,
+                "from": from_,
+                "chat_id": chat_id,
+                "tenant_id": tenant_id or "_default",
+                "last_activity": time.time(),
+                "notified_at": 0.0,
+            }
+        )
+        state[key] = entry
+        _save_state(state)
 
 
 def purge_user(uid: str, *, tenant_id: str | None = None) -> int:
@@ -258,14 +338,18 @@ def purge_user(uid: str, *, tenant_id: str | None = None) -> int:
 
     A failed save RAISES: the caller reports the layer as failed instead of
     signing an erasure whose entries are still on disk (review 2026-11-05).
+    Runs under the writer lock every bg_watch.json writer holds, and an
+    unparseable store RAISES instead of reading as "no match" (RS-8).
     """
-    state = _load_state()
-    to_remove = [k for k, v in state.items()
-                 if _routing_record_matches(v, "from", uid, tenant_id)]
-    for k in to_remove:
-        del state[k]
-    if to_remove:
-        _save_state(state)
+    with _state_lock():
+        # strict: a torn store RAISES (the layer reports FAILED), never "no match" (RS-8).
+        state = _load_state(strict=True)
+        to_remove = [k for k, v in state.items()
+                     if _routing_record_matches(v, "from", uid, tenant_id)]
+        for k in to_remove:
+            del state[k]
+        if to_remove:
+            _save_state(state)
     return len(to_remove)
 
 
@@ -317,6 +401,18 @@ def run_once() -> int:
     # 3) …and the intermediate updates of still-running autonomous work.
     delivered += _deliver_progress()
 
+    try:
+        with _state_lock():
+            return delivered + _watch_pass(now)
+    except OSError as e:  # LockBusy / save failure: the next tick retries
+        print(f"bg_monitor: bg_watch pass skipped: {e}", file=sys.stderr)
+        return delivered
+
+
+def _watch_pass(now: float) -> int:
+    """Prune / (legacy) wakeup pass over bg_watch.json. Caller holds :func:`_state_lock`.
+    Returns the number of injected wakeups."""
+    delivered = 0
     state = _load_state()
     if not state:
         return delivered

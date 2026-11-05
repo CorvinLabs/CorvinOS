@@ -739,14 +739,14 @@ orchestration:
             self.assertIn("workflows_concurrent", p2["error"])
             # Once the first run really ends, its slot is free again.
             deadline = time.time() + 10
-            while time.time() < deadline and m._ACTIVE_WORKFLOW_RUNS:
+            while time.time() < deadline and m._active_mcp_runs(m._current_tenant(None)):
                 time.sleep(0.05)
-            self.assertEqual(m._ACTIVE_WORKFLOW_RUNS, 0)
+            self.assertEqual(m._active_mcp_runs(m._current_tenant(None)), 0)
             third = _drive(self._server(), [_call("workflow_run", {
                 "workflow_id": "m5_smoke", "inputs": {"a": 1, "b": 2}}, msgid=3)])
         p3 = json.loads(third[0]["result"]["content"][0]["text"])
         self.assertEqual(p3["status"], "complete", p3)
-        self.assertEqual(m._ACTIVE_WORKFLOW_RUNS, 0)
+        self.assertEqual(m._active_mcp_runs(m._current_tenant(None)), 0)
 
     def test_timeout_text_does_not_promise_delivery_past_the_turn(self):
         """SRF-8: the run lives in this per-turn tool server; the timeout text
@@ -817,9 +817,9 @@ orchestration:
         # The run still holds its workflows_concurrent slot (SRF-8); let it
         # end so the next test does not start at the cap.
         deadline = time.time() + 10
-        while time.time() < deadline and m._ACTIVE_WORKFLOW_RUNS:
+        while time.time() < deadline and m._active_mcp_runs(m._current_tenant(None)):
             time.sleep(0.05)
-        self.assertEqual(m._ACTIVE_WORKFLOW_RUNS, 0)
+        self.assertEqual(m._active_mcp_runs(m._current_tenant(None)), 0)
 
     def test_workflow_resume_timeout_registers_completion_notify_and_returns_run_id(self):
         import corvin_orchestration.mcp_server as m
@@ -980,6 +980,73 @@ class TestToolDefinitionsHelper(unittest.TestCase):
             self.assertIn("name", tool)
             self.assertIn("description", tool)
             self.assertIn("inputSchema", tool)
+
+
+_SLOT_HOLDER = r"""
+import os, sys, time
+for p in sys.argv[1].split(os.pathsep):
+    sys.path.insert(0, p)
+import corvin_orchestration.mcp_server as m
+m._lic_get_limit = lambda key: 1
+m._count_console_running = lambda tid: 0
+refusal, slot = m._acquire_workflow_slot("_default")
+print("REFUSED" if refusal else "HELD", flush=True)
+if slot is not None and sys.argv[2] == "hold":
+    time.sleep(60)
+"""
+
+
+class TestWorkflowSlotAcrossProcesses(unittest.TestCase):
+    """RS-12 (refutation 2026-11-05): every ``claude -p`` turn runs its OWN orchestration MCP
+    server, so the workflows_concurrent slot must be counted across processes, under a file
+    lock in the tenant home - a module-global counter let each turn pass a cap of 1."""
+
+    def setUp(self):
+        import subprocess  # noqa: PLC0415
+        self._sp = subprocess
+        self.home_tmp = tempfile.TemporaryDirectory(prefix="corvin-rs12-")
+        self.home = Path(self.home_tmp.name)
+        (self.home / "tenants" / "_default" / "workflows").mkdir(parents=True)
+        self.env = dict(os.environ, CORVIN_HOME=str(self.home), CORVIN_TENANT_ID="_default")
+        self.path = os.pathsep.join(str(p) for p in (
+            _PKG_DIR, _REPO / "core" / "workflows", _REPO / "corvin_operator" / "bridges" / "shared",
+            _REPO / "corvin_operator" / "forge", _REPO))
+        self.procs = []
+
+    def tearDown(self):
+        for p in self.procs:
+            if p.poll() is None:
+                p.kill()
+            p.wait(timeout=30)
+        self.home_tmp.cleanup()
+
+    def _start(self, mode):
+        p = self._sp.Popen([sys.executable, "-c", _SLOT_HOLDER, self.path, mode], env=self.env,
+                           stdout=self._sp.PIPE, text=True)
+        self.procs.append(p)
+        return p, p.stdout.readline().strip()
+
+    def test_second_process_is_refused_at_cap_one(self):
+        holder, first = self._start("hold")
+        self.assertEqual(first, "HELD")
+        _p2, second = self._start("once")
+        self.assertEqual(second, "REFUSED")
+
+    def test_slot_of_a_killed_process_is_reaped(self):
+        holder, first = self._start("hold")
+        self.assertEqual(first, "HELD")
+        holder.kill()
+        holder.wait(timeout=30)
+        _p2, second = self._start("once")
+        self.assertEqual(second, "HELD")
+
+    def test_slot_files_are_owner_only(self):
+        holder, first = self._start("hold")
+        self.assertEqual(first, "HELD")
+        slots = list((self.home / "tenants" / "_default" / "workflows" / ".mcp_running").glob("*.json"))
+        self.assertEqual(len(slots), 1)
+        if os.name != "nt":
+            self.assertEqual(slots[0].stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

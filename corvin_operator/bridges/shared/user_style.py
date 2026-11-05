@@ -145,18 +145,20 @@ def _store_dir(*, corvin_home: Path | None = None) -> Path:
         return Path.home() / ".corvin" / "global" / "user_style"
 
 
-def _audit_path(*, corvin_home: Path | None = None) -> Path:
-    if corvin_home is not None:
-        return Path(corvin_home) / "global" / "forge" / "audit.jsonl"
-    # Same env-first ordering as _store_dir — see comment there.
-    env = os.environ.get("CORVIN_HOME")
-    if env:
-        return Path(env) / "global" / "forge" / "audit.jsonl"
+def _audit_path(*, corvin_home: Path | None = None, tenant_id: str | None = None) -> Path:
+    """THE process tenant's chain (``paths.tenant_audit_chain``), the one the boot tripwire
+    verifies and every reader reads. Until 2026-11-05 this composed the pre-tenancy host-wide
+    ``<home>/global/forge/audit.jsonl``, which no live writer feeds, so the learner read an
+    empty chain and its records were outside the audit trail (refutation RS-9).
+    ``corvin_home`` (tests) re-roots the SAME relative location under another home."""
     try:
-        from corvin_operator.forge.forge.paths import corvin_home as _ch  # type: ignore  # noqa: PLC0415
-        return Path(_ch()) / "global" / "forge" / "audit.jsonl"
-    except Exception:  # noqa: BLE001
-        return Path.home() / ".corvin" / "global" / "forge" / "audit.jsonl"
+        from . import paths as _paths  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        import paths as _paths  # type: ignore[import-not-found,no-redef]  # noqa: PLC0415
+    chain = _paths.tenant_audit_chain(tenant_id)
+    if corvin_home is None:
+        return chain
+    return Path(corvin_home) / chain.relative_to(_paths.corvin_home())
 
 
 _STORE_LOCK = threading.RLock()

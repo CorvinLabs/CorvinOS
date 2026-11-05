@@ -37,6 +37,7 @@ import hashlib
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -345,6 +346,51 @@ _ENGINE_TRUST_KEYS = frozenset({
 STRICTEST_TIER = "high"
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that REFUSES a duplicated mapping key. PyYAML keeps the last of two
+    equal keys silently, so a second ``spec:`` block erased ``spec.engine_trust`` and the
+    tier read as ``low`` (refutation 2026-11-05, RS-6)."""
+
+
+def _construct_unique_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode,
+                              deep: bool = False) -> dict:
+    seen: set = set()
+    for key_node, _value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            dup = key in seen
+        except TypeError:  # an unhashable key: let the base constructor refuse it
+            break
+        if dup:
+            raise EngineTrustConfigInvalid("duplicate_key")
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping)
+
+
+def _edit_distance(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _is_block_name_typo(key: object) -> bool:
+    """``engine-trust``, ``enginetrust``, ``engine_trsut``, ``Engine_Trust``: a ``spec`` key
+    that is not ``engine_trust`` but within edit distance 2 of it once case and the
+    ``-``/``_`` separators are ignored (RS-6)."""
+    if not isinstance(key, str) or key == "engine_trust":
+        return False
+    norm = key.lower().replace("-", "").replace("_", "")
+    return _edit_distance(norm, "enginetrust") <= 2
+
+
 class EngineTrustConfigInvalid(ValueError):
     """``spec.engine_trust`` is present but unreadable; ``.code`` is a closed
     vocabulary (no path, no exception text) safe for the audit chain."""
@@ -370,13 +416,15 @@ def _load_engine_trust_block(tenant_id: str) -> dict[str, Any]:
         return {}
     try:
         with p.open("r", encoding="utf-8") as fh:
-            raw = yaml.safe_load(fh)
+            raw = yaml.load(fh, Loader=_UniqueKeyLoader)  # noqa: S506 - a SafeLoader subclass
     except yaml.YAMLError:
         raise EngineTrustConfigInvalid("yaml_unparseable") from None
     except OSError:
         raise EngineTrustConfigInvalid("config_unreadable") from None
     if raw is None:
-        return {}
+        # RS-6: the file EXISTS but holds nothing - the commonest torn state (a
+        # non-atomic writer truncated it, O_TRUNC then write). Never "absent".
+        raise EngineTrustConfigInvalid("config_empty")
     if not isinstance(raw, dict):
         raise EngineTrustConfigInvalid("config_not_mapping")
     spec = raw.get("spec")
@@ -384,6 +432,8 @@ def _load_engine_trust_block(tenant_id: str) -> dict[str, Any]:
         return {}
     if not isinstance(spec, dict):
         raise EngineTrustConfigInvalid("spec_not_mapping")
+    if any(_is_block_name_typo(k) for k in spec):
+        raise EngineTrustConfigInvalid("block_name_typo")
     et = spec.get("engine_trust")
     if et is None:
         return {}
@@ -397,12 +447,32 @@ def _load_engine_trust_block(tenant_id: str) -> dict[str, Any]:
     return et
 
 
+#: (tenant, code, file identity) of every config state already recorded (RS-6).
+_CONFIG_INVALID_SEEN: set = set()
+_CONFIG_INVALID_LOCK = threading.Lock()
+
+
 def _audit_config_invalid(tenant_id: str, code: str) -> None:
     """CRITICAL ``engine_trust.config_invalid`` on the tenant's chain.
 
     The enforcement (strictest tier) does NOT depend on this write: a failed
-    audit is logged, the gate still fails closed."""
+    audit is logged, the gate still fails closed.
+
+    Written ONCE per config state (tenant, code, file inode/mtime/size), not per
+    spawn: the tier gate runs on every spawn, and one record per spawn over an
+    unchanged config is the shape that buried real events before (RS-6). A
+    changed file - still broken or broken differently - is recorded again."""
     import logging as _logging  # noqa: PLC0415
+    try:
+        st = _tenant_config_path(tenant_id).stat()
+        ident: tuple = (st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        ident = ()
+    key = (tenant_id, code, ident)
+    with _CONFIG_INVALID_LOCK:
+        if key in _CONFIG_INVALID_SEEN:
+            return
+        _CONFIG_INVALID_SEEN.add(key)
     _logging.getLogger("corvin.engine_trust").critical(
         "engine-trust config for tenant %s is present but invalid (%s) — enforcing "
         "min_tier=%s until it is fixed", tenant_id, code, STRICTEST_TIER)

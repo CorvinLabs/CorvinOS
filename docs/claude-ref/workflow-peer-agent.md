@@ -43,9 +43,16 @@ keys rejected** - in particular the tenant, run and task id can never come from 
    soft hyphen removed - what the peer's own sanitiser does), and the gate judges THAT text; the node then sends
    exactly the judged text (`PeerGateDecision.payload`), never the raw one (P-01: a fullwidth or zero-width-split
    credential passed the secret patterns and was reassembled at the peer). L44 acceptable use -> data grade ->
-   endpoint pairing. A `[class:...]` marker can only RAISE the grade: the content is classified without it and the
-   stricter of the two counts (P-02: a leading `[class:public]`, writable by any upstream node, downgraded personal
-   data). A refusal is audited `workflow.peer_refused` with a closed reason code and never carries text.
+   endpoint pairing. A `[class:...]` marker can only RAISE the grade: EVERY leading marker is stripped (any count,
+   separated by whitespace or zero-width characters) and the content is graded FIRST - secret bank, then the
+   personal-data bank - with no classifier's own marker override (`[class:...]`, `[zone:...]`) consulted; the
+   strictest of content and markers counts (P-02: a leading `[class:public]`, writable by any upstream node,
+   downgraded personal data; RS-1: a SECOND marker still did, because one stripped marker left the next for
+   `classify_task`, whose marker step returns before its personal-data step). The content is judged on the text as
+   sent AND on its confusable skeleton (`peer_gate.confusable_skeleton`: Cyrillic/Greek look-alikes folded to
+   Latin, combining marks dropped), and a word mixing two scripts raises the grade to at least `INTERNAL` (RS-15:
+   `sk-\u0430nt-api03-...` with a Cyrillic `\u0430` passed the secret bank). A normalisation error refuses
+   (`gate_unavailable`). Boundary: this is not a DLP - an encoded or paraphrased secret is not recognised. A refusal is audited `workflow.peer_refused` with a closed reason code and never carries text.
 3b. **Send claim** (`peer_gate.claim_task`, P-05). The ledger row appears only inside `delegate()`, so two runners
    of the same (run, node) could both read "nothing sent". Right before the send the node creates
    `<tenant>/global/federation/peer_claims/<task_id>` with `O_EXCL`; whoever fails to create it reports

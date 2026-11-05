@@ -1,7 +1,8 @@
 """Imported skills become SkillForge prompt skills (G9, Skills 2.0).
 
-A Forge-bundle / single-skill import stores the package under
-``<corvin_home>/skills_installed/<id>/<version>/``. Nothing booted that store, so an
+A Forge-bundle / single-skill import stores the package under the tenant's installed-skill
+store (:func:`installed_store_root`: ``<corvin_home>/skills_installed`` for ``_default``,
+``<tenant_home>/skills/installed`` for every other tenant) at ``<id>/<version>/``. Nothing booted that store, so an
 imported skill was reported "installed" and never took part in a turn.
 
 This module is the ONE bridge from that store into the machinery that already decides
@@ -140,11 +141,27 @@ def activate_installed_skill(skill_id: str, version: str, body_md: str, *,
         return Activation(skill_id, version, "refused", name, f"unexpected error ({type(exc).__name__})")
 
 
-def _installed_root() -> Path:
+def installed_store_root(tenant_id: str) -> Path:
+    """THE installed-skill store of ``tenant_id`` - every reader and writer resolves it here.
+
+    ``_default`` keeps the host-wide ``<corvin_home>/skills_installed`` (the store every
+    install used before 2026-11-05, so nothing moves); every other tenant has its own
+    ``<tenant_home>/skills/installed``. Until then the store was host-wide for everyone: the
+    owner of tenant B installed into it, every tenant's session listed it and every tenant's
+    boot activated it as ``prompt.installed.<id>`` (refutation 2026-11-05, RS-11). A
+    non-default tenant never reads, lists or activates the host store."""
     _ensure_skill_forge_importable()
     from forge import paths as _forge_paths  # noqa: PLC0415
+    from forge.tenants import validate_tenant_id  # noqa: PLC0415
 
-    return _forge_paths.corvin_home() / "skills_installed"
+    tid = validate_tenant_id(tenant_id)
+    if tid == "_default":
+        return _forge_paths.corvin_home() / "skills_installed"
+    return _forge_paths.tenant_home(tid) / "skills" / "installed"
+
+
+def _installed_root(tenant_id: str) -> Path:
+    return installed_store_root(tenant_id)
 
 
 def _registry_entries(root: Path) -> Dict[str, List[Dict[str, Any]]]:
@@ -176,7 +193,7 @@ def activate_missing_installed_skills(tenant_id: str, *, limit: int = BOOT_CATCH
     """
     out: List[Activation] = []
     try:
-        root = _installed_root()
+        root = _installed_root(tenant_id)  # RS-11: the booted tenant's own store only
         entries = _registry_entries(root)
     except Exception as exc:  # noqa: BLE001
         logger.info("installed skills not scanned (%s)", type(exc).__name__)
@@ -198,4 +215,4 @@ def activate_missing_installed_skills(tenant_id: str, *, limit: int = BOOT_CATCH
 
 
 __all__ = ["Activation", "activate_installed_skill", "activate_missing_installed_skills",
-           "forge_name_for", "NAME_PREFIX", "SCOPE", "ORIGIN"]
+           "forge_name_for", "installed_store_root", "NAME_PREFIX", "SCOPE", "ORIGIN"]
