@@ -102,7 +102,7 @@ def _pinned_path(name: str) -> "Path | None":
 
 def _write_deferred(event_type: str, severity: str, details: dict,
                     path: Path, identity: "tuple[str, str]",
-                    id_path: "str | None" = None) -> None:
+                    id_path: str) -> None:
     """Thread body of a deferred record: write it where it was RAISED.
 
     The chain path and the signing identity are resolved on the raising thread.
@@ -135,10 +135,10 @@ def _write_deferred(event_type: str, severity: str, details: dict,
             "deferred %s not written: the signing identity changed from %s to %s "
             "before the record could be signed", event_type, identity, now)
         return
+    # Both paths were resolved by the canonical resolvers on the raising thread
+    # (instance_id_path() / the signing identity) — never composed here.
     _audit_tls.pinned_key_path = Path(identity[1])
-    _audit_tls.pinned_id_path = (
-        Path(id_path) if id_path is not None
-        else Path(identity[0]) / _GLOBAL_DIR / _INSTANCE_ID_FILE)
+    _audit_tls.pinned_id_path = Path(id_path)
     try:
         _write_audit(event_type, severity, details, path=path)
     finally:
