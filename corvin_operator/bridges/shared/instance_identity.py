@@ -95,8 +95,14 @@ def _signing_identity() -> "tuple[str, str]":
             os.path.abspath(str(instance_key_path())))
 
 
+def _pinned_path(name: str) -> "Path | None":
+    """A path pinned for THIS thread by :func:`_write_deferred`, else None."""
+    return getattr(_audit_tls, name, None)
+
+
 def _write_deferred(event_type: str, severity: str, details: dict,
-                    path: Path, identity: "tuple[str, str]") -> None:
+                    path: Path, identity: "tuple[str, str]",
+                    id_path: "str | None" = None) -> None:
     """Thread body of a deferred record: write it where it was RAISED.
 
     The chain path and the signing identity are resolved on the raising thread.
@@ -109,6 +115,15 @@ def _write_deferred(event_type: str, severity: str, details: dict,
     mint or use the key of a DIFFERENT install, so the record is dropped with a
     warning instead of being written into a foreign chain. A real process never
     changes its home or its instance key path mid-run.
+
+    That check alone left a window (run-all-tests.sh 2026-11-05,
+    test_engine_trust_drift): it passed, then ``write_event`` waited for the
+    outer write's lock and only AFTER that resolved the instance id and the
+    signing key — by which time the raising thread had dropped
+    ``CORVIN_HOME``, so ``instance_id.json`` (and the key pair) were minted in
+    ``<checkout>/.corvin``. The instance-id and key paths resolved at raise
+    time are therefore PINNED on this thread for the whole write;
+    :func:`instance_id_path` and :func:`instance_key_path` honour the pin.
     """
     try:
         now = _signing_identity()
@@ -120,7 +135,15 @@ def _write_deferred(event_type: str, severity: str, details: dict,
             "deferred %s not written: the signing identity changed from %s to %s "
             "before the record could be signed", event_type, identity, now)
         return
-    _write_audit(event_type, severity, details, path=path)
+    _audit_tls.pinned_key_path = Path(identity[1])
+    _audit_tls.pinned_id_path = (
+        Path(id_path) if id_path is not None
+        else Path(identity[0]) / _GLOBAL_DIR / _INSTANCE_ID_FILE)
+    try:
+        _write_audit(event_type, severity, details, path=path)
+    finally:
+        _audit_tls.pinned_key_path = None
+        _audit_tls.pinned_id_path = None
 
 
 def _audit_ibc(event_type: str, severity: str, details: dict) -> None:
@@ -144,10 +167,11 @@ def _audit_ibc(event_type: str, severity: str, details: dict) -> None:
         try:
             identity = _signing_identity()
             path = _audit_chain_path()
+            id_path = os.path.abspath(str(instance_id_path()))
         except Exception:  # noqa: BLE001
             return  # best-effort, like _write_audit
         threading.Thread(target=_write_deferred,
-                         args=(event_type, severity, details, path, identity),
+                         args=(event_type, severity, details, path, identity, id_path),
                          name="ibc-audit-deferred").start()
         return
     _write_audit(event_type, severity, details)
@@ -223,8 +247,12 @@ def instance_id_path() -> Path:
 
     Honours the ``CORVIN_INSTANCE_ID_PATH`` env override (used by tests
     and multi-instance E2E setups). Otherwise: ``<corvin_home>/global/
-    instance_id.json``.
+    instance_id.json``. A deferred audit write uses the path pinned when it
+    was raised (see :func:`_write_deferred`).
     """
+    pinned = _pinned_path("pinned_id_path")
+    if pinned is not None:
+        return pinned
     env = os.environ.get("CORVIN_INSTANCE_ID_PATH")
     if env:
         return Path(env).expanduser()
@@ -455,6 +483,9 @@ def set_label(label: str) -> dict[str, Any]:
 
 
 def instance_key_path() -> Path:
+    pinned = _pinned_path("pinned_key_path")  # deferred audit write, see _write_deferred
+    if pinned is not None:
+        return pinned
     env = os.environ.get("CORVIN_INSTANCE_KEY_PATH")
     if env:
         return Path(env).expanduser()

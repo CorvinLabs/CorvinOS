@@ -787,6 +787,30 @@ class TestDeferredAuditBinding(unittest.TestCase):
         write.assert_called_once()
         self.assertEqual(write.call_args.kwargs["path"], expected)
 
+    def test_home_dropped_while_the_write_waits_still_signs_where_raised(self) -> None:
+        # The identity check passes, then write_event waits for the outer lock
+        # and resolves the instance id + key only afterwards. The raising thread
+        # dropping CORVIN_HOME in that window minted instance_id.json in
+        # <checkout>/.corvin (run-all-tests.sh 2026-11-05, engine trust drift).
+        home_a = self.tmp / "a"
+        target, args = self._defer()
+        seen: dict = {}
+
+        def _write_after_the_home_was_dropped(*_a, **_kw) -> None:
+            os.environ.pop("CORVIN_HOME", None)
+            seen["id"] = instance_identity.instance_id_path()
+            seen["key"] = instance_identity.instance_key_path()
+
+        with mock.patch.object(instance_identity, "_write_audit",
+                               side_effect=_write_after_the_home_was_dropped):
+            target(*args)
+        self.assertEqual(seen["id"], home_a / "global" / "instance_id.json")
+        self.assertEqual(seen["key"], home_a / "global" / "instance_key.pem")
+        # The pin is the deferred write's alone — it does not outlive it.
+        os.environ["CORVIN_HOME"] = str(self.tmp / "c")
+        self.assertEqual(instance_identity.instance_id_path(),
+                         self.tmp / "c" / "global" / "instance_id.json")
+
 
 class TestCILint(unittest.TestCase):
     def test_no_anthropic_import(self) -> None:

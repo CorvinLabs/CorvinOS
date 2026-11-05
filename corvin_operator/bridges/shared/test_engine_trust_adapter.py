@@ -32,6 +32,21 @@ sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 PASS = 0
 FAIL = 0
 
+# The CORVIN_HOME this process was started with (the runner's sandbox). A
+# section that points CORVIN_HOME at its own temp dir puts THIS value back
+# afterwards — never pops it: with CORVIN_HOME unset every resolver (the audit
+# writer's instance identity among them) falls back to `<checkout>/.corvin`, the
+# live install when run from the main checkout (run-all-tests.sh 2026-11-05).
+_CORVIN_HOME_AT_START = os.environ.get("CORVIN_HOME")
+
+
+def _restore_corvin_home() -> None:
+    if _CORVIN_HOME_AT_START is None:
+        os.environ.pop("CORVIN_HOME", None)
+    else:
+        os.environ["CORVIN_HOME"] = _CORVIN_HOME_AT_START
+
+
 
 def t(label: str, ok: bool, *, detail: str = "") -> None:
     global PASS, FAIL
@@ -144,7 +159,7 @@ def section_fail_open() -> None:
             t("engine without .name → fail-open", r is None,
               detail=f"got {r!r}")
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +193,7 @@ def section_happy_paths() -> None:
                 engine, channel="test", chat_key="c1")
             t("min_tier=high + claude_code (high) → passes", r is None)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +253,7 @@ def section_gate_trips() -> None:
               isinstance(r, str) and ("abgelaufen" in (r or "") or "expired" in (r or "")),
               detail=str(r)[:80])
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +278,7 @@ def section_module_absent() -> None:
             finally:
                 ad._engine_trust = saved
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------

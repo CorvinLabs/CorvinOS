@@ -26,6 +26,21 @@ sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 PASS = 0
 FAIL = 0
 
+# The CORVIN_HOME this process was started with (the runner's sandbox). A
+# section that points CORVIN_HOME at its own temp dir puts THIS value back
+# afterwards — never pops it: with CORVIN_HOME unset every resolver (the audit
+# writer's instance identity among them) falls back to `<checkout>/.corvin`, the
+# live install when run from the main checkout (run-all-tests.sh 2026-11-05).
+_CORVIN_HOME_AT_START = os.environ.get("CORVIN_HOME")
+
+
+def _restore_corvin_home() -> None:
+    if _CORVIN_HOME_AT_START is None:
+        os.environ.pop("CORVIN_HOME", None)
+    else:
+        os.environ["CORVIN_HOME"] = _CORVIN_HOME_AT_START
+
+
 
 def t(label: str, ok: bool, *, detail: str = "") -> None:
     global PASS, FAIL
@@ -111,7 +126,7 @@ def section_schema_validation() -> None:
             except et2.EngineTrustManifestMalformed:
                 t("extra=forbid rejects unknown top-level", True)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
     # cross-field: metadata.engine_id must match requested id
     with tempfile.TemporaryDirectory() as tmp:
@@ -127,7 +142,7 @@ def section_schema_validation() -> None:
             except et2.EngineTrustManifestMalformed:
                 t("cross-field engine_id mismatch raises", True)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
     # binary_sha256 charset enforced
     with tempfile.TemporaryDirectory() as tmp:
@@ -143,7 +158,7 @@ def section_schema_validation() -> None:
             except et2.EngineTrustManifestMalformed:
                 t("invalid binary_sha256 charset rejected", True)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
     # engine_id charset
     try:
@@ -173,7 +188,7 @@ def section_override_resolution() -> None:
               m.metadata.trust_tier == "low",
               detail=f"got {m.metadata.trust_tier}")
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +261,7 @@ def section_expiry_downgrade() -> None:
               v.passed and v.expired,
               detail=f"passed={v.passed} expired={v.expired}")
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +367,7 @@ def section_binary_hash() -> None:
             t("null binary_sha256 → check skipped",
               v.passed and v.binary_check == "skipped")
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +444,7 @@ def section_audit_emission() -> None:
             except et2.EngineTrustAuditFieldNotAllowed:
                 t("off-allowlist field rejected", True)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
