@@ -87,7 +87,8 @@ class TestCheckpointWorkflowState:
         # Deserialize and verify
         restored = SessionCheckpoint.from_dict(data)
         assert restored.workflow_execution_state is not None
-        assert restored.workflow_execution_state["workflow_id"] == "wf-xyz"
+        # from_dict rebuilds the WorkflowExecutionState dataclass (checkpoint.py), not a dict
+        assert restored.workflow_execution_state.workflow_id == "wf-xyz"
 
 
 class TestCheckpointGoalAlignment:
