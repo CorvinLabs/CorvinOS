@@ -12,9 +12,22 @@ These tests drive real HTTP requests against the Settings API and verify:
   5. Audit events are logged
 """
 import json
+import os
 import pytest
 from pathlib import Path
 from httpx import AsyncClient, HTTPStatusError
+
+# These requests go to http://localhost:8765 — on a developer host that is the
+# LIVE console, and test_toggle_* rewrite its feature whitelist. Tests must
+# never touch the live install (CLAUDE.md "Testing + Docs Sync"); without a
+# session they also only ever saw 401 "no session". The same API is covered
+# in-process by tests/console/test_feature_whitelist_api_unit.py. Opt in only
+# against a disposable console with CORVIN_FEATURE_FLAGS_E2E_LIVE=1.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("CORVIN_FEATURE_FLAGS_E2E_LIVE") != "1",
+    reason="drives and mutates the console on localhost:8765 (the live install); "
+    "set CORVIN_FEATURE_FLAGS_E2E_LIVE=1 against a disposable console",
+)
 
 
 @pytest.fixture

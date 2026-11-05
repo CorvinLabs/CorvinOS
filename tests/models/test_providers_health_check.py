@@ -185,16 +185,16 @@ class TestProviderHealthCheckTimeout:
         provider = OpenAIProvider(config)
 
         with patch("aiohttp.ClientSession.get") as mock_get:
-            # Simulate timeout
-            async def timeout_after_delay():
-                await asyncio.sleep(0.1)
-                raise asyncio.TimeoutError()
-
-            mock_get.side_effect = timeout_after_delay
+            # Simulate the transport timing out. ``session.get`` is used as an
+            # async context manager, so the timeout is raised from the call
+            # itself — an ``async def`` side effect would hand ``async with``
+            # a bare coroutine and land in the generic-error branch instead.
+            mock_get.side_effect = asyncio.TimeoutError()
 
             result = await provider.health_check()
 
             assert result.healthy is False
+            assert "timeout" in result.message
             assert result.latency_ms > 0
 
 

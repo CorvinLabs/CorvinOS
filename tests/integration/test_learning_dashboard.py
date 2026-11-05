@@ -323,6 +323,9 @@ class TestLearningDashboardBasic:
     def test_get_skill_stats_caches_result(self):
         """get_skill_stats() caches per-skill results."""
         mock_event_store = Mock()
+        # Since round-4 F11 the stats are aggregated from the tenant's real
+        # events (``query_events``); an empty store is a valid answer.
+        mock_event_store.query_events.return_value = []
         mock_audit = Mock()
 
         dashboard = LearningDashboard(
@@ -338,6 +341,7 @@ class TestLearningDashboardBasic:
         # Second call (cached)
         result2 = dashboard.get_skill_stats("skill1")
         assert result2.skill_name == "skill1"
+        assert mock_event_store.query_events.call_count == 1  # served from the cache
         # Only 1 audit call (from first invocation)
         assert mock_audit.write_audit_event.call_count == 1
 

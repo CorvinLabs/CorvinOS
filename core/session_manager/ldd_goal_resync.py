@@ -71,14 +71,18 @@ class LDDGoalResyncProtocol:
         # 3. Composite score: 70% similarity + 30% completeness
         composite = (sim_score * 0.7) + (comp_score * 0.3)
 
-        # 4. Decide action based on composite score + drift history
-        decision, reason = self._decide_action(composite, iteration_num)
-
-        # 5. Update drift counter (reset on good score)
+        # 4. Update drift counter FIRST (reset on good score), so the decision
+        #    counts THIS iteration. Deciding before counting escalated a
+        #    sub-0.5 drift only on its 4th consecutive iteration while the
+        #    milder 0.5-0.7 band escalated on its 3rd — the worse drift got
+        #    one more unsupervised iteration than the documented ">=3".
         if composite < self.SIMILARITY_THRESHOLD_CONTINUE:
             self.drift_count += 1
         else:
             self.drift_count = 0
+
+        # 5. Decide action based on composite score + drift history
+        decision, reason = self._decide_action(composite, iteration_num)
 
         # 6. Create checkpoint
         checkpoint = GoalAlignmentCheckpoint(
@@ -128,7 +132,8 @@ class LDDGoalResyncProtocol:
             return "CONTINUE", f"Goal alignment {composite:.2f} (strong)"
 
         elif composite >= self.SIMILARITY_THRESHOLD_CORRECT:
-            if self.drift_count >= 2:
+            # ``drift_count`` already includes this iteration (see step 4).
+            if self.drift_count >= self.DRIFT_COUNT_ESCALATE:
                 return (
                     "ESCALATE",
                     f"Goal alignment {composite:.2f} + {self.drift_count} drifts (user input needed)",

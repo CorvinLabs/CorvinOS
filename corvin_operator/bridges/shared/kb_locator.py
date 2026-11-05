@@ -3,7 +3,7 @@
 Stdlib only, import-free of the console: the gate skills (``adr_gate``, ``concept_gate``) are
 rendered with the result (``render``), so an agent is told the EXACT absolute ``kb.py`` path the
 path gate pins (``path_gate._session_kb_pins``) instead of the maintainers' hard-coded
-``/home/shumway/projects/Corvin-Knowledge``.
+sibling ``Corvin-Knowledge`` checkout path.
 
 Resolution mirrors ``corvin_console.kb_projection.kb_repo`` (the board's binding):
 

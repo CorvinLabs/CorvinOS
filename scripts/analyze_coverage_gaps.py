@@ -164,7 +164,7 @@ def main():
     print()
     print("1. Run pytest locally:")
     print("   $ cd <repo-root>")
-    print("   $ python3 -m pytest --cov=operator --cov=core --cov-report=html tests/")
+    print("   $ python3 -m pytest --cov=corvin_operator --cov=core --cov-report=html tests/")
     print()
     print("2. View HTML report:")
     print("   $ open htmlcov/index.html")

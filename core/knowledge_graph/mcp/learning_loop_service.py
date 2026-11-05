@@ -162,6 +162,12 @@ class LearningLoopService:
 
         self.tenant_id = validate_tenant_id(tenant_id)
         self._storage = LearningLoopIndexStorage(tenant_id, db_path)
+        # update_on_event is a read-modify-write of one entry and runs on the
+        # executor's threads (index_update_hook): without a lock, concurrent
+        # events read the same entry and the last insert wins — measured: 10
+        # concurrent events left event_count_7d at 2.
+        import threading  # noqa: PLC0415
+        self._update_lock = threading.RLock()
 
     def insert_from_manifest(
         self,
@@ -241,6 +247,15 @@ class LearningLoopService:
         Returns:
             Updated entry, or None if not found
         """
+        with self._update_lock:
+            return self._update_on_event_locked(plugin_id, loop_id, feedback_signal)
+
+    def _update_on_event_locked(
+        self,
+        plugin_id: str,
+        loop_id: str,
+        feedback_signal: Optional[float],
+    ) -> Optional[LearningLoopIndexEntry]:
         entry = self._storage.get(plugin_id, loop_id)
         if entry is None:
             logger.warning(

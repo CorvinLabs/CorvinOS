@@ -14,8 +14,10 @@ def test_learning_api_route_exists():
         from core.console.corvin_console.routes import learning
         assert hasattr(learning, 'router'), "learning module should have router"
         assert hasattr(learning, 'get_learning_nodes'), "should have get_learning_nodes endpoint"
-        assert hasattr(learning, 'grade_pattern'), "should have grade_pattern endpoint"
-        assert hasattr(learning, 'add_operator_note'), "should have add_operator_note endpoint"
+        # POST /learning/grade and /learning/note were removed in 1a0bfcef0
+        # (always 404, no caller); they must stay gone.
+        assert not hasattr(learning, 'grade_pattern')
+        assert not hasattr(learning, 'add_operator_note')
         print("✅ Backend routes exist and are importable")
     except Exception as e:
         raise AssertionError(f"Failed to import learning routes: {e}")

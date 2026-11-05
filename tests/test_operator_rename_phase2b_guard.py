@@ -11,6 +11,18 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
+# These checks ran against the one-off Phase-2b worktree ``/tmp/wt-adr-0730``
+# (1bbad8d9d era), not against this checkout; the same invariants are enforced
+# on the real tree by tests/test_adr_0730_operator_guard.py and
+# tests/test_operator_layout_guard.py.
+pytestmark = pytest.mark.skipif(
+    not Path("/tmp/wt-adr-0730").is_dir(),
+    reason="needs the historical Phase-2b worktree /tmp/wt-adr-0730 (absent); "
+    "covered on this checkout by test_adr_0730_operator_guard / test_operator_layout_guard",
+)
+
 def test_no_operator_directory():
     """Phase 1: 'operator/' and 'core/operator/' directories removed."""
     files = subprocess.run(

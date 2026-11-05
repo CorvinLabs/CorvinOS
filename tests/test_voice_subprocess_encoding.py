@@ -73,14 +73,26 @@ _NEUTRAL_ENV.setdefault("PYTHONCOERCECLOCALE", "0")
 if os.name != "nt":
     _NEUTRAL_ENV["LC_ALL"] = "C"
     _NEUTRAL_ENV["LANG"] = "C"
+    # PEP 540: on the C/POSIX locale CPython >= 3.7 turns UTF-8 MODE ON by
+    # itself, which made the baseline stdio UTF-8 again and every probe below
+    # non-discriminating. Disable it explicitly so the child gets the ASCII
+    # locale codec a script must defend against.
+    _NEUTRAL_ENV["PYTHONUTF8"] = "0"
 
 # The scripts that exchange TEXT over a pipe in the voice pipeline.
 _STDIO_SCRIPTS = ("summarize.py", "strip_for_tts.py", "summarize_smart.py")
 
+#: The stdio codec the CHILD gets under ``_NEUTRAL_ENV``: ASCII off Windows
+#: (forced C locale, UTF-8 mode off), the ANSI code page on Windows. Asking the
+#: PARENT's locale (UTF-8 on a Linux dev box) counted every character as
+#: encodable, so the survivor check below could never find one.
+_CHILD_CODEC = "ascii" if os.name != "nt" else locale.getpreferredencoding(False)
+
+
 def _encodable(ch: str) -> bool:
-    """True when this machine's locale codec can represent *ch*."""
+    """True when the probe child's locale codec can represent *ch*."""
     try:
-        ch.encode(locale.getpreferredencoding(False))
+        ch.encode(_CHILD_CODEC)
         return True
     except UnicodeEncodeError:
         return False

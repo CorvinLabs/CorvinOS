@@ -178,6 +178,15 @@ async def copy_files_atomic(
             _log.info(f"  Created backup: {backup_dir}")
         except Exception as e:
             raise MigrationError(f"Backup creation failed: {e}") from e
+    else:
+        # No prior target: the backup is an EMPTY directory, so a failed run
+        # still has something to roll back to. Returning a path that did not
+        # exist made run_migration skip the rollback (``backup_dir.exists()``)
+        # and leave a half-verified target behind.
+        try:
+            backup_dir.mkdir(parents=True)
+        except Exception as e:
+            raise MigrationError(f"Backup creation failed: {e}") from e
 
     # Create temp directory for atomic swap
     with tempfile.TemporaryDirectory() as temp_staging:

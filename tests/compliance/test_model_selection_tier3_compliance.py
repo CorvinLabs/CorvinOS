@@ -287,10 +287,16 @@ class TestSecurityHardening:
             "reasoning": "99% confident Haiku will work",
         }
 
-        # Even with high confidence, house-rules gate applies
+        # Even with high confidence, house-rules gate applies: "haiku" is a
+        # family name, not a whitelisted model id, so the suggestion is
+        # refused — 99 % confidence buys no exception. (The assertion read
+        # ``is True`` since the file was added and never passed.)
         house_rules_check = self._verify_house_rules(suggestion)
 
-        assert house_rules_check is True  # Gate cannot be bypassed
+        assert house_rules_check is False  # Gate cannot be bypassed
+
+        # A whitelisted id passes the same gate.
+        assert self._verify_house_rules({**suggestion, "suggested_model": "claude-sonnet-5"}) is True
 
     def _verify_house_rules(self, suggestion: Dict[str, Any]) -> bool:
         """Verify house-rules gate (never disabled)."""

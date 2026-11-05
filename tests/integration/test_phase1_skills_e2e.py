@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 
 
 # Mock audit backend for testing
+
+# os.delegation_router advises the WORKER-ENGINE route (native / acs / tde) since
+# 5c191a73a (ADR-0532 L5, ADR-2092): it confirms the bundled route or de-escalates
+# to native; it no longer names a model. Without a /delegate or big-data signal the
+# route is "native" for every complexity.
+
 class MockAuditBackend:
     """Mock audit backend that captures events in memory."""
 
@@ -94,9 +100,10 @@ class TestSkillsRegistryE2E:
         # Execute: list registered skills
         skills = registry.list_skills()
 
-        # Verify: all 7 builtin skills (routing, vibe, context + 4 flag-backed)
+        # Verify: every booted builtin skill (BUILTIN_SKILL_IDS — 11 since the
+        # manifest-boot reconciliation 429ef9497 and the learning daemon cf37bf031)
         from core.skills.os_skills_phase1 import BUILTIN_SKILL_IDS
-        assert len(skills) == len(BUILTIN_SKILL_IDS) == 7
+        assert len(skills) == len(BUILTIN_SKILL_IDS)
         skill_ids = [s.id for s in skills]
         assert "os.delegation_router" in skill_ids
         assert "os.vibe_engineering" in skill_ids
@@ -117,7 +124,7 @@ class TestSkillsRegistryE2E:
         # Verify: execution succeeded
         assert result.status == "success"
         assert result.output is not None
-        assert result.output["engine"] == "claude-opus-5"
+        assert result.output["engine"] == "native"  # L5 route, not a model
         assert result.execution_time_ms >= 0
         assert result.tenant_id == "_default"
 
@@ -250,7 +257,7 @@ class TestA2ASkillBridgeE2E:
         assert result.task_id == "task_001"
         assert result.status == A2ATaskStatus.SUCCESS
         assert result.output is not None
-        assert result.output["engine"] == "claude-opus-5"
+        assert result.output["engine"] == "native"  # L5 route, not a model
 
         # Verify: audit trail shows A2A events
         a2a_received = mock_audit.get_events("A2A_TASK_RECEIVED")
@@ -358,11 +365,7 @@ class TestFeatureFlagReplacement:
                 lom="tests/integration/test_phase1_skills_e2e.py:e2e",
             )
             assert result.status == "success"
-            assert result.output["engine"] in [
-                "claude-haiku-4",
-                "claude-sonnet-4",
-                "claude-opus-5",
-            ]
+            assert result.output["engine"] in ("native", "acs", "tde")
 
         # Verify: all executions logged to audit trail
         audit_events = mock_audit.get_events("SKILL_EXECUTED")
@@ -378,10 +381,11 @@ class TestFeatureFlagReplacement:
         # and repeatable (A/B equivalence requirement)
 
         test_cases = [
-            {"complexity": 2, "task_type": "chat", "expected_engine": "claude-haiku-4"},
-            {"complexity": 5, "task_type": "analysis", "expected_engine": "claude-sonnet-4"},
-            # complexity >= 8 wins over the "code prefers Sonnet" rule (that rule is < 7 only)
-            {"complexity": 9, "task_type": "code", "expected_engine": "claude-opus-5"},
+            # No /delegate and no big-data signal: the route stays native at
+            # every complexity (the router only confirms or de-escalates).
+            {"complexity": 2, "task_type": "chat", "expected_engine": "native"},
+            {"complexity": 5, "task_type": "analysis", "expected_engine": "native"},
+            {"complexity": 9, "task_type": "code", "expected_engine": "native"},
         ]
 
         for test_case in test_cases:

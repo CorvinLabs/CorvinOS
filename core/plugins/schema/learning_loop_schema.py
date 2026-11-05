@@ -18,6 +18,10 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
+#: The documented loop-id charset (kebab-case or snake_case).
+_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
 class FeedbackTypeEnum(str, Enum):
     """Allowed feedback types (ADR-0314 Learning Event taxonomy)."""
     outcome_feedback = "outcome_feedback"
@@ -137,16 +141,18 @@ class LearningLoopManifest(BaseModel):
         """Validate id: must be kebab-case or snake_case (no uppercase, special chars)."""
         if not v:
             raise ValueError("id cannot be empty")
-        # Allow a-z, 0-9, hyphen, underscore
-        if not all(c.isalnum() or c in "-_" for c in v):
+        # Allow a-z, 0-9, hyphen, underscore. ``str.isalnum`` accepted upper
+        # case and any Unicode letter ("TestLoop", "lööp"), contradicting the
+        # documented charset — the check is now the literal ASCII set.
+        if not all(c in _ID_CHARS for c in v):
             raise ValueError(
                 f"id must be kebab-case or snake_case (a-z, 0-9, -, _), got: {v}"
             )
         # Must start with letter or digit
-        if not v[0].isalnum():
+        if v[0] in "-_":
             raise ValueError(f"id must start with letter or digit, got: {v}")
         # Must end with letter or digit
-        if not v[-1].isalnum():
+        if v[-1] in "-_":
             raise ValueError(f"id must end with letter or digit, got: {v}")
         return v
 

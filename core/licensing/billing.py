@@ -49,17 +49,21 @@ class ModelPricing:
     change_date: str = field(default="")                        # When pricing changed (ISO 8601)
 
     def to_dict(self) -> Dict:
-        """Serialize to dict for config/audit."""
+        """Serialize to dict for config/audit.
+
+        Costs in plain decimal notation: ``str(Decimal("0.0000008"))`` is
+        ``"8E-7"``, which no config reader or person expects.
+        """
         return {
             "model_id": self.model_id,
             "tier": self.tier.value,
             "pricing_model": self.pricing_model.value,
-            "input_token_cost": str(self.input_token_cost),
-            "output_token_cost": str(self.output_token_cost),
-            "cache_read_cost": str(self.cache_read_cost),
-            "cache_write_cost": str(self.cache_write_cost),
-            "request_cost": str(self.request_cost),
-            "hourly_cost": str(self.hourly_cost),
+            "input_token_cost": format(self.input_token_cost, "f"),
+            "output_token_cost": format(self.output_token_cost, "f"),
+            "cache_read_cost": format(self.cache_read_cost, "f"),
+            "cache_write_cost": format(self.cache_write_cost, "f"),
+            "request_cost": format(self.request_cost, "f"),
+            "hourly_cost": format(self.hourly_cost, "f"),
             "requests_per_day_limit": self.requests_per_day_limit,
             "tokens_per_day_limit": self.tokens_per_day_limit,
             "active": self.active,
@@ -83,17 +87,33 @@ class BillingSchema:
     member_tier_daily_tokens: int = 0               # Unlimited
     member_tier_monthly_cost: Decimal = Decimal("10")  # Per seat, per month (EUR)
 
+    # Every tier's entry per model. ``pricing_by_model`` is keyed by model id
+    # alone, so registering a model's MEMBER row overwrote its COMMUNITY row
+    # and ``is_model_available(<model>, COMMUNITY)`` answered False for every
+    # model offered on both tiers (Haiku, Sonnet). ``pricing_by_model`` keeps
+    # the FIRST registered row per model (the documented lookup order), the
+    # tier table answers availability.
+    pricing_by_tier: Dict[tuple, ModelPricing] = field(default_factory=dict)
+
     def add_model_pricing(self, pricing: ModelPricing):
         """Add or update model pricing (k=2 gates this)."""
-        self.pricing_by_model[pricing.model_id] = pricing
+        self.pricing_by_tier[(pricing.model_id, pricing.tier)] = pricing
+        current = self.pricing_by_model.get(pricing.model_id)
+        if current is None or current.tier == pricing.tier:
+            self.pricing_by_model[pricing.model_id] = pricing
 
-    def get_model_pricing(self, model_id: str) -> Optional[ModelPricing]:
-        """Get pricing for a model (returns None if not found)."""
+    def get_model_pricing(
+        self, model_id: str, tier: Optional[ModelTier] = None,
+    ) -> Optional[ModelPricing]:
+        """Pricing for a model — for *tier* when given, else the first row
+        registered for it. ``None`` if not found."""
+        if tier is not None:
+            return self.pricing_by_tier.get((model_id, tier))
         return self.pricing_by_model.get(model_id)
 
     def is_model_available(self, model_id: str, tier: ModelTier) -> bool:
         """Check if model is available for a tier."""
-        pricing = self.get_model_pricing(model_id)
+        pricing = self.get_model_pricing(model_id, tier)
         if pricing is None:
             return False
         return pricing.active and pricing.tier == tier

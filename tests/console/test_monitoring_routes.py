@@ -20,14 +20,13 @@ from fastapi.testclient import TestClient
 from pathlib import Path
 import sys
 
-# Setup path to import corvin_console
+# Import through the PACKAGE: monitoring_routes uses package-relative imports
+# (``from ..deps import ...``), so loading it as a top-level ``routes`` module
+# from the corvin_console directory failed at collection with "attempted
+# relative import beyond top-level package".
 REPO_ROOT = Path(__file__).parents[2]
-CONSOLE_DIR = REPO_ROOT / "core/console/corvin_console"
-sys.path.insert(0, str(CONSOLE_DIR))
-
-# Import after path setup
-from routes import monitoring_routes
-from api_schemas.monitoring import (
+from corvin_console.routes import monitoring_routes
+from corvin_console.api_schemas.monitoring import (
     SystemHealthResponse,
     AutonomousStatsResponse,
     SkillPerformanceResponse,
@@ -57,8 +56,8 @@ def test_client():
     """Create a test client for the monitoring routes."""
     # Create a minimal FastAPI app with monitoring routes
     from fastapi import FastAPI, Depends
-    from deps import require_session
-    from auth import SessionRecord as AuthSessionRecord
+    from corvin_console.deps import require_session
+    from corvin_console.auth import SessionRecord as AuthSessionRecord
 
     # Mock the require_session dependency
     def mock_require_session():

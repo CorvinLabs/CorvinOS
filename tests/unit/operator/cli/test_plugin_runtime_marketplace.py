@@ -96,10 +96,15 @@ def test_unknown_id_is_exit_1_with_a_not_found_message(home):
     assert _installed_ids(home) == []
 
 
-def test_community_tier_ids_are_refused_not_pretended(home):
+def test_contributor_tier_id_installs_from_the_marketplace_checkout(home):
+    """Since f19246adf (ADR-0892) the contributor tier installs from the
+    Corvin-Marketplace checkout like builtin does (it used to be refused with
+    "only builtin plugins install locally")."""
     proc = _corvin(home, "install", "plugin:contributor-integration-slack_notifier")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "only builtin plugins install locally" in proc.stderr
+    if proc.returncode == 1 and "not found" in (proc.stdout + proc.stderr).lower():
+        pytest.skip("no Corvin-Marketplace checkout with contributor plugins on this host")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Installed slack_notifier" in proc.stdout + proc.stderr
 
 
 def test_missing_local_directory_is_exit_2(home):

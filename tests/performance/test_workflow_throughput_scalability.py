@@ -183,7 +183,7 @@ class TestSteadyStateThroughput:
         assert avg_latency < 0.5, \
             f"Average latency {avg_latency*1000:.1f}ms unexpectedly high"
 
-    def test_steady_state_json_report(self, throughput_context: Dict) -> None:
+    def test_steady_state_json_report(self, throughput_context: Dict, tmp_path: Path) -> None:
         """Generate JSON report for steady-state test."""
         # Synthetic results if not populated by async test
         if not throughput_context["request_times"]:
@@ -216,7 +216,9 @@ class TestSteadyStateThroughput:
             "p99_latency_ms": 250,
         }
 
-        output_path = Path("results/throughput_baseline.json")
+        # Under tmp: the report used to land in ./results/ — wherever pytest
+        # was started, i.e. inside the repo tree.
+        output_path = tmp_path / "results" / "throughput_baseline.json"
         output_path.parent.mkdir(exist_ok=True, parents=True)
 
         with open(output_path, "w", encoding="utf-8") as f:

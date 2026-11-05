@@ -324,7 +324,13 @@ def skill_authoring_tier(tenant_id: str) -> str:
             "forge.create", requested=1, tenant_id=tenant_id,
             entry_point="skill-forge:create",
         )
-    except LicenseDenied:
+    except LicenseDenied as exc:
+        # Only a TIER verdict means "free tier, daily quota". Any other
+        # refusal — above all ``invalid_tenant`` — stays a refusal: returning
+        # "free" for every LicenseDenied let a write for an unresolvable tenant
+        # (``../escape``) through on the quota path (fail-open since 1c1f7aa64).
+        if getattr(exc, "reason", None) == "invalid_tenant":
+            raise ValueError(f"license_required: {exc}") from exc
         return "free"
     if decision is not None and decision.decision is Decision.ALLOW:
         return "member"

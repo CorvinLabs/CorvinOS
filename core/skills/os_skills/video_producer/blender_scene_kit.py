@@ -7,13 +7,13 @@ which does not exist in the regular CorvinOS/pytest Python environment (no
 embedded interpreter). Scene-building scripts import this via
 ``blender --background --python <script>``, exactly like
 ``tests/fixtures/video_producer/build_fixture_scene.py`` and
-``/home/shumway/projects/Corvin-Videos/*/build_blender_scene.py`` do. Never
+the sibling ``Corvin-Videos/*/build_blender_scene.py`` scripts do. Never
 import this from ``core/skills/os_skills/video_producer/__init__.py`` or any
 other module regular CorvinOS code imports at process start -- that would
 break every non-Blender caller of the video_producer package.
 
 Consolidates lessons from building two real rendered videos this session
-(see CorvinOS commit history + /home/shumway/projects/Corvin-Videos/
+(see CorvinOS commit history + the sibling Corvin-Videos repo,
 audit_chain_learn_video/): a scene assembled from Emission-only materials,
 an unrotated Sun lamp, and BEZIER camera keyframes renders fast but looks
 flat, shadowless, and produces a "stop-start" camera judder. Every helper

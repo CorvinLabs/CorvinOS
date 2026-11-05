@@ -552,6 +552,15 @@ def test_the_instance_seed_exists_before_the_first_audit_record_of_a_boot(monkey
     monkeypatch.setattr(v, "_set_active_license", lambda *a, **k: None)
     monkeypatch.setattr(v, "_CONFIG_DIR_SNAPSHOT", tmp_path / "cfg", raising=False)
     monkeypatch.setattr(v, "_CORVIN_HOME_SNAPSHOT", tmp_path / "home", raising=False)
+    # The scenario is a FIRST boot. An earlier test in the same process may
+    # already have initialised the licence, and the idempotency guard then
+    # refuses ``force=True`` outside CORVIN_INTEGRATION_TEST (passed alone,
+    # failed in a full run). Start uninitialised; monkeypatch restores every
+    # module global the call rewrites.
+    monkeypatch.setattr(v, "_LICENSE_INITIALIZED", False)
+    for name in ("_LICENSE_LOADED_AT", "_AUDIT_PATH_SNAPSHOT"):
+        if hasattr(v, name):
+            monkeypatch.setattr(v, name, getattr(v, name))
     monkeypatch.delenv("CORVIN_LICENSE_KEY", raising=False)
     v.load_license_from_env(force=True)
     assert order and order[0] == "seed", order

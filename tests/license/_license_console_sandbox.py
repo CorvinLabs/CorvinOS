@@ -101,6 +101,29 @@ def member_tier() -> Iterator[None]:
         yield
 
 
+def exhaust_free_skill_quota(home: Path, tenant_id: str = TENANT) -> None:
+    """Spend today's free-tier skill credits (ADR-2095: ``skill_forge_per_day``
+    writes per UTC day) through the real counter, so the next skill write is
+    the one past the quota."""
+    from corvin_operator.license import quota_counter as qc
+    from corvin_operator.license.limits import LicenseLimitError
+
+    for _ in range(1000):
+        try:
+            qc.increment_and_check(Path(home), "skill_forge_per_day", tenant_id)
+        except LicenseLimitError:
+            return
+    raise AssertionError("skill_forge_per_day never reached its limit on the free tier")
+
+
+def assert_402_limit_reached(resp) -> None:
+    """The free tier's daily skill quota is used up (ADR-2095)."""
+    assert resp.status_code == 402, (resp.status_code, resp.text)
+    detail = resp.json()["detail"]
+    assert detail["error"] == "limit_reached"
+    assert detail["feature"] == "skill_forge_per_day"
+
+
 def assert_402_forge(resp) -> None:
     assert resp.status_code == 402, (resp.status_code, resp.text)
     detail = resp.json()["detail"]

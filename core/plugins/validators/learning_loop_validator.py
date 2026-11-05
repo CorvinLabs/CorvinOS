@@ -177,10 +177,21 @@ def validate_loop_cross_plugin(
     if existing_loops is None:
         existing_loops = {}
 
+    # Index the existing loops of THIS tenant by loop id. The lookup used to
+    # build the key from the CURRENT plugin id, so it could only ever find the
+    # current plugin's own entry — and then skipped it as "same plugin": a
+    # conflict with another plugin was never reported.
+    by_loop_id: dict[str, set[str]] = {}
+    for key, data in existing_loops.items():
+        parts = key.split(":")
+        if len(parts) < 3 or parts[0] != tenant_id:
+            continue
+        loop_id = parts[-1]
+        other = (data or {}).get("plugin_id") or ":".join(parts[1:-1]) or "unknown"
+        by_loop_id.setdefault(loop_id, set()).add(other)
+
     for loop in loops:
-        composite_key = f"{tenant_id}:{plugin_id}:{loop.id}"
-        if composite_key in existing_loops:
-            other_plugin = existing_loops[composite_key].get("plugin_id", "unknown")
+        for other_plugin in sorted(by_loop_id.get(loop.id, ())):
             if other_plugin != plugin_id:
                 warning = (
                     f"Learning loop conflict: loop '{loop.id}' declared by both "

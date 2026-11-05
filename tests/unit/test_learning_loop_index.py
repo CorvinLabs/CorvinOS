@@ -79,7 +79,9 @@ def storage(temp_db_dir) -> LearningLoopIndexStorage:
 @pytest.fixture
 def service(storage) -> LearningLoopService:
     """Create a LearningLoopService instance."""
-    return LearningLoopService("_default", storage._db.path)
+    # The storage's directory (``_db.path`` was the plyvel handle's attribute;
+    # the stock backend is sqlite since 64c56c524).
+    return LearningLoopService("_default", storage.db_path)
 
 
 # ── Test LearningLoopIndexEntry ─────────────────────────────────────────────
@@ -399,7 +401,7 @@ class TestLearningLoopIndexStorage:
 
         # Measure read performance
         start = time.time()
-        result = storage.get("plugin5", "loop500")
+        result = storage.get("plugin0", "loop500")  # loop i lives in plugin{i % 10}
         elapsed_ms = (time.time() - start) * 1000
 
         assert result is not None

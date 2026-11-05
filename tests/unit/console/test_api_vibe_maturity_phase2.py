@@ -79,9 +79,16 @@ def mock_session() -> SessionRecord:
 
 
 @pytest.fixture
-def test_client() -> TestClient:
-    """FastAPI test client."""
-    return TestClient(app)
+def test_client(tmp_path, monkeypatch) -> TestClient:
+    """FastAPI test client over a SHIPPED host app.
+
+    ``corvin_console.app.app`` does not mount the console router (the hosts
+    do, under ``/v1/console``), so every request to it was a 404. The
+    standalone host is what ``corvinos-serve`` runs."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    from corvin_console.standalone import create_app
+    return TestClient(create_app())
 
 
 # ============ TESTS: ENDPOINT REGISTRATION ============
@@ -91,8 +98,11 @@ class TestEndpointRegistration:
 
     def test_measurements_endpoint_exists(self, test_client: TestClient):
         """Endpoint /v1/console/vibe/maturity/measurements should exist."""
-        # Note: This will return 401 without auth, but that proves the route exists
-        response = test_client.get("/v1/console/vibe/maturity/measurements")
+        # Note: This will return 401 without auth, but that proves the route exists.
+        # The console router carries the DNS-rebinding host guard — send a
+        # loopback Host.
+        response = test_client.get("/v1/console/vibe/maturity/measurements",
+                                   headers={"host": "127.0.0.1:8765"})
         assert response.status_code in [200, 401, 403], "Route should exist and return 200 or auth error"
 
 
@@ -232,34 +242,18 @@ class TestMeasurementSchema:
 class TestErrorHandling:
     """Test error handling and graceful degradation."""
 
-    def test_missing_directory_returns_empty(self):
-        """If measurements directory doesn't exist, should return empty list."""
+    def test_measurement_failure_returns_empty(self):
+        """The dashboard never 500s: a failing on-demand measurement is logged
+        and answered with an empty list. (Since e30e7d0f7 the API computes each
+        measurement live via ``maturity_live``; the per-minute JSONL directory
+        and its ``measurements_dir`` attribute — what the two tests here used to
+        patch — no longer exist.)"""
         api = api_vibe_maturity.MaturityMeasurementAPI()
 
-        with patch.object(api, 'measurements_dir', Path("/nonexistent/path")):
+        with patch.object(api_vibe_maturity.maturity_live, "build_measurement",
+                          side_effect=RuntimeError("store unreadable")):
             measurements = api.get_measurements(window="7d")
-            assert measurements == [], "Missing directory should return empty list"
-
-    def test_invalid_json_line_skipped(self):
-        """Invalid JSON lines should be skipped with warning."""
-        api = api_vibe_maturity.MaturityMeasurementAPI()
-
-        # Create a temporary file with invalid JSON
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding="utf-8") as f:
-            f.write('{"valid": "json"}\n')
-            f.write('invalid json line\n')
-            f.write('{"also": "valid"}\n')
-            temp_path = Path(f.name)
-
-        try:
-            with patch.object(api, 'measurements_dir', temp_path.parent):
-                with patch('pathlib.Path.glob') as mock_glob:
-                    mock_glob.return_value = [temp_path]
-                    # Should skip the invalid line and still process valid lines
-                    assert temp_path.exists()
-        finally:
-            temp_path.unlink()
+        assert measurements == [], "A failed measurement should return an empty list"
 
     def test_malformed_timestamp_skipped(self, sample_measurement: Dict[str, Any]):
         """Measurement with malformed timestamp should be skipped."""

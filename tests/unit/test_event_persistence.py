@@ -28,6 +28,13 @@ def temp_tenant_home():
             "CORVIN_TENANT_ID": "_default",
         }):
             yield tenant_home
+        # The first chain write in a fresh home records instance.key_rotated
+        # from a short-lived "ibc-audit-deferred" thread; removing the temp
+        # root while it still writes fails with "Directory not empty".
+        import threading
+        for th in threading.enumerate():
+            if th.name == "ibc-audit-deferred" and th is not threading.current_thread():
+                th.join(timeout=10.0)
 
 
 class TestEventStore:
@@ -241,7 +248,10 @@ class TestEventStore:
         recent_events = await store.read_events(tenant_id="_default", since=now - timedelta(hours=1))
 
         assert len(recent_events) == 1
-        assert recent_events[0].timestamp_utc == now
+        # The store normalises every timestamp to an AWARE UTC datetime; the
+        # naive ``utcnow()`` written here comes back as the same instant in UTC.
+        from datetime import timezone
+        assert recent_events[0].timestamp_utc == now.replace(tzinfo=timezone.utc)
 
     @pytest.mark.asyncio
     async def test_read_events_tenant_isolation(self, temp_tenant_home):

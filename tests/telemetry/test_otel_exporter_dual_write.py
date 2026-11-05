@@ -175,7 +175,7 @@ class TestJSONFallback:
             )
 
         assert success is False
-        assert "JSON fallback" in message
+        assert "fell back to JSON" in message
 
         # Verify file was created
         expected_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
@@ -392,7 +392,7 @@ class TestDualWriteBehavior:
             )
 
         assert success is False
-        assert "JSON fallback" in message
+        assert "fell back to JSON" in message
 
     def test_zero_telemetry_loss_on_otel_failure(self, exporter, heartbeat_signal):
         """JSON fallback should be written even when OTEL fails (zero data loss)."""
@@ -474,7 +474,8 @@ class TestOTELExporterInitialization:
         assert exporter.tenant_id == "tenant_test"
         assert exporter.instance_id == "instance-uuid"
         assert exporter.geo_granularity == "country"
-        assert exporter.otel_collector_url == "http://localhost:4318"
+        # 9fa484597 (ADR-0901): the default is the OTLP/HTTP metrics route.
+        assert exporter.otel_collector_url == "http://localhost:4318/v1/metrics"
 
     def test_init_with_custom_values(self, temp_dir, audit_logger):
         """Initialization with custom arguments."""
@@ -571,8 +572,12 @@ class TestErrorHandling:
 
     def test_export_heartbeat_handles_unexpected_exception(self, exporter, heartbeat_signal):
         """export_heartbeat should fallback to JSON on unexpected exceptions."""
-        with patch.object(exporter, "_export_to_otel", side_effect=RuntimeError("Unexpected error")):
-            success, message = exporter.export_heartbeat(
+        # Only OTELExportError selects the fallback. ``_export_to_otel`` turns
+        # every SDK/transport failure into one inside its retry loop, so a bare
+        # RuntimeError escaping it is a programming error and must surface.
+        with patch.object(exporter, "_export_to_otel", side_effect=RuntimeError("Unexpected error")), \
+                pytest.raises(RuntimeError, match="Unexpected error"):
+            exporter.export_heartbeat(
                 is_alive=heartbeat_signal.is_alive,
                 uptime_seconds=heartbeat_signal.uptime_seconds,
                 plugin_count=heartbeat_signal.plugin_count,

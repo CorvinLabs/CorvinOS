@@ -25,6 +25,17 @@ CORVIN_HOME = Path.home() / ".corvin"
 CORVIN_CONFIG = Path.home() / ".config" / "corvin-voice"
 BACKUP_DIR = Path.home() / ".corvin-credential-backups"
 
+
+def _core_audit():
+    """The tenant's ONE hash-chained audit log and its canonical writer
+    (``forge.paths.tenant_audit_chain`` + ``forge.security_events``)."""
+    forge_dir = Path(__file__).resolve().parent.parent / "corvin_operator" / "forge"
+    if str(forge_dir) not in sys.path:
+        sys.path.insert(0, str(forge_dir))
+    from forge import security_events  # noqa: PLC0415
+    from forge.paths import tenant_audit_chain  # noqa: PLC0415
+    return security_events, tenant_audit_chain
+
 def green(s: str) -> str:
     return f"\033[32m{s}\033[0m"
 
@@ -171,6 +182,15 @@ def rotate_credentials_phase2(dry_run: bool = False) -> bool:
             save_env_file(env_path, env_data)
             env_path.chmod(0o600)
             print(f"  {green('✓')} .env updated")
+
+        # Audit record on the tenant's core chain (counts only — no key name,
+        # no value): a credential rotation is a security-relevant change.
+        security_events, tenant_audit_chain = _core_audit()
+        security_events.write_event(
+            tenant_audit_chain(None),
+            "credential_rotation.rotated",
+            details={"rotated_count": rotated_count, "backup_created": True},
+        )
         
         print(f"\n{green(bold('✓ Credential rotation complete!'))}")
         return True

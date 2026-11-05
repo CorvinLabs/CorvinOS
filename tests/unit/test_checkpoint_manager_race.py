@@ -14,19 +14,23 @@ import pytest
 from core.session_manager.checkpoint_manager import CheckpointManager
 
 
-class MockCheckpoint:
-    """Mock checkpoint for testing."""
+def MockCheckpoint(session_id: str):
+    """A REAL ``lifecycle_manager.Checkpoint``. The hand-written mock lacked
+    the ADR-0668 savings fields and ``compute_hash()`` that save_checkpoint
+    uses, so every save in this file failed on the mock, not on the race."""
+    from core.session_manager.lifecycle_manager import Checkpoint
 
-    def __init__(self, session_id: str):
-        self.session_id = session_id
-        self.goal = f"test_goal_{session_id}"
-        self.goal_hash = "hash_123"
-        self.timestamp = datetime.now().isoformat()
-        self.context_reduction_pct = 50
-        self.context_tokens_used = 1000
-        self.audit_trail_hash = "audit_hash_456"
-        self.checkpoint_hash = "ckpt_hash_789"
-        self.phase = "execution"
+    return Checkpoint(
+        session_id=session_id,
+        goal=f"test_goal_{session_id}",
+        goal_hash="hash_123",
+        timestamp=datetime.now().timestamp(),
+        context_reduction_pct=50,
+        context_tokens_used=1000,
+        audit_trail_hash="audit_hash_456",
+        checkpoint_hash="ckpt_hash_789",
+        phase="execution",
+    )
 
 
 class TestCheckpointManagerRaceCondition:
@@ -161,17 +165,22 @@ class TestCheckpointManagerRaceCondition:
 
     @pytest.mark.asyncio
     async def test_lock_file_cleanup(self, manager, temp_checkpoint_dir):
-        """Test that lock files are cleaned up after writes.
+        """Lock files do not accumulate: ONE per session, reused by every write.
 
-        Verifies no orphaned .lock files accumulate.
+        A flock lock file is deliberately left in place — unlinking it after
+        the unlock lets a waiter that already opened the old inode and a new
+        writer that creates a fresh file both "hold" the lock at once. The
+        former expectation (fewer lock files than sessions) asked for exactly
+        that race. What must hold is that re-writing a session reuses its lock
+        file instead of creating another.
         """
         for i in range(10):
             checkpoint = MockCheckpoint(f"test_lock_cleanup_{i}")
             await manager.save_checkpoint(checkpoint)
+        first = sorted(temp_checkpoint_dir.glob("*.lock"))
+        assert len(first) <= 10
 
-        # Count lock files
-        lock_files = list(temp_checkpoint_dir.glob("*.lock"))
-
-        # Allow for a few lock files in race conditions, but not one per checkpoint
-        # (if locking is broken, we'd see 10 or more lock files)
-        assert len(lock_files) < 5, f"Too many orphaned lock files: {len(lock_files)}"
+        for _ in range(3):
+            for i in range(10):
+                await manager.save_checkpoint(MockCheckpoint(f"test_lock_cleanup_{i}"))
+        assert sorted(temp_checkpoint_dir.glob("*.lock")) == first

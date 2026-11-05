@@ -139,6 +139,16 @@ def owns_listener(pid: int, port: int) -> bool:
     return False
 
 
+def _is_marketplace_plugin(path: Path) -> bool:
+    """``path`` sits inside a Corvin-Marketplace ``plugins/`` tree (the env's
+    CORVIN_MARKETPLACE_ROOT or the sibling checkout next to the main tree)."""
+    roots = [MAIN_ROOT.parent / "Corvin-Marketplace" / "plugins"]
+    env = os.environ.get("CORVIN_MARKETPLACE_ROOT")
+    if env:
+        roots.append(Path(env))
+    return any(path.is_relative_to(r.resolve()) for r in roots if r.exists())
+
+
 def origin_problems(mods: dict[str, str]) -> list[str]:
     """Modules of a running server that did not come from this tree (see BLOCKER-1 in WP-02)."""
     repo, main = REPO_ROOT, MAIN_ROOT
@@ -148,6 +158,12 @@ def origin_problems(mods: dict[str, str]) -> list[str]:
     for name, f in mods.items():
         p = Path(f).resolve()
         if p.is_relative_to(repo) or p.is_relative_to(main / ".venv"):
+            continue
+        # Builtin plugins live in the Corvin-Marketplace checkout BY DESIGN
+        # ("Plugins live fully in the marketplace"): the registry loads each
+        # one's provider as ``corvin_builtin_<name>`` from its ``plugins/``
+        # tree, so such a module is not this tree's code leaking from elsewhere.
+        if name.startswith("corvin_builtin_") and _is_marketplace_plugin(p):
             continue
         if name.split(".")[0].lower().startswith("corvin") or (main != repo and p.is_relative_to(main)):
             out.append(f"{name} -> {f}")

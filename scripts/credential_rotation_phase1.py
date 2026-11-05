@@ -38,6 +38,17 @@ logging.basicConfig(
 _log = logging.getLogger(__name__)
 
 
+
+def _core_audit():
+    """The tenant's ONE hash-chained audit log and its canonical writer
+    (``forge.paths.tenant_audit_chain`` + ``forge.security_events``)."""
+    forge_dir = Path(__file__).resolve().parent.parent / "corvin_operator" / "forge"
+    if str(forge_dir) not in sys.path:
+        sys.path.insert(0, str(forge_dir))
+    from forge import security_events  # noqa: PLC0415
+    from forge.paths import tenant_audit_chain  # noqa: PLC0415
+    return security_events, tenant_audit_chain
+
 @dataclass(frozen=True)
 class CredentialInventory:
     """Immutable credential inventory record."""
@@ -98,9 +109,9 @@ class CredentialRotationPhase1:
         self.skip_network = skip_network
         self.timestamp_utc = datetime.utcnow().isoformat() + "Z"
         self.repo_root = Path(__file__).parent.parent
-        self.audit_path = (
-            self.repo_root / ".corvin" / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
-        )
+        # Resolved, never composed by hand: the one chain the boot tripwire
+        # verifies (CLAUDE.md "Multi-tenant Axis").
+        self.audit_path = _core_audit()[1](tenant_id)
         self.inventory: List[CredentialInventory] = []
 
     def _color(self, text: str, color: str) -> str:
@@ -358,31 +369,29 @@ class CredentialRotationPhase1:
         """Document baseline audit trail before rotation."""
         print(f"{self._color('Step 3: Document Baseline Audit Trail', 'blue')}\n")
 
-        # Create audit directory
-        self.audit_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Emit baseline event
-        baseline_event = {
-            "event_type": "credential_rotation_phase1_baseline",
-            "timestamp": self.timestamp_utc,
-            "tenant_id": self.tenant_id,
-            "inventory_count": len(self.inventory),
-            "accessible_count": sum(1 for r in self.inventory if r.status == "accessible"),
-            "test_passed_count": sum(1 for r in self.inventory if r.test_passed),
-            "credentials": [r.to_dict() for r in self.inventory],
-            "prev_hash": "0" * 64,  # First event
-        }
-
-        # Compute hash
-        event_str = json.dumps(baseline_event, sort_keys=True, default=str)
-        baseline_event["hash"] = sha256(event_str.encode()).hexdigest()
-
+        # Until 2026-11-05 this appended a hand-built JSON line with
+        # ``prev_hash = "0"*64`` straight into the tenant chain: a record that
+        # is not linked to the chain tail breaks the hash chain, and the
+        # ADR-0232 boot tripwire refuses to start on a broken chain. It also
+        # carried each credential's masked prefix. It now goes through the
+        # canonical writer, with counts and a digest of the inventory only.
+        inventory_sha256 = sha256(
+            "".join(r.hash for r in self.inventory).encode()
+        ).hexdigest()
         try:
-            with open(self.audit_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(baseline_event) + "\n")
-            os.chmod(self.audit_path, 0o600)
+            security_events, _ = _core_audit()
+            security_events.write_event(
+                self.audit_path,
+                "credential_rotation.baseline_documented",
+                details={
+                    "inventory_count": len(self.inventory),
+                    "accessible_count": sum(1 for r in self.inventory if r.status == "accessible"),
+                    "test_passed_count": sum(1 for r in self.inventory if r.test_passed),
+                    "inventory_sha256": inventory_sha256,
+                },
+            )
             print(self._color(f"✓ Baseline documented: {self.audit_path}", "green"))
-            print(f"  Event hash: {baseline_event['hash'][:16]}...")
+            print(f"  Inventory digest: {inventory_sha256[:16]}...")
             return True
         except Exception as e:
             print(self._color(f"✗ Audit emission failed: {e}", "red"))

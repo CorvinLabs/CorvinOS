@@ -62,7 +62,7 @@ def cleanup_ephemeral_skills_daily(tenant_ids: list = None, ttl_hours: int = 24)
 
         try:
             # Import skill registry dynamically
-            _sf_dir = str(Path(__file__).resolve().parents[2] / "operator" / "skill-forge")
+            _sf_dir = str(Path(__file__).resolve().parents[4] / "corvin_operator" / "skill-forge")
             if _sf_dir not in sys.path:
                 sys.path.insert(0, _sf_dir)
 

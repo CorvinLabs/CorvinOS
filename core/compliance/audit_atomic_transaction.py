@@ -53,6 +53,20 @@ class AtomicTransactionError(Exception):
     pass
 
 
+_LOG_LOCKS: dict = {}
+_LOG_LOCKS_GUARD = threading.Lock()
+
+
+def _log_lock(log_path: "str | Path") -> threading.Lock:
+    """The process-wide lock serialising commits to one audit log."""
+    key = str(Path(log_path).resolve())
+    with _LOG_LOCKS_GUARD:
+        lock = _LOG_LOCKS.get(key)
+        if lock is None:
+            lock = _LOG_LOCKS[key] = threading.Lock()
+        return lock
+
+
 class AuditAtomicTransaction:
     """
     Atomic transaction manager for audit writes (GDPR Art. 32 compliance).
@@ -236,70 +250,81 @@ class AuditAtomicTransaction:
             # - Atomic rename (moves file)
             # - On crash during rename, file is either at old path or new path, never partial
 
-            fd, temp_path_str = tempfile.mkstemp(
-                dir=str(self.log_path.parent),
-                prefix=".audit_tmp_",
-                text=False,
-            )
-            self.temp_path = Path(temp_path_str)
-
-            try:
-                # Write record to temp file
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(record_json + "\n")
-                    f.flush()
-                    os.fsync(f.fileno())  # Force sync to disk
-
-                # Step 2: Write journal entry (for recovery)
-                journal_entry = {
-                    "event_id": self.event_id,
-                    "temp_path": str(self.temp_path),
-                    "log_path": str(self.log_path),
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "operation": "append",
-                }
-
-                with open(self.journal_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(journal_entry) + "\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-
-                # Step 3: Atomic append-rename
-                # On POSIX systems, appending to a file is atomic IF:
-                # - We're not replacing the file
-                # - We use O_APPEND flag
-                #
-                # Safest approach: read existing file, append, write atomically
-                self._atomic_append(record_json)
-
-                # Step 4: Verify write succeeded
-                if not self._verify_last_record(record):
-                    raise AtomicTransactionError(
-                        f"Verification failed: written record does not match "
-                        f"(corruption detected, fail-closed)"
-                    )
-
-                # Step 5: Clean up journal
-                self._cleanup_journal()
-
-                self.committed = True
-
-                logger.info(
-                    f"Atomic transaction committed: "
-                    f"event_id={self.event_id}, hash={record.hash[:16]}..., "
-                    f"sequence={self.sequence}"
+            # One writer per log at a time (in this process): step 4 verifies
+            # that the LAST line is ours, so a concurrent append between our
+            # append and our read made a correct commit fail as "corruption"
+            # (5 threads x 10 events committed 14). The journal is per log
+            # too, and its cleanup must not drop another writer's entry.
+            with _log_lock(self.log_path):
+                fd, temp_path_str = tempfile.mkstemp(
+                    dir=str(self.log_path.parent),
+                    prefix=".audit_tmp_",
+                    text=False,
                 )
+                self.temp_path = Path(temp_path_str)
 
-                return record.hash
+                try:
+                    # Write record to temp file
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(record_json + "\n")
+                        f.flush()
+                        os.fsync(f.fileno())  # Force sync to disk
 
-            except Exception as e:
-                # Cleanup temp file on error
-                if self.temp_path and self.temp_path.exists():
+                    # Step 2: Write journal entry (for recovery)
+                    journal_entry = {
+                        "event_id": self.event_id,
+                        "temp_path": str(self.temp_path),
+                        "log_path": str(self.log_path),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "operation": "append",
+                    }
+
+                    with open(self.journal_path, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(journal_entry) + "\n")
+                        f.flush()
+                        os.fsync(f.fileno())
+
+                    # Step 3: Atomic append-rename
+                    # On POSIX systems, appending to a file is atomic IF:
+                    # - We're not replacing the file
+                    # - We use O_APPEND flag
+                    #
+                    # Safest approach: read existing file, append, write atomically
+                    self._atomic_append(record_json)
+
+                    # Step 4: Verify write succeeded
+                    if not self._verify_last_record(record):
+                        raise AtomicTransactionError(
+                            f"Verification failed: written record does not match "
+                            f"(corruption detected, fail-closed)"
+                        )
+
+                    # Step 5: Clean up journal and the staged temp copy (it
+                    # was left behind in the log directory on every commit).
+                    self._cleanup_journal()
                     try:
                         os.unlink(self.temp_path)
                     except OSError:
                         pass
-                raise
+
+                    self.committed = True
+
+                    logger.info(
+                        f"Atomic transaction committed: "
+                        f"event_id={self.event_id}, hash={record.hash[:16]}..., "
+                        f"sequence={self.sequence}"
+                    )
+
+                    return record.hash
+
+                except Exception as e:
+                    # Cleanup temp file on error
+                    if self.temp_path and self.temp_path.exists():
+                        try:
+                            os.unlink(self.temp_path)
+                        except OSError:
+                            pass
+                    raise
 
         except AtomicTransactionError:
             raise

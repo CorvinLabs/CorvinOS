@@ -46,6 +46,7 @@ class TestFeedbackModels:
         report1 = FeedbackReport(
             feedback_id="test-id",
             tenant_id="test_tenant",
+            timestamp="2026-11-05T00:00:00Z",
             title="Test",
             description="Description",
         )
@@ -53,6 +54,7 @@ class TestFeedbackModels:
         report2 = FeedbackReport(
             feedback_id="test-id",
             tenant_id="test_tenant",
+            timestamp="2026-11-05T00:00:00Z",
             title="Test",
             description="Description",
         )
@@ -64,6 +66,7 @@ class TestFeedbackModels:
         report3 = FeedbackReport(
             feedback_id="test-id",
             tenant_id="test_tenant",
+            timestamp="2026-11-05T00:00:00Z",
             title="Different",
             description="Description",
         )
@@ -349,8 +352,10 @@ class TestTenantIsolation:
 
         # Same data, different tenants
         assert report1.tenant_id != report2.tenant_id
-        # Signatures should be identical (only content matters)
-        assert report1.signature == report2.signature
+        # The integrity signature covers the tenant (and the per-report id):
+        # a report cannot be replayed into another tenant under the same
+        # signature.
+        assert report1.signature != report2.signature
 
     def test_portal_tenant_isolation(self):
         """Portal directories are tenant-scoped."""

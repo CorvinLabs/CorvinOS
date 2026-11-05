@@ -72,8 +72,10 @@ def test_flag_is_registered_and_defaults_off():
 
 def test_collection_is_reached_from_stream_turn_flag_gated():
     """A real call site outside tests: stream_turn spawns the collection, gated
-    on the ship-dark flag."""
-    src = inspect.getsource(cr.stream_turn)
+    on the ship-dark flag. The turn body lives in ``_stream_turn_impl`` since
+    6d8bad572 (``stream_turn`` is now its task-lifecycle wrapper)."""
+    assert "_stream_turn_impl(" in inspect.getsource(cr.stream_turn)
+    src = inspect.getsource(cr._stream_turn_impl)
     assert 'is_enabled("tde_measurement_collection"' in src
     assert "_spawn_decision_measurement(" in src
     # The spawn must be *inside* the flag branch (gate precedes spawn).
@@ -85,7 +87,7 @@ def test_collection_is_reached_from_stream_turn_flag_gated():
 def test_collection_records_the_native_outcome_not_a_delegated_arm():
     """The ctx built at the call site carries the NATIVE arm only — rc + latency
     + the heuristic decision — never a fabricated delegated arm."""
-    src = inspect.getsource(cr.stream_turn)
+    src = inspect.getsource(cr._stream_turn_impl)
     # honest native-only inputs present …
     for token in ("\"would_delegate\": bool(_del_heuristic)",
                   "\"native_rc\": rc",

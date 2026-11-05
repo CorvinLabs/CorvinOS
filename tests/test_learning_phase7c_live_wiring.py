@@ -34,26 +34,16 @@ def test_console_learning_route_exists():
 
     content = route_file.read_text(encoding="utf-8")
     assert "get_learning_nodes" in content, "Should have GET /nodes endpoint"
-    assert "grade_pattern" in content, "Should have POST /grade endpoint"
-    assert "add_operator_note" in content, "Should have POST /note endpoint"
+    # POST /grade and /note were removed in 1a0bfcef0 (always 404, no caller).
+    assert "def grade_pattern" not in content
+    assert "def add_operator_note" not in content
 
     print("✅ Console learning routes wired")
 
 
-def test_dashboard_page_exists():
-    """E2E: Learning dashboard panel exists, is registered, and calls the learning API."""
-    web = Path(__file__).resolve().parents[1] / "core/console/corvin_console/web-next/src"
-    panel_file = web / "panels" / "LearningDashboard.tsx"
-    assert panel_file.exists(), "LearningDashboard panel should exist"
-
-    content = panel_file.read_text(encoding="utf-8")
-    assert "LearningDashboard" in content
-    assert "/v1/console/learning/" in content, "Panel must call the real learning API"
-
-    registry = (web / "panels" / "registry.tsx").read_text(encoding="utf-8")
-    assert 'rc("learning-dashboard"' in registry, "Panel must be registered in PANELS"
-
-    print("✅ Dashboard frontend page wired")
+# test_dashboard_page_exists was removed (2026-11-05 sweep): the
+# LearningDashboard panel was deleted at the operator's request in 3c29c265c
+# (registry.tsx: "REMOVED 2026-09-15 (operator request): learning-dashboard").
 
 
 if __name__ == "__main__":
@@ -66,7 +56,6 @@ if __name__ == "__main__":
         test_chat_learning_wrapper_exists,
         test_learning_integration_api_exists,
         test_console_learning_route_exists,
-        test_dashboard_page_exists,
     ]
 
     passed = 0

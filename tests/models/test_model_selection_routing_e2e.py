@@ -20,8 +20,10 @@ class TestModelSelectionRoutingE2E:
         self.router = ModelSelectionRouter()
 
     @pytest.mark.asyncio
-    async def test_route_simple_task_to_openrouter(self):
-        """Simple tasks route to OpenRouter (local Ollama removed, ADR-2091)."""
+    async def test_route_simple_task_to_anthropic(self):
+        """Simple tasks route to native Anthropic: ``_select_provider`` always
+        prefers Anthropic since e3c2461ca (ADR-0845, k=2); local Ollama is gone
+        (ADR-2091)."""
         task = "Translate hello to French"
 
         with patch("core.models.router.ModelRouter.invoke_with_fallback") as mock_invoke:
@@ -37,12 +39,11 @@ class TestModelSelectionRoutingE2E:
 
             assert result.content == "Bonjour"
             assert result.model == "mistral:7b"
-            # Cheapest remote provider is preferred (no local model since ADR-2091)
-            assert mock_invoke.call_args[1]["model_preference"] == "openrouter"
+            assert mock_invoke.call_args[1]["model_preference"] == "anthropic"
 
     @pytest.mark.asyncio
-    async def test_route_medium_task_to_openrouter(self):
-        """Test routing medium task to OpenRouter."""
+    async def test_route_medium_task_to_anthropic(self):
+        """Medium tasks route to native Anthropic too (ADR-0845, e3c2461ca)."""
         task = "Write a Python function to sort numbers"
 
         with patch("core.models.router.ModelRouter.invoke_with_fallback") as mock_invoke:
@@ -57,8 +58,7 @@ class TestModelSelectionRoutingE2E:
             result = await self.router.route_task(task, "_default")
 
             assert result.content is not None
-            # Verify OpenRouter was preferred
-            assert mock_invoke.call_args[1]["model_preference"] == "openrouter"
+            assert mock_invoke.call_args[1]["model_preference"] == "anthropic"
 
     @pytest.mark.asyncio
     async def test_route_complex_task_to_anthropic(self):

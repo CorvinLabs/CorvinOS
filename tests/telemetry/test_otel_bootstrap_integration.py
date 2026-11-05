@@ -14,6 +14,7 @@ ADR-0680, ADR-0681, ADR-0682
 import json
 import logging
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -24,6 +25,27 @@ from core.observability.otel_exporter.exporter import (
     OTELExporter,
     OTELExportError,
 )
+
+
+def _drive_flushes(exporter, outcomes):
+    """Run the REAL retry loop inside ``_export_to_otel``: the meter is a stub
+    and each ``force_flush`` reports the next outcome (True = exported).
+    Returns the list of flush timestamps. The retries live inside
+    ``_export_to_otel``, so patching that method away (as these tests once did)
+    can only ever observe one call."""
+    it = iter(outcomes)
+    calls = []
+
+    def force_flush(timeout_millis=0):
+        calls.append(time.time())
+        ok = next(it)
+        exporter._last_result = (ok, "exported" if ok else "Simulated failure")
+        return True
+
+    exporter._otel_initialized = True
+    exporter._meter = MagicMock()
+    exporter._meter_provider = MagicMock(force_flush=force_flush)
+    return calls
 
 
 @pytest.fixture
@@ -78,14 +100,16 @@ class TestBootstrapInitialization:
     def test_exporter_ready_before_plugins_load(self, temp_telemetry_dir, mock_audit_logger):
         """OTELExporter should be initialized and ready before plugins load."""
         # Boot sequence: 1. Create exporter, 2. Load plugins
+        lazy_dir = temp_telemetry_dir / "not-created-yet"
         exporter = OTELExporter(
             tenant_id="tenant_default",
             instance_id="instance-boot-12345",
-            json_fallback_dir=temp_telemetry_dir,
+            json_fallback_dir=lazy_dir,
             audit_logger=mock_audit_logger,
         )
 
-        # Verify exporter is ready (no exceptions)
+        # Verify exporter is ready (no exceptions); the fixture dir itself
+        # exists, so laziness is checked on a subdirectory it never made.
         assert exporter.json_fallback_dir.exists() is False  # Created lazily
         assert exporter.tenant_id == "tenant_default"
 
@@ -322,7 +346,7 @@ class TestJSONFallbackVerification:
 
         # Verify fallback was activated
         assert success is False
-        assert "JSON fallback" in message
+        assert "fell back to JSON" in message
 
         # Verify JSON file was created
         fallback_file = temp_telemetry_dir / "heartbeat-tenant_prod-instance-fallback-test.jsonl"
@@ -347,14 +371,8 @@ class TestJSONFallbackVerification:
             audit_logger=mock_audit_logger,
         )
 
-        call_count = 0
-
-        def simulate_persistent_failure(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            raise OTELExportError(f"Attempt {call_count} failed")
-
-        with patch.object(exporter, "_export_to_otel", side_effect=simulate_persistent_failure):
+        calls = _drive_flushes(exporter, [False] * 10)
+        with patch("core.observability.otel_exporter.exporter.time.sleep"):
             success, message = exporter.export_heartbeat(
                 is_alive=True,
                 uptime_seconds=3600,
@@ -364,6 +382,8 @@ class TestJSONFallbackVerification:
                 python_version="3.11",
                 geo_attrs=None,
             )
+        call_count = len(calls)
+        assert success is False
 
         # Should have retried 3 times
         assert call_count == 3

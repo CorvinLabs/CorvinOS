@@ -274,7 +274,15 @@ class TestBackgroundJobs:
                 feedback_signal=0.8,
             )
 
+        # "Old data": the job skips loops younger than 7 days (they have no
+        # 7-day window yet), so the loop must have been created 8 days ago.
+        from dataclasses import replace as _replace
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        entry = service._storage.get("test", "score_loop")
+        service._storage.insert(_replace(entry, created_at=_dt.now(_tz.utc) - _td(days=8)))
+
         scheduler = BackgroundJobScheduler(service)
         result = await scheduler.run_daily_pruning()
 
+        assert not result.get("error"), result
         assert result["recalculated_scores"] >= 1

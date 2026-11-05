@@ -151,12 +151,31 @@ def setup_e2e_env():
     }
 
 
+# pytest wiring. Every flow takes the environment from ``setup_e2e_env``; the
+# flows declared ``env=None`` and pytest never injects a parameter that has a
+# default, so each collected flow ran with ``env=None`` and died on its first
+# ``env["registry"]`` — and ``TestCriticalPathsE2E`` asked for an ``e2e_env``
+# fixture that did not exist. (Despite the file name, no flow calls an LLM:
+# the backends are the in-file mocks above.)
+if HAS_PYTEST:
+    @pytest.fixture
+    def env():
+        e = setup_e2e_env()
+        yield e
+        import shutil  # noqa: PLC0415
+        shutil.rmtree(e["tmpdir"], ignore_errors=True)
+
+    @pytest.fixture
+    def e2e_env(env):
+        return env
+
+
 # ============================================================================
 # TEST 1: Task Creation + Routing with Real Opus
 # ============================================================================
 
 
-def test_flow_1_task_routing_real_opus(env=None):
+def test_flow_1_task_routing_real_opus(env):
     """
     FLOW 1: Task Creation → L5 Routing (os.delegation_router) → Real Opus Call
 
@@ -229,27 +248,8 @@ def test_flow_1_task_routing_real_opus(env=None):
     else:
         print("  ℹ No learning events (skill has learn=False)")
 
-    # STEP 6: Real Opus call (confidence grading)
-    print("\n[STEP 6] Grade routing output with real Opus")
-    grader = ConfidenceGrader(model="claude-opus-4-20250514")
-
-    # Create grading request
-    grading_request = {
-        "skill_name": "os.delegation_router",
-        "output": json.dumps(result.output),
-        "exception": None,
-    }
-
-    # Grade asynchronously (if supported)
-    try:
-        grade = asyncio.run(grader.grade(grading_request))
-        if grade:
-            print(f"  ✓ Opus grade: {grade.value:.2f}")
-            print(f"  ✓ Feedback: {grade.feedback[:100]}...")
-        else:
-            print("  ℹ Grading returned None (API failure or parsing error)")
-    except Exception as e:
-        print(f"  ⚠ Grading failed: {type(e).__name__}: {str(e)[:100]}")
+    # The real-Opus grading step was removed with ``ConfidenceGrader``, deleted
+    # (no production path) in 73430e55d / T-0140. No flow here calls an LLM.
 
     elapsed = time.time() - start_time
     print(f"\n✓ TEST 1 PASSED in {elapsed:.1f}s")
@@ -267,7 +267,7 @@ def test_flow_1_task_routing_real_opus(env=None):
 # ============================================================================
 
 
-def test_flow_2_skill_execution_learning(env=None):
+def test_flow_2_skill_execution_learning(env):
     """
     FLOW 2: Execute Skill → Emit Learning Event → Audit Trail
 
@@ -363,7 +363,7 @@ def test_flow_2_skill_execution_learning(env=None):
 # ============================================================================
 
 
-def test_flow_3_feedback_optimization(env=None):
+def test_flow_3_feedback_optimization(env):
     """
     FLOW 3: Execute Skill → Receive User Feedback → Emit FeedbackEvent → Optimizer Tunes Config
 
@@ -420,25 +420,8 @@ def test_flow_3_feedback_optimization(env=None):
     print(f"  ✓ Feedback captured: {user_feedback['signal']}")
     print(f"  ✓ Reason: {user_feedback['reason']}")
 
-    # STEP 3: Grade the feedback with Opus
-    print("\n[STEP 3] Grade feedback with real Opus")
-    grader = ConfidenceGrader(model="claude-opus-4-20250514")
-
-    grading_req = {
-        "skill_name": "os.delegation_router",
-        "output": f"Feedback: {user_feedback['signal']}\nReason: {user_feedback['reason']}",
-        "exception": None,
-    }
-
-    try:
-        grade = asyncio.run(grader.grade(grading_req))
-        if grade:
-            print(f"  ✓ Opus graded feedback: {grade.value:.2f}")
-            print(f"  ✓ Comment: {grade.feedback[:80]}...")
-        else:
-            print("  ℹ Grade returned None")
-    except Exception as e:
-        print(f"  ⚠ Grading failed: {type(e).__name__}")
+    # The real-Opus grading step was removed with ``ConfidenceGrader``, deleted
+    # (no production path) in 73430e55d / T-0140. No flow here calls an LLM.
 
     # STEP 4: Simulate optimizer reading feedback and tuning config
     print("\n[STEP 4] Simulate optimizer tuning config")
@@ -505,7 +488,7 @@ def test_flow_3_feedback_optimization(env=None):
 # ============================================================================
 
 
-def test_flow_4_console_dashboard_live_data(env=None):
+def test_flow_4_console_dashboard_live_data(env):
     """
     FLOW 4: Populate learning events → Console API queries them → Dashboard renders live data
 
@@ -624,7 +607,7 @@ def test_flow_4_console_dashboard_live_data(env=None):
 # ============================================================================
 
 
-def test_flow_5_consent_house_rules(env=None):
+def test_flow_5_consent_house_rules(env):
     """
     FLOW 5: Task with sensitive input → Consent Check (L16) → House-Rules Gate (L44) → Allowed/Denied
 
@@ -757,7 +740,7 @@ def test_flow_5_consent_house_rules(env=None):
 # ============================================================================
 
 
-def test_flow_6_tenant_isolation(env=None):
+def test_flow_6_tenant_isolation(env):
     """
     FLOW 6: Multi-Tenant Scenario → Verify Data Isolation → No Cross-Tenant Leaks
 

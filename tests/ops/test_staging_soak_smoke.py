@@ -29,6 +29,19 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+import os as _os
+
+# These probes curl a DEPLOYED Security-Orchestrator staging host on
+# localhost:8765 (and need wscat): an operations soak, not a unit of this
+# checkout. Without that deployment every probe reports "endpoint not
+# responding". Opt in on the staging box with CORVIN_STAGING_SOAK=1.
+pytestmark = pytest.mark.skipif(
+    _os.environ.get("CORVIN_STAGING_SOAK") != "1",
+    reason="staging soak: needs the deployed Stream-2 staging host on :8765 "
+    "(set CORVIN_STAGING_SOAK=1 on that host)",
+)
+
+
 class TestPhase(Enum):
     """Test execution phases."""
     PRE_DEPLOYMENT = "pre_deployment"

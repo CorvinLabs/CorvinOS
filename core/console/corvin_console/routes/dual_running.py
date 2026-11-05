@@ -109,10 +109,12 @@ class DualRunningRouter:
             "enrolled_at": self._timestamp(),
         }
 
+        # The enrolment takes effect in this process even when it cannot be
+        # persisted (logged as an error, re-read from disk after a restart).
+        self._cohort_cache[tenant_id] = cohort
         try:
             with open(cohort_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
-            self._cohort_cache[tenant_id] = cohort
             _log.info(f"Enrolled tenant {tenant_id} in cohort {cohort.value}")
         except Exception as e:
             _log.error(f"Failed to write cohort file {cohort_file}: {e}")
@@ -121,7 +123,14 @@ class DualRunningRouter:
         """Load cohort from disk, default to control."""
         cohort_file = self.config_dir / f"{tenant_id}.cohort.json"
 
-        if not cohort_file.exists():
+        # ``Path.exists`` RAISES on an unreadable directory (EACCES); routing
+        # must fall back to CONTROL there like on any other read failure.
+        try:
+            present = cohort_file.exists()
+        except OSError as e:
+            _log.warning(f"Failed to check cohort for {tenant_id}: {e}; defaulting to CONTROL")
+            return Cohort.CONTROL
+        if not present:
             return Cohort.CONTROL
 
         try:

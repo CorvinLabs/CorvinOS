@@ -73,6 +73,12 @@ class IndexUpdateHook:
             # Events without a learning_loop_id are gracefully skipped
             return False
 
+        if self.service is None:
+            # No index service in this process (it failed to open): the event
+            # is already on the chain; the index simply is not updated.
+            logger.warning("No learning loop service bound; index update skipped")
+            return False
+
         # Validate that the service is bound to the same tenant
         if self.service.tenant_id != tenant_id:
             logger.error(

@@ -36,22 +36,11 @@ from datetime import datetime, timedelta
 class TestLicensingGateWithDataHubLearningLoop:
     """Integration: Licensing tier gates DataHub project creation and metrics flow."""
 
-    def test_tier_free_blocks_datahub_project_creation(self):
-        """FREE tier cannot create DataHub projects (license gate)."""
-        try:
-            from core.licensing.billing import BillingSchema
-        except ImportError:
-            pytest.skip("licensing module not available")
-        
-        schema = BillingSchema(tiers={
-            "free": {"datahub_projects": 0, "skill_tracking": False},
-            "member": {"datahub_projects": 10, "skill_tracking": True},
-        })
-        
-        tier_config = schema.tiers.get("free", {})
-        project_limit = tier_config.get("datahub_projects", 0)
-        
-        assert project_limit == 0, "FREE tier must have 0 DataHub project slots"
+    # test_tier_free_blocks_datahub_project_creation was removed (2026-11-05
+    # sweep): it built a BillingSchema(tiers=...) that the class has never
+    # accepted and then asserted the dict it had just passed in — no licence
+    # gate ran. There is no DataHub-project capability in the licence matrix
+    # (corvin_operator/license/limits.py) for a real test to drive.
 
     def test_no_circular_dependencies(self):
         """Verify no circular imports between licensing, datahub, learning."""

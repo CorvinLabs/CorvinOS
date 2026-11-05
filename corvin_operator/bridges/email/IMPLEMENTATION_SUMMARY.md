@@ -316,7 +316,7 @@ python3 orchestration_handler.py
 ## File Locations
 
 ```
-/home/shumway/projects/CorvinOS/corvin_operator/bridges/email/
+corvin_operator/bridges/email/
 ├── orchestration_handler.py              [450 LoC — Main handler]
 ├── test_email_orchestration.py          [528 LoC — Test suite]
 ├── ORCHESTRATION_INTEGRATION.md         [Detailed integration]

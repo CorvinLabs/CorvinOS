@@ -647,6 +647,11 @@ EVENT_SEVERITY: dict[str, str] = {
     "instance.ibc_expired":                 "WARNING",
     "instance.ibc_revoked":                 "CRITICAL",
     "instance.key_rotated":                 "WARNING",
+    # ADR-0869 credential rotation scripts (scripts/credential_rotation_phase1.py,
+    # scripts/rotate_corvin_keys_phase2.py). Counts and a digest only — never a
+    # credential name/value or its masked prefix.
+    "credential_rotation.baseline_documented": "INFO",
+    "credential_rotation.rotated":             "WARNING",
     "instance.ibc_sig_failed":              "CRITICAL",
     "instance.ibc_hardware_mismatch":       "WARNING",
     "instance.crl_refreshed":               "INFO",
@@ -4130,6 +4135,10 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "instance.ibc_expired":           frozenset(set()),
     "instance.ibc_revoked":           frozenset({"origin_id", "reason", "ibc_jti"}),
     "instance.key_rotated":           frozenset(set()),
+    "credential_rotation.baseline_documented": frozenset({
+        "inventory_count", "accessible_count", "test_passed_count", "inventory_sha256",
+    }),
+    "credential_rotation.rotated":    frozenset({"rotated_count", "backup_created"}),
     "instance.ibc_sig_failed":        frozenset({"origin_id", "reason", "ibc_jti"}),
     "instance.ibc_hardware_mismatch": frozenset({"reason"}),
     "instance.hardware_bound":        frozenset({"ibc_jti"}),

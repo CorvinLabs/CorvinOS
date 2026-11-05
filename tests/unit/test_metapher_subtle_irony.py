@@ -16,6 +16,21 @@ from pathlib import Path
 
 import pytest
 
+import os
+
+# Every test here pipes text through summarize.py --metapher-mode, which calls
+# the REAL ``claude`` CLI (a paid model turn per test, ~6 s each) and asserts on
+# free-form model prose: marker choice and wording vary run to run, which is
+# why single tests flipped between "fails in the suite" and "passes alone".
+# The deterministic parts of the metapher path are pinned elsewhere; this file
+# is an opt-in live-model check (same switch as the other real-LLM suites);
+# TestMetapherSystemPrompt (static prompt checks) always runs.
+_LIVE_MODEL = pytest.mark.skipif(
+    os.environ.get("CORVIN_TEST_RUN_REAL_LLM_CALLS") != "1",
+    reason="real claude CLI call per test, non-deterministic output; "
+    "set CORVIN_TEST_RUN_REAL_LLM_CALLS=1 to run",
+)
+
 _THIS_DIR = Path(__file__).resolve().parent
 # tests/unit -> tests -> repo root. This was parents[2] (one level too high, i.e.
 # the directory CONTAINING the checkout), so every assertion that reads
@@ -55,6 +70,7 @@ def _run_summarize_metapher(text: str, lang: str = "de", model: str = "claude-ha
         pytest.skip("Claude CLI not available; using fallback unit assertions")
 
 
+@_LIVE_MODEL
 class TestMetapherMarkers:
     """Verify new markers are recognized and used."""
 
@@ -77,6 +93,7 @@ class TestMetapherMarkers:
             )
 
 
+@_LIVE_MODEL
 class TestMetapherLength:
     """Verify metapher is 1–2 sentences max."""
 
@@ -102,6 +119,7 @@ class TestMetapherLength:
             )
 
 
+@_LIVE_MODEL
 class TestMetapherIrony:
     """Verify metapher contains irony, wordplay, or unexpected comparison."""
 
@@ -138,6 +156,7 @@ class TestMetapherIrony:
             )
 
 
+@_LIVE_MODEL
 class TestMetapherFaithfulness:
     """Verify metapher does not invent new facts."""
 
@@ -167,6 +186,7 @@ class TestMetapherFaithfulness:
             )
 
 
+@_LIVE_MODEL
 class TestMetapherEdgeCases:
     """Verify edge case handling."""
 

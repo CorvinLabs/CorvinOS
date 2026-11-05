@@ -27,9 +27,20 @@ _SKIP_PARTS = {".venv", "node_modules", "corvin_decisions", ".git"}
 
 
 def _repo_ps1_files() -> list[Path]:
+    """Every CHECKED-IN .ps1 (the module contract). A tree walk also picked up
+    untracked agent worktrees under ``.claude/worktrees/`` — copies of old
+    trees that are not part of this checkout."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", "*.ps1"], cwd=_REPO,
+            capture_output=True, timeout=60, check=True,
+        ).stdout.decode("utf-8", "replace")
+        files = [_REPO / f for f in out.split("\0") if f]
+    except (OSError, subprocess.SubprocessError):
+        files = list(_REPO.rglob("*.ps1"))
     return sorted(
-        p for p in _REPO.rglob("*.ps1")
-        if not (_SKIP_PARTS & set(p.relative_to(_REPO).parts))
+        p for p in files
+        if p.is_file() and not (_SKIP_PARTS & set(p.relative_to(_REPO).parts))
     )
 
 

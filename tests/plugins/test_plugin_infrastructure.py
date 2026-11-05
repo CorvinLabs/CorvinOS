@@ -335,6 +335,12 @@ class TestSecurablePluginGate:
         with pytest.raises(SandboxViolationError):
             gate.check_network_access("evil.com")
 
+        # A wildcard admits subdomains only: never the apex, never a
+        # look-alike that merely ends in the same characters.
+        for host in ("example.org", "evilexample.org", "example.org.evil.com"):
+            with pytest.raises(SandboxViolationError):
+                gate.check_network_access(host)
+
 
 # ── Metrics Tests ────────────────────────────────────────────────────────────
 
@@ -522,7 +528,7 @@ class TestPluginCallGuard:
             == ErrorSeverity.DEGRADED
         )
         assert (
-            guard._classify_severity(RuntimeError("OutOfMemoryError"))
+            guard._classify_severity(MemoryError("out of memory"))
             == ErrorSeverity.CRITICAL
         )
 

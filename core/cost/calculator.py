@@ -421,26 +421,36 @@ class CostCalculator:
 
         Currently stubbed; integrates with BillingSchema in production.
         """
-        # Placeholder pricing (replace with BillingSchema lookup)
-        pricing_table = {
+        # Placeholder pricing (replace with BillingSchema lookup), in USD PER
+        # MILLION tokens. ``calculate_call_cost`` multiplies by a token count,
+        # so the table is converted to a per-token rate below. The table used
+        # to hold "0.003" commented "$3 per million" and multiplied it per
+        # token — every recorded call cost 1000x its price, and a 7-day test
+        # flow tripped a 500 EUR budget at 6300 %.
+        per_million = {
             "claude-opus-5": {
-                "input_cost": Decimal("0.003"),      # $3 per million input tokens
-                "output_cost": Decimal("0.015"),     # $15 per million output tokens
-                "cache_read_cost": Decimal("0.0003"),   # 10% of input
-                "cache_write_cost": Decimal("0.0003"),  # Same as input
+                "input_cost": Decimal("3"),
+                "output_cost": Decimal("15"),
+                "cache_read_cost": Decimal("0.3"),   # 10% of input
+                "cache_write_cost": Decimal("0.3"),
             },
             "claude-sonnet-5": {
-                "input_cost": Decimal("0.003"),
-                "output_cost": Decimal("0.015"),
-                "cache_read_cost": Decimal("0.0003"),
-                "cache_write_cost": Decimal("0.0003"),
+                "input_cost": Decimal("3"),
+                "output_cost": Decimal("15"),
+                "cache_read_cost": Decimal("0.3"),
+                "cache_write_cost": Decimal("0.3"),
             },
             "claude-haiku-4-5": {
-                "input_cost": Decimal("0.00008"),
-                "output_cost": Decimal("0.0004"),
-                "cache_read_cost": Decimal("0.00001"),
-                "cache_write_cost": Decimal("0.00001"),
+                "input_cost": Decimal("0.08"),
+                "output_cost": Decimal("0.4"),
+                "cache_read_cost": Decimal("0.01"),
+                "cache_write_cost": Decimal("0.01"),
             },
+        }
+        _per_token = Decimal(1_000_000)
+        pricing_table = {
+            model: {k: v / _per_token for k, v in rates.items()}
+            for model, rates in per_million.items()
         }
 
         return pricing_table.get(

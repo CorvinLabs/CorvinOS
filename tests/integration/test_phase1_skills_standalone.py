@@ -74,7 +74,7 @@ def test_skill_execution_success():
 
     assert result.status == "success", f"Expected success, got {result.status}"
     assert result.output is not None
-    assert result.output["engine"] == "claude-opus-5"
+    assert result.output["engine"] == "native"  # L5 worker-engine route (5c191a73a), not a model
     assert result.tenant_id == "_default"
 
     # Verify audit event
@@ -231,7 +231,7 @@ def test_a2a_task_execution():
     assert result.task_id == "task_001"
     assert result.status.value == "success"
     assert result.output is not None
-    assert result.output["engine"] == "claude-opus-5"
+    assert result.output["engine"] == "native"  # L5 worker-engine route (5c191a73a), not a model
 
     # Verify A2A audit events
     a2a_events = mock_audit.get_events_by_type("A2A_TASK_RECEIVED")
@@ -286,10 +286,13 @@ def test_feature_flag_replacement():
 
     assert registry.is_enabled("os.delegation_router") is True
 
+    # os.delegation_router advises the worker-engine route since 5c191a73a
+    # (ADR-0532 L5 / ADR-2092): without /delegate or a big-data signal it is
+    # "native" at every complexity — it no longer names a model.
     test_cases = [
-        (3, "claude-haiku-4"),
-        (5, "claude-sonnet-4"),
-        (8, "claude-opus-5"),
+        (3, "native"),
+        (5, "native"),
+        (8, "native"),
     ]
 
     for complexity, expected_engine in test_cases:

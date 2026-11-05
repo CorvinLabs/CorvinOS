@@ -104,22 +104,20 @@ class TestBlocker4GraphCycleDetection:
 class TestBlocker5ContextPipelineV2:
     """Blocker 5: Context Pipeline v2 archival and documentation."""
 
-    def test_v2_context_preservation_exists(self):
-        """Verify v2_context_preservation.py exists and is documented."""
+    def test_v2_context_preservation_is_gone(self):
+        """The orphaned research prototype was archived and then deleted with
+        the whole ``core/context_pipeline/`` package (ee5ea4f85); the blocker's
+        end state is that it does not come back as importable code."""
         from pathlib import Path
 
-        v2_file = Path("/home/shumway/projects/CorvinOS/core/context_pipeline/v2_context_preservation.py")
-        assert v2_file.exists()
-
-        # Read file to check for research code notice
-        content = v2_file.read_text(encoding="utf-8")
-        assert "RESEARCH PROTOTYPE" in content or "orphaned" in content.lower()
+        repo = Path(__file__).resolve().parents[1]
+        assert not (repo / "core" / "context_pipeline" / "v2_context_preservation.py").exists()
 
     def test_dual_gate_alternative_exists(self):
         """Verify core/pipeline/dual_gate.py provides alternative."""
         from pathlib import Path
 
-        dual_gate_file = Path("/home/shumway/projects/CorvinOS/core/pipeline/dual_gate.py")
+        dual_gate_file = Path(__file__).resolve().parents[1] / "core" / "pipeline" / "dual_gate.py"
         assert dual_gate_file.exists()
 
 

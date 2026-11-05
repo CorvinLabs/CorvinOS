@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 import hashlib
 import json
+import concurrent.futures
 import copy
 
 logger = logging.getLogger(__name__)
@@ -184,9 +185,32 @@ class Executor:
             result.execution_trace.append(f"[{elapsed_ms/1000:.1f}s] Attempt {attempt + 1} starting")
 
             try:
-                # Execute task (simulated or real)
+                # Execute task (simulated or real). The timeout used to be
+                # checked only BETWEEN attempts, so one slow worker call ran to
+                # completion and reported COMPLETED regardless of timeout_secs.
+                # The call now runs on a helper thread bounded by the remaining
+                # budget. A Python thread cannot be killed: an overrunning
+                # worker keeps running detached and its result is discarded.
                 if worker_callable:
-                    output = worker_callable(task_id, worker_type, input_data)
+                    remaining = timeout_secs - (time.time() - start_time)
+                    pool = concurrent.futures.ThreadPoolExecutor(
+                        max_workers=1, thread_name_prefix="executor-worker")
+                    future = pool.submit(worker_callable, task_id, worker_type, input_data)
+                    try:
+                        output = future.result(timeout=max(0.0, remaining))
+                    except concurrent.futures.TimeoutError:
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        result.status = ExecutionStatus.TIMEOUT
+                        result.error_message = f"Execution timeout after {elapsed_ms:.0f}ms"
+                        result.latency_ms = elapsed_ms
+                        result.execution_trace.append(
+                            f"[{elapsed_ms/1000:.1f}s] TIMEOUT during attempt {attempt + 1}")
+                        logger.warning(f"Task {task_id} timed out during attempt {attempt + 1}")
+                        result.audit_hash = self._compute_audit_hash(result)
+                        self.execution_results[task_id] = result
+                        return result
+                    finally:
+                        pool.shutdown(wait=False)
                 else:
                     output = self._simulate_worker_execution(task_id, worker_type, input_data)
 

@@ -32,10 +32,12 @@ class TestDualRunningRouterBasic:
 
         assert config_dir.exists()
 
-    def test_default_cohort_dir(self):
-        """Router defaults to ~/.corvin/tenants/_default/workflows/."""
+    def test_default_cohort_dir(self, tmp_path, monkeypatch):
+        """Router defaults to <CORVIN_HOME>/tenants/_default/workflows/ (it
+        honours CORVIN_HOME; ~/.corvin only when that is unset)."""
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
         router = DualRunningRouter()
-        expected_dir = Path.home() / ".corvin" / "tenants" / "_default" / "workflows"
+        expected_dir = tmp_path / "home" / "tenants" / "_default" / "workflows"
         assert router.config_dir == expected_dir
 
 

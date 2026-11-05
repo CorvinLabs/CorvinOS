@@ -15,7 +15,7 @@ from datetime import datetime
 
 # The source tree this module was imported from — the code that is actually
 # running. Until 2026-09-27 every git/hash call hard-wired
-# /home/shumway/projects/CorvinOS, so on any other install registration failed
+# one developer checkout's absolute path, so on any other install registration failed
 # ("Cannot get git SHA") and on this host it described a tree that is not
 # necessarily the one being served.
 REPO_ROOT = Path(__file__).resolve().parents[2]

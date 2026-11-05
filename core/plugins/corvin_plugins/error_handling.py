@@ -235,6 +235,10 @@ class PluginCallGuard:
 
         # Critical errors that need immediate attention
         critical_types = {
+            # Python's out-of-memory exception is ``MemoryError``; the Java-style
+            # "OutOfMemoryError" below never matches a CPython exception, so an
+            # OOM used to be classified DEGRADED.
+            "MemoryError",
             "OutOfMemoryError",
             "ImportError",
             "SyntaxError",

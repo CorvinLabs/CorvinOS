@@ -34,7 +34,7 @@ BASELINE: dict[str, int] = {
     "core/cost/calculator.py": 1,
     "core/cost/optimizer.py": 1,
     "core/delegate/corvin_delegate/output_judge.py": 1,
-    "core/gateway/corvin_gateway/dispatcher.py": 4,
+    "core/gateway/corvin_gateway/dispatcher.py": 3,
     "core/learning/model_selection_learner.py": 4,
     "core/license/models/billing.py": 2,
     "core/license/tier_enforcer.py": 2,
@@ -46,6 +46,10 @@ BASELINE: dict[str, int] = {
     "core/skills/os_skills/model_selector.py": 6,
     "core/skills/os_skills/model_selector_variants.py": 3,
     "core/skills/os_skills/workflow_optimizer_wrapper.py": 1,
+    # a2a_usage.py: a comment spelling out the model-id GRAMMAR the usage
+    # block accepts (871ec0164, ADR-2292) — a parsed example, not a routing
+    # literal; nothing routes through it.
+    "corvin_operator/bridges/shared/a2a_usage.py": 1,
     "corvin_operator/bridges/shared/acs_gate_chain.py": 1,
     "corvin_operator/bridges/shared/acs_runtime.py": 1,
     "corvin_operator/bridges/shared/adapter.py": 3,

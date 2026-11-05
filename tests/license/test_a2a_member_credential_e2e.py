@@ -155,12 +155,12 @@ class TestA2APairingGateFree(unittest.TestCase):
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    def test_pairing_generate_on_free_tier_is_not_gated_KNOWN_GAP(self):
-        """ADR-0702 §3.4 (P) requires ``require_member_for_pairing`` on
-        ``POST /v1/console/remote-trigger/pair/generate`` → HTTP 402 on free tier.
-        It is not implemented: the route (routes/a2a_pair.py::pair_generate) has
-        only ``require_csrf`` and mints a four-key invite for a free instance.
-        Pinned so the fix must flip this to 402. Session + CSRF still hold."""
+    def test_pairing_generate_on_free_tier_is_402(self):
+        """ADR-0702 §3.4 (P): ``POST /v1/console/remote-trigger/pair/generate``
+        is member-only. The known gap this test pinned (a free instance minted a
+        four-key invite) was closed in e03e37f45 (``_require_a2a_network_for_pairing``
+        on every pairing writer); it now answers 402 ``license_limit`` for
+        ``a2a.network``. Session + CSRF still hold first."""
         import sys as _sys
         from pathlib import Path as _Path
 
@@ -174,8 +174,11 @@ class TestA2APairingGateFree(unittest.TestCase):
             self.assertEqual(con.anonymous().post(url, json=body, headers=con.h).status_code, 401)
             self.assertEqual(con.client.post(url, json=body).status_code, 403)
             resp = con.client.post(url, json=body, headers=con.h)
-            self.assertEqual(resp.status_code, 200, resp.text)   # should be 402 per ADR-0702
-            self.assertIn("invite_code", resp.json())
+            self.assertEqual(resp.status_code, 402, resp.text)
+            detail = resp.json()["detail"]
+            self.assertEqual(detail["error"], "license_limit")
+            self.assertEqual(detail["feature"], "a2a.network")
+            self.assertNotIn("invite_code", resp.text)
 
 
 class TestOfflineCredential(unittest.TestCase):

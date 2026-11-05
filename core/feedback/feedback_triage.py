@@ -35,11 +35,14 @@ class TriageEngine:
         "docs": 0.3,         # Documentation
     }
 
-    # Environment multiplier
-    ENVIRONMENT_MULTIPLIER = {
-        "production": 1.5,  # Production = highest priority
-        "staging": 1.2,
-        "local": 1.0,
+    # Environment impact: an ADDITIVE bump for bug reports. It used to be a
+    # 1.5x multiplier on the whole score, base included, so EVERY production
+    # report — a low-severity bug, a feature request — scored >= 9 and was
+    # triaged P0, which made P0 meaningless.
+    ENVIRONMENT_BUMP = {
+        "production": 1.0,
+        "staging": 0.5,
+        "local": 0.0,
     }
 
     def triage(self, report: FeedbackReport) -> TriagedFeedback:
@@ -89,36 +92,40 @@ class TriageEngine:
           - Environment impact
           - Feature request momentum (TBD: multi-report count)
         """
-        score = 5.0  # Base score
+        # Calibrated so the bands mean what triage() says they mean: a
+        # critical production bug lands P0, a high bug P1, a detractor P1, a
+        # feature request P2. The former base of 5.0 plus a component weight
+        # of up to 2.0 put every feature request on the console at 8.0 (P1).
+        score = 2.0  # Base score
 
         # Factor 1: Feedback type
         if report.feedback_type == FeedbackType.BUG_REPORT:
             if report.severity == FeedbackSeverity.CRITICAL:
-                score += 3.5
+                score += 6.0
             elif report.severity == FeedbackSeverity.HIGH:
-                score += 2.5
+                score += 4.5
             elif report.severity == FeedbackSeverity.MEDIUM:
-                score += 1.5
+                score += 3.0
             else:
-                score += 0.5
+                score += 1.5
         elif report.feedback_type == FeedbackType.NPS_SURVEY:
             if report.nps_score is not None:
                 if report.nps_score <= 3:  # Detractors
-                    score += 3.0
+                    score += 4.5
                 elif report.nps_score <= 6:  # Passives
-                    score += 1.0
-                else:  # Promoters
-                    score -= 1.0
+                    score += 2.0
+                # Promoters add nothing
         elif report.feedback_type == FeedbackType.FEATURE_REQUEST:
-            score += 1.0  # Base feature request
+            score += 1.5  # Base feature request
 
         # Factor 2: Component criticality
         component_weight = self.COMPONENT_CRITICALITY.get(report.component, 0.5)
-        score += (component_weight * 2.0)
+        score += component_weight * 1.5
 
-        # Factor 3: Environment multiplier
-        env_multiplier = self.ENVIRONMENT_MULTIPLIER.get(report.environment, 1.0)
-        score *= env_multiplier
+        # Factor 3: Environment impact (bugs only — a feature request or a
+        # survey is not more urgent because it was filed from production)
+        if report.feedback_type == FeedbackType.BUG_REPORT:
+            score += self.ENVIRONMENT_BUMP.get(report.environment, 0.0)
 
         # Factor 4: Reproduction steps provided
         if report.reproduction_steps:

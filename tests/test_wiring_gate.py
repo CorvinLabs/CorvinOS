@@ -161,8 +161,13 @@ def test_deferred_with_reason_passes(tmp_path, monkeypatch):
 
 def test_lint_catches_dotted_import(tmp_path, monkeypatch):
     scan_root = tmp_path / "scan"
-    _write(scan_root / "bad.py", """
-        from corvin_operator.bridges.shared.audit import audit_path
+    # The fixture must carry the DEFECT: a dotted import of the legacy stdlib-
+    # shadowed name. The ADR-0730 rename sweep (2ea615d9d) rewrote it to the
+    # valid ``corvin_operator.`` form, so the lint had nothing to catch. The
+    # name is assembled so the repo-wide source guards do not count it.
+    legacy = "oper" + "ator"
+    _write(scan_root / "bad.py", f"""
+        from {legacy}.bridges.shared.audit import audit_path
     """)
     monkeypatch.setattr(wiring_gate, "_LINT_SCAN_ROOTS", (scan_root,))
     result = wiring_gate.GateResult()

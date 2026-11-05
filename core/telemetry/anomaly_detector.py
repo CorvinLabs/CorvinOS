@@ -18,8 +18,19 @@ class AnomalyDetector:
         if len(metrics) < 10:
             return []  # Need enough data
 
-        recent = metrics[-self.baseline_window:]
-        baseline = metrics[:-self.baseline_window] if len(metrics) > self.baseline_window else metrics[:-10]
+        # Recent = the last ``baseline_window`` samples, baseline = everything
+        # before them — when that leaves a baseline of at least 10 samples;
+        # otherwise the last 10 against the rest. The short-history branch used
+        # to keep recent = ALL samples while the baseline was all-but-10 (the
+        # windows overlapped by 90 %), and just past the window the baseline
+        # shrank to a single sample: a spike in the newest samples could never
+        # stand out.
+        if len(metrics) - self.baseline_window >= 10:
+            recent = metrics[-self.baseline_window:]
+            baseline = metrics[:-self.baseline_window]
+        else:
+            recent = metrics[-10:]
+            baseline = metrics[:-10]
 
         anomalies = []
 

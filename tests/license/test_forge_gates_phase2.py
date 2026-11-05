@@ -24,7 +24,7 @@ from unittest import mock
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _license_console_sandbox import member_tier  # noqa: E402
+from _license_console_sandbox import exhaust_free_skill_quota, member_tier  # noqa: E402
 
 from skill_forge.multi_registry import MultiSkillRegistry  # noqa: E402
 from skill_forge.registry import SkillRegistry  # noqa: E402
@@ -52,11 +52,18 @@ def _create(reg: SkillRegistry, name: str = "g2_skill"):
                       description="g2", scope="user")
 
 
-def test_free_tier_cannot_create_a_skill(home):
+def test_free_tier_creates_within_its_quota_and_is_refused_past_it(home):
+    """ADR-2095 (1c1f7aa64): the free tier authors skills within
+    ``skill_forge_per_day``; the write past the quota is refused and nothing
+    is written. (Before ADR-2095 every free write was ``license_required``.)"""
+    from skill_forge.registry import SkillQuotaExceeded
+
     reg = _reg(home)
-    with pytest.raises(ValueError, match=r"^license_required: .*forge\.create.*tier=free"):
-        _create(reg)
-    assert reg.get("g2_skill") is None
+    assert _create(reg).name == "g2_skill"
+    exhaust_free_skill_quota(home)
+    with pytest.raises(SkillQuotaExceeded):
+        _create(reg, name="g2_skill_two")
+    assert reg.get("g2_skill_two") is None
 
 
 def test_member_can_create_a_skill(home):
@@ -89,9 +96,9 @@ def test_invalid_tenant_fails_closed(home, monkeypatch):
 
 
 def test_multi_registry_promote_after_downgrade_is_refused(home, tmp_path):
-    """Member creates in session scope; after the licence lapses, promotion
-    (which re-creates in the target scope through G2) is refused and the
-    original copy is untouched."""
+    """Member creates in session scope; after the licence lapses AND the free
+    quota is spent, promotion (which re-creates in the target scope through G2)
+    is refused and the original copy is untouched."""
     multi = MultiSkillRegistry(tenant_id="_default", channel_id="chan", task_id="task",
                                project_root=tmp_path / "project")
     with member_tier():
@@ -99,7 +106,8 @@ def test_multi_registry_promote_after_downgrade_is_refused(home, tmp_path):
                      body_md=BODY, description="p")
     assert multi.find_scope("promo_skill") == "session"
 
-    with pytest.raises(ValueError, match="^license_required:"):
+    exhaust_free_skill_quota(home)
+    with pytest.raises(ValueError, match="^license_limit"):
         multi.promote("promo_skill", to="user", force=True)
     assert multi.find_scope("promo_skill") == "session"
 

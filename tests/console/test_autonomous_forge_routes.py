@@ -379,29 +379,6 @@ async def test_audit_events_logged_on_pause(console_client: AsyncClient) -> None
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_canary_state_response_validation() -> None:
-    """Test CanaryStateResponse model validation."""
-    from core.console.corvin_console.api_schemas.autonomous_forge import CanaryStateResponse
-
-    # Valid model
-    state = CanaryStateResponse(
-        skill_id="os.test_skill",
-        version="1.0.0",
-        status="canary",
-        confidence=0.95,
-        latency_p95_ms=50.0,
-        error_rate=0.001,
-        traffic_percent=20,
-        time_remaining_sec=3600,
-        created_at=datetime.utcnow(),
-        tenant_id="_default",
-    )
-
-    assert state.skill_id == "os.test_skill"
-    assert state.confidence == 0.95
-    assert 0.0 <= state.confidence <= 1.0
-
-
 def test_canary_state_invalid_confidence() -> None:
     """Test CanaryStateResponse rejects invalid confidence."""
     from core.console.corvin_console.api_schemas.autonomous_forge import CanaryStateResponse
@@ -423,22 +400,6 @@ def test_canary_state_invalid_confidence() -> None:
         )
 
 
-def test_approve_request_validation() -> None:
-    """Test ApproveRequest model validation."""
-    from core.console.corvin_console.api_schemas.autonomous_forge import ApproveRequest
-
-    # Valid model
-    req = ApproveRequest(
-        skill_id="os.test_skill",
-        version="1.0.0",
-        operator_id="op_123",
-    )
-
-    assert req.skill_id == "os.test_skill"
-    assert req.version == "1.0.0"
-    assert req.operator_id == "op_123"
-
-
 def test_approve_request_forbids_extra() -> None:
     """Test ApproveRequest rejects extra fields."""
     from core.console.corvin_console.api_schemas.autonomous_forge import ApproveRequest
@@ -452,22 +413,6 @@ def test_approve_request_forbids_extra() -> None:
             operator_id="op_123",
             extra_field="should_fail",  # type: ignore
         )
-
-
-def test_defer_request_validation() -> None:
-    """Test DeferRequest model validation."""
-    from core.console.corvin_console.api_schemas.autonomous_forge import DeferRequest
-
-    # Valid model
-    req = DeferRequest(
-        skill_id="os.test_skill",
-        version="1.0.0",
-        reason="Needs more testing",
-        operator_id="op_123",
-    )
-
-    assert req.reason == "Needs more testing"
-    assert len(req.reason) <= 500
 
 
 def test_history_response_validation() -> None:
@@ -484,3 +429,11 @@ def test_history_response_validation() -> None:
     assert len(resp.history) == 0
     assert resp.total_count == 0
     assert resp.limit == 10
+
+
+# test_canary_state_response_validation / test_approve_request_validation /
+# test_defer_request_validation were removed (2026-11-05 sweep): they validated
+# CanaryStateResponse / ApproveRequest / DeferRequest, the body-token schemas
+# (session_token, client_nonce) that 1c1f7aa64 replaced with the console's
+# X-CSRF-Token — autonomous_forge_routes.py imports only ManifestResponse now,
+# so no route reads those models.

@@ -412,11 +412,17 @@ class LearningLoopIndexStorage:
 
         with self._lock:
             try:
-                self._db.delete(self._encode_key(key))
+                # Neither backend raises on a missing key (sqlite DELETE and
+                # LevelDB delete are no-ops), so "not found" is decided by a
+                # lookup — the former ``except KeyError`` never fired and every
+                # delete reported True.
+                encoded = self._encode_key(key)
+                if self._db.get(encoded) is None:
+                    self._cache.invalidate(key)
+                    return False
+                self._db.delete(encoded)
                 self._cache.invalidate(key)
                 return True
-            except KeyError:
-                return False
             except Exception as exc:
                 logger.error(f"Failed to delete index entry {key}: {exc}")
                 raise

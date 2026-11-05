@@ -390,31 +390,10 @@ class TestConfigReloadOnSkillInit:
         assert loaded_config["routing_threshold"] == 0.72
 
 
-class TestMeasurableImprovement:
-    """Test 9: Measurable improvement detection across iterations."""
-
-    def test_multiple_feedback_iterations_show_convergence(self, skill_config):
-        """Verify multiple feedback cycles show convergence in metrics."""
-        # Simulate 3 feedback cycles
-        iterations = [
-            {"quality_rating": 2, "latency_ms": 350},
-            {"quality_rating": 3, "latency_ms": 300},
-            {"quality_rating": 4, "latency_ms": 250},
-        ]
-
-        metrics = []
-        for it in iterations:
-            loss = (1 - (it["quality_rating"] / 5.0)) + 0.1 * (it["latency_ms"] / 100)
-            metrics.append(loss)
-
-        # Verify decreasing loss (convergence)
-        assert metrics[1] < metrics[0], "Loss should decrease iteration 1→2"
-        assert metrics[2] < metrics[1], "Loss should decrease iteration 2→3"
-
-        # Verify slope stabilization
-        slope_01 = metrics[1] - metrics[0]
-        slope_12 = metrics[2] - metrics[1]
-        assert abs(slope_12) < 0.2  # Converging
+# TestMeasurableImprovement was removed (2026-11-05 sweep): its one test
+# computed a "loss" from three hard-coded dicts inside the test and asserted on
+# that arithmetic — no production code ran — and the arithmetic (constant
+# slope 0.25 against a < 0.2 bound) never held, so it had never passed.
 
 
 # ============================================================================

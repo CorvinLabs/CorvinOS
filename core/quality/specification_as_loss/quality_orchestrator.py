@@ -165,7 +165,12 @@ class SpecConvergenceOptimizer:
 
         elif failures.primary_cause == "dod":
             # DoD-driven: add constraint
-            remediation = failures.remediation_hint or ""
+            # The failed checks are evidence too: a DoD failure that arrives
+            # without a remediation hint used to learn nothing at all, so the
+            # next iteration ran on the identical spec.
+            remediation = " ".join(
+                [failures.remediation_hint or "", *(failures.failed_checks or [])]
+            )
             if "reachability" in remediation:
                 delta["reachability_constraint"] = True
             if "audit" in remediation:

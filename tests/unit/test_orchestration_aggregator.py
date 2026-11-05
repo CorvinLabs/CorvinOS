@@ -46,6 +46,14 @@ def temp_corvin_home(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         monkeypatch.setenv("CORVIN_HOME", tmpdir)
         yield Path(tmpdir)
+        # The first audit write in a fresh home records instance.key_rotated
+        # from a short-lived "ibc-audit-deferred" thread; removing the temp dir
+        # while it still writes raised "Directory not empty" at teardown (it
+        # passed alone only when the thread happened to finish first).
+        import threading
+        for th in threading.enumerate():
+            if th.name == "ibc-audit-deferred" and th is not threading.current_thread():
+                th.join(timeout=10.0)
 
 
 class TestBatchRegistration:

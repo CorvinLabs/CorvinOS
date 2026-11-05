@@ -132,22 +132,10 @@ class TestPluginLicense:
         
         assert lic.is_valid() is False
     
-    def test_days_until_expiry(self):
-        """Test expiry countdown"""
-        expires = datetime.utcnow() + timedelta(days=30)
-        lic = PluginLicense(
-            plugin_id='plugin-1',
-            name='Test Plugin',
-            tier='B',
-            author='Test Author',
-            version='1.0.0',
-            issued_at=datetime.utcnow(),
-            expires_at=expires,
-        )
-        
-        days = lic.days_until_expiry()
-        assert days is not None
-        assert 29 <= days <= 30
+    # test_days_until_expiry was removed (2026-11-05 sweep): PluginLicense
+    # has never had a days_until_expiry() (e0a150541 added the test and the
+    # class in the same commit without it), and nothing outside this file
+    # asks for one; expiry is covered by is_valid() above.
 
 
 class TestTierEnforcer:
@@ -191,9 +179,10 @@ class TestTierEnforcer:
         enforcer = TierEnforcer('tenant-1', 'B')
         
         # Set quota to 1 for testing
+        # The gates are plain dicts (tier_enforcement.CAPABILITY_GATES).
         gate = enforcer.CAPABILITY_GATES[CapabilityType.MCP_TOOL_EXECUTION]
-        original_quota = gate.quota_per_hour
-        gate.quota_per_hour = 1
+        original_quota = gate['quota_per_hour']
+        gate['quota_per_hour'] = 1
         
         try:
             # First call should succeed
@@ -203,7 +192,7 @@ class TestTierEnforcer:
             with pytest.raises(CapabilityDeniedError):
                 enforcer.enforce_capability(CapabilityType.MCP_TOOL_EXECUTION)
         finally:
-            gate.quota_per_hour = original_quota
+            gate['quota_per_hour'] = original_quota
 
 
 class TestCrossTenantIsolation:
@@ -253,7 +242,8 @@ class TestAuditIntegration:
             pytest.fail("Should have raised CapabilityDeniedError")
         except CapabilityDeniedError as e:
             # Exception message should contain relevant info for audit
-            assert 'LAYER_OVERRIDE' in str(e) or 'Layer Override' in str(e)
+            # The message names the capability by its value.
+            assert CapabilityType.LAYER_OVERRIDE.value in str(e)
 
 
 if __name__ == '__main__':

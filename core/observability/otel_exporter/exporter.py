@@ -11,7 +11,7 @@ import json
 import os
 import logging
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -398,9 +398,18 @@ class OTELExporter:
         )
 
         # Construct JSON record
+        # The geo block is read field by field rather than with ``asdict``: the
+        # fallback is the zero-loss path, and a geo object that is not exactly a
+        # ``GeoAttributes`` dataclass must not turn a JSON write into a crash
+        # that loses the heartbeat it was meant to keep. Every geo field is a
+        # string or absent; anything else is dropped to ``None``.
         record = {
             **asdict(signal),
-            "geo": asdict(geo_attrs) if geo_attrs else None,
+            "geo": (
+                {f.name: (v if isinstance(v := getattr(geo_attrs, f.name, None), str) else None)
+                 for f in fields(GeoAttributes)}
+                if geo_attrs is not None else None
+            ),
         }
 
         # Append to file (immutable log)

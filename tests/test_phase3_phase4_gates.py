@@ -199,270 +199,99 @@ class TestPhase3Gate:
 
 class TestPhase4Gate:
     """
-    Phase 4 Gate Requirements (from PLAN-0661):
+    Phase 4 Gate Requirements (from PLAN-0661), as far as their subject still
+    exists:
 
-    1. test_dashboard_loads() - Dashboard responsive (<1s load)
-    2. test_audit_chain_unbroken() - Hash-chain verified
-    3. test_gdpr_export() - Portable format, PII redacted
-    4. test_slo_monitoring() - P99, success rate, cost tracked
-    5. test_e2e_full_learning_cycle() - Gen → Usage → Feedback → Learn
+    * Dashboard (``monitoring.MonitoringService``), GDPR export
+      (``compliance_reporter.ComplianceReporter``) and SLO monitoring were
+      deleted with no production path in 12e47c577 (T-0125); their three
+      tests went with them (2026-11-05 sweep).
+    * The per-learning ``AuditTrail`` was a SECOND hash chain; it is refused
+      (``core.compliance.audit_trail``: one chain per tenant). The chain test
+      and the E2E cycle now write through the tenant's core chain
+      (``forge.paths.tenant_audit_chain`` + ``forge.security_events``) — the
+      file the ADR-0232 boot tripwire verifies.
     """
 
-    @pytest.mark.asyncio
-    async def test_phase4_dashboard_loads(self):
-        """
-        Phase 4 Gate Requirement 1: Dashboard loads without error, responsive.
-        """
-        from monitoring import MonitoringService
-
-        monitor = MonitoringService()
-
-        # Simulate real learning activity
-        for i in range(20):
-            monitor.record_skill_generation(
-                f"skill_{i}",
-                duration_ms=2000.0 + i * 100,
-                success=True,
-                quality_score=0.80 + i * 0.01
-            )
-            monitor.record_convergence(samples_to_convergence=250, final_variance=0.001)
-            monitor.record_feedback(signal=0.7, dimension="quality")
-
-        # Dashboard API should return data
-        summary = monitor.get_summary()
-
-        assert summary is not None
-        assert "skill_metrics" in summary
-        assert summary["skill_metrics"]["total_count"] == 20
-        assert summary["timestamp"] is not None
-
-        print(f"✓ Phase 4 Gate 1 PASS: Dashboard loads with {summary['skill_metrics']['total_count']} skills")
+    @staticmethod
+    def _core_chain():
+        repo = os.path.join(os.path.dirname(__file__), "..", "corvin_operator", "forge")
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from forge import security_events as se  # noqa: PLC0415
+        from forge.paths import tenant_audit_chain  # noqa: PLC0415
+        return se, tenant_audit_chain("_default")
 
     @pytest.mark.asyncio
     async def test_phase4_audit_chain_unbroken(self):
         """
         Phase 4 Gate Requirement 2: Audit chain verified (hash-chain intact).
         """
-        import tempfile
-        import os
-        from audit_trail import AuditTrail
+        se, chain = self._core_chain()
+        before = len(chain.read_text(encoding="utf-8").splitlines()) if chain.exists() else 0
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.environ["CORVIN_HOME"] = tmpdir
+        for i in range(100):
+            se.write_event(chain, "learning.feedback_recorded",
+                           details={"skill_id": f"skill_{i}", "tenant_id": "_default"})
 
-            trail = AuditTrail("test_tenant")
-
-            # Write 100 events
-            for i in range(100):
-                await trail.write_event(
-                    "feedback",
-                    {"skill_id": f"skill_{i}", "signal": 0.5},
-                    f"fb_{i}"
-                )
-
-            # Verify chain
-            result = await trail.verify_chain()
-            assert result is True, "Hash chain should be unbroken"
-
-            # Get status
-            status = await trail.get_chain_status()
-            assert status["height"] == 100
-            assert status["integrity_verified"] is True
-
-            print(f"✓ Phase 4 Gate 2 PASS: Audit chain verified ({status['height']} events)")
-
-    @pytest.mark.asyncio
-    async def test_phase4_gdpr_export(self):
-        """
-        Phase 4 Gate Requirement 3: GDPR export works (portable, PII redacted).
-        """
-        import tempfile
-        import os
-        import json
-        from compliance_reporter import ComplianceReporter
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.environ["CORVIN_HOME"] = tmpdir
-
-            reporter = ComplianceReporter("test_tenant")
-            trail = reporter.audit_trail
-
-            # Write diverse events
-            for i in range(10):
-                await trail.write_event(
-                    "generation",
-                    {
-                        "skill_id": f"skill_{i}",
-                        "data_sources_used": ["memory", "rag"],
-                        "final_loss_vector": {"relevance": 0.2, "completeness": 0.3},
-                    },
-                    f"gen_{i}"
-                )
-
-                await trail.write_event(
-                    "feedback",
-                    {
-                        "skill_id": f"skill_{i}",
-                        "user_id_masked": f"user_{i:016x}",
-                        "signal": 0.7,
-                    },
-                    f"fb_{i}"
-                )
-
-            # Test export
-            export = await trail.export_for_compliance()
-            assert export["event_count"] >= 10
-
-            # Test compliance report
-            report = await reporter.generate_compliance_report(period_days=30)
-            assert report.total_skills >= 10
-            assert report.chain_integrity is True
-            assert report.user_ids_masked is True or True  # Check performed
-
-            # Test JSON export
-            json_export = await reporter.export_compliance_report(report, format="json")
-            data = json.loads(json_export)
-            assert "tenant_id" in data
-
-            print(f"✓ Phase 4 Gate 3 PASS: GDPR export ({export['event_count']} events)")
-
-    @pytest.mark.asyncio
-    async def test_phase4_slo_monitoring(self):
-        """
-        Phase 4 Gate Requirement 4: SLO monitoring active (P99, success, cost).
-        """
-        from monitoring import MonitoringService
-
-        monitor = MonitoringService()
-
-        # Simulate good performance
-        for i in range(50):
-            success = i < 45  # 90% success rate
-            monitor.record_skill_generation(
-                f"skill_{i}",
-                duration_ms=3000.0 + (i * 50),
-                success=success,
-                quality_score=0.85 if success else 0.30
-            )
-
-        for _ in range(20):
-            monitor.record_convergence(samples_to_convergence=250, final_variance=0.001)
-
-        for i in range(20):
-            monitor.record_feedback(signal=0.6 + i * 0.01, dimension="quality")
-
-        # Check SLOs
-        slo_status = monitor.check_slo_compliance()
-
-        assert isinstance(slo_status, dict)
-        assert "skill_p99_latency" in slo_status
-        assert "success_rate" in slo_status
-        assert "convergence_time" in slo_status
-        assert "daemon_availability" in slo_status
-
-        passed_slos = sum(1 for v in slo_status.values() if v is True)
-        total_slos = len(slo_status)
-
-        print(f"✓ Phase 4 Gate 4 PASS: SLO monitoring ({passed_slos}/{total_slos} SLOs met)")
+        ok, problems = se.verify_chain(chain)
+        assert ok, problems
+        after = len(chain.read_text(encoding="utf-8").splitlines())
+        # >= : the first write of a fresh home may add the instance-key record.
+        assert after - before >= 100
 
     @pytest.mark.asyncio
     async def test_phase4_e2e_full_learning_cycle(self):
         """
         Phase 4 Gate Requirement 5: Full E2E learning cycle
-        (Generation → Usage → Feedback → Learning).
+        (Generation -> Usage -> Feedback -> Learning), recorded on the core chain.
         """
-        import tempfile
-        import os
         from learning_daemon import DataHubLearningDaemon, DaemonEvent
-        from audit_trail import AuditTrail
         from datetime import datetime
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.environ["CORVIN_HOME"] = tmpdir
+        se, chain = self._core_chain()
+        daemon = DataHubLearningDaemon()
+        skill_id = "e2e_test_skill"
 
-            daemon = DataHubLearningDaemon()
-            trail = AuditTrail()
+        se.write_event(chain, "learning.skill_generated",
+                       details={"skill_id": skill_id, "tenant_id": "_default"})
 
-            skill_id = "e2e_test_skill"
-
-            # Step 1: Generation (log to audit trail)
-            await trail.write_event(
-                "generation",
-                {
+        for i in range(5):
+            await daemon.on_event(DaemonEvent(
+                event_type="skill_executed",
+                timestamp=datetime.utcnow().isoformat(),
+                payload={
                     "skill_id": skill_id,
-                    "data_sources_used": ["memory:tier2", "rag:embeddings"],
-                    "final_loss_vector": {"relevance": 0.25, "completeness": 0.30},
+                    "success": i < 4,
+                    "execution_id": f"{skill_id}_exec_{i}",
+                    "execution_time_ms": 1000.0 + i * 100,
                 },
-                f"gen_{skill_id}"
-            )
+            ))
 
-            # Step 2: Execution (usage)
-            for i in range(5):
-                exec_event = DaemonEvent(
-                    event_type="skill_executed",
-                    timestamp=datetime.utcnow().isoformat(),
-                    payload={
-                        "skill_id": skill_id,
-                        "success": i < 4,
-                        "execution_id": f"{skill_id}_exec_{i}",
-                        "execution_time_ms": 1000.0 + i * 100,
-                    },
-                )
-                await daemon.on_event(exec_event)
+        for j in range(3):
+            await daemon.on_event(DaemonEvent(
+                event_type="user_feedback",
+                timestamp=datetime.utcnow().isoformat(),
+                payload={
+                    "skill_id": skill_id,
+                    "signal": 0.8 - j * 0.2,
+                    "data_sources": ["memory:tier2", "rag:embeddings"],
+                    "user_id_masked": f"user_masked_{j:016x}",
+                    "feedback_id": f"{skill_id}_fb_{j}",
+                },
+            ))
+            se.write_event(chain, "learning.feedback_recorded",
+                           details={"skill_id": skill_id, "tenant_id": "_default"})
 
-                # Log usage
-                await trail.write_event(
-                    "usage",
-                    {
-                        "skill_id": skill_id,
-                        "success": i < 4,
-                        "execution_id": f"{skill_id}_exec_{i}",
-                    },
-                    f"usage_{skill_id}_{i}"
-                )
+        # Learning happened
+        assert daemon.feedback_collector.feedback_history is not None
+        assert len(daemon.feedback_collector.feedback_history) == 3
 
-            # Step 3: User feedback
-            for j in range(3):
-                fb_event = DaemonEvent(
-                    event_type="user_feedback",
-                    timestamp=datetime.utcnow().isoformat(),
-                    payload={
-                        "skill_id": skill_id,
-                        "signal": 0.8 - j * 0.2,
-                        "data_sources": ["memory:tier2", "rag:embeddings"],
-                        "user_id_masked": f"user_masked_{j:016x}",
-                        "feedback_id": f"{skill_id}_fb_{j}",
-                    },
-                )
-                await daemon.on_event(fb_event)
-
-                # Log feedback
-                await trail.write_event(
-                    "feedback",
-                    {
-                        "skill_id": skill_id,
-                        "signal": 0.8 - j * 0.2,
-                        "user_id_masked": f"user_masked_{j:016x}",
-                    },
-                    f"feedback_{skill_id}_{j}"
-                )
-
-            # Step 4: Verify learning happened
-            assert daemon.feedback_collector.feedback_history is not None
-            assert len(daemon.feedback_collector.feedback_history) == 3
-
-            # Verify audit trail is complete
-            skill_events = await trail.query_skill_lifecycle(skill_id)
-
-            event_types = set(e.get("event_type") for e in skill_events)
-            assert "generation" in event_types or len(skill_events) > 0
-            assert "feedback" in event_types or len(skill_events) > 0
-
-            # Verify chain integrity
-            chain_ok = await trail.verify_chain()
-            assert chain_ok is True
-
-            print(f"✓ Phase 4 Gate 5 PASS: E2E cycle complete ({len(skill_events)} audit events)")
+        # And the cycle is on the one chain, intact
+        ok, problems = se.verify_chain(chain)
+        assert ok, problems
+        types = [ln for ln in chain.read_text(encoding="utf-8").splitlines() if skill_id in ln]
+        assert len(types) >= 4  # ours (1 + 3); the daemon records its own too
 
 
 # ============================================================================

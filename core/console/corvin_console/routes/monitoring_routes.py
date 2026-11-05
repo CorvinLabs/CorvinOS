@@ -242,6 +242,9 @@ def _generate_alerts(tenant_id: str) -> AlertsResponse:
     )
 
 
+_TIMESERIES_METRICS = ("confidence", "latency_p95_ms", "error_rate")
+
+
 def _generate_timeseries(
     metric_name: str, days: int, tenant_id: str
 ) -> TimeSeriesResponse:
@@ -253,24 +256,32 @@ def _generate_timeseries(
       - Handle different metrics (confidence, latency, error_rate)
 
     For now, returns mock confidence trend data.
+
+    Raises ValueError for a metric it does not know (the route validates too;
+    this keeps a direct caller from getting a "latency" series for any name).
     """
+    if metric_name not in _TIMESERIES_METRICS:
+        raise ValueError(f"unknown metric: {metric_name!r}")
     window_end = datetime.utcnow()
     window_start = window_end - timedelta(days=days)
     aggregation_interval_sec = 3600  # 1 hour
 
     data_points = []
     current = window_start
-    base_value = 0.85 if metric_name == "confidence" else 50.0
+    # error_rate is a FRACTION in [0, 1] like confidence; only latency is in ms.
+    base_value = {"confidence": 0.85, "error_rate": 0.05}.get(metric_name, 50.0)
 
     while current <= window_end:
         # Generate synthetic trend (gradual improvement)
         hours_elapsed = (current - window_start).total_seconds() / 3600.0
         if metric_name == "confidence":
             value = base_value + (hours_elapsed / (days * 24)) * 0.1  # Trend upward
+        elif metric_name == "error_rate":
+            value = base_value - (hours_elapsed / (days * 24)) * 0.01  # Trend downward
         else:
             value = base_value - (hours_elapsed / (days * 24)) * 5  # Trend downward
 
-        value = max(0, min(100, value)) if metric_name != "confidence" else max(0, min(1, value))
+        value = max(0, min(100, value)) if metric_name == "latency_p95_ms" else max(0, min(1, value))
 
         data_points.append(
             TimeSeriesDataPoint(

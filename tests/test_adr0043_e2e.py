@@ -29,6 +29,16 @@ for _p in (_REPO, _REPO / "corvin_operator", _REPO / "corvin_operator" / "bridge
 from workload_classifier import classify_and_store_workload_hint  # type: ignore
 
 
+def _fast_tier() -> str:
+    """The fast tier serves the NEWEST Haiku (ADR-2090 model lineage,
+    a0d9aa8a3) — never a pinned snapshot literal, which went stale the day
+    a newer Haiku was registered."""
+    from model_lineage import latest  # type: ignore  # noqa: PLC0415
+    newest = latest("haiku", "claude_code")
+    assert newest, "the registry offers no Haiku model at all"
+    return newest
+
+
 def _resolve(profile: dict | None, hint: dict | None) -> "str | None":
     """Call the real Tier-2.7 consumer hermetically: no operator override,
     and CORVIN_HOME pinned to an empty tmp dir so Tier 2.5 cannot read the
@@ -55,7 +65,7 @@ def test_e2e_chat_message_routes_to_fast_tier() -> None:
     assert hint["confidence"] >= 0.7
 
     model = _resolve({"fast_chat_mode": True}, hint)
-    assert model == "claude-haiku-4-5-20251001"
+    assert model == _fast_tier()
 
 
 def test_e2e_flag_off_is_fully_inert() -> None:
@@ -100,7 +110,7 @@ def test_e2e_coding_request_in_natural_language_never_fast_tier() -> None:
         hint = classify_and_store_workload_hint(msg, session)
         assert hint["workload"] != "chat", f"coding request classified CHAT: {msg!r}"
         model = _resolve({"fast_chat_mode": True}, hint)
-        assert model != "claude-haiku-4-5-20251001", f"fast tier for: {msg!r}"
+        assert model != _fast_tier(), f"fast tier for: {msg!r}"
 
 
 def test_e2e_explicit_model_pin_beats_workload_routing() -> None:
@@ -125,7 +135,7 @@ def test_e2e_routing_decision_is_audited() -> None:
     hint = {"workload": "chat", "confidence": 0.95, "timestamp": 1}
     with mock.patch.object(adapter, "_audit_event", _spy):
         model = _resolve({"fast_chat_mode": True}, hint)
-    assert model == "claude-haiku-4-5-20251001"
+    assert model == _fast_tier()
     routing = [e for e in events if e[0] == "bridge.workload_model_selection"]
     assert len(routing) == 1
     details = routing[0][1].get("details") or {}

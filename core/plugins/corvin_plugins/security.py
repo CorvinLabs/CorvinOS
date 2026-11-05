@@ -87,6 +87,32 @@ class SandboxViolationError(RuntimeError):
         )
 
 
+
+def _domain_allowed(domain: str, allowed: "FrozenSet[str]") -> bool:
+    """Exact match, or a ``*.suffix`` entry matching a SUBDOMAIN of suffix.
+
+    ``*.example.org`` admits ``api.example.org`` and ``a.b.example.org``, never
+    the apex ``example.org`` nor a look-alike such as ``evilexample.org``
+    (the match is on a ``.suffix`` label boundary). Comparison is
+    case-insensitive and ignores one trailing root dot, as DNS does. Before
+    this, entries were compared verbatim, so a declared wildcard was dead and
+    refused every host it named.
+    """
+    host = (domain or "").strip().lower().rstrip(".")
+    if not host:
+        return False
+    for entry in allowed:
+        rule = (entry or "").strip().lower().rstrip(".")
+        if not rule:
+            continue
+        if rule.startswith("*."):
+            suffix = rule[1:]  # ".example.org"
+            if len(suffix) > 1 and host.endswith(suffix) and len(host) > len(suffix):
+                return True
+        elif host == rule:
+            return True
+    return False
+
 @dataclass(frozen=True)
 class PluginSecurityPolicy:
     """Immutable security policy for a single plugin.
@@ -338,7 +364,7 @@ class SecurablePluginGate:
                 "network access not allowed",
             )
 
-        if domain not in self.policy.allowed_domains:
+        if not _domain_allowed(domain, self.policy.allowed_domains):
             self._violation_count += 1
             self._audit_violation(
                 "sandbox_violation",

@@ -26,7 +26,7 @@ def cleanup_session_skills(tenant_id: str, session_id: str) -> dict:
 
     try:
         # Import skill registry dynamically
-        _sf_dir = str(Path(__file__).resolve().parents[3] / "operator" / "skill-forge")
+        _sf_dir = str(Path(__file__).resolve().parents[4] / "corvin_operator" / "skill-forge")
         if _sf_dir not in sys.path:
             sys.path.insert(0, _sf_dir)
 

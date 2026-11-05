@@ -75,18 +75,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/compute/corvin_compute/cli.py::_resolve_datasource_env::Path(corvin_home) / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/compute/corvin_compute/engines/anthropic_batch.py::_emit::corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/compute/corvin_compute/engines/anthropic_batch.py::_emit::corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/compute/corvin_compute/engines/anthropic_batch.py::_tenant_home_path::_corvin_home() / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -94,6 +82,10 @@
   "core/compute/corvin_compute/fabric/backends/registry.py::BackendRegistry.discover::self._corvin_home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
+  },
+  "core/compute/corvin_compute/fabric/datasources/connection_env.py::connections_dir::Path(corvin_home) / 'tenants'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "core/compute/corvin_compute/fabric/datasources/mcp_tools.py::_tool_unregister::registry._home / 'tenants'": {
     "count": 2,
@@ -155,10 +147,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/console/corvin_console/api/feature_status_endpoints.py::_get_tenant_yaml_path::home / '.corvin' / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/console/corvin_console/audit.py::_audit_path::_forge_paths.tenant_global_dir(tid) / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -172,10 +160,6 @@
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "core/console/corvin_console/chat_router.py::_execute_erasure::root / 'global'": {
-    "count": 2,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/chat_router.py::_execute_erasure::root / 'global' / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -235,127 +219,7 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/console/corvin_console/routes/audit_tail.py::audit_tail::_forge_paths.corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/audit_tail.py::audit_tail::_forge_paths.corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/audit_tail.py::audit_tail::global_dir / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/audit_tail.py::audit_tail::global_dir / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/console/corvin_console/routes/autonomous_forge_routes.py::_tenant_roots::Path(_forge_paths.corvin_home()) / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chain_dual_track.py::_read_all_events::_forge_paths.corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chain_dual_track.py::_read_all_events::_forge_paths.corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chain_dual_track.py::_read_all_events::_forge_paths.tenant_global_dir(tid) / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chain_dual_track.py::_read_all_events::_forge_paths.tenant_global_dir(tid) / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chain_dual_track.py::_verify_all_chains::_forge_paths.corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chain_dual_track.py::_verify_all_chains::_forge_paths.corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chain_dual_track.py::_verify_all_chains::_forge_paths.tenant_global_dir(tid) / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chain_dual_track.py::_verify_all_chains::_forge_paths.tenant_global_dir(tid) / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_session_execution_log::corvin_home / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_session_execution_log::corvin_home / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_session_execution_log::corvin_home / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_session_execution_log::corvin_home / 'tenants' / rec.tenant_id / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_session_execution_log::corvin_home / 'tenants' / rec.tenant_id / 'global' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_session_wdat_graph::_fp.corvin_home() / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_session_wdat_graph::_fp.corvin_home() / 'tenants' / rec.tenant_id / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_session_wdat_graph::_fp.corvin_home() / 'tenants' / rec.tenant_id / 'global' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_worker_trace::_fp.corvin_home() / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_worker_trace::_fp.corvin_home() / 'tenants' / rec.tenant_id / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::get_worker_trace::_fp.corvin_home() / 'tenants' / rec.tenant_id / 'global' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::list_session_engine_spans::corvin_home / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::list_session_engine_spans::corvin_home / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::list_session_engine_spans::corvin_home / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::list_session_engine_spans::corvin_home / 'tenants' / rec.tenant_id / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::list_session_engine_spans::corvin_home / 'tenants' / rec.tenant_id / 'global' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::list_session_os_turns::_fp.corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/chat.py::list_session_os_turns::_fp.corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -519,9 +383,13 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/console/corvin_console/routes/license.py::apply_license_key::corvin_home / 'global'": {
+  "core/console/corvin_console/routes/license.py::_swap_in_license_key_locked::corvin_home / 'global'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
+  },
+  "core/console/corvin_console/routes/members.py::_store_dirs::Path(_forge_paths.corvin_home()) / 'global'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "core/console/corvin_console/routes/model_selection_analytics.py::_rated_path::tenant_home(tenant_id) / 'global'": {
     "count": 1,
@@ -624,10 +492,6 @@
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "core/console/corvin_console/routes/workflows.py::_resolve_skill::user_home / '.corvin' / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/standalone.py::create_app._lifespan::Path.home() / '.corvin' / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -851,10 +715,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/gateway/corvin_gateway/dispatcher.py::RunDispatcher._audit_policy::_fp.tenant_global_dir(tenant_id) / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/gateway/corvin_gateway/oidc.py::resolve_jwt::_forge_paths.corvin_home() / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -930,6 +790,10 @@
   "core/learning/model_selection_learner.py::compute_learned_thresholds::_bootstrap.forge_paths.tenant_global_dir(tenant_id) / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
+  },
+  "core/learning/token_metrics_db.py::TokenMetricsDB._tenant_files::Path(corvin_home()) / 'tenants'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "core/licensing/a2a_verifier.py::A2ADelegationVerifier.__init__::self.corvin_home / 'licensing' / 'verification_audit.jsonl'": {
     "count": 1,
@@ -1044,14 +908,6 @@
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "core/orchestration/context_coherence_manager.py::ContextCoherenceManager.__init__::self.corvin_home / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/orchestration/corvin_orchestration/mcp_server.py::_audit_sink_for::_corvin_home() / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/orchestration/corvin_orchestration/mcp_server.py::_audit_sink_for::_corvin_home() / 'tenants' / tenant_id / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -1231,13 +1087,9 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/skills/os_skills/definition_of_done_verifier/weight_persistence.py::WeightPersistence.__init__::Path.home() / '.corvin' / 'tenants'": {
+  "core/skills/os_skills/definition_of_done_verifier/weight_persistence.py::weights_path::tenant_home(tenant_id) / 'global'": {
     "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/skills/os_skills/definition_of_done_verifier/weight_persistence.py::WeightPersistence.__init__::Path.home() / '.corvin' / 'tenants' / '_default' / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "core/skills/os_skills/model_selector_variants.py::VariantBSelector._get_config_path::home / 'tenants'": {
     "count": 1,
@@ -1263,9 +1115,9 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/skills/os_skills/phase1/mock_audit_trail.py::MockAuditTrail.__init__::Path.home() / '.corvin' / 'audit.jsonl'": {
+  "core/skills/os_skills/phase1/mock_audit_trail.py::default_audit_file::corvin_home() / 'skills' / _DEFAULT_FILE_NAME": {
     "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "core/skills/os_skills/skill_adapter.py::_default_work_dir::base / 'tenants'": {
     "count": 1,
@@ -1455,6 +1307,14 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
+  "corvin_operator/bridges/shared/acs_runtime.py::_operator_worker_env_keep::_corvin_home() / 'tenants'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
+  },
+  "corvin_operator/bridges/shared/acs_runtime.py::_operator_worker_env_keep::_corvin_home() / 'tenants' / tenant_id / 'global'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
+  },
   "corvin_operator/bridges/shared/acs_runtime.py::_resolve_acs_datasources::home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -1643,11 +1503,23 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/audit_view.py::_audit_path::_corvin_home() / 'global'": {
+  "corvin_operator/bridges/shared/audit_view.py::_audit_path::_corvin_home() / 'tenants'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
+  },
+  "corvin_operator/bridges/shared/audit_view.py::_audit_path::_corvin_home() / 'tenants' / _tenant_id() / 'global'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
+  },
+  "corvin_operator/bridges/shared/audit_view.py::_audit_path::_corvin_home() / 'tenants' / _tenant_id() / 'global' / 'forge' / 'audit.jsonl'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
+  },
+  "corvin_operator/bridges/shared/audit_view.py::_audit_paths::_corvin_home() / 'global'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/audit_view.py::_audit_path::_corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
+  "corvin_operator/bridges/shared/audit_view.py::_audit_paths::_corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -1827,11 +1699,11 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/data_classification.py::load_guard_for_tenant::home / 'tenants'": {
+  "corvin_operator/bridges/shared/data_classification.py::_tenant_config_file::home / 'tenants'": {
     "count": 2,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/data_classification.py::load_guard_for_tenant::home / 'tenants' / tenant_id / 'global'": {
+  "corvin_operator/bridges/shared/data_classification.py::_tenant_config_file::home / 'tenants' / tenant_id / 'global'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -1851,17 +1723,17 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/disclosure.py::_store_path::home / 'global'": {
+  "corvin_operator/bridges/shared/disclosure.py::_legacy_root_path::path.parents[4] / 'global'": {
     "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "corvin_operator/bridges/shared/disclosure.py::_store_path::home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/disclosure.py::_store_path::home / 'tenants' / tenant_id / 'global'": {
+  "corvin_operator/bridges/shared/disclosure.py::_store_path::home / 'tenants' / tid / 'global'": {
     "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "corvin_operator/bridges/shared/egress_gate.py::load_egress_gate_for_tenant::cfg_path.parent / 'forge' / 'audit.jsonl'": {
     "count": 1,
@@ -1947,14 +1819,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/erasure_handler_corvinid.py::_audit_emit::_default_corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/erasure_handler_corvinid.py::_audit_emit::_default_corvin_home() / 'global' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "corvin_operator/bridges/shared/erasure_handlers.py::L28RecallHandler.purge::_tenant_global(self.tenant_id) / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -1962,6 +1826,10 @@
   "corvin_operator/bridges/shared/erasure_handlers.py::L28UserModelHandler._emit::_tenant_global(self.tenant_id) / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
+  },
+  "corvin_operator/bridges/shared/erasure_handlers.py::UidKeyedStoreHandler._legacy_dirs::_corvin_home() / 'global'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "corvin_operator/bridges/shared/erasure_handlers.py::_tenant_global::home / 'global'": {
     "count": 2,
@@ -2055,14 +1923,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/incident_tracker.py::_emit::_corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/incident_tracker.py::_emit::audit_dir / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "corvin_operator/bridges/shared/incident_tracker.py::_incidents_dir::_corvin_home() / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -2098,6 +1958,10 @@
   "corvin_operator/bridges/shared/instance_identity.py::instance_key_path::corvin_home() / _GLOBAL_DIR": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
+  },
+  "corvin_operator/bridges/shared/kb_locator.py::tenant_kb_path::corvin_home() / 'tenants'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "corvin_operator/bridges/shared/memory_bridge.py::_audit_path_for::_tenant_global_dir(tenant_id) / 'forge' / 'audit.jsonl'": {
     "count": 1,
@@ -2275,14 +2139,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/proposal.py::_audit_path::home / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/proposal.py::_audit_path::home / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "corvin_operator/bridges/shared/proposal.py::_audit_path::home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -2375,17 +2231,17 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/roles.py::_store_path::home / 'global'": {
+  "corvin_operator/bridges/shared/roles.py::_legacy_root_path::path.parents[4] / 'global'": {
     "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "corvin_operator/bridges/shared/roles.py::_store_path::home / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/roles.py::_store_path::home / 'tenants' / tenant_id / 'global'": {
+  "corvin_operator/bridges/shared/roles.py::_store_path::home / 'tenants' / tid / 'global'": {
     "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "corvin_operator/bridges/shared/savings_cap.py::settings_path::Path(tenant_home(tenant_id)) / 'global'": {
     "count": 1,
@@ -2455,9 +2311,9 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/bridges/shared/spawn_gates.py::_l44_audit_path::_forge_paths.tenant_global_dir(tenant_id) / 'forge' / 'audit.jsonl'": {
+  "corvin_operator/bridges/shared/spawn_gates.py::_l44_audit_path::_forge_module('paths').tenant_global_dir(tenant_id) / 'forge' / 'audit.jsonl'": {
     "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "corvin_operator/bridges/shared/spawn_gates.py::_load_l34_guard::home / 'tenants'": {
     "count": 1,
@@ -2532,38 +2388,6 @@
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "corvin_operator/bridges/shared/user_model.py::_memory_dir::base / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/user_style.py::_audit_path::Path(_ch()) / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/user_style.py::_audit_path::Path(_ch()) / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/user_style.py::_audit_path::Path(corvin_home) / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/user_style.py::_audit_path::Path(corvin_home) / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/user_style.py::_audit_path::Path(env) / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/user_style.py::_audit_path::Path(env) / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/user_style.py::_audit_path::Path.home() / '.corvin' / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/bridges/shared/user_style.py::_audit_path::Path.home() / '.corvin' / 'global' / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -2715,27 +2539,11 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "corvin_operator/forge/forge/runner.py::_audit_path_for::corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/forge/forge/runner.py::_audit_path_for::corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "corvin_operator/forge/forge/runner.py::_guard_bind_target::_ch / 'global'": {
     "count": 2,
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "corvin_operator/forge/forge/runner.py::run_tool::_corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/forge/forge/runner.py::run_tool::corvin_home() / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "corvin_operator/forge/forge/runner.py::run_tool::corvin_home() / 'global' / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -2994,6 +2802,10 @@
   "corvin_operator/voice/hooks/path_gate.py::_self_test_vectors::home / 'tenants'": {
     "count": 5,
     "reason": "measured-2026-10-24, not yet triaged"
+  },
+  "corvin_operator/voice/hooks/path_gate.py::_session_kb_pins::_corvin_home() / 'tenants'": {
+    "count": 1,
+    "reason": "measured-2026-11-05 (full pytest sweep), not yet triaged — hand-composed path added since the last baseline; owner to resolve through the tenant path resolvers"
   },
   "corvin_operator/voice/hooks/web_trust_gate.py::_tenant_chain::_corvin_home() / 'tenants'": {
     "count": 1,
@@ -3300,18 +3112,6 @@
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "scripts/compliance_verification_e2e.py::ComplianceVerifier.test_finding_8_boot_tripwire::self.tmp_dir / 'audit_tripwire.jsonl'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "scripts/credential_rotation_phase1.py::CredentialRotationPhase1.__init__::self.repo_root / '.corvin' / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "scripts/credential_rotation_phase1.py::CredentialRotationPhase1.__init__::self.repo_root / '.corvin' / 'tenants' / tenant_id / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "scripts/credential_rotation_phase1.py::CredentialRotationPhase1.__init__::self.repo_root / '.corvin' / 'tenants' / tenant_id / 'global' / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },

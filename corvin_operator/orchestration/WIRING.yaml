@@ -45,3 +45,13 @@ components:
       TDE's AdaptiveDelegationExecutor uses its own step-execution path, not
       this module. Real integration work, not a wiring oversight.
     target_adr: "0210"
+
+  - name: __init__
+    module: orchestration
+    status: deferred
+    reason: >
+      Empty package marker added by cce86a13b (2026-09-15). It holds no code,
+      and nothing in production imports `corvin_operator.orchestration` as a
+      package — the modules above load by bare name from the orchestration
+      directory on sys.path. Declared so the manifest stays complete; it
+      becomes `live` with an entry_point the day a dotted importer exists.

@@ -191,7 +191,7 @@ class TestCapabilityDecisionAudit(unittest.TestCase):
                 "tier": "free",
                 "reason": "not_included_in_tier",
             },
-            "lom": "operator/forge/forge/registry.py:create:L45",
+            "lom": "corvin_operator/forge/forge/registry.py:create:L45",
         }
 
         self.assertEqual(event["details"]["capability"], "forge.create")

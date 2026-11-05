@@ -2,7 +2,7 @@
 
 This test verifies:
 1. No 'operator' directory exists (phase 2 cleanup)
-2. No stale sys.path.insert("operator") references
+2. No stale sys.path injection of the bare legacy directory
 3. No stale 'from operator' imports
 4. Form-agnostic segment scan (Annex A) catches any remaining "operator/" Pfadsegmente
 5. Launcher smoke tests (all 9 entry-points exist and import successfully)
@@ -12,6 +12,8 @@ This test verifies:
 """
 import re
 import subprocess
+
+import pytest
 import sys
 from pathlib import Path
 
@@ -29,20 +31,28 @@ class TestAdr0730OperatorGuard:
         assert not (self.repo / "core" / "operator").exists(), "core/operator/ dir should not exist"
         
     def test_no_stale_syspath_operator(self):
-        """Verify no sys.path.insert("operator") references remain."""
+        """Verify no sys.path injection of the bare legacy directory remains."""
         result = subprocess.run(
-            ["git", "grep", "-c", r'sys\.path\.insert[^)]*"operator"'],
+            ["git", "grep", "-n", r'sys\.path\.insert[^)]*"operator"', "--", "*.py", "*.sh"],
             cwd=self.repo,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace"
         )
-        count = int(result.stdout.strip()) if result.returncode == 0 else 0
-        assert count == 0, f"Found {count} sys.path.insert(…, 'operator') references"
+        # ``git grep -c`` prints one ``file:N`` line per file, which int() could
+        # never parse — the guard crashed instead of counting (since 1bbad8d9d).
+        hits = result.stdout.splitlines() if result.returncode == 0 else []
+        assert not hits, f"Found {len(hits)} legacy sys.path injection(s): {hits[:5]}"
         
     def test_no_stale_from_operator_imports(self):
-        """Verify no 'from operator' or 'import operator' module refs (vs stdlib)."""
+        """Verify no 'from operator' or 'import operator' module refs (vs stdlib).
+
+        Scoped to code (``*.py``/``*.sh``) and to this guard's own file
+        excluded: the pattern quoted in its own assertion message matched
+        itself. Markdown prose that still names the old module path is a docs
+        residue, not an import, and is outside this guard."""
         result = subprocess.run(
-            ["git", "grep", "-E", r"(from|import)\s+operator\."],
+            ["git", "grep", "-nE", r"(from|import)\s+operator\.", "--", "*.py", "*.sh",
+             ":!tests/test_adr_0730_operator_guard.py"],
             cwd=self.repo,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace"
@@ -60,7 +70,9 @@ class TestAdr0730OperatorGuard:
         ).stdout.splitlines()
         
         exts = (".py", ".sh", ".yaml", ".yml", ".json", ".js", ".mjs", ".ts")
-        skip = ("corvin_decisions/", "outputs/", "node_modules/", "/processed/", "/inbox/", "/outbox/", "dist/")
+        skip = ("corvin_decisions/", "outputs/", "node_modules/", "/processed/", "/inbox/", "/outbox/", "dist/",
+                # this guard's own regexes and docstrings
+                "tests/test_adr_0730_operator_guard.py")
         
         pats = [
             (re.compile(r'/ *"operator"'), "Path-join"),
@@ -81,14 +93,17 @@ class TestAdr0730OperatorGuard:
                             if pat.search(ln) and "corvin_operator" not in ln:
                                 residues.append(f"{f}:{i} [{kind}]")
                                 break
-            except:
-                pass
+            except (OSError, UnicodeDecodeError):
+                continue  # binary or vanished file: nothing to scan
         
         # Allowlist: only test fixture, guard regex, and legacy helper are OK
         allowlist = [
             "tests/test_operator_layout_guard.py:38",  # LEGACY_DIRS
             "tests/test_operator_layout_guard.py:54",  # _STALE_SYSPATH regex
             "corvinOS/shared/paths.py:290",            # legacy_bridge_runtime_dir
+            # verbatim ``paths:`` data of the superseded ADR-0655 (ADR-2282
+            # audit table) — a historical record, not a path this tree resolves
+            "tests/learning/test_adr_2282_supersession_audit.py:68",
         ]
         
         unexpected = [r for r in residues if not any(a in r for a in allowlist)]
@@ -134,7 +149,10 @@ class TestAdr0730OperatorGuard:
             capture_output=True,
             text=True, encoding="utf-8", errors="replace"
         )
-        count = int(result.stdout.strip()) if result.returncode == 0 else 0
+        # ``git grep -c`` prints ``file:N`` per file — sum them.
+        count = sum(
+            int(ln.rsplit(":", 1)[1]) for ln in result.stdout.splitlines() if ":" in ln
+        ) if result.returncode == 0 else 0
         # Expected count after Phase 2b: ~600–700 joins
         # This ratchet ensures we don't accidentally introduce NEW bare joins
         assert count >= 500, f"Too few '/ \"corvin_operator\"' joins: {count} (expected >= 500)"

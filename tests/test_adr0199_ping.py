@@ -42,6 +42,21 @@ def _write_endpoint(dirpath: Path, endpoint_id: str, url: str) -> Path:
     return p
 
 
+
+# a2a.network is a member-only capability (ADR-0700 §2.1) and the sender and
+# receiver run the REAL licence gate (``a2a_license_gate``) — every probe,
+# send and receive in this file was refused with ``rejected`` / 403 on a Free
+# install. The protocol mechanics tested here presuppose a licensed install,
+# so the tier RESOLVER reports ``member`` (same pin as
+# ``corvin_operator/bridges/shared/conftest.py::_a2a_member_tier``, which does
+# not reach ``tests/``); the gate, limits matrix and audit run unmodified.
+@pytest.fixture(autouse=True)
+def _a2a_member_tier(monkeypatch):
+    from corvin_operator.license import capability_api  # noqa: PLC0415
+    monkeypatch.setattr(capability_api, "active_tier", lambda **_k: "member")
+    yield
+
+
 @pytest.fixture()
 def isolated_env(tmp_path, monkeypatch):
     """Keep the sender away from the real ~/.corvin and endpoint registry."""

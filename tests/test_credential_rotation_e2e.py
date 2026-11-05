@@ -98,7 +98,10 @@ RESEND_API_KEY=re_test_key_123
     def test_phase1_audit_path(self):
         """Verify Phase 1 creates audit path."""
         phase1 = CredentialRotationPhase1(tenant_id="_default", skip_network=True)
-        expected_path = phase1.repo_root / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        # The chain is resolved by the one resolver (never composed by hand),
+        # so it honours CORVIN_HOME — the root conftest points it at a tmp dir.
+        expected_path = (Path(os.environ["CORVIN_HOME"]) / "tenants" / "_default"
+                         / "global" / "forge" / "audit.jsonl")
         assert phase1.audit_path == expected_path
         print(f"✓ Audit path configured: {phase1.audit_path}")
 
@@ -111,7 +114,7 @@ RESEND_API_KEY=re_test_key_123
             ("a", "*"),
             ("ab", "**"),
             ("abc", "***"),
-            ("abcd", "abcd"),
+            ("abcd", "****"),  # a short secret is masked whole, never echoed
             ("abcdefgh", "abcd***"),
             ("ghp_1234567890abcdefghijklmnopqrstu", "ghp_***"),
         ]
@@ -244,7 +247,8 @@ class TestPhase2Preparation:
             "OPENAI_API_KEY",
             "PYPI_TOKEN",
             "RESEND_API_KEY",
-            "OLLAMA_API_KEY",
+            # OLLAMA_API_KEY: dropped from Phase 2 in 9e9e34ff3; local Ollama
+            # itself was removed with Hermes (ADR-2091, 435d26820).
         ]
 
         for cred in credentials:
@@ -334,6 +338,26 @@ class TestCredentialRotationIntegration:
         assert "restore_credentials" in content, "Rollback missing"
 
         print("✓ Zero-downtime capability verified")
+
+    def test_baseline_is_written_to_the_core_chain_intact(self, monkeypatch):
+        """document_baseline() appends through the canonical writer: the chain
+        still verifies afterwards and the record carries no credential text.
+        (It used to append a hand-built line with prev_hash "0"*64, which broke
+        the chain the boot tripwire verifies.)"""
+        sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "forge"))
+        from forge import security_events as se
+
+        phase1 = CredentialRotationPhase1(tenant_id="_default", skip_network=True)
+        se.write_event(phase1.audit_path, "credential_rotation.rotated",
+                       details={"rotated_count": 0, "backup_created": False})
+        phase1.inventory = []
+        assert phase1.document_baseline() is True
+        ok, problems = se.verify_chain(phase1.audit_path)
+        assert ok, problems
+        last = json.loads(phase1.audit_path.read_text(encoding="utf-8").splitlines()[-1])
+        assert last["event_type"] == "credential_rotation.baseline_documented"
+        assert set(last["details"]) >= {"inventory_count", "inventory_sha256"}
+        assert "credentials" not in last["details"]
 
     def test_compliance_logging(self):
         """Verify rotation process logs for compliance (GDPR, CIS)."""

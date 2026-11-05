@@ -148,7 +148,7 @@ def build_wheels() -> bool:
 # (EXPECTED_ROOT_ENTRIES) — that test is the CI-side twin of this check.
 _EXPECTED_ROOT_ENTRIES = frozenset({
     "corvinOS", "core", "ops",
-    "corvin_console", "corvin_core", "corvin_gateway", "corvin_license",
+    "corvin_console", "corvin_core", "corvin_gateway",
     "corvin_plugins", "plugin_builder", "corvin_logging",
     "corvin_compliance_reports", "corvin_compute", "corvin_workflows",
     "corvin_delegate", "corvin_orchestration", "awpkg",

@@ -209,15 +209,13 @@ class TestIndexUpdateHook:
         """Hook returns False if service is None."""
         hook = IndexUpdateHook(None)
 
-        # Patch the service attribute to simulate missing service
-        hook.service = None
-
-        with patch.object(hook.service, 'update_on_event', side_effect=AttributeError):
-            result = await hook.update_on_event(
-                tenant_id="_default",
-                plugin_id="test_plugin",
-                loop_id="test_loop",
-            )
+        # A hook without a service (the index failed to open) skips the update
+        # instead of raising AttributeError on ``None.tenant_id``.
+        result = await hook.update_on_event(
+            tenant_id="_default",
+            plugin_id="test_plugin",
+            loop_id="test_loop",
+        )
         # Should handle the AttributeError gracefully
 
 

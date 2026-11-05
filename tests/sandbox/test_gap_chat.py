@@ -94,6 +94,16 @@ def test_G6_generated_invite_is_listed_and_revocable(server, sandbox, sess):
     gen = harness.fetch(server, sess, "/remote-trigger/pair/generate", method="POST", json_body={
         "label": "gap6 peer", "url": "http://127.0.0.1:9/v1/a2a/receive",
         "console_url": "http://127.0.0.1:9", "peer_origin_id": "gap6-peer", "ttl_minutes": 30})
+    if gen.status_code == 402:
+        # A2A pairing is member-only (ADR-0702 §3.4, gate on every pairing
+        # writer since e03e37f45). The sandbox server is a separate process on
+        # a Free install — a member seat needs a production-signed licence the
+        # tests cannot mint — so the invite lifecycle below has no subject here.
+        # What must hold is the refusal itself: no invite, nothing redeemable.
+        detail = gen.json()["detail"]
+        assert detail["error"] == "license_limit" and detail["feature"] == "a2a.network", detail
+        assert not list(Path(sandbox.env["REMOTE_PENDING_DIR"]).glob("*.json"))
+        pytest.skip("A2A pairing is member-only and the sandbox server runs on the free tier")
     assert gen.status_code == 200, gen.text[:300]
     accept_id = gen.json()["accept_id"]
     pending = Path(sandbox.env["REMOTE_PENDING_DIR"]) / f"{accept_id}.json"

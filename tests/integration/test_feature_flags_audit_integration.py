@@ -106,9 +106,13 @@ class TestAuditIntegration:
         events = _events(home, "tenant_other")
         assert not [e for e in events if e["event_type"] == "skill.executed"], \
             "cross-tenant skill.executed must be refused"
-        # what DOES land is the type/count-only refusal record — the proof
-        assert events and events[-1]["event_type"] == "audit.tenant_mismatch"
-        assert events[-1]["details"]["dropped_event_type"] == "skill.executed"
+        # what DOES land is the type/count-only refusal record — the proof —
+        # in the CONTEXT tenant's chain: since ADR-0562 D2 / AUD-2 (2026-10-12)
+        # a refusal is never appended to the foreign tenant's trail.
+        assert not [e for e in events if e["event_type"] == "audit.tenant_mismatch"]
+        own = _events(home, "_default")
+        assert own and own[-1]["event_type"] == "audit.tenant_mismatch"
+        assert own[-1]["details"]["dropped_event_type"] == "skill.executed"
 
     def test_audit_events_contain_no_pii(self, skill, home):
         skill.execute({

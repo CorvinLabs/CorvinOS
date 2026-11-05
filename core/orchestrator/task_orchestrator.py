@@ -85,6 +85,13 @@ class RoutingRule:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+
+def _is_member(value, enum_cls) -> bool:
+    """An ``enum_cls`` member, or the value of one."""
+    if isinstance(value, enum_cls):
+        return True
+    return any(value == m.value for m in enum_cls)
+
 class TaskRouter:
     """Routes tasks to appropriate workers based on type, priority, tenant"""
 
@@ -148,12 +155,14 @@ class TaskRouter:
         if not task.task_id or len(task.task_id) == 0:
             return False, "task_id required"
 
-        # Task type validation
-        if task.task_type not in TaskType:
+        # Task type validation. ``"x" in TaskType`` RAISES TypeError for a
+        # non-member on Python < 3.12 instead of answering False, so a bad
+        # value crashed validation; test membership explicitly.
+        if not _is_member(task.task_type, TaskType):
             return False, f"invalid task_type: {task.task_type}"
 
         # Priority validation
-        if task.priority not in TaskPriority:
+        if not _is_member(task.priority, TaskPriority):
             return False, f"invalid priority: {task.priority}"
 
         # Input data validation

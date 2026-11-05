@@ -44,7 +44,7 @@ _REPO = Path(__file__).resolve().parents[1]
 # packaging decision — mirror it in build_wheels.py::_EXPECTED_ROOT_ENTRIES.
 EXPECTED_ROOT_ENTRIES: frozenset[str] = frozenset({
     "corvinOS", "core", "ops",
-    "corvin_console", "corvin_core", "corvin_gateway", "corvin_license",
+    "corvin_console", "corvin_core", "corvin_gateway",
     "corvin_plugins", "plugin_builder", "corvin_logging",
     "corvin_compliance_reports", "corvin_compute", "corvin_workflows",
     "corvin_delegate", "corvin_orchestration", "awpkg",

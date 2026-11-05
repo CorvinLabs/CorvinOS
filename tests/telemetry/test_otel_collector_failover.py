@@ -62,6 +62,27 @@ def exporter(temp_dir, audit_logger):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _drive_flushes(exporter, outcomes):
+    """Run the REAL retry loop inside ``_export_to_otel``: the meter is a stub
+    and each ``force_flush`` reports the next outcome (True = exported).
+    Returns the list of flush timestamps. The retries live inside
+    ``_export_to_otel``, so patching that method away (as these tests once did)
+    can only ever observe one call."""
+    it = iter(outcomes)
+    calls = []
+
+    def force_flush(timeout_millis=0):
+        calls.append(time.time())
+        ok = next(it)
+        exporter._last_result = (ok, "exported" if ok else "Simulated failure")
+        return True
+
+    exporter._otel_initialized = True
+    exporter._meter = MagicMock()
+    exporter._meter_provider = MagicMock(force_flush=force_flush)
+    return calls
+
+
 class TestNetworkPartitionFailover:
     """Test failover when OTEL collector is unreachable."""
 
@@ -82,7 +103,7 @@ class TestNetworkPartitionFailover:
             )
 
         assert success is False
-        assert "JSON fallback" in message
+        assert "fell back to JSON" in message
 
         # Verify JSON fallback was written
         fallback_file = exporter.json_fallback_dir / f"heartbeat-tenant_default-instance-uuid-12345.jsonl"
@@ -110,30 +131,20 @@ class TestNetworkPartitionFailover:
 
     def test_intermittent_collector_failures(self, exporter):
         """Intermittent collector failures should be handled with retries and fallback."""
-        call_count = 0
-
-        def simulate_intermittent_failure(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                raise OTELExportError("Temporary network error")
-            # Success on third attempt
-            return None
-
-        with patch.object(exporter, "_export_to_otel", side_effect=simulate_intermittent_failure):
-            success, message = exporter.export_heartbeat(
-                is_alive=True,
-                uptime_seconds=3600,
-                plugin_count=5,
-                memory_usage_bytes=524288000,
-                platform="linux",
-                python_version="3.11",
-                geo_attrs=None,
-            )
+        calls = _drive_flushes(exporter, [False, False, True])
+        success, message = exporter.export_heartbeat(
+            is_alive=True,
+            uptime_seconds=3600,
+            plugin_count=5,
+            memory_usage_bytes=524288000,
+            platform="linux",
+            python_version="3.11",
+            geo_attrs=None,
+        )
 
         # Should eventually succeed after retries
         assert success is True
-        assert call_count == 3
+        assert len(calls) == 3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -145,26 +156,19 @@ class TestRetryLogicAndBackoff:
     """Test exponential backoff retry logic."""
 
     def test_exponential_backoff_timing(self, exporter):
-        """Retry logic should implement exponential backoff (100ms, 200ms, 400ms)."""
-        call_times = []
+        """Retry logic should implement exponential backoff (100ms, 200ms)."""
+        call_times = _drive_flushes(exporter, [False, False, False])
+        success, message = exporter.export_heartbeat(
+            is_alive=True,
+            uptime_seconds=3600,
+            plugin_count=5,
+            memory_usage_bytes=524288000,
+            platform="linux",
+            python_version="3.11",
+            geo_attrs=None,
+        )
 
-        def track_call_times(*args, **kwargs):
-            call_times.append(time.time())
-            raise OTELExportError("Simulated failure")
-
-        with patch.object(exporter, "_export_to_otel", side_effect=track_call_times):
-            start_time = time.time()
-            success, message = exporter.export_heartbeat(
-                is_alive=True,
-                uptime_seconds=3600,
-                plugin_count=5,
-                memory_usage_bytes=524288000,
-                platform="linux",
-                python_version="3.11",
-                geo_attrs=None,
-            )
-            end_time = time.time()
-
+        assert success is False
         # Should have called 3 times (max_retries=3)
         assert len(call_times) == 3
 
@@ -172,20 +176,13 @@ class TestRetryLogicAndBackoff:
         elapsed_1_2 = (call_times[1] - call_times[0]) * 1000  # Convert to ms
         elapsed_2_3 = (call_times[2] - call_times[1]) * 1000
 
-        # Allow ±50ms tolerance for timing variance
         assert 50 < elapsed_1_2 < 150, f"First backoff was {elapsed_1_2}ms, expected ~100ms"
         assert 150 < elapsed_2_3 < 300, f"Second backoff was {elapsed_2_3}ms, expected ~200ms"
 
     def test_max_retries_parameter(self, exporter):
         """max_retries parameter should limit retry attempts."""
-        call_count = 0
-
-        def count_calls(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            raise OTELExportError("Persistent failure")
-
-        with patch.object(exporter, "_export_to_otel", side_effect=count_calls):
+        calls = _drive_flushes(exporter, [False] * 10)
+        with patch("core.observability.otel_exporter.exporter.time.sleep"):
             success, message = exporter.export_heartbeat(
                 is_alive=True,
                 uptime_seconds=3600,
@@ -196,8 +193,9 @@ class TestRetryLogicAndBackoff:
                 geo_attrs=None,
             )
 
+        assert success is False
         # Should have called exactly max_retries times (default 3)
-        assert call_count == 3
+        assert len(calls) == 3
 
 
 # ─────────────────────────────────────────────────────────────────────────────

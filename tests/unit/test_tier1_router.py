@@ -135,11 +135,12 @@ class TestTier1Router:
     
     def test_model_names_valid(self, router):
         """All selected models are valid Claude model names."""
-        valid_models = [
-            "claude-haiku-4-5-20251001",
-            "claude-sonnet-5",
-            "claude-opus-5",
-        ]
+        # Automatic tiers serve the NEWEST model of each family (ADR-2090
+        # lineage, ``Tier1Router._model_name``) — the valid set is derived
+        # from the router's own resolution, never hardcoded snapshot ids.
+        valid_models = [router._model_name(t) for t in ModelTier]
+        for m, fam in zip(valid_models, ("haiku", "sonnet", "opus")):
+            assert m.startswith(f"claude-{fam}-"), m
         
         for complexity in ["simple", "medium", "complex"]:
             for i in range(10):

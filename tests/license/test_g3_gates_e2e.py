@@ -21,11 +21,15 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _license_console_sandbox import assert_402_forge, console, member_tier  # noqa: E402
+from _license_console_sandbox import (  # noqa: E402
+    assert_402_forge, assert_402_limit_reached, console, exhaust_free_skill_quota, member_tier,
+)
 
 # (route, a body that passes request validation for that route)
+# ``/skill-creator/generate`` left this matrix with ADR-2095 (1c1f7aa64): skill
+# authoring is open to the free tier within a daily quota, so a free generate
+# is ACCEPTED (and starts a run). Its gate is pinned below, past the quota.
 G3_ROUTES = [
-    ("/v1/console/skill-creator/generate", {"user_request": "create a json validator skill"}),
     ("/v1/console/tools/some_tool/promote", {"to": "project"}),
     ("/v1/console/skills/some_skill/promote", {"to": "project"}),
     ("/v1/console/panels", {"id": "g3panel", "title": "G3", "html": "<p>x</p>"}),
@@ -46,6 +50,15 @@ def test_refusal_matrix(con, route, body):
     assert con.anonymous().post(route, json=body, headers=con.h).status_code == 401
     # session but no CSRF header → 403, before the licence is even consulted
     assert con.client.post(route, json=body).status_code == 403
+
+
+def test_free_tier_skill_creator_past_its_quota_is_402(con):
+    """The free tier's Skill-Creator pre-check refuses once today's skill
+    credits are spent — before a minutes-long generation is started."""
+    exhaust_free_skill_quota(con.home)
+    assert_402_limit_reached(con.client.post(
+        "/v1/console/skill-creator/generate",
+        json={"user_request": "create a json validator skill"}, headers=con.h))
 
 
 def test_free_tier_panel_is_not_written(con):

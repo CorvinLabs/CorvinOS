@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -60,16 +60,23 @@ class BackgroundJobScheduler:
             # Get all loops
             loops = self.service.list_loops(limit=10000)
 
-            now = datetime.utcnow()
+            # Index entries carry AWARE UTC timestamps (learning_loop_service
+            # writes datetime.now(timezone.utc)); a naive utcnow() here made
+            # every comparison raise TypeError and the whole job fail. A naive
+            # value from an older entry is read as UTC.
+            now = datetime.now(timezone.utc)
             seven_days_ago = now - timedelta(days=7)
+
+            def _utc(ts: datetime) -> datetime:
+                return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
 
             for entry in loops:
                 # Skip if entry is too recent to have 7-day data
-                if (now - entry.created_at).days < 7:
+                if (now - _utc(entry.created_at)).days < 7:
                     continue
 
                 # Count as stale if no recent events
-                if entry.last_event_ts < seven_days_ago:
+                if _utc(entry.last_event_ts) < seven_days_ago:
                     results["stale_loops_found"] += 1
 
                 # Recalculate event count (in real impl, query audit chain)

@@ -487,7 +487,7 @@ class TestValidateLoopCrossPlugin:
         loops = [
             LearningLoopManifest(
                 id="loop1",
-                description="Test loop",
+                description="Test loop one",  # the schema requires >= 10 chars
                 event_source="Event",
             ),
         ]

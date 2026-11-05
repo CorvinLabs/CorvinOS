@@ -26,7 +26,11 @@ def test_feedback_emitter_helper_file_exists():
     content = helper_file.read_text(encoding="utf-8")
     assert "async def emit_feedback_event" in content, "emit_feedback_event function not found"
     assert "EventStore" in content, "EventStore not used in helper"
-    assert "EventEmitter" in content, "EventEmitter not used in helper"
+    # No EventEmitter queue any more: the write is synchronous and audit-first
+    # (``EventStore.write_event`` off the event loop), so the caller learns
+    # whether the record exists (2e4bc8566 era; HTTP proof in
+    # tests/integration/test_video_producer_feedback_http.py).
+    assert "asyncio.to_thread" in content, "the store write must run off the event loop"
     assert "tenant_id" in content, "tenant_id validation missing"
     assert "FeedbackEvent" in content, "FeedbackEvent not created"
 
@@ -50,14 +54,13 @@ def test_video_producer_api_wiring():
     assert "await emit_feedback_event(" in content, \
         "emit_feedback_event is not being called"
 
-    # Verify feedback mapping (approve → yes, reject → no)
-    assert "outcome_map" in content, "outcome_map not found"
-    assert '"approve": "yes"' in content, "approve→yes mapping missing"
-    assert '"reject": "no"' in content, "reject→no mapping missing"
+    # Verify feedback mapping (approve → yes, reject → no), now inline
+    assert '{"approve": "yes", "reject": "no"}' in content, "approve/reject mapping missing"
 
-    # Verify response includes learning feedback status
-    assert '"learning_feedback_emitted": True' in content, \
-        "Response should indicate feedback was emitted"
+    # The response reports the RECORDED record (audit_ref), and a feedback
+    # that was not recorded is a 503 — never a claimed "emitted: True".
+    assert '"status": "recorded"' in content and '"audit_ref": audit_ref' in content
+    assert "if not audit_ref:" in content, "an unrecorded feedback must not answer 200"
 
     logger.info("✓ video_producer_api.py has feedback wiring (uncommented and functional)")
     return True
@@ -142,7 +145,8 @@ def test_no_silent_drops():
     # Verify all error paths log explicitly
     assert "logger.error" in content, "Error logging missing"
     assert "logger.warning" in content, "Warning logging missing"
-    assert "return False" in content, "Explicit rejection (return False) missing"
+    # A refusal returns None ("nothing recorded"); the route turns it into 503.
+    assert "return None" in content, "Explicit rejection (return None) missing"
 
     # Verify no path silently drops feedback without logging
     # (Every return statement should have a preceding log)

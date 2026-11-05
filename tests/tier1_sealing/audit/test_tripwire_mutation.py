@@ -61,7 +61,11 @@ class TestVerifierMutations:
 
     def test_mutated_record_fails(self, chain):
         lines = chain.read_text(encoding="utf-8").splitlines()
-        lines[1] = lines[1].replace('"count": 1', '"count": 99')
+        # Locate the record by content, not position: the first write of a
+        # fresh install also records an ``instance.key_rotated`` event, so
+        # index 1 is not the second test record.
+        idx = next(i for i, ln in enumerate(lines) if '"count": 1' in ln)
+        lines[idx] = lines[idx].replace('"count": 1', '"count": 99')
         _rewrite(chain, lines)
         ok, problems = se.verify_chain(chain)
         assert not ok and any(p["issue"] in ("tampered", "mac_tampered") for p in problems)

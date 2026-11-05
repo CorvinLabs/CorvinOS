@@ -27,9 +27,10 @@ class TestOpenAIProvider:
         )
         self.provider = OpenAIProvider(self.config)
 
-    def test_get_default_model(self):
-        """Test default model selection."""
-        assert self.provider.get_default_model() == "gpt-4-turbo"
+    @pytest.mark.asyncio
+    async def test_get_default_model(self):
+        """Test default model selection (``get_default_model`` is async)."""
+        assert await self.provider.get_default_model() == "gpt-4-turbo"
 
     def test_provider_name(self):
         """Test provider name property."""
@@ -98,9 +99,10 @@ class TestOpenRouterProvider:
         )
         self.provider = OpenRouterProvider(self.config)
 
-    def test_get_default_model(self):
-        """Test default model selection."""
-        assert self.provider.get_default_model() == "anthropic/claude-opus"
+    @pytest.mark.asyncio
+    async def test_get_default_model(self):
+        """Test default model selection (``get_default_model`` is async)."""
+        assert await self.provider.get_default_model() == "anthropic/claude-opus"
 
     def test_provider_name(self):
         """Test provider name property."""

@@ -11,6 +11,12 @@ G2 gate inside ``SkillRegistry.create`` (``ValueError("license_required: …")``
 which the route mapped to **HTTP 400**. The route now carries the G3 dependency,
 and a G2 refusal that still reaches the route (the tier changed between the two
 checks) is mapped to 402 as well.
+
+ADR-2095 (1c1f7aa64) amended this for SKILLS: the free tier authors skills
+within a daily quota (``skill_forge_per_day``); the route's G3 dependency is
+``require_skill_forge_quota`` and a free write past the quota answers 402
+``limit_reached``. The free-tier tests below follow that contract (they used to
+assert a blanket 402 ``license_required``).
 """
 from __future__ import annotations
 
@@ -20,7 +26,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _license_console_sandbox import assert_402_forge, console, member_tier  # noqa: E402
+from _license_console_sandbox import (  # noqa: E402
+    assert_402_limit_reached, console, exhaust_free_skill_quota, member_tier,
+)
 
 URL = "/v1/console/skills/manual"
 NAME = "assistant.real_flow"          # inside the console persona's namespace
@@ -37,12 +45,15 @@ def _skill_dir(con) -> Path:
     return con.home / "tenants" / "_default" / "skill-forge" / "skills" / NAME
 
 
-def _assert_licence_refusal(resp) -> None:
-    assert_402_forge(resp)
+def test_free_tier_create_within_its_quota_is_written(con):
+    resp = con.client.post(URL, json={"name": NAME, "body": BODY}, headers=con.h)
+    assert resp.status_code == 200, resp.text
+    assert (_skill_dir(con) / "SKILL.md").is_file()
 
 
-def test_free_tier_create_is_refused_and_nothing_is_written(con):
-    _assert_licence_refusal(con.client.post(URL, json={"name": NAME, "body": BODY}, headers=con.h))
+def test_free_tier_create_past_its_quota_is_refused_and_nothing_is_written(con):
+    exhaust_free_skill_quota(con.home)
+    assert_402_limit_reached(con.client.post(URL, json={"name": NAME, "body": BODY}, headers=con.h))
     assert not _skill_dir(con).exists()
     assert con.client.get(URL).json()["count"] == 0
 
@@ -74,11 +85,12 @@ def test_member_create_is_audited_in_the_tenant_chain(con):
         assert cur.get("prev_hash") == prev.get("hash")
 
 
-def test_downgrade_to_free_blocks_edits_but_keeps_the_skill(con):
+def test_downgrade_to_free_blocks_edits_past_the_quota_but_keeps_the_skill(con):
     with member_tier():
         assert con.client.post(URL, json={"name": NAME, "body": BODY}, headers=con.h).status_code == 200
     before = (_skill_dir(con) / "SKILL.md").read_text(encoding="utf-8")
-    _assert_licence_refusal(con.client.put(
+    exhaust_free_skill_quota(con.home)
+    assert_402_limit_reached(con.client.put(
         f"{URL}/{NAME}", json={"body": "# changed\n\nnew body"}, headers=con.h))
     assert (_skill_dir(con) / "SKILL.md").read_text(encoding="utf-8") == before
     assert [s["name"] for s in con.client.get(URL).json()["skills"]] == [NAME]
@@ -95,17 +107,17 @@ def test_post_without_session_is_401(con):
 
 
 def test_g2_refusal_behind_a_passed_g3_is_still_402(con):
-    """If G3 passed but the G2 registry gate refuses (tier changed in between),
-    the route answers 402 license_required — never a 400."""
-    from corvin_console.routes.license_gates import require_forge_capability
+    """If the G3 pre-check passed but the G2 registry charge refuses (the quota
+    ran out in between), the route answers 402 limit_reached — never a 400."""
+    from corvin_console.routes.skill_creator_api import require_skill_forge_quota
     from corvin_console.deps import require_session
 
+    exhaust_free_skill_quota(con.home)
     app = con.client.app
-    app.dependency_overrides[require_forge_capability] = require_session
+    app.dependency_overrides[require_skill_forge_quota] = require_session
     try:
         resp = con.client.post(URL, json={"name": NAME, "body": BODY}, headers=con.h)
     finally:
-        app.dependency_overrides.pop(require_forge_capability, None)
-    assert resp.status_code == 402, (resp.status_code, resp.text)
-    assert resp.json()["detail"]["error"] == "license_required"
+        app.dependency_overrides.pop(require_skill_forge_quota, None)
+    assert_402_limit_reached(resp)
     assert not _skill_dir(con).exists()
