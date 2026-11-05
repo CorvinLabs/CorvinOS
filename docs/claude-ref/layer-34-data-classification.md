@@ -163,7 +163,14 @@ inbound A2A worker. A classifier error there allows (no policy: an error is not 
 A caller-declared class never lowers the verdict: when a prompt accompanies it (the video
 producer declares `INTERNAL` for its grounding pack and narration), the prompt is classified
 too and a literal credential is refused whatever the declared class. A tenant WITH a policy is
-still judged by the class the caller declared (residual gap: there the prompt is not re-read).
+judged the same way since review DLG-1 (2026-11-05): `spawn_gates.check_l34(classification=…,
+prompt=…)` classifies the prompt too and validates `max(declared, content)` — the declared
+class may only RAISE the verdict, an unparseable label is denied (`unknown_classification`),
+and a classifier error is a refusal (fail-closed). `check_l34` with no tenant refuses instead
+of reading `CORVIN_TENANT_ID` (DLG-23). The inbound A2A worker classifies the decoded text of
+every inbound attachment with the instruction and judges the maximum (DLG-17, bounded by
+`a2a_attachments.MAX_ATTACHMENTS_COUNT`/`MAX_ATTACHMENTS_TOTAL_BYTES`; a non-UTF-8 file not
+declared as text — an image, an archive — is not read; a digest error refuses).
 
 `DataClassification.parse()` returns `None` for an unknown value (it used to
 return `INTERNAL`, which every default row allows on a cloud engine — a typo in a

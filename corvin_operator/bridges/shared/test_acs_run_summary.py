@@ -209,7 +209,8 @@ def _run_bridge(prompt: str, *, mode: str, result):
                               # another test may leave a fake acs_runtime in sys.modules
                               "acs_runtime": acs_runtime}):
         answer, _ = adapter._maybe_delegate_worker(prompt, channel="discord",
-                                                   chat_key="chat-1", persona="")
+                                                   chat_key="chat-1", persona="",
+                                                   tenant_id="_default")
     return answer
 
 

@@ -79,7 +79,7 @@ class _TdeReady:
 
 def _call(prompt=SMALL):
     return adapter._maybe_delegate_worker(
-        prompt, channel="discord", chat_key="c1", persona="")
+        prompt, channel="discord", chat_key="c1", persona="", tenant_id="_default")
 
 
 class WorkerEngineTargetTest(unittest.TestCase):
@@ -148,7 +148,8 @@ class DelegationBadgeTest(unittest.TestCase):
              patch.object(adapter, "_run_tde_delegation", return_value="x"):
             m: dict = {}
             answer, _ = adapter._maybe_delegate_worker(
-                "do X", channel="discord", chat_key="c1", persona="", meta=m)
+                "do X", channel="discord", chat_key="c1", persona="", meta=m,
+                tenant_id="_default")
         self.assertEqual(answer, "x")
         self.assertEqual(m.get("engine"), "tde")
         self.assertEqual(m.get("mode"), "tiered")
@@ -158,7 +159,8 @@ class DelegationBadgeTest(unittest.TestCase):
              patch.object(adapter, "_run_tde_delegation", return_value=None):
             m: dict = {}
             answer, _ = adapter._maybe_delegate_worker(
-                "do X", channel="discord", chat_key="c1", persona="", meta=m)
+                "do X", channel="discord", chat_key="c1", persona="", meta=m,
+                tenant_id="_default")
         self.assertIsNone(answer)
         self.assertNotIn("engine", m, "a degrade is native — no delegation meta")
 

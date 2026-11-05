@@ -264,5 +264,36 @@ class TestExceptionDuringLoadFailsOpen(unittest.TestCase):
             self.assertIsNone(msg)
 
 
+
+
+class TestGateCrashFailsClosed(unittest.TestCase):
+    """Review 2026-11-05: a gate that RAISES has not judged the prompt.
+
+    A missing policy or an unavailable guard is decided inside ``check_l34`` /
+    ``check_l35`` (permitted — see the classes above). An exception out of the
+    gate is not a decision; until 2026-11-05 both helpers answered ``None`` on it,
+    so a crashing classifier let a bridge OS turn through unjudged.
+    """
+
+    def test_l34_gate_exception_blocks_the_spawn(self):
+        with _Sandbox(yaml_content="spec:\n  data_classification:\n    matrix:\n      INTERNAL: [local]\n"):
+            engine = _FakeEngine(name="claude_code")
+            with mock.patch.object(spawn_gates, "check_l34", side_effect=RuntimeError("classifier down")):
+                msg = adapter._check_compliance_or_fail(
+                    engine, prompt="x", persona=None, channel="ch", chat_key="ck",
+                )
+            self.assertIsNotNone(msg)
+            self.assertIn("fail-closed", msg)
+            self.assertIn("[security]", msg)
+
+    def test_l35_gate_exception_blocks_the_spawn(self):
+        with _Sandbox(yaml_content="spec:\n  data_classification:\n    matrix:\n      INTERNAL: [local]\n"):
+            engine = _FakeEngine(name="claude_code")
+            with mock.patch.object(spawn_gates, "check_l35", side_effect=RuntimeError("egress policy unreadable")):
+                msg = adapter._check_egress_or_fail(engine, channel="ch", chat_key="ck")
+            self.assertIsNotNone(msg)
+            self.assertIn("fail-closed", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

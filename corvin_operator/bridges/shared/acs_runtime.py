@@ -1626,11 +1626,43 @@ _WORKER_SECRET_ENV_STRIP = (
     # M4 at-rest encryption), PGPASSWORD is a DB credential (datasource_env
     # deliberately withholds it, yet the env copy leaked it).
     "CORVIN_WDAT_KEY", "PGPASSWORD",
+    # Review DLG-2 (2026-11-05): bearer credentials whose NAME is not secret-shaped
+    # (the location-pointer suffix `_URL` kept them, `_DSN`/`PASSPHRASE` match no
+    # pattern). The webhook/DSN names are the ones this repo reads
+    # (notification_router, slo_alert_daemon, marketplace_slo_monitoring,
+    # sentry_config); DATABASE_URL / *_PASSPHRASE are the common operator names.
+    # Anything else of this shape is caught by `_url_value_carries_credential`.
+    "DISCORD_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "CORVIN_SLACK_WEBHOOK_URL",
+    "SLACK_WEBHOOK_URL_MARKETPLACE_SLO", "SENTRY_DSN",
+    "DATABASE_URL", "GPG_PASSPHRASE",
 )
+
+# The VALUE of a `*_URL` / `*_URI` / `*_DSN` variable is a credential when it carries
+# userinfo with a password (`scheme://user:pass@host`), is a webhook (`/api/webhooks/`,
+# `hooks.slack.com`), or carries a token in its query string. A `*_DSN` with any
+# userinfo (`https://<key>@sentry…`) is one too — the user part IS the key there.
+# A separate rule on purpose: `_SECRET_NAME_RE` stays a NAME rule (CLAUDE.md, ADR-0759).
+_URL_CREDENTIAL_RE = re.compile(
+    r"(://[^/@\s:]*:[^/@\s]+@|/api/webhooks/|hooks\.slack\.com/|"
+    r"[?&](?:token|access_token|api_key|apikey|key|sig|signature|secret)=)",
+    re.IGNORECASE,
+)
+_DSN_USERINFO_RE = re.compile(r"://[^/@\s]+@")
+
+
+def _url_value_carries_credential(name_upper: str, value: object) -> bool:
+    """True when a location-shaped variable's VALUE is itself a bearer credential."""
+    if not isinstance(value, str) or not value:
+        return False
+    if "PASSPHRASE" in name_upper:
+        return True
+    if name_upper.endswith(("_URL", "_URI", "_DSN")) and _URL_CREDENTIAL_RE.search(value):
+        return True
+    return name_upper.endswith("_DSN") and bool(_DSN_USERINFO_RE.search(value))
 
 
 # A denylist can never enumerate every secret an operator exports (GITHUB_TOKEN,
-# PYPI_TOKEN, CORVIN_AUDIT_ANCHOR_KEY — the audit-chain MAC key — and so on), so
+# PYPI_TOKEN and so on), so
 # round-4 adds a NAME-pattern catch-all on top of the explicit list: any var whose
 # name looks like a credential is stripped unless it is known-safe public material
 # or a location pointer. Fail-closed for anything secret-shaped.
@@ -1645,6 +1677,13 @@ _WORKER_SECRET_NAME_ALLOW = {
     "CORVIN_CA_PUBKEY", "CORVIN_CA_PUBKEY_PATH", "CORVIN_IBC_PUBKEY_PEM",
     "CORVIN_MAINTAINER_PUBKEY", "CORVIN_MAINTAINER_PUBKEY_PATH",
     "CORVIN_LICENSE_PUBKEY",
+    # A LOCATION pointer despite its `_KEY` suffix: security_events._anchor_key_path()
+    # reads it as the PATH of the audit-chain MAC key file. Stripping it does not hide
+    # the key (the worker runs as the same OS user and the default path is public);
+    # it makes every audit write inside the worker (its hooks — path_gate) MAC the
+    # tenant chain with the ~/.config default key instead, and the host's next
+    # verify_chain reports mac_tampered (refutation 2026-11-05).
+    "CORVIN_AUDIT_ANCHOR_KEY",
 }
 
 
@@ -1659,6 +1698,9 @@ def _strip_worker_secrets(env: dict) -> None:
     for _k in list(env.keys()):
         ku = _k.upper()
         if ku in _WORKER_SECRET_NAME_ALLOW or "PUBKEY" in ku or "PUBLIC_KEY" in ku:
+            continue
+        if _url_value_carries_credential(ku, env.get(_k)):
+            env.pop(_k, None)   # DLG-2: a webhook / DSN / password-bearing URL
             continue
         if ku.endswith(("_PATH", "_DIR", "_URL", "_HOME", "_FILE")):
             continue  # location pointer, not the secret itself
@@ -1755,8 +1797,14 @@ def _write_system_prompt_tmp_file(system: str, tenant_id: str) -> str | None:
 
 def _communicate_capped(
     proc: subprocess.Popen, *, input_text: str, timeout: float, cap_chars: int,
+    stdout_tail: "list[str] | None" = None, tail_chars: int = 0,
 ) -> tuple[str, str, bool]:
-    """Like ``proc.communicate()``, but never RETAINS more than ``cap_chars``
+    """``stdout_tail`` (a caller-owned list) receives the LAST ``tail_chars`` of stdout
+    once the call returns — also when the head was truncated. The manager uses it to
+    read the CLI envelope's ``usage``/``modelUsage``, which follow the (possibly
+    truncated) ``result`` text (review DLG-22). Bounded like the head.
+
+    Like ``proc.communicate()``, but never RETAINS more than ``cap_chars``
     of decoded text per stream — excess is read-and-discarded so the child
     can never block on a full OS pipe (the classic subprocess deadlock this
     function must avoid exactly like ``communicate()`` does), but this
@@ -1787,6 +1835,7 @@ def _communicate_capped(
     threads (undefined behaviour — two readers on one pipe).
     """
     truncated = {"out": False, "err": False}
+    tail = {"out": ""}
 
     def _drain(stream, sink: list, key: str) -> None:
         total = 0
@@ -1795,6 +1844,8 @@ def _communicate_capped(
                 chunk = stream.read(65536)
                 if not chunk:
                     break
+                if key in tail and tail_chars > 0:
+                    tail[key] = (tail[key] + chunk)[-tail_chars:]
                 if total < cap_chars:
                     take = chunk[: cap_chars - total]
                     sink.append(take)
@@ -1838,6 +1889,8 @@ def _communicate_capped(
         raise
     out_thread.join(timeout=5.0)
     err_thread.join(timeout=5.0)
+    if stdout_tail is not None:
+        stdout_tail.append(tail["out"])
 
     return "".join(out_chunks), "".join(err_chunks), (truncated["out"] or truncated["err"])
 
@@ -1922,10 +1975,12 @@ def _call_manager_sync(
     if proc_holder is not None:
         with proc_holder.lock:
             proc_holder.popen = proc
+    _tail: list[str] = []
     try:
         stdout, _stderr, truncated = _communicate_capped(
             proc, input_text=prompt, timeout=_MANAGER_TIMEOUT,
             cap_chars=_MANAGER_OUTPUT_CAP,
+            stdout_tail=_tail, tail_chars=_MANAGER_ENVELOPE_TAIL,
         )
         if truncated:
             log.warning("[acs] manager output truncated at %d chars (tenant=%s) "
@@ -1939,18 +1994,87 @@ def _call_manager_sync(
                 pass
     raw = stdout.strip()
     output = raw  # fallback: pass through if not a JSON envelope
+    envelope: "dict | None" = None
     if raw.startswith("{"):
         try:
             resp = json.loads(raw)
             extracted = resp.get("result") or resp.get("text") or ""
             if extracted:
                 output = str(extracted)
-            if proc_holder is not None and isinstance(resp, dict):
-                proc_holder.envelope = resp
+            if isinstance(resp, dict):
+                envelope = resp
         except (json.JSONDecodeError, TypeError, AttributeError):
             pass
-    tokens_est = max(len(prompt.split()) + len(output.split()), 100)
-    return output, tokens_est
+    if envelope is None and truncated and _tail:
+        # DLG-22: the envelope's head (`result`) was cut, its usage sits in the tail.
+        # A turn over the cap is by construction the largest — it is still billed.
+        envelope = _envelope_usage_from_tail(_tail[0])
+    if proc_holder is not None and envelope is not None:
+        proc_holder.envelope = envelope
+    return output, _manager_tokens(prompt, output, envelope)
+
+
+# Tail of the manager's stdout kept for the CLI envelope's `usage`/`modelUsage`
+# blocks (a few hundred bytes each) when the head was cut at _MANAGER_OUTPUT_CAP.
+_MANAGER_ENVELOPE_TAIL = 16384
+
+
+def _envelope_usage_from_tail(tail: str) -> "dict | None":
+    """``{"usage": …, "modelUsage": …}`` decoded from the END of a truncated envelope.
+
+    Each key's LAST occurrence is decoded with ``raw_decode`` — the envelope writes
+    them after the ``result`` text, so the last one is the envelope's own, not text
+    the model wrote. ``None`` when neither is there (an unpriced turn, never a guess).
+    """
+    dec = json.JSONDecoder()
+    out: dict = {}
+    for key in ("usage", "modelUsage"):
+        pos = tail.rfind(f'"{key}"')
+        if pos < 0:
+            continue
+        colon = tail.find(":", pos + len(key) + 2)
+        if colon < 0:
+            continue
+        start = colon + 1
+        while start < len(tail) and tail[start] in " \t\r\n":
+            start += 1
+        try:
+            val, _end = dec.raw_decode(tail, start)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(val, dict):
+            out[key] = val
+    return out or None
+
+
+def _manager_tokens(prompt: str, output: str, envelope: "dict | None") -> int:
+    """Tokens a manager turn charges to the run budget (review DLG-22).
+
+    The engine-REPORTED input + output tokens (``engine_span.usage_split``, the same
+    definition the worker charges in ``_call_worker_sync``) when the envelope has them;
+    the word estimate only for a turn that reported nothing."""
+    if envelope is not None and _espan is not None:
+        split = _espan.usage_split(envelope.get("usage"))
+        real = split["input_tokens"] + split["output_tokens"]
+        if real > 0:
+            return real
+    return max(len(prompt.split()) + len(output.split()), 100)
+
+
+def _absorb_manager_envelope(ctx: "RunContext", holder: "_WorkerProcessHolder") -> None:
+    """ADR-0759 — fold one manager turn's ENGINE-reported model and four-way split into
+    the run's manager span. Called on EVERY exit of a manager call (success and the
+    raise path, DLG-22), once per turn: the holder's envelope is consumed."""
+    env = holder.envelope
+    holder.envelope = None
+    if not isinstance(env, dict):
+        return
+    model = _reported_model(env)
+    if model:
+        ctx.manager_reported_model = model
+    if _espan is not None:
+        for k, v in _espan.usage_split(env.get("usage")).items():
+            ctx.manager_usage[k] = ctx.manager_usage.get(k, 0) + v
 
 
 # ---------------------------------------------------------------------------
@@ -2371,6 +2495,20 @@ def _workflow_classification(workflow_spec: dict | None) -> str:
     ).lower()
 
 
+def _l34_content_gate(check_l34: Any, engine_id: str, tenant_id: str,
+                      declared: str, prompt: str) -> "str | None":
+    """L34 for an ACS spawn: the DECLARED workflow class AND the prompt's CONTENT.
+
+    One call to the SSOT gate: ``spawn_gates.check_l34`` classifies ``prompt`` even
+    when a ``classification`` is declared and judges ``max(declared, content)`` — the
+    declared class may only RAISE the verdict, never hide a credential (review DLG-1:
+    with a tenant policy the declared class used to replace the content's). A
+    classifier error is a refusal inside the gate; any other exception propagates
+    (the caller fails closed)."""
+    return check_l34(engine_id, tenant_id, classification=declared,
+                     prompt=prompt, persona="orchestrator")
+
+
 def _workflow_goal_text(workflow_spec: dict | None, inputs: dict | None) -> str:
     """Concatenate the user-controlled, free-text instruction fields of a workflow.
 
@@ -2497,8 +2635,8 @@ async def _dispatch_workers(
             prompt = _build_worker_prompt(st, ctx)
             try:
                 from spawn_gates import check_l34 as _sg_l34, check_l35 as _sg_l35  # type: ignore
-                _l34_result = _sg_l34(_engine_id, ctx.tenant_id, classification=_cls,
-                                      prompt=prompt, persona="orchestrator")
+                _l34_result = _l34_content_gate(_sg_l34, _engine_id, ctx.tenant_id,
+                                                _cls, prompt)
                 if _l34_result is not None:
                     _write_audit(ctx.tenant_id, "acs.worker_l34_blocked", {
                         "run_id": ctx.run_id, "worker_id": wid, "engine": _engine_id,
@@ -2960,8 +3098,8 @@ async def _manager_loop(
         # is re-judged every iteration: a credential a worker returned must not ride
         # into the next manager turn. Fail-closed on a gate error, like the gate above.
         try:
-            _mgr_content_l34 = _sg_l34(_mgr_engine, ctx.tenant_id, classification=_mgr_cls,
-                                       prompt=prompt, persona="orchestrator")
+            _mgr_content_l34 = _l34_content_gate(_sg_l34, _mgr_engine, ctx.tenant_id,
+                                                 _mgr_cls, prompt)
         except Exception as _mgr_content_exc:  # noqa: BLE001 — gate error → refuse
             _mgr_content_l34 = (f"L34 gate error ({type(_mgr_content_exc).__name__}); "
                                 "refusing to spawn the manager")
@@ -2995,6 +3133,10 @@ async def _manager_loop(
                 _mgr_proc_holder.kill()
                 raise
         except (subprocess.TimeoutExpired, RuntimeError) as exc:
+            # DLG-22: whatever the engine reported before the raise is still billed — sum
+            # it into the manager span before this return (a killed CLI usually reported
+            # nothing; then the span stays honest at zero, never a guess).
+            _absorb_manager_envelope(ctx, _mgr_proc_holder)
             _write_audit(ctx.tenant_id, "acs.manager_error", {
                 "run_id": ctx.run_id, "reason": str(exc)[:300],
             })
@@ -3008,17 +3150,10 @@ async def _manager_loop(
                 elapsed_s=time.monotonic() - start,
             )
 
+        # `tok` is the engine-REPORTED input+output when the envelope carried usage
+        # (`_manager_tokens`, DLG-22), the word estimate only when it did not.
         ctx.budget.tokens_used += tok
-        # ADR-0759 — the manager turn is billed like any other: keep the model and
-        # the four-way split the ENGINE reported, so the manager span is priceable.
-        _mgr_env = _mgr_proc_holder.envelope
-        if isinstance(_mgr_env, dict):
-            _mgr_model = _reported_model(_mgr_env)
-            if _mgr_model:
-                ctx.manager_reported_model = _mgr_model
-            if _espan is not None:
-                for _k, _v in _espan.usage_split(_mgr_env.get("usage")).items():
-                    ctx.manager_usage[_k] = ctx.manager_usage.get(_k, 0) + _v
+        _absorb_manager_envelope(ctx, _mgr_proc_holder)
 
         # Parse decision
         decision = _parse_manager_decision(mgr_text)

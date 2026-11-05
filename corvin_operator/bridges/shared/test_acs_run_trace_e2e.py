@@ -175,7 +175,7 @@ def test_bridge_streams_each_step_as_a_status_line_and_appends_the_summary():
          _patch.object(_rt, "_write_audit", side_effect=lambda *a, **k: None), \
          _module_overrides(**{"license.compute_quota": quota, "acs_runtime": _rt}):
         answer, _ = _adapter._maybe_delegate_worker(
-            prompt, channel="discord", chat_key="chat-1", persona="",
+            prompt, channel="discord", chat_key="chat-1", persona="", tenant_id="_default",
             on_status=lambda text, tool_name=None: lines.append(text),
         )
 

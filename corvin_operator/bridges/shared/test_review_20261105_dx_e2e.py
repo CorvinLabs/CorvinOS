@@ -229,3 +229,106 @@ def test_dx2_a2a_worker_env_carries_no_operator_secret(sandbox, tmp_path, monkey
     assert calls, f"positive control: the engine never ran ({res.status}: {res.error})"
     leaked = {k: v for k, v in calls[-1]["env_probe"].items() if v}
     assert leaked == {}, f"operator secrets reached the remote-peer worker: {sorted(leaked)}"
+
+
+# ── Refutation 2026-11-05: DX-1 must also hold for a tenant that HAS a policy ───────
+
+
+def _write_tenant_policy(home: Path) -> None:
+    """A tenant.corvin.yaml as the console writes one (no data_classification block):
+    load_guard_for_tenant then builds the DEFAULT matrix guard, so the tenant is judged
+    by a policy instead of the no-policy SECRET floor."""
+    cfg = home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("spec:\n  web_chat:\n    worker_engine: claude_code\n", encoding="utf-8")
+    cfg.chmod(0o600)
+
+
+def test_refute_dx1_manager_gate_classifies_content_with_a_policy(sandbox, tmp_path):
+    _write_tenant_policy(sandbox)
+    ok = _run_acs(_spec("summarise the release notes"))
+    assert _calls(tmp_path), f"positive control: the manager never ran ({ok.status}: {ok.error})"
+    (tmp_path / "shim.jsonl").unlink()
+
+    res = _run_acs(_spec(SECRET_TEXT))
+    assert res.status == "failed", res
+    assert _calls(tmp_path) == [], "policy tenant: a credential-bearing task reached the manager"
+    assert any(r.get("event_type") == "acs.manager_l34_blocked" for r in _chain(sandbox))
+
+
+def test_refute_dx1_worker_gate_classifies_content_with_a_policy(sandbox, tmp_path, monkeypatch):
+    _write_tenant_policy(sandbox)
+    monkeypatch.setenv("DX_SUBTASK", "use this: " + SECRET_TEXT)
+    _run_acs(_spec("prepare the release"))
+    kinds = [c["kind"] for c in _calls(tmp_path)]
+    assert "manager" in kinds, f"positive control: the manager never ran ({kinds})"
+    workers = [c for c in _calls(tmp_path) if c["kind"] == "worker"]
+    assert all(TOKEN_FRAGMENT not in c["stdin"] for c in workers), (
+        "policy tenant: a manager-written credential was spawned as a worker")
+    assert any(r.get("event_type") == "acs.worker_l34_blocked" for r in _chain(sandbox))
+
+
+_HOOK_SHIM = r'''#!__PY__
+import json, os, sys
+sys.stdin.read()
+# What a hook of the worker (path_gate, voice plugin) does: append to the tenant chain
+# with the worker's OWN environment.
+sys.path.insert(0, "__FORGE__")
+from forge import paths, security_events
+security_events.write_event(paths.tenant_audit_chain("_default"), "a2a.task_received",
+                            details={"origin_id": "peer-anchor"})
+with open(os.environ["DX_SHIM_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"anchor": os.environ.get("CORVIN_AUDIT_ANCHOR_KEY", "<unset>")}) + "\n")
+print(json.dumps({"type": "system", "subtype": "init", "model": "claude-sonnet-5", "session_id": "s1"}))
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                  "result": json.dumps({"status": "ok", "result": {}}),
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}))
+'''
+
+
+def test_refute_dx2_a2a_worker_keeps_the_audit_anchor_key_pointer(sandbox, tmp_path, monkeypatch):
+    """CORVIN_AUDIT_ANCHOR_KEY is a PATH (security_events._anchor_key_path), not the key.
+    Blanking it makes every audit write inside the worker (its hooks) MAC the tenant chain
+    with a different key (the ~/.config default), so the host's next verify_chain fails."""
+    import a2a_worker
+    from agents.claude_code import ClaudeCodeEngine
+    from forge import paths, security_events
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))   # the worker's default key path stays in tmp
+    (tmp_path / "home").mkdir()
+    # The host process caches its key; an earlier test's sandbox key must not be reused.
+    monkeypatch.setattr(security_events, "_ANCHOR_KEY", None)
+    monkeypatch.setattr(security_events, "_ANCHOR_KEY_LOADED", False)
+    chain = paths.tenant_audit_chain("_default")
+    security_events.write_event(chain, "a2a.task_received", details={"origin_id": "host"})
+    ok0, probs0 = security_events.verify_chain(chain)
+    assert ok0, f"positive control: host chain must verify before the worker ({probs0})"
+
+    shim = tmp_path / "claude-hook"
+    shim.write_text(_HOOK_SHIM.replace("__PY__", sys.executable)
+                    .replace("__FORGE__", str(_REPO / "corvin_operator" / "forge")), encoding="utf-8")
+    shim.chmod(shim.stat().st_mode | stat.S_IXUSR)
+    home = Path(getattr(a2a_worker, "_CORVIN_HOME_SNAPSHOT_A2A", "/nonexistent"))
+    for name in ("compute_quota.json", ".compute_quota.json.lock"):
+        try:
+            (home / "global" / "license" / name).unlink()
+        except OSError:
+            pass
+    res = a2a_worker.spawn_a2a_worker(
+        instruction="summarise the attached notes", origin_id="peer-anchor", task_id="t-anchor",
+        persona="assistant", ttl_s=30, engine_factory=lambda: ClaudeCodeEngine(binary=str(shim)))
+    calls = _calls(tmp_path)
+    assert calls, f"positive control: the engine never ran ({res.status}: {res.error})"
+    ok, probs = security_events.verify_chain(chain)
+    assert ok, f"a worker-side audit write broke the host chain: {probs}"
+    assert calls[-1]["anchor"] == os.environ["CORVIN_AUDIT_ANCHOR_KEY"], calls[-1]
+
+
+@pytest.mark.parametrize("policy", [False, True])
+def test_refute_dx1_legit_task_mentioning_password_still_runs(sandbox, tmp_path, policy):
+    """Regression guard: naming a password / api key is not a credential."""
+    if policy:
+        _write_tenant_policy(sandbox)
+    res = _run_acs(_spec("write docs on how users reset their password and rotate an api key"))
+    kinds = [c["kind"] for c in _calls(tmp_path)]
+    assert "manager" in kinds and "worker" in kinds, (res.status, res.error, kinds)

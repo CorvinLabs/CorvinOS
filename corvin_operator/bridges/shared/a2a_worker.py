@@ -85,13 +85,16 @@ except ImportError:
         attested_model = None  # type: ignore[assignment]
 
 
-def _secret_env_overrides(base: "dict[str, str]") -> dict[str, str]:
+def _secret_env_overrides(base: "dict[str, str]", *,
+                          restore_platform: bool = False) -> dict[str, str]:
     """``{name: ""}`` for every secret-shaped variable of ``base`` a worker must not see.
 
     The SAME rule as the ACS worker/manager spawn (``acs_runtime._strip_worker_secrets``
-    — explicit list + name-pattern catch-all, public keys and location pointers kept),
-    followed by ``_restore_platform_credentials`` so a Bedrock/Vertex/Foundry host keeps
-    the one credential chain its engine signs with. The engine merges its ``env`` over
+    — explicit list + name-pattern catch-all + the credential-bearing URL/DSN value
+    check, public keys and location pointers kept). ``restore_platform=True`` then puts
+    back the Bedrock/Vertex/Foundry credential chain (``_restore_platform_credentials``);
+    the caller passes it ONLY when the worker can read neither files nor a shell
+    (review DLG-25 — see ``_worker_can_read_env``). The engine merges its ``env`` over
     ``os.environ``, so an empty string is how a name is removed. Raises when the helpers
     are unimportable — the caller refuses the spawn.
     """
@@ -108,8 +111,105 @@ def _secret_env_overrides(base: "dict[str, str]") -> dict[str, str]:
         )
     kept = dict(base)
     _strip_worker_secrets(kept)
-    _restore_platform_credentials(kept, dict(base))
+    if restore_platform:
+        _restore_platform_credentials(kept, dict(base))
     return {name: "" for name in base if name not in kept}
+
+
+# Tools through which a worker can read its own environment (/proc/self/environ, `env`):
+# the shell family and the file readers. The receiver denies all of them when an origin
+# has neither ``allow_bash`` nor ``allow_read_files`` (remote_trigger_receiver: _SHELL_TOOLS,
+# Read/Grep/NotebookRead) and denies the subagent tools whenever bash is denied.
+_ENV_READING_TOOLS = frozenset({
+    "Bash", "PowerShell", "Monitor", "Read", "Grep", "NotebookRead", "Task", "Agent",
+})
+
+
+def _worker_can_read_env(disallowed_tools: "list[str] | None") -> bool:
+    """True unless EVERY tool that could read the worker's environment is denied."""
+    denied = {str(t) for t in (disallowed_tools or [])}
+    return not _ENV_READING_TOOLS <= denied
+
+
+def _active_platform_id(source_env: "dict[str, str]") -> str:
+    """The platform provider (Bedrock/Vertex/Foundry) this host is set up for, ``""`` if none.
+
+    Raises when the registry cannot be read — the caller refuses (it cannot tell whether
+    the credential chain it would hand over is a cloud account's)."""
+    try:
+        from engine_models import active_platform_provider  # type: ignore[import-not-found]
+    except ImportError:
+        _shared = str(Path(__file__).resolve().parent)
+        if _shared not in sys.path:
+            sys.path.insert(0, _shared)
+        from engine_models import active_platform_provider  # type: ignore[import-not-found]
+    spec = active_platform_provider(source_env)
+    return str(getattr(spec, "id", "") or "") if spec is not None else ""
+
+
+def _inbound_attachment_texts(inbound_attachments: "list | None") -> list[str]:
+    """The decoded TEXT of every inbound attachment, for the L34 gate (review DLG-17).
+
+    The worker is told to read these files, so their content goes to the engine as surely
+    as the instruction does. Bounded by the receiver's own caps
+    (``a2a_attachments.MAX_ATTACHMENTS_COUNT`` / ``MAX_ATTACHMENTS_TOTAL_BYTES``) — a set
+    over the caps raises. A file that is not UTF-8 and not declared as text (an image, an
+    archive) carries no text this classifier can judge and is skipped; a ``text/*`` /
+    JSON / XML / CSV file that is not valid UTF-8 is decoded with replacement and judged
+    anyway. A digest/base64 failure raises — the caller refuses (fail-closed).
+    """
+    atts = list(inbound_attachments or [])
+    if not atts:
+        return []
+    try:
+        from a2a_attachments import (  # type: ignore[import-not-found]
+            MAX_ATTACHMENTS_COUNT, MAX_ATTACHMENTS_TOTAL_BYTES,
+        )
+    except ImportError:
+        _shared = str(Path(__file__).resolve().parent)
+        if _shared not in sys.path:
+            sys.path.insert(0, _shared)
+        from a2a_attachments import (  # type: ignore[import-not-found]
+            MAX_ATTACHMENTS_COUNT, MAX_ATTACHMENTS_TOTAL_BYTES,
+        )
+    if len(atts) > MAX_ATTACHMENTS_COUNT:
+        raise ValueError("too many inbound attachments")
+    texts: list[str] = []
+    total = 0
+    for att in atts:
+        raw = att.decode()  # verifies digest + b64; raises on a mismatch
+        total += len(raw)
+        if total > MAX_ATTACHMENTS_TOTAL_BYTES:
+            raise ValueError("inbound attachments over the size cap")
+        mime = str(getattr(att, "mime", "") or "").lower()
+        texty = mime.startswith("text/") or any(
+            m in mime for m in ("json", "xml", "csv", "yaml", "javascript"))
+        try:
+            texts.append(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            if texty:
+                texts.append(raw.decode("utf-8", errors="replace"))
+    return texts
+
+
+def _receiver_tenant(tenant_id: "str | None") -> str:
+    """The tenant this A2A worker runs for, validated (review DLG-23).
+
+    An explicit ``tenant_id`` (the receiver's own) wins; ``None`` is the receiver
+    process's tenant through the canonical resolver ``forge.tenants.current_tenant()`` —
+    the rule ``remote_trigger_receiver._resolve_tenant_id`` applies too — never a raw
+    environment read. Raises on an invalid id; the caller refuses the spawn.
+    """
+    try:
+        from forge.tenants import current_tenant, validate_tenant_id  # type: ignore[import-not-found]
+    except ImportError:
+        _forge = str(Path(__file__).resolve().parents[2] / "forge")
+        if _forge not in sys.path:
+            sys.path.append(_forge)
+        from forge.tenants import current_tenant, validate_tenant_id  # type: ignore[import-not-found]
+    if tenant_id is not None:
+        return validate_tenant_id(tenant_id)
+    return current_tenant()
 
 
 def _attested_model_of(result: Any) -> str:
@@ -672,6 +772,10 @@ def spawn_a2a_worker(
     # (after every pre-spawn gate). Lets the federation layer tell "refused
     # before running" from "ran". Exceptions from it are swallowed.
     on_engine_spawn: Callable[[], None] | None = None,
+    # Review DLG-23: the receiving tenant, decided ONCE by the caller and used by every
+    # gate below (L34, L35, L44). ``None`` = this receiver process's tenant
+    # (``_receiver_tenant()``), the same rule the receiver itself applies.
+    tenant_id: str | None = None,
 ) -> WorkerResult:
     """Spawn a single A2A worker turn under the safety framing.
 
@@ -725,6 +829,49 @@ def spawn_a2a_worker(
     except Exception:  # noqa: BLE001 — the real gate at 1d decides
         pass
 
+    # 1a.1 The receiving tenant, decided once for every gate below (DLG-23).
+    try:
+        _tid = _receiver_tenant(tenant_id)
+    except Exception as _texc:  # noqa: BLE001 — no valid tenant → nothing to judge against
+        return WorkerResult(
+            status="rejected", raw_output="", parsed_output={},
+            duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+            reason_code="gate_error",
+            error=f"tenant-unresolved (fail-closed): {type(_texc).__name__}"[:300],
+        )
+
+    # 1a.2 Platform credentials (review DLG-25). On a Bedrock/Vertex/Foundry host the
+    # engine signs with the operator's cloud credential chain (AWS/GCP/Azure keys), which
+    # is usually far broader than "invoke the model". The ACS rule restores it to the
+    # worker because an ACS worker runs the OPERATOR's task; an A2A worker runs a REMOTE
+    # peer's. Decision: restore it only when the origin can read neither files nor a
+    # shell (the environment is then unreachable); otherwise refuse the spawn, audited.
+    # No per-origin opt-in exists on purpose — handing a peer the cloud account is not a
+    # setting; route such a host's A2A through a signing proxy instead.
+    _env_readable = _worker_can_read_env(disallowed_tools)
+    try:
+        _platform = _active_platform_id(dict(os.environ))
+    except Exception as _pexc:  # noqa: BLE001 — cannot tell → refuse
+        return WorkerResult(
+            status="rejected", raw_output="", parsed_output={},
+            duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+            reason_code="gate_error",
+            error=f"platform-provider-unresolved (fail-closed): {type(_pexc).__name__}"[:300],
+        )
+    if _platform and _env_readable:
+        _emit_worker_session_audit(
+            "A2A.worker_platform_credentials_refused",
+            task_id=str(task_id), origin_id=str(origin_id), platform=_platform,
+            reason="origin_can_read_environment", tenant_id=_tid,
+        )
+        return WorkerResult(
+            status="rejected", raw_output="", parsed_output={},
+            duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+            reason_code="gate",
+            error=(f"platform-credentials-refused: this host signs with the {_platform} "
+                   "credential chain and the origin may read files or run a shell"),
+        )
+
     # 1b. Layer 34 — data-classification × engine-egress gate (review fix).
     # The A2A worker spawns a cloud engine (ClaudeCodeEngine → external
     # egress); a SECRET/CONFIDENTIAL inbound instruction must not reach it.
@@ -745,13 +892,20 @@ def spawn_a2a_worker(
         load_guard_for_tenant = None  # type: ignore
     if load_guard_for_tenant is not None:
         try:
-            _tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+            # DLG-17: the inbound attachments the worker is told to read are judged
+            # with the instruction; the class is max() over all of them. A decode or
+            # size-cap failure raises → gate_error (fail-closed).
+            _l34_texts = [clean, *_inbound_attachment_texts(inbound_attachments)]
             # Opt-in (adapter parity): no tenant data_classification config → allow,
             # except a SECRET task, which the built-in floor refuses (T-0254).
             _guard = load_guard_for_tenant(_tid)
             if _guard is None:
-                _floor = secret_floor_refusal(_tid, engine_id="claude_code",
-                                              prompt=clean, persona=persona or None)
+                _floor = None
+                for _txt in _l34_texts:
+                    _floor = secret_floor_refusal(_tid, engine_id="claude_code",
+                                                  prompt=_txt, persona=persona or None)
+                    if _floor is not None:
+                        break
                 if _floor is not None:
                     return WorkerResult(
                         status="rejected", raw_output="",
@@ -765,8 +919,9 @@ def spawn_a2a_worker(
                 if getattr(_guard, "route_malformed", False) is True:
                     # ADR-2268 R1a: a malformed sensitive_route refuses every turn (A2A cannot reroute).
                     raise RuntimeError("sensitive_route malformed")
-                _classif = classify_task(clean, persona=persona or None,
-                                         detector=bool(getattr(_guard, "detector_on", False)))
+                _det = bool(getattr(_guard, "detector_on", False))
+                _classif = max(classify_task(_txt, persona=persona or None, detector=_det)
+                               for _txt in _l34_texts)
                 _decision = _guard.validate(classification=_classif,
                                             engine_id="claude_code", persona=persona or None)
                 if not _decision.allowed:
@@ -796,7 +951,7 @@ def spawn_a2a_worker(
     if check_engine_egress is not None:
         try:
             _eg = check_engine_egress("claude_code",
-                                      os.environ.get("CORVIN_TENANT_ID") or "_default",
+                                      _tid,
                                       persona=persona or None)
             if _eg is not None:
                 return WorkerResult(
@@ -850,7 +1005,7 @@ def spawn_a2a_worker(
         )
     _l44_refusal = _sg_l44(
         clean,
-        os.environ.get("CORVIN_TENANT_ID") or "_default",
+        _tid,
         persona=persona or "assistant",
         channel="a2a",
         chat_key=str(origin_id),
@@ -1064,10 +1219,12 @@ def spawn_a2a_worker(
     # os.environ, so every one of them reached a worker a REMOTE peer drives —
     # readable with Read(/proc/self/environ) or Bash once the origin opts in. Clear
     # everything the ACS worker strip removes (same name-pattern rule), restoring
-    # only the active platform's own credential chain (ADR-0759). Fail-closed: no
-    # strip helper, no spawn.
+    # the active platform's own credential chain (ADR-0759) ONLY for an origin that can
+    # read neither files nor a shell — any other origin was refused at 1a.2 (DLG-25).
+    # Fail-closed: no strip helper, no spawn.
     try:
-        _ENV_CLEAR = {**_secret_env_overrides(os.environ), **_ENV_CLEAR}
+        _ENV_CLEAR = {**_secret_env_overrides(
+            dict(os.environ), restore_platform=bool(_platform) and not _env_readable), **_ENV_CLEAR}
     except Exception as exc:  # noqa: BLE001
         shutil.rmtree(workspace, ignore_errors=True)
         return WorkerResult(

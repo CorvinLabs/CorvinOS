@@ -234,12 +234,20 @@ def check_l34(
     string when the gate denies, AND when a present policy could not be loaded,
     classified or validated (gate error — fail-closed, like ``check_l44``).
 
-    Two classification modes:
+    Classification:
 
-    * ``classification`` (str, e.g. ``"internal"``) — caller-declared
-      level, used by acs_runtime / A2A spawn sites.
     * ``prompt`` + ``persona`` — heuristic classification via
-      ``classify_task()``, used by the OS-turn adapter path.
+      ``classify_task()`` (the OS-turn adapter path).
+    * ``classification`` (str, e.g. ``"internal"``) — a caller-declared
+      level (acs_runtime worker/manager, workflow spawn sites). When a
+      ``prompt`` is passed too, the prompt is STILL classified and the gate
+      judges ``max(declared, content)``: a declared class may only RAISE the
+      verdict, never hide a credential in the content (review DLG-1, 2026-11-05
+      — the declared class used to replace the content classification on
+      every tenant that has a policy). A classifier error is a refusal
+      (fail-closed), exactly as on the prompt-only path. An unparseable
+      declared label is passed through and denied by the guard
+      (``unknown_classification``).
 
     The engine is validated under the id it actually runs as. The former
     ``cc_local_mode`` remap (``claude_code`` → ``claude_code_local``, the
@@ -256,7 +264,17 @@ def check_l34(
 
     validate_id = engine_id
 
-    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    # DLG-23: the tenant is the caller's, never the process environment's. A multi-tenant
+    # host (the console) imports this gate too, so an env fallback would judge one
+    # tenant's prompt by another tenant's policy. No tenant ⇒ nothing to judge against ⇒
+    # refuse (fail-closed); every production caller passes the turn's own tenant.
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        _log.warning("spawn_gates.check_l34: no tenant given — fail-closed")
+        return (
+            f"[data-flow] Spawn rejected: no tenant was given for engine '{engine_id}', so "
+            "its data-classification policy cannot be resolved (fail-closed)."
+        )
+    tenant = tenant_id
     guard = _load_l34_guard(tenant, corvin_home)
     if guard is None:
         return _no_policy_secret_refusal(
@@ -285,11 +303,17 @@ def check_l34(
             "Operator: fix tenant.corvin.yaml::spec.data_classification.sensitive_route."
         )
 
-    if classification is None:
+    if classification is None or (isinstance(prompt, str) and prompt.strip()):
         try:
-            from data_classification import classify_task  # type: ignore
+            from data_classification import DataClassification, classify_task  # type: ignore
             cls_val = classify_task(prompt or "", persona=persona,
                                     detector=bool(getattr(guard, "detector_on", False)))
+            if classification is not None:
+                # DLG-1: the declared class may only RAISE the content's class. An
+                # unparseable label stays as given — the guard denies it
+                # (unknown_classification) instead of it silently becoming the content's.
+                declared = DataClassification.parse(classification)
+                cls_val = classification if declared is None else max(declared, cls_val)
         except Exception as exc:  # noqa: BLE001
             # Fail CLOSED (round-2): a tenant policy IS present (guard is not
             # None) but the task could not be classified — we cannot prove it is

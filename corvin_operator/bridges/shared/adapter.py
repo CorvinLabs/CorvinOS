@@ -2226,8 +2226,14 @@ def _check_compliance_or_fail(
             channel=channel, chat_key=chat_key,
         )
     except Exception as e:  # noqa: BLE001
-        log(f"compliance gate: spawn_gates.check_l34 failed ({e!r}), fail-open")
-        return None
+        # Review 2026-11-05 (DLG follow-up): a gate that CRASHES has not judged the
+        # prompt. Returning None here let a bridge OS turn carry SECRET content to a
+        # cloud engine whenever the classifier raised. A missing policy or a None
+        # guard is decided INSIDE check_l34 (permitted, stripped deployments); an
+        # exception is not a decision — fail CLOSED like the import branch above.
+        log(f"compliance gate: spawn_gates.check_l34 failed ({e!r}) — fail-CLOSED block")
+        return ("[security] Data-classification gate failed before it could judge this "
+                "request — request blocked (fail-closed). Contact the operator.")
 
 
 # ── ADR-0043 / Layer 35 — Egress Gate wire-in ──────────────────────────
@@ -2272,8 +2278,12 @@ def _check_egress_or_fail(
     try:
         return _sg_l35(engine_name, tid, channel=channel, chat_key=chat_key)
     except Exception as e:  # noqa: BLE001
-        log(f"egress gate: spawn_gates.check_l35 failed ({e!r}), fail-open")
-        return None
+        # Review 2026-11-05: same rule as the L34 gate above — a disabled or absent
+        # egress policy is decided inside check_l35 (permitted); a crash is not a
+        # decision and must not open the network for this spawn.
+        log(f"egress gate: spawn_gates.check_l35 failed ({e!r}) — fail-CLOSED block")
+        return ("[security] Egress gate failed before it could judge this request — "
+                "request blocked (fail-closed). Contact the operator.")
 
 
 def _resolve_os_turn_route(
@@ -9271,6 +9281,15 @@ def _build_bridge_acs_spec(prompt: str, channel: str, suffix: str, tenant_id: st
     return spec
 
 
+def _mark_delegation_failure(failure: dict | None, kind: str) -> None:
+    """Record WHY a delegated engine returned no answer (review DLG-12).
+
+    ``kind``: ``no_engine`` (refused / unavailable before it ran), ``quota`` (pool
+    spent — the native turn serves) or ``failed`` (it ran and produced nothing)."""
+    if failure is not None:
+        failure["kind"] = kind
+
+
 def _run_acs_delegation(
     prompt: str,
     *,
@@ -9285,8 +9304,17 @@ def _run_acs_delegation(
     is_big_data: bool = False,
     mode: str = "native",
     on_status=None,
+    failure: dict | None = None,
 ) -> str | None:
     """Compliance-gated ACS fan-out spawn (ADR-0255).
+
+    ``failure`` (a caller-owned dict) receives WHY a ``None`` came back, as
+    ``failure["kind"]`` — ``"no_engine"`` (a gate refused or could not judge the
+    ACS spawn class: the engine never ran), ``"quota"`` (the pool is spent: the
+    native turn serves, exactly the console's quota fallback) or ``"failed"``
+    (the run started and ended without an answer). The routing record judges
+    the delegated engine on it (review DLG-12) instead of crediting the native
+    turn that degraded in its place.
 
     Extracted from the former monolithic ``_maybe_delegate_big_data`` so the
     L34/L35 gates, the compute-quota charge and the ACS runtime spawn exist
@@ -9321,12 +9349,14 @@ def _run_acs_delegation(
                 _acs_engine, channel=channel, chat_key=str(chat_key),
                 tenant_id=tenant_id)
     except Exception as e:  # noqa: BLE001 — a broken gate must not fan out
+        _mark_delegation_failure(failure, "no_engine")
         log(f"{log_prefix}: gate raised ({e!r}) — direct turn")
         return None
     if refusal is not None:
         # The gate denied ACS for this content. The direct turn is a DIFFERENT
         # compliance row and runs its own gates, so degrade rather than
         # refusing the message outright.
+        _mark_delegation_failure(failure, "no_engine")
         log(f"{log_prefix}: gate denied the ACS spawn class — direct turn")
         return None
 
@@ -9336,6 +9366,7 @@ def _run_acs_delegation(
         _home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
         _cq(_home, channel=f"{channel}-{quota_channel_suffix}", chat_key=str(chat_key))
     except Exception as e:  # noqa: BLE001 — over quota, or no license module
+        _mark_delegation_failure(failure, "quota")
         log(f"{log_prefix}: compute quota unavailable/exhausted ({type(e).__name__})"
             " — direct turn")
         return None
@@ -9369,9 +9400,11 @@ def _run_acs_delegation(
                 f"{': ' + _why if _why else ''}")
     except RuntimeError as e:
         # asyncio.run inside an existing loop, or a runtime-level abort.
+        _mark_delegation_failure(failure, "failed")
         log(f"{log_prefix}: run aborted ({e!r}) — direct turn")
         return None
     except Exception as e:  # noqa: BLE001 — ANY failure degrades to native
+        _mark_delegation_failure(failure, "failed")
         log(f"{log_prefix}: run failed ({type(e).__name__}) — direct turn")
         return None
 
@@ -9387,6 +9420,7 @@ def _run_acs_delegation(
                 answer = inner.strip()
                 break
     if not answer:
+        _mark_delegation_failure(failure, "failed")
         log(f"{log_prefix}: run produced no text — direct turn")
         return None
     # The user sees WHY the fan-out ran and how it ended, not only the answer text.
@@ -9473,8 +9507,12 @@ def _worker_engine_target(
     force_delegate: bool,
     tenant_id: str = "_default",
     meta: dict | None = None,
+    acs_runnable: bool = True,
 ) -> str:
     """Which engine runs this bridge turn: "native" | "acs" | "tde" (ADR-0255).
+
+    ``acs_runnable=False`` (parity flag off) means the rule's "acs" is served as
+    "native" and RECORDED as "native" (review DLG-13).
 
     Structurally identical to ``chat_runtime.py::_worker_engine_target`` — the
     same shared ``delegation_policy.resolve_worker_engine`` call, the same
@@ -9520,17 +9558,39 @@ def _worker_engine_target(
             tde_available = False
             quota_ok = False
 
-    return resolve_worker_engine(
-        mode=mode,
-        force_delegate=force_delegate,
-        is_big_data=_is_bd,
-        tde_available=tde_available,
-        quota_ok=quota_ok,
-        tenant_id=tenant_id,
-        turn_id=(meta or {}).get("turn_id"),
-        surface="bridge",
-        features=routing_features(prompt, tenant_id=tenant_id),
-        sink=meta,
+    if acs_runnable:
+        return resolve_worker_engine(
+            mode=mode,
+            force_delegate=force_delegate,
+            is_big_data=_is_bd,
+            tde_available=tde_available,
+            quota_ok=quota_ok,
+            tenant_id=tenant_id,
+            turn_id=(meta or {}).get("turn_id"),
+            surface="bridge",
+            features=routing_features(prompt, tenant_id=tenant_id),
+            sink=meta,
+        )
+    # DLG-13: ACS cannot run on this bridge (``bridge_worker_engine_parity`` off —
+    # only ``bridge_tde_execution`` brought the turn here). The rule's answer is
+    # decided FIRST and an "acs" it cannot serve becomes "native" BEFORE the
+    # decision is recorded, so the ledger never claims an engine that never ran
+    # (readiness counts ``bundled != native`` as delegating).
+    from delegation_policy import _resolve_worker_engine, route_and_record  # noqa: PLC0415
+
+    bundled = _resolve_worker_engine(
+        mode=mode, force_delegate=force_delegate, is_big_data=_is_bd,
+        tde_available=tde_available, quota_ok=quota_ok, tenant_id=tenant_id,
+    )
+    if bundled == "acs":
+        bundled = "native"
+    feats = dict(routing_features(prompt, tenant_id=tenant_id) or {})
+    feats.update(tde_available=bool(tde_available), quota_ok=bool(quota_ok))
+    return route_and_record(
+        tenant_id=tenant_id, bundled=bundled, force_delegate=force_delegate,
+        is_big_data=_is_bd, mode=mode, surface="bridge",
+        turn_id=(meta or {}).get("turn_id"), features=feats, sink=meta,
+        record=meta is not None,
     )
 
 
@@ -9541,8 +9601,12 @@ def _run_tde_delegation(
     chat_key: str,
     persona: str | None,
     tenant_id: str,
+    failure: dict | None = None,
 ) -> str | None:
     """Compliance-gated TDE fan-out on a bridge (TDE_ROBUST_USABLE_PLAN Step 4).
+
+    ``failure`` receives why ``None`` came back (``_mark_delegation_failure``), the
+    same contract as ``_run_acs_delegation``.
 
     The bridge sibling of ``_run_acs_delegation``, for the Tiered Delegation
     Engine. Reuses the engine-agnostic TDE core
@@ -9583,9 +9647,11 @@ def _run_tde_delegation(
                 prompt=prompt, persona=persona, channel=channel,
                 chat_key=str(chat_key), tenant_id=tenant_id)
     except Exception as e:  # noqa: BLE001 — a broken gate must not fan out
+        _mark_delegation_failure(failure, "no_engine")
         log(f"tde delegation: gate raised ({e!r}) — direct turn")
         return None
     if refusal is not None:
+        _mark_delegation_failure(failure, "no_engine")
         log("tde delegation: gate denied the TDE spawn class — direct turn")
         return None
 
@@ -9598,6 +9664,7 @@ def _run_tde_delegation(
         from tde.engine_registry import EngineRegistry  # noqa: PLC0415
         from tde.send_integration import SendIntegration  # noqa: PLC0415
     except ImportError as e:
+        _mark_delegation_failure(failure, "no_engine")
         log(f"tde delegation: orchestration tree unavailable ({e!r}) — direct turn")
         return None
 
@@ -9615,14 +9682,17 @@ def _run_tde_delegation(
             run_id=run_id,
         ))
     except RuntimeError as e:
+        _mark_delegation_failure(failure, "failed")
         log(f"tde delegation: run aborted ({e!r}) — direct turn")
         return None
     except Exception as e:  # noqa: BLE001 — ANY failure degrades to native
+        _mark_delegation_failure(failure, "failed")
         log(f"tde delegation: run failed ({type(e).__name__}: {e}) — direct turn")
         return None
 
     result = result or {}
     if result.get("reason") == "quota_exhausted":
+        _mark_delegation_failure(failure, "quota")
         log("tde delegation: shared pool exhausted — direct turn")
         return None
     summary = result.get("summary") or {}
@@ -9633,6 +9703,7 @@ def _run_tde_delegation(
             parts.append(str(out))
     answer = ("\n\n".join(parts)).strip()
     if not result.get("success") or not answer:
+        _mark_delegation_failure(failure, "failed")
         log("tde delegation: run produced no usable answer — direct turn")
         return None
     log(f"tde delegation: run {run_id} produced {len(answer)} chars")
@@ -9752,16 +9823,26 @@ def _report_route_outcome(tenant_id: str, meta: dict, answer, chat_key: str,
     gate — ``_turn_refused`` with no engine span). They are recorded with
     ``excluded`` and leave the join rate and every success rate; a refusal is
     never a native success.
+
+    A delegated engine that returned no answer (``meta["delegation_failed"]``,
+    set by ``_maybe_delegate_worker``; review DLG-12) is judged as THAT engine,
+    like the console does, never as the native turn that degraded in its place:
+    ``used=<engine>, ok=False`` when it ran and failed, NOT-JUDGED ``no_engine``
+    when a gate refused it before it ran.
     """
     status = _LAST_OS_TURN_STATUS.pop(chat_key, None)
     if "routed_engine" not in meta or meta.get("outcome_reported"):
         return
     meta["outcome_reported"] = True
+    failed_engine = meta.get("delegation_failed")
     delegated = bool(meta.get("engine"))
     excluded = None
     routed_unavailable = False
     if getattr(_TURN_OUTCOME, "failed", None) == "cancelled":
         excluded = "cancelled"
+    elif failed_engine:
+        if meta.get("delegation_failure") == "no_engine":
+            excluded = "no_engine"
     elif not delegated and status is None and getattr(_TURN_OUTCOME, "refused", None):
         # Exception (review r2_s2-P1): the Skill routed this turn onto an engine
         # that cannot run here (``engine_unavailable``). That is the one harm a
@@ -9771,7 +9852,7 @@ def _report_route_outcome(tenant_id: str, meta: dict, answer, chat_key: str,
                               and meta.get("route_source") == "skill")
         if not routed_unavailable:
             excluded = "no_engine"
-    if routed_unavailable:
+    if routed_unavailable or failed_engine:
         ok = False
     elif delegated:
         ok = bool(answer)
@@ -9784,7 +9865,7 @@ def _report_route_outcome(tenant_id: str, meta: dict, answer, chat_key: str,
 
         record_turn_outcome(
             tenant_id=tenant_id, turn_id=meta.get("turn_id"), surface="bridge",
-            used=str(meta.get("engine") or "native"), ok=ok,
+            used=str(failed_engine or meta.get("engine") or "native"), ok=ok,
             latency_ms=(time.monotonic() - started) * 1000.0,
             source=str(meta.get("route_source") or "bundled"),
             excluded=excluded,
@@ -9799,11 +9880,14 @@ def _maybe_delegate_worker(
     channel: str,
     chat_key: str,
     persona: str | None,
-    tenant_id: str | None = None,
+    tenant_id: str,
     meta: dict | None = None,
     on_status=None,
 ) -> tuple[str | None, str]:
     """Bridge worker-engine parity (ADR-0255).
+
+    ``tenant_id`` is REQUIRED: the turn's own tenant, decided once by
+    ``process_one`` (review DLG-23 — no environment fallback in here).
 
     Gives a bridge turn the SAME reach the console already has: the
     operator's Settings → AI Engines ``worker_engine`` mode (native/acs/tde),
@@ -9820,7 +9904,9 @@ def _maybe_delegate_worker(
     is a pass-through to the UNCHANGED ``_maybe_delegate_big_data`` — an
     existing install that has not opted in keeps today's exact behavior.
     """
-    tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        raise ValueError("_maybe_delegate_worker: tenant_id is required")
+    tid = tenant_id
 
     try:
         from corvin_core import feature_flags as _ff  # type: ignore  # noqa: PLC0415
@@ -9884,10 +9970,15 @@ def _maybe_delegate_worker(
     except Exception:  # noqa: BLE001 — fail toward the safe default
         mode = "native"
 
+    # ACS parity needs its OWN flag; bridge_tde_execution alone only unlocks TDE,
+    # never a silent ACS fan-out the operator didn't ask for. Decided BEFORE the
+    # rule records its decision (DLG-13), so the ledger never names an engine
+    # this bridge cannot run.
     target = _worker_engine_target(
         prompt, mode=mode, force_delegate=force_delegate, tenant_id=tid,
-        meta=meta,
+        meta=meta, acs_runnable=parity_on,
     )
+    _failure: dict = {}
     if target == "tde":
         # bridge_tde_execution on + mode=tde + TDE probed available
         # (_worker_engine_target). Run TDE for real; a None answer (ANY failure
@@ -9895,20 +9986,18 @@ def _maybe_delegate_worker(
         # built-in robust degrade, which IS the self-healing on this path.
         answer = _run_tde_delegation(
             prompt, channel=channel, chat_key=chat_key, persona=persona,
-            tenant_id=tid,
+            tenant_id=tid, failure=_failure,
         )
         # Delegation-transparency: report the engine/mode ONLY when TDE actually
         # produced the answer; a degrade (answer=None) is a native turn, tagged
-        # by the dispatcher.
+        # by the dispatcher — but the ROUTING record judges TDE (DLG-12).
         if answer is not None and meta is not None:
             meta["engine"], meta["mode"] = "tde", "tiered"
+        elif meta is not None:
+            _note_delegation_failure(meta, "tde", _failure)
         return answer, prompt
     if target == "acs":
-        if not parity_on:
-            # ACS parity needs its OWN flag; bridge_tde_execution alone only
-            # unlocks TDE, never a silent ACS fan-out the operator didn't ask for.
-            if meta is not None and "routed_engine" in meta:
-                meta["routed_engine"] = "native"
+        if not parity_on:  # unreachable since DLG-13 (the rule cannot pick it); defensive
             return None, prompt
         from delegation_policy import is_big_data_task as _is_bd_task  # noqa: PLC0415
         answer = _run_acs_delegation(
@@ -9920,12 +10009,30 @@ def _maybe_delegate_worker(
             is_big_data=_is_bd_task(prompt),
             mode=mode,
             on_status=on_status,
+            failure=_failure,
         )
         if answer is not None and meta is not None:
             meta["engine"], meta["mode"] = "acs", "delegation_loop"
+        elif meta is not None:
+            _note_delegation_failure(meta, "acs", _failure)
         return answer, prompt
     # "native" — run the direct turn.
     return None, prompt
+
+
+def _note_delegation_failure(meta: dict, engine: str, failure: dict) -> None:
+    """Mark a delegated engine that returned no answer for the routing record (DLG-12).
+
+    The console records the same event as ``used=<engine>, ok=False`` (or NOT-JUDGED
+    ``no_engine`` for a gate refusal); the bridge used to record the native turn that
+    degraded in its place, so readiness saw only SUCCESSFUL delegations. A spent pool
+    (``quota``) is the one exception, matching the console's quota fallback: the native
+    turn is what was served and what is judged."""
+    kind = failure.get("kind") or "failed"
+    if kind == "quota":
+        return
+    meta["delegation_failed"] = engine
+    meta["delegation_failure"] = kind
 
 
 # Flags a summarizer CLI may legitimately name back at us in an error. Anything
@@ -13125,7 +13232,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             prompt, channel=channel, chat_key=chat_key,
             persona=str((profile or {}).get("persona")
                         or (profile or {}).get("name") or ""),
-            meta=_deleg_meta,
+            tenant_id=_route_tid, meta=_deleg_meta,
             on_status=_emit_status,
         )
         _TURN_OUTCOME.delegated = answer is not None

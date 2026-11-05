@@ -1207,15 +1207,25 @@ def _write_wdat_run_for_delegation(
     instruction_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
     duration_s = duration_ms / 1000.0
     model_id = model or engine
-    tokens_in  = int(usage.get("input_tokens",  usage.get("tokens_in",  0)) or 0)
-    tokens_out = int(usage.get("output_tokens", usage.get("tokens_out", 0)) or 0)
-    # Cache tokens dominate real spend on a cache-heavy delegation (a cache read
-    # is billed at 0.1x input, a cache write at 1.25x — so a run with 20k cache
-    # tokens and 300 input tokens is almost entirely cache cost). `usage` is the
-    # raw engine `usage` object (agents/claude_code.py:1129), which carries both
-    # fields; they were simply not forwarded below.
-    cache_write = int(usage.get("cache_creation_input_tokens", 0) or 0)
-    cache_read  = int(usage.get("cache_read_input_tokens", 0) or 0)
+    # The four-way split (input / output / cache read / cache write) comes from the ONE
+    # normaliser every span emitter shares, ``engine_span.usage_split()`` (CLAUDE.md,
+    # ADR-0759; review DLG-21 — a private copy here read `tokens_in` / only the raw
+    # cache names, so the same engine report priced differently on this path). Cache
+    # tokens dominate real spend on a cache-heavy delegation, so they are part of it.
+    try:
+        _shared_dir = str(Path(__file__).resolve().parents[3]
+                          / "corvin_operator" / "bridges" / "shared")
+        if _shared_dir not in sys.path:
+            sys.path.insert(0, _shared_dir)
+        import engine_span as _espan  # type: ignore
+    except Exception as exc:  # noqa: BLE001 — no normaliser: nothing priceable to write
+        _log.error("ACS delegation audit skipped: engine_span unavailable: %s", exc)
+        return
+    _split = _espan.usage_split(usage)
+    tokens_in = _split["input_tokens"]
+    tokens_out = _split["output_tokens"]
+    cache_read = _split["cache_read_tokens"]
+    cache_write = _split["cache_write_tokens"]
     tokens_used = tokens_in + tokens_out
 
     if session_dir is not None:
@@ -1231,11 +1241,6 @@ def _write_wdat_run_for_delegation(
     # the acs.* records, so the console renders the delegation engine
     # engine-agnostically (any engine_id), not only via acs.* heuristics.
     try:
-        _shared_dir = str(Path(__file__).resolve().parents[3]
-                          / "corvin_operator" / "bridges" / "shared")
-        if _shared_dir not in sys.path:
-            sys.path.insert(0, _shared_dir)
-        import engine_span as _espan  # type: ignore
         _span_id = f"spn-{run_id}-{worker_id}"
         _sec.write_event(audit_path, _espan.ENGINE_SPAN_START,
                          details=_espan.start_details(
@@ -1246,9 +1251,7 @@ def _write_wdat_run_for_delegation(
             span_id=_span_id, role="worker",
             engine_id=engine, model_id=reported_model or "",
             run_id=run_id, status="ok",
-            duration_ms=duration_ms, tokens_used=tokens_used,
-            input_tokens=tokens_in, output_tokens=tokens_out,
-            cache_read_tokens=cache_read, cache_write_tokens=cache_write)
+            duration_ms=duration_ms, tokens_used=tokens_used, **_split)
         _sec.write_event(audit_path, _espan.ENGINE_SPAN_END, details=_end)
         # ADR-2286 — live model-usage signal from the same span details.
         _espan.send_live_model_usage(_end)

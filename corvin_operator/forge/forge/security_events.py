@@ -424,6 +424,10 @@ EVENT_SEVERITY: dict[str, str] = {
     "social.actor_deleted":         "INFO",
     # Layer 22 — WorkerEngine session lifecycle (ADR-0049)
     "worker_session.deleted":       "INFO",
+    # a2a_worker._emit_worker_session_audit (review DLG-16): a pinned A2A worker session.
+    "worker_session.created":       "INFO",
+    "worker_session.resumed":       "INFO",
+    "worker_session.stale_evicted": "INFO",
     # Layer 18 — Bridge access control: observer/whitelist management
     "bridge.observer_removed":      "INFO",
     # ADR-0166 — Session Participation Gate (SPG)
@@ -689,6 +693,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "A2A.reconnect_rejected": "WARNING",
     "A2A.reconnect_failed": "WARNING",
     "A2A.subagents_force_restricted": "WARNING",
+    "A2A.worker_platform_credentials_refused": "WARNING",
     "A2A.attestation_disabled_bypass": "WARNING",
     "a2a.manifest_required_unavailable": "WARNING",
     # 2026-09-25 A2A adversarial review — events added by the fixes.
@@ -972,6 +977,11 @@ EVENT_SEVERITY: dict[str, str] = {
     "bridge.reset_prewarned":         "WARNING",
     "bridge.budget_rejected":         "WARNING",
     "bridge.engine_policy_denied":    "WARNING",
+    # OS-model routing decisions of the AUTOMATIC Tiers 2.7 / 2.8
+    # (model_selector.resolve_os_model_with_source → adapter._audit_event).
+    # Metadata only: class, confidence, model ids — never the user's message.
+    "bridge.workload_model_selection": "INFO",
+    "bridge.ato_model_selection":      "INFO",
     # ADR-0127 datasource binding — explicit registrations (already in allowlist above)
     "tool.datasource_env_injected":   "INFO",
     # ADR-0142 — Layer Extension API (ext.* lifecycle + runtime).
@@ -1635,6 +1645,14 @@ EVENT_SEVERITY: dict[str, str] = {
     "engine.span.start": "INFO",
     "erasure.trail_failed": "WARNING",
     "gateway.webhook_secret_missing": "WARNING",
+    # Gateway run dispatch (core/gateway/corvin_gateway/dispatcher.py). The two
+    # policy denials used to get a severity by an import-time setdefault in the
+    # dispatcher and no allowlist at all (review 2026-11-05, DLG-16); the
+    # routing decision was written through a function that does not exist
+    # (DLG-5).
+    "gateway.engine_denied": "WARNING",
+    "gateway.zone_denied": "WARNING",
+    "intelligent_routing_decision": "INFO",
     "instance.attestation_failed": "WARNING",
     "instance.attestation_verified": "INFO",
     "plugin.boot_layer_rejected": "WARNING",
@@ -3706,6 +3724,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "A2A.reconnect_rejected": frozenset({"task_id", "origin_id", "reason", "status", "duration_ms"}),
     "A2A.reconnect_failed": frozenset({"task_id", "origin_id", "reason", "status", "duration_ms"}),
     "A2A.subagents_force_restricted": frozenset({"task_id", "origin_id", "reason"}),
+    # Review DLG-25 (a2a_worker.spawn_a2a_worker): a platform host (Bedrock/Vertex/Foundry)
+    # refused an A2A worker whose origin may read files or run a shell. `platform` is the
+    # registry provider id; `reason` is the closed code `origin_can_read_environment`.
+    "A2A.worker_platform_credentials_refused": frozenset(
+        {"task_id", "origin_id", "platform", "reason", "tenant_id"}),
     "A2A.attestation_disabled_bypass": frozenset({"origin_id", "reason"}),
     "a2a.manifest_required_unavailable": frozenset({"origin_id", "reason"}),
     # CLI pairing events (corvin_a2a.py, round 7: their fields were dropped).
@@ -4000,6 +4023,32 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # denylist, so the positive allowlist overrides the floor for this event —
     # same pattern as tool.secrets_injected / vault.* (names only).
     "gateway.webhook_secret_missing": frozenset({"run_id", "secret_ref", "host"}),
+    # Gateway run dispatch policy denials. Engine/zone ids are registry enums,
+    # allowed/forbid_engines the tenant policy's engine id lists, reason a
+    # fixed code ("tenant-config-malformed"), error_class an exception CLASS
+    # name — never the run's input.
+    "gateway.engine_denied": frozenset({
+        "run_id", "engine", "reason", "error_class",
+        "allowed_engines", "forbid_engines",
+    }),
+    "gateway.zone_denied": frozenset({
+        "run_id", "engine", "engine_zone", "tenant_zone",
+    }),
+    # Gateway worker-model routing (RunDispatcher._resolve_worker_model). Closed
+    # fields only: the router's free-text ``reasoning`` is deliberately NOT here
+    # (it paraphrases the tenant's prompt). No ``tenant_id`` field: the record
+    # lands on the RUN tenant's own chain, and in the multi-tenant gateway a
+    # tenant-tagged record for any tenant but the process tenant is refused at
+    # the chokepoint (AuditTenantMismatch) — the chain IS the tenant, like the
+    # gateway's engine spans and policy denials.
+    "intelligent_routing_decision": frozenset({
+        "model", "tier", "confidence", "engine", "run_id",
+    }),
+    # a2a_worker._emit_worker_session_audit (ADR-0049, review DLG-16) — the closed field
+    # sets of the three emitters; scope_label is the pinning scope id, never content.
+    "worker_session.created":       frozenset({"scope_label", "persona"}),
+    "worker_session.resumed":       frozenset({"scope_label", "persona", "resume_count"}),
+    "worker_session.stale_evicted": frozenset({"scope_label", "persona"}),
     # ADR-0166 — Session Participation Gate (SPG).
     # Strictly metadata — uid_hash/changed_by_hash/granted_by_hash/sender_hash
     # are sha256 prefixes (never raw UIDs). msg_id is an opaque message handle.
@@ -5192,6 +5241,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "auth.elevation_revoke": frozenset({"channel", "chat_key"}),
     "bridge.budget_rejected": frozenset({"channel", "chat_key", "policy", "quota", "used", "user"}),
     "bridge.engine_policy_denied": frozenset({"channel", "chat_key", "reason", "zone"}),
+    # model_selector Tier 2.7 / 2.8 — the closed field set each emitter sends
+    # (channel/chat_key/user/persona are the reserved spine).
+    "bridge.workload_model_selection": frozenset({
+        "confidence", "engine", "selected_model", "tier", "workload_type"}),
+    "bridge.ato_model_selection": frozenset({
+        "confidence", "engine", "recommended_model", "selected_model", "task_type", "tier"}),
     "bridge.reset_prewarned": frozenset({"channel", "chat_key", "unpinned_count", "user"}),
     "bridges.path_migrated": frozenset({"stage"}),
     "chain.genesis": frozenset({"instance_id", "network_id", "network_pubkey_fp", "ts"}),

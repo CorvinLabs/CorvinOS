@@ -2217,11 +2217,18 @@ checks and the read. `_harvest_report` therefore opens each file once with `O_NO
 regular, single-linked and the inode `lstat` saw, and reads from that descriptor (`_open_harvest_fd`), the same
 pattern `a2a_objects.stage_file` uses. A swapped entry is counted `unreadable`.
 
-**Accepted limit: the label of an inbound attachment is the peer's own statement.** L34 classifies the sanitised
-instruction at spawn; the bytes of inbound attachments are not content-classified here. Their class is the
-sender's declared label (default `INTERNAL`), bounded by the origin's `max_data_classification`
-(`remote_trigger_receiver` rejects a label above it). A peer that mislabels bytes within that maximum is not caught
-by content; the maximum is the control.
+**Inbound attachments are content-classified at spawn (review DLG-17, 2026-11-05).** L34 in
+`spawn_a2a_worker` classifies the sanitised instruction AND the decoded text of every inbound attachment
+(`_inbound_attachment_texts`) and judges the maximum against the tenant's policy — or, with no policy, the SECRET
+floor per text. Bounded by `MAX_ATTACHMENTS_COUNT` / `MAX_ATTACHMENTS_TOTAL_BYTES`; a digest/base64 failure or a set
+over the caps refuses (`gate_error`). Limit: a file that is not UTF-8 and not declared as text (an image, a PDF, an
+archive) is not read by this gate. The sender's declared label (default `INTERNAL`) is still bounded by the origin's
+`max_data_classification` (`remote_trigger_receiver` rejects a label above it).
+
+**Platform hosts (review DLG-25).** On a Bedrock/Vertex/Foundry host the worker gets the platform credential chain
+only when the origin can read neither files nor a shell (Bash, PowerShell, Monitor, Read, Grep, NotebookRead, Task,
+Agent all denied); otherwise the spawn is refused with `reason_code: gate` and audited as
+`A2A.worker_platform_credentials_refused`. A remote peer is never handed the operator's cloud account.
 
 **Not proven by an automated test yet: the denylist under `--dangerously-skip-permissions`.** The worker's tool
 policy is a denylist of known tool names handed to the CLI (`--disallowedTools`) in the same branch that passes

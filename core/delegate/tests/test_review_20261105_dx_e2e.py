@@ -88,3 +88,64 @@ def test_dx4_bridge_delegation_writes_a_priceable_span(home, tmp_path):
     assert end["model_id"] == REPORTED
     assert (end["input_tokens"], end["output_tokens"],
             end["cache_read_tokens"], end["cache_write_tokens"]) == (5, 9, 400, 60), end
+
+
+def test_refute_dx4_console_delegation_writes_exactly_one_span_pair(home, tmp_path, monkeypatch):
+    """Console surface (session dir set): still the WDAT run + ONE start/end pair, not two."""
+    from agents.claude_code import ClaudeCodeEngine
+    from corvin_delegate import delegation
+
+    session = tmp_path / "session"
+    session.mkdir()
+    monkeypatch.setenv("CORVIN_SESSION_DIR", str(session))
+    binary = _shim(tmp_path)
+    res = delegation.run_delegate(
+        engine="claude_code", prompt="summarise the rust changelog", budget_s=30,
+        engine_factory=lambda _eid: ClaudeCodeEngine(binary=binary))
+    assert res.ok, res.error
+    chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+    recs = [json.loads(x) for x in chain.read_text("utf-8").splitlines() if x.strip()]
+    starts = [r for r in recs if r.get("event_type") == "engine.span.start"
+              and r["details"].get("role") == "worker"]
+    assert len(starts) == 1 and len(_worker_ends(home)) == 1, (len(starts), len(_worker_ends(home)))
+    assert any(r.get("event_type") == "acs.worker_spawned" for r in recs), "WDAT records lost"
+    assert list((session / "acs" / "runs").iterdir()), "WDAT run directory not written"
+
+
+# ── DLG-21: the span's four-way split comes from engine_span.usage_split() ──────────
+
+
+_SHIM_NORMALISED = r'''#!__PY__
+import json, sys
+sys.stdin.read() if not sys.stdin.isatty() else None
+print(json.dumps({"type": "system", "subtype": "init", "model": "__MODEL__", "session_id": "s1"}))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}}))
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done",
+                  "usage": {"input_tokens": 5, "output_tokens": 9, "tokens_in": 999,
+                            "cache_read_tokens": 400, "cache_write_tokens": 60}}))
+'''
+
+
+def test_dlg21_run_delegate_span_uses_the_shared_usage_normaliser(home, tmp_path):
+    """An engine reporting the NORMALISED cache names is priced with its cache here exactly
+    as on every other path; a non-alias (`tokens_in`) is never read. Before: cache 0/0."""
+    from agents.claude_code import ClaudeCodeEngine
+    from corvin_delegate import delegation
+    import engine_span
+
+    p = tmp_path / "claude"
+    p.write_text(_SHIM_NORMALISED.replace("__PY__", sys.executable)
+                 .replace("__MODEL__", REPORTED), "utf-8")
+    p.chmod(p.stat().st_mode | stat.S_IXUSR)
+    res = delegation.run_delegate(
+        engine="claude_code", prompt="summarise the rust changelog", budget_s=30,
+        engine_factory=lambda _eid: ClaudeCodeEngine(binary=str(p)))
+    assert res.ok, f"positive control: the delegated engine never ran ({res.error})"
+    ends = _worker_ends(home)
+    assert len(ends) == 1, ends
+    end = ends[0]
+    got = {k: end[k] for k in ("input_tokens", "output_tokens",
+                                "cache_read_tokens", "cache_write_tokens")}
+    assert got == engine_span.usage_split(res.usage) == {
+        "input_tokens": 5, "output_tokens": 9,
+        "cache_read_tokens": 400, "cache_write_tokens": 60}, (got, res.usage)

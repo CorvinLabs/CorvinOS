@@ -38,7 +38,7 @@ FANOUT = ("Recherchiere mit mehreren Workern parallel die Konkurrenzprodukte "
 
 def _call(prompt=SMALL, channel="discord"):
     return adapter._maybe_delegate_worker(
-        prompt, channel=channel, chat_key="chat-1", persona="")
+        prompt, channel=channel, chat_key="chat-1", persona="", tenant_id="_default")
 
 
 class _Flags:

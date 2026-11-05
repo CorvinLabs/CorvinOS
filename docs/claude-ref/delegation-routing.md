@@ -576,6 +576,15 @@ dict per step (no prompt, worker or result text) and the run result carries them
   required whenever a budget is present); all 21 bridge ACS decisions were served by the native
   turn and the only trace was "run produced no text". A caller that passes `budget_override` must
   include `max_depth` for the same reason (the MCP tool sets 4).
+- **A failed run is judged as the delegated engine.** `_run_acs_delegation` / `_run_tde_delegation`
+  report WHY they returned `None` (`failure["kind"]`: `no_engine` gate refusal, `quota`, `failed`);
+  `_maybe_delegate_worker` marks `meta["delegation_failed"]` and `_report_route_outcome` records
+  `used: acs|tde, ok: false` (or NOT-JUDGED `no_engine`), as the console does — never the native
+  turn that degraded in its place (review DLG-12). A spent pool records the native turn (the
+  console's quota fallback). With `bridge_worker_engine_parity` off, `_worker_engine_target`
+  (`acs_runnable=False`) turns the rule's `acs` into `native` before the decision row is written
+  (DLG-13). `_maybe_delegate_worker` takes the turn's `tenant_id` as a REQUIRED argument —
+  `process_one` passes it; there is no environment fallback inside (DLG-23).
 - **Voice:** the blocks are on-screen information. `strip_for_tts.py` (run by both
   `adapter.build_voice_summary` and the console's `_summarize_for_speech` before the summarizer)
   removes the step block and the run summary (exact line formats, CRLF-safe: a heading alone such as

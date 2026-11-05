@@ -191,7 +191,7 @@ def test_a_failed_acs_run_logs_its_reason_and_falls_back_to_the_direct_turn(sand
          _module_overrides(**{"license.compute_quota": quota, "acs_runtime": rt}):
         answer, _ = adapter._maybe_delegate_worker(
             "/delegate Vergleiche die Strompreise", channel="sandbox-acs", chat_key="c",
-            persona="")
+            persona="", tenant_id="_default")
 
     assert answer is None, "a failed run must degrade to the direct turn"
     assert any("ended failed" in line and "R31" in line for line in logged), logged

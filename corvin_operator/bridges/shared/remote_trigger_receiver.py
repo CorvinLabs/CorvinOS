@@ -1736,6 +1736,10 @@ class RemoteTriggerReceiver:
                 task_id=env.task_id,
                 persona=persona,
                 ttl_s=env.ttl_s,
+                # Review DLG-23: the receiving tenant is decided here, once, and
+                # carried to every worker-side gate (L34/L35/L44) — never re-read
+                # from the environment inside the worker.
+                tenant_id=self._tenant_id or _resolve_tenant_id(),
                 engine_factory=self._engine_factory,
                 inbound_attachments=inbound_attachments,
                 result_schema=env.result_schema,
