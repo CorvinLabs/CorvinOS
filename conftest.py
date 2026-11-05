@@ -300,34 +300,37 @@ _REAL_PLUGIN_SLOT = _REPO_ROOT / "corvin_operator" / "skill-forge" / "skills" / 
 # TestClient in this repo therefore defaults to ``http://127.0.0.1`` (what the
 # browser of a local operator sends), instead of teaching production code a test
 # hostname. An explicit ``base_url`` always wins (the rebinding tests pass a hostile one).
-from starlette.testclient import TestClient as _StarletteTestClient  # noqa: E402
+# Guarded: the CI jobs that run a bare pytest-only interpreter (audit-completeness,
+# zero-caller sweep) have no starlette, and an unguarded import here broke EVERY
+# pytest run of theirs at conftest load (measured on main 2026-11-05, 14:16Z).
+try:
+    from starlette.testclient import TestClient as _StarletteTestClient  # noqa: E402
+except ImportError:  # no console/gateway stack in this interpreter: nothing to patch
+    _StarletteTestClient = None  # type: ignore[assignment,misc]
 
-_tc_orig_init = _StarletteTestClient.__init__
+if _StarletteTestClient is not None:
+    _tc_orig_init = _StarletteTestClient.__init__
 
+    def _tc_loopback_init(self, *args, **kwargs):
+        if "base_url" not in kwargs and len(args) < 2:
+            kwargs["base_url"] = "http://127.0.0.1"
+        _tc_orig_init(self, *args, **kwargs)
 
-def _tc_loopback_init(self, *args, **kwargs):
-    if "base_url" not in kwargs and len(args) < 2:
-        kwargs["base_url"] = "http://127.0.0.1"
-    _tc_orig_init(self, *args, **kwargs)
+    if getattr(_StarletteTestClient.__init__, "__name__", "") != "_tc_loopback_init":
+        _StarletteTestClient.__init__ = _tc_loopback_init
 
+    # ``websocket_connect`` joins a relative URL onto a hard-coded ``ws://testserver``;
+    # join it onto the client's own base URL instead (same reason as above).
+    _tc_orig_ws = _StarletteTestClient.websocket_connect
 
-if getattr(_StarletteTestClient.__init__, "__name__", "") != "_tc_loopback_init":
-    _StarletteTestClient.__init__ = _tc_loopback_init
+    def _tc_loopback_ws(self, url, *args, **kwargs):
+        if "://" not in str(url):
+            from urllib.parse import urljoin as _urljoin  # noqa: PLC0415
+            url = _urljoin(str(self.base_url).replace("http", "ws", 1), str(url))
+        return _tc_orig_ws(self, url, *args, **kwargs)
 
-# ``websocket_connect`` joins a relative URL onto a hard-coded ``ws://testserver``;
-# join it onto the client's own base URL instead (same reason as above).
-_tc_orig_ws = _StarletteTestClient.websocket_connect
-
-
-def _tc_loopback_ws(self, url, *args, **kwargs):
-    if "://" not in str(url):
-        from urllib.parse import urljoin as _urljoin  # noqa: PLC0415
-        url = _urljoin(str(self.base_url).replace("http", "ws", 1), str(url))
-    return _tc_orig_ws(self, url, *args, **kwargs)
-
-
-if getattr(_StarletteTestClient.websocket_connect, "__name__", "") != "_tc_loopback_ws":
-    _StarletteTestClient.websocket_connect = _tc_loopback_ws
+    if getattr(_StarletteTestClient.websocket_connect, "__name__", "") != "_tc_loopback_ws":
+        _StarletteTestClient.websocket_connect = _tc_loopback_ws
 
 # httpx ``ASGITransport`` clients in older tests use ``http://test``: allowlist the two
 # test-only names for the API (local-login still demands a loopback Host).
