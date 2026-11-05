@@ -79,7 +79,7 @@ systems:
     # tests/learning/test_review_20261105_lrn_hosts_e2e.py pins the premise. L02 likewise.
     callers:
       - core/gateway/corvin_gateway/app.py:547:_lh.start
-      - core/console/corvin_console/app.py:896:learning_host.start
+      - core/console/corvin_console/app.py:901:learning_host.start
       - core/console/corvin_console/standalone.py:370:_lh.start
     readers:
       # the daemon state (weights, queue, cooldowns) on the console's learning dashboard
@@ -122,11 +122,11 @@ systems:
     name: Feedback gate (throttle, reality check, trust weight)
     state: A
     callers:
-      - core/learning/event_store.py:164:admission(
+      - core/learning/event_store.py:181:admission(
       - core/console/corvin_console/routes/stream4_skill_feedback.py:176:admit(
     readers:
       # the verdict decides the write: a refused signal raises FeedbackRejected and nothing is stored
-      - core/learning/event_store.py:164:admission(
+      - core/learning/event_store.py:181:admission(
     tests:
       - core/learning/tests/test_operator_feedback.py
       - core/console/tests/test_learning_loop_routes_e2e.py
@@ -136,7 +136,7 @@ systems:
     state: B
     callers:
       # writer 1: the operator star rating (stream4) -> loop closure -> SkillAdapter
-      - core/console/corvin_console/routes/stream4_skill_feedback.py:340:apply_outcome_to_skill
+      - core/console/corvin_console/routes/stream4_skill_feedback.py:353:apply_outcome_to_skill
       - core/skills/feedback/loop_closure.py:407:apply_config_delta
       # writer 2: the optimizer epoch of POST /v1/console/learning/feedback (PLAN-0966 A2)
       - core/console/corvin_console/routes/method_discovery_api.py:418:run_optimizer_epoch
@@ -203,12 +203,12 @@ systems:
     name: Skill grades, injection gate, promotion
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:3415:collect_active_skills
-      - corvin_operator/bridges/shared/adapter.py:12885:grade_from_user_followup
-      - corvin_operator/bridges/shared/adapter.py:13545:auto_grade_from_output
-      - corvin_operator/skill-forge/skill_forge/mcp_server.py:544:promote
+      - corvin_operator/bridges/shared/adapter.py:3464:collect_active_skills
+      - corvin_operator/bridges/shared/adapter.py:13038:grade_from_user_followup
+      - corvin_operator/bridges/shared/adapter.py:13701:auto_grade_from_output
+      - corvin_operator/skill-forge/skill_forge/mcp_server.py:581:promote
       - core/console/corvin_console/routes/chat.py:772:grade_followup
-      - core/console/corvin_console/chat_runtime.py:8812:record_turn_skills
+      - core/console/corvin_console/chat_runtime.py:8816:record_turn_skills
     readers:
       # the injection gate: a skill with no grade or a mean score <= 0 is not injected
       - corvin_operator/bridges/shared/skill_inject.py:742:spec.n_grades
@@ -223,15 +223,15 @@ systems:
     name: CEL turn grades
     state: B
     callers:
-      - core/console/corvin_console/chat_runtime.py:8583:_cel_record_outcome
-      - core/console/corvin_console/chat_runtime.py:9365:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:8587:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:9373:_cel_record_outcome
     tests:
       - corvin_operator/context_engineering/tests/test_grades_adr0285.py
     intake: >-
       Advisory only. The native console path records success=True for every
-      turn that reaches its end (chat_runtime.py:9365), so the grade means "turn
+      turn that reaches its end (chat_runtime.py:9373), so the grade means "turn
       completed", not "the stage helped"; the delegated (ACS/TDE) branch records
-      the run's own result (ok or bounded stop, chat_runtime.py:8583). Behind the
+      the run's own result (ok or bounded stop, chat_runtime.py:8587). Behind the
       outcome_feedback_loop flag (default off). An automatic grade never makes a
       stage default-eligible, only an operator grade does. It may steer stage
       selection only with a measured outcome source (T-0128 was cancelled for want
@@ -252,9 +252,9 @@ systems:
     name: Model selector learner (descriptive only, shown on the Models page)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:5485:shadow_classify_task
-      - corvin_operator/bridges/shared/adapter.py:6975:report_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:7014:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:5534:shadow_classify_task
+      - corvin_operator/bridges/shared/adapter.py:7024:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:7063:report_turn_outcome
       - core/console/corvin_core/task_manager.py:684:_update_model_selection_confidence
       # reader: GET /v1/console/v1/engine/config -> the Models page task cards
       - core/console/corvin_console/routes/engine_api.py:667:optimizer.get_stats
@@ -300,10 +300,10 @@ systems:
     name: User model distillation (L28, opt-in per chat)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:13632:_user_model_distill_async
+      - corvin_operator/bridges/shared/adapter.py:13788:_user_model_distill_async
     readers:
       # the distilled model is loaded into the prompt of the opted-in chat
-      - corvin_operator/bridges/shared/adapter.py:3734:_user_model.load
+      - corvin_operator/bridges/shared/adapter.py:3783:_user_model.load
     tests:
       - corvin_operator/bridges/shared/test_user_model.py
       - corvin_operator/bridges/shared/test_adapter_recall.py
@@ -316,8 +316,8 @@ systems:
     name: Shadow OS skills (workflow optimizer, flow guard, security orchestrator, context adapter)
     state: B
     callers:
-      - corvin_operator/bridges/shared/adapter.py:3311:_wo_shadow
-      - corvin_operator/bridges/shared/spawn_gates.py:350:_fg_shadow
+      - corvin_operator/bridges/shared/adapter.py:3360:_wo_shadow
+      - corvin_operator/bridges/shared/spawn_gates.py:456:_fg_shadow
       - corvin_operator/bridges/shared/auth_elevation.py:220:_so_shadow
       - corvin_operator/context_engineering/stages/l10_adapter.py:138:adapt_context_l10
     tests:
@@ -377,15 +377,15 @@ systems:
       # decision record, one per turn: a turn that stays native is recorded by the triage
       # (delegation_policy.resolve_delegation_route), a delegation-worthy one by
       # resolve_worker_engine, a turn neither reached by the unrouted fallback
-      - core/console/corvin_console/chat_runtime.py:4324:resolve_delegation_route
-      - core/console/corvin_console/chat_runtime.py:4626:_shared_target
-      - core/console/corvin_console/chat_runtime.py:4664:route_and_record
-      - corvin_operator/bridges/shared/adapter.py:9872:resolve_delegation_route
-      - corvin_operator/bridges/shared/adapter.py:9523:resolve_worker_engine
-      - corvin_operator/bridges/shared/adapter.py:9731:route_and_record
+      - core/console/corvin_console/chat_runtime.py:4328:resolve_delegation_route
+      - core/console/corvin_console/chat_runtime.py:4630:_shared_target
+      - core/console/corvin_console/chat_runtime.py:4668:route_and_record
+      - corvin_operator/bridges/shared/adapter.py:10004:resolve_delegation_route
+      - corvin_operator/bridges/shared/adapter.py:9606:resolve_worker_engine
+      - corvin_operator/bridges/shared/adapter.py:9846:route_and_record
       # outcome record, joined to the decision by turn_id
-      - core/console/corvin_console/chat_runtime.py:4764:record_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:9785:record_turn_outcome
+      - core/console/corvin_console/chat_runtime.py:4768:record_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:9910:record_turn_outcome
       # console engine guard: a cleared Phase 2 Skill route onto an unavailable engine
       # records its decision and a judged ok:false outcome (the bridge does the same)
       - core/console/corvin_console/routes/chat.py:1013:record_unavailable_skill_route
@@ -427,7 +427,7 @@ systems:
     state: B
     callers:
       - core/console/corvin_console/routes/flow_guard.py:100:LearningIntegration
-      - core/console/corvin_console/app.py:267:flow_guard_route
+      - core/console/corvin_console/app.py:272:flow_guard_route
     tests:
       # the real POST /v1/console/flow/feedback and GET /flow/policy routes over HTTP
       - tests/learning/test_adr_2283_flow_guard_feedback_e2e.py
@@ -457,7 +457,7 @@ systems:
     name: Layer Forge learning integration (emit_*_confidence / *_outcome)
     state: B
     callers:
-      - core/forge_bundle/item_import.py:416:create_layer_definition
+      - core/forge_bundle/item_import.py:415:create_layer_definition
       - core/orchestration/layer_forge/orchestrator.py:136:emit_gate_confidence
       - core/orchestration/layer_forge/orchestrator.py:170:emit_enforcement_confidence
       - core/orchestration/layer_forge/orchestrator.py:211:emit_review_confidence
@@ -501,7 +501,7 @@ systems:
     state: A
     callers:
       - core/compute/corvin_compute/worker.py:431:load_strategy
-      - core/compute/corvin_compute/cli.py:253:HACEngine
+      - core/compute/corvin_compute/cli.py:254:HACEngine
     readers:
       # the search reads the strategy's next proposal from the history it learned
       - core/compute/corvin_compute/driver.py:171:self.strategy.suggest_batch
@@ -513,8 +513,8 @@ systems:
     name: Learning and maturity panels (report health, not learning)
     state: A
     callers:
-      - core/console/corvin_console/app.py:321:learning_analytics_route
-      - core/console/corvin_console/app.py:334:api_vibe_maturity_route
+      - core/console/corvin_console/app.py:326:learning_analytics_route
+      - core/console/corvin_console/app.py:339:api_vibe_maturity_route
     readers:
       - core/console/corvin_console/web-next/src/components/learning-loops-view.tsx:16:useLoops
       - core/console/corvin_console/web-next/src/pages/vibe-engineering/components/MaturityDashboard.tsx:34:useLiveMaturityData
@@ -526,7 +526,7 @@ systems:
     name: Video learning feedback API (ratings, per-variant statistics, advice)
     state: A
     callers:
-      - core/console/corvin_console/app.py:402:video_learning_api_route
+      - core/console/corvin_console/app.py:407:video_learning_api_route
       - core/console/corvin_console/routes/video_learning_api.py:218:get_model_stats
       - core/console/corvin_console/routes/video_learning_api.py:259:select_model
     readers:
@@ -544,7 +544,7 @@ systems:
     name: Autonomous Forge (skill canary autopilot, on by default)
     state: A
     callers:
-      - core/console/corvin_console/app.py:290:autonomous_forge_route
+      - core/console/corvin_console/app.py:295:autonomous_forge_route
       # the autopilot scheduler, started when the route module is imported (every 600 s, all tenants)
       - core/console/corvin_console/routes/autonomous_forge_routes.py:419:_auto.start_scheduler
     tests:
