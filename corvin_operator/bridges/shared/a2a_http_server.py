@@ -11,7 +11,13 @@ gateway. Useful for:
 
 Routes (native A2A):
   POST /v1/a2a/receive  → :class:`RemoteTriggerReceiver`
-  GET  /healthz          → 200 ok + instance_id
+  GET  /healthz          → 200 ``{"ok": true}`` - content-free liveness
+  GET  /metrics          → Prometheus text, loopback callers only
+  GET  /v1/a2a/audit-head → chain head, signed request from a paired origin only
+
+Every route answers 403 ``license_required`` on a network-denied (Free) install,
+GET included (review SRF-7: the GETs used to answer anyone with the instance id,
+the audit-chain head, its event count and the last-activity time).
 
 There is no other inbound protocol (ADR-2293): CorvinOS does not interoperate with foreign A2A agents,
 pairing is the trust boundary. Everything else → 404.
@@ -138,6 +144,18 @@ _OBJECT_PULL_RPM = 600.0
 _PING_SEEN: "collections.OrderedDict[tuple[str, str], float]" = collections.OrderedDict()
 _PING_SEEN_MAX = 4096
 _PING_WINDOW_S = 300  # == remote_trigger_receiver._TIME_WINDOW_S (pinned by a test)
+
+
+def _is_loopback_addr(addr: str) -> bool:
+    """True for a 127.0.0.0/8 or ::1 TCP peer (an IPv4-mapped one included)."""
+    import ipaddress  # noqa: PLC0415
+    try:
+        ip = ipaddress.ip_address(str(addr).split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
 _PING_SEEN_TTL_S = 2 * _PING_WINDOW_S + 30.0
 
 
@@ -544,25 +562,30 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
     # ── Routes ────────────────────────────────────────────────────────
 
     def do_GET(self):  # noqa: N802
-        if self.path == "/healthz":
-            # Prefer the receiver's cached instance_id (matches what
-            # ResponseEnvelope.instance_id will carry) over re-reading
-            # the file — two receivers in one process can hold distinct
-            # identities, and healthz must report the local server's.
-            iid = getattr(self.receiver, "_instance_id", "") or ""
-            if not iid:
-                try:
-                    iid = instance_identity.get_instance_id()
-                except Exception:
-                    iid = ""
-            body = json.dumps({"ok": True, "instance_id": iid}).encode()
-            self._respond(200, body)
+        route = self.path.split("?", 1)[0]
+        if route not in ("/healthz", "/metrics", "/v1/a2a/audit-head"):
+            self._respond(404, b'{"reason":"not_found"}\n')
+            return
+        # A free install does not answer the A2A network at all - GET included
+        # (review SRF-7; POST ping/friendship-ack/receive were gated, the GETs
+        # were not, so a Free install stayed distinguishable and disclosed state).
+        if self.receiver is not None and self.receiver._network_denied():  # noqa: SLF001
+            self._respond(403, b'{"reason":"license_required"}\n')
             return
 
-        # Prometheus metrics endpoint (Layer 38 Observability)
-        # Exposes A2A relay and connectivity metrics in Prometheus text format.
-        # SLO targets: query p99 < 100ms, success > 95%, uptime 99.9%
-        if self.path == "/metrics":
+        if route == "/healthz":
+            # Content-free: the instance id is the identifier telemetry treats as
+            # pseudonymous; an unauthenticated scanner must not learn it here.
+            self._respond(200, b'{"ok":true}')
+            return
+
+        # Prometheus metrics endpoint (Layer 38 Observability) - a local scrape
+        # target, never answered to a network peer.
+        if route == "/metrics":
+            peer = self.client_address[0] if self.client_address else ""
+            if not _is_loopback_addr(peer):
+                self._respond(404, b'{"reason":"not_found"}\n')
+                return
             try:
                 import a2a_relay_metrics  # type: ignore[import-not-found]
                 metrics = a2a_relay_metrics.get_relay_metrics()
@@ -574,27 +597,28 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(503, body)
             return
 
-        # ADR-0141 Tier 4 — Audit Chain Transparency. A peer requests the local
-        # chain head + event count to detect a fork that silenced its audit
-        # module. Optional ?origin_id=<id> selects the recv_key used to HMAC-sign
-        # the response so the requester can authenticate it. Advisory only.
-        if self.path.split("?", 1)[0] == "/v1/a2a/audit-head":
-            origin_id = ""
-            if "?" in self.path:
-                from urllib.parse import parse_qs
-                qs = parse_qs(self.path.split("?", 1)[1])
-                origin_id = (qs.get("origin_id", [""])[0] or "")[:128]
+        # ADR-0141 Tier 4 — Audit Chain Transparency. A PAIRED peer requests the
+        # local chain head + event count to detect a fork that silenced its audit
+        # module. The request is signed with the pairing hmac_key over a fresh
+        # (issued_at, nonce) - see a2a_audit_head.verify_head_request; anything
+        # else gets one opaque 403 (no origin-existence oracle). The response
+        # stays HMAC-signed with the origin's recv_key.
+        from urllib.parse import parse_qs
+        qs = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+        params = {k: (v[0] if v else "") for k, v in qs.items()}
+        try:
+            import a2a_audit_head  # type: ignore
+            registry = getattr(self.receiver, "_registry", None)
+            if not a2a_audit_head.verify_head_request(params, registry=registry):
+                self._respond(403, b'{"reason":"audit_head_rejected"}\n')
+                return
             iid = getattr(self.receiver, "_instance_id", "") or ""
-            try:
-                import a2a_audit_head  # type: ignore
-                head = a2a_audit_head.build_audit_head(
-                    origin_id=origin_id, instance_id=iid or None)
-                self._respond(200, json.dumps(head).encode())
-            except Exception:
-                self._respond(500, b'{"reason":"audit_head_error"}\n')
-            return
-
-        self._respond(404, b'{"reason":"not_found"}\n')
+            head = a2a_audit_head.build_audit_head(
+                origin_id=params.get("origin_id", "")[:128], instance_id=iid or None)
+            self._respond(200, json.dumps(head).encode())
+        except Exception:
+            self._respond(500, b'{"reason":"audit_head_error"}\n')
+        return
 
     def do_POST(self):  # noqa: N802
         # ADR-0199: Lightweight peer-liveness check. Receiver-side ping

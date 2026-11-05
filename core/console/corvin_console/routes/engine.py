@@ -21,7 +21,6 @@ from __future__ import annotations
 import logging
 import os
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -34,6 +33,7 @@ from pydantic import BaseModel, Field
 
 from .. import audit as console_audit
 from .. import auth as session_auth
+from .. import tenant_yaml as _tenant_yaml
 from ..deps import require_csrf, require_session
 
 _log = logging.getLogger(__name__)
@@ -139,26 +139,17 @@ def _load_tenant_yaml_for_write(tenant_id: str) -> dict[str, Any]:
     returning {} here (as the reader does) makes the writer replace the whole file
     with its one section and drop everything else in it, including the L34
     data-residency policy. The refusal leaves the file byte-identical (T-0227).
+    The rule lives in ``corvin_console.tenant_yaml`` (the one console writer).
     """
     path = _tenant_yaml_path(tenant_id)
-    if not path.exists():
-        return {}
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        _log.error("tenant YAML at %s is unparseable; refusing to overwrite it", path)
+        return _tenant_yaml.load_for_write(path)
+    except _tenant_yaml.TenantYamlUnreadable as exc:
+        _log.error("tenant YAML at %s is unreadable; refusing to overwrite it (%s)", path, exc)
         raise HTTPException(
             http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             "tenant configuration is unparseable; fix or restore it before changing engine settings",
         ) from exc
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise HTTPException(
-            http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "tenant configuration is not a mapping; fix or restore it before changing engine settings",
-        )
-    return data
 
 
 def _save_tenant_yaml(tenant_id: str, data: dict[str, Any]) -> None:
@@ -181,22 +172,11 @@ def _save_tenant_yaml(tenant_id: str, data: dict[str, Any]) -> None:
     ``chmod`` happens BEFORE ``replace`` so there is never a window in which the
     live path is world-readable (same ordering as ``routes/compute.py``'s
     writer, which had this right).
+
+    The writer itself is ``corvin_console.tenant_yaml.write_mapping`` - the one
+    console writer of this file (review SRF-3).
     """
-    path = _tenant_yaml_path(tenant_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    raw = yaml.safe_dump(data, default_flow_style=False)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tenant.corvin.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(raw)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    _tenant_yaml.write_mapping(_tenant_yaml_path(tenant_id), data)
 
 
 # ---------------------------------------------------------------------------

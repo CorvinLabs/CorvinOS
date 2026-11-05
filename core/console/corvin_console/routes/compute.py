@@ -222,22 +222,9 @@ def _read_tenant_yaml(tid: str) -> dict[str, Any]:
         return {}
 
 def _write_tenant_yaml(tid: str, data: dict[str, Any]) -> None:
-    p = _tenant_yaml_path(tid)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    import tempfile
-    raw = _yaml.dump(data, default_flow_style=False, allow_unicode=True)
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(raw)
-        os.chmod(tmp, 0o600)  # mode before replace — no world-readable window
-        os.replace(tmp, p)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    """Whole-document write through the one console tenant-YAML writer (0o600, atomic)."""
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
+    _ty.write_mapping(_tenant_yaml_path(tid), data)
 
 def _compute_dir(tid: str) -> Path:
     return _forge_paths.tenant_home(tid) / "compute"
@@ -318,6 +305,13 @@ def _probe_socket(path: Path, timeout_s: float = 0.3) -> dict[str, Any]:
         return {"exists": True, "reachable": False, "error": str(e)}
 
 
+def _on_windows() -> bool:
+    """The platform predicate the worker hint branches on. A named seam so tests
+    can flip it without patching the process-wide ``os.name`` (which makes every
+    ``pathlib.Path()`` a ``WindowsPath`` and kills pytest itself on Linux)."""
+    return os.name == "nt"
+
+
 def _worker_not_running_detail(tenant_id: str) -> str:
     """503 hint for a missing compute worker, correct for this platform.
 
@@ -325,7 +319,7 @@ def _worker_not_running_detail(tenant_id: str) -> str:
     Windows has no service/scheduled task for it (the installer does not create
     one), so the only start path is running the CLI by hand.
     """
-    if os.name == "nt":
+    if _on_windows():
         # Name the console's effective home explicitly: the CLI's own default
         # ($CORVIN_HOME or ~/.corvin) can differ from the home this console
         # resolved (repo-relative .corvin, a non-default CORVIN_HOME), and a
@@ -1000,15 +994,34 @@ def update_compute_config(
     if not _YAML_OK:
         raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "PyYAML not available")
 
-    tenant = _read_tenant_yaml(rec.tenant_id)
-    tenant.setdefault("spec", {}).setdefault("compute", {})
-    tenant["spec"]["compute"] = {
-        "enabled": body.enabled,
-        "fabric_enabled": body.fabric_enabled,
-        "max_parallel_runs": body.max_parallel_runs,
-        "run_ttl_days": body.run_ttl_days,
-    }
-    _write_tenant_yaml(rec.tenant_id, tenant)
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
+
+    def _set(tenant: dict[str, Any]) -> None:
+        spec = tenant.get("spec")
+        if not isinstance(spec, dict):
+            spec = tenant["spec"] = {}
+        spec["compute"] = {
+            "enabled": body.enabled,
+            "fabric_enabled": body.fabric_enabled,
+            "max_parallel_runs": body.max_parallel_runs,
+            "run_ttl_days": body.run_ttl_days,
+        }
+
+    # Locked read-modify-write; an unreadable file is refused, never rewritten as
+    # {"spec": {"compute": ...}} (review SRF-4, same class as /features/toggle).
+    try:
+        _ty.update(_tenant_yaml_path(rec.tenant_id), _set)
+    except _ty.TenantYamlUnreadable:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="compute.config_update",
+            target_kind="compute",
+            target_id="config",
+            reason="tenant-yaml-unreadable",
+        )
+        raise HTTPException(http_status.HTTP_409_CONFLICT,
+                            "tenant configuration is unreadable; fix or restore it first") from None
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -1871,7 +1884,9 @@ def artifact_download(
     mt = media_types.get(artifact_path.suffix.lower(), "application/octet-stream")
     safe_filename = filename.replace('"', "").replace("\r", "").replace("\n", "")
     return FileResponse(str(artifact_path), media_type=mt,
-                        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'})
+                        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"',
+                                 "X-Content-Type-Options": "nosniff",
+                                 "Content-Security-Policy": "sandbox"})
 
 # ══════════════════════════════════════════════════════════════════════════
 # ── M6: Export Hub ────────────────────────────────────────────────────────
@@ -2768,11 +2783,19 @@ def stage_artifact_image(
         target_id=f"{pipeline_id}/{stage_id}",
     )
 
+    # Same serving rule as chat attachments (attachments_common.serve_headers):
+    # nosniff always; an SVG stays inline for <img> but carries
+    # "Content-Security-Policy: sandbox", so opening its URL directly cannot run
+    # a script in the console origin (review SRF-6 - a stage artifact is written
+    # by worker / LLM-generated stage code).
+    from ..attachments_common import serve_headers as _serve_headers  # noqa: PLC0415
+    disposition, sec_headers = _serve_headers(mime)
     return FileResponse(
         str(artifact_path),
         media_type=mime,
         headers={
-            "Content-Disposition": f'inline; filename="{safe_fn}"',
+            **sec_headers,
+            "Content-Disposition": f'{disposition}; filename="{safe_fn}"',
             "Cache-Control": "private, max-age=3600",
         },
     )
@@ -2976,7 +2999,8 @@ def compute_run_voice(
     except OSError:
         pass
 
-    return FileResponse(str(audio_path), media_type=media_type)
+    return FileResponse(str(audio_path), media_type=media_type,
+                        headers={"X-Content-Type-Options": "nosniff"})
 
 # ══════════════════════════════════════════════════════════════════════════
 # ── ACS Engine — Autonomous Compute Shell (ADR-0104, second engine)  ──────

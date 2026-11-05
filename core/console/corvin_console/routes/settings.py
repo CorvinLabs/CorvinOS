@@ -856,14 +856,22 @@ def settings_write(
         )
 
     try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = file_path.with_suffix(file_path.suffix + ".tmp")
-        tmp.write_text(body.body, encoding="utf-8")
-        try:
-            tmp.chmod(0o600)
-        except OSError:
-            pass
-        tmp.replace(file_path)
+        if file_path.name == "tenant.corvin.yaml":
+            # The co-owned tenant spec goes through the one console writer
+            # (locked against the other console writers, atomic, 0o600 before
+            # replace - review SRF-3).
+            from .. import tenant_yaml as _ty  # noqa: PLC0415
+            with _ty.locked(file_path):
+                _ty.write_text(file_path, body.body)
+        else:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = file_path.with_suffix(file_path.suffix + ".tmp")
+            tmp.write_text(body.body, encoding="utf-8")
+            try:
+                tmp.chmod(0o600)
+            except OSError:
+                pass
+            tmp.replace(file_path)
     except OSError as e:
         console_audit.action_failed(
             tenant_id=rec.tenant_id,

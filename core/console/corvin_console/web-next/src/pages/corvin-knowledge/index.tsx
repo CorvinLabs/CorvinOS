@@ -271,7 +271,7 @@ export function CorvinKnowledgePage() {
                 <div className="space-y-1">
                   <label className="text-sm font-medium" htmlFor="ck-repo">Repository path</label>
                   <Input id="ck-repo" className="font-mono" value={cfg.repo_path} onChange={(e) => setDraft({ ...cfg, repo_path: e.target.value })} />
-                  <p className="text-xs text-muted-foreground">Local checkout the graph is read from (kb/graph/entities.jsonl, kb/graph/relations.jsonl — ADR-2206).</p>
+                  <p className="text-xs text-muted-foreground">Local checkout the graph is read from (kb/graph/entities.jsonl, kb/graph/relations.jsonl).</p>
                 </div>
                 <div className="space-y-1">
                   <label className="text-sm font-medium" htmlFor="ck-remote">Remote URL</label>

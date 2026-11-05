@@ -50,7 +50,7 @@ def _fake_session_record():
     from corvin_console import auth as _auth
     return _auth.SessionRecord(
         sid="s", sid_fingerprint="fp", tier="owner", tenant_id="_default",
-        token_fingerprint="tf", csrf_secret="cs",
+        token_fingerprint="tf", csrf_secret="cs", csrf_nonce="", csrf_nonce_issued_at=0.0,
         created_at=0.0, last_seen_at=0.0, expires_at=2_000_000_000.0,
     )
 

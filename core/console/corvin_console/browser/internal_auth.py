@@ -150,6 +150,10 @@ def _bearer_record(token: str | None) -> session_auth.SessionRecord | None:
         tenant_id=tenant_id,
         token_fingerprint="",
         csrf_secret="",
+        # No CSRF nonce: this credential is a header the browser never attaches
+        # on its own, so require_csrf_or_token skips the CSRF check for it.
+        csrf_nonce="",
+        csrf_nonce_issued_at=0.0,
         created_at=now,
         last_seen_at=now,
         expires_at=now + _TTL_S,

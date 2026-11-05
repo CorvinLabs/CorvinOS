@@ -94,7 +94,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
       setValidationResult(data)
       setStep('confirm')
     } catch (err) {
-      setError(`Fehler: ${err instanceof Error ? err.message : 'Unbekannt'}`)
+      setError(`Error: ${err instanceof Error ? err.message : 'unknown error'}`)
       setStep('error')
     }
   }
@@ -127,7 +127,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
       setStep('success')
       onSuccess?.()
     } catch (err) {
-      setError(`Fehler: ${err instanceof Error ? err.message : 'Unbekannt'}`)
+      setError(`Error: ${err instanceof Error ? err.message : 'unknown error'}`)
       setStep('error')
     }
   }
@@ -313,7 +313,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
                 <div className="flex items-start">
                   <AlertCircle className="w-5 h-5 text-destructive mr-2 mt-0.5 flex-shrink-0" />
                   <div>
-                    <h3 className="font-medium text-destructive">Fehler</h3>
+                    <h3 className="font-medium text-destructive">Error</h3>
                     <p className="text-sm text-destructive mt-1">{error}</p>
                   </div>
                 </div>

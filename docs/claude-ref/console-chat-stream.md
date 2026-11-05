@@ -26,10 +26,51 @@ then showed no agent output at all.
 | `delta`, `tool_use`, `tool_diff`, `result`, `artifact`, `notice`, `engine`, `engine_progress`, `language`, `bg_status`, `session_title`, `ccc_action`, `error` | during a turn | produced by `chat_runtime.stream_turn`; fanned out to attached sockets too |
 | `done` | end of a turn | the starting socket: `{type: "done"}`; attached sockets: `{type: "done", attached: true, turn_id}` |
 | `turn_resync` | an attached socket fell `live_turns.MAX_QUEUE` events behind | it receives nothing more for this turn; its `done` reconciles |
-| `voice` | after a turn, when its audio is archived | separate forwarder (ADR-0194) |
+| `voice` | after a turn, when its audio is archived | separate forwarder (ADR-0194). Carries `msg_id` when the `/voice/tts` request named one (the per-message "Voice summary" button): the client attaches the player to THAT message, also after a reload, and ignores an id it does not hold; without `msg_id` it attaches to the current, else the last completed turn |
 | `pong`, `info` | replies | `info` for a `cancel` outside the socket's own turn: `"stopping the running turn"` or `"no active turn"` |
 
 Client → server: `user {text, voice_on}`, `cancel`, `ping`.
+
+**Host and Origin (review SRF-1, 2026-11-05).** The socket is refused with close code 1008
+before the route runs when its `Host` is not a loopback name, an IP literal or an
+operator-allowlisted host, or when it carries an `Origin` that is not the same host:port as
+its `Host`, the vite dev server (`localhost:5173`) or an entry of `CORVIN_ALLOWED_ORIGINS`
+(`corvin_console/host_guard.py`; see `console-security-surfaces.md` § DNS rebinding).
+
+### Model and token line (ADR-2263)
+
+* `engine` (OS engine, before the spawn) carries `routed_model`: the model
+  `model_selector.resolve_os_model` chose. It names the model of a RUNNING turn.
+* `turn_usage` (after the CLI `result`) carries `{model, routed_model, usage}`: `model` is the
+  model the CLI CONFIRMED in its `init` event only (never filled from `routed_model`), `usage`
+  the raw `result.usage` with every unreported count `null`, never 0.
+* The same payload is persisted as `turn_usage` on the final assistant turn in `turns.jsonl`
+  (`chat_runtime._append_turn(turn_usage=...)`); `GET /chat/sessions/{sid}/turns` passes it
+  through and `hydrateChatTurn` rebuilds the line, so a reload shows what the live stream showed.
+  Only a turn that reached `turn_usage` has it: a cancelled or failed turn persists none.
+* The badge (`web-next/src/lib/turn-usage.ts`): after `turn_usage`,
+  `Model: <confirmed> · Tokens: <in> in / <out> out · Cache: …`, with `(routed: X)` only when the
+  routed model differs from the confirmed one (a dated snapshot equals its family alias) or the
+  confirmed one is unknown; `unknown` only for a value the engine did not report. While the turn
+  runs: `Model: <routed> (routed) · Tokens: pending` (`formatPendingTurnUsage`) — never
+  "unknown". A turn that ENDS without `turn_usage` shows the engine label, the same line a reload
+  shows for it.
+* Proofs: `core/console/tests/test_chat_turn_usage_stream_e2e.py` (real WebSocket route + fake
+  claude subprocess; `routed_model` on `engine`, `turn_usage` and the persisted turn),
+  `web-next/tests/unit/chat-turn-usage.test.ts`, `tests/integration/chat/chat-page.test.tsx`.
+
+### Per-message "Voice summary"
+
+Every finished assistant message without an archived player shows a "Voice summary" button
+(`VoiceSummaryFooter`, `pages/chat.tsx`). It calls `/voice/tts` with the message text, the chat
+`sid` and `msg_id` = that message's id; the route archives the audio and echoes `msg_id` in the
+live `voice` event, so the player replaces the button on the CLICKED message (before 2026-11-05 it
+landed on the newest message, and after a reload not at all). After a reload the archived audio
+is matched to its turn by the text key (`attach_voice_artifacts`). A stale CSRF token on
+`/voice/tts` is retried ONCE with the token from `/auth/whoami` (`ttsBlob`,
+`tests/unit/tts-csrf-retry.test.ts`); a second refusal is surfaced, never bypassed.
+Proofs: `core/console/tests/test_voice_summary_target_message.py` (HTTP),
+`web-next/tests/unit/lib/chat-registry.test.ts`, `tests/integration/chat/chat-page.test.tsx`.
 
 ## The hub (`corvin_console/live_turns.py`)
 

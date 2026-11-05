@@ -923,7 +923,9 @@ def test_a_final_result_is_guaranteed_after_a_pending_one() -> None:
     """
     import re as _re
     src = Path(cr.__file__).read_text(encoding="utf-8")
-    m = _re.search(r"if _ann_pending:\s*\n\s*yield \{\"type\": \"result\"", src)
+    # Comment lines and the outcome assignment may sit between the gate and the yield.
+    m = _re.search(r"if _ann_pending:\s*\n(?:[ \t]*(?:#[^\n]*|_ann_outcome = [^\n]*)\n)*"
+                   r"\s*yield \{\"type\": \"result\"", src)
     assert m, ("the final result event must be gated on _ann_pending, not on "
                "_ann_suffix — otherwise an empty annotation leaves the turn mute")
 

@@ -362,15 +362,21 @@ class TestChmodBeforeReplace(unittest.TestCase):
     """Finding 7 — _write_tenant_yaml must chmod BEFORE os.replace."""
 
     def test_chmod_order_in_write_tenant_yaml(self):
-        source = (_REPO / "core" / "console" / "corvin_console" / "routes" / "compute.py"
+        # compute._write_tenant_yaml delegates to the one console tenant-YAML writer
+        # (corvin_console/tenant_yaml.py, review SRF-3); the ordering is pinned there.
+        compute_src = (_REPO / "core" / "console" / "corvin_console" / "routes" / "compute.py"
+                       ).read_text(encoding="utf-8")
+        idx = compute_src.index("def _write_tenant_yaml(")
+        self.assertIn("_ty.write_mapping(", compute_src[idx:compute_src.index("\ndef ", idx + 10)])
+        source = (_REPO / "core" / "console" / "corvin_console" / "tenant_yaml.py"
                   ).read_text(encoding="utf-8")
-        idx = source.index("def _write_tenant_yaml(")
+        idx = source.index("def write_text(")
         end = source.index("\ndef ", idx + 10)
         snippet = source[idx:end]
         chmod_pos = snippet.index("os.chmod(tmp")
         replace_pos = snippet.index("os.replace(tmp")
         self.assertLess(chmod_pos, replace_pos,
-                        "_write_tenant_yaml: os.chmod must come before os.replace")
+                        "tenant_yaml.write_text: os.chmod must come before os.replace")
 
 
 class TestChampLossBug(unittest.TestCase):

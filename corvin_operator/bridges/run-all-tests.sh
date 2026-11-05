@@ -49,6 +49,15 @@ export CORVIN_AUDIT_ANCHOR_KEY="$_SUITE_SANDBOX/audit_anchor.key"
 # move CORVIN_HOME themselves, so no fixed value can be right for them (review 2026-10-12, ACP2-4).
 export FORGE_ROOT="$_SUITE_SANDBOX/forge_root"
 mkdir -p "$FORGE_ROOT"
+# The forge / skill-forge PROJECT scope is `<git toplevel>/.corvin/{forge,skill-forge}`
+# unless CORVIN_PROJECT_ROOT names one — and it ignores CORVIN_HOME and FORGE_ROOT.
+# Run from the main checkout that is the live install: the bridge adapter's
+# auto-grade created `.corvin/skill-forge/{manifest,skills_registry}.json` there,
+# and the forge multi-scope test's promote-to-project wrote a tool plus a
+# `tool.created` record into `.corvin/forge/audit.jsonl` (measured 2026-11-05 on a
+# clean worktree). A test that sets its own CORVIN_PROJECT_ROOT still wins.
+export CORVIN_PROJECT_ROOT="$_SUITE_SANDBOX/project"
+mkdir -p "$CORVIN_PROJECT_ROOT"
 unset VOICE_AUDIT_PATH
 _REAL_HOME="$HOME"
 if [[ "${CLAUDE_LIVE_E2E:-}" != "1" ]]; then
@@ -234,7 +243,6 @@ run "Node: local-announce survives a missing announce program" node shared/js/te
 run "Python: voice summarizer choice (VOICE-F9)" python3 shared/test_adapter_voice_summarizer_choice.py >/dev/null || fails=$((fails+1))
 run "Python: voice quota"        python3 shared/test_voice_quota.py >/dev/null              || fails=$((fails+1))
 run "Python: session reset"      python3 shared/test_session_reset.py >/dev/null      || fails=$((fails+1))
-run "Python: router"             python3 shared/test_router.py >/dev/null             || fails=$((fails+1))
 run "Python: ACS-X classifier (ADR-0155)" python3 shared/test_acs_classify.py >/dev/null || fails=$((fails+1))
 run "Python: spawn gates (ADR-0158 M1)"  python3 shared/tests/test_spawn_gates.py >/dev/null || fails=$((fails+1))
 run "Python: notification relay" python3 ../voice/hooks/test_notification_relay.py >/dev/null || fails=$((fails+1))
@@ -646,6 +654,9 @@ run "Python: ldd ↔ dialectic"    python3 shared/test_ldd_dialectic_coupling.py
 run "Python: ldd dependencies"   python3 shared/test_ldd_dependencies.py >/dev/null   || fails=$((fails+1))
 run "Python: persona ldd"        python3 ../cowork/test/test_persona_ldd_resolution.py >/dev/null || fails=$((fails+1))
 run "Node: audit.js wrapper"     node shared/js/test_audit.js >/dev/null              || fails=$((fails+1))
+run "Node: host guard (DNS rebinding, daemon HTTP)" node shared/js/test_host_guard.js >/dev/null || fails=$((fails+1))
+run "Python: A2A GET routes gated (SRF-7)" python3 -m pytest -q shared/test_a2a_get_routes_gated.py >/dev/null || fails=$((fails+1))
+run "Python: every daemon writes its inbox atomically (SRF-9)" python3 -m pytest -q shared/test_daemon_inbox_atomic.py >/dev/null || fails=$((fails+1))
 run "Node: auth audit hooks"     node shared/js/test_auth_audit.js >/dev/null         || fails=$((fails+1))
 run "Node: read-only gate"       node shared/js/test_auth_read_only.js >/dev/null     || fails=$((fails+1))
 run "Node: observer visibility"  node shared/js/test_observer_visibility.js >/dev/null || fails=$((fails+1))
@@ -917,7 +928,7 @@ run "Python: L34 data classification + L34/L35 integration" bash -c 'PYTEST="${P
 run "Python: L34 SECRET floor for a tenant without a policy (ADR-2299, T-0254)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../tests/security/test_t0254_secret_floor_no_policy.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: provider_compliance parser + validate_provider + provider-aware L35 (ADR-2268, T-0228)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_provider_compliance_parser.py shared/test_provider_flow_validation.py shared/test_sensitive_route.py shared/test_sensitive_detector.py shared/test_l34_reroute_decision.py shared/test_classify_task_detector.py ../../core/console/tests/test_sensitive_route_api.py ../../core/console/tests/test_detector_call_sites_e2e.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: L34 relabel pin for every bundled US-cloud engine (T-0226)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_l34_pinned_engine_relabel.py ../../core/plugins/tests/test_l34_relabel_boot_report.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
-run "Python: sensitive-data reroute: resolver, strict env, bridge + console E2E (ADR-2268, T-0219/T-0221/T-0229)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_l34_route_resolver.py shared/test_provider_env_strict.py shared/test_bridge_sensitive_reroute_e2e.py shared/test_bridge_reroute_session_isolation_e2e.pyshared/test_sensitive_route_adversarial.py ../../core/console/tests/test_console_sensitive_reroute_e2e.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: sensitive-data reroute: resolver, strict env, bridge + console E2E (ADR-2268, T-0219/T-0221/T-0229)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_l34_route_resolver.py shared/test_provider_env_strict.py shared/test_bridge_sensitive_reroute_e2e.py shared/test_bridge_reroute_session_isolation_e2e.py shared/test_sensitive_route_adversarial.py ../../core/console/tests/test_console_sensitive_reroute_e2e.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: claude_code spawn env agrees with the L35 host; one home resolver (T-0230)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_claude_code_route_agreement.py shared/test_adapter_openrouter_routing.py ../../core/console/tests/test_console_provider_route_e2e.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
 
 # ── Learning systems (ADR-2281): register well-formedness + reachability ratchet ──

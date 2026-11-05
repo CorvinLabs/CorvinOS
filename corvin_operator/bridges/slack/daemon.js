@@ -122,10 +122,13 @@ let botUserId = null;
 // alphabetical-sort race) is dropped silently.
 const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
+const { writeInboxAtomic } = require('../shared/js/inbox_write');
+
 function writeInbox(payload) {
   const id = newMsgId();
-  fs.writeFileSync(path.join(INBOX, `${id}.json`),
-    JSON.stringify({ id, channel: CHANNEL, ...payload }, null, 2));
+  // tmp + rename at mode 0o600, like every other daemon (review SRF-9): an in-place
+  // write could be read half-written by the adapter's 1 Hz poll and quarantined.
+  writeInboxAtomic(INBOX, id, { id, channel: CHANNEL, ...payload });
   const kind = payload.audio_path ? 'voice'
              : payload.image_path ? 'image'
              : payload.document_path ? 'document'

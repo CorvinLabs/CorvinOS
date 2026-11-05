@@ -188,6 +188,11 @@ def local_login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="local-login is only available from localhost",
         )
+    # The peer alone is not enough: under DNS rebinding the peer IS 127.0.0.1 while
+    # the browser names the attacker's host. The Host must be loopback too, even
+    # when it is an operator-allowlisted public name (review SRF-1).
+    from .. import host_guard as _host_guard  # noqa: PLC0415
+    _host_guard.require_loopback_host(request)
 
     if os.environ.get("CORVIN_LOCAL_AUTOLOGIN", "1") == "0":
         raise HTTPException(

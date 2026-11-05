@@ -19,51 +19,47 @@ except ImportError:
 router = APIRouter(prefix="/api/feature-status", tags=["feature-status"])
 
 
-def _get_tenant_yaml_path() -> Path:
-    """Get the path to tenant.corvin.yaml (in ~/.corvin/tenants/_default/)."""
-    home = Path.home()
-    return home / ".corvin" / "tenants" / "_default" / "tenant.corvin.yaml"
+def _get_tenant_yaml_path(tenant_id: str) -> Path:
+    """The session tenant's tenant.corvin.yaml - the file every other reader uses.
+
+    Used to be a hand-composed ``~/.corvin/tenants/_default/tenant.corvin.yaml``
+    (no ``global/``, ignoring CORVIN_HOME and the session's tenant): a file no
+    reader opens, written non-atomically at umask before a late chmod.
+    """
+    from forge import paths as _forge_paths  # noqa: PLC0415
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
+    return _forge_paths.tenant_global_dir(tenant_id) / _ty.FILENAME
 
 
-def _load_tenant_spec() -> dict:
-    """Load tenant.corvin.yaml and return the spec dict."""
-    path = _get_tenant_yaml_path()
-    if not path.exists():
-        return {"preset": "standard"}
-
+def _load_tenant_spec(tenant_id: str) -> dict:
+    """Load tenant.corvin.yaml and return the spec dict (read-only view)."""
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        return data.get("spec", {})
-    except Exception:
+        data = _ty.load_for_write(_get_tenant_yaml_path(tenant_id))
+    except _ty.TenantYamlUnreadable:
         return {"preset": "standard"}
+    spec = data.get("spec")
+    return spec if isinstance(spec, dict) else {"preset": "standard"}
 
 
-def _save_tenant_spec(spec: dict) -> None:
-    """Save updated spec back to tenant.corvin.yaml."""
-    path = _get_tenant_yaml_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _save_preset(tenant_id: str, preset: str) -> None:
+    """Set spec.preset through the one console tenant-YAML writer (locked, atomic,
+    0o600); an unreadable file raises TenantYamlUnreadable and nothing is written."""
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
 
-    # Load existing YAML or create new
-    if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    else:
-        data = {}
+    def _set(data: dict) -> None:
+        spec = data.get("spec")
+        if not isinstance(spec, dict):
+            spec = data["spec"] = {}
+        spec["preset"] = preset
 
-    # Update spec
-    data["spec"] = spec
-
-    # Write back with restricted permissions (GDPR Art. 32)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-    os.chmod(path, 0o600)
+    _ty.update(_get_tenant_yaml_path(tenant_id), _set)
 
 
 @router.get("/preset")
 async def get_preset(session=Depends(require_session)):
     """Get current installation preset (minimal|standard|advanced). Requires auth."""
-    spec = _load_tenant_spec()
+    spec = _load_tenant_spec(session.tenant_id)
     preset = spec.get("preset", "standard")
     return {"preset": preset}
 
@@ -77,9 +73,12 @@ async def set_preset(body: dict, session=Depends(require_session), csrf=Depends(
     if preset not in ("minimal", "standard", "advanced"):
         raise HTTPException(status_code=400, detail="Invalid preset")
 
-    spec = _load_tenant_spec()
-    spec["preset"] = preset
-    _save_tenant_spec(spec)
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
+    try:
+        _save_preset(session.tenant_id, preset)
+    except _ty.TenantYamlUnreadable:
+        raise HTTPException(status_code=409,
+                            detail="tenant configuration is unreadable; fix or restore it first") from None
 
     return JSONResponse(
         status_code=201,

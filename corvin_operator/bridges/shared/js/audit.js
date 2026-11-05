@@ -63,6 +63,7 @@ const KNOWN_EVENT_TYPES = new Set([
   'daemon.started',
   'daemon.stopped',
   'daemon.error',
+  'http.host_rejected',
 ]);
 
 /**

@@ -117,40 +117,35 @@ def _write_flags(tenant_id: str, patch: dict[str, bool]) -> None:
     """
     if _yaml is None:
         raise RuntimeError("pyyaml unavailable")
-    path = _config_path(tenant_id)
-    cfg = _read_config(tenant_id)
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
 
-    # Mirror the reader: write into spec: when the manifest has one, else top-level.
-    # `target` is a live reference into `cfg`, so mutating it mutates the document
-    # that is dumped below — the full manifest structure is preserved.
-    target = cfg["spec"] if isinstance(cfg.get("spec"), dict) else cfg
+    def _merge(cfg: dict[str, Any]) -> None:
+        # A new (empty) file gets the manifest's spec: wrapper, where every reader
+        # looks first. Otherwise mirror the reader: spec: when present, else top-level.
+        if not cfg:
+            cfg["spec"] = {}
+        target =cfg["spec"] if isinstance(cfg.get("spec"), dict) else cfg
+        if any(k in patch for k in ("telemetry_enabled", "ping_enabled", "error_enabled")):
+            if not isinstance(target.get("telemetry"), dict):
+                target["telemetry"] = {}
+            if "telemetry_enabled" in patch:
+                target["telemetry"]["healing_traces"] = patch["telemetry_enabled"]
+            if "ping_enabled" in patch:
+                target["telemetry"]["ping_enabled"] = patch["ping_enabled"]
+            if "error_enabled" in patch:
+                target["telemetry"]["error_traces"] = patch["error_enabled"]
+        if "healing_enabled" in patch or "risky_enabled" in patch:
+            if not isinstance(target.get("aco"), dict):
+                target["aco"] = {}
+            if "healing_enabled" in patch:
+                target["aco"]["l5_enabled"] = patch["healing_enabled"]
+            if "risky_enabled" in patch:
+                target["aco"]["l5_risky"] = patch["risky_enabled"]
 
-    if any(k in patch for k in ("telemetry_enabled", "ping_enabled", "error_enabled")):
-        if not isinstance(target.get("telemetry"), dict):
-            target["telemetry"] = {}
-        if "telemetry_enabled" in patch:
-            target["telemetry"]["healing_traces"] = patch["telemetry_enabled"]
-        if "ping_enabled" in patch:
-            target["telemetry"]["ping_enabled"] = patch["ping_enabled"]
-        if "error_enabled" in patch:
-            target["telemetry"]["error_traces"] = patch["error_enabled"]
-    if "healing_enabled" in patch or "risky_enabled" in patch:
-        if not isinstance(target.get("aco"), dict):
-            target["aco"] = {}
-        if "healing_enabled" in patch:
-            target["aco"]["l5_enabled"] = patch["healing_enabled"]
-        if "risky_enabled" in patch:
-            target["aco"]["l5_risky"] = patch["risky_enabled"]
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body = _yaml.dump(cfg, default_flow_style=False, sort_keys=False)
-    tmp = path.with_suffix(".yaml.tmp")
-    tmp.write_text(body, encoding="utf-8")
-    try:
-        tmp.chmod(0o600)
-    except OSError:
-        pass
-    tmp.replace(path)
+    # The one console tenant-YAML writer: locked, atomic, 0o600 before replace. An
+    # unreadable file raises TenantYamlUnreadable (nothing written) instead of being
+    # read as {} and rewritten with only these flags (review SRF-4).
+    _ty.update(_config_path(tenant_id), _merge)
 
 
 class HealingConfigRequest(BaseModel):
@@ -208,8 +203,22 @@ def patch_healing_config(
             )
 
     if patch:
+        from .. import tenant_yaml as _ty  # noqa: PLC0415
         try:
             _write_flags(rec.tenant_id, patch)
+        except _ty.TenantYamlUnreadable:
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="settings.write",
+                target_kind="settings_file",
+                target_id="tenant.corvin.yaml",
+                reason="tenant-yaml-unreadable",
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_409_CONFLICT,
+                detail="tenant configuration is unreadable; fix or restore it first",
+            ) from None
         except Exception as e:
             console_audit.action_failed(
                 tenant_id=rec.tenant_id,

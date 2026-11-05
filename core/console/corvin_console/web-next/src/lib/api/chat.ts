@@ -80,6 +80,14 @@ export interface ChatTurn {
   /** The note passed the pre-spawn gates (only those are ever re-supplied). */
   btw_gated?: boolean;
   gate_refused?: string;
+  /** ADR-2263: the confirmed model, the routed model and the raw usage of an
+   *  OS-engine assistant turn (chat_runtime.py::_append_turn). A field the
+   *  engine did not report is null, never 0. */
+  turn_usage?: {
+    model: string | null;
+    routed_model: string | null;
+    usage: Record<string, number | null> | null;
+  } | null;
 }
 
 export interface ChatTurnsResponse {

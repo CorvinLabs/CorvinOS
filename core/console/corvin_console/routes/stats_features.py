@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+
+from .. import auth as session_auth
+from ..deps import require_session
 
 router = APIRouter()
 
@@ -72,8 +75,17 @@ def _validate_feature_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     return validated
 
 
+def _home() -> Path:
+    """The install home - the same resolver the telemetry overview reads it with
+    (``forge.paths.corvin_home``), never a hand-composed CORVIN_HOME/~/.corvin."""
+    from forge import paths as _forge_paths  # noqa: PLC0415
+    return Path(_forge_paths.corvin_home())
+
+
 @router.get("/stats/features", tags=["console-stats"])
-def get_feature_stats() -> FeatureHeatmapResponse:
+def get_feature_stats(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> FeatureHeatmapResponse:
     """Get this instance's feature adoption snapshot.
 
     Scans ~/.corvin/telemetry/feature_snapshot.json (local instance data
@@ -81,11 +93,11 @@ def get_feature_stats() -> FeatureHeatmapResponse:
     GET /v1/stats/features). Used by dashboard FeatureHeatmapCard component.
 
     v0.10.60: Validates snapshot data before using (fails gracefully if corrupted).
+
+    Behind the console session (review SRF-12): which features an install has
+    adopted is reconnaissance for an unauthenticated caller on a LAN bind.
     """
-    # Resolve home path from environment or default.
-    import os
-    home_str = os.environ.get("CORVIN_HOME")
-    home = Path(home_str) if home_str else Path.home() / ".corvin"
+    home = _home()
 
     snapshot_file = home / "telemetry" / "feature_snapshot.json"
     snapshot_data: dict[str, Any] = {}

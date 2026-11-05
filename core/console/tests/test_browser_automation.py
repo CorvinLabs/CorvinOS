@@ -1259,12 +1259,12 @@ def test_navigate_route_passes_confirm_cross_host_for_internal_tool_caller(monke
 
     internal_rec = session_auth.SessionRecord(
         sid="mcp:x", sid_fingerprint="fp1", tier="owner", tenant_id="acme",
-        token_fingerprint="", csrf_secret="", created_at=0.0, last_seen_at=0.0,
+        token_fingerprint="", csrf_secret="", csrf_nonce="", csrf_nonce_issued_at=0.0, created_at=0.0, last_seen_at=0.0,
         expires_at=1e18, is_internal_tool=True,
     )
     cookie_rec = session_auth.SessionRecord(
         sid="s1", sid_fingerprint="fp1", tier="owner", tenant_id="acme",
-        token_fingerprint="", csrf_secret="", created_at=0.0, last_seen_at=0.0,
+        token_fingerprint="", csrf_secret="", csrf_nonce="", csrf_nonce_issued_at=0.0, created_at=0.0, last_seen_at=0.0,
         expires_at=1e18, is_internal_tool=False,
     )
 

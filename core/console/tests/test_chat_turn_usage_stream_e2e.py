@@ -227,3 +227,58 @@ def test_ws_missing_init_model_sends_model_none_not_the_requested_one(ws_turn, t
     assert len(got) == 1, wire
     assert got[0]["model"] in (None, ""), wire
     assert got[0]["usage"] == USAGE
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX process semantics in the harness")
+def test_confirmed_model_and_usage_are_persisted_on_the_assistant_turn(tmp_path, monkeypatch):
+    """The turn record in turns.jsonl (what the chat reloads from) carries the same
+    model and usage the live stream sent — a reload must not lose them."""
+    _sandbox(tmp_path, monkeypatch)
+    _replay(tmp_path, monkeypatch, _stream(init_model=CONFIRMED, usage=USAGE))
+
+    from corvin_console import chat_runtime as cr
+
+    sess = cr.create_session("_default")
+
+    async def _collect():
+        return [ev async for ev in cr.stream_turn(sess, "say done")]
+
+    asyncio.run(_collect())
+
+    assistant = [t for t in cr.read_turns("_default", sess.sid) if t["role"] == "assistant"]
+    assert assistant, "the assistant turn was not persisted"
+    persisted = assistant[-1]["turn_usage"]
+    assert persisted["model"] == CONFIRMED
+    assert persisted["usage"] == USAGE
+
+
+
+ROUTED = "claude-opus-5"
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX process semantics in the harness")
+def test_ws_routed_model_rides_the_engine_event_turn_usage_and_the_persisted_turn(
+        ws_turn, tmp_path, monkeypatch):
+    """``routed_model`` is the selector's choice, known before the spawn: the ``engine``
+    event carries it (the chat names the model of a RUNNING turn), ``turn_usage`` carries
+    it next to the CONFIRMED model (they may differ), and the persisted assistant turn
+    keeps both so a reload renders the same line. The confirmed model never comes from
+    the routed one."""
+    from corvin_console import chat_runtime as cr
+
+    assert cr._model_selector is not None, "positive control: the selector is importable"
+    monkeypatch.setattr(cr._model_selector, "resolve_os_model", lambda *a, **k: ROUTED)
+    monkeypatch.setattr(cr._model_selector, "resolve_step_model", lambda m, **k: m)
+    wire = ws_turn(_stream(init_model=CONFIRMED, usage=USAGE))
+
+    engine = [ev for ev in wire if ev.get("type") == "engine"]
+    assert engine and engine[0]["routed_model"] == ROUTED, wire
+    got = _turn_usage_events(wire)
+    assert len(got) == 1, wire
+    assert got[0]["routed_model"] == ROUTED
+    assert got[0]["model"] == CONFIRMED
+    turns = [t for sess in cr.list_sessions("_default")
+             for t in cr.read_turns("_default", sess.sid) if t["role"] == "assistant"]
+    assert turns, "the assistant turn was not persisted"
+    persisted = turns[-1]["turn_usage"]
+    assert persisted == {"model": CONFIRMED, "routed_model": ROUTED, "usage": USAGE}

@@ -94,7 +94,7 @@ class ModelHistory(BaseModel):
     """Model's confidence history."""
     model: str
     task_type: str
-    samples: List[Dict[str, Any]]  # Recent samples with timestamps
+    samples: List[Dict[str, Any]]  # Recent samples, oldest first: {"index", "confidence"} (no time is stored)
 
 
 class ResetResponse(BaseModel):
@@ -473,15 +473,15 @@ async def get_model_history(
         optimizer.get_stats(task_type, model_id, tenant_id)  # read-through: loads the persisted history
         history = optimizer._confidence_history.get(key, [])
 
-        # Return recent samples with timestamps (simplified)
+        # The optimizer stores confidence values only, no observation time. The
+        # samples are returned in recorded order (oldest first) with their position
+        # in the full history - never an invented timestamp (review SRF-14: this
+        # used to fabricate "now - n minutes" per sample, ADR-0763).
+        recent = history[-limit:]
+        offset = len(history) - len(recent)
         samples = [
-            {
-                "timestamp": (
-                    datetime.now(timezone.utc).timestamp() - (len(history) - i) * 60
-                ),
-                "confidence": conf,
-            }
-            for i, conf in enumerate(history[-limit:])
+            {"index": offset + i, "confidence": conf}
+            for i, conf in enumerate(recent)
         ]
 
         logger.info(f"Model history retrieved: {model_id}/{task_type}, {len(samples)} samples")

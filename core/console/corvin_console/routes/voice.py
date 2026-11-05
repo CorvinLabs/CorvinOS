@@ -225,7 +225,8 @@ async def _run_with_tts_slot(
         _get_tts_semaphore().release()
 
 
-def _publish_voice_live_event(tenant_id: str, sid: str | None, resp: Response, *, label: str) -> None:
+def _publish_voice_live_event(tenant_id: str, sid: str | None, resp: Response, *, label: str,
+                              msg_id: str | None = None) -> None:
     """Push the just-archived voice file onto the session's live WS stream.
 
     Best-effort / must never raise: TTS itself already succeeded (or degraded
@@ -242,7 +243,7 @@ def _publish_voice_live_event(tenant_id: str, sid: str | None, resp: Response, *
         return
     try:
         from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
-        _cr.publish_voice_event(sid, _cr.voice_dir(tenant_id, sid) / name, label)
+        _cr.publish_voice_event(sid, _cr.voice_dir(tenant_id, sid) / name, label, msg_id=msg_id)
     except Exception:  # noqa: BLE001
         pass
 
@@ -1037,6 +1038,12 @@ class TtsRequest(BaseModel):
     # system-generated strings like localized welcome prompts are never misclassified
     # or blocked (ADR-0194 Phase 2 voice trust model).
     system_generated: bool = Field(False)
+    # The chat message the audio belongs to, when the caller knows it (the per-message
+    # "Voice summary" button). Echoed in the live "voice" event so the player attaches
+    # to the CLICKED message, not to the newest turn (review SRF-10). Opaque to the
+    # server; never a path component.
+    msg_id: str | None = Field(None, min_length=1, max_length=128,
+                               pattern=r"^[A-Za-z0-9_:.-]+$")
     model_config = {"extra": "forbid"}
 
 
@@ -1657,7 +1664,7 @@ async def voice_tts(
     # live-replay) — additive to, and independent of, the ephemeral playTts()
     # auto-speak-once path above; runs back on the event loop (not the sync
     # threadpool worker), so it's safe to touch the asyncio-based pub/sub here.
-    _publish_voice_live_event(rec.tenant_id, body.sid, resp, label="voice")
+    _publish_voice_live_event(rec.tenant_id, body.sid, resp, label="voice", msg_id=body.msg_id)
     return resp
 
 

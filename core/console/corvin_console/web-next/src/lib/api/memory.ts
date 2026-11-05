@@ -4,6 +4,7 @@
  */
 
 import { ApiError, api, isCsrfError, notifyCsrfError } from "./client";
+import { setCurrentCsrf } from "@/lib/csrf-fetch";
 
 // ── Memory API ────────────────────────────────────────────────────────────
 // The caller's OWN tenant memory (ADR A-10): conversation turns from the tenant
@@ -141,7 +142,8 @@ export function getLastTtsReason(): string | null {
 
 export async function ttsBlob(text: string, lang: string, csrf: string,
                               sid?: string, signal?: AbortSignal,
-                              systemGenerated?: boolean): Promise<Blob> {
+                              systemGenerated?: boolean,
+                              msgId?: string): Promise<Blob> {
   // `signal`: see ttsSegment — client-side abort on Stop/supersede; an
   // already-running server synthesis finishes on its own schedule.
   // `systemGenerated`: explicit trust flag (e.g. the first-boot welcome
@@ -150,36 +152,65 @@ export async function ttsBlob(text: string, lang: string, csrf: string,
   // server no longer infers this from sid being absent (2026-07-29 — that
   // inference skipped summarization for ANY sid-less request, including a
   // real answer that simply didn't pass a session id).
-  const res = await fetch("/v1/console/voice/tts", {
+  // ADR-0194 Phase 1: naming the session archives this audio into the session's
+  // voice/ dir, so the turn keeps a replayable player. Callers without a chat
+  // session (e.g. the first-boot greeting) omit it and get the old behaviour.
+  const body = JSON.stringify({
+    text, lang,
+    ...(sid ? { sid } : {}),
+    ...(systemGenerated ? { system_generated: true } : {}),
+    // The chat message this audio belongs to (per-message "Voice summary"): the
+    // server echoes it in the live "voice" event so the player lands on THAT
+    // message, not on the newest turn.
+    ...(sid && msgId ? { msg_id: msgId } : {}),
+  });
+  const post = (token: string) => fetch("/v1/console/voice/tts", {
     method: "POST",
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRF-Token": csrf,
-    },
-    // ADR-0194 Phase 1: naming the session archives this audio into the session's
-    // voice/ dir, so the turn keeps a replayable player. Callers without a chat
-    // session (e.g. the first-boot greeting) omit it and get the old behaviour.
-    body: JSON.stringify({
-      text, lang,
-      ...(sid ? { sid } : {}),
-      ...(systemGenerated ? { system_generated: true } : {}),
-    }),
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
+    body,
     signal,
   });
+  let res = await post(csrf);
+  if (res.status === 403) {
+    const errText = await res.clone().text();
+    if (isCsrfError(res.status, errText)) {
+      // The token this caller holds went stale (the session rotated it). Fetch
+      // the current one ONCE and retry: without this every TTS call 403'd until
+      // a page reload. One retry only - a server that refuses the fresh token
+      // too is answered with that refusal, never a bypass.
+      const fresh = await freshCsrfToken(signal);
+      if (fresh && fresh !== csrf) res = await post(fresh);
+    }
+  }
   if (res.status === 204) {
     _lastTtsReason = res.headers.get("X-Corvin-Voice-Reason");
     return new Blob();
   }
   if (!res.ok) {
     const errText = await res.text();
-    // Stale csrf → refresh the session so the next turn's TTS succeeds without
-    // a manual page reload (the whole reason the automatic voice note broke).
+    // Still refused: refresh the session so the next turn's TTS succeeds without
+    // a manual page reload.
     if (isCsrfError(res.status, errText)) notifyCsrfError();
     throw new ApiError(res.status, errText);
   }
   _lastTtsReason = null;
   return res.blob();
+}
+
+/** The session's current CSRF token from /auth/whoami, or null. Also handed to the
+ *  global fetch wrapper so the other raw-fetch callers stop sending the stale one. */
+async function freshCsrfToken(signal?: AbortSignal): Promise<string | null> {
+  try {
+    const r = await fetch("/v1/console/auth/whoami", { credentials: "include", signal });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { csrf_token?: unknown };
+    const tok = typeof j.csrf_token === "string" && j.csrf_token ? j.csrf_token : null;
+    if (tok) setCurrentCsrf(tok);
+    return tok;
+  } catch {
+    return null;
+  }
 }
 
 /**

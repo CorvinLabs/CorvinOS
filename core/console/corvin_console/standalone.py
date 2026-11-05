@@ -639,6 +639,11 @@ def create_app() -> FastAPI:
         openapi_url=None,
         lifespan=_lifespan,
     )
+    # Review 2026-11-05 (SRF-1): the Host/Origin guard on the whole standalone
+    # host, not only the console router — the SPA shell and the non-router
+    # routes (the /local-stats page) are reachable by a DNS-rebound site too.
+    from . import host_guard as _host_guard  # noqa: PLC0415
+    _host_guard.install(app, surface="standalone")
 
     # Any exception a route handler doesn't catch itself used to reach the
     # client as a bare "500 Internal Server Error" with zero detail, AND

@@ -92,7 +92,8 @@ class PipelineEditorTests(unittest.TestCase):
         'flag absent = off'. Mirrors routes/engine.py::_save_tenant_yaml (R6)."""
         import inspect
         src = inspect.getsource(V._write_pipeline_config)
-        self.assertIn("os.replace", src, "temp + atomic replace, never a raw write")
+        # The atomic 0o600 writer lives in corvin_console.tenant_yaml (SRF-3).
+        self.assertIn("_ty.update(", src, "the one tenant-YAML writer, never a raw write")
 
     def test_put_rejects_unknown(self):
         r = self._client().put("/vibe-engineering/pipeline",

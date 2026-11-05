@@ -508,3 +508,94 @@ class ConsoleRoundTwoRoutingE2E(_StreamTurnE2EBase):
         wire, rows, _ = self._unavailable_engine_turn("phase2_dual_write", prompt="hallo")
         self.assertTrue(any(e.get("code") == 503 for e in wire), wire)
         self.assertEqual(rows, [])
+
+
+# ── a console tenant other than the registry's boot tenant (review DLG-10, 2026-11-05) ──
+
+class ConsoleSecondTenantRoutingE2E(_StreamTurnE2EBase):
+    """A console turn of tenant ``acme`` on a Skill registry booted for ``_default``.
+
+    The registry admits only its boot tenant, so it can never run the router for acme.
+    Before the fix the phase gate still reported the Skill as available: every acme turn
+    executed the router into a "Tenant isolation violation" error, the ledger said
+    ``skill: null`` and no refusal ever named the cause. Now the gate says
+    ``skill_not_booted`` and nothing is executed. The routing audit writer is the faked
+    boundary (as in tests/skills/test_l5_routing_loop.py): this process's chain belongs
+    to ``_default``, and the chain chokepoint refuses any acme-tagged record.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from core.skills.os_skills.monitoring import dual_write
+
+        dual_write.reset_for_tests()
+        self.addCleanup(dual_write.reset_for_tests)
+        os.environ["CORVIN_ACP_PHASE"] = "phase2_dual_write"
+        self.addCleanup(os.environ.pop, "CORVIN_ACP_PHASE", None)
+
+    def test_a_non_boot_tenant_turn_is_skill_not_booted_and_runs_no_skill(self) -> None:
+        from audit import audit_event
+        from core.skills import skill_registry_phase1 as reg
+        from core.skills.boot import boot_skills
+        from core.skills.os_skills.monitoring import routing_ledger
+        import delegation_policy as dp
+
+        boot_skills(tenant_id=TENANT, wire_learning=False,
+                    audit_emit=lambda e, d: audit_event(e, details=d, tenant_id=TENANT))
+        executed: list[str] = []
+        real_execute = reg._global_registry.execute
+
+        def spy_execute(skill_id, *a, **k):
+            if skill_id == "os.delegation_router":
+                executed.append(k.get("tenant_id"))
+            return real_execute(skill_id, *a, **k)
+        audits: list[tuple[str, dict]] = []
+        acme = self.cr.create_session("acme")
+        with patch.object(reg._global_registry, "execute", spy_execute), \
+             patch.object(dp, "_audit",
+                          lambda et, d, tenant_id: audits.append((et, dict(d))) or True):
+            self.sess = acme
+            events, spawn, _ = self._run_turn("wie spät ist es eigentlich?")
+            self.assertTrue(spawn["hit"])
+            self.assertEqual(events[-1].get("type"), "done")
+            self.assertEqual(executed, [])
+            rows = routing_ledger.join(routing_ledger.read_records("acme"))
+            self.assertEqual(len(rows), 1, rows)
+            self.assertEqual((rows[0]["phase"], rows[0]["skill"]), ("shadow", None))
+            self.assertIsNotNone(rows[0]["outcome"])
+            self.assertEqual(
+                [(e, d["tenant_id"], d["reason"]) for e, d in audits
+                 if e == "routing.phase2_refused"],
+                [("routing.phase2_refused", "acme", "skill_not_booted")])
+            # Positive control: the boot tenant's turn on the same registry runs the Skill.
+            self.sess = self.cr.create_session(TENANT)
+            self._run_turn("wie spät ist es eigentlich?")
+            self.assertEqual(executed, [TENANT])
+
+
+class ConsoleRoutingOffLoopE2E(_StreamTurnE2EBase):
+    """Review DLG-14: the console routing record (Skill execution with a 500 ms budget,
+    chained audit, ledger flock) ran inline on the event loop and stalled every chat of
+    the process while it waited. It must run in a worker thread."""
+
+    def test_the_routing_record_never_runs_on_the_event_loop_thread(self) -> None:
+        import threading
+
+        import delegation_policy as dp
+
+        seen: list[tuple[bool, str]] = []
+        real = dp.route_and_record
+
+        def spy(**kw):
+            try:
+                asyncio.get_running_loop()
+                on_loop = True
+            except RuntimeError:
+                on_loop = False
+            seen.append((on_loop, threading.current_thread().name))
+            return real(**kw)
+        with patch.object(dp, "route_and_record", spy):
+            self._run_turn("wie spät ist es eigentlich?")   # triage-native branch
+            self._run_turn(FANOUT)                          # delegating branch
+        self.assertGreaterEqual(len(seen), 2, seen)
+        self.assertFalse(any(on_loop for on_loop, _ in seen), seen)

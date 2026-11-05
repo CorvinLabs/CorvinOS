@@ -361,7 +361,7 @@ class TestCacheTenantIsolation:
             tier="owner",
             tenant_id="tenant_a",
             token_fingerprint="",
-            csrf_secret="csrf1",
+            csrf_secret="csrf1", csrf_nonce="", csrf_nonce_issued_at=0.0,
             created_at=time.time(),
             last_seen_at=time.time(),
             expires_at=time.time() + 3600,
@@ -374,7 +374,7 @@ class TestCacheTenantIsolation:
             tier="owner",
             tenant_id="tenant_b",  # Different tenant
             token_fingerprint="",
-            csrf_secret="csrf2",
+            csrf_secret="csrf2", csrf_nonce="", csrf_nonce_issued_at=0.0,
             created_at=time.time(),
             last_seen_at=time.time(),
             expires_at=time.time() + 3600,
@@ -411,7 +411,7 @@ class TestCacheTenantIsolation:
             tier="owner",
             tenant_id="tenant_a",
             token_fingerprint="",
-            csrf_secret="csrf_exp",
+            csrf_secret="csrf_exp", csrf_nonce="", csrf_nonce_issued_at=0.0,
             created_at=time.time() - 7200,  # 2 hours ago
             last_seen_at=time.time() - 7200,
             expires_at=time.time() - 3600,  # Expired 1 hour ago
@@ -435,7 +435,7 @@ class TestCacheTenantIsolation:
             tier="owner",
             tenant_id="tenant_a",
             token_fingerprint="",
-            csrf_secret="csrf_inv",
+            csrf_secret="csrf_inv", csrf_nonce="", csrf_nonce_issued_at=0.0,
             created_at=time.time(),
             last_seen_at=time.time(),
             expires_at=time.time() + 3600,

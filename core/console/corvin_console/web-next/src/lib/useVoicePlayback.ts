@@ -166,7 +166,7 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
 
   const playTts = React.useCallback(
     async (text: string, lang: string, sid?: string,
-           opts?: { notifyOnEmpty?: boolean; systemGenerated?: boolean }) => {
+           opts?: { notifyOnEmpty?: boolean; systemGenerated?: boolean; msgId?: string }) => {
       // Order matters: stopVoice() ITSELF bumps the generation (that is what
       // makes an explicit Stop a real supersede), so the id must be captured
       // AFTER it. Capturing first and then calling stopVoice() made every call
@@ -180,7 +180,7 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       abortRef.current = ac;
       let blob: Blob;
       try {
-        blob = await ttsBlob(text, lang, csrf, sid, ac.signal, opts?.systemGenerated);
+        blob = await ttsBlob(text, lang, csrf, sid, ac.signal, opts?.systemGenerated, opts?.msgId);
       } catch (e) {
         if (myRequestId !== requestIdRef.current) return; // superseded meanwhile
         if (_isAbort(e)) return; // our own Stop — intentional, not an error

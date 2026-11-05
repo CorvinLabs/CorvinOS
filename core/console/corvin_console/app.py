@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as _StarletteHTTPException
 from corvin_core.process_signals import run_tree_safe as _run_tree_safe  # Windows: no hang on timeout
@@ -251,9 +251,14 @@ from .routes import (
     # CONCEPT-0097 Phase 1 — Federation Local Agent Registry
     federation_routes as federation_route,
 )
+from . import host_guard as _host_guard
 
 
-router = APIRouter()
+# Every console route - HTTP and WebSocket, on every host that mounts this router
+# (gateway, standalone, create_app) - refuses a Host this install does not answer
+# to (DNS rebinding, review SRF-1) and a WebSocket from a foreign Origin. Set on
+# the router before any include_router, so every included route inherits it.
+router = APIRouter(dependencies=[Depends(_host_guard.require_allowed_host)])
 router.include_router(auth_routes.router, prefix="/auth", tags=["console-auth"])
 router.include_router(dashboard.router, tags=["console-dashboard"])
 # Phase B — read-only viewers
@@ -1031,6 +1036,8 @@ def create_app() -> FastAPI:
             return await marketplace_slo_middleware(request, call_next)
 
     _app.add_middleware(MarketplaceSLOMiddleware)
+    # Added last, runs first: a foreign Host never reaches a route or the SPA (SRF-1).
+    _host_guard.install(_app, surface="console")
 
     _app.include_router(router)  # All API routes (includes /vibe-engineering/*)
     mount_static(_app, url_prefix="/console")  # SPA at /console/

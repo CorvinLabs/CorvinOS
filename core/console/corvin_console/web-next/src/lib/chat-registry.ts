@@ -97,6 +97,9 @@ export interface ChatMessage {
   turnModel?: string | null;
   turnUsage?: TurnUsage | null;
   turnUsageSeen?: boolean;
+  /** The model the selector routed this turn to (`engine` / `turn_usage` events).
+   *  Named in the badge only when it differs from `turnModel`. */
+  turnRoutedModel?: string | null;
   /** ADR-0214: TDE turn correlation id ("tde-<epoch>-<hex>"), stamped from
    *  the `engine` stream event when this turn ran through the Tiered
    *  Delegation Engine. Lets the Audit panel's TDE Graph tab find the
@@ -128,6 +131,10 @@ export interface StreamEvent {
         "btw_flushed" | "btw_undelivered" | "btw_window_closed" | "turn_usage";
   /** `turn_usage`: confirmed model id (null if unknown). */
   model?: string | null;
+  /** `engine` / `turn_usage`: the model the selector routed the turn to (null if none). */
+  routed_model?: string | null;
+  /** `voice`: the message the audio was synthesised for (per-message "Voice summary"). */
+  msg_id?: string;
   /** `btw_flushed` / `btw_undelivered`: the steering note's client id. */
   client_id?: string;
   /** `done` only: the turn was stopped (e.g. from another tab), not finished. */
@@ -696,7 +703,13 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
         const usage = parseTurnUsage(evt.usage);
         entry.messages = entry.messages.map((m) =>
           m.id === aid
-            ? { ...m, turnModel: evt.model ?? null, turnUsage: usage, turnUsageSeen: true }
+            ? {
+                ...m,
+                turnModel: evt.model ?? null,
+                turnRoutedModel: evt.routed_model ?? null,
+                turnUsage: usage,
+                turnUsageSeen: true,
+              }
             : m
         );
       }
@@ -718,6 +731,7 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
                 // Keep a prior tdeRunId if this particular engine event
                 // didn't carry one (e.g. a non-TDE fallback re-stamp).
                 ...(evt.tde_run_id ? { tdeRunId: evt.tde_run_id } : {}),
+                ...(evt.routed_model ? { turnRoutedModel: evt.routed_model } : {}),
               }
             : m
         );
@@ -887,7 +901,14 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
       // otherwise to the most recently completed one — /voice/tts normally
       // resolves just after "done" already fired. Additive only: this never
       // touches the ephemeral playTts() auto-speak-once path.
-      const aid = entry.currentAssistantId ?? entry.lastAssistantId;
+      //
+      // An event that names its message (msg_id: the per-message "Voice summary"
+      // button) attaches to THAT message - also after a reload, when no turn is
+      // current - and is ignored when the message is not in this view; it must
+      // never fall back to the newest turn (review SRF-10).
+      const aid = evt.msg_id
+        ? (entry.messages.some((m) => m.id === evt.msg_id) ? evt.msg_id : null)
+        : entry.currentAssistantId ?? entry.lastAssistantId;
       if (aid && evt.name && evt.path && evt.mime) {
         const part: MessagePart = {
           kind: "artifact",

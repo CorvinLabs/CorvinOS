@@ -410,7 +410,7 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
           )}
           {peerCount > 0 && (
             <Badge variant="outline" className="text-[10px]" data-testid="group-peer-delivery-hint"
-              title="A group message is mirrored into the same group on each connected instance for the people there to read. No agent runs it and no agent answers here (ADR-2218): to get an agent's answer, message that peer directly or use /ask in its peer chat.">
+              title="A group message is mirrored into the same group on each connected instance for the people there to read. No agent runs it and no agent answers here: to get an agent's answer, message that peer directly or use /ask in its peer chat.">
               <Globe2 className="mr-1 h-3 w-3" /> Delivered to {plural(peerCount, "connected instance")} · people there read it, no agent answers
             </Badge>
           )}

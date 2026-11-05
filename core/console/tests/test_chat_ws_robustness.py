@@ -71,6 +71,13 @@ class ChatWsRobustnessTests(unittest.TestCase):
         _qp.start()
         self.addCleanup(_qp.stop)
 
+    def _expect_turn_started(self, ws) -> None:  # noqa: ANN001
+        """A user turn opens with ``turn_started`` carrying the turn id
+        (docs/claude-ref/console-chat-stream.md); the engine's events follow."""
+        ev = ws.receive_json()
+        self.assertEqual(ev["type"], "turn_started")
+        self.assertTrue(ev.get("turn_id"))
+
     def _client(self) -> TestClient:
         c = TestClient(_app())
         c.cookies.set("corvin_console_sid", "valid-sid")
@@ -86,6 +93,7 @@ class ChatWsRobustnessTests(unittest.TestCase):
             with c.websocket_connect("/v1/console/chat/sessions/s1/stream") as ws:
                 self.assertEqual(ws.receive_json()["type"], "ready")
                 ws.send_json({"type": "user", "text": "do it"})
+                self._expect_turn_started(ws)
                 self.assertEqual(ws.receive_json()["type"], "tool_use")
                 # The engine raised — must arrive as an in-band error, NOT a drop.
                 self.assertEqual(ws.receive_json()["type"], "error")
@@ -104,6 +112,7 @@ class ChatWsRobustnessTests(unittest.TestCase):
             with c.websocket_connect("/v1/console/chat/sessions/s2/stream") as ws:
                 self.assertEqual(ws.receive_json()["type"], "ready")
                 ws.send_json({"type": "user", "text": "long task"})
+                self._expect_turn_started(ws)
                 self.assertEqual(ws.receive_json()["type"], "tool_use")
                 # Heartbeat sent while the turn is mid-flight (during the gap).
                 ws.send_json({"type": "ping"})
@@ -127,11 +136,13 @@ class ChatWsRobustnessTests(unittest.TestCase):
             with c.websocket_connect("/v1/console/chat/sessions/s3/stream") as ws:
                 self.assertEqual(ws.receive_json()["type"], "ready")
                 ws.send_json({"type": "user", "text": "one"})
+                self._expect_turn_started(ws)
                 self.assertEqual(ws.receive_json()["type"], "delta")
                 self.assertEqual(ws.receive_json()["type"], "result")
                 self.assertEqual(ws.receive_json()["type"], "done")
                 # Second turn on the SAME socket works (no reconnect needed).
                 ws.send_json({"type": "user", "text": "two"})
+                self._expect_turn_started(ws)
                 self.assertEqual(ws.receive_json()["type"], "delta")
 
     def test_non_object_json_does_not_drop_socket(self) -> None:
@@ -182,6 +193,7 @@ class ChatWsRobustnessTests(unittest.TestCase):
             with c.websocket_connect("/v1/console/chat/sessions/s5/stream") as ws:
                 self.assertEqual(ws.receive_json()["type"], "ready")
                 ws.send_json({"type": "user", "text": prompt_text})
+                self._expect_turn_started(ws)
                 self.assertEqual(ws.receive_json()["type"], "delta")
                 self.assertEqual(ws.receive_json()["type"], "result")
                 self.assertEqual(ws.receive_json()["type"], "done")

@@ -377,6 +377,41 @@ describe("applyEvent / StreamEvent processing", () => {
     expect(assistant.tdeProgress?.quota_limit).toBeNull();
   });
 
+  it("attaches a voice event that names its message to THAT message, not the newest (SRF-10)", () => {
+    connect("s1");
+    // Two finished turns: the user clicks "Voice summary" on the OLDER one.
+    sendMessage("s1", "first");
+    mockWs.emit({ type: "delta", text: "older answer" });
+    mockWs.emit({ type: "done" });
+    sendMessage("s1", "second");
+    mockWs.emit({ type: "delta", text: "newer answer" });
+    mockWs.emit({ type: "done" });
+    const [older, newer] = getSessionState("s1").messages.filter((m) => m.role === "assistant");
+    mockWs.emit({
+      type: "voice", name: "o.ogg", path: "voice/o.ogg", mime: "audio/ogg",
+      size: 7, label: "voice", msg_id: older.id,
+    });
+    const after = getSessionState("s1").messages;
+    const art = (id: string) => after.find((m) => m.id === id)!.parts.filter((p) => p.kind === "artifact");
+    expect(art(older.id)).toHaveLength(1);
+    expect(art(newer.id)).toHaveLength(0);
+  });
+
+  it("attaches a msg_id voice event after a reload (no current turn) and ignores an unknown id", () => {
+    connect("s1");
+    loadHistory("s1", [
+      { id: "h0", role: "assistant", parts: [{ kind: "text", text: "a" }], ts: 1 },
+      { id: "h1", role: "assistant", parts: [{ kind: "text", text: "b" }], ts: 2 },
+    ]);
+    mockWs.emit({ type: "voice", name: "x.ogg", path: "voice/x.ogg", mime: "audio/ogg",
+                  size: 1, label: "voice", msg_id: "h0" });
+    mockWs.emit({ type: "voice", name: "y.ogg", path: "voice/y.ogg", mime: "audio/ogg",
+                  size: 1, label: "voice", msg_id: "gone" });
+    const ms = getSessionState("s1").messages;
+    expect(ms.find((m) => m.id === "h0")!.parts.some((p) => p.kind === "artifact")).toBe(true);
+    expect(ms.find((m) => m.id === "h1")!.parts.some((p) => p.kind === "artifact")).toBe(false);
+  });
+
   it("ignores a voice event with no completed or in-flight turn to attach to", () => {
     connect("s1");
     mockWs.emit({

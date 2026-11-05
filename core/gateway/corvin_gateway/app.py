@@ -828,6 +828,13 @@ try:
     # pre-check the standalone host uses, so a multipart body is refused before it is spooled.
     from corvin_console import body_cap as _body_cap  # type: ignore[import-not-found]
     app.middleware("http")(_body_cap.make_body_cap_middleware(_body_cap.gateway_cap_for))
+    # DNS-rebinding guard (review SRF-1): every route on this app - the console API,
+    # the SPA, /local-stats and the gateway's own routes - refuses a Host this
+    # install does not answer to, and a WebSocket from a foreign Origin. Added after
+    # the body cap, so it runs before it. The console router also carries the same
+    # check as a dependency; one module (corvin_console.host_guard) decides both.
+    from corvin_console import host_guard as _host_guard  # type: ignore[import-not-found]
+    _host_guard.install(app, surface="gateway")
     _console_app.mount_static(app)
     # ADR-0241/0243: in headless mode this process serves no browser surface.
     # mount_static() already declines the SPA; the HTML dashboards below are the

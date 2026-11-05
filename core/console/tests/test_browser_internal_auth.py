@@ -72,7 +72,8 @@ def test_cookie_session_record_defaults_is_internal_tool_false(monkeypatch):
     from corvin_console import auth as session_auth
     fake_rec = session_auth.SessionRecord(
         sid="s1", sid_fingerprint="fp1", tier="owner", tenant_id="acme",
-        token_fingerprint="", csrf_secret="", created_at=0.0, last_seen_at=0.0,
+        token_fingerprint="", csrf_secret="", csrf_nonce="", csrf_nonce_issued_at=0.0,
+        created_at=0.0, last_seen_at=0.0,
         expires_at=1e18,
     )
     monkeypatch.setattr(internal_auth._deps, "require_session", lambda **kw: fake_rec)
@@ -112,3 +113,47 @@ def test_require_csrf_or_token_falls_back_to_401_with_no_cookie_and_no_token():
         internal_auth.require_csrf_or_token(
             corvin_console_sid=None, x_csrf_token=None, x_corvin_browser_token=None)
     assert exc_info.value.status_code == 401
+
+
+def test_minted_token_authenticates_a_real_browser_route_over_http():
+    """SRF-21: drive routes/browser.py through FastAPI with a token minted by the
+    same function a chat turn calls. The record is built by the real
+    ``_bearer_record`` path, so a future required ``SessionRecord`` field that
+    internal_auth.py does not pass fails HERE (it shipped broken once: every
+    token call answered 500 from 2026-09-20 on)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from corvin_console.routes import browser as browser_routes
+
+    app = FastAPI()
+    app.include_router(browser_routes.router, prefix="/v1/console")
+    client = TestClient(app, raise_server_exceptions=True)
+    token = internal_auth.mint("_default", "fp-http")
+    try:
+        r = client.get("/v1/console/browser/attach/consent",
+                       headers={"X-Corvin-Browser-Token": token})
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), dict)
+        # No token, no cookie -> the cookie path's 401, never a tenant guess.
+        assert client.get("/v1/console/browser/attach/consent").status_code == 401
+    finally:
+        internal_auth.revoke(token)
+
+
+def test_bearer_record_passes_every_required_session_field():
+    """Every SessionRecord field without a default must be set by the token path."""
+    import dataclasses
+
+    from corvin_console import auth as session_auth
+
+    required = {f.name for f in dataclasses.fields(session_auth.SessionRecord)
+                if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING}
+    token = internal_auth.mint("acme", "fp-req")
+    try:
+        rec = internal_auth._bearer_record(token)
+        assert rec is not None
+        for name in required:
+            assert hasattr(rec, name)
+    finally:
+        internal_auth.revoke(token)

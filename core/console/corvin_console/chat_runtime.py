@@ -1209,7 +1209,7 @@ def subscribe_voice_live(sid: str) -> tuple[asyncio.Queue, Callable[[], None]]:
     return q, _unsubscribe
 
 
-def publish_voice_event(sid: str, path: Path, label: str) -> None:
+def publish_voice_event(sid: str, path: Path, label: str, *, msg_id: str | None = None) -> None:
     """Push a live 'voice' stream event for *path* to every open subscriber of
     *sid*. Best-effort: no subscriber (no open tab, or the WS hasn't
     (re)connected yet) is the common case and must stay silent — the reload
@@ -1230,6 +1230,10 @@ def publish_voice_event(sid: str, path: Path, label: str) -> None:
         "size": part["size"],
         "label": part["label"],
     }
+    if msg_id:
+        # The message the caller synthesised this for (per-message "Voice summary"):
+        # the client attaches the player there instead of to the newest turn.
+        event["msg_id"] = msg_id
     for q in list(subs):
         try:
             q.put_nowait(event)
@@ -4297,7 +4301,8 @@ _ACS_X_IMPORT_WARNED = False
 _NON_FANOUT_PRIMITIVES = frozenset({"LOOP", "GOAL", "COMPUTE", "DELEGATE"})
 
 
-def _should_delegate(prompt: str, *, tenant_id: str, sink: dict | None = None) -> bool:
+def _should_delegate(prompt: str, *, tenant_id: str, sink: dict | None = None,
+                     phase_decision: object | None = None) -> bool:
     """The triage heuristic, then the ADR-0251 route-selection hook.
 
     ``tenant_id`` is keyword-REQUIRED rather than defaulted. The hook bus is
@@ -4325,6 +4330,9 @@ def _should_delegate(prompt: str, *, tenant_id: str, sink: dict | None = None) -
             surface="console", sink=sink,
             turn_id=(sink or {}).get("turn_id"),
             features=routing_features(prompt, tenant_id=tenant_id) if sink is not None else None,
+            # The guard's phase decision, also for a turn that stays native
+            # (review DLG-15): one decision per turn on every branch.
+            phase_decision=phase_decision,
         )
     except Exception:  # noqa: BLE001
         # Triage must never cost the turn; the bundled verdict is the
@@ -4668,6 +4676,68 @@ def _record_console_route(tenant_id: str, meta: dict, prompt: str, *,
         pass
 
 
+def _route_console_turn(prompt: str, *, tenant_id: str, sink: dict,
+                        phase_decision: object | None, pre_gate: bool,
+                        force_delegate: bool, worker_mode: str,
+                        explicit_tde: bool) -> tuple[bool, str]:
+    """The console turn's ONE routing record: triage, worker-engine target, and the
+    post-hoc record for a turn the triage never reached. ``(pre_delegate, target)``.
+
+    Synchronous by nature (Skill execution with a 500 ms budget, chained audit
+    writes under the cross-process chain lock, the ledger ``flock``, rollback
+    state reads) — so ``stream_turn`` runs it through
+    :func:`_route_console_turn_off_loop`, never inline on the event loop.
+    """
+    pre = pre_gate and (force_delegate or _should_delegate(
+        prompt, tenant_id=tenant_id, sink=sink, phase_decision=phase_decision))
+    target = (
+        _worker_engine_target(prompt, mode=worker_mode, force_delegate=force_delegate,
+                              tenant_id=tenant_id, sink=sink,
+                              phase_decision=phase_decision)
+        if pre else "native"
+    )
+    if "routed_engine" not in sink:
+        _record_console_route(tenant_id, sink, prompt, explicit_tde=explicit_tde)
+    return pre, target
+
+
+async def _route_console_turn_off_loop(sess: "WebChatSession", prompt: str, *,
+                                       sink: dict, started: float,
+                                       **kw: Any) -> tuple[bool, str]:
+    """:func:`_route_console_turn` in a worker thread (review DLG-14, 2026-11-05).
+
+    Until then it ran inline in ``_stream_turn_impl``: a contended audit-chain lock
+    or a router at its 500 ms budget stalled every chat and request of the console
+    process — the 2026-09-13 incident shape. Cancel-safe: the thread cannot be
+    interrupted, so a turn cancelled while it decides gets its decision row joined
+    to a NOT-JUDGED ``cancelled`` outcome once the record lands (the turn's own
+    ``finally`` ran before the row existed and reported nothing).
+    """
+    fut = asyncio.ensure_future(asyncio.to_thread(
+        _route_console_turn, prompt, tenant_id=sess.tenant_id, sink=sink, **kw))
+    try:
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        loop = asyncio.get_running_loop()
+
+        def _join_cancelled(f: "asyncio.Future") -> None:
+            if f.cancelled() or f.exception() is not None:
+                return
+            if "routed_engine" not in sink or sink.get("outcome_reported"):
+                return              # the turn's own ``finally`` already joined it
+            # Claimed HERE, on the loop thread — the same thread the turn's
+            # ``finally`` checks the flag on — so the two never both report.
+            sink["outcome_reported"] = True
+            meta = {k: v for k, v in sink.items() if k != "outcome_reported"}
+            # The outcome write (ledger flock) stays off the loop as well.
+            loop.run_in_executor(None, lambda: _report_console_route_outcome(
+                sess.tenant_id, meta, served=str(meta.get("routed_engine") or "native"),
+                ok=False, started=started, excluded="cancelled"))
+
+        fut.add_done_callback(_join_cancelled)
+        raise
+
+
 def _cut_turn_outcome(why: "str | None") -> "str | None":
     """NOT-JUDGED reason for a console turn cut with rc == -1, or None = JUDGED.
 
@@ -4765,7 +4835,8 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
                  btw: bool = False, btw_status: str | None = None,
                  btw_via: str | None = None, btw_client_id: str | None = None,
                  btw_gated: bool = False, btw_reason: str | None = None,
-                 notice: str | None = None, recovery: dict[str, Any] | None = None) -> None:
+                 notice: str | None = None, recovery: dict[str, Any] | None = None,
+                 turn_usage: dict[str, Any] | None = None) -> None:
     """Append one turn (user or assistant) to the session's turns log.
 
     ``notice`` (PLAN-0958 P2): the kind of a system notice (interruption / resume / ending,
@@ -4789,6 +4860,10 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
     for the turn. Attached by stream_turn() for audit and frontend rendering.
     Omitted for non-OS turns (user messages, delegation fan-out).
 
+    ``turn_usage`` (ADR-2263): the confirmed model, the routed model and the raw usage the
+    ``turn_usage`` stream event carried. Persisted so the chat shows the same line after a
+    reload; a turn without it is shown without a model/token line, never with a guess.
+
     Best-effort: a failed write does not break the stream — the user
     message is still in the WebSocket history client-side, and the
     assistant's reply was already streamed back."""
@@ -4809,6 +4884,8 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
         payload["tde_progress"] = tde_progress
     if execution_context:
         payload["execution_context"] = execution_context
+    if turn_usage:
+        payload["turn_usage"] = dict(turn_usage)
     if btw:
         # A mid-turn /btw note: session_ledger.records_from_turn_log folds it
         # into the turn it was sent during instead of starting a new one.
@@ -7065,6 +7142,9 @@ async def _stream_turn_impl(
     # Model the CLI confirmed in its `init` event ONLY — what `turn_usage` reports.
     # The requested model above must never leak into it (nothing is estimated).
     _turn_model_confirmed: str | None = None
+    # The turn_usage payload, built where the stream event is yielded and persisted
+    # with the final assistant turn; None when the turn never reached that point.
+    _turn_usage: dict[str, Any] | None = None
     # ADR-0171 — one engine.span per OS turn (role=os), engine-agnostic,
     # dual-emitted on the SAME chain as os_turn.* so the console can build
     # the OS graph from spans uniformly. Paired by a stable per-turn span_id.
@@ -7289,26 +7369,21 @@ async def _stream_turn_impl(
     # choice: it never reaches the router (a cleared Phase 2 could otherwise
     # audit a de-escalation the TDE branch below never serves) and is recorded
     # after the fact as what runs, below.
-    _pre_delegate = (_del_enabled
-                     and not _del_throttled
-                     and not _force_direct
-                     and not _tde_force
-                     and (_force_delegate or _should_delegate(
-                         prompt, tenant_id=sess.tenant_id, sink=_route_meta)))
     # The pre-filter only says "delegation-worthy"; the operator's mode decides
-    # WHERE it runs, and `native` means the turn stays in-process. Resolve it
-    # here so the pre-spawn gate below is classified against the engine that
-    # will really spawn.
-    _worker_target = (
-        _worker_engine_target(prompt, mode=_worker_mode,
-                              force_delegate=_force_delegate,
-                              tenant_id=sess.tenant_id, sink=_route_meta,
-                              phase_decision=route_phase)
-        if _pre_delegate else "native"
+    # WHERE it runs, and `native` means the turn stays in-process. Resolved
+    # together so the pre-spawn gate below is classified against the engine that
+    # will really spawn. The routing record (Skill execution with a 500 ms
+    # budget, chained audit, ledger flock) runs OFF the event loop, like the
+    # L34 gate below (review DLG-14); `route_phase` is carried into the native
+    # branch too (DLG-15).
+    _pre_delegate, _worker_target = await _route_console_turn_off_loop(
+        sess, prompt, sink=_route_meta, started=_route_t0,
+        phase_decision=route_phase,
+        pre_gate=(_del_enabled and not _del_throttled
+                  and not _force_direct and not _tde_force),
+        force_delegate=_force_delegate, worker_mode=_worker_mode,
+        explicit_tde=(_tde_force and _worker_mode == "tde"),
     )
-    if "routed_engine" not in _route_meta:
-        _record_console_route(sess.tenant_id, _route_meta, prompt,
-                              explicit_tde=(_tde_force and _worker_mode == "tde"))
     if "routed_engine" in _route_meta:
         # Restart-killed turns (ADR-2092 G1 as amended 2026-10-27): the boot reaper
         # finds the routing turn through this event and records it NOT-JUDGED
@@ -8743,8 +8818,10 @@ async def _stream_turn_impl(
         except Exception:  # noqa: BLE001 — grading bookkeeping never breaks a turn
             pass
     _os_audit("os_turn.started", {"model": _os_model_used})
+    # routed_model: the selector's choice, known before the spawn, so the chat can name
+    # the model of a running turn. The confirmed model arrives only on turn_usage.
     yield {"type": "engine", "engine": _os_engine or "claude_code",
-           "label": "Claude Code (OS-Engine)"}
+           "label": "Claude Code (OS-Engine)", "routed_model": _os_model or None}
 
     # Feed the prompt as the FIRST framed `--input-format stream-json` user
     # message, and — ADR-2220 — leave stdin OPEN and registered for `/btw`
@@ -9254,13 +9331,34 @@ async def _stream_turn_impl(
         v = last_usage.get(key)
         return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
-    yield {"type": "turn_usage", "model": _turn_model_confirmed or None,
-           "usage": ({
-               "input_tokens": _raw_count("input_tokens"),
-               "output_tokens": _raw_count("output_tokens"),
-               "cache_read_input_tokens": _raw_count("cache_read_input_tokens"),
-               "cache_creation_input_tokens": _raw_count("cache_creation_input_tokens"),
-           } if last_usage else None)}
+    # ``routed_model`` is what the selector chose before the spawn (the Models
+    # page's binding choice); ``model`` is what the CLI confirmed. The UI shows
+    # the confirmed one and names the routed one only when they differ.
+    _turn_usage = {"model": _turn_model_confirmed or None,
+                   "routed_model": _os_model or None,
+                   "usage": ({
+                       "input_tokens": _raw_count("input_tokens"),
+                       "output_tokens": _raw_count("output_tokens"),
+                       "cache_read_input_tokens": _raw_count("cache_read_input_tokens"),
+                       "cache_creation_input_tokens": _raw_count("cache_creation_input_tokens"),
+                   } if last_usage else None)}
+    yield {"type": "turn_usage", **_turn_usage}
+    # ADR-0365 token metrics: the same measured usage, per session, in the tenant's own
+    # <tenant_home>/learning/token_metrics.db (the Vibe dashboard's token panel). Imported
+    # here since the hook existed and never called, so that panel read an empty table
+    # (review 2026-11-05 LRN-14). Synchronous and non-blocking (queue + DB task).
+    if _TOKEN_MEASUREMENT_AVAILABLE and last_usage:
+        try:
+            # user_id: the turn's consent subject - a console turn is the local
+            # operator's, as browser/internal_auth's tool record states - so an
+            # Art. 17 erasure by user finds the row, not only one by sid (RL-8).
+            record_turn_metrics(turn_id=_os_turn_id, session_id=sess.sid,
+                                tenant_id=sess.tenant_id,
+                                input_tokens=_raw_count("input_tokens") or 0,
+                                output_tokens=_raw_count("output_tokens") or 0,
+                                user_id="local-operator:" + sess.tenant_id)
+        except Exception as exc:  # noqa: BLE001 - telemetry never breaks a turn
+            _log.warning("token metrics for turn %s not recorded: %s", _os_turn_id, exc)
 
     touch(sess, increment_turn=True)
 
@@ -9421,7 +9519,7 @@ async def _stream_turn_impl(
     _append_turn(sess, "assistant", parts_persisted,
                  voice_key_hint=voice_key(_spoken_text) if _spoken_text.strip() else None,
                  execution_context=_exec_ctx.to_dict() if _exec_ctx else None,
-                 cli_spawned=True)
+                 cli_spawned=True, turn_usage=_turn_usage)
 
     # Phase 2b: Emit execution context to L16 audit chain
     _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)

@@ -1707,6 +1707,13 @@ EVENT_SEVERITY: dict[str, str] = {
     "plugin.loaded": "INFO",
     "plugin.marketplace_sync_failed": "WARNING",
     "plugin.unloaded": "INFO",
+    # `corvin plugin install` (core/gateway/corvin_gateway/plugin_cmd.py) and the
+    # registry lifecycle (core/plugins/corvin_plugins/state.py::install).
+    "plugin.installed": "INFO",
+    "plugin.already_present": "INFO",
+    "plugin.install_cancelled": "INFO",
+    "plugin.install_failed": "WARNING",
+    "plugin.signature_verification_failed": "WARNING",
     "ulo.objective_created": "INFO",
     "ulo.objective_deleted": "INFO",
     "ulo.objective_updated": "INFO",
@@ -4211,6 +4218,17 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "plugin_id", "plugin_type", "boot_layer", "version", "tenant_id", "origin", "source", "reason",
     }),
     "plugin.boot_layer_rejected": frozenset({"plugin_id", "tenant_id", "declared_boot_layer", "reason"}),
+    # plugin_cmd.install_plugin (version/origin/boot_layer) + PluginLifecycle.install
+    # (plugin_type/origin/pii_risk/requires_consent/installed_by - a role, never a name).
+    "plugin.installed": frozenset({
+        "plugin_id", "tenant_id", "version", "origin", "boot_layer", "plugin_type",
+        "pii_risk", "requires_consent", "installed_by",
+    }),
+    "plugin.already_present": frozenset({"plugin_id", "tenant_id"}),
+    "plugin.install_cancelled": frozenset({"plugin_id", "tenant_id"}),
+    "plugin.install_failed": frozenset({"plugin_id", "tenant_id", "stage"}),
+    # reason: verify_plugin_signature's code-level verdict (free text, PII-scanned).
+    "plugin.signature_verification_failed": frozenset({"plugin_id", "tenant_id", "origin", "reason"}),
     "plugin.updated": frozenset({
         "plugin_id", "tenant_id", "from_version", "to_version", "was_enabled",
         "escalations", "settings_dropped", "updated_by",

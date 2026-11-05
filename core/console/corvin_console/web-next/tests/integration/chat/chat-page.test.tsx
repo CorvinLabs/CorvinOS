@@ -174,10 +174,11 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
     const { ttsBlob } = await import('@/lib/api');
     // 4th/5th arg: session id (ADR-0194 voice archive) + AbortSignal
     // (Stop/supersede releases the server TTS slot, 2026-07-17); 6th arg is
-    // the `systemGenerated` flag, absent for an assistant reply.
+    // the `systemGenerated` flag, absent for an assistant reply; 7th is the
+    // target message id, which only the per-message "Voice summary" passes.
     await waitFor(() => expect(ttsBlob).toHaveBeenCalledWith(
       'Hallo, wie geht es dir heute?', 'de', 'test-csrf',
-      expect.anything(), expect.any(AbortSignal), undefined,
+      expect.anything(), expect.any(AbortSignal), undefined, undefined,
     ));
 
     // VoicePlaybackChip renders the "Speaking · DE" control while playing.
@@ -200,7 +201,7 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
     const lastCall = vi.mocked(ttsBlob).mock.calls.at(-1);
     expect(lastCall).toEqual([
       'Hallo, wie geht es dir heute?', 'de', 'test-csrf',
-      'sid-voice-1', expect.any(AbortSignal), undefined,
+      'sid-voice-1', expect.any(AbortSignal), undefined, undefined,
     ]);
 
     // Replaying re-enters the "playing" state through the same real chip.
@@ -232,20 +233,99 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
     expect(screen.queryByLabelText('Replay last response')).not.toBeInTheDocument();
   });
 
-  it('no longer renders the header Audit or Engine buttons', async () => {
+  it('renders the header Audit opener (restored in 07b3979db) but no Engine override', async () => {
     renderRealChatPage(SID);
     await waitFor(() => expect(subscribeEventsMock).toHaveBeenCalledWith(SID, expect.any(Function)));
 
-    // The Audit button used to toggle the Audit Trail panel; the panel
-    // itself is still reachable (a message's TDE "View graph →" link opens
-    // it), only the standalone header toggle was removed.
-    expect(screen.queryByTitle('Audit Trail')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Audit$/ })).not.toBeInTheDocument();
+    // The header Audit toggle was removed once and deliberately restored by
+    // 07b3979db ("Chat header regains the Audit opener"): it toggles the
+    // Audit Trail panel and reports its state through aria-pressed.
+    const audit = screen.getByTestId('chat-audit-toggle');
+    expect(audit).toHaveAttribute('title', 'Audit Trail');
+    expect(audit).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(audit);
+    await waitFor(() => expect(screen.getByTestId('chat-audit-toggle')).toHaveAttribute('aria-pressed', 'true'));
     // The per-chat engine override dropdown (ChatEngineSelector) is gone;
     // the read-only engine label in the status bar footer is unaffected —
     // that is a *different* element and is asserted absent nowhere here.
     expect(screen.queryByText('Engine for this chat')).not.toBeInTheDocument();
     expect(screen.queryByText('override')).not.toBeInTheDocument();
+  });
+});
+
+describe('ChatPage voice summary at the end of every assistant message', () => {
+  const SID = 'sid-voice-summary-1';
+  const msg = (over: Partial<ChatMessage>): ChatMessage => ({
+    id: 'm-vs-1', role: 'assistant', parts: [{ kind: 'text', text: 'Hallo, das ist die Antwort.' }], ts: 1, ...over,
+  });
+  const show = (messages: ChatMessage[]) =>
+    vi.mocked(useChatSession).mockReturnValue({
+      messages, streaming: false, error: null, reconnecting: false, latestResultText: null, pendingTitle: null,
+    });
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+  });
+  afterEach(() => {
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [], streaming: false, error: null, reconnecting: false, latestResultText: null, pendingTitle: null,
+    });
+    vi.clearAllMocks();
+  });
+
+  it('offers a play button even without a stored player, and clicking it goes through /voice/tts for that message', async () => {
+    show([msg({})]);
+    renderRealChatPage(SID);
+    const btn = await screen.findByTestId('voice-summary-play');
+    fireEvent.click(btn);
+    const { ttsBlob } = await import('@/lib/api');
+    await waitFor(() => expect(ttsBlob).toHaveBeenCalledWith(
+      'Hallo, das ist die Antwort.', expect.any(String), 'test-csrf',
+      SID, expect.any(AbortSignal), undefined, 'm-vs-1',
+    ));
+  });
+
+  it('names the CLICKED message, not the newest one, so the player lands there (SRF-10)', async () => {
+    show([
+      msg({ id: 'm-old', parts: [{ kind: 'text', text: 'Older answer.' }], ts: 1 }),
+      msg({ id: 'm-new', parts: [{ kind: 'text', text: 'Newer answer.' }], ts: 2 }),
+    ]);
+    renderRealChatPage(SID);
+    const buttons = await screen.findAllByTestId('voice-summary-play');
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]);
+    const { ttsBlob } = await import('@/lib/api');
+    await waitFor(() => expect(ttsBlob).toHaveBeenCalledWith(
+      'Older answer.', expect.any(String), 'test-csrf',
+      SID, expect.any(AbortSignal), undefined, 'm-old',
+    ));
+    expect(vi.mocked(ttsBlob).mock.calls.some((c) => c[6] === 'm-new')).toBe(false);
+  });
+
+  it('does not add a second control when the turn already carries its voice player', async () => {
+    show([msg({ parts: [
+      { kind: 'text', text: 'Antwort' },
+      { kind: 'artifact', name: 'k.ogg', path: 'voice/k.ogg', mime: 'audio/ogg', size: 3, sid: SID, label: 'voice' },
+    ] })]);
+    renderRealChatPage(SID);
+    await screen.findByText('Antwort');
+    expect(screen.queryByTestId('voice-summary-play')).not.toBeInTheDocument();
+  });
+
+  it('says so when there is nothing to summarise', async () => {
+    show([msg({ id: 'm-err', parts: [], error: 'boom' })]);
+    renderRealChatPage(SID);
+    expect(await screen.findByTestId('voice-summary-unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('voice-summary-play')).not.toBeInTheDocument();
+  });
+
+  it('stays hidden while the message is still streaming', async () => {
+    show([msg({ id: 'm-live', streaming: true })]);
+    renderRealChatPage(SID);
+    await screen.findByText('Hallo, das ist die Antwort.');
+    expect(screen.queryByTestId('voice-summary-play')).not.toBeInTheDocument();
   });
 });
 
@@ -455,6 +535,94 @@ describe('ChatPage TDE inline badge (real components, ADR-0214/0216)', () => {
     );
     expect(msg.engine).toBeUndefined();
     expect(msg.tdeProgress).toBeUndefined();
+  });
+});
+
+describe('ChatPage model and token line (real components, ADR-2263)', () => {
+  const SID = 'sid-turn-usage-1';
+
+  const claudeMessage: ChatMessage = {
+    id: 'm-usage-1',
+    role: 'assistant',
+    parts: [{ kind: 'text', text: 'Done.' }],
+    ts: 1,
+    engine: 'claude_code',
+    engineLabel: 'Claude Code (OS-Engine)',
+  };
+
+  afterEach(() => {
+    // Restore the module-level default so later describe blocks see the empty state.
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [],
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    });
+    vi.clearAllMocks();
+  });
+
+  it('shows the confirmed model, the routed model on a mismatch, and the tokens', async () => {
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [{
+        ...claudeMessage,
+        turnModel: 'claude-haiku-4-5',
+        turnRoutedModel: 'claude-opus-5',
+        turnUsageSeen: true,
+        turnUsage: {
+          input_tokens: 1200, output_tokens: 340,
+          cache_read_input_tokens: 5000, cache_creation_input_tokens: 0,
+        },
+      }],
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    });
+
+    renderRealChatPage(SID);
+
+    expect(await screen.findByText(
+      'Model: claude-haiku-4-5 (routed: claude-opus-5) · Tokens: 1,200 in / 340 out · Cache: 5,000 read',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/^Engine:/)).not.toBeInTheDocument();
+  });
+
+  it('shows the routed model while the turn runs, with the counts pending (not unknown)', async () => {
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [{ ...claudeMessage, parts: [{ kind: 'text', text: 'working' }], streaming: true,
+                   turnRoutedModel: 'claude-opus-5' }],
+      streaming: true,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+      bgChildren: [],
+    });
+
+    renderRealChatPage(SID);
+
+    expect(await screen.findByText('Model: claude-opus-5 (routed) · Tokens: pending')).toBeInTheDocument();
+    expect(screen.queryByText(/unknown/)).not.toBeInTheDocument();
+  });
+
+  it('a turn that ended without turn_usage shows the engine label, as after a reload', async () => {
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [{ ...claudeMessage, parts: [{ kind: 'text', text: 'stopped' }], streaming: false,
+                   turnRoutedModel: 'claude-opus-5' }],
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    });
+
+    renderRealChatPage(SID);
+
+    expect(await screen.findByText(/^Engine:/)).toBeInTheDocument();
+    expect(screen.queryByText(/Tokens:/)).not.toBeInTheDocument();
   });
 });
 

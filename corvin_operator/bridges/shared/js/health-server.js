@@ -8,6 +8,7 @@
 // EADDRINUSE direkt.
 
 const http = require('http');
+const { guardRequest } = require('./host_guard');
 
 /**
  * @param {object} cfg
@@ -19,6 +20,8 @@ const http = require('http');
  */
 function startHealthServer({ port, kind, getStatus, logger }) {
   const server = http.createServer((req, res) => {
+    // DNS-rebinding guard (review SRF-1): a rebound page must not read /status.
+    if (!guardRequest(req, res, { channel: kind, audit: require('./audit').auditEvent, logger })) return;
     if (req.url === '/status') {
       res.setHeader('Content-Type', 'application/json');
       try {

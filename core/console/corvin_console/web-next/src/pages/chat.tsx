@@ -58,7 +58,7 @@ import {
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { cn, formatDate } from "@/lib/utils";
-import { formatTurnUsage } from "@/lib/turn-usage";
+import { formatPendingTurnUsage, formatTurnUsage, parseTurnUsage } from "@/lib/turn-usage";
 import { turnOutcomeIsFailure, turnOutcomeText } from "@/lib/turn-outcome";
 import {
   PREF_KEYS,
@@ -202,7 +202,17 @@ export function hydrateChatTurn(t: ChatTurn, i: number, sid: string): ChatMessag
   const runId = hasTde ? tde!.run_id : undefined;
   const derivedEngine = hasTde
     ? (tde!.l34_forced === true ? "claude_code" : "tiered_delegation")
-    : undefined;
+    : t.turn_usage ? "claude_code" : undefined;
+  // The model/usage line is rebuilt from the persisted turn_usage (ADR-2263), so a
+  // reload shows what the live stream showed. Nothing is filled in when it is absent.
+  const turnUsageFields = t.turn_usage && !hasTde
+    ? {
+        turnModel: t.turn_usage.model,
+        turnRoutedModel: t.turn_usage.routed_model,
+        turnUsage: parseTurnUsage(t.turn_usage.usage),
+        turnUsageSeen: true,
+      }
+    : {};
   const btw = t.role === "user" ? btwFromTurn(t, `h${i}`) : undefined;
   if (btw) {
     const text = (t.parts ?? []).filter((p) => p.kind === "text").map((p) => String(p.text ?? "")).join("");
@@ -225,6 +235,8 @@ export function hydrateChatTurn(t: ChatTurn, i: number, sid: string): ChatMessag
           ...(typeof runId === "string" ? { tdeRunId: runId } : {}),
         }
       : {}),
+    ...(derivedEngine && !hasTde ? { engine: derivedEngine } : {}),
+    ...turnUsageFields,
     parts: (t.parts ?? []).map((p): MessagePart => {
       if (p.kind === "text") return { kind: "text", text: String(p.text ?? "") };
       if (p.kind === "artifact") return {
@@ -830,6 +842,18 @@ function ChatPane({
     const nav = (typeof navigator !== "undefined" && navigator.language) || "";
     return ttsFallbackLanguage(profileQ.data?.profile, nav);
   }, [profileQ.data]);
+
+  // Explicit click on a message's "Voice summary" button (VoiceSummaryFooter).
+  // An explicit click opts into failure feedback (notifyOnEmpty), unlike the
+  // silent automatic turn voice. The result is archived by /voice/tts and then
+  // shows up as THIS message's real player via the live "voice" event, which
+  // carries msgId back (it used to attach to the newest message instead).
+  const playMessageSummary = React.useCallback(
+    (text: string, msgId: string) => {
+      playTts(text, detectTtsLang(text, ttsLang), sid, { notifyOnEmpty: true, msgId }).catch(() => {});
+    },
+    [playTts, ttsLang, sid],
+  );
 
   // The WebSocket onmessage handler is bound once per `sid` mount.
   // Without refs, any state that changes afterwards (the user clicks
@@ -1784,6 +1808,7 @@ function ChatPane({
             stickRef={stickToBottom}
             onViewTdeGraph={viewTdeGraph}
             onBtwAction={btwAction}
+            onPlaySummary={playMessageSummary}
           />
           {/* CCC M5 — entity action cards inline below messages */}
           {cccActions.length > 0 && (
@@ -2166,18 +2191,20 @@ const MessageRow = React.memo(function MessageRow({
   rowRef,
   onViewTdeGraph,
   onBtwAction,
+  onPlaySummary,
 }: {
   m: ChatMessage;
   prevTs: number | undefined;
   rowRef: (node: HTMLElement | null) => void;
   onViewTdeGraph: () => void;
   onBtwAction: (clientId: string, action: "edit" | "resend") => void;
+  onPlaySummary: (text: string, msgId: string) => void;
 }) {
   const newDay = prevTs === undefined || startsNewDay([prevTs, m.ts], 1);
   return (
     <div ref={rowRef} data-row-key={m.id} className="pb-4">
       {newDay && <DaySeparator ts={m.ts} nowS={Math.floor(Date.now() / 1000)} />}
-      <MessageBubble m={m} onViewTdeGraph={onViewTdeGraph} onBtwAction={onBtwAction} />
+      <MessageBubble m={m} onViewTdeGraph={onViewTdeGraph} onBtwAction={onBtwAction} onPlaySummary={onPlaySummary} />
     </div>
   );
 });
@@ -2191,6 +2218,7 @@ function ChatMessageRows({
   stickRef,
   onViewTdeGraph,
   onBtwAction,
+  onPlaySummary,
 }: {
   messages: readonly ChatMessage[];
   windowStart: number;
@@ -2198,6 +2226,7 @@ function ChatMessageRows({
   stickRef: React.MutableRefObject<boolean>;
   onViewTdeGraph: () => void;
   onBtwAction: (clientId: string, action: "edit" | "resend") => void;
+  onPlaySummary: (text: string, msgId: string) => void;
 }) {
   const listRef = React.useRef<HTMLDivElement>(null);
   const visible = messages.slice(windowStart);
@@ -2222,6 +2251,7 @@ function ChatMessageRows({
             rowRef={measure(m.id)}
             onViewTdeGraph={onViewTdeGraph}
             onBtwAction={onBtwAction}
+            onPlaySummary={onPlaySummary}
           />
         );
       })}
@@ -2234,10 +2264,12 @@ const MessageBubble = React.memo(function MessageBubble({
   m,
   onViewTdeGraph,
   onBtwAction,
+  onPlaySummary,
 }: {
   m: ChatMessage;
   onViewTdeGraph: () => void;
   onBtwAction: (clientId: string, action: "edit" | "resend") => void;
+  onPlaySummary: (text: string, msgId: string) => void;
 }) {
   if (m.btw) return <BtwBubble m={m} onAction={onBtwAction} />;
   const isUser = m.role === "user";
@@ -2333,18 +2365,78 @@ const MessageBubble = React.memo(function MessageBubble({
               <Cpu className="h-3 w-3" aria-hidden />
               <span>
                 {m.engine === "claude_code" && m.turnUsageSeen
-                  ? formatTurnUsage(m.turnModel, m.turnUsage)
-                  : `Engine: ${AGENTIC_ENGINE_LABELS[m.engine] ?? m.engineLabel ?? m.engine}`}
+                  ? formatTurnUsage(m.turnModel, m.turnUsage, m.turnRoutedModel)
+                  // Running, turn_usage not here yet: pending, not "unknown". A turn
+                  // that ENDS without turn_usage (cancelled, failed) falls back to the
+                  // engine label - the same line a reload shows for it.
+                  : m.engine === "claude_code" && m.streaming
+                    ? formatPendingTurnUsage(m.turnRoutedModel)
+                    : `Engine: ${AGENTIC_ENGINE_LABELS[m.engine] ?? m.engineLabel ?? m.engine}`}
               </span>
             </p>
           )
         )}
+        {!isUser && <VoiceSummaryFooter m={m} onPlay={onPlaySummary} />}
         </div>
       </div>
       {isUser && <div className="mt-5"><ChatAvatar label="You" icon={User} /></div>}
     </div>
   );
 });
+
+/** Message text a finished assistant turn would be summarised from. */
+export function voiceSummarySource(m: ChatMessage): string {
+  return m.parts
+    .flatMap((p) => (p.kind === "text" ? [p.text] : []))
+    .join("\n\n")
+    .trim();
+}
+
+/** True when the turn already carries its archived voice player (ADR-0194). */
+export function hasVoiceArtifact(m: ChatMessage): boolean {
+  return m.parts.some(
+    (p) => p.kind === "artifact" && p.mime.startsWith("audio/") && (p.label ?? "").startsWith("voice"),
+  );
+}
+
+/**
+ * Always-present replay affordance at the END of every finished assistant
+ * message. The archived voice player only exists once /voice/tts ran for the
+ * turn, i.e. only when voice output was on and synthesis succeeded — so a
+ * turn spoken never, or while voice was off, had nothing to replay. When no
+ * player is attached this renders one button that synthesises the summary on
+ * demand through the same /voice/tts path (which archives it and pushes the
+ * live "voice" event naming THIS message by id, after which the real player replaces
+ * this button on this message — so playback is never duplicated and never lands on
+ * another message). With nothing to summarise it says so.
+ */
+function VoiceSummaryFooter({ m, onPlay }: { m: ChatMessage; onPlay: (text: string, msgId: string) => void }) {
+  if (m.streaming || m.btw) return null;
+  if (hasVoiceArtifact(m)) return null;
+  const source = voiceSummarySource(m);
+  if (!source) {
+    if (m.parts.length === 0 && !m.error) return null;
+    return (
+      <p data-testid="voice-summary-unavailable" className="mt-2 text-[11px] text-muted-foreground">
+        <VolumeX className="mr-1 inline h-3 w-3" aria-hidden />
+        No voice summary available for this message.
+      </p>
+    );
+  }
+  return (
+    <button
+      type="button"
+      data-testid="voice-summary-play"
+      onClick={() => onPlay(source, m.id)}
+      className="mt-2 flex items-center gap-1.5 rounded-full bg-muted/60 px-3 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+      title="Play the voice summary of this message"
+      aria-label="Play voice summary"
+    >
+      <Volume2 className="h-3 w-3" aria-hidden />
+      Voice summary
+    </button>
+  );
+}
 
 /**
  * TdeInlineBadge — ADR-0214/0216 rich per-turn badge for turns that ran

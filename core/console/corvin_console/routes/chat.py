@@ -985,10 +985,16 @@ async def chat_stream(
                 # ONE L5 phase decision for this turn, read by the guard below AND
                 # carried into the turn: two separate readiness reads could answer
                 # differently (review r2_s2-2).
-                _route_phase = chat_runtime.turn_phase_decision(rec.tenant_id)
+                # Off the event loop (review DLG-14): the decision reads rollback
+                # state and the readiness cache, and the guard's mirror of the
+                # turn's route may read the learned router config — file I/O
+                # that stalled every connection of this process while it ran.
+                _route_phase = await asyncio.to_thread(
+                    chat_runtime.turn_phase_decision, rec.tenant_id)
                 _engine_msg = chat_runtime.get_engine_unavailable_message(rec.tenant_id)
-                if _engine_msg and chat_runtime.will_delegate(
-                        sess, prompt, phase_decision=_route_phase):
+                if _engine_msg and await asyncio.to_thread(
+                        chat_runtime.will_delegate, sess, prompt,
+                        phase_decision=_route_phase):
                     _engine_msg = None
                 # /create task and /erase are answered by the command itself
                 # (chat_runtime CCC hook) — they need no engine, so a missing
@@ -1003,7 +1009,8 @@ async def chat_stream(
                 if _engine_msg:
                     # A cleared Phase 2 Skill route onto the unavailable engine is the
                     # Skill's harm: record decision + judged failure, like the bridge.
-                    chat_runtime.record_unavailable_skill_route(
+                    await asyncio.to_thread(
+                        chat_runtime.record_unavailable_skill_route,
                         sess, prompt, phase_decision=_route_phase)
                     await websocket.send_json({
                         "type": "error", "code": 503,

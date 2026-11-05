@@ -813,7 +813,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // HTTP API. Used by mock mode for testing, and by /whatsapp-status in any mode.
+const { guardRequest: guardHost } = require('../shared/js/host_guard');
 const httpServer = http.createServer(async (req, res) => {
+  // DNS-rebinding guard (review SRF-1): /qr.png hands out the live pairing QR, so a
+  // page that rebinds its own name to 127.0.0.1 must not be answered.
+  if (!guardHost(req, res, { channel: CHANNEL, audit: require('../shared/js/audit').auditEvent, logger: log })) {
+    return;
+  }
   // Browser-based pairing page: shows the current QR as a large image with
   // an auto-refresh so the user can scan from their screen.
   if (req.method === 'GET' && req.url === '/pair') {
@@ -823,15 +829,15 @@ const httpServer = http.createServer(async (req, res) => {
     const ageSec = lastQR ? Math.floor((Date.now() - lastQRTimestamp) / 1000) : null;
     let body;
     if (paired) {
-      body = `<h1 style="color:#25D366">Verbunden ✓</h1><p>JID: <code>${waSocket.user?.id || ''}</code></p><p>Du kannst dieses Fenster schließen.</p>`;
+      body = `<h1 style="color:#25D366">Connected ✓</h1><p>JID: <code>${waSocket.user?.id || ''}</code></p><p>You can close this window.</p>`;
     } else if (!hasQR) {
-      body = `<h1>Pairing</h1><p>Warte auf QR-Code vom WhatsApp-Server…</p><p style="opacity:0.6">Diese Seite loads sich automatically neu.</p>`;
+      body = `<h1>Pairing</h1><p>Waiting for the QR code from the WhatsApp server…</p><p style="opacity:0.6">This page reloads automatically.</p>`;
     } else {
       body = `
-        <h1>WhatsApp pairen</h1>
-        <p style="font-size:1.1em">Auf dem Phone: WhatsApp → settings → Linked Devices → <b>device add</b> → diesen QR scannen.</p>
+        <h1>Pair WhatsApp</h1>
+        <p style="font-size:1.1em">On your phone: WhatsApp → Settings → Linked Devices → <b>Link a device</b> → scan this QR code.</p>
         <img src="/qr.png?ts=${lastQRTimestamp}" style="width:380px;height:380px;background:white;padding:16px;border-radius:8px"/>
-        <p style="opacity:0.6;font-size:0.9em">QR-Alter: ${ageSec}s — refresht alle 5s</p>
+        <p style="opacity:0.6;font-size:0.9em">QR age: ${ageSec}s — refreshes every 5s</p>
       `;
     }
     res.end(`<!doctype html><html><head>

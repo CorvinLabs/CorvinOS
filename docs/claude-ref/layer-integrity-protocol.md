@@ -98,9 +98,15 @@ the `protocol_version` here is a marker *inside* the attestation block.
 
 ## Tier 4 — Audit chain transparency (advisory)
 
-`GET /v1/a2a/audit-head` → `{chain_head, event_count, latest_ts, instance_id,
-signature}`. `?origin_id=<id>` selects the recv_key for an HMAC signature the
-requester can verify. `a2a_audit_head.check_peer_audit_head()` flags a peer
+`GET /v1/a2a/audit-head?origin_id=&issued_at=&nonce=&sig=` → `{chain_head, event_count,
+latest_ts, instance_id, signature}`. **Only a paired origin may ask (review SRF-7,
+2026-11-05):** the request is signed with the pairing `hmac_key` over
+`{"op":"audit_head","origin_id","issued_at","nonce"}` (`a2a_audit_head.sign_head_request`;
+verified by `verify_head_request`, same ±300 s window as a ping); an unsigned, wrongly
+signed, unknown-origin or stale request gets one opaque 403 `audit_head_rejected`, and a
+network-denied (Free) install answers 403 `license_required`. Before, any caller learned
+the instance id, the chain head, the event count and the last-activity time. The response
+stays HMAC-signed with the origin's `recv_key`. `a2a_audit_head.check_peer_audit_head()` flags a peer
 whose chain has not advanced across ≥2 consecutive observations
 (`a2a.peer_audit_anomaly`, WARNING). Never hard-blocks.
 

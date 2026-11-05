@@ -10,12 +10,27 @@ from __future__ import annotations
 
 import json
 
+from types import SimpleNamespace
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from corvin_console.routes import stats_features
+
+_REC = SimpleNamespace(tenant_id="_default", sid_fingerprint="fp", tier="owner")
+
+
+def test_route_requires_a_console_session():
+    """SRF-12: no session -> 401, never the adoption snapshot."""
+    app = FastAPI()
+    app.include_router(stats_features.router, prefix="/v1/console")
+    r = TestClient(app).get("/v1/console/stats/features")
+    assert r.status_code == 401
 
 
 def test_no_snapshot_returns_zero_instances_all_features_present(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
-    result = stats_features.get_feature_stats()
+    result = stats_features.get_feature_stats(_REC)
     assert result.total_instances == 0
     assert set(result.adoption_pct.keys()) == set(stats_features._KNOWN_FEATURES)
     assert all(v == 0.0 for v in result.adoption_pct.values())
@@ -30,7 +45,7 @@ def test_snapshot_present_reports_adopted_features(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    result = stats_features.get_feature_stats()
+    result = stats_features.get_feature_stats(_REC)
     assert result.total_instances == 1
     assert result.adoption_pct["ldd_enabled"] == 100.0
     assert result.adoption_pct["workflows_run_count"] == 100.0
@@ -44,5 +59,5 @@ def test_malformed_snapshot_file_does_not_crash(tmp_path, monkeypatch):
     tele_dir.mkdir()
     (tele_dir / "feature_snapshot.json").write_text("not json", encoding="utf-8")
 
-    result = stats_features.get_feature_stats()
+    result = stats_features.get_feature_stats(_REC)
     assert result.total_instances == 0

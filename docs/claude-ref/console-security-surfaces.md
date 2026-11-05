@@ -31,6 +31,53 @@ session minted for another tenant are executed but not recorded. This is pre-exi
 `routes/consent.py` "Known limitation") and NOT changed here. Proofs that assert audit records run as
 the process tenant `_default`.
 
+## DNS rebinding — Host / Origin allowlist (`host_guard.py`, review SRF-1, 2026-11-05)
+
+Local login is credential-less ("the TCP peer is 127.0.0.1" is the authorisation). A page that
+rebinds its own name to 127.0.0.1 used to get a session cookie for its origin from
+`/auth/local-login` and the CSRF token from `/auth/whoami`. Now every request on every host must
+name a Host this install answers to: `localhost`, `*.localhost`, a loopback or ANY IP literal
+(rebinding needs a name; an address is the server itself, which keeps a LAN bind working), or the
+operator allowlist — env `CORVIN_ALLOWED_HOSTS` (comma separated, `.example.com` = suffix) plus
+`spec.console.allowed_hosts` in the `_default` tenant's `tenant.corvin.yaml` (for a reverse-proxy
+name or LAN hostname). A WebSocket that carries an `Origin` must match its own host:port, the vite
+dev server, or `CORVIN_ALLOWED_ORIGINS`. `/auth/local-login` additionally requires a LOOPBACK Host —
+an allowlisted public name never earns a credential-less session.
+
+| Where | How |
+|---|---|
+| gateway (`corvin_gateway/app.py`, what `corvin-service` runs) | `HostGuardMiddleware` on the whole app (console API, SPA, `/local-stats`, gateway routes) |
+| console `create_app()` | the same middleware |
+| standalone (`corvinos-serve`) and every host mounting the console router | router-level dependency `require_allowed_host` on `corvin_console.app.router` (HTTP + WebSocket) |
+| `/auth/local-login` | `require_loopback_host` |
+| bridge daemons (`shared/js/host_guard.js`) | the WhatsApp daemon's HTTP API (`/pair`, `/qr.png`, `/status`) and `shared/js/health-server.js` |
+
+Refused: HTTP 400 `host not allowed` (local-login: 403), WebSocket close 1008. Recorded as
+`http.host_rejected` (`surface`, `reason` = `host_not_allowed`/`origin_not_allowed`/
+`local_login_host`, `scope_type`, `path_class` = first two path segments, `host_fp`/`origin_fp` =
+16-hex sha256 fingerprints — never the value) in the `_default` chain, at most once a minute per
+reason and host. In tests, the repo-root `conftest.py` makes every Starlette `TestClient`
+default to `http://127.0.0.1` (HTTP and `websocket_connect`, which hard-codes
+`ws://testserver` otherwise) and allowlists the test-only names `testserver`/`test` for the API
+(httpx `ASGITransport` clients); production code knows no test hostname. Proofs: `core/console/tests/test_host_guard_dns_rebinding.py`
+(gateway app AND standalone app over TestClient with a crafted Host/Origin; chain record),
+`corvin_operator/bridges/shared/js/test_host_guard.js` (real health server over loopback HTTP).
+
+## tenant.corvin.yaml writes
+
+Every console writer goes through `corvin_console/tenant_yaml.py` (0o600 before `os.replace`,
+atomic, locked read-modify-write, an unreadable file is refused with 409 and never rewritten from
+`{}`) — `layer-engines.md` § "the console's own save re-broke it".
+
+## Unauthenticated routes trimmed / file serving
+
+* `GET /v1/console/stats/features` requires a session since 2026-11-05 (SRF-12) and reads the
+  home through `forge.paths.corvin_home()`; it is no longer in `deps.PUBLIC_ROUTES`.
+* Compute stage images (`/compute/pipelines/{p}/stages/{s}/artifact-image/{f}`) are served with
+  `attachments_common.serve_headers`: `nosniff`, and an SVG inline but with
+  `Content-Security-Policy: sandbox` (SRF-6, `core/console/tests/test_compute_stage_image_headers.py`);
+  stage artifact downloads carry `nosniff` + `sandbox`.
+
 ## Memory panel (`routes/memory.py`)
 
 - The panel used to list, read, write and delete `~/.claude/projects/<slug>/memory` — the host

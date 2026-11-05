@@ -149,12 +149,21 @@ class TestMarketplaceE03:
             json={"tenant_id": "victim_tenant", "version": "1.0.0"},
             headers=sb.hdr,
         )
+        # Since f19246adf the install is a phased job that runs to completion by
+        # default (``wait: true``): the response is the job's FINAL document
+        # (no tenant field) and the audit actions are marketplace.install /
+        # marketplace.install_failed - "install_queued" is no longer emitted.
+        # The job itself carries the tenant it was bound to: read it back.
         assert r.status_code == 200, r.text
-        assert r.json()["tenant_id"] == TENANT
         job_id = r.json()["job_id"]
-        assert sb.authed.get(f"{self.BASE}/install/{job_id}/progress").status_code == 200
+        prog = sb.authed.get(f"{self.BASE}/install/{job_id}/progress")
+        assert prog.status_code == 200, prog.text
+        assert prog.json()["tenant_id"] == TENANT
         assert sb.anon.get(f"{self.BASE}/install/{job_id}/progress").status_code == 401
-        assert "marketplace.install_queued" in _actions(sb)
+        acts = _actions(sb)
+        assert "marketplace.install" in acts or "marketplace.install_failed" in acts
+        assert "victim_tenant" not in json.dumps(_audit_events(sb))
+        assert not (sb.home / "tenants" / "victim_tenant").exists()
 
     def test_job_is_bound_to_its_tenant(self, sb):
         from corvin_console.routes import marketplace_install as mi
