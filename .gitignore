@@ -179,3 +179,6 @@ corvin_operator/bridges/shared/settings.json
 
 # Key material never belongs in this public repo (ADR-0891 amendment, 2026-10-01)
 /Corvin-Keys/
+# lock files written next to live state (console auto-build, bridge settings)
+core/console/corvin_console/web-next/.autobuild.lock
+corvin_operator/bridges/*/settings.lock
