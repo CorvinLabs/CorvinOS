@@ -282,7 +282,15 @@ _REAL_VOICE_CONFIG = _REAL_CONFIG / "corvin-voice"
 #: Left unset it resolves to the REAL ``corvin_operator/skill-forge/skills/dyn`` of the checkout, so every test
 #: that creates a skill left a mirror there (120 ``assistant_datahub_*`` ones from three Data Hub tests alone,
 #: 2026-10-12..24), which the engine's skill loader and the CEL skill stage then read as real skills.
-_ISOLATED_KEYS = ("CORVIN_HOME", "XDG_CONFIG_HOME", "CORVIN_AUDIT_ANCHOR_KEY", "CORVIN_PLUGIN_SLOT_DIR")
+#: ``CORVIN_PROJECT_ROOT`` too (review 2026-11-05): the forge "project" scope is
+#: ``<git toplevel>/.corvin/forge`` unless that variable points elsewhere, so a test that
+#: promotes a tool or skill to project scope wrote ``<repo>/.corvin/forge/{registry.json,
+#: tools/,skills/}`` and ``<repo>/.corvin/skill-forge/*`` — the LIVE install when the
+#: checkout is the install (measured on a clean worktree run: those files appeared
+#: during the gateway, top-level and plugin groups). The runner exports it for every
+#: suite since 55b2d42ec; pytest did not.
+_ISOLATED_KEYS = ("CORVIN_HOME", "XDG_CONFIG_HOME", "CORVIN_AUDIT_ANCHOR_KEY", "CORVIN_PLUGIN_SLOT_DIR",
+                  "CORVIN_PROJECT_ROOT")
 _REAL_PLUGIN_SLOT = _REPO_ROOT / "corvin_operator" / "skill-forge" / "skills" / "dyn"
 
 # The console/gateway DNS-rebinding guard (corvin_console/host_guard.py, review SRF-1)
@@ -412,6 +420,8 @@ def _unsafe(key: str, value: "str | None") -> bool:
         return True
     if key == "CORVIN_PLUGIN_SLOT_DIR":
         return _under(p, _REAL_PLUGIN_SLOT) or _under(_REAL_PLUGIN_SLOT, p)
+    if key == "CORVIN_PROJECT_ROOT":
+        return _under(p, _REPO_ROOT) or p == _REPO_ROOT  # the checkout IS the live install
     if key == "XDG_CONFIG_HOME":
         return p == _REAL_CONFIG or _under(_REAL_CONFIG, p)
     if key == "CORVIN_AUDIT_ANCHOR_KEY":
@@ -431,6 +441,7 @@ def _install_session_sandbox() -> "tuple[Path, bool, dict[str, str]]":
         "XDG_CONFIG_HOME": str(sandbox / "xdg_config"),
         "CORVIN_AUDIT_ANCHOR_KEY": str(sandbox / "anchor" / "audit_anchor.key"),
         "CORVIN_PLUGIN_SLOT_DIR": str(sandbox / "plugin_slot"),
+        "CORVIN_PROJECT_ROOT": str(sandbox / "project_root"),
     }
     for key, default in defaults.items():
         if _unsafe(key, _os.environ.get(key)):
