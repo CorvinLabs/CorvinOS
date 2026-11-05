@@ -136,10 +136,14 @@ def _audit_gateway(
     Returns whether the record committed.
     """
     try:
-        from forge import paths as _fp  # noqa: PLC0415 — same lazy guard as runs.py
+        # core.paths.tenant is a byte-identical mirror of forge.paths (CLAUDE.md,
+        # tests/security/test_audit_chain_ssot.py) and needs no sys.path insert:
+        # ``forge`` is importable here only while a caller put corvin_operator/forge
+        # on the path, which the workflow test isolation undoes between tests.
+        from core.paths.tenant import tenant_audit_chain as _tenant_audit_chain  # noqa: PLC0415
 
         _security_events.write_event(
-            _fp.tenant_audit_chain(tenant_id), event_type,
+            _tenant_audit_chain(tenant_id), event_type,
             severity=severity, details=dict(details or {}),
             hash_chain=True,
         )
