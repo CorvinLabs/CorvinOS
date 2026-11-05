@@ -1,8 +1,0 @@
-{
-  "id": "mtvw8sr7_95e1fd",
-  "channel": "discord",
-  "from": "1299270034849533983",
-  "chat_id": "1515819896993222867",
-  "ts": 1789066907539,
-  "text": "lass uns mal das skill forge und tool forge refactoren. stell dir mal vor es gäbe sowas wie ein data hub skill. dieser vereint alle daten quellen wie memory, rag, mcp data scources, daten in pfaden oder ordnern, datei anhänge also alles mögliche. also ein generelles interface für daten quellen. dieses bereitet die daten auf und versteht diese. der zweite skill soll ein skill2.0 creator sein der skills erzeugt aus den daten output des data hub. später sollen auch tool forge tools daraus gebaut werden können. ziel ist es die qualität der tools und skill forge zu erhöhen. diese tool und skill forge soll immer im hiintergrund in einem unter prozess event basiert laufen wenn es wirklich sinn macht. schau dir dieses repo genau an und lerne daraus da wurde es schon gemacht. /home/shumway/projects/skill2.0-creator/ lass uns mal eine idee entwickeln."
-}
