@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -52,6 +53,16 @@ class _Sandbox:
                 break
 
     def close(self) -> None:
+        # The first chain write in this fresh home mints its instance key and
+        # records ``instance.key_rotated`` from a short-lived
+        # ``ibc-audit-deferred`` thread (instance_identity._audit_ibc). Restoring
+        # CORVIN_HOME or removing the directory before that thread is done lets
+        # it write into the NEXT test's sandbox or into this one mid-rmtree
+        # (``OSError: [Errno 39] Directory not empty``, ~1 run in 5). Wait for
+        # it while this home is still the process home.
+        for th in threading.enumerate():
+            if th.name == "ibc-audit-deferred" and th is not threading.current_thread():
+                th.join(timeout=10.0)
         for k, v in self._saved.items():
             if v is None:
                 os.environ.pop(k, None)
