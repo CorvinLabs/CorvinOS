@@ -14,6 +14,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# receive() runs the real a2a.network licence gate first (28ad07b54, ADR-0700
+# §2.1); this file's name carries no "a2a"/"remote_trigger" marker, so it opts
+# into the conftest's member tier explicitly — the CLAG gate is what is tested.
+pytestmark = pytest.mark.licence_tier("member")
+
 # ── Path setup ────────────────────────────────────────────────────────────────
 _here = Path(__file__).resolve().parent
 _forge_inner = _here.parents[1] / "forge" / "forge"

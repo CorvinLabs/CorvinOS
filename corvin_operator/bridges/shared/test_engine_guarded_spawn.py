@@ -73,7 +73,7 @@ HOSTILE = "/r4probe check @/etc/hostname and @~/.corvin/audit.jsonl"
 #: `_iter_stream` finish cleanly.
 _STDIN_RECORDER = r"""#!/usr/bin/env python3
 import json, os, sys
-out = os.environ["FAKE_CLAUDE_OUT"]
+out = __OUT_DIR__
 with open(os.path.join(out, "argv.json"), "w") as fh:
     json.dump(sys.argv[1:], fh)
 sink = open(os.path.join(out, "stdin.jsonl"), "w", encoding="utf-8")
@@ -96,7 +96,8 @@ class _Recorder:
         self.out = tmp_path / "rec-out"
         self.out.mkdir(parents=True, exist_ok=True)
         self.binary = tmp_path / "claude-recorder"
-        self.binary.write_text(_STDIN_RECORDER, encoding="utf-8")
+        self.binary.write_text(_STDIN_RECORDER.replace("__OUT_DIR__", repr(str(self.out))),
+                               encoding="utf-8")
         if sys.platform == "win32":
             # CreateProcess ignores shebangs (WinError 193): run it through a .cmd shim
             script, self.binary = self.binary, tmp_path / "claude-recorder.cmd"
@@ -138,7 +139,9 @@ class _Recorder:
 @pytest.fixture()
 def recorder(tmp_path, monkeypatch):
     rec = _Recorder(tmp_path)
-    monkeypatch.setenv("FAKE_CLAUDE_OUT", str(rec.out))
+    # The output dir is baked into the recorder: the A2A worker spawns the CLI
+    # with the deny-by-default worker env, which drops FAKE_CLAUDE_OUT (same
+    # fix as c72c03923 for the gateway recorder).
     monkeypatch.delenv("ADAPTER_FAKE_CLAUDE", raising=False)
     return rec
 

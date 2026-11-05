@@ -41,6 +41,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -144,7 +145,10 @@ class ConsentLockTests(_TmpHome):
     CH, KEY, UID = "discord", "555", "u1"
 
     def _store(self) -> Path:
-        return consent._store_path(self.CH, self.KEY)
+        # _store_path takes an explicit tenant since 86bad7527 (CRITICAL-3);
+        # resolve it the way grant/revoke/is_granted do (_store_tenant(None)).
+        return consent._store_path(self.CH, self.KEY,
+                                   tenant_id=consent._store_tenant(None))
 
     def _lock(self) -> Path:
         p = self._store()
@@ -282,11 +286,19 @@ class QuotaLockTests(_TmpHome):
 
 
 class RolesLockTests(_TmpHome):
-    # A channel with no ``settings.json`` has an EMPTY whitelist, which
-    # ``is_intrinsic_owner`` treats as DEV mode (every uid is owner) — that is
-    # what gives the grantor authority here. Using "discord" would read the
-    # checked-in bridge settings and answer "insufficient-authority" instead.
+    # An EMPTY whitelist makes NOBODY an owner (F-A19, roles.is_intrinsic_owner
+    # — the old DEV-mode "everyone is owner" fail-open is gone), so the
+    # grantor's authority comes from a stubbed whitelist listing it; the test
+    # never reads a real bridge settings file.
     CH, KEY, UID = "lockprobe", "555", "u1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        patcher = unittest.mock.patch.object(
+            roles, "_read_channel_whitelist",
+            lambda channel: ["grantor1"] if channel == self.CH else [])
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _lock(self) -> Path:
         p = roles._store_path(self.CH, self.KEY)

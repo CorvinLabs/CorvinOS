@@ -23,10 +23,14 @@ def _block_clag_import(monkeypatch):
     """Force ``from clag import ...`` to raise ImportError, leave others intact."""
     _real_import = builtins.__import__
 
-    def _fake_import(name, *args, **kwargs):
-        if name == "clag":
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        # consent._import_clag imports package-qualified (``from forge import
+        # clag``) first and falls back to a bare ``import clag``; disclosure
+        # still uses ``from clag import gate``. Block every form.
+        if name in ("clag", "forge.clag") or (
+                name == "forge" and fromlist and "clag" in fromlist):
             raise ImportError("simulated: clag unimportable")
-        return _real_import(name, *args, **kwargs)
+        return _real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", _fake_import)
 

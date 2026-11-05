@@ -12,6 +12,7 @@ from pathlib import Path
 
 # Sandbox before importing.
 _SANDBOX = tempfile.mkdtemp(prefix="profile_test_")
+_PREV_XDG = os.environ.get("XDG_CONFIG_HOME")
 os.environ["XDG_CONFIG_HOME"] = _SANDBOX
 
 HERE = Path(__file__).resolve().parent
@@ -68,7 +69,10 @@ class FormatTests(unittest.TestCase):
         prof.set_value("tone", "concise, du-form")
         out = prof.for_system_prompt()
         self.assertIn("Name: Silvio", out)
-        self.assertIn("Language: de", out)
+        # display_language set by the operator is a PIN and renders as the
+        # authoritative "ALWAYS answer in" line (profile.for_system_prompt,
+        # maintainer decision 2026-07-20) — no longer the bare "Language: de".
+        self.assertIn("Language: ALWAYS answer in de.", out)
         self.assertIn("concise, du-form", out)
         # Must be appendable to a system prompt (starts with newline-ish
         # pattern, doesn't have leading garbage).
@@ -290,17 +294,33 @@ class MutateConcurrencyTests(unittest.TestCase):
             self.assertEqual(d.get(f"m{i}_b"), i * 2)
 
 
+def _clear_audience_defaults() -> None:
+    """Drop the fresh-install audience defaults (profile._PROFILE_DEFAULTS:
+    metaphors=on, learning=3) so a test controls every audience field itself."""
+    for key in prof._PROFILE_DEFAULTS:
+        prof.set_value(key, None)
+
+
 class TtsAudienceTests(unittest.TestCase):
     """Layer-12 listener-profile rendering and validation."""
 
     def setUp(self):
         prof.reset()
+        _clear_audience_defaults()
 
     def test_empty_audience_returns_empty_string(self):
-        # Backward-compat: no audience fields → empty block → caller does
-        # not append anything to the system prompt.
+        # No audience fields → empty block → caller does not append anything
+        # to the system prompt.
         self.assertEqual(prof.for_tts_audience("de"), "")
         self.assertEqual(prof.for_tts_audience("en"), "")
+
+    def test_fresh_install_renders_the_shipped_defaults(self):
+        # A fresh install (no profile.json) gets profile._PROFILE_DEFAULTS
+        # (analogies on, learning mode 3), so the block is NOT empty there.
+        prof.reset()
+        out = prof.for_tts_audience("de")
+        self.assertIn("Lern-Modus 3/3", out)
+        self.assertIn("Analogien erwünscht", out)
 
     def test_audience_renders_de_and_en(self):
         prof.set_value("voice_audience_level", "expert")
@@ -468,6 +488,7 @@ class TtsAudienceTests(unittest.TestCase):
         # Fail-open: 4, -1, "abc" must not break the prompt.
         for bad in (4, -1, 99, "abc"):
             prof.reset()
+            _clear_audience_defaults()
             prof.set_value("voice_audience_learning", bad)
             out = prof.for_tts_audience("de")
             self.assertNotIn("LERN-ZUGABE", out,
@@ -598,6 +619,21 @@ class TtsProviderKnownKeyTests(unittest.TestCase):
         prof.set_value("tts_provider", "auto")
         d = prof.load()
         self.assertEqual(d.get("tts_provider"), "auto")
+
+
+def tearDownModule():
+    """Leave nothing behind for the rest of the pytest process. ``profile`` is a
+    shared module (adapter imports it as ``_voice_profile``) whose PROFILE_FILE
+    was bound to this sandbox at import; the last test here leaves
+    ``tts_provider="openai"`` in it, which pinned every later TTS test in the
+    same process to OpenAI (test_tts_piper_fallback: edge-tts never tried).
+    The XDG override was also set at import (collection) time, outside any
+    per-test environment snapshot."""
+    prof.reset()
+    if _PREV_XDG is None:
+        os.environ.pop("XDG_CONFIG_HOME", None)
+    else:
+        os.environ["XDG_CONFIG_HOME"] = _PREV_XDG
 
 
 if __name__ == "__main__":

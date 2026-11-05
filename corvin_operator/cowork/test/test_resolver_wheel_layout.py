@@ -106,12 +106,19 @@ def test_forge_entry_script_is_vendored_in_wheel_map():
     vendoring only the inner package left every wheel install with a dead
     forge MCP server."""
     repo_root = Path(__file__).resolve().parents[3]
-    sys.path.insert(0, str(repo_root))
-    try:
-        import hatch_build
-    finally:
-        sys.path.remove(str(repo_root))
-    srcs = [src for src, _ in hatch_build._VENDOR_MAP]
+    # Read the literal ``_VENDOR_MAP`` from hatch_build.py's AST instead of
+    # importing it: the module imports ``hatchling`` (a build-time dependency
+    # the runtime venv does not install), and the map is plain data.
+    import ast
+    tree = ast.parse((repo_root / "hatch_build.py").read_text(encoding="utf-8"))
+    vendor_map = None
+    for node in tree.body:
+        target = getattr(node, "target", None)
+        if isinstance(node, ast.AnnAssign) and isinstance(target, ast.Name) \
+                and target.id == "_VENDOR_MAP":
+            vendor_map = ast.literal_eval(node.value)
+    assert vendor_map, "hatch_build._VENDOR_MAP not found as a literal"
+    srcs = [src for src, _ in vendor_map]
     assert "corvin_operator/forge/forge.py" in srcs
-    for src, dest in hatch_build._VENDOR_MAP:
+    for src, dest in vendor_map:
         assert (repo_root / src).exists(), f"vendor map source missing: {src}"

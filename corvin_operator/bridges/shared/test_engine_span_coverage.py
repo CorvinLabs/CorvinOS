@@ -36,6 +36,16 @@ _SCAN_DIRS = [
 # Map: relative-path-suffix -> reason. Empty today (every spawn site is wrapped).
 EXEMPT: dict[str, str] = {}
 
+# Module receivers whose ``.spawn(...)`` is NOT an engine spawn. Map: name -> reason.
+# Narrower than a file EXEMPT: a real engine spawn added to the same file still fails.
+NON_ENGINE_SPAWN_RECEIVERS: dict[str, str] = {
+    # core/console/corvin_console/forge_runs.py::spawn (703d9e4b8, 2026-10-04) starts a
+    # daemon THREAD that runs a Forge generation ``work`` callable — it is a run-store
+    # helper, not a WorkerEngine. Called from routes/skill_creator_api.py and
+    # routes/forge_creator.py.
+    "forge_runs": "thread runner for Forge generation runs, not an engine",
+}
+
 # Any of these substrings in the file proves it emits an engine.span.
 _SPAN_MARKERS = ("engine_span", "ENGINE_SPAN", "engine.span")
 
@@ -52,6 +62,9 @@ def _is_engine_spawn_call(node: ast.AST) -> bool:
         return False
     fn = node.func
     if isinstance(fn, ast.Attribute):
+        if fn.attr == "spawn" and isinstance(fn.value, ast.Name) \
+                and fn.value.id in NON_ENGINE_SPAWN_RECEIVERS:
+            return False
         if fn.attr in ("spawn", "create_subprocess_exec"):
             return True
     if isinstance(fn, ast.Name) and fn.id == "create_subprocess_exec":

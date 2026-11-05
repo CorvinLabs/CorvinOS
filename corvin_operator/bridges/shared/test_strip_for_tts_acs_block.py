@@ -15,10 +15,15 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "voice" / "scripts" / "strip_for_tts.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from status_markers import icon  # noqa: E402
 
+# The gate line carries the shared status icon (acs_runtime.format_acs_step via
+# _status_icon("done"), since f3d8cefe2) — not the 📊 the first cut emitted.
 DE = ("Solarenergie hat zwei Vorteile und zwei Nachteile.\n\n"
       "Verlauf\n🧭 Iteration 1: Manager teilt in 2 Teilaufgaben auf\n"
-      "🤖 Worker 1/2: erfolgreich (Konfidenz 0.95)\n📊 Gate Iteration 2: bestanden, Loss-Score 0.998 (höher = besser)\n\n"
+      "🤖 Worker 1/2: erfolgreich (Konfidenz 0.95)\n"
+      f"{icon('done')} Gate Iteration 2: bestanden, Loss-Score 0.998 (höher = besser)\n\n"
       "ACS-Lauf\n- Auslöser: /delegate (ausdrücklich angefordert)\n- Ergebnis: abgeschlossen\n"
       "- Schritte: 2 Iteration(en), 2 Worker\n- Loss-Score (höher = besser): 0.998 (Verlauf 0.998)\n- Dauer: 19 s\n")
 EN = ("Solar has two upsides.\n\nSteps\n🧭 Iteration 1: manager splits into 2 subtasks\n\n"

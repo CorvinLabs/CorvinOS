@@ -439,15 +439,26 @@ class TestL28UserModelHandler(unittest.TestCase):
     """V-001: L28UserModelHandler purges user-model JSON files."""
 
     def setUp(self):
-        self.tmpdir = tempfile.TemporaryDirectory()
+        # ignore_cleanup_errors: in a full-suite run a background thread left
+        # running by an EARLIER test (it resolves CORVIN_HOME per write) can drop
+        # a file into this home between rmtree's listing and its rmdir — the
+        # teardown then failed with ENOTEMPTY although the assertion passed
+        # (sweep 2026-11-05, not reproducible in a re-run of the 130-file prefix).
+        self.tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.tmp = Path(self.tmpdir.name)
         import os
+        self._prev_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = str(self.tmp)
         # Build the user_model dir
         self.udir = self.tmp / "tenants" / "_default" / "global" / "memory" / "user_model"
         self.udir.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
+        import os
+        if self._prev_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._prev_home
         self.tmpdir.cleanup()
 
     def _write_model_file(self, channel: str, chat_key: str) -> Path:

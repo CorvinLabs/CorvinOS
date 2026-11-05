@@ -29,11 +29,16 @@ pytestmark = pytest.mark.skipif(sys.platform.startswith("win"),
                                 reason="POSIX process semantics in the harness")
 
 
-def _fresh_adapter():
+def _fresh_adapter(monkeypatch):
     os.environ.pop("ADAPTER_FAKE_CLAUDE", None)
+    # Purge through monkeypatch so the ORIGINAL module objects come back at
+    # teardown. A bare ``del sys.modules[...]`` left the re-imported ``agents``
+    # package in place for the rest of the pytest process, so a later file that
+    # had bound ``agents.CapabilityError`` at import compared it against a
+    # second, different class (test_worker_session_store::TestCapabilityError).
     for mod in list(sys.modules):
         if mod in ("adapter", "agents") or mod.startswith("agents."):
-            del sys.modules[mod]
+            monkeypatch.delitem(sys.modules, mod)
     import adapter  # type: ignore
 
     adapter._house_rules_classifier = lambda task, rules, auth, **_kw: ("", 1.0, "test-benign")
@@ -57,7 +62,7 @@ def sandbox(tmp_path, monkeypatch):
 def _turn(monkeypatch, sandbox, fixture):
     for k, v in kit.fake_env(sandbox, fixture, speedup=20).items():
         monkeypatch.setenv(k, v)
-    adapter = _fresh_adapter()
+    adapter = _fresh_adapter(monkeypatch)
     adapter.call_claude_streaming("irrelevant", channel="discord", chat_key="rlw",
                                   mode="unrestricted", profile=None)
     from corvin_console import rate_limit_windows as rlw  # noqa: PLC0415

@@ -69,6 +69,21 @@ def _codex_in_path() -> bool:
     return nvm.exists()
 
 
+#: What the codex CLI answers when its stored ChatGPT login can no longer be
+#: refreshed (measured 2026-11-05). An installed binary is not a usable engine:
+#: the live tests need the operator's codex login, an external precondition.
+_CODEX_LOGIN_EXPIRED = ("access token could not be refreshed",
+                        "log out and sign in again")
+
+
+def _skip_if_codex_login_expired(case: unittest.TestCase, error: object) -> None:
+    text = str(error or "").lower()
+    if any(marker in text for marker in _CODEX_LOGIN_EXPIRED):
+        case.skipTest("codex CLI is installed but its login has expired "
+                      "(run `codex login`); live codex E2E needs a valid login: "
+                      f"{str(error)[:120]}")
+
+
 # ---------------------------------------------------------------------------
 # Fast unit tests (always run)
 # ---------------------------------------------------------------------------
@@ -550,6 +565,7 @@ class CodexCliLiveE2E(unittest.TestCase):
         result = collect(engine.spawn(PROMPT_PONG, timeout=180.0))
         duration = time.time() - start
 
+        _skip_if_codex_login_expired(self, result.error)
         self.assertIsNone(result.error,
                           f"codex engine returned error: {result.error}")
         self.assertIn("pong", result.final_text.lower(),
@@ -574,6 +590,7 @@ class EngineParityLiveE2E(unittest.TestCase):
         prompt = "Reply with exactly: ack"
         claude_result = collect(ClaudeCodeEngine().spawn(prompt, timeout=180.0))
         codex_result = collect(CodexCliEngine().spawn(prompt, timeout=180.0))
+        _skip_if_codex_login_expired(self, codex_result.error)
 
         # Both must succeed
         self.assertIsNone(claude_result.error,

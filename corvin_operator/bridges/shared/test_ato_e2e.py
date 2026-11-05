@@ -1,8 +1,18 @@
 """test_ato_e2e.py — End-to-End classification tests for ADR-0165.
 
 Strategy (LDD test pyramid):
-  Tier 1  — deterministic unit tests: run code.task_intake.py directly via
-             subprocess (bwrap-simulated), assert on JSON output.
+  Tier 1  — deterministic classification matrix against the production
+             classifier ``ato_classify.classify()`` (what the adapter calls
+             inline before the engine spawn).
+
+  The matrix used to drive the runtime-forged Forge tool
+  ``<repo>/.corvin/tenants/_default/forge/tools/code.task_intake.py`` as a
+  subprocess. That tool was never part of the repository or the marketplace —
+  it lived only in one live install (the ``code.*`` namespace of the persona
+  removed in c93ef9915) and is absent from every current install, so the
+  tier had no subject and failed on FileNotFoundError. ``ato_classify.py`` is
+  the in-repo single source of truth (it "mirrors the heuristics in
+  code.task_intake.py"); all 79 matrix cases were re-verified against it.
   Tier 2  — edge-case matrix: 30+ tasks across all 6 types, including
              ambiguous cases designed to probe classification boundaries.
   Tier 3  — LDD loss recording: every misclassification is recorded in
@@ -28,35 +38,21 @@ from pathlib import Path
 _here = Path(__file__).resolve().parent
 _repo = _here.parents[2]  # operator/bridges/shared → repo root
 
-# Path to the Forge tool script under the default tenant
-_INTAKE_TOOL = (
-    _repo / ".corvin" / "tenants" / "_default" / "forge" / "tools" / "code.task_intake.py"
-)
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _classify(
     task: str,
     data_classification: str = "CONFIDENTIAL",
     engine_id: str = "claude_code",
+    haiku_allowed: "bool | None" = None,
 ) -> dict:
-    """Run code.task_intake.py as a subprocess (mirrors bwrap execution).
-
-    engine_id defaults to "claude_code" to mirror ato_classify.classify()'s
-    default, so parity tests compare equivalent contexts.
-    """
-    result = subprocess.run(
-        [sys.executable, str(_INTAKE_TOOL)],
-        input=json.dumps({
-            "task": task,
-            "data_classification": data_classification,
-            "engine_id": engine_id,
-        }),
-        capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"intake tool failed: {result.stderr[:200]}")
-    return json.loads(result.stdout)
+    """The production classifier's plan as a plain dict (the shape the matrix
+    and schema checks assert on). See the module docstring for why this no
+    longer spawns the Forge tool."""
+    import dataclasses  # noqa: PLC0415
+    plan = _classify_module(task, data_classification=data_classification,
+                            engine_id=engine_id, haiku_allowed=haiku_allowed)
+    return dataclasses.asdict(plan)
 
 
 def _classify_module(task: str, **kwargs) -> "ATOPlan":
@@ -565,26 +561,13 @@ CASES: list[Case] = [
 
 # ── Test classes ──────────────────────────────────────────────────────────────
 
-class TestATOClassificationSubprocess(unittest.TestCase):
-    """Tier 1: Subprocess tests (real bwrap-equivalent execution)."""
+class TestATOClassificationMatrix(unittest.TestCase):
+    """Tier 1: the classification matrix against the production classifier."""
 
     def _run_case(self, case: Case) -> dict:
-        env = dict(os.environ)
-        if case.haiku_allowed:
-            env["CORVIN_OS_MODEL_ALLOW_HAIKU"] = "1"
-        result = subprocess.run(
-            [sys.executable, str(_INTAKE_TOOL)],
-            input=json.dumps({
-                "task": case.task,
-                "data_classification": case.data_classification,
-                # Simulate the CC OS-turn context so M5/M6 delegation guard is active.
-                "engine_id": "claude_code",
-            }),
-            capture_output=True, text=True, timeout=10, env=env, encoding="utf-8", errors="replace",
-        )
-        self.assertEqual(result.returncode, 0,
-                         f"tool exited {result.returncode}: {result.stderr[:200]}")
-        return json.loads(result.stdout)
+        # The CC OS-turn context, so the M5/M6 delegation guard is active.
+        return _classify(case.task, data_classification=case.data_classification,
+                         engine_id="claude_code", haiku_allowed=case.haiku_allowed)
 
     def _assert_case(self, case: Case) -> None:
         out = self._run_case(case)
@@ -620,8 +603,8 @@ class TestATOClassificationSubprocess(unittest.TestCase):
 
 # Dynamically generate test methods from CASES
 for _case in CASES:
-    _test_method = TestATOClassificationSubprocess._make_test(_case)
-    setattr(TestATOClassificationSubprocess, _test_method.__name__, _test_method)
+    _test_method = TestATOClassificationMatrix._make_test(_case)
+    setattr(TestATOClassificationMatrix, _test_method.__name__, _test_method)
 
 
 class TestATOClassifyModule(unittest.TestCase):
@@ -739,9 +722,11 @@ class TestATOOutputSchema(unittest.TestCase):
     """Schema validation: ensure all output fields are present and correctly typed."""
 
     def _check_schema(self, out: dict) -> None:
+        # ato_classify.ATOPlan's fields (the Forge tool's extra ``goal_text``
+        # went with the tool).
         required = {
             "task_type", "confidence", "execution_strategy",
-            "goal_text", "loop_params", "required_ldd_skills",
+            "loop_params", "required_ldd_skills",
             "delegation_target", "recommended_model", "compute_params",
         }
         missing = required - set(out.keys())
@@ -762,23 +747,6 @@ class TestATOOutputSchema(unittest.TestCase):
     def test_schema_compute(self):
         self._check_schema(_classify("Run Bayesian optimization over 200 trials."))
 
-    def test_no_anthropic_import_in_tool(self):
-        import ast  # noqa: PLC0415
-        src = _INTAKE_TOOL.read_text(encoding="utf-8")
-        tree = ast.parse(src)
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                names = (
-                    [a.name for a in node.names]
-                    if isinstance(node, ast.Import)
-                    else ([node.module] if node.module else [])
-                )
-                for name in names:
-                    self.assertFalse(
-                        name and name.startswith("anthropic"),
-                        f"code.task_intake.py must not import anthropic — found: {name}",
-                    )
-
     def test_no_anthropic_import_in_module(self):
         import ast  # noqa: PLC0415
         src = (_here / "ato_classify.py").read_text(encoding="utf-8")
@@ -797,78 +765,25 @@ class TestATOOutputSchema(unittest.TestCase):
                     )
 
 
-class TestATOParitySubprocessVsModule(unittest.TestCase):
-    """Parity tests: subprocess (code.task_intake.py) and in-process (ato_classify.py)
-    must produce identical task_type AND delegation_target for the same input.
+class TestATOModuleContract(unittest.TestCase):
+    """Contract checks on ato_classify.py. (The subprocess-vs-module parity tests
+    that lived here compared it against the runtime-forged code.task_intake.py,
+    which no install carries any more — see the module docstring.)"""
 
-    Guards against SSOT divergence when patterns are updated in one file but not the other.
-    The subprocess receives engine_id="claude_code" (CC OS-turn context) to match
-    ato_classify.classify()'s default of engine_id="claude_code".
-    """
-
-    _PARITY_INPUTS = [
-        "Fix the failing test in test_ato_loss.py.",
-        "Research all open-source GDPR consent libraries.",
-        "Write an ADR for the new rate-limiting strategy.",
-        "Monitor the health endpoint every 5 minutes.",
-        "Run Bayesian optimization over 200 trials.",
-        "What is the capital of Germany?",
-        "Which files need to be migrated across the codebase?",  # workflow via question
-        "How do you fix N+1 queries in SQL?",                   # question-word fix
-    ]
-
-    def _subprocess_plan(self, task: str) -> dict:
-        return _classify(task)  # subprocess already sends engine_id="claude_code"
-
-    def _module_plan(self, task: str) -> "ATOPlan":
-        return _classify_module(task)  # classify() defaults to engine_id="claude_code"
-
-    def _subprocess_type(self, task: str) -> str:
-        return self._subprocess_plan(task)["task_type"]
-
-    def _module_type(self, task: str) -> str:
-        return self._module_plan(task).task_type
-
-    def test_parity_all_inputs(self):
-        for task in self._PARITY_INPUTS:
-            sub = self._subprocess_plan(task)
-            mod = self._module_plan(task)
-            self.assertEqual(
-                sub["task_type"], mod.task_type,
-                f"task_type SSOT divergence for: {task!r}\n"
-                f"  subprocess: {sub['task_type']!r}\n  module: {mod.task_type!r}",
-            )
-            self.assertEqual(
-                sub.get("delegation_target"), mod.delegation_target,
-                f"delegation_target SSOT divergence for: {task!r}\n"
-                f"  subprocess: {sub.get('delegation_target')!r}\n"
-                f"  module: {mod.delegation_target!r}",
-            )
-
-    def test_parity_question_workflow(self):
-        """'Which files?' should be multi_agent in both paths (no workflow_score penalty)."""
+    def test_question_workflow_is_multi_agent(self):
+        """'Which files?' is multi_agent (no workflow_score penalty for questions)."""
         task = "Which files need to be migrated across the codebase?"
-        self.assertEqual(self._subprocess_type(task), "multi_agent")
-        self.assertEqual(self._module_type(task), "multi_agent")
+        self.assertEqual(_classify_module(task).task_type, "multi_agent")
 
-    def test_parity_question_fix(self):
-        """'How do you fix...?' should be one_shot in both paths (loop suppressed by question)."""
-        task = "How do you fix N+1 queries in SQL?"
-        self.assertEqual(self._subprocess_type(task), "one_shot")
-        self.assertEqual(self._module_type(task), "one_shot")
+    def test_question_fix_is_one_shot(self):
+        """'How do you fix...?' is one_shot (loop suppressed by the question form)."""
+        self.assertEqual(_classify_module("How do you fix N+1 queries in SQL?").task_type,
+                         "one_shot")
 
-    def test_parity_non_cc_engine_no_delegation(self):
-        """Non-CC engine (opencode) must produce delegation_target=None in subprocess (ADR-0029)."""
-        import tempfile  # noqa: PLC0415
-        result = subprocess.run(
-            [sys.executable, str(_INTAKE_TOOL)],
-            input=json.dumps({"task": "What is the token limit?", "engine_id": "opencode"}),
-            capture_output=True, text=True, timeout=10, env=dict(os.environ), encoding="utf-8", errors="replace",
-        )
-        self.assertEqual(result.returncode, 0, result.stderr[:200])
-        out = json.loads(result.stdout)
-        self.assertIsNone(out.get("delegation_target"),
-                          f"Non-CC engine must not produce delegation_target; got {out.get('delegation_target')!r}")
+    def test_non_cc_engine_no_delegation(self):
+        """A non-CC engine (opencode) never gets a delegation_target (ADR-0029)."""
+        plan = _classify_module("What is the token limit?", engine_id="opencode")
+        self.assertIsNone(plan.delegation_target)
 
     def test_no_path_import_in_module(self):
         """ato_classify.py must not import pathlib.Path (no filesystem operations)."""

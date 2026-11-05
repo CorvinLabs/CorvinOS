@@ -17,11 +17,22 @@ from pathlib import Path
 
 # Sandbox the schedule file before importing the module.
 _SANDBOX = tempfile.mkdtemp(prefix="sched_test_")
+_PREV_XDG_CACHE = os.environ.get("XDG_CACHE_HOME")
 os.environ["XDG_CACHE_HOME"] = _SANDBOX
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import scheduler  # noqa: E402
+
+# scheduler.SCHEDULE_FILE is bound at import, so the override is only needed for
+# the import itself. Left set, it leaked into every later test of the pytest
+# process (it is set at COLLECTION time, outside any per-test env snapshot) and
+# moved the legacy session root session_state.claude_session_dirs resolves
+# (test_session_ledger::TestRound8 legacy-path chat).
+if _PREV_XDG_CACHE is None:
+    os.environ.pop("XDG_CACHE_HOME", None)
+else:
+    os.environ["XDG_CACHE_HOME"] = _PREV_XDG_CACHE
 
 
 class CronParserTests(unittest.TestCase):

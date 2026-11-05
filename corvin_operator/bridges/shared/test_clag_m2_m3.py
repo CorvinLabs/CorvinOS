@@ -77,8 +77,11 @@ def test_consent_clag_gate_raises_on_broken_chain():
         last["hash"] = "0000000000000000"
         lines[-1] = json.dumps(last)
         p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # consent imports the gate package-qualified (``forge.clag``,
+        # consent._import_clag) — a different module object than the bare
+        # ``clag`` imported above, so assert the class the gate really raises.
         with patch.object(_consent, "_audit_path", return_value=p):
-            with pytest.raises(ChainIntegrityFailure):
+            with pytest.raises(_consent._import_clag().ChainIntegrityFailure):
                 _consent._clag_gate("L16.consent_gate")
     finally:
         p.unlink(missing_ok=True)

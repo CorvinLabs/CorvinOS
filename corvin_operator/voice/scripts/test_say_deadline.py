@@ -49,10 +49,15 @@ def test_exhausted_budget_returns_none():
     assert say._clamped_timeout(10.0, -3.0) is None
 
 
-def test_default_total_budget_stays_under_console_outer_timeout():
-    # routes/voice.py::_TTS_TIMEOUT_S defaults to 25s; say.py must finish
-    # (or degrade) strictly before the caller SIGKILLs it.
-    assert say._TOTAL_BUDGET_S < 25.0
+def test_default_total_budget_stays_under_console_outer_timeout(monkeypatch):
+    # Since ea97abf2b the chain budget SCALES WITH THE TEXT (total_budget_for);
+    # _TOTAL_BUDGET_S is only the operator's absolute pin and is None by
+    # default. For a short reply the default budget must still finish (or
+    # degrade) strictly before the console's 25s floor SIGKILLs say.py; the
+    # per-length invariant against routes/voice.py::_tts_timeout_for is
+    # guarded by tests/test_voice_tts_budget.py.
+    monkeypatch.setattr(say, "_TOTAL_BUDGET_S", None)
+    assert say.total_budget_for("hello") < 25.0
 
 
 def test_deadline_anchored_at_module_import_not_main():
@@ -70,7 +75,10 @@ def test_deadline_anchored_at_module_import_not_main():
 def test_exhausted_budget_skips_all_providers_e2e(tmp_path):
     out = tmp_path / "clip.opus"
     env = dict(os.environ)
-    env["CORVIN_TTS_TOTAL_BUDGET_S"] = "0"
+    # A pin below margin + minimum attempt exhausts the chain. "0" is no longer
+    # a pin: since ea97abf2b an empty/zero value means "no pin, scale with the
+    # text" (say.py::_TOTAL_BUDGET_S).
+    env["CORVIN_TTS_TOTAL_BUDGET_S"] = "0.5"
     proc = subprocess.run(
         [sys.executable, str(_SCRIPTS / "say.py"), str(out), "hello", "en"],
         capture_output=True, text=True, env=env, timeout=15, encoding="utf-8", errors="replace",

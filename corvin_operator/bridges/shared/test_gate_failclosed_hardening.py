@@ -179,8 +179,15 @@ class TestL34TransientLoadNotCached(unittest.TestCase):
     def test_no_policy_file_stays_fail_open(self):
         empty_home = Path(tempfile.mkdtemp(prefix="l34nopolicy_"))
         self.assertIsNone(spawn_gates._load_l34_guard("_default", empty_home))
-        self.assertIsNone(spawn_gates.check_l34("claude_code", "_default", classification="secret",
+        # No policy = opt-in default, fail-open — for every class below SECRET.
+        self.assertIsNone(spawn_gates.check_l34("claude_code", "_default", classification="internal",
                                                 corvin_home=empty_home))
+        # ADR-2299 (ba9362208): a SECRET prompt is refused on a non-local engine
+        # even without a tenant policy — the one exception to the fail-open default.
+        verdict = spawn_gates.check_l34("claude_code", "_default", classification="secret",
+                                        corvin_home=empty_home)
+        self.assertIsNotNone(verdict)
+        self.assertIn("even without a tenant.corvin.yaml", verdict)
 
 
 # ── H3 — "acs" delegation alias host-map drift ───────────────────────────────

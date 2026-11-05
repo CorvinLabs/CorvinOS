@@ -73,16 +73,20 @@ def _flag_on(monkeypatch):
 
 @pytest.fixture
 def _house_pass(monkeypatch):
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows",
+                        lambda text, *, channel, chat_key, tenant_id=None: True)
 
 
 @pytest.fixture
 def _owner(monkeypatch):
     """Treat UID as the intrinsic owner — the carve-out that makes consent +
-    disclosure pass with no record (the repo channel whitelist does not list the
-    synthetic test UID)."""
+    disclosure pass with no record. The proactive carve-out applies only when
+    the channel HAS a whitelist (``proactive_consent._is_owner`` is fail-closed
+    on an empty one), so UID is listed in a stubbed whitelist; the test never
+    reads the operator's real channel settings."""
     import disclosure  # type: ignore
-    monkeypatch.setattr(disclosure, "_is_intrinsic_owner", lambda channel, uid: True)
+    monkeypatch.setattr(disclosure, "_read_channel_whitelist", lambda channel: [UID])
+    monkeypatch.setattr(disclosure, "_is_intrinsic_owner", lambda channel, uid: uid == UID)
 
 
 @pytest.fixture

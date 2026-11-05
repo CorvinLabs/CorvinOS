@@ -42,13 +42,16 @@ def _fake_modules(tmp_path: Path) -> tuple[dict, Mock, Mock, Mock]:
     start_hb = Mock(return_value=None)
     hb_mod.start_heartbeat_thread = start_hb
 
-    fp_mod = types.ModuleType("forge.paths")
+    # adapter imports corvin_home from the fully-qualified
+    # ``corvin_operator.forge.forge.paths`` since 0ea50431c (ADR-0700), not
+    # the bare ``forge.paths`` — fake the module the boot path really imports.
+    fp_mod = types.ModuleType("corvin_operator.forge.forge.paths")
     fp_mod.corvin_home = lambda: tmp_path
 
     mods = {
         "corvin_core.aco.htrace_uploader": hu_mod,
         "corvin_core.aco.heartbeat": hb_mod,
-        "forge.paths": fp_mod,
+        "corvin_operator.forge.forge.paths": fp_mod,
     }
     return mods, start_ping, start_upload, start_hb
 

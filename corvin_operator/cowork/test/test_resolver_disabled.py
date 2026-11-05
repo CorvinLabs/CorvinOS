@@ -47,16 +47,20 @@ def _write_disabled(user_personas: Path, names: list[str]) -> None:
 
 def test_disabled_bundle_persona_excluded_from_list_available(resolver_in_sandbox):
     resolver, user_personas = resolver_in_sandbox
+    # Since c93ef9915 (2026-09-06, deprecated personas removed) "assistant" is
+    # the only BUNDLE persona; a user persona stands in for "everything else".
+    (user_personas / "mine.json").write_text(
+        json.dumps({"name": "mine", "description": "x"}), encoding="utf-8")
     before = {p["name"] for p in resolver.list_available()}
-    assert "research" in before  # a known bundle persona
+    assert "assistant" in before  # the bundle persona
 
-    _write_disabled(user_personas, ["research"])
+    _write_disabled(user_personas, ["assistant"])
     after = {p["name"] for p in resolver.list_available()}
-    assert "research" not in after
+    assert "assistant" not in after
     # everything else still present
-    assert "assistant" in after
+    assert "mine" in after
     # explicit pin still resolves (disable != brick)
-    assert resolver.load("research") is not None
+    assert resolver.load("assistant") is not None
 
 
 def test_disabled_user_persona_excluded(resolver_in_sandbox):

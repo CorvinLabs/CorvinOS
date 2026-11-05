@@ -84,6 +84,10 @@ def test_sigtermed_bridge_child_is_classified_c1() -> None:
             "ADAPTER_INBOX": str(inbox), "ADAPTER_OUTBOX": str(outbox),
             "ADAPTER_PROCESSED": str(processed),
             "CORVIN_HOME": str(corvin_home), "CORVIN_TENANT_ID": "_default",
+            # Pinned explicitly: the adapter only defaults VOICE_AUDIT_PATH into the sandbox
+            # when it is unset, and the pytest harness already points it at a per-test file
+            # outside this sandbox — the record then landed where _chain_records never looks.
+            "VOICE_AUDIT_PATH": str(base / "audit.jsonl"),
             "CORVIN_CLAUDE_BIN": str(fake), "FAKE_CLAUDE_PIDFILE": str(pidfile),
             "CORVIN_USE_ENGINE_LAYER": "1",
             # The documented dual-env bypass of the chat-turn quota gate (test_adapter_engine_switch):

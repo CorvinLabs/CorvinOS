@@ -13,8 +13,16 @@ from pathlib import Path
 SHARED = Path(__file__).resolve().parent
 REPO = SHARED.parents[2]
 
+# The venv's editable install (``_editable_impl_corvinos.pth``) puts
+# ``core/console`` — the home of ``corvin_core`` — on every interpreter's
+# sys.path, so a bare subprocess is NOT a process without corvin_core. Strip
+# every sys.path entry that carries the package (what the orchestration MCP
+# server's narrow PYTHONPATH amounts to) and keep site-packages for the
+# third-party imports; the find_spec assert still proves the premise.
 _PROBE = (
-    "import sys; sys.path.insert(0, %r);"
+    "import os, sys; sys.path[:] = [p for p in sys.path"
+    " if not os.path.isdir(os.path.join(p or '.', 'corvin_core'))];"
+    "sys.path.insert(0, %r);"
     "import importlib.util as u; assert u.find_spec('corvin_core') is None;"
     "import remote_trigger_sender as r; print(r._relay_fallback_enabled())"
 ) % str(SHARED)
