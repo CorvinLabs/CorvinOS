@@ -204,9 +204,11 @@ class TestVideoAssemblerPhase3:
             slides_dir.mkdir()
             audio_dir.mkdir()
 
-            # Create test files
-            (slides_dir / "s01.png").write_bytes(b"PNG" + b"\x00" * 1000)
-            (audio_dir / "s01.mp3").write_bytes(b"MP3" + b"\x00" * 1000)
+            # Real, decodable files: junk bytes fed to the real ffmpeg encode can
+            # deadlock it on its error path (measured: 1 hang in 6 runs), which held
+            # the whole suite for the assembler's 60-minute timeout.
+            write_real_png(slides_dir / "s01.png")
+            write_real_audio(audio_dir / "s01.mp3", duration=12.0)
 
             # Create timings: audio is 12s, slide is 5s
             timings = {"s01": 12000}  # 12000ms audio
@@ -375,9 +377,10 @@ class TestVideoProducerPhase3E2E:
             audio_dir.mkdir()
 
             # Create 3 slides + 3 audio files with mixed timing
-            for i in range(1, 4):
-                (slides_dir / f"s{i:02d}.png").write_bytes(b"PNG" + b"\x00" * 2000000)
-                (audio_dir / f"s{i:02d}.mp3").write_bytes(b"MP3" + b"\x00" * 1000000)
+            # (real, decodable files — junk bytes can deadlock the real ffmpeg encode)
+            for i, secs in zip(range(1, 4), (4.5, 5.0, 4.8)):
+                write_real_png(slides_dir / f"s{i:02d}.png")
+                write_real_audio(audio_dir / f"s{i:02d}.mp3", duration=secs)
 
             # Create storyboard with different durations
             scenes = [

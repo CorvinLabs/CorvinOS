@@ -109,14 +109,42 @@ class TestVideoValidatorIntegration:
         with tempfile.TemporaryDirectory() as tmpdir:
             orchestrator = VideoProducerOrchestrator(tmpdir)
 
-            # Mock the orchestrate method to test response structure
-            # (We're just checking that validation field is in the response)
+            # Drive orchestrate() through phases 1-6.5 with the expensive workers
+            # mocked, and prove the Phase 6.5 verdict reaches the response. (The
+            # old body patched a module attribute that does not exist — the
+            # analyzer is imported inside orchestrate() — and asserted True.)
+            from core.skills.os_skills.video_producer.types import (
+                AssetAnalysisResult, FactualClaim,
+            )
 
-            # Create a minimal test by checking the orchestrator's response structure
-            with patch("core.skills.os_skills.video_producer.orchestrator.AssetAnalyzer"):
-                # The orchestrator should include validation field in its response
-                # This is tested implicitly through the code review above
-                assert True  # Placeholder for structural test
+            analysis = AssetAnalysisResult(
+                metadata={},
+                factual_claims=[
+                    FactualClaim(id=f"f{i}", text=f"Fact {i}.", source_asset="a.md")
+                    for i in range(3)
+                ],
+                asset_roles={"a.md": "primary"},
+                ready_for_narration=True,
+            )
+            verdict = {"valid": True, "checks": {"duration": "pass"}}
+            video = str(Path(tmpdir) / "video" / "output.mp4")
+            with patch(
+                "core.skills.workers.asset_analyzer.AssetAnalyzer.analyze",
+                new=AsyncMock(return_value=analysis),
+            ), patch.object(
+                orchestrator, "_execute_phase_5_parallel_workers",
+                new=AsyncMock(return_value={"slides_dir": tmpdir, "slides_metadata": {}}),
+            ), patch.object(
+                orchestrator, "_execute_phase_6_video_assembly",
+                new=AsyncMock(return_value={"video_path": video, "metadata": {}}),
+            ), patch.object(
+                orchestrator, "_execute_phase_6_5_video_validation",
+                new=AsyncMock(return_value=verdict),
+            ) as phase65:
+                result = await orchestrator.orchestrate([], skip_phases=[7])
+
+            phase65.assert_awaited_once_with(video)
+            assert result["validation"] == verdict
 
 
 class TestVideoValidatorSkillDirect:

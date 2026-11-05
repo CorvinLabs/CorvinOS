@@ -51,6 +51,20 @@ class TestPhase1Setup:
         assert ContextBridge.skill_id == "os.context_bridge"
         assert BasicOrchestrator.skill_id == "os.orchestrator"
 
+    def test_default_audit_file_follows_corvin_home(self, tmp_path, monkeypatch):
+        """The no-argument mock resolves under ``CORVIN_HOME``, never ``~/.corvin``.
+
+        Regression (2026-11-05): the default was ``Path.home()/.corvin/audit.jsonl``
+        — a sandboxed test wrote toward the operator's home and into a file named
+        like the real audit chain.
+        """
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        trail = MockAuditTrail()
+        assert trail.audit_file == tmp_path / "home" / "skills" / "phase1_mock_audit.jsonl"
+        assert trail.audit_file.name != "audit.jsonl"
+        HealthMonitor("_default", trail).execute({})
+        assert trail.read_events("_default"), "the execution must be recorded in the sandbox file"
+
     def test_dependency_declarations(self):
         """Verify composition dependencies are declared (ADR-0535)."""
         assert HealthMonitor.required_dependencies == []

@@ -417,7 +417,10 @@ class VideoProducerMaestro:
             raise ValueError("Job has no narration segments (FAIL-CLOSED)")
 
         for i, scene in enumerate(narration_list):
-            text = scene.get("text", "").strip() if isinstance(scene, dict) else ""
+            # A None or non-string text is "no text" (refused below), never an
+            # AttributeError escaping the fail-closed gate as a crash.
+            raw = scene.get("text") if isinstance(scene, dict) else None
+            text = raw.strip() if isinstance(raw, str) else ""
             # FIX #1: Stricter validation - require at least 10 characters
             if not text:
                 raise ValueError(f"Narration scene {i} has empty text (FAIL-CLOSED)")

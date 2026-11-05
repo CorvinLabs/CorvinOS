@@ -29,6 +29,24 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_FILE_NAME = "phase1_mock_audit.jsonl"
+
+
+def default_audit_file() -> Path:
+    """Where the mock writes when no file is given: ``<corvin_home>/skills/``.
+
+    Resolved per call through ``core.paths.tenant.corvin_home`` (honours
+    ``CORVIN_HOME``), never a hard-wired ``~/.corvin``. Until 2026-11-05 the
+    default was ``~/.corvin/audit.jsonl``: it ignored ``CORVIN_HOME`` (so a
+    sandboxed test wrote into the operator's home — the pytest fence refused
+    it) AND it named the root audit-chain file, into which this mock's own,
+    differently-shaped records would have been appended. The mock keeps its
+    own file name so it can never land in a real chain.
+    """
+    from core.paths.tenant import corvin_home  # noqa: PLC0415 - lazy, standalone import path
+
+    return corvin_home() / "skills" / _DEFAULT_FILE_NAME
+
 
 class MockAuditTrail(AuditTrail):
     """Mock audit trail: JSON lines file with hash chain.
@@ -57,10 +75,11 @@ class MockAuditTrail(AuditTrail):
         """Initialize mock audit trail.
 
         Args:
-            audit_file: Path to audit log file (default: ~/.corvin/audit.jsonl)
+            audit_file: Path to the mock's log file (default:
+                :func:`default_audit_file`).
         """
         if audit_file is None:
-            audit_file = Path.home() / ".corvin" / "audit.jsonl"
+            audit_file = default_audit_file()
 
         self.audit_file = Path(audit_file) if not isinstance(audit_file, Path) else audit_file
         self.audit_file.parent.mkdir(parents=True, exist_ok=True)

@@ -420,11 +420,13 @@ async def test_complete_video_assembly_produces_real_output():
         video_path = video_output_dir / "output.mp4"
         
         try:
-            # Create a black video frame from the audio
+            # Pair the synthesized audio with a moving test pattern. (A solid
+            # black source compresses to ~15 KB, so this test's own fixture
+            # tripped the 100 KB "placeholder" check below.)
             result = subprocess.run([
                 "ffmpeg",
                 "-f", "lavfi",
-                "-i", f"color=c=black:s=1280x720:d={int(audio_duration)}",
+                "-i", f"testsrc2=s=1280x720:d={max(1, int(audio_duration))}",
                 "-i", str(audio_path),
                 "-c:v", "libx264",
                 "-c:a", "aac",

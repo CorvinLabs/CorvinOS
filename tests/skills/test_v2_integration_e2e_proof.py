@@ -132,9 +132,11 @@ def test_tenant_isolation():
     print(f"   - plan_2 tenant: {plan_2.tenant_id}")
 
 
-def test_develop_workflow_minimal():
-    """Proof: Minimal develop workflow executes."""
+def test_develop_workflow_minimal(monkeypatch):
+    """Proof: Minimal develop workflow executes (run as the plan's tenant: a run is
+    always audited and the core writer refuses a record for another tenant, 334203538)."""
     print("\n[Test 5] Minimal Workflow Execution")
+    monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_test")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         developer = PluginDeveloper()

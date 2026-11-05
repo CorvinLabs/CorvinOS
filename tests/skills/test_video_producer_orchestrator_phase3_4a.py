@@ -20,7 +20,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import pytest
 
 from core.skills.os_skills.video_producer.orchestrator import VideoProducerOrchestrator
-from core.skills.os_skills.video_producer.types import Scene, Storyboard
+from core.skills.os_skills.video_producer.types import (
+    AssetAnalysisResult,
+    FactualClaim,
+    Scene,
+    Storyboard,
+)
+
+
+def _ready_analysis() -> AssetAnalysisResult:
+    """An analysis that genuinely passes the Phase 3 gate (>=3 facts, >=1 role)."""
+    return AssetAnalysisResult(
+        metadata={"source": "test"},
+        factual_claims=[
+            FactualClaim(id=f"f{i}", text=f"Sourced fact number {i}.", source_asset="doc.md")
+            for i in range(1, 4)
+        ],
+        asset_roles={"doc.md": "primary"},
+        ready_for_narration=True,
+    )
+
+
+def _patch_analyzer():
+    """``orchestrate()`` analyses its assets first; serve a ready analysis so the
+    phase-sequencing tests reach the phases they test. (They called
+    ``orchestrate([])`` — no assets, so the analysis gate, which predates them
+    (0cb56588d), refused every run before phase 5.)"""
+    return patch(
+        "core.skills.workers.asset_analyzer.AssetAnalyzer.analyze",
+        new=AsyncMock(return_value=_ready_analysis()),
+    )
 
 
 class TestOrchestratorPhase3Integration:
@@ -33,7 +62,9 @@ class TestOrchestratorPhase3Integration:
             orchestrator = VideoProducerOrchestrator(tmpdir)
 
             assert orchestrator.project_dir == Path(tmpdir)
-            assert orchestrator.assets_dir.exists()
+            # assets_dir is a path, not a directory the constructor creates (it
+            # never did — the original ``.exists()`` assertion was never true).
+            assert orchestrator.assets_dir == Path(tmpdir) / "assets"
             assert orchestrator.analysis_path == Path(tmpdir) / "analysis.json"
             assert orchestrator.storyboard_path == Path(tmpdir) / "storyboard.json"
 
@@ -165,17 +196,19 @@ class TestOrchestratorPhase3Integration:
             scene = Scene(id="s01", kind="card", narration="Test", duration_seconds=5.0)
             storyboard = Storyboard(metadata={"title": "Test"}, scenes=[scene])
 
-            # Mock the analysis step
-            with patch.object(
-                orchestrator, "_generate_storyboard", return_value=storyboard
-            ):
+            with _patch_analyzer(), patch.object(
+                orchestrator, "_execute_phase_5_parallel_workers", new=AsyncMock(),
+            ) as phase5:
                 # Skip Phase 5-7 for quick testing
                 result = await orchestrator.orchestrate(
                     [], skip_phases=[5, 6, 7]
                 )
 
-                # Should complete without error
-                assert result is not None
+            phase5.assert_not_called()
+            assert result["status"] == "partial"
+            assert result["video_path"] is None
+            assert result["storyboard"]["scenes"], "phases 1-4 must still produce a storyboard"
+            assert orchestrator.storyboard_path.exists()
 
 
 class TestOrchestratorPhase3GateEnforcement:
@@ -267,21 +300,27 @@ class TestOrchestratorStateManagement:
                 "slides_metadata": {"s01": {"width": 1920}},
             }
 
-            # Mock Phase 6 to avoid real FFmpeg
-            with patch.object(
-                orchestrator, "_execute_phase_6_video_assembly"
-            ) as mock_phase6:
-                mock_phase6.return_value = {
+            # Phase 5 hands its slides metadata to Phase 6 (mocked: no real FFmpeg).
+            with _patch_analyzer(), patch.object(
+                orchestrator, "_execute_phase_5_parallel_workers",
+                new=AsyncMock(return_value=slides_metadata),
+            ), patch.object(
+                orchestrator, "_execute_phase_6_video_assembly", new=AsyncMock(return_value={
                     "status": "success",
                     "video_path": str(project_dir / "output.mp4"),
                     "metadata": {"duration": 30},
                     "timing_issues": [],
-                }
+                }),
+            ) as mock_phase6, patch.object(
+                orchestrator, "_execute_phase_6_5_video_validation",
+                new=AsyncMock(return_value={"valid": True}),
+            ):
+                result = await orchestrator.orchestrate([], skip_phases=[7])
 
-                result = await orchestrator.orchestrate([], skip_phases=[5, 7])
-
-                # Check result structure
-                assert result is not None
+            assert result["slides_metadata"] == slides_metadata
+            assert mock_phase6.await_args.args[1] == slides_metadata
+            assert result["video_path"] == str(project_dir / "output.mp4")
+            assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_orchestrator_persists_video_metadata(self):
@@ -338,20 +377,13 @@ class TestOrchestratorErrorHandling:
         with tempfile.TemporaryDirectory() as tmpdir:
             orchestrator = VideoProducerOrchestrator(tmpdir)
 
-            # Mock Phase 5 to raise exception
-            with patch.object(
-                orchestrator, "_execute_phase_5_parallel_workers"
-            ) as mock:
-                mock.side_effect = RuntimeError("Test error")
+            # Phase 5 raises: orchestrate() must report "blocked", not crash.
+            # (The old body awaited the raising mock itself, so it could only fail.)
+            with _patch_analyzer(), patch.object(
+                orchestrator, "_execute_phase_5_parallel_workers",
+                new=AsyncMock(side_effect=RuntimeError("Test error")),
+            ):
+                result = await orchestrator.orchestrate([], skip_phases=[7])
 
-                scene = Scene(id="s01", kind="card", duration_seconds=5.0)
-                storyboard = Storyboard(
-                    metadata={"scene_count": 1}, scenes=[scene]
-                )
-
-                # Should not crash
-                result = await orchestrator._execute_phase_5_parallel_workers(
-                    storyboard
-                )
-
-                # mock will raise, so this tests the error scenario
+            assert result["status"] == "blocked"
+            assert "Test error" in result["message"]

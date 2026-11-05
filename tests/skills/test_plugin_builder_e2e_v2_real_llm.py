@@ -13,6 +13,7 @@ All tests use REAL Anthropic API calls (no mocks).
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -24,6 +25,48 @@ from core.plugins.plugin_builder.testing_framework.base_fixtures import (
     OpusCheckpointer,
     PluginTestContext,
 )
+from core.plugins.plugin_builder.testing_framework.conftest import (  # noqa: F401 - fixture
+    plugin_scaffold_dir,
+)
+
+
+# The framework's fixtures live in ``core/plugins/plugin_builder/testing_framework/
+# conftest.py``, which pytest only loads for tests UNDER that directory — so here
+# ``tenant_context`` was "not found" (an ERROR, not a skip) and ``real_haiku_client``
+# resolved to ``tests/fixtures_console.py``'s raw ``anthropic.Anthropic`` client,
+# which has no ``classify_plugin_type``. Serve the framework's types here.
+
+
+def _api_key_or_skip() -> str:
+    key = os.getenv("ANTHROPIC_API_KEY")
+    if not key:
+        pytest.skip("ANTHROPIC_API_KEY not set — this suite calls the live API on purpose")
+    return key
+
+
+@pytest.fixture
+def real_haiku_client() -> HaikuClassifier:
+    return HaikuClassifier(api_key=_api_key_or_skip())
+
+
+@pytest.fixture
+def real_opus_client() -> OpusCheckpointer:
+    return OpusCheckpointer(api_key=_api_key_or_skip())
+
+
+@pytest.fixture
+def tenant_context():
+    """Tenant-scoped context with its own in-memory hash-linked audit list."""
+    context = PluginTestContext(
+        plugin_id="test_plugin_builder",
+        tenant_id="_default",
+        session_id="pytest_session",
+        user_id="pytest_user",
+        initialize_clients=False,
+    )
+    yield context
+    if getattr(context, "_audit_chain", None):
+        assert context.verify_audit_chain(), "Audit chain integrity check failed"
 
 
 # ============================================================================

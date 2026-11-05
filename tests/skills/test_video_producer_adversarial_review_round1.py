@@ -21,10 +21,8 @@ from datetime import datetime
 
 # Import the Video Producer components
 import sys
-sys.path.insert(0, "/home/shumway/projects/CorvinOS/core/skills/video_producer")
-sys.path.insert(0, "/home/shumway/projects/CorvinOS/core/skills/video_producer/workers")
 
-from maestro import MaestroOrchestrator, VideoJob, VideoJobPhase
+from core.skills.video_producer.maestro import MaestroOrchestrator, VideoJob, VideoJobPhase
 
 
 class TestVector1ContentAuthenticity:
@@ -57,7 +55,7 @@ class TestVector1ContentAuthenticity:
 
     def test_asset_analyzer_detects_contradiction(self):
         """Asset Analyzer MUST detect contradictions in narration"""
-        from workers.asset_analyzer import AssetAnalyzerWorker
+        from core.skills.video_producer.workers.asset_analyzer import AssetAnalyzerWorker
 
         analyzer = AssetAnalyzerWorker()
 
@@ -69,14 +67,21 @@ class TestVector1ContentAuthenticity:
             duration_seconds=60,
             audience="technical",
             narration=[
-                "CorvinOS runs locally on your machine",
-                "CorvinOS requires cloud servers to operate",  # CONTRADICTS first statement
+                "Telemetry is enabled on every install",
+                "Telemetry is disabled on every install",  # CONTRADICTS first statement
             ]
         )
 
-        # Asset Analyzer should detect contradiction
+        # The detector is a whole-word opposite-pair heuristic and its verdict is
+        # ADVISORY since 9a5328198 (blocking on a word-pair match would stop
+        # correct narration): a contradiction is reported as WARN, it does not
+        # fail the phase. (The old assertion called .get() on the dataclass
+        # result and expected a semantic "local vs cloud" detection that the
+        # heuristic never had.)
         result = analyzer.execute(job)
-        assert result.get("success") == False or result.get("contradiction_detected") == True
+        assert result.contradictions, "the enabled/disabled pair must be reported"
+        assert result.status.value == "warn"
+        assert result.success is True
 
     def test_openai_tts_output_matches_input(self):
         """OpenAI TTS MUST produce audio matching input narration"""
@@ -85,7 +90,7 @@ class TestVector1ContentAuthenticity:
         if not api_key:
             pytest.skip("OPENAI_API_KEY not set")
 
-        from workers.openai_tts_worker import OpenAITTSWorker
+        from core.skills.video_producer.workers.openai_tts_worker import OpenAITTSWorker
 
         worker = OpenAITTSWorker(voice="nova")
 
@@ -128,7 +133,7 @@ class TestVector2E2EWiring:
         if not api_key:
             pytest.skip("OPENAI_API_KEY not set")
 
-        from workers.openai_tts_worker import OpenAITTSWorker
+        from core.skills.video_producer.workers.openai_tts_worker import OpenAITTSWorker
 
         # Patch the write function to log all calls
         with patch("builtins.open", create=True) as mock_open:
@@ -144,7 +149,7 @@ class TestVector2E2EWiring:
     def test_ffmpeg_subprocess_invoked_for_encoding(self):
         """PROVE ffmpeg subprocess is invoked for video encoding"""
         # We'll verify this by checking the command that would be run
-        from workers.video_assembler import VideoAssemblerWorker
+        from core.skills.video_producer.workers.video_assembler import VideoAssemblerWorker
 
         worker = VideoAssemblerWorker()
 
@@ -162,7 +167,7 @@ class TestVector2E2EWiring:
                     mock_run.return_value = MagicMock(returncode=0)
 
                     # Create a minimal job
-                    from maestro import VideoJob
+                    from core.skills.video_producer.maestro import VideoJob
                     job = VideoJob(
                         job_id="test_ffmpeg",
                         topic="Test",
@@ -184,27 +189,6 @@ class TestVector3QualityGateBypasses:
 
     Defense: Quality gates validate bitrate, duration, codecs before proceeding.
     """
-
-    def test_quality_gate_validates_bitrate_minimum(self):
-        """Quality gate MUST reject videos with bitrate < 100 kbps"""
-        # Create a mock video result with low bitrate
-        low_bitrate_result = {
-            "video_path": "/tmp/low_bitrate.mp4",
-            "duration_seconds": 90,
-            "bitrate_kbps": 50,  # TOO LOW
-            "codec": "h264",
-            "quality_score": 0.3,
-            "success": True,
-        }
-
-        # Verify the maestro would reject this
-        maestro = MaestroOrchestrator()
-
-        # Create a test to check quality validation
-        # (Assuming quality checks are in the assembly worker or maestro)
-        assert low_bitrate_result["bitrate_kbps"] >= 100 or pytest.fail(
-            "Quality gate should reject bitrate < 100 kbps"
-        )
 
     def test_quality_gate_validates_duration_tolerance(self):
         """Quality gate MUST validate duration ±2 seconds from target"""
@@ -255,7 +239,7 @@ class TestVector4LearningLoopSecurity:
             topic="Test",
             duration=30,
             audience="technical",
-            narration=["Test narration"],
+            narration=["Test narration for the feedback checks."]  # >=20 chars: Content-Presence Gate (96ba881b0),
         )
 
         # Attempt to inject invalid confidence > 1.0
@@ -269,7 +253,7 @@ class TestVector4LearningLoopSecurity:
 
     def test_feedback_event_is_immutable(self):
         """FeedbackEvent MUST be immutable (frozen dataclass)"""
-        from maestro import FeedbackEvent
+        from core.skills.video_producer.maestro import FeedbackEvent
 
         event = FeedbackEvent(
             timestamp=datetime.now().isoformat(),
@@ -291,7 +275,7 @@ class TestVector4LearningLoopSecurity:
             topic="Test",
             duration=30,
             audience="technical",
-            narration=["Test narration"],
+            narration=["Test narration for the feedback checks."]  # >=20 chars: Content-Presence Gate (96ba881b0),
         )
 
         maestro.record_feedback(

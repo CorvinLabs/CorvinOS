@@ -310,6 +310,17 @@ class TestCoreAuditIsUnaffected(unittest.TestCase):
         import audit as _audit  # type: ignore[import-not-found]
 
         self._audit = _audit
+        # The first signed audit write of a process with no instance key mints
+        # it and records ``instance.key_rotated`` from a DEFERRED thread (the
+        # writer's lock is held while signing), bound to the chain that raised
+        # it — here, the temp dir (d0e049466). When this class ran first in the
+        # process that thread wrote into the directory while tearDown removed it
+        # ("Directory not empty"), and the record reached the backend as a
+        # second copy. Provision the key synchronously before the test writes.
+        if self._core_available():
+            import instance_identity  # type: ignore[import-not-found]
+
+            instance_identity.ensure_instance_key()
 
     def tearDown(self):
         import os

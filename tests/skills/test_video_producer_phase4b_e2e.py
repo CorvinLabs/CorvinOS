@@ -216,7 +216,10 @@ class TestPhase4bAdversarial:
             loop = LearningLoopIntegration(tmpdir)
 
             # Normal operation
-            loop.submit_feedback("job1", "s01", 4, "good")
+            # The 4th positional is feedback_type: "good" was rejected and the
+            # return value ignored, so no feedback record was ever written.
+            ok, err = loop.submit_feedback("job1", "s01", 4, feedback_type="quality", worker_notes="good")
+            assert ok, err
 
             # Attack: Try to tamper with model selector state
             state_file = Path(tmpdir) / "model_selector_state.json"
@@ -360,7 +363,10 @@ class TestPhase4bCompliance:
             loop = LearningLoopIntegration(tmpdir)
 
             # Submit feedback
-            loop.submit_feedback("job1", "s01", 4, "good")
+            # The 4th positional is feedback_type: "good" was rejected and the
+            # return value ignored, so no feedback record was ever written.
+            ok, err = loop.submit_feedback("job1", "s01", 4, feedback_type="quality", worker_notes="good")
+            assert ok, err
 
             # Select model
             loop.select_model_for_video(60)
@@ -387,7 +393,13 @@ class TestPhase4bCompliance:
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = LearningLoopIntegration(tmpdir, tenant_id="tenant_a")
 
-            loop.submit_feedback("job1", "s01", 4, "good")
+            # The 4th positional is feedback_type: "good" was rejected and the
+
+            # return value ignored, so no feedback record was ever written.
+
+            ok, err = loop.submit_feedback("job1", "s01", 4, feedback_type="quality", worker_notes="good")
+
+            assert ok, err
 
             # Verify: Audit events have tenant_id
             audit_log = Path(tmpdir) / "learning_audit.jsonl"

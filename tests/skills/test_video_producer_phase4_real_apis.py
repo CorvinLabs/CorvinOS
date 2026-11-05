@@ -27,6 +27,50 @@ from core.skills.video_producer.workers.youtube_uploader import YouTubeUploaderW
 from core.skills.video_producer.workers.asset_analyzer import AssetAnalyzerWorker
 
 
+# A local page for the real-Playwright tests. The capturer maps narration
+# keywords to the LIVE console (http://localhost:8765/console/...); a test must
+# not depend on the live install, and the console's SPA polls its shell every
+# few seconds, so ``goto(wait_until="networkidle")`` timed out, the capturer
+# fell back to a 1x1 placeholder and Gate 3 (correctly) refused it. The page
+# below is real, colourful content served from this process.
+_PAGE = (
+    b"<!doctype html><html><body style='margin:0'>"
+    b"<div style='width:1920px;height:1080px;background:"
+    b"linear-gradient(90deg,red,orange,yellow,green,blue,indigo,violet)'>"
+    b"<h1 style='font-size:120px;color:white'>Console</h1></div></body></html>"
+)
+
+
+@pytest.fixture
+def local_page_url():
+    import http.server
+    import threading
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server API
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(_PAGE)))
+            self.end_headers()
+            self.wfile.write(_PAGE)
+
+        def log_message(self, *_a):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _point_at(worker, url, monkeypatch):
+    monkeypatch.setattr(worker, "_parse_target_url", lambda _narration: url)
+
+
 class TestVoiceSynthesizerPhase4:
     """Test Voice Synthesizer Worker Phase 4 (Real TTS)"""
 
@@ -96,9 +140,11 @@ class TestScreenshotCapturerPhase4:
         assert worker.browser_type == "chromium"
         assert worker.headless
 
-    def test_execute_returns_screenshot_result(self):
-        """Test execute returns valid ScreenshotResult"""
+    def test_execute_returns_screenshot_result(self, local_page_url, monkeypatch):
+        """Test execute returns valid ScreenshotResult (real Playwright, local page)"""
+        pytest.importorskip("playwright")
         worker = ScreenshotCapturerWorker()
+        _point_at(worker, local_page_url, monkeypatch)
 
         maestro = MaestroOrchestrator()
         job_id = maestro.create_job(
@@ -154,7 +200,7 @@ class TestVideoAssemblerPhase4:
             topic="Test",
             duration=30,
             audience="test",
-            narration=["Test narration."]
+            narration=["Test narration for the assembled video."]
         )
         job = maestro.get_job(job_id)
 
@@ -169,9 +215,13 @@ class TestVideoAssemblerPhase4:
 
         result = worker.execute(job, voice_result=job.voice_result, screenshot_result=job.screenshots_result)
 
+        # No audio and no frames: since 9a5328198 assembly needs at least one
+        # frame and there is no mock branch, so the result is an honest failure
+        # (it used to report a duration and a quality score for no video).
         assert isinstance(result, VideoResult)
-        assert result.duration_seconds > 0
-        assert 0.8 <= result.quality_score <= 1.0
+        assert result.success is False
+        assert result.video_path == ""
+        assert result.quality_score == 0.0
 
 
 class TestYouTubeUploaderPhase4:
@@ -194,7 +244,7 @@ class TestYouTubeUploaderPhase4:
             topic="Test Video",
             duration=90,
             audience="beginners",
-            narration=["Test scene."]
+            narration=["Test scene with enough narration content."]
         )
         job = maestro.get_job(job_id)
 
@@ -205,12 +255,14 @@ class TestYouTubeUploaderPhase4:
 
         result = worker.execute(job, video_result=job.video_result)
 
+        # Since 9a5328198 the uploader fails instead of inventing a video id and
+        # URL: nothing is uploaded, and the result says so.
         assert isinstance(result, UploadResult)
-        assert result.success
-        assert result.video_id is not None
-        assert len(result.video_id) == 11  # YouTube video ID length
-        assert "youtube.com/watch?v=" in result.url
-        assert result.published == False  # unlisted visibility
+        assert result.success is False
+        assert result.video_id == ""
+        assert result.url == ""
+        assert "not implemented" in (result.error or "")
+        assert result.published is False
 
     def test_title_generation(self):
         """Test YouTube title generation"""
@@ -221,7 +273,7 @@ class TestYouTubeUploaderPhase4:
             topic="Introduction to CorvinOS",
             duration=90,
             audience="beginners",
-            narration=["Test"]
+            narration=["Test narration with enough content."]
         )
         job = maestro.get_job(job_id)
 
@@ -241,7 +293,7 @@ class TestYouTubeUploaderPhase4:
             topic="Video Producer Skill 2.0",
             duration=90,
             audience="technical",
-            narration=["Test"]
+            narration=["Test narration with enough content."]
         )
         job = maestro.get_job(job_id)
 
@@ -282,7 +334,7 @@ class TestMaestroPhase4:
             topic="Test",
             duration=30,
             audience="test",
-            narration=["Test scene."]
+            narration=["Test scene with enough narration content."]
         )
 
         job = maestro.get_job(job_id)
@@ -309,25 +361,36 @@ class TestMaestroPhase4:
             topic="Test",
             duration=30,
             audience="test",
-            narration=["Test scene."]
+            narration=["Test scene with enough narration content."]
         )
 
         audit_log = maestro.get_audit_log()
-        assert len(audit_log) >= 1
-        assert audit_log[0]["event_type"] == "job_created"
-        assert audit_log[0]["job_id"] == job_id
+        # The two register_worker() calls above are recorded first
+        # (worker_registered), so job_created is not at index 0.
+        assert [e["event_type"] for e in audit_log[:2]] == ["worker_registered"] * 2
+        created = [e for e in audit_log if e["event_type"] == "job_created"]
+        assert len(created) == 1
+        assert created[0]["job_id"] == job_id
 
 
 class TestPhase4EndToEnd:
     """End-to-end tests for Phase 4"""
 
-    def test_minimal_pipeline(self):
-        """Test minimal successful pipeline"""
+    def test_minimal_pipeline(self, local_page_url, monkeypatch):
+        """Phases ANALYSIS..ASSEMBLY run for real; YOUTUBE fails honestly.
+
+        Since 9a5328198 a phase passes only on an explicit success and the
+        uploader refuses to invent an upload, so the job stops at YOUTUBE with a
+        RuntimeError instead of "completing" with a fake video id.
+        """
+        pytest.importorskip("playwright")
         maestro = MaestroOrchestrator()
+        screenshots = ScreenshotCapturerWorker()
+        _point_at(screenshots, local_page_url, monkeypatch)
 
         maestro.register_worker(VideoJobPhase.ANALYSIS, AssetAnalyzerWorker())
         maestro.register_worker(VideoJobPhase.VOICE, VoiceSynthesizerWorker())
-        maestro.register_worker(VideoJobPhase.SCREENSHOTS, ScreenshotCapturerWorker())
+        maestro.register_worker(VideoJobPhase.SCREENSHOTS, screenshots)
         maestro.register_worker(VideoJobPhase.ASSEMBLY, VideoAssemblerWorker())
         maestro.register_worker(VideoJobPhase.YOUTUBE, YouTubeUploaderWorker())
 
@@ -335,13 +398,22 @@ class TestPhase4EndToEnd:
             topic="Quick Demo",
             duration=30,
             audience="beginners",
-            narration=["First scene."]
+            # long enough for the Final-Validation Gate's 5-second minimum
+            narration=["First scene of the quick demo video. It walks through the console, "
+                       "shows the skills tab, and explains what the operator sees there."]
         )
 
-        # Execute all phases
-        for _ in range(5):
+        # ANALYSIS, VOICE, SCREENSHOTS, ASSEMBLY succeed
+        for expected in (VideoJobPhase.ANALYSIS, VideoJobPhase.VOICE,
+                         VideoJobPhase.SCREENSHOTS, VideoJobPhase.ASSEMBLY):
+            assert maestro.get_job(job_id).current_phase == expected
             result = maestro.execute_phase(job_id)
             assert result is not None
+
+        assert maestro.get_job(job_id).current_phase == VideoJobPhase.YOUTUBE
+        with pytest.raises(RuntimeError, match="YOUTUBE"):
+            maestro.execute_phase(job_id)
+        assert maestro.get_job(job_id).current_phase == VideoJobPhase.YOUTUBE
 
         # Verify final state
         final_job = maestro.get_job(job_id)

@@ -1,6 +1,8 @@
 """Unit tests for Video Producer Workers (Phase 1 Step 2 — k=2)."""
 
 import asyncio
+
+import pytest
 import tempfile
 from pathlib import Path
 from typing import Dict, Any
@@ -110,15 +112,41 @@ def test_video_assembler_worker():
     worker = VideoAssemblerWorker(manifest)
     assert worker.manifest.id == "video-producer:video-assembler"
 
-    # Test execution (will create stub output since FFmpeg may not be installed)
+    # Empty stub inputs are refused: since dd93c32c7 the output is validated
+    # fail-closed (a placeholder under 100 KB is an error, not a "success").
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create stub video/audio files
+        video_file = Path(tmpdir) / "video.mp4"
+        audio_file = Path(tmpdir) / "audio.mp3"
+        video_file.touch()
+        audio_file.touch()
+        result = asyncio.run(worker.execute({
+            "video_file": str(video_file),
+            "audio_file": str(audio_file),
+            "output_file": str(Path(tmpdir) / "final.mp4"),
+        }))
+        assert result.status == "error"
+        assert "FAIL-CLOSED" in (result.error or "")
+
+    # Real, decodable inputs are muxed for real.
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed — the real mux path cannot run")
+    with tempfile.TemporaryDirectory() as tmpdir:
         video_file = Path(tmpdir) / "video.mp4"
         audio_file = Path(tmpdir) / "audio.mp3"
         output_file = Path(tmpdir) / "final.mp4"
-
-        video_file.touch()
-        audio_file.touch()
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25:duration=3",
+             "-c:v", "libx264", "-b:v", "2M", "-pix_fmt", "yuv420p", "-y", str(video_file)],
+            check=True, capture_output=True, timeout=60,
+        )
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+             "-y", str(audio_file)],
+            check=True, capture_output=True, timeout=60,
+        )
 
         result = asyncio.run(
             worker.execute({
@@ -128,10 +156,10 @@ def test_video_assembler_worker():
             })
         )
 
-        assert result.status == "success"
+        assert result.status == "success", result.error
         assert result.output["codec"] == "h264"
         assert result.output["container"] == "mp4"
-        assert result.output["duration_s"] >= 0
+        assert result.output["duration_s"] >= 1.0
 
         print("✓ Video assembler worker passed")
         print(f"  - Output: {result.output['output_file']}")

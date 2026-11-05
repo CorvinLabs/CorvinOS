@@ -174,12 +174,19 @@ class ConfidenceScorer:
             old_samples = old_metric.sample_count
             old_variance = old_metric.variance
         else:
-            old_score = 0.5  # Start neutral
+            old_score = None
             old_samples = 0
             old_variance = 0.0
 
-        # Apply exponential smoothing
-        new_score = self.ALPHA * new_rating + (1 - self.ALPHA) * old_score
+        # Apply exponential smoothing. The series is seeded with its first
+        # observation (S_1 = X_1), the standard initialisation of the formula in
+        # the module docstring. Seeding it with a 0.5 "neutral" prior instead
+        # reported one 0.9 rating as 0.62 confidence and booked the distance from
+        # that fictitious prior as variance on every early sample.
+        if old_score is None:
+            new_score = new_rating
+        else:
+            new_score = self.ALPHA * new_rating + (1 - self.ALPHA) * old_score
         new_samples = old_samples + 1
 
         # Update variance (simplified: track if ratings are consistent)

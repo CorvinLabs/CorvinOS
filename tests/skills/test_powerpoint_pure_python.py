@@ -215,7 +215,16 @@ class TestPurePythonPPTXGenerator:
 
         assert result["status"] == "success"
         assert result["slide_count"] == 20
-        assert result["file_size_bytes"] > 50000  # Should be reasonably sized
+        # Size thresholds measured nothing: the archive is ZIP_DEFLATED, and 20
+        # text slides compress to ~17 KB. Prove the content instead: one slide
+        # part per slide, each carrying its own title.
+        with ZipFile(Path(result["output_path"]), "r") as pptx:
+            slides = sorted(n for n in pptx.namelist()
+                            if n.startswith("ppt/slides/slide") and n.endswith(".xml"))
+            assert len(slides) == 20, slides
+            body = "".join(pptx.read(n).decode("utf-8") for n in slides)
+        for i in range(20):
+            assert f"Title {i}" in body or f"Slide {i}" in body
 
     @pytest.mark.asyncio
     async def test_corvinOS_presentation_demo(self, temp_output_dir):
@@ -273,11 +282,15 @@ class TestPurePythonPPTXGenerator:
         assert result["status"] == "success"
         assert result["slide_count"] == 5
         assert Path(result["output_path"]).exists()
-        assert result["file_size_bytes"] > 20000
+        assert result["file_size_bytes"] > 0
 
-        # Verify it's a valid ZIP/PPTX
+        # Verify it's a valid ZIP/PPTX with one part per slide (a byte-size
+        # threshold proved nothing: the archive is deflated).
         with ZipFile(Path(result["output_path"]), 'r') as pptx:
             assert "ppt/presentation.xml" in pptx.namelist()
+            slides = [n for n in pptx.namelist()
+                      if n.startswith("ppt/slides/slide") and n.endswith(".xml")]
+            assert len(slides) == 5, slides
             assert "ppt/slides/slide5.xml" in pptx.namelist()
 
 

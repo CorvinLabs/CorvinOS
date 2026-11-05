@@ -15,11 +15,9 @@ from datetime import datetime
 from unittest.mock import patch, MagicMock
 
 import sys
-sys.path.insert(0, "/home/shumway/projects/CorvinOS/core/skills/video_producer")
-sys.path.insert(0, "/home/shumway/projects/CorvinOS/core/skills/video_producer/workers")
 
-from maestro import MaestroOrchestrator, VideoJob, VideoJobPhase, FeedbackEvent
-from workers.video_assembler import VideoAssemblerWorker, VideoResult
+from core.skills.video_producer.maestro import MaestroOrchestrator, VideoJob, VideoJobPhase, FeedbackEvent
+from core.skills.video_producer.workers.video_assembler import VideoAssemblerWorker, VideoResult
 
 
 class TestFix1FeedbackEventImmutable:
@@ -75,7 +73,7 @@ class TestFix2FeedbackValidation:
             topic="Test Video",
             duration=30,
             audience="technical",
-            narration=["Test narration"],
+            narration=["Test narration for the feedback checks."]  # >=20 chars: Content-Presence Gate (96ba881b0),
         )
 
         # Attempt to record invalid confidence
@@ -95,7 +93,7 @@ class TestFix2FeedbackValidation:
             topic="Test Video",
             duration=30,
             audience="technical",
-            narration=["Test narration"],
+            narration=["Test narration for the feedback checks."]  # >=20 chars: Content-Presence Gate (96ba881b0),
         )
 
         with pytest.raises(ValueError, match="must be between 0.0 and 1.0"):
@@ -114,7 +112,7 @@ class TestFix2FeedbackValidation:
             topic="Test Video",
             duration=30,
             audience="technical",
-            narration=["Test narration"],
+            narration=["Test narration for the feedback checks."]  # >=20 chars: Content-Presence Gate (96ba881b0),
         )
 
         # Record valid confidence values
@@ -139,7 +137,8 @@ class TestFix2FeedbackValidation:
             topic="Test Video",
             duration=30,
             audience="technical",
-            narration=["Scene 1", "Scene 2"],  # Only 2 scenes
+            # Only 2 scenes (>=20 chars in total: Content-Presence Gate, 96ba881b0)
+            narration=["Scene 1 narration", "Scene 2 narration"],
         )
 
         # Attempt to provide feedback for scene 5 (out of range)
@@ -159,7 +158,7 @@ class TestFix2FeedbackValidation:
             topic="Test Video",
             duration=30,
             audience="technical",
-            narration=["Test narration"],
+            narration=["Test narration for the feedback checks."]  # >=20 chars: Content-Presence Gate (96ba881b0),
         )
 
         with pytest.raises(ValueError, match="Unknown feedback type"):
@@ -178,14 +177,20 @@ class TestFix3QualityGateValidation:
         """Quality Gate MUST reject videos with bitrate < 100 kbps"""
         worker = VideoAssemblerWorker()
 
-        # Attempt to validate a video with low bitrate
-        with pytest.raises(ValueError, match="bitrate too low"):
-            worker._validate_video_quality(
-                output_path="/tmp/test.mp4",
-                bitrate_kbps=50,  # TOO LOW
-                duration_seconds=90,
-                codec="h264",
-            )
+        # The gate checks existence and size BEFORE bitrate, so the file must be
+        # real and >=100 KB for the bitrate check to be the one that refuses it
+        # (a nonexistent /tmp/test.mp4 was refused as "not created").
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+            f.write(b"x" * (100 * 1024))
+            f.flush()
+            with pytest.raises(ValueError, match="bitrate too low"):
+                worker._validate_video_quality(
+                    output_path=f.name,
+                    bitrate_kbps=50,  # TOO LOW
+                    duration_seconds=90,
+                    codec="h264",
+                )
 
     def test_quality_gate_accepts_bitrate_above_100(self):
         """Quality Gate MUST accept videos with bitrate >= 100 kbps"""
@@ -278,7 +283,7 @@ class TestFix4AssetAnalyzerResult:
 
     def test_asset_analyzer_result_is_dataclass(self):
         """Asset Analyzer MUST return dataclass with proper attributes"""
-        from workers.asset_analyzer import AssetAnalyzerWorker
+        from core.skills.video_producer.workers.asset_analyzer import AssetAnalyzerWorker
 
         analyzer = AssetAnalyzerWorker()
 
