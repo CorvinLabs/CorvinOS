@@ -301,6 +301,42 @@ tripwire, `verify_chain`, the daily verify timer, compliance reports — read
 the canonical chain alone, and nothing ever merges, rewrites, reorders or
 deletes a history file.
 
+**Review 2026-11-05 — one chain, one verifier rule:**
+
+- **No writer composes the host-wide chain (SEC-7).** `incident_tracker`
+  (EU AI Act Art. 73 `incident.*`), `anthropic_batch`, the forge runner's
+  `_audit_path_for` fallback, `proposal._audit_path` and the corvinid erasure
+  fallback built `<home>/global/(forge/)audit.jsonl` by hand — records no
+  verifier, report or panel reads. All resolve `tenant_audit_chain(tid)` now;
+  `tests/security/test_audit_chain_ssot.py::test_no_production_writer_composes_the_host_wide_chain`
+  AST-scans every production module for a home-resolver `/ "global" / … "audit.jsonl"`
+  chain (also through a local name), with an explicit, self-checking
+  allowlist of READERS of the historical file (`audit_view`, `path_gate`,
+  `migrate_cmd`, the e2e fixture script).
+- **Readers read THE chain (SEC-13).** `audit_view` (`/audit me`, `/audit chat`)
+  read only the pre-tenancy `<home>/global/forge/audit.jsonl`; it reads the
+  process tenant's chain (plus that historical file for `_default`). `audit_tail`
+  and `chain_dual_track` resolve `tenant_audit_chain()` / `legacy_audit_chains()`
+  instead of hand-built paths; `chain_dual_track` stopped reading the host-wide
+  chain for non-default tenants (S-11a rule).
+- **`CORVIN_AUDIT_VERIFY_NO_KEY_OK` is a CLI flag, not a library mode (SEC-12).**
+  `security_events.verify_chain(..., allow_missing_key=True)` is the only way to
+  suppress `mac_unverifiable_key_absent`; `voice-audit verify` passes it from the
+  variable. `verify_chain_incremental` (boot tripwire, integrity monitor) never
+  does, and a chain witness written under the old relaxed mode forces a full walk.
+- **Registered security events (SEC-9).** `engine_trust.gate_fail_open`,
+  `engine_trust.config_invalid`, `consent.gate_unavailable_drop`,
+  `consent.group_chat_non_consenting_participants`, `gate_pipeline.self_test_failed`,
+  `security.config_conflict`, `house_rules.allowed_after_lowconf`,
+  `plugin.security_violation`, `plugin.consent_granted`, `tenant.path_migrated`,
+  `compliance.crash_recovery` and `incident.{opened,status_changed,closed}` carry a
+  severity and a closed field set (free-text `details`, `errors` and the
+  `operator` identifier are deliberately not admitted). The completeness ratchet
+  (`scripts/verify_audit_event_completeness.py`) now sees the writers `_audit_event`,
+  `audit_emit`, `_audit_log`, `_emit_audit`, `_audit_write`, `_write_audit`, `emit`,
+  `audit` and the `event_type=` / `event=` keyword; the ~90 names that became
+  visible were rebaselined once (shrink-only semantics unchanged).
+
 ### F — Linter NFKC + confusable normalisation
 
 `skill_forge.linter.lint()` now NFKC-normalises the body and folds a

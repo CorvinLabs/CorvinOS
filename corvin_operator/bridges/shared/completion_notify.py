@@ -1012,11 +1012,14 @@ def reap_orphan_pending(
 # ─── GDPR Art. 17 ──────────────────────────────────────────────────────────
 
 
-def purge_user(uid: str) -> int:
+def purge_user(uid: str, *, tenant_id: str | None = None) -> int:
     """Remove all pending-notification records whose sender matches *uid*.
 
     Mirrors bg_monitor.purge_user for the Right-to-Erasure path — these records
-    hold routing PII (sender uid + chat_id). Returns the number removed.
+    hold routing PII (sender uid + chat_id). With *tenant_id* only that tenant's
+    records are considered and ``uid == tenant_id`` removes all of them. An
+    unlink failure raises (the erasure layer then reports failed). Returns the
+    number removed.
     """
     qdir = _queue_dir()
     if not qdir.exists():
@@ -1024,9 +1027,17 @@ def purge_user(uid: str) -> int:
     removed = 0
     for path in qdir.glob("*.json"):
         rec = _read(path)
-        if rec is not None and rec.get("sender") == uid:
-            path.unlink(missing_ok=True)
-            removed += 1
+        if rec is None:
+            continue
+        if tenant_id is not None:
+            if str(rec.get("tenant_id") or "_default") != tenant_id:
+                continue
+            if uid != tenant_id and rec.get("sender") != uid:
+                continue
+        elif rec.get("sender") != uid:
+            continue
+        path.unlink(missing_ok=True)
+        removed += 1
     return removed
 
 

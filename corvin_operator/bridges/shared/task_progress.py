@@ -669,36 +669,50 @@ def deliver_progress(outbox_dir: str | Path, *, now: float | None = None) -> int
 # ─── GDPR Art. 17 ──────────────────────────────────────────────────────────
 
 
-def purge_user(uid: str) -> int:
+def purge_user(uid: str, *, tenant_id: str | None = None) -> int:
     """Remove every progress record whose sender matches *uid*.
 
     Called by the GDPR Art. 17 erasure path, mirroring
     ``completion_notify.purge_user`` and ``bg_monitor.purge_user``: these
     records carry the same routing PII (chat_id, sender uid) and must be
-    erased on the same request. Returns the number of records removed.
+    erased on the same request. With *tenant_id* only that tenant's records
+    are considered and ``uid == tenant_id`` removes all of them. Returns the
+    number of records removed; a record that could not be removed raises
+    ``OSError`` after the sweep, so the erasure layer reports failed instead of
+    completed over a survivor (review 2026-11-05).
     """
     qdir = _queue_dir()
     if not qdir.exists():
         return 0
     removed = 0
+    errors: list[str] = []
     victim_tasks: set[str] = set()
     for path in sorted(qdir.glob("tp_*.json")):
         rec = _read(path)
-        if rec is None or rec.get("sender") != uid:
+        if rec is None:
+            continue
+        if tenant_id is not None:
+            if str(rec.get("tenant_id") or "_default") != tenant_id:
+                continue
+            if uid != tenant_id and rec.get("sender") != uid:
+                continue
+        elif rec.get("sender") != uid:
             continue
         victim_tasks.add(str(rec.get("task_id") or ""))
         try:
             path.unlink(missing_ok=True)
             path.with_suffix(".json.lock").unlink(missing_ok=True)
             removed += 1
-        except OSError:
-            pass
+        except OSError as exc:
+            errors.append(f"{path.name}: {type(exc).__name__}")
     # The per-task counters are keyed by task id, which is itself a routing
     # correlate of the erased subject — drop them too.
     for tid in victim_tasks:
         if tid:
             try:
                 _counter_path(tid).unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as exc:
+                errors.append(f"counter {tid}: {type(exc).__name__}")
+    if errors:
+        raise OSError(f"task_progress purge left {len(errors)} item(s): " + ", ".join(errors[:5]))
     return removed

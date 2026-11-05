@@ -34,6 +34,12 @@ path is denied, not allowed.
   the create/overwrite commands (`patch`, `xxd`, `split`, `touch`, `mkdir`, …),
   which are otherwise checked against the ledger stores only, check it too —
   `patch`/`xxd -r` rewrote the router config before (refutation 2026-11-05).
+  Three learning-state files directly under `<corvin_home>/tenants/<tid>/global/`
+  are covered by the same rule (LRN-10): `ce_stage_grades.json` (forged
+  `operator` grades made a non-builtin CEL stage default-eligible),
+  `usage_epoch.json` (resetting it reset the ADR-2259 Free-tier savings meter)
+  and `model_confidence_stats.json` (L08), each with its `<name>.lock` and
+  `.<name>.<x>.tmp` siblings; other files in `global/` keep their own rules.
   Not covered (gate-wide, every protected tree): `git -C <dir> init/clean`,
   a symlinked `CORVIN_HOME` or tenant directory (the target is resolved, the
   home is not), and case variants on a case-insensitive file system.
@@ -140,10 +146,24 @@ or register the hook directly in `~/.claude/settings.json`:
 `check()` is fail-CLOSED (F-A8): any internal exception is a deny (exit 2),
 never a non-blocking hook error.
 
+**No interpreter is a deny too (review 2026-11-05, SEC-2).** `hooks.json` runs every
+hook through `hooks/with_python.sh` (python3 → `CORVIN_PYTHON` → the corvinos tool
+venv → `python`). The three PreToolUse gates — `path_gate.py`,
+`auth_elevation_gate.py`, `web_trust_gate.py` — are invoked as
+`with_python.sh --fail-closed <gate>.py`: when no Python 3 resolves, the launcher
+exits **2** (the only blocking exit code) and names the gate as denied. Before, it
+exited 1 for every hook — a non-blocking error, so on a host without an interpreter
+every gated tool call ran ungated. The best-effort hooks (`artifact_register`,
+`notification_relay`, `ldd_auto_optin`) keep exit 1. A hand-registered hook in
+`~/.claude/settings.json` that calls the gate through the launcher must pass
+`--fail-closed` as well. Test: `tests/security/test_review_20261105_sec_e2e.py`
+(`test_sec2_*`, the manifest's own command line through `/bin/sh -c`).
+
 ## Must NOT do
 
 - Don't fail-open the gate (an unparseable protected-path command must deny —
-  and so must an exception inside `check()`).
+  and so must an exception inside `check()`, and so must a missing interpreter:
+  never drop `--fail-closed` from a PreToolUse gate's `hooks.json` command).
 - Don't add an env kill-switch or "path-gate off" mode.
 - Don't add a second entry to `_PINNED_PYTHON_TOOLS` without pinning every sibling module the tool imports, and don't
   make the exception match on a basename, a prefix, a pattern or a normalised path.

@@ -278,13 +278,17 @@ def _execute_erasure(tenant_id: str, subject_id: str):
         ErasureOrchestrator, ErasureRequest, builtin_stub_chain, make_forge_audit_writer,
     )
     from erasure_handlers import real_handler_chain  # type: ignore[import-not-found]
-    from core.paths.tenant import tenant_home
+    from core.paths.tenant import tenant_audit_chain, tenant_home
 
+    # The real chain includes the four root-level routing stores
+    # (bg_watch.json, pending_notifications/, task_progress/, task_runs/) as
+    # RootRoutingStoreHandler layers — the console and the CLI erase the same
+    # stores, and both record them in the trail (review 2026-11-05, SEC-5).
     root = tenant_home(tenant_id)
     orch = ErasureOrchestrator(
         tenant_id=tenant_id,
         trail_dir=root / "global" / "erasure",
-        audit_writer=make_forge_audit_writer(root / "global" / "forge" / "audit.jsonl"),
+        audit_writer=make_forge_audit_writer(tenant_audit_chain(tenant_id)),
     )
     registered: set[str] = set()
     for h in real_handler_chain(tenant_id=tenant_id):

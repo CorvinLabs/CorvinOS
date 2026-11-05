@@ -114,24 +114,35 @@ def _incidents_dir(tenant_id: str) -> Path:
 
 # ── Audit emit helper ───────────────────────────────────────────────────────
 
-def _emit(event_type: str, details: dict[str, Any], *, severity: str = "INFO") -> None:
-    """Best-effort audit emit.  Never raises.  Only allow-listed keys."""
+def _emit(event_type: str, details: dict[str, Any], *, tenant_id: str,
+          severity: str = "INFO") -> None:
+    """Audit emit onto the tenant's ONE chain (``tenant_audit_chain``).
+
+    Until 2026-11-05 this built ``<home>/global/forge/audit.jsonl`` by hand —
+    the pre-ADR-0007 host-wide file the boot tripwire, ``audit_query`` and every
+    compliance report never read, so EU AI Act Art. 73 incident records were
+    not in the audit trail at all (review SEC-7). Never raises (an incident is
+    opened on the store even when the chain write fails) but a failed write is
+    LOGGED, never silently dropped. ``VOICE_AUDIT_PATH`` still redirects (tests).
+    """
     try:
         repo = Path(__file__).resolve().parents[3]
         forge_path = repo / "corvin_operator" / "forge"
         if forge_path.is_dir() and str(forge_path) not in sys.path:
             sys.path.insert(0, str(forge_path))
         from forge import security_events as _se  # type: ignore
+        from forge.paths import tenant_audit_chain  # type: ignore
 
-        audit_dir = _corvin_home() / "global" / "forge"
-        audit_dir.mkdir(parents=True, exist_ok=True)
-        audit_file = Path(
-            os.environ.get("VOICE_AUDIT_PATH") or str(audit_dir / "audit.jsonl")
-        )
+        override = os.environ.get("VOICE_AUDIT_PATH")
+        audit_file = Path(override) if override else tenant_audit_chain(tenant_id)
+        audit_file.parent.mkdir(parents=True, exist_ok=True)
         _se.write_event(audit_file, event_type, severity=severity,
-                        tool="", run_id="", details=details, hash_chain=True)
-    except Exception:
-        pass
+                        tool="", run_id="", details={**details, "tenant_id": tenant_id},
+                        hash_chain=True)
+    except Exception as exc:  # noqa: BLE001 - never break incident handling
+        import logging as _logging  # noqa: PLC0415
+        _logging.getLogger("corvin.incident_tracker").error(
+            "incident audit write failed for %s: %s", event_type, type(exc).__name__)
 
 
 # ── Storage layer ───────────────────────────────────────────────────────────
@@ -193,7 +204,8 @@ def open_incident(
         "severity": record.severity,
         "trigger_event": record.trigger_event,
         "trigger_chain_hash": record.trigger_chain_hash,
-    }, severity="CRITICAL" if record.severity == "serious" else "WARNING")
+    }, tenant_id=tenant_id,
+        severity="CRITICAL" if record.severity == "serious" else "WARNING")
     return record
 
 
@@ -221,7 +233,7 @@ def update_incident(
         "incident_id": record.incident_id,
         "old_status": old_status,
         "new_status": new_status,
-    })
+    }, tenant_id=tenant_id)
     return record
 
 
@@ -242,7 +254,7 @@ def close_incident(incident_id: str, *, tenant_id: str = "_default") -> Incident
     _emit("incident.closed", {
         "incident_id": record.incident_id,
         "duration_hours": duration_hours,
-    })
+    }, tenant_id=tenant_id)
     return record
 
 

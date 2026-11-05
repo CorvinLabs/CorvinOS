@@ -95,11 +95,18 @@ def _audit_emit(event_type: str, severity: str, details: dict[str, Any]) -> None
                 from audit import audit_path as _audit_path  # type: ignore
             _log_path = _audit_path()
         except Exception:  # noqa: BLE001
-            # Fallback to ~/.corvin/global/audit.jsonl if audit module is unavailable.
-            _log_path = _default_corvin_home() / "global" / "audit.jsonl"
+            # The tenant's ONE chain (review 2026-11-05, SEC-7) — never the
+            # stray <home>/global/audit.jsonl the old fallback wrote to.
+            try:
+                from .paths import tenant_audit_chain as _tac  # type: ignore
+            except ImportError:
+                from paths import tenant_audit_chain as _tac  # type: ignore
+            _log_path = _tac()
         _write_event(_log_path, event_type, severity=severity, details=details)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 - erasure must not fail on its own audit
+        import logging as _logging  # noqa: PLC0415
+        _logging.getLogger("corvin.erasure.corvinid").error(
+            "corvinid erasure audit write failed for %s: %s", event_type, type(exc).__name__)
 
 
 def _fire_and_forget_revoke(instance_id: str) -> None:

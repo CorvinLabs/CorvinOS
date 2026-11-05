@@ -23,7 +23,14 @@ Storage
 -------
 Single JSON file per (channel, chat) at::
 
-    <corvin_home>/global/consent/<safe_channel>__<safe_chat>.json
+    <corvin_home>/tenants/<tid>/global/consent/<safe_channel>__<safe_chat>.json
+
+``<tid>`` is the explicit ``tenant_id`` keyword of every public function,
+else the process tenant (``CORVIN_TENANT_ID``), else ``_default``. GDPR
+Art. 17: the ``L-uid-stores`` erasure layer removes a subject's entry from
+every chat file of the tenant; the proof that consent was given (Art. 7(1))
+is the pseudonymised ``consent.granted`` record on the audit chain, which
+outlives the store entry (Art. 17(3)(b)/(e)).
 
 ::
 
@@ -170,6 +177,26 @@ def _store_path(channel: str, chat_key: str, *, tenant_id: str) -> Path:
     home = _corvin_home()
     base = home / "tenants" / tenant_id / "global" / "consent"
     return base / f"{safe_channel}__{safe_chat}.json"
+
+
+def _store_tenant(tenant_id: str | None) -> str:
+    """The tenant whose consent store a call reads/writes.
+
+    Explicit ``tenant_id`` wins; otherwise the PROCESS tenant
+    (``CORVIN_TENANT_ID``), else ``_default`` — the same rule as the audit
+    chain this module writes to. Until 2026-11-05 every public function
+    hard-coded ``_default``, so a non-default tenant's consent landed in (and
+    was read from) the default tenant's store (review SEC-6). Consent recorded
+    under ``_default`` by a non-default tenant process before then is NOT read
+    by that tenant any more: the gate answers ``no-entry`` (deny) and the user
+    re-consents — the fail-closed direction.
+    """
+    tid = tenant_id if tenant_id is not None else (
+        (os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default")
+    if not isinstance(tid, str) or not re.fullmatch(r"[a-z0-9_][a-z0-9_-]{0,62}", tid) \
+            or tid.startswith("__"):
+        raise ValueError(f"invalid tenant_id {tid!r}")
+    return tid
 
 
 def _audit_path(*, tenant_id: str | None = None) -> Path:
@@ -514,8 +541,8 @@ def parse_share_prefix(text: str) -> tuple[bool, str]:
     return True, payload
 
 
-def is_granted(channel: str, chat_key: str, uid: str
-               ) -> tuple[bool, str]:
+def is_granted(channel: str, chat_key: str, uid: str, *,
+               tenant_id: str | None = None) -> tuple[bool, str]:
     """Return (granted, reason).
 
     ``granted=True`` when the uid currently holds a non-expired durable
@@ -540,7 +567,7 @@ def is_granted(channel: str, chat_key: str, uid: str
         _clag_gate(f"L16.consent_gate.{_secrets.token_hex(4)}")
     except Exception:
         return False, "chain-integrity-failed"
-    path = _store_path(channel, chat_key, tenant_id="_default")
+    path = _store_path(channel, chat_key, tenant_id=_store_tenant(tenant_id))
     try:
         data = _load_store(path)
     except ConsentStoreCorrupted:
@@ -600,6 +627,7 @@ def is_granted_with_epoch(
     *,
     consent_epoch: float | None = None,
     toctou_max_s: int = DEFAULT_CONSENT_TOCTOU_MAX_S,
+    tenant_id: str | None = None,
 ) -> tuple[bool, str]:
     """TOCTOU-aware consent check.
 
@@ -619,7 +647,7 @@ def is_granted_with_epoch(
         return True, "epoch_ok"
 
     # Stale or absent epoch — re-validate from disk.
-    granted, reason = is_granted(channel, chat_key, uid)
+    granted, reason = is_granted(channel, chat_key, uid, tenant_id=tenant_id)
     if not granted and consent_epoch is not None:
         age_s = int(now - consent_epoch)
         _audit(
@@ -639,7 +667,8 @@ def is_granted_with_epoch(
 
 def grant(channel: str, chat_key: str, uid: str, *,
           ttl_s: int | None = None,
-          via: str = "slash") -> dict:
+          via: str = "slash",
+          tenant_id: str | None = None) -> dict:
     """Grant consent for ``uid`` in ``(channel, chat_key)``.
 
     ``ttl_s=None`` → durable; otherwise time-bounded clamped to
@@ -667,7 +696,7 @@ def grant(channel: str, chat_key: str, uid: str, *,
             "granted_via": via,
             "ttl_s": clamped,
         }
-    path = _store_path(channel, chat_key, tenant_id="_default")
+    path = _store_path(channel, chat_key, tenant_id=_store_tenant(tenant_id))
     # _locked_update holds the lock across read-prune-write to prevent the
     # lost-update race where two concurrent grant() calls overwrite each other.
     _locked_update(path, lambda data: data.update({uid: entry}))
@@ -684,13 +713,13 @@ def grant(channel: str, chat_key: str, uid: str, *,
 
 
 def revoke(channel: str, chat_key: str, uid: str, *,
-           via: str = "slash") -> bool:
+           via: str = "slash", tenant_id: str | None = None) -> bool:
     """Drop the consent entry for ``uid``. Returns True iff an entry
     actually existed (so the caller can distinguish "revoked" from
     "nothing was on file"). Emits ``consent.revoked`` audit event."""
     if not uid:
         return False
-    path = _store_path(channel, chat_key, tenant_id="_default")
+    path = _store_path(channel, chat_key, tenant_id=_store_tenant(tenant_id))
 
     def _do_revoke(data: dict) -> bool:
         ex = uid in data
@@ -708,12 +737,13 @@ def revoke(channel: str, chat_key: str, uid: str, *,
     return existed
 
 
-def status(channel: str, chat_key: str, uid: str) -> dict:
+def status(channel: str, chat_key: str, uid: str, *,
+           tenant_id: str | None = None) -> dict:
     """Return a status dict for an uid: ``{granted, mode, remaining_s,
     granted_at, granted_via}`` — safe for serialisation into a chat
     reply via ``/consent status``."""
-    granted, reason = is_granted(channel, chat_key, uid)
-    path = _store_path(channel, chat_key, tenant_id="_default")
+    granted, reason = is_granted(channel, chat_key, uid, tenant_id=tenant_id)
+    path = _store_path(channel, chat_key, tenant_id=_store_tenant(tenant_id))
     data, _expired = _prune(_load_store(path))  # raises ConsentStoreCorrupted to caller
     entry = data.get(uid) or {}
     remaining = 0
@@ -732,11 +762,12 @@ def status(channel: str, chat_key: str, uid: str) -> dict:
     }
 
 
-def list_consents(channel: str, chat_key: str) -> dict[str, dict]:
+def list_consents(channel: str, chat_key: str, *,
+                  tenant_id: str | None = None) -> dict[str, dict]:
     """Return all currently-valid (non-expired) consent entries for the
     chat. Used by ``/consent list`` for the owner to see who consented.
     """
-    path = _store_path(channel, chat_key, tenant_id="_default")
+    path = _store_path(channel, chat_key, tenant_id=_store_tenant(tenant_id))
     data, _expired = _prune(_load_store(path))  # raises ConsentStoreCorrupted to caller
     return data
 

@@ -35,9 +35,21 @@ def chain(tmp_path, monkeypatch):
     monkeypatch.setattr(se, "_ANCHOR_KEY_LOADED", False)
     monkeypatch.setattr(se, "_ANCHOR_KEY_REFUSED", None)
     p = audit.audit_path()
+    # Every record is signed with the instance key (ADR-0153 M3). On a fresh home
+    # the FIRST write generates that key, and the key-creation record
+    # (``instance.key_rotated``) is written from a deferred thread because the
+    # writer's lock is held during signing (instance_identity._audit_ibc). Its
+    # position in the chain then depends on thread timing, and the tests below
+    # that name a line number raced it (review 2026-11-05: "line 7 vs 6").
+    # Provision the key first, synchronously, so the chain is deterministic:
+    # one key-creation record, then the five messages.
+    import instance_identity  # noqa: PLC0415 - bridges/shared, on sys.path above
+    instance_identity.ensure_instance_key()
     for i in range(5):
         audit.audit_event("message.received", channel="d", details={"count": i})
     assert se.verify_chain(p) == (True, [])
+    types = [json.loads(line)["event_type"] for line in p.read_text(encoding="utf-8").splitlines()]
+    assert types == ["instance.key_rotated"] + ["message.received"] * 5, types
     return p
 
 
@@ -51,7 +63,8 @@ def test_appended_forged_unchained_record_is_flagged(chain):
         fh.write(_forged() + "\n")
     ok, problems = se.verify_chain(chain)
     assert not ok
-    assert problems == [{"line": 6, "issue": "unchained_record", "event_type": "consent.granted"}]
+    # six chained records (key creation + five messages), the forgery is the 7th line
+    assert problems == [{"line": 7, "issue": "unchained_record", "event_type": "consent.granted"}]
 
 
 def test_mid_inserted_forged_record_is_flagged(chain):

@@ -67,6 +67,16 @@ def _boot(host: str, tmp_path: Path, *, strip: bool, tamper: bool = False) -> st
         "VOICE_AUDIT_PATH": str(home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"),
         "CORVIN_AUDIT_ANCHOR_KEY": str(home / "anchor.key"),
         "STRIP_PLUGINS": "1" if strip else "0",
+        # The evidence that the tripwire ran is its reporting-only L10 probe
+        # (``l10_hook_registered``), which logs only when NO path_gate hook is
+        # registered. It reads ``~/.claude/settings.json``, so on an operator
+        # machine with the voice plugin enabled the probe passed silently and
+        # this test failed for a reason that had nothing to do with the hosts
+        # (review 2026-11-05: both hosts DO fail the boot on an absent
+        # corvin_plugins, after the tripwire). A throwaway HOME makes the
+        # evidence deterministic; the repo's own .claude/settings*.json (also
+        # probed) register no path_gate hook.
+        "HOME": str(home),
     })
     env.pop("PYTEST_CURRENT_TEST", None)
     if tamper:

@@ -180,7 +180,10 @@ def test_ccc_erase_rejects_invalid_subject(home):
 _HOME_CALLS = frozenset({"corvin_home", "_corvin_home", "get_corvin_home"})
 _TENANT_CALLS = frozenset({"tenant_home", "_tenant_home", "tenant_dir"})
 _GLOBAL_CALLS = frozenset({"tenant_global_dir", "_tenant_global", "global_dir"})
-_SCAN_ROOTS = ("core", "operator", "scripts")
+# ``operator`` was renamed ``corvin_operator`` long ago; the old name matched no
+# directory, so the bridges, forge and voice writers were never scanned at all
+# (review 2026-11-05, SEC-6). Both names stay listed: a missing root is a no-op.
+_SCAN_ROOTS = ("core", "corvin_operator", "operator", "scripts")
 
 
 def _flatten_div(node: ast.BinOp):
@@ -214,12 +217,63 @@ def _first_segment(literal: str, *, is_global: bool) -> str | None:
     return ("global/" + seg[0]) if is_global else seg[0]
 
 
+def _bound_resolvers(tree: ast.AST) -> dict[str, set[str]]:
+    """Local names bound to a home resolver: ``home = _corvin_home()``.
+
+    The disclosure/roles stores were written as
+    ``home = _corvin_home(); home / "tenants" / tid / "global" / "disclosure"``
+    and were invisible to a scan that only matched the CALL as the base of the
+    ``/`` chain (review 2026-11-05, SEC-6). Scope-insensitive on purpose: a
+    name bound to a resolver anywhere in the module is read as that resolver
+    everywhere in it — over-reporting is a classification question, a miss is
+    an unswept store. A name bound to SEVERAL resolvers (``home`` is a tenant
+    home in one function and the corvin home in another) is read as each of
+    them; a tenant/global reading whose next literal is ``"tenants"`` is the
+    corvin-home reading and is skipped (a tenant home holds no ``tenants``).
+    """
+    bound: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        value = None
+        targets: list = []
+        if isinstance(node, ast.Assign):
+            value, targets = node.value, node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            value, targets = node.value, [node.target]
+        if value is None:
+            continue
+        if _call_name(value) == "Path" and getattr(value, "args", None):
+            value = value.args[0]
+        name = _call_name(value)
+        if name not in (_HOME_CALLS | _TENANT_CALLS | _GLOBAL_CALLS):
+            continue
+        for t in targets:
+            if isinstance(t, ast.Name):
+                bound.setdefault(t.id, set()).add(name)
+    return bound
+
+
+def _entry_for(name: str, lits: list) -> str | None:
+    if name in _TENANT_CALLS and lits and lits[0] and lits[0] != "tenants":
+        if lits[0] == "global":
+            return _first_segment(lits[1], is_global=True) if len(lits) > 1 and lits[1] else None
+        return _first_segment(lits[0], is_global=False)
+    if name in _GLOBAL_CALLS and lits and lits[0] and lits[0] != "tenants":
+        return _first_segment(lits[0], is_global=True)
+    if (name in _HOME_CALLS and len(lits) >= 3
+            and lits[0] == "tenants" and lits[1] is None and lits[2]):
+        if lits[2] == "global":
+            return _first_segment(lits[3], is_global=True) if len(lits) > 3 and lits[3] else None
+        return _first_segment(lits[2], is_global=False)
+    return None
+
+
 def _scan_module(path: Path) -> set[str]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeDecodeError):
         return set()
     found: set[str] = set()
+    bound = _bound_resolvers(tree)
     for node in ast.walk(tree):
         if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)):
             continue
@@ -227,25 +281,13 @@ def _scan_module(path: Path) -> set[str]:
         if _call_name(base) == "Path" and getattr(base, "args", None):
             base = base.args[0]
         name = _call_name(base)
-        if name is None:
-            continue
+        names = {name} if name is not None else (
+            bound.get(base.id, set()) if isinstance(base, ast.Name) else set())
         lits = [_str_const(x) for x in parts]
-        entry: str | None = None
-        if name in _TENANT_CALLS and lits and lits[0]:
-            if lits[0] == "global":
-                entry = _first_segment(lits[1], is_global=True) if len(lits) > 1 and lits[1] else None
-            else:
-                entry = _first_segment(lits[0], is_global=False)
-        elif name in _GLOBAL_CALLS and lits and lits[0]:
-            entry = _first_segment(lits[0], is_global=True)
-        elif (name in _HOME_CALLS and len(lits) >= 3
-              and lits[0] == "tenants" and lits[1] is None and lits[2]):
-            if lits[2] == "global":
-                entry = _first_segment(lits[3], is_global=True) if len(lits) > 3 and lits[3] else None
-            else:
-                entry = _first_segment(lits[2], is_global=False)
-        if entry:
-            found.add(entry)
+        for n in names:
+            entry = _entry_for(n, lits)
+            if entry:
+                found.add(entry)
     return found
 
 

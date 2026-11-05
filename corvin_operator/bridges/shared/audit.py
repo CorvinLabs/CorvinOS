@@ -500,8 +500,13 @@ def audit_event(
     return core_write_committed
 
 
-def verify_audit(path: Path | None = None) -> tuple[bool, list[dict]]:
+def verify_audit(path: Path | None = None, *,
+                 allow_missing_key: bool = False) -> tuple[bool, list[dict]]:
     """Verify the bridge audit log's hash chain.
+
+    ``allow_missing_key`` is the cross-host relaxation (a mac'd record on a host
+    without the anchor key is not reported); only ``voice-audit verify`` passes
+    it, from ``CORVIN_AUDIT_VERIFY_NO_KEY_OK`` (review 2026-11-05, SEC-12).
 
     ``(False, [{"reason": "writer_unavailable"}])`` when forge is missing: there
     is no writer, so nothing on disk is being maintained and "verifies" would be
@@ -511,6 +516,8 @@ def verify_audit(path: Path | None = None) -> tuple[bool, list[dict]]:
     if _se is None:
         return False, [{"reason": "writer_unavailable"}]
     target = path if path is not None else audit_path()
+    if allow_missing_key:
+        return _se.verify_chain(target, allow_missing_key=True)
     return _se.verify_chain(target)
 
 

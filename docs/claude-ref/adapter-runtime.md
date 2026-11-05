@@ -1012,7 +1012,15 @@ is `~/.claude` — and `web_trust_gate` wrote its audit record to the pre-ADR-00
 `<home>/global/forge/audit.jsonl` (a second live chain → `audit_chain_split`); it now writes the
 tenant chain. The hooks run through `hooks/with_python.sh`: a fresh system has no `python3` on
 PATH (uv's Python lives in the corvinos tool venv only), and `python3 …` commands exited 127 —
-the L10 path gate never ran. The voice plugin's tag updater (`scripts/autoupdate.sh`, a
+the L10 path gate never ran. When the launcher itself finds no Python 3 it exits 2 for the three
+PreToolUse gates (`hooks.json` passes `--fail-closed` for `path_gate`, `auth_elevation_gate`,
+`web_trust_gate`) and 1 for the best-effort hooks (review 2026-11-05, SEC-2; layer-10-path-gate.md).
+The bridge's engine-trust gate (`engine_trust.load_min_tier_for_tenant`) reads a present but
+broken `spec.engine_trust` (torn YAML, unknown key, invalid `min_tier`) as the STRICTEST tier and
+writes CRITICAL `engine_trust.config_invalid`; only an absent config is the permissive `low`
+(SEC-8). Disclosure (L19) and role (L18) stores live under `<tenant>/global/{disclosure,roles}/`
+since 2026-11-05 (a root-level chat file of `_default` is moved there on first access), and
+consent (L17) follows the process tenant instead of a hard-coded `_default` (SEC-6). The voice plugin's tag updater (`scripts/autoupdate.sh`, a
 `SessionStart` hook) stands down in a CorvinOS checkout: `update.sh` is the one updater.
 
 Verification happens in two complementary steps:

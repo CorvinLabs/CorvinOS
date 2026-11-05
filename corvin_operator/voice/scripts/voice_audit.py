@@ -27,6 +27,16 @@ sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 import audit  # noqa: E402  bridges/shared/audit.py
 
 
+def _cross_host_no_key_ok() -> bool:
+    """``CORVIN_AUDIT_VERIFY_NO_KEY_OK=1`` — the cross-host verification mode.
+
+    Honoured HERE, in the operator CLI, and passed to the verifier as the
+    explicit ``allow_missing_key`` argument. The library no longer reads the
+    variable, so setting it in a service environment cannot relax the boot
+    tripwire's verification (review 2026-11-05, SEC-12)."""
+    return os.environ.get("CORVIN_AUDIT_VERIFY_NO_KEY_OK", "").strip() in ("1", "true", "yes")
+
+
 def _cross_peer_verify(
     local_path: Path,
     peer_path: Path,
@@ -274,7 +284,7 @@ def cmd_verify_all(args) -> int:
     io_errors: list[Path] = []
     for chain in chains:
         try:
-            ok, problems = audit.verify_audit(chain)
+            ok, problems = audit.verify_audit(chain, allow_missing_key=_cross_host_no_key_ok())
         except OSError as e:
             print(f"  IO-ERROR  {chain}: {e}", file=sys.stderr)
             io_errors.append(chain)
@@ -344,7 +354,7 @@ def cmd_verify(args) -> int:
         except Exception as e:  # noqa: BLE001
             print(f"--with-signatures requested but unavailable: {e}", file=sys.stderr)
     try:
-        ok, problems = audit.verify_audit(path)
+        ok, problems = audit.verify_audit(path, allow_missing_key=_cross_host_no_key_ok())
     except OSError as e:
         print(f"audit IO error: {e}", file=sys.stderr)
         return 2
@@ -604,7 +614,7 @@ def _verify_segment_manifest(audit_dir: Path, live_first_prev_hash: str):
     # can't be verified because the key is gone is surfaced (not silently passed)
     # unless CORVIN_AUDIT_VERIFY_NO_KEY_OK=1.
     import os as _os
-    _no_key_ok = _os.environ.get("CORVIN_AUDIT_VERIFY_NO_KEY_OK", "").strip() in ("1", "true", "yes")
+    _no_key_ok = _cross_host_no_key_ok()
     ak = _manifest_anchor_key()
     mac_required = False
     mac_seen = 0
@@ -753,9 +763,10 @@ def _verify_sealed_segments(
                 from forge.security_events import verify_chain  # type: ignore
                 ok, segment_problems = verify_chain(
                     plaintext, initial_prev=prev_tail,
+                    allow_missing_key=_cross_host_no_key_ok(),
                 )
             except ImportError:
-                ok, segment_problems = audit.verify_audit(plaintext)
+                ok, segment_problems = audit.verify_audit(plaintext, allow_missing_key=_cross_host_no_key_ok())
             if not ok:
                 for p in segment_problems:
                     p["segment"] = seg.name

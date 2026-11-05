@@ -35,6 +35,10 @@ overall outcome.
 | ACS global index (R4-F1) | `<tenant>/global/acs/runs/<run_id>/manifest.json` — the tenant-global index whose `run_dir` points into `sessions/<subject>/…`, plus the quota-fallback branch's whole `output/` working tree | `ACSGlobalIndexHandler`. A run is the subject's when a manifest names them under an identity key OR when any path value has them as a segment |
 | Generic tenant stores (R4-F1) — `packages` holds the console's skill-package registry since 2026-10-24 (before, `routes/packages.py` wrote to `~/.corvin/packages`, outside the tenant and outside this sweep) | `files`, `artifacts`, `packages`, `backups`, `idea-pipeline`, `plugin-builder`, `measurement-week`, `compute`, `voice`, `bridges`, `memory`, `agents`, `extensions`, `global/gateway`, `global/rag`, `global/flows`, `global/space`, `global/incidents`, `global/scim`, `global/chat_activity.jsonl`, … | `TenantStoreHandler` — one data-driven class per claim group (`L-user-content`, `L-compute-runs`, `L-voice`, `L-tenant-registries`, `L-store-sweep`, …), all applying the same documented attribution rule |
 
+| Root-level routing stores (review 2026-11-05, SEC-5) | `<home>/bg_watch.json` (wakeups: `from` uid, chat id), `<home>/pending_notifications/*.json` (completion queue: `sender`, `chat_id`, label), `<home>/task_progress/tp_*.json` (+ per-task counters), `<home>/task_runs/*.json` (supervised runs: `sender`, chat key, the instruction text) — shared by every tenant, each record carrying its `tenant_id` | One `RootRoutingStoreHandler` per store (`L-bg-monitor`, `L-completion-notify`, `L-task-progress`, `L-task-supervisor`) calls the module's own `purge_user(uid, tenant_id=…)`: only the request tenant's records, `subject == tenant` removes all of them, a record that cannot be removed RAISES → layer `failed / store_error`. Until 2026-11-05 only `corvin-erasure run` purged these, in an un-audited pre-step that swallowed every error; the console's `/erase` left them standing. Both entry points now run them as chain layers, so they are in the trail and on the chain |
+| Uid-keyed chat stores (review 2026-11-05, SEC-6) | `<tenant>/global/{consent,disclosure,roles,quota,proactive_consent,proposals,engine_pref}/<channel>__<chat>.json` — `{"<uid>": {...}}` (consent L17, disclosure L19, roles L18, quota L20, proactive consent), proposals `{"proposals": [{"from_uid": …}]}`, engine preference `{"set_by_uid": …}`; for `_default` also the pre-tenancy root `<home>/global/{disclosure,roles,quota,proposals,engine_pref}/` | `UidKeyedStoreHandler` (`L-uid-stores`) removes the subject's top-level entry / proposals / the preference it set, under the writer's own `.json.lock` flock (bounded), atomically, plus the generic rule; `subject == tenant` deletes the files. **Consent and GDPR Art. 7(1):** the store entry is the live grant and goes; the proof that consent was given is the pseudonymised `consent.granted` record (`uid_hash`) on the hash chain, which stays (Art. 17(3)(b)/(e), `NON_PERSONAL_DIRS["global/forge"]`). Disclosure and roles stores moved to the tenant path on 2026-11-05 (first access of `_default` moves a root-level chat file once, see `disclosure._store_path`); consent is tenant-scoped (process tenant, or an explicit `tenant_id=`) instead of hard-coded `_default` |
+| CEL context priority / console Forge (2026-11-05) | `<tenant>/cel_context_priority/<safe_key>.json` (topics already surfaced in a session); `<tenant>/global/forge_intake/uploads/att-*/` (raw uploads) and `<tenant>/global/forge_runs/run-*.json` (+ events dir; verbatim request text) | `CELContextPriorityHandler` (`L-cel-context-priority`, file NAME = the CEL `_safe_key` forms); `ConsoleForgeHandler` (`L-console-forge`, attribution = the session's `sid_fingerprint` = `sha256(sid)[:12]` of a `web:<sid>` subject; an upload goes WHOLE) |
+
 **Coverage guard (F-A9, rebuilt R4-F1).** Three registries in
 `erasure_handlers.py` classify every tenant-home entry:
 
@@ -55,8 +59,13 @@ rewritten entry-wise rather than deleted whole, for the same reason.
 **The guard's universe is DERIVED, not enumerated.** `tests/security/
 test_erasure_coverage_guard.py` AST-scans the production source for every
 `tenant_home()/"…"`, `tenant_global_dir()/"…"` and
-`corvin_home()/"tenants"/<tid>/"…"` path literal, AND boots the writers it can
-reach into a temp home. Every entry either scan finds must appear in one of the
+`corvin_home()/"tenants"/<tid>/"…"` path literal — also through a LOCAL name bound
+to one of those resolvers (`home = _corvin_home(); home / "tenants" / …`), which is
+how the disclosure/role stores stayed invisible — AND boots the writers it can
+reach into a temp home. Its scan roots are `core`, `corvin_operator` and `scripts`:
+until 2026-11-05 the second root was still spelled `operator`, a directory that no
+longer exists, so no bridge, forge or voice writer was scanned at all (review SEC-6;
+21 more entries surfaced and were classified, each after reading its writer). Every entry either scan finds must appear in one of the
 three registries. The round-2 version enumerated only the five writers its author
 chose to import — which is why it was green while `cel_anchors/` (the operator's
 own conversation text) and `global/acs/` had no Art. 17 path at all.

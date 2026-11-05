@@ -246,23 +246,38 @@ def touch(channel: str, from_: str, chat_id: str | None,
     _save_state(state)
 
 
-def purge_user(uid: str) -> int:
+def purge_user(uid: str, *, tenant_id: str | None = None) -> int:
     """Remove all bg_watch.json entries whose 'from' field matches *uid*.
 
-    Called by the GDPR Art. 17 erasure path to honour Right-to-Erasure for
-    the bg-monitor's personal-data store (Discord UIDs / chat routing keys).
-    Returns the number of entries removed.
+    Called by the GDPR Art. 17 erasure path (``erasure_handlers.
+    RootRoutingStoreHandler`` — both ``corvin-erasure run`` and the console)
+    to honour Right-to-Erasure for the bg-monitor's personal-data store
+    (Discord UIDs / chat routing keys). With *tenant_id* only that tenant's
+    entries are considered, and ``uid == tenant_id`` (whole-tenant erasure)
+    removes every entry of the tenant. Returns the number of entries removed.
+
+    A failed save RAISES: the caller reports the layer as failed instead of
+    signing an erasure whose entries are still on disk (review 2026-11-05).
     """
     state = _load_state()
-    to_remove = [k for k, v in state.items() if v.get("from") == uid]
+    to_remove = [k for k, v in state.items()
+                 if _routing_record_matches(v, "from", uid, tenant_id)]
     for k in to_remove:
         del state[k]
     if to_remove:
-        try:
-            _save_state(state)
-        except OSError as e:
-            print(f"bg_monitor: purge_user save failed: {e}", file=sys.stderr)
+        _save_state(state)
     return len(to_remove)
+
+
+def _routing_record_matches(rec: object, key: str, uid: str, tenant_id: str | None) -> bool:
+    if not isinstance(rec, dict):
+        return False
+    if tenant_id is not None:
+        if str(rec.get("tenant_id") or "_default") != tenant_id:
+            return False
+        if uid == tenant_id:
+            return True
+    return rec.get(key) == uid
 
 
 def run_once() -> int:

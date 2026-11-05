@@ -330,12 +330,40 @@ def _tenant_config_path(tenant_id: str) -> Path:
     return _corvin_home() / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
 
 
+#: The fields of ``spec.engine_trust`` — mirror of the gateway's
+#: ``tenant_config.EngineTrustConfig`` (``extra="forbid"``). A key outside this
+#: set is a typo the gateway refuses loudly; the bridge must not read it as
+#: "absent" (review 2026-11-05, SEC-8).
+_ENGINE_TRUST_KEYS = frozenset({
+    "min_tier", "require_binary_pin", "canary_alert_delta",
+    "canary_min_window_days", "auto_block_on_drift", "sentinel_personas",
+    "audit_passed_sentinel",
+})
+#: The tier enforced when a config EXISTS but cannot be read as the operator
+#: meant it: the strictest one, mirroring L35's deny-all on a broken egress
+#: config. An absent file / block keeps the permissive ``"low"`` default.
+STRICTEST_TIER = "high"
+
+
+class EngineTrustConfigInvalid(ValueError):
+    """``spec.engine_trust`` is present but unreadable; ``.code`` is a closed
+    vocabulary (no path, no exception text) safe for the audit chain."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 def _load_engine_trust_block(tenant_id: str) -> dict[str, Any]:
     """Lightweight read of ``spec.engine_trust`` from the tenant config.
 
-    Returns ``{}`` (empty dict) on every error path. Mirror of the
-    L23 / L24 lightweight-loader pattern: keep the bridge runtime
-    decoupled from the gateway's pydantic dep.
+    Returns ``{}`` when the tenant config file or the ``engine_trust`` block is
+    ABSENT (the documented permissive default). A config that EXISTS but is
+    torn / unreadable / not a mapping, or a block with an unknown key or an
+    invalid ``min_tier``, raises :class:`EngineTrustConfigInvalid` — until
+    2026-11-05 every one of those read as ``{}``, so ``min_tier: hihg`` or a
+    half-written file silently admitted every engine (review SEC-8).
+    Mirror of the L23 / L24 lightweight-loader pattern: no pydantic.
     """
     p = _tenant_config_path(tenant_id)
     if not p.exists():
@@ -343,35 +371,72 @@ def _load_engine_trust_block(tenant_id: str) -> dict[str, Any]:
     try:
         with p.open("r", encoding="utf-8") as fh:
             raw = yaml.safe_load(fh)
-    except (yaml.YAMLError, OSError):
+    except yaml.YAMLError:
+        raise EngineTrustConfigInvalid("yaml_unparseable") from None
+    except OSError:
+        raise EngineTrustConfigInvalid("config_unreadable") from None
+    if raw is None:
         return {}
     if not isinstance(raw, dict):
+        raise EngineTrustConfigInvalid("config_not_mapping")
+    spec = raw.get("spec")
+    if spec is None:
         return {}
-    spec = raw.get("spec") or {}
     if not isinstance(spec, dict):
+        raise EngineTrustConfigInvalid("spec_not_mapping")
+    et = spec.get("engine_trust")
+    if et is None:
         return {}
-    et = spec.get("engine_trust") or {}
     if not isinstance(et, dict):
-        return {}
+        raise EngineTrustConfigInvalid("block_not_mapping")
+    if set(et) - _ENGINE_TRUST_KEYS:
+        raise EngineTrustConfigInvalid("unknown_key")
+    tier = et.get("min_tier")
+    if tier is not None and not (isinstance(tier, str) and tier in _VALID_TIERS):
+        raise EngineTrustConfigInvalid("invalid_min_tier")
     return et
+
+
+def _audit_config_invalid(tenant_id: str, code: str) -> None:
+    """CRITICAL ``engine_trust.config_invalid`` on the tenant's chain.
+
+    The enforcement (strictest tier) does NOT depend on this write: a failed
+    audit is logged, the gate still fails closed."""
+    import logging as _logging  # noqa: PLC0415
+    _logging.getLogger("corvin.engine_trust").critical(
+        "engine-trust config for tenant %s is present but invalid (%s) — enforcing "
+        "min_tier=%s until it is fixed", tenant_id, code, STRICTEST_TIER)
+    forge_path = _THIS.parent.parent.parent / "forge"
+    if str(forge_path) not in sys.path:
+        sys.path.insert(0, str(forge_path))
+    try:
+        from forge import security_events as _se  # noqa: PLC0415
+        from forge.paths import tenant_audit_chain  # noqa: PLC0415
+        _se.write_event(tenant_audit_chain(tenant_id), "engine_trust.config_invalid",
+                        severity="CRITICAL",
+                        details={"tenant_id": tenant_id, "reason": code,
+                                 "enforced_tier": STRICTEST_TIER})
+    except Exception as exc:  # noqa: BLE001 - the gate is already closed
+        _logging.getLogger("corvin.engine_trust").error(
+            "engine_trust.config_invalid audit write failed: %s", type(exc).__name__)
 
 
 def load_min_tier_for_tenant(tenant_id: str = "_default") -> str:
     """Resolve ``spec.engine_trust.min_tier`` for a tenant.
 
-    Returns the configured minimum tier or ``"low"`` (permissive
-    default) when:
-      * the tenant config file is absent
-      * the file is malformed
-      * the engine_trust block is absent or null
-      * the field is unparseable
-
-    Fail-open is the right default here: a misconfigured tenant
-    should not lose every engine spawn. Operators see misconfig via
-    the existing validate-config path; this loader is the read-only
-    consumer.
+    * file / ``engine_trust`` block / ``min_tier`` ABSENT → ``"low"`` (the
+      permissive default: single-operator setups configure nothing);
+    * config PRESENT but torn, unreadable, not a mapping, an unknown key or an
+      invalid tier → :data:`STRICTEST_TIER` plus a CRITICAL
+      ``engine_trust.config_invalid`` audit (fail closed, like L35's deny-all on
+      a broken egress config — the gateway's ``extra="forbid"`` refuses the same
+      typo loudly).
     """
-    et = _load_engine_trust_block(tenant_id)
+    try:
+        et = _load_engine_trust_block(tenant_id)
+    except EngineTrustConfigInvalid as exc:
+        _audit_config_invalid(tenant_id, exc.code)
+        return STRICTEST_TIER
     tier = et.get("min_tier")
     if isinstance(tier, str) and tier in _VALID_TIERS:
         return tier
@@ -392,7 +457,13 @@ def load_drift_policy_for_tenant(tenant_id: str = "_default") -> dict[str, Any]:
     timer still runs and emits its own drift events regardless of
     this flag.
     """
-    et = _load_engine_trust_block(tenant_id)
+    try:
+        et = _load_engine_trust_block(tenant_id)
+    except EngineTrustConfigInvalid:
+        # Fail closed here too: a broken config blocks on drift. Not audited
+        # again — the tier gate (load_min_tier_for_tenant), which runs first on
+        # every spawn, has already enforced STRICTEST_TIER and recorded why.
+        et = {"auto_block_on_drift": True}
     auto_block = bool(et.get("auto_block_on_drift", False))
     raw_delta = et.get("canary_alert_delta", 0.10)
     if isinstance(raw_delta, (int, float)) and 0.0 <= float(raw_delta) <= 1.0:

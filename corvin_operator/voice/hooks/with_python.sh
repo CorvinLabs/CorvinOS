@@ -1,7 +1,14 @@
 #!/bin/sh
 # with_python.sh — run a hook script with a Python 3 that exists on THIS system.
 #
-#   sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh path_gate.py   (stdin passes through)
+#   sh ${CLAUDE_PLUGIN_ROOT}/hooks/with_python.sh [--fail-closed] path_gate.py   (stdin passes through)
+#
+# --fail-closed: for the PreToolUse GATES (path_gate, auth_elevation_gate,
+# web_trust_gate). When no Python 3 resolves the launcher exits 2 — the only
+# exit code Claude Code treats as BLOCKING — so a host without an interpreter
+# denies the tool call instead of running it ungated. Without the flag (the
+# best-effort hooks: artifact_register, notification_relay, ldd_auto_optin)
+# it exits 1, a non-blocking hook error, as before (review 2026-11-05, SEC-2).
 #
 # hooks.json ran every hook as `python3 …`. A fresh system installed per the
 # README has NO python3 on PATH: the installer brings uv's Python only inside
@@ -13,6 +20,8 @@
 # Resolution: python3 on PATH → CORVIN_PYTHON → the corvinos tool venv
 # (uv tool dir, the uv default dir) → `python` if it is a Python 3.
 here="$(cd "$(dirname "$0")" && pwd)"
+_miss_rc=1
+if [ "${1:-}" = "--fail-closed" ]; then _miss_rc=2; shift; fi
 script="$1"; shift
 _py=""
 # Windows: %LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe exists on a fresh
@@ -45,8 +54,12 @@ else
     fi
 fi
 if [ -z "$_py" ]; then
-    echo "corvin hooks: no Python 3 found (python3, CORVIN_PYTHON, the corvinos tool venv) — $script did not run" >&2
-    exit 1
+    if [ "$_miss_rc" = 2 ]; then
+        echo "corvin hooks: no Python 3 found (python3, CORVIN_PYTHON, the corvinos tool venv) — $script is a fail-closed gate: tool call DENIED" >&2
+    else
+        echo "corvin hooks: no Python 3 found (python3, CORVIN_PYTHON, the corvinos tool venv) — $script did not run" >&2
+    fi
+    exit "$_miss_rc"
 fi
 # Windows (Git Bash / MSYS): run the hook in Python UTF-8 mode. Claude Code
 # sends the hook payload as UTF-8; under the ANSI code page (cp1252 on a German

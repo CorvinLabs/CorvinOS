@@ -386,6 +386,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "console.session_started":          "INFO",
     "console.session_ended":            "INFO",
     "console.session_denied":           "WARNING",
+    # Review SRF-1 — DNS-rebinding guard (corvin_console/host_guard.py, whatsapp daemon)
+    "http.host_rejected":               "WARNING",
     "console.action_performed":         "INFO",
     "console.action_failed":            "WARNING",
     "console.engine_setting_updated":   "INFO",  # ADR-0067 M2.4
@@ -5293,6 +5295,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "console.panel_deleted": frozenset({"deleted_by", "panel_id", "sid_fingerprint", "tenant_id"}),
     "vault.secret_deleted": frozenset({"key_name", "tenant_id"}),
     "console.session_denied": frozenset({"reason", "tenant_id", "token_fingerprint", "user_agent_class"}),
+    "http.host_rejected": frozenset({"channel", "host_fp", "origin_fp", "path_class", "reason", "scope_type", "surface", "tenant_id"}),
     "console.session_ended": frozenset({"reason", "sid_fingerprint", "tenant_id"}),
     "console.session_started": frozenset({"sid_fingerprint", "tenant_id", "token_fingerprint", "user_agent_class"}),
     "cost.optimize_capped": frozenset({"cap", "counterfactual_usd", "month", "ratio", "reason", "tenant_id", "tier"}),

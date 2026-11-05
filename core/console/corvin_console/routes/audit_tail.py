@@ -184,9 +184,12 @@ def audit_tail(
     #                written by the bridge to corvin_home()/global/forge/ — on installs with
     #                ADR-0007 backward-compat symlinks these converge; without symlinks this
     #                third path is the only way bridge events reach the console.
-    forge_chain  = global_dir / "forge" / "audit.jsonl"
-    tenant_chain = global_dir / "audit.jsonl"
-    bridge_chain = _forge_paths.corvin_home() / "global" / "forge" / "audit.jsonl"
+    # forge_chain is THE chain (tenant_audit_chain); the other two are the
+    # read-only historical locations legacy_audit_chains() names (SEC-13).
+    _legacy = _forge_paths.legacy_audit_chains(tid)
+    forge_chain  = _forge_paths.tenant_audit_chain(tid)
+    tenant_chain = _legacy["tenant_global"]
+    bridge_chain = _legacy["host_global_forge"]
 
     all_events: list[dict[str, Any]] = []
     total_size = 0

@@ -668,7 +668,10 @@ class L7SkillForgeHandler:
 
     def _roots(self) -> list[Path]:
         home = _tenant_home(self.tenant_id)
+        # skills_packages (2026-11-05): the console's per-tenant packaged skills
+        # (skill_forge_distribution_routes._packages_root) — same content as skills/.
         return [home / "skill-forge", home / "skills", home / "_shared",
+                home / "skills_packages",
                 _tenant_global(self.tenant_id) / "skill-forge",
                 _tenant_global(self.tenant_id) / "skills"]
 
@@ -1141,6 +1144,8 @@ _SUBJECT_KEYS: tuple[str, ...] = (
     "speaker", "author", "actor", "actor_id", "sender", "from_user",
     "created_by", "requested_by", "participant", "user", "username",
     "account_id", "owner_id", "session_key", "subject",
+    # 2026-11-05: the feedback portal's only identity field (core/feedback).
+    "user_email",
 )
 
 
@@ -1363,6 +1368,13 @@ class LearningEventHandler:
                     erased += int(ex.submit(asyncio.run, coro).result())
             else:
                 erased += int(asyncio.run(coro))
+            # ADR-0534 gate ledgers (learning/feedback_gate/): their lines are keyed by
+            # source_key = sha256(tenant, producer) - unsalted, so recomputable from the
+            # subject's id and personal data. Removed under the gate's own locks
+            # (review 2026-11-05, LRN-24).
+            from core.learning.feedback_gate import erase_producer  # type: ignore
+
+            erased += erase_producer(root.parent, self.tenant_id, subject_id)
             # Side stores (decisions / outcomes / profiles / live experiments):
             # JSONL records naming the subject are removed in place (atomic).
             events_dir = root / "events"
@@ -1404,6 +1416,45 @@ class LearningEventHandler:
             code=ReasonCode.DELETED.value,
             duration_ms=int((time.time() - t0) * 1000),
         )
+
+
+@dataclass
+class TokenMetricsHandler:
+    """GDPR Art. 17 for the ADR-0365 token-metrics database
+    (``<tenant>/learning/token_metrics.db``, review 2026-11-05 LRN-14).
+
+    A SQLite table: the JSON/JSONL rules of :class:`LearningEventHandler` and the
+    generic sweep never look inside it. Rows naming the subject as their user or
+    their console session are deleted; ``subject_id == tenant_id`` deletes them all.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-token-metrics"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        db_file = _tenant_home(self.tenant_id) / "learning" / "token_metrics.db"
+        if not db_file.is_file():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="token metrics store absent",
+                           empty_reason="", applied_reason="")
+        try:
+            import sys as _sys
+            _repo = Path(__file__).resolve().parents[3]
+            if str(_repo) not in _sys.path:
+                _sys.path.append(str(_repo))
+            from core.learning.token_metrics_db import TokenMetricsDB  # type: ignore
+
+            removed = TokenMetricsDB(db_file).erase_subject(self.tenant_id, subject_id)
+        except Exception as exc:  # noqa: BLE001 — genuine infra failure → FAILED
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=0,
+                reason=f"token metrics purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no token metrics rows matched subject",
+                       applied_reason="erased {n} token metrics row(s) for subject")
 
 
 @dataclass
@@ -2049,6 +2100,34 @@ def _cel_safe_key(session_key: str) -> str:
     return f"{s}_{epoch}" if epoch else s
 
 
+def _cel_store_name_re(subject_id: str) -> "re.Pattern[str]":
+    """Every per-session store NAME a subject can have in the CEL stores
+    (``cel_anchors/`` and ``cel_context_priority/``, same ``_safe_key``)."""
+    safe = _cel_safe_key(subject_id)
+    # A bridge chat's anchor key is "<channel>:<chat>" plus "#<seq>"
+    # after each /new (adapter._cel_session); _safe_key turns both
+    # separators into "_". A subject given as "<channel>:<chat>" must
+    # therefore also match "<safe>_<digits>" — without it every store
+    # written after a /new survived an erasure reported as APPLIED.
+    # A bridge chat's key is "<channel>:<raw chat id>" — a raw id such
+    # as a WhatsApp JID never appears verbatim in the sanitised file
+    # name, so also try every bridge channel prefix.
+    try:
+        try:
+            from .channels import BRIDGE_CHANNELS  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from channels import BRIDGE_CHANNELS  # type: ignore  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        BRIDGE_CHANNELS = ()
+    forms = {safe} | {_cel_safe_key(f"{ch}:{subject_id}") for ch in BRIDGE_CHANNELS}
+    # A console chat's store is named after the bare sid while the
+    # console's subject is "web:<sid>" (review R6-1): also match the
+    # part after the channel prefix.
+    if ":" in subject_id:
+        forms.add(_cel_safe_key(subject_id.split(":", 1)[1]))
+    return re.compile("(?:" + "|".join(re.escape(x) for x in forms) + r")(?:_\d+)?")
+
+
 @dataclass
 class CELAnchorHandler:
     """GDPR Art. 17 erasure for the CEL load-bearing-anchor store (R4-F1).
@@ -2078,29 +2157,7 @@ class CELAnchorHandler:
                            empty_reason="", applied_reason="")
         removed = 0
         try:
-            safe = _cel_safe_key(subject_id)
-            # A bridge chat's anchor key is "<channel>:<chat>" plus "#<seq>"
-            # after each /new (adapter._cel_session); _safe_key turns both
-            # separators into "_". A subject given as "<channel>:<chat>" must
-            # therefore also match "<safe>_<digits>" — without it every store
-            # written after a /new survived an erasure reported as APPLIED.
-            # A bridge chat's key is "<channel>:<raw chat id>" — a raw id such
-            # as a WhatsApp JID never appears verbatim in the sanitised file
-            # name, so also try every bridge channel prefix.
-            try:
-                try:
-                    from .channels import BRIDGE_CHANNELS  # type: ignore  # noqa: PLC0415
-                except ImportError:
-                    from channels import BRIDGE_CHANNELS  # type: ignore  # noqa: PLC0415
-            except Exception:  # noqa: BLE001
-                BRIDGE_CHANNELS = ()
-            forms = {safe} | {_cel_safe_key(f"{ch}:{subject_id}") for ch in BRIDGE_CHANNELS}
-            # A console chat's store is named after the bare sid while the
-            # console's subject is "web:<sid>" (review R6-1): also match the
-            # part after the channel prefix.
-            if ":" in subject_id:
-                forms.add(_cel_safe_key(subject_id.split(":", 1)[1]))
-            epoch_re = re.compile("(?:" + "|".join(re.escape(x) for x in forms) + r")(?:_\d+)?")
+            epoch_re = _cel_store_name_re(subject_id)
             # Hold the writers' store lock (anchor.STORE_LOCK_NAME) across the
             # whole purge: a turn's read-modify-write of a store would otherwise
             # re-write a store purged in between, and the erasure reported
@@ -2133,6 +2190,122 @@ class CELAnchorHandler:
         return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
                        empty_reason="no CEL anchor store matched subject",
                        applied_reason="removed {n} CEL anchor store(s) for subject")
+
+
+@dataclass
+class CELContextPriorityHandler:
+    """GDPR Art. 17 for ``<tenant>/cel_context_priority/<safe_key>.json``
+    (``context_engineering/context_priority.py``): the topic keys already
+    surfaced in one chat session — derived from that session's conversation.
+    Attribution is the file NAME, exactly as for the CEL anchor store (same
+    ``_safe_key`` transform), so the same name forms are matched. Added
+    2026-11-05: the coverage guard had never scanned ``corvin_operator/``."""
+    tenant_id: str = "_default"
+    layer_id: str = "L-cel-context-priority"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "cel_context_priority"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="CEL context-priority store absent",
+                           empty_reason="", applied_reason="")
+        removed = 0
+        try:
+            name_re = _cel_store_name_re(subject_id)
+            for f in sorted(root.glob("*.json")):
+                if f.is_symlink():
+                    continue
+                if name_re.fullmatch(f.stem) or _name_names_subject(f.name, subject_id):
+                    f.unlink()
+                    removed += 1
+            removed += _purge_path(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"CEL context-priority purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no CEL context-priority store matched subject",
+                       applied_reason="removed {n} context-priority store(s) for subject")
+
+
+def _console_sid_fingerprints(subject_id: str) -> set[str]:
+    """The console's ``sid_fingerprint`` (``auth._sid_fingerprint``:
+    ``sha256(sid)[:12]``) for a console subject ``web:<sid>`` or a bare sid."""
+    import hashlib as _h  # noqa: PLC0415
+    sids = {subject_id}
+    if subject_id.startswith("web:"):
+        sids.add(subject_id[len("web:"):])
+    return {_h.sha256(s.encode("utf-8")).hexdigest()[:12] for s in sids if s}
+
+
+@dataclass
+class ConsoleForgeHandler:
+    """GDPR Art. 17 for the console Forge's per-session stores (added 2026-11-05):
+
+    * ``global/forge_intake/uploads/att-<hex>/`` — the raw upload (``data.<ext>``)
+      and its ``meta.json``, whose ``owner`` is the uploading session's
+      ``sid_fingerprint``. A matching attachment is removed WHOLE (the upload
+      next to the record must not survive it). TTL-pruned by the writer
+      (24 h unused / 14 d used) — erasure does not wait for that.
+    * ``global/forge_runs/run-<id>.json`` (+ ``run-<id>/`` events) — the run
+      record, which carries the verbatim request text under ``resume``,
+      attributed by ``sid_fingerprint``.
+
+    Both roots also run the generic rule (:func:`_purge_path`).
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-console-forge"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        import shutil  # noqa: PLC0415
+        t0 = time.time()
+        g = _tenant_global(self.tenant_id)
+        intake, runs = g / "forge_intake", g / "forge_runs"
+        if not intake.is_dir() and not runs.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="console Forge stores absent",
+                           empty_reason="", applied_reason="")
+        fps = _console_sid_fingerprints(subject_id)
+        whole = subject_id == self.tenant_id
+        removed = 0
+        try:
+            uploads = intake / "uploads"
+            if uploads.is_dir() and not uploads.is_symlink():
+                for d in sorted(uploads.iterdir()):
+                    if d.is_symlink() or not d.is_dir():
+                        continue
+                    meta = _load_json(d / "meta.json")
+                    if whole or (isinstance(meta, dict) and meta.get("owner") in fps):
+                        shutil.rmtree(d)
+                        removed += 1
+            if runs.is_dir() and not runs.is_symlink():
+                for f in sorted(runs.glob("run-*.json")):
+                    if f.is_symlink():
+                        continue
+                    rec = _load_json(f)
+                    if whole or (isinstance(rec, dict) and rec.get("sid_fingerprint") in fps):
+                        run_dir = runs / f.stem
+                        f.unlink()
+                        if run_dir.is_dir() and not run_dir.is_symlink():
+                            shutil.rmtree(run_dir)
+                        removed += 1
+            for root in (intake, runs):
+                if root.is_dir():
+                    removed += _purge_path(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"console Forge purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no console Forge upload or run matched subject",
+                       applied_reason="removed {n} console Forge upload(s)/run(s) for subject")
 
 
 @dataclass
@@ -2188,18 +2361,23 @@ class FederationConversationHandler:
 
     def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
         t0 = time.time()
-        root = _tenant_global(self.tenant_id) / "federation" / "conversations"
-        if not root.is_dir():
+        fed = _tenant_global(self.tenant_id) / "federation"
+        root = fed / "conversations"
+        if not fed.is_dir():
             return _result(self.layer_id, t0, 0, absent=True,
                            absent_reason="conversation store absent",
                            empty_reason="", applied_reason="")
         try:
-            repo = Path(__file__).resolve().parents[3]
-            if str(repo) not in sys.path:
-                sys.path.insert(0, str(repo))
-            from core.federation import conversation as _conv  # noqa: PLC0415
-            n = _conv.erase_endpoint(self.tenant_id, subject_id)
-            n += _purge_path(root, subject_id)
+            n = 0
+            if root.is_dir():
+                repo = Path(__file__).resolve().parents[3]
+                if str(repo) not in sys.path:
+                    sys.path.insert(0, str(repo))
+                from core.federation import conversation as _conv  # noqa: PLC0415
+                n = _conv.erase_endpoint(self.tenant_id, subject_id)
+            # The whole federation root (2026-11-05): the guard derives
+            # ``global/federation`` from the source, not only its subdirectory.
+            n += _purge_path(fed, subject_id)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.FAILED, count=0,
@@ -2800,7 +2978,7 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     "L-vibe-checkpoints":        frozenset({"vibe"}),
     "L-datasource-connections":  frozenset({"datasource_connections"}),
     # R4-F4 — were claimed by permanent no-op stubs; now real purges.
-    "L7-skill-forge":        frozenset({"skill-forge", "skills", "_shared",
+    "L7-skill-forge":        frozenset({"skill-forge", "skills", "_shared", "skills_packages",
                                         "global/skill-forge", "global/skills"}),
     "L24-data-snapshot":     frozenset({"global/data"}),
     # R4-F1 — the two stores the round-2 guard could not see.
@@ -2814,7 +2992,9 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     "L-user-content":        frozenset({"files", "artifacts", "global/artifacts",
                                         "packages", "backups", "idea-pipeline",
                                         "plugin-builder", "measurement-week",
-                                        "git_sync_repo", "cross_device"}),
+                                        "git_sync_repo", "cross_device",
+                                        # feedback portal reports (user_email, free text)
+                                        "feedback"}),
     "L-compute-runs":        frozenset({"compute", "global/compute"}),
     "L-gateway-runs":        frozenset({"global/gateway"}),
     "L-rag":                 frozenset({"global/rag", "global/rag_hub"}),
@@ -2826,11 +3006,19 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     # 2026-10-05 review R3 — stores with no Art. 17 path until then.
     "L-a2a-feed":            frozenset({"global/a2a_feed"}),
     "L-chat-groups":         frozenset({"global/chat_groups"}),
-    "L-federation-conversations": frozenset({"global/federation/conversations"}),
+    "L-federation-conversations": frozenset({"global/federation/conversations",
+                                             "global/federation"}),
     "L-voice":               frozenset({"voice"}),
     # 2026-10-10 (PLAN-0945) - styles, jobs, videos; per-job owner since ADR-2247 R3 (owners.json),
     # jobs deleted whole through video_job_store - see VideoProducerHandler.
     "L-video-producer":      frozenset({"video_producer"}),
+    # 2026-11-05 (review SEC-6) - the per-chat stores keyed by uid; see UidKeyedStoreHandler.
+    "L-uid-stores":          frozenset({"global/consent", "global/disclosure",
+                                        "global/roles", "global/quota",
+                                        "global/proactive_consent", "global/proposals",
+                                        "global/engine_pref"}),
+    "L-cel-context-priority": frozenset({"cel_context_priority"}),
+    "L-console-forge":       frozenset({"global/forge_intake", "global/forge_runs"}),
     # R4-F1/F4: the format-specific handlers above own the sqlite tables and the
     # file shapes they were written for; this layer runs the generic attribution
     # rule over the SAME roots, so a record those narrower rules do not look at
@@ -2850,6 +3038,8 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
         "global/browser_attach_consent.json", "global/ce_stage_grades.json",
         "global/connectors.json", "global/connector_vault.json",
         "global/custom_layers.json", "global/delegation_budget.json",
+        # cross-bridge notification routing: its targets name chats (chat_id)
+        "global/relay.json",
     }),
 }
 
@@ -2880,6 +3070,38 @@ NON_PERSONAL_DIRS: dict[str, str] = {
     "global/model_catalog_cache.json": "upstream model catalogue cache, no subject data",
     "global/features.json": "console feature-flag overlay — operator config, no subject data",
     ".wf_create.lock": "advisory lock file, no content",
+    # 2026-11-05 — entries the widened source scan surfaced; each writer was read.
+    "global/.secret_rotation_state": "{last_rotation: ts} written by core/compliance/bootstrap_rotation.py, no subject data",
+    "global/compliance": "rotation_policy.yaml — operator secret-rotation policy, no subject data",
+    "global/deployment": "canary_state.json — rollout traffic %, latency/error metrics, decisions",
+    "global/forge_bundle": "quarantined imported tool code + spec + sha (core/forge_bundle/tool_quarantine.py)",
+    "global/initiatives.json": "frozen operator project board (titles, deadlines, status, verification)",
+    "global/last_shutdown.json": "{at: ts} shutdown marker (turn_recovery.py)",
+    "global/layer_forge": "Layer Forge layer definitions, locks and review-prompt versions",
+    "global/model_confidence_stats.json": "per (task_type, model) counters and Beta parameters",
+    "global/model_feedback_rated.json": "list of audit record hashes already rated (pointers into the content-free chain)",
+    "global/model_selection_config.json": "operator model choice per task type",
+    "global/model_selection_overrides.json": "operator model overrides per task type (model_selector_variants.py)",
+    "global/model_learning.json": "per-model / task-type success rates (aggregates, model_selector_variants.py)",
+    "global/quota_tracking.json": "tenant-level budget quota counters (TenantBudgetQuota), no per-user field",
+    "global/plugin_events.db": "plugin lifecycle events: plugin id, version, method and input/output/error HASHES",
+    "global/plugin_staging": "uploaded plugin packages (.zip), their manifest meta and review decisions",
+    "global/plugins_installed": "approved plugin packages (.zip)",
+    "global/packages": "installed AWP packages (publisher-name-version tree of package files)",
+    "global/quality_gates.db": "quality-gate verdicts and hashes over ADR/concept documents",
+    "global/skill_registry_hashes": "<skill>_<ver>.sha256 integrity hashes",
+    "global/update_state.json": "updater status, phase, versions, git sha, step log",
+    "learning_loop_index": "per-plugin learning-loop manifests and metrics keyed tenant:plugin:loop",
+    "workflow_optimizer_config.json": "os.workflow_optimizer SkillConfig (thresholds, model weights)",
+    "datasource_checkpoints": "datasource sync watermarks (timestamps / cursors) restored from AWP bundles",
+    "global/a2a": "offline-pairing fingerprint ledger — hashes of INSTANCE ids/keys, no person",
+    "global/autonomous_forge.yaml": "operator schedule config for autonomous Forge runs",
+    "global/branding.yaml": "operator disclosure-card branding extras",
+    "global/data_policy.yaml": "operator L24 PII-redaction strategy config",
+    "global/dialectic.json": "operator L11 dialectical-decide site modes",
+    "global/ldd.json": "operator LDD layer toggles",
+    "global/tenant.corvin.json": "operator config (alternate spelling of tenant.corvin.yaml)",
+    "global/tenant.corvin.yml": "operator config (alternate spelling of tenant.corvin.yaml)",
 }
 
 #: Entries that DO hold personal data but carry no per-subject attribution.
@@ -2894,6 +3116,35 @@ UNATTRIBUTABLE_DIRS: dict[str, str] = {
         ".corvin-sysprompt-*.txt before spawning the engine. Plain text, no "
         "identity field, no subject-derived name, and stale files survive the "
         "spawn — attribution is impossible; the fix is a TTL sweep at the writer."
+    ),
+    # 2026-11-05 — entries the widened source scan surfaced; each writer was read.
+    "global/datahub_artifacts": (
+        "datahub_api.py / regenerate.py store generated artifacts profiled from the user's "
+        "data (values when include_values is set) with no creator field — fix: record "
+        "created_by at the writer."
+    ),
+    "global/video_producer": (
+        "blender_orchestrator.py renders a user's input video to renders/render_<ms>.mp4: "
+        "media, timestamp name, no owner — fix: owner-keyed path at the writer."
+    ),
+    "global/task_tracking": (
+        "tasks.db (SQLite): free-text titles/descriptions; owner/assignee/created_by are "
+        "free-form strings, the console writes the constant actor 'operator' — no principal "
+        "an Art. 17 request could select by."
+    ),
+    "global/orchestration": (
+        "master_orchestrator_state.json + checkpoints: operator_approvals carry approved_by "
+        "inside a state_hash-sealed blueprint state (a rewrite breaks the seal). No production "
+        "caller instantiates MasterRolloutOrchestrator; reported when present."
+    ),
+    "knowledge": (
+        "the tenant knowledge base (Markdown/YAML in a git repository, kb.py): free text "
+        "authored by the operator and agents; erasure would need content matching AND a "
+        "history rewrite."
+    ),
+    "registry": (
+        "skill_grades.jsonl: {skill_id, score, timestamp, notes} — free-text notes with no "
+        "identity field — fix: record the grading principal at the writer."
     ),
 }
 
@@ -2918,6 +3169,179 @@ _GENERIC_STORE_LAYERS: tuple[tuple[str, str, str], ...] = (
     ("L-tenant-registries",  "tenant registry",      "registry entry"),
     ("L-store-sweep",        "layer store",          "stored record"),
 )
+
+
+#: The per-chat stores keyed BY UID (``{"<uid>": {...}}`` per
+#: ``<channel>__<chat>.json``): consent (L17), disclosure (L19), roles (L18) and
+#: quota (L20). Their top-level key IS the subject, which the generic
+#: :func:`_purge_path` rule (identity FIELDS, file/dir names) never looks at, so
+#: until 2026-11-05 a subject's consent, disclosure and role entries survived an
+#: erasure reported as completed (review SEC-6).
+_UID_KEYED_STORES: tuple[str, ...] = ("consent", "disclosure", "roles", "quota",
+                                       "proactive_consent", "proposals", "engine_pref")
+#: The stores of :data:`_UID_KEYED_STORES` whose writers still fall back to the
+#: pre-tenancy root ``<home>/global/<kind>/`` (records there belong to ``_default``).
+_UID_KEYED_LEGACY_ROOT: tuple[str, ...] = ("disclosure", "roles", "quota", "proposals",
+                                           "engine_pref")
+
+
+def _strip_uid_keyed(kind: str, doc: Any, subject_id: str) -> "tuple[bool, bool]":
+    """Remove the subject from one uid-keyed chat document.
+
+    Returns ``(changed, delete_file)``. ``proposals`` is ``{"proposals": [{"from_uid":
+    …}]}``; ``engine_pref`` is ONE chat preference whose ``set_by_uid`` names who set
+    it (the file goes when the subject set it); every other kind is ``{"<uid>": {...}}``.
+    """
+    if not isinstance(doc, dict):
+        return False, False
+    if kind == "proposals":
+        items = doc.get("proposals")
+        if not isinstance(items, list):
+            return False, False
+        kept = [e for e in items if not (isinstance(e, dict) and e.get("from_uid") == subject_id)]
+        if len(kept) == len(items):
+            return False, False
+        doc["proposals"] = kept
+        return True, False
+    if kind == "engine_pref":
+        return (True, True) if doc.get("set_by_uid") == subject_id else (False, False)
+    if subject_id in doc:
+        doc.pop(subject_id)
+        return True, False
+    return False, False
+
+
+@dataclass
+class UidKeyedStoreHandler:
+    """GDPR Art. 17 for the uid-keyed chat stores (:data:`_UID_KEYED_STORES`).
+
+    Removes the subject's top-level entry from every chat file under
+    ``<tenant>/global/{consent,disclosure,roles,quota}/`` — and, for the
+    default tenant, from the pre-tenancy root ``<home>/global/{disclosure,
+    roles,quota}/`` the stores used until 2026-11-05 (records there carry no
+    tenant and belong to ``_default``). ``subject_id == tenant_id`` removes the
+    tenant's files whole. Each file is rewritten under the SAME ``.json.lock``
+    flock its writer holds (bounded; a busy lock FAILS the layer), atomically
+    via :func:`_atomic_replace_text`.
+
+    Consent and Art. 7(1): the store entry is the LIVE grant, which the
+    subject's erasure request withdraws anyway; the proof that consent was
+    given is the pseudonymised ``consent.granted`` record (``uid_hash``) on the
+    hash chain, which stays under Art. 17(3)(b)/(e) — the chain is
+    ``NON_PERSONAL_DIRS["global/forge"]``.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-uid-stores"
+
+    def _dirs(self) -> list[Path]:
+        dirs = [_tenant_global(self.tenant_id) / kind for kind in _UID_KEYED_STORES]
+        if self.tenant_id == "_default":
+            dirs += [_corvin_home() / "global" / kind for kind in _UID_KEYED_LEGACY_ROOT]
+        return dirs
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        from _bounded_lock import acquire_exclusive  # noqa: PLC0415 - bridges/shared
+        from _compat_fcntl import fcntl  # noqa: PLC0415
+
+        t0 = time.time()
+        present = [d for d in self._dirs() if d.is_dir() and not d.is_symlink()]
+        if not present:
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="uid-keyed chat stores absent",
+                           empty_reason="", applied_reason="")
+        removed = 0
+        whole = subject_id == self.tenant_id
+        try:
+            for d in present:
+                for f in sorted(d.glob("*.json")):
+                    if f.is_symlink() or not f.is_file():
+                        continue
+                    lock = f.with_suffix(f.suffix + ".lock")
+                    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+                    locked = False
+                    try:
+                        acquire_exclusive(fd, "uid-keyed chat store", timeout=5.0)
+                        locked = True
+                        if whole:
+                            f.unlink()
+                            removed += 1
+                            continue
+                        doc = _load_json(f)
+                        changed, delete = _strip_uid_keyed(d.name, doc, subject_id)
+                        if delete:
+                            f.unlink()
+                        elif changed:
+                            _atomic_replace_text(
+                                f, json.dumps(doc, indent=2, sort_keys=True) + "\n")
+                        if changed:
+                            removed += 1
+                    finally:
+                        if locked:
+                            fcntl.flock(fd, fcntl.LOCK_UN)
+                        os.close(fd)
+            # The documented generic rule as well (file names / identity fields).
+            for d in present:
+                removed += _purge_path(d, subject_id)
+        except Exception as exc:  # noqa: BLE001 - reported as FAILED, never swallowed
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"uid-keyed store purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no uid-keyed chat entry matched subject",
+                       applied_reason="removed the subject from {n} chat store file(s)")
+
+
+#: Root-level routing stores (``<CORVIN_HOME>/…``, shared by every tenant, each
+#: record carrying its ``tenant_id``): ``(layer_id, module, store label)``. They
+#: hold routing PII — sender uid, chat_id — and, for ``task_runs``, the
+#: instruction text the subject wrote. Until 2026-11-05 only ``corvin-erasure
+#: run`` purged them, in an un-audited pre-step OUTSIDE the orchestrator, so the
+#: console's Art. 17 path left them standing and neither path recorded them in
+#: the erasure trail (review SEC-5). They are real chain layers now: both entry
+#: points share them and every outcome lands in the trail and on the chain.
+_ROOT_ROUTING_STORES: tuple[tuple[str, str, str], ...] = (
+    ("L-bg-monitor",          "bg_monitor",        "bg_watch.json wakeup"),
+    ("L-completion-notify",   "completion_notify", "pending_notifications record"),
+    ("L-task-progress",       "task_progress",     "task_progress update"),
+    ("L-task-supervisor",     "task_supervisor",   "task_runs record"),
+)
+
+
+@dataclass
+class RootRoutingStoreHandler:
+    """GDPR Art. 17 for one root-level routing store (see :data:`_ROOT_ROUTING_STORES`).
+
+    Delegates to the store module's own ``purge_user(uid, tenant_id=…)`` —
+    the one function that knows the record shape — scoped to the request's
+    tenant (``subject_id == tenant_id`` erases every record of the tenant, like
+    every other handler here). The module RAISES when a matching record could
+    not be removed; that is reported as ``FAILED / store_error``, never as a
+    completed erasure over a survivor.
+    """
+    layer_id: str
+    module: str
+    item: str
+    tenant_id: str = "_default"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        import importlib  # noqa: PLC0415
+        t0 = time.time()
+        try:
+            mod = importlib.import_module(self.module)
+            removed = int(mod.purge_user(subject_id, tenant_id=self.tenant_id))
+        except Exception as exc:  # noqa: BLE001 - reported as FAILED, never swallowed
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=0,
+                reason=f"{self.module} purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason=f"no {self.item} matched subject",
+                       applied_reason=f"removed {{n}} {self.item}(s) for subject")
 
 
 # ── default chain factory ────────────────────────────────────────────
@@ -2958,6 +3382,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         L42OrgHandler(tenant_id=tenant_id),
         WorkflowCheckpointHandler(tenant_id=tenant_id),
         LearningEventHandler(tenant_id=tenant_id),      # F-A9: ADR-0314 learning store
+        TokenMetricsHandler(tenant_id=tenant_id),       # LRN-14: learning/token_metrics.db
         InfiniteSessionHandler(tenant_id=tenant_id),    # F-A9: session state + checkpoints
         # R2-A7: live stores that reported COMPLETED with survivors.
         WorkflowChatHandler(tenant_id=tenant_id),           # workflows/*.chat.jsonl
@@ -2968,6 +3393,8 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         L24DataSnapshotHandler(tenant_id=tenant_id),        # R4-F4: was a no-op stub
         # R4-F1: stores the round-2 guard's writer list could not see.
         CELAnchorHandler(tenant_id=tenant_id),              # cel_anchors/
+        CELContextPriorityHandler(tenant_id=tenant_id),     # cel_context_priority/ (2026-11-05)
+        ConsoleForgeHandler(tenant_id=tenant_id),           # global/forge_{intake,runs}/ (2026-11-05)
         SessionLedgerHandler(tenant_id=tenant_id),          # session_ledger/** (+ legacy .corvin-ledger/)
         ACSGlobalIndexHandler(tenant_id=tenant_id),         # global/acs/runs/
         A2AFeedHandler(tenant_id=tenant_id),                # global/a2a_feed/
@@ -2982,6 +3409,14 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         TenantStoreHandler(layer_id=lid, entries=tuple(sorted(COVERED_DIRS[lid])),
                            store=store, item=item, tenant_id=tenant_id)
         for lid, store, item in _GENERIC_STORE_LAYERS
+    )
+    # SEC-6 (review 2026-11-05): consent / disclosure / roles / quota, keyed by uid.
+    chain.append(UidKeyedStoreHandler(tenant_id=tenant_id))
+    # SEC-5 (review 2026-11-05): the four root-level routing stores, shared by
+    # the CLI and the console through this one chain.
+    chain.extend(
+        RootRoutingStoreHandler(layer_id=lid, module=mod, item=item, tenant_id=tenant_id)
+        for lid, mod, item in _ROOT_ROUTING_STORES
     )
     chain.append(UnattributableStoreHandler(tenant_id=tenant_id))
     if _ulo_handler is not None:

@@ -1,7 +1,7 @@
 """audit_view.py — Layer 20: scoped audit-log read for /audit me + /audit chat.
 
-The unified hash chain at ``<corvin_home>/global/forge/audit.jsonl``
-records everything: forge / skill-forge / path-gate / consent / roles /
+The tenant's ONE hash chain (``paths.tenant_audit_chain()``,
+``<corvin_home>/tenants/<tid>/global/forge/audit.jsonl``) records everything: forge / skill-forge / path-gate / consent / roles /
 disclosure / quota / auth-elevation. Operators (and end-users with the
 right capability) need to see relevant slices without grepping the
 file by hand.
@@ -45,8 +45,39 @@ def _corvin_home() -> Path:
     return Path.home() / ".corvin"
 
 
+def _tenant_id() -> str:
+    return (os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default"
+
+
 def _audit_path() -> Path:
-    return _corvin_home() / "global" / "forge" / "audit.jsonl"
+    """The PROCESS tenant's chain — the file every writer resolves.
+
+    Until 2026-11-05 this read the pre-ADR-0007 host-wide
+    ``<home>/global/forge/audit.jsonl``, which no writer appends to any more,
+    so ``/audit me`` and ``/audit chat`` showed nothing recorded since the
+    chain unification (review SEC-13). Mirrors ``paths.tenant_audit_chain``
+    (``<home>/tenants/<tid>/global/forge/audit.jsonl``) without importing it,
+    exactly like ``_corvin_home`` mirrors ``paths.corvin_home``.
+    """
+    return _corvin_home() / "tenants" / _tenant_id() / "global" / "forge" / "audit.jsonl"
+
+
+def _audit_paths() -> list[Path]:
+    """Chains to read, oldest first: for the default tenant the historical
+    host-wide chain (its records predate tenancy and carry no tenant id, so
+    they belong to ``_default`` — the audit tail's S-11a rule), then the
+    canonical chain. Read-only: nothing here resolves a write."""
+    out: list[Path] = []
+    if _tenant_id() == "_default":
+        legacy = _corvin_home() / "global" / "forge" / "audit.jsonl"
+        out.append(legacy)
+    out.append(_audit_path())
+    return out
+
+
+def _iter_all_events():
+    for path in _audit_paths():
+        yield from _iter_events(path)
 
 
 # ── Iteration ──────────────────────────────────────────────────────────
@@ -86,7 +117,7 @@ def view_me(*, channel: str, chat_key: str, uid: str,
     if limit < 1:
         limit = 1
     out: list[dict] = []
-    for ev in _iter_events(_audit_path()):
+    for ev in _iter_all_events():
         det = ev.get("details") or {}
         if event_type_prefix and not str(ev.get("event_type", "")).startswith(event_type_prefix):
             continue
@@ -135,7 +166,7 @@ def view_chat(*, channel: str, chat_key: str,
     if limit < 1:
         limit = 1
     out: list[dict] = []
-    for ev in _iter_events(_audit_path()):
+    for ev in _iter_all_events():
         det = ev.get("details") or {}
         if event_type_prefix and not str(ev.get("event_type", "")).startswith(event_type_prefix):
             continue

@@ -201,51 +201,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(json.dumps(out, indent=2 if args.format == "json" else None))
         return 0
 
-    # Purge the bg-monitor's personal-data store (bg_watch.json) before the
-    # orchestrator runs — this file is outside the session dir and not covered
-    # by the handler chain's path-based sweep.  Best-effort, never blocks erasure.
-    try:
-        from bg_monitor import purge_user as _bg_purge  # type: ignore
-        removed = _bg_purge(req.subject_id)
-        if removed:
-            print(f"bg_monitor: purged {removed} wakeup entry/entries for {req.subject_id}")
-    except Exception:
-        pass
-
-    # Purge the durable completion-notification queue (pending_notifications/)
-    # for the same reason: its records live at the CORVIN_HOME root, outside the
-    # session dir and per-tenant sweep, and carry routing PII (sender uid +
-    # chat_id). Best-effort, never blocks erasure.
-    try:
-        from completion_notify import purge_user as _cn_purge  # type: ignore
-        cn_removed = _cn_purge(req.subject_id)
-        if cn_removed:
-            print(f"completion_notify: purged {cn_removed} record(s) for {req.subject_id}")
-    except Exception:
-        pass
-
-    # Purge the intermediate-update queue (task_progress/) and the supervised
-    # run records (task_runs/) for exactly the same reason as the two stores
-    # above: both live at the CORVIN_HOME root, outside the session dir and the
-    # per-tenant sweep, and both carry routing PII (sender uid + chat_id) — the
-    # run record additionally holds the instruction text the subject wrote.
-    # Best-effort, never blocks erasure.
-    try:
-        from task_progress import purge_user as _tp_purge  # type: ignore
-        tp_removed = _tp_purge(req.subject_id)
-        if tp_removed:
-            print(f"task_progress: purged {tp_removed} update(s) for {req.subject_id}")
-    except Exception:
-        pass
-
-    try:
-        from task_supervisor import purge_user as _sup_purge  # type: ignore
-        sup_removed = _sup_purge(req.subject_id)
-        if sup_removed:
-            print(f"task_supervisor: purged {sup_removed} run(s) for {req.subject_id}")
-    except Exception:
-        pass
-
+    # The four root-level routing stores (bg_watch.json, pending_notifications/,
+    # task_progress/, task_runs/) are real chain layers since 2026-11-05
+    # (erasure_handlers.RootRoutingStoreHandler, review SEC-5): the console runs
+    # the same purges, and every outcome is in the erasure trail. They used to
+    # run here as an un-audited best-effort pre-step that swallowed every error.
     result = orch.execute(req)
 
     if args.format == "json":

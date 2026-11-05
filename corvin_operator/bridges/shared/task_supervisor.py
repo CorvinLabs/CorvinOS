@@ -1095,28 +1095,42 @@ def _terminate(pid: int) -> None:
 # ─── GDPR Art. 17 ──────────────────────────────────────────────────────────
 
 
-def purge_user(uid: str) -> int:
+def purge_user(uid: str, *, tenant_id: str | None = None) -> int:
     """Remove every run record whose sender matches *uid*.
 
     Run records carry the instruction text plus routing PII (chat_key, sender
     uid), so they are erased on the same Art. 17 request as the
-    ``completion_notify`` and ``task_progress`` records. Returns the count.
+    ``completion_notify`` and ``task_progress`` records. With *tenant_id* only
+    that tenant's runs are considered and ``uid == tenant_id`` removes all of
+    them. Returns the count; a run record that could not be removed raises
+    ``OSError`` after the sweep (the erasure layer then reports failed).
     """
     d = _runs_dir()
     if not d.exists():
         return 0
     removed = 0
+    errors: list[str] = []
     for path in sorted(d.glob("*.json")):
         rec = _read(path)
-        if rec is None or rec.get("sender") != uid:
+        if rec is None:
+            continue
+        if tenant_id is not None:
+            if str(rec.get("tenant_id") or "_default") != tenant_id:
+                continue
+            if uid != tenant_id and rec.get("sender") != uid:
+                continue
+        elif rec.get("sender") != uid:
             continue
         tid = str(rec.get("task_id") or "")
         try:
             path.unlink(missing_ok=True)
             path.with_suffix(".json.spawnlock").unlink(missing_ok=True)
             removed += 1
-        except OSError:
+        except OSError as exc:
+            errors.append(f"{path.name}: {type(exc).__name__}")
             continue
         if tid:
             _cleanup_run_artifacts(tid)
+    if errors:
+        raise OSError(f"task_supervisor purge left {len(errors)} run(s): " + ", ".join(errors[:5]))
     return removed

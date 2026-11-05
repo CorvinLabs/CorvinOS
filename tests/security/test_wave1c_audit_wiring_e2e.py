@@ -112,7 +112,18 @@ def _t_sigterm(tmp_path):
 _A2A_CLI = _REPO / "corvin_operator" / "voice" / "scripts" / "corvin_a2a.py"
 
 
+#: ``a2a.network`` is member-only (gate 28ad07b54, ADR-0700 §2.1): a Free sandbox
+#: home refuses ``pair`` with "A2A network requires a member seat" BEFORE the
+#: offline-pair branch these tests exercise (review 2026-11-05: both failed on
+#: that refusal, not on the audit wiring). The repo's member pin — a
+#: ``sitecustomize`` that replaces only the tier RESOLVER with "member", gate,
+#: HMAC and audit as shipped — is put first on the CLI subprocess's PYTHONPATH.
+_MEMBER_PIN = _REPO / "tests" / "e2e" / "fresh_system" / "a2a_member_pin"
+
+
 def _pair(tmp_path: Path, env: dict, *extra: str) -> subprocess.CompletedProcess:
+    env = dict(env)
+    env["PYTHONPATH"] = os.pathsep.join([str(_MEMBER_PIN), env.get("PYTHONPATH", "")])
     return subprocess.run(
         [sys.executable, str(_A2A_CLI), "pair", "peerx", "http://127.0.0.1:9", *extra],
         env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",

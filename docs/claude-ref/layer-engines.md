@@ -2989,6 +2989,26 @@ the Engine Config page left it `0o664` and disabled every run until someone
 chmod'ed it back by hand. It now `mkstemp` + `chmod 0o600` **before** `replace`
 (same ordering `routes/compute.py` already had).
 
+**One writer since 2026-11-05 (review SRF-3/SRF-4).** Two more console writers had the
+same defect (`routes/vibe_engineering.py` PUT `/pipeline`, `routes/features.py` POST
+`/features/toggle` — the latter plain `write_text`, non-atomic), and `/features/toggle`,
+`PUT /compute/config` and `PATCH /healing-config` read an UNPARSEABLE file as `{}` and
+wrote back a file holding only their own section (engine pins, data residency, budget
+and the telemetry opt-outs gone). Every console writer of the file now goes through
+`corvin_console/tenant_yaml.py`: `write_mapping`/`write_text` (temp in the same dir,
+`chmod 0o600` before `os.replace`) and `update(path, mutate)` — a locked
+read-modify-write (thread lock + POSIX `flock` on `.tenant.corvin.yaml.lock`) that raises
+`TenantYamlUnreadable` and writes nothing when the file exists but is not a YAML
+mapping. The routes answer that with 409 and `console.action_failed
+reason=tenant-yaml-unreadable` (engine settings keep their 422). The raw Settings editor
+(`PUT /settings/files/tenant.corvin.yaml`) writes through `write_text` under the same lock.
+`api/feature_status_endpoints.py` (installation preset) wrote a hand-composed
+`~/.corvin/tenants/_default/tenant.corvin.yaml` that no reader opens; it now sets
+`spec.preset` in the session tenant's real file. Guard:
+`core/console/tests/test_tenant_yaml_writer.py` (umask 0o002 → 0o600 per writer through
+its route, refuse-unreadable, and an AST scan that fails on a new console module dumping
+YAML next to a tenant-YAML reference outside `tenant_yaml.py`).
+
 ### The worker span had no model and no tokens — so delegation was invisible
 
 `dispatcher._emit_engine_span()` passed neither, and `model_usage._collect`
@@ -3579,9 +3599,15 @@ original event every cycle.
   chain, and an operator prompted for "the Bedrock API key" is already lost.
 - **Don't re-tighten `TenantSpec` to `extra="forbid"`** — it is a shared file.
   Do keep `extra="forbid"` on `data_residency`, `budget`, `compute` and
-  `engine_trust`; that is where a typo must still fail loudly.
+  `engine_trust`; that is where a typo must still fail loudly. The bridge's
+  lightweight `engine_trust` loader mirrors it (review 2026-11-05, SEC-8): a
+  present config with an unknown key, an invalid `min_tier` or torn YAML
+  enforces the strictest tier and writes CRITICAL `engine_trust.config_invalid`
+  — never the permissive `low`, which only an ABSENT config gets.
 - **Don't write `tenant.corvin.yaml` at umask.** `chmod 0o600` before `replace`,
-  or the gateway refuses the file and every run fails.
+  or the gateway refuses the file and every run fails. In the console, write it only
+  through `corvin_console.tenant_yaml` (never a private writer), and never rewrite it
+  from a failed read.
 - **Don't emit an `engine.span.*` without a `model_id`.** The usage roll-up is
   keyed on it; a span without one is real work that no view will ever show.
 - **Don't pass `model=` to an engine without probing for the keyword.**

@@ -30,7 +30,12 @@ Storage
 -------
 Single JSON file per (channel, chat) at::
 
-    <corvin_home>/global/disclosure/<safe_channel>__<safe_chat>.json
+    <corvin_home>/tenants/<tid>/global/disclosure/<safe_channel>__<safe_chat>.json
+
+(``<tid>`` = process tenant; a pre-2026-11-05 root-level file under
+``<corvin_home>/global/disclosure/`` is moved here on first access of the
+default tenant — see :func:`_store_path`. Erased per subject by the
+``L-uid-stores`` Art. 17 layer.)
 
 ::
 
@@ -95,42 +100,71 @@ MAX_CARD_CHARS = 1500
 # ── Path resolution (mirror of consent.py / roles.py) ────────────────
 
 def _corvin_home() -> Path:
-    """Phase 1 strangler-fig: CORVIN_HOME canonical, CORVIN_HOME alias.
-    On disk .corvin preferred, .corvinOS legacy fallback. Silent on
-    legacy reads — paths.py emits the canonical deprecation log."""
-    env = os.environ.get("CORVIN_HOME") or os.environ.get("CORVIN_HOME")
+    """CORVIN_HOME env, then the repo-local ``.corvin``, then ``~/.corvin``.
+
+    The ``.corvinOS`` legacy fallback was removed 2026-11-05 (review SEC-6):
+    the project identity is a hard cut to ``.corvin``/``CORVIN_*``, and a
+    second root here was a second, unswept disclosure store.
+    """
+    env = os.environ.get("CORVIN_HOME")
     if env:
         return Path(os.path.expanduser(os.path.expandvars(env)))
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-            new = parent / ".corvin"
-            legacy = parent / ".corvinOS"
-            if new.is_dir():
-                return new
-            if legacy.is_dir():
-                return legacy
-            return new
-    new_default = Path.home() / ".corvin"
-    legacy_default = Path.home() / ".corvinOS"
-    if not new_default.is_dir() and legacy_default.is_dir():
-        return legacy_default
-    return new_default
+            return parent / ".corvin"
+    return Path.home() / ".corvin"
 
 
 def _safe_component(s: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in s)[:64] or "anon"
 
 
+def _process_tenant(tenant_id: str | None) -> str:
+    tid = tenant_id if tenant_id is not None else (
+        (os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default")
+    if not isinstance(tid, str) or not re.fullmatch(r"[a-z0-9_][a-z0-9_-]{0,62}", tid) \
+            or tid.startswith("__"):
+        raise ValueError(f"invalid tenant_id {tid!r}")
+    return tid
+
+
 def _store_path(channel: str, chat_key: str, *, tenant_id: str | None = None) -> Path:
+    """``<home>/tenants/<tid>/global/disclosure/<channel>__<chat>.json``.
+
+    ``<tid>`` = explicit ``tenant_id``, else the process tenant
+    (``CORVIN_TENANT_ID``), else ``_default``. Until 2026-11-05 every caller
+    passed no tenant and the store sat at the pre-tenancy root
+    ``<home>/global/disclosure/`` — outside every tenant's Art. 17 sweep (review
+    SEC-6). Records there carry no tenant id, so (like the console's members
+    view) they belong to ``_default``: the first access of the default tenant
+    MOVES a root-level chat file into the tenant path, once (``os.replace``,
+    same filesystem). If that move fails the legacy file is returned so the
+    state is still READ (a lost disclosure record would re-show the card / drop the
+    role) and the failure is logged; the next access retries the move.
+    """
     safe_channel = _safe_component(channel or "unknown")
     safe_chat = _safe_component(str(chat_key) if chat_key is not None else "anon")
     home = _corvin_home()
-    if tenant_id is None:
-        base = home / "global" / "disclosure"
-    else:
-        base = home / "tenants" / tenant_id / "global" / "disclosure"
-    return base / f"{safe_channel}__{safe_chat}.json"
+    tid = _process_tenant(tenant_id)
+    name = f"{safe_channel}__{safe_chat}.json"
+    path = home / "tenants" / tid / "global" / "disclosure" / name
+    if tid == "_default" and not path.exists():
+        legacy = home / "global" / "disclosure" / name
+        if legacy.is_file() and not legacy.is_symlink():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(legacy, path)
+                legacy.with_suffix(legacy.suffix + ".lock").unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass  # a concurrent process moved it first; ``path`` now exists
+            except OSError as exc:
+                import logging as _lg
+                _lg.getLogger("corvin.disclosure").warning(
+                    "disclosure store migration to the tenant path failed (%s); "
+                    "reading the legacy file", type(exc).__name__)
+                return legacy
+    return path
 
 
 def _audit_path(*, tenant_id: str | None = None) -> Path:

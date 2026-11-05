@@ -186,9 +186,18 @@ def find_emitters(names: set[str]) -> dict[str, list[str]]:
     return found
 
 
-#: Writer callees whose first/second positional argument is an event name.
+#: Writer callees whose first/second positional argument (or ``event_type=`` /
+#: ``event=`` keyword) is an event name. Review 2026-11-05 (SEC-9): the bridge
+#: adapter writes through ``_audit_event`` / ``_audit_write``, the plugin layer
+#: through ``audit_emit``, others through ``_audit_log`` / ``_emit_audit`` /
+#: ``_write_audit`` / ``emit`` / ``audit`` — none of which this scan saw, so
+#: security events such as ``engine_trust.gate_fail_open`` were written at the
+#: default severity with floored details and never reached the ratchet.
 _WRITER_CALLEES = {"write_event", "_write_event", "_log_security_event", "log_security_event",
-                   "audit_event", "_audit", "_emit", "emit_event"}
+                   "audit_event", "_audit", "_emit", "emit_event",
+                   "_audit_event", "audit_emit", "_audit_log", "_emit_audit",
+                   "_audit_write", "_write_audit", "emit", "audit"}
+_EVENT_KEYWORDS = {"event_type", "event"}
 _EVENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$")
 
 
@@ -207,7 +216,9 @@ def find_unregistered_emissions(severity: set[str]) -> dict[str, list[str]]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or _call_name(node) not in _WRITER_CALLEES:
                 continue
-            for arg in node.args[:2]:
+            cands = list(node.args[:2]) + [kw.value for kw in node.keywords
+                                           if kw.arg in _EVENT_KEYWORDS]
+            for arg in cands:
                 v = arg.value if isinstance(arg, ast.Constant) else None
                 if (isinstance(v, str) and _EVENT_NAME_RE.match(v) and v not in severity
                         and not v.endswith((".jsonl", ".json", ".py"))):

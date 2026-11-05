@@ -117,7 +117,9 @@ def _store_path(channel: str, chat_key: str, *, tenant_id: str | None = None) ->
 def _audit_path(*, tenant_id: str | None = None) -> Path:
     home = _corvin_home()
     if tenant_id is None:
-        return home / "global" / "forge" / "audit.jsonl"
+        # ONE chain per tenant: the PROCESS tenant's chain, never the
+        # pre-ADR-0007 <home>/global/forge/audit.jsonl (review 2026-11-05, SEC-7).
+        tenant_id = (os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default"
     return home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
 
 

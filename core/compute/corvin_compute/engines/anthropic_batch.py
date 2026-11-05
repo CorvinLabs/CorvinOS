@@ -270,9 +270,11 @@ def _http_get_jsonl(url: str) -> list[dict]:
 def _emit(event: str, *, job_id: str, tenant_id: str, **details: Any) -> None:
     try:
         from .. import audit as _compute_audit
-        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore[import]
+        from corvin_operator.forge.forge.paths import tenant_audit_chain  # type: ignore[import]
         from forge.security_events import write_event  # type: ignore[import]
-        audit_path = corvin_home() / "global" / "forge" / "audit.jsonl"
+        # The tenant's ONE chain (review 2026-11-05, SEC-7) — not the
+        # pre-ADR-0007 host-wide <home>/global/forge/audit.jsonl.
+        audit_path = tenant_audit_chain(tenant_id)
         audit_path.parent.mkdir(parents=True, exist_ok=True)
         _compute_audit.emit(
             event,

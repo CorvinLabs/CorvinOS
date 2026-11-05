@@ -258,13 +258,15 @@ def _audit_path_for(ctx: RunContext) -> Path:
 
     Mirrors the inline lookup the network_share path uses: prefer
     ``ctx.audit_path`` when present (newer ctx), else fall back to the
-    canonical ``<corvin_home>/global/forge/audit.jsonl``.
+    tenant's ONE chain (``tenant_audit_chain``). Until 2026-11-05 the fallback
+    was the pre-ADR-0007 host-wide ``<corvin_home>/global/forge/audit.jsonl``,
+    a file no verifier or report reads (review SEC-7).
     """
     p = getattr(ctx, "audit_path", None)
     if p is not None:
         return Path(p)
-    from .paths import corvin_home  # type: ignore
-    return corvin_home() / "global" / "forge" / "audit.jsonl"
+    from .paths import tenant_audit_chain  # type: ignore
+    return tenant_audit_chain(getattr(ctx, "tenant_id", None) or None)
 
 
 def _emit_tool_executed(ctx: RunContext, *, status: str, exit_code: int,
@@ -665,10 +667,7 @@ def run_tool(
                 _rea("tool.network_share",
                      {"persona", "sandbox", "deny_loopback", "tool", "run_id",
                       "tenant_id", "audit_ref"})
-                _audit_path = ctx.audit_path if hasattr(ctx, "audit_path") else None
-                if _audit_path is None:
-                    from .paths import corvin_home  # type: ignore
-                    _audit_path = corvin_home() / "global" / "forge" / "audit.jsonl"
+                _audit_path = _audit_path_for(ctx)
                 _swe(
                     _audit_path, "tool.network_share",
                     severity="INFO", tool=name, run_id=ctx.id,

@@ -138,13 +138,22 @@ def _read_audit(audit_path: Path) -> list[dict[str, Any]]:
     return events
 
 
+def _chain_paths(tid: str) -> list:
+    """THE chain (``tenant_audit_chain``) plus the read-only historical
+    location ``legacy_audit_chains()`` names for tenant-level records. The
+    pre-tenancy host-wide chain carries no tenant id, so it is read for the
+    default tenant only (the audit tail's S-11a rule) — until 2026-11-05 every
+    tenant read it, and the path was composed by hand (review SEC-13)."""
+    legacy = _forge_paths.legacy_audit_chains(tid)
+    paths = [_forge_paths.tenant_audit_chain(tid), legacy["tenant_global"]]
+    if tid == "_default":
+        paths.insert(0, legacy["host_global_forge"])
+    return paths
+
+
 def _read_all_events(tid: str) -> list[dict[str, Any]]:
     """Read events from all three audit chain files, deduplicated by inode."""
-    paths = [
-        _forge_paths.corvin_home() / "global" / "forge" / "audit.jsonl",
-        _forge_paths.tenant_global_dir(tid) / "forge" / "audit.jsonl",
-        _forge_paths.tenant_global_dir(tid) / "audit.jsonl",
-    ]
+    paths = _chain_paths(tid)
     seen_inodes: set[int] = set()
     result: list[dict[str, Any]] = []
     for path in paths:
@@ -182,11 +191,7 @@ def _verify_all_chains(tid: str) -> bool:
         from forge import security_events as _sec  # type: ignore[import-untyped]
     except Exception:
         return False
-    paths = [
-        _forge_paths.corvin_home() / "global" / "forge" / "audit.jsonl",
-        _forge_paths.tenant_global_dir(tid) / "forge" / "audit.jsonl",
-        _forge_paths.tenant_global_dir(tid) / "audit.jsonl",
-    ]
+    paths = _chain_paths(tid)
     seen_inodes: set[int] = set()
     for path in paths:
         if not path.exists():
