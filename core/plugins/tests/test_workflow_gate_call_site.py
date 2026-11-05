@@ -32,8 +32,9 @@ awp: "1.0.0"
 workflow:
   name: gate-test
   version: "1.0.0"
+  description: two noop nodes behind the workflow gate (validator rule R3)
 orchestration:
-  engine: graph
+  engine: dag
   graph:
     - id: first
       agent: noop

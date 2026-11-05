@@ -677,8 +677,10 @@ def _index_turn_for_recall(*, channel, chat_key, prompt, answer, msg_id, profile
         persona_name = ""
         if isinstance(profile, dict):
             persona_name = str(profile.get("persona") or profile.get("name") or "")
-        prov = globals().get("_recall_prov")
-        index_fn = (prov.get_active().index_turn if prov is not None
+        # A direct call on the module-level binding (always defined: set to None
+        # when the plugin package is absent), so the plugin surface map's static
+        # consumer check can see this file calls the recall_backend registry.
+        index_fn = (_recall_prov.get_active().index_turn if _recall_prov is not None
                     else _conversation_recall.index_turn)
         return index_fn(
             channel=str(channel or ""), chat_key=str(chat_key or ""),

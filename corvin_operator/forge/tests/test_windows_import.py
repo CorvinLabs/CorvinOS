@@ -21,6 +21,11 @@ _FORGE = _REPO / "corvin_operator" / "forge"
 _SIM_WINDOWS = r"""
 import sys, importlib.abc
 sys.platform = "win32"                      # pretend we are on Windows
+import os
+# Windows-only open flags _wincompat.install_binary_os_open reads (226d105f8);
+# 0 = no translation, which is what POSIX does, so the wrapper stays inert here.
+os.O_TEXT = getattr(os, "O_TEXT", 0)
+os.O_BINARY = getattr(os, "O_BINARY", 0)
 for _m in ("fcntl", "resource"):
     sys.modules.pop(_m, None)
 
@@ -52,8 +57,10 @@ print("WINDOWS_IMPORT_OK")
 
 # Sibling packages with their own bare POSIX imports — must import on Windows too.
 _SIM_WINDOWS_SIBLINGS = r"""
-import sys, importlib.abc
+import sys, importlib.abc, os
 sys.platform = "win32"
+os.O_TEXT = getattr(os, "O_TEXT", 0)
+os.O_BINARY = getattr(os, "O_BINARY", 0)
 for _m in ("fcntl", "resource"):
     sys.modules.pop(_m, None)
 class _Block(importlib.abc.MetaPathFinder):

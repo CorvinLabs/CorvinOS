@@ -558,8 +558,11 @@ class TestE2ERoundTrip(unittest.TestCase):
                     chat_key=self.CHAT_KEY,
                     tenant_id="_default",
                 )
-
-        done.wait(timeout=8.0)
+                # Wait INSIDE the patches: the harvest runs on a daemon thread
+                # that resolves mb._run_haiku when it gets there. Waiting after
+                # the `with` let it race the restore and call the real helper
+                # (no key in a sandbox -> "" -> zero entries, no file).
+                done.wait(timeout=8.0)
         self.assertTrue(done.is_set(), "harvest task did not complete within 8 s")
 
         # Verify the memory file was written

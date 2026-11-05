@@ -78,9 +78,12 @@ def test_bridge_events_chain_verifies_clean():
 
             t("audit file exists", audit_path.exists())
             lines = audit_path.read_text(encoding="utf-8").splitlines()
-            t("3 events written", len(lines) == 3)
             recs = [json.loads(l) for l in lines]
-            types = [r["event_type"] for r in recs]
+            # The first write of a fresh install also records its own
+            # instance.key_rotated (the instance signing key is minted then);
+            # count the bridge records this test wrote.
+            types = [r["event_type"] for r in recs if r["event_type"].startswith("bridge.")]
+            t("3 bridge events written", len(types) == 3, detail=str([r["event_type"] for r in recs]))
             t("event_types match",
               types == ["bridge.message_received",
                         "bridge.whitelist_deny",
@@ -309,8 +312,13 @@ def test_forge_broken_import_indistinguishable_from_absent():
     # one outward state (_se is None) — but since 2026-09-03 (finding A1) that
     # state is no longer an "all clear": writer_available() is False, the
     # verifiers REFUSE, and the boot tripwire refuses to boot on it.
-    t("genuinely-absent forge logs NO warning at all (silent by design)",
-      len(cap_absent.records) == 0)
+    # Since the writer-import is "LOGGED at ERROR ... never silent" (audit.py;
+    # see test_broken_writer_import_is_logged_at_error_level below), absence is
+    # no longer silent either: one record naming the refusal.
+    t("genuinely-absent forge logs one record naming the consequence (never silent)",
+      len(cap_absent.records) == 1
+      and "REFUSES" in cap_absent.records[0].getMessage(),
+      detail=str([r.getMessage()[:120] for r in cap_absent.records]))
     t("present-but-broken forge logs a warning that names the consequence "
       "(tripwire refuses), not a reassuring standalone-mode message",
       len(cap_broken.records) == 1

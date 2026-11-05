@@ -64,19 +64,24 @@ def main() -> int:
            "(narrower blast radius kept for constrained personas)",
            f"got {ha}")
 
-    # ── 2. resolve(assistant) injects all six orchestration tools ─────────
+    # ── 2. resolve(assistant) injects the four orchestration tools ─────────
     out = resolver.resolve("assistant", overrides={})
     allowed = out.get("allowed_tools") or []
     for t in (
         "mcp__corvin_orchestration__workflow_run",
         "mcp__corvin_orchestration__workflow_resume",
         "mcp__corvin_orchestration__workflow_list_paused",
-        "mcp__corvin_orchestration__a2a_send",
-        "mcp__corvin_orchestration__a2a_list_endpoints",
         "mcp__corvin_orchestration__acs_delegate",
     ):
         expect(t in allowed,
                f"resolve(assistant) → {t} in allowed_tools",
+               f"allowed_tools={allowed}")
+    # 675c99230 (ADR-2099 Phase 2): the ungated orchestration A2A send is no longer
+    # a chat tool — the chat path is the two-step mcp__forge__a2a_send.
+    for t in ("mcp__corvin_orchestration__a2a_send",
+              "mcp__corvin_orchestration__a2a_list_endpoints"):
+        expect(t not in allowed,
+               f"resolve(assistant) → {t} NOT in allowed_tools (675c99230)",
                f"allowed_tools={allowed}")
 
     mcp = out.get("mcp_servers") or {}

@@ -134,9 +134,21 @@ class EdgeTtsFfmpegRowTests(unittest.TestCase):
         import types
         fake_adapter = types.ModuleType("adapter")
         fake_adapter._resolve_ffmpeg_bin = lambda: "/usr/bin/ffmpeg"
-        with mock.patch.dict(sys.modules, {"adapter": fake_adapter,
-                                           "edge_tts": types.ModuleType("edge_tts")}):
+        # Swap ONLY these two entries. mock.patch.dict(sys.modules, ...) restores the
+        # whole dict on exit and so drops every module first imported inside it —
+        # including pywhispercpp's C extension, which cannot be re-imported, so the
+        # later RealRoundTripTests found "local: not available".
+        fakes = {"adapter": fake_adapter, "edge_tts": types.ModuleType("edge_tts")}
+        saved = {k: sys.modules.get(k) for k in fakes}
+        sys.modules.update(fakes)
+        try:
             rows = dict((n, (ok, why)) for n, ok, why in voice_doctor._tts_provider_rows())
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
         self.assertEqual(rows["edge-tts"][0], True, rows["edge-tts"])
 
 if __name__ == "__main__":

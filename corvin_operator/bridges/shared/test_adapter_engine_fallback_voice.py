@@ -98,7 +98,9 @@ def _section_source_sweep(adapter) -> None:
     # still fail this, which a single "total >= N" check would not catch.
     targets = [
         ("call_claude", adapter.call_claude, 3),
-        ("_call_claude_streaming_via_engine", adapter._call_claude_streaming_via_engine, 4),
+        # Six: generic failure x3, failure after background children started
+        # (ADR-2236, 42ac244ee), timeout with and without a session reset.
+        ("_call_claude_streaming_via_engine", adapter._call_claude_streaming_via_engine, 6),
         ("_call_codex_streaming_via_engine", adapter._call_codex_streaming_via_engine, 2),
         ("_call_opencode_streaming_via_engine", adapter._call_opencode_streaming_via_engine, 2),
         # call_claude_streaming is the turn-task wrapper (ADR-2081); the body

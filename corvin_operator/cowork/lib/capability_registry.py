@@ -299,6 +299,21 @@ CAPABILITIES: tuple[Capability, ...] = (
         test_file="core/orchestration/tests/test_mcp_server.py",
     ),
     Capability(
+        # ADR-2099 Phase 2 / ADR-2216: the CHAT path to A2A (675c99230 moved it here
+        # from corvin_orchestration). Two-step: the tool only stages a request the
+        # operator confirms in the console; each tool is advertised only while its
+        # tenant flag (a2a_send_from_chat / a2a_friendship_token_from_chat) is on.
+        id="forge.a2a_chat_staging",
+        domain="A2A (instance-to-instance)",
+        status="wired",
+        one_liner="Only when the operator has enabled it for this tenant: stage a message to a paired CorvinOS instance, or a friendship-token request for pairing, for the operator to confirm in the console — the tool never sends or mints anything itself.",
+        persona_flag="forge_enabled",
+        mcp_server="forge.mcp_server",
+        tool_names=("mcp__forge__a2a_send", "mcp__forge__a2a_friendship_token_create"),
+        gate_fn="operator.forge.forge.mcp_server.MCPServer._is_a2a_send_from_chat_enabled",
+        test_file="tests/e2e/a2a/test_a2a_send_mcp_e2e.py",
+    ),
+    Capability(
         id="workflows.awp",
         domain="Workflows",
         status="wired",

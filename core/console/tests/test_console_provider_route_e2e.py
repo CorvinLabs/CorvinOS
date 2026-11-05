@@ -66,6 +66,14 @@ class ConsoleProviderRouteE2E(unittest.TestCase):
         })
         os.environ.pop("FORGE_ROOT", None)
         os.environ.pop("VOICE_AUDIT_PATH", None)
+        # The console refuses a turn up front when Claude Code is not signed in
+        # (chat_runtime._claude_authenticated). Under a sandboxed HOME (run-all-tests.sh)
+        # there is no OAuth file, so give this test's own HOME a stand-in one; the fake
+        # claude binary never reads it.
+        os.environ["HOME"] = str(home / "home")
+        (home / "home" / ".claude").mkdir(parents=True)
+        (home / "home" / ".claude" / ".credentials.json").write_text(
+            '{"claudeAiOauth": {"accessToken": "test-not-a-token"}}', encoding="utf-8")
         (home / "corvin").mkdir()
         self.cfg = home / "corvin" / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
         self.cfg.parent.mkdir(parents=True)

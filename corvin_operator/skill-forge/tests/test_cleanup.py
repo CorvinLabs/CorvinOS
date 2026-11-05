@@ -215,4 +215,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import _licence_pin  # ADR-0701/2095: a plain-script run loads no conftest tier pin
+    _licence_pin.pin()
     raise SystemExit(main())

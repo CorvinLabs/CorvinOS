@@ -559,10 +559,18 @@ class TestTripwire(unittest.TestCase):
 
                 lines = path.read_text(encoding="utf-8").splitlines()
                 self.assertGreaterEqual(len(lines), 2)
-                record = json.loads(lines[0])
-                self.assertIn("hash", record, "core writes must be chained")
-                record["details"]["user"] = "tampered-by-attacker"
-                lines[0] = json.dumps(record)
+                # Tamper EVERY chained record. A single tampered record in the tail is SEALED by
+                # a chained compliance.chain_discontinuity seam and the boot continues (F-A13,
+                # tripwire.audit_chain_intact; reported by audit_chain_history_clean). This
+                # test passed with one tampered record only while the chain held exactly two
+                # (2 problems >= 2 records = whole-chain failure); a fresh install's first
+                # write now also records instance.key_rotated, so a one-record tamper is
+                # sealed. A whole-chain failure is the shape that must refuse the boot.
+                for i, line in enumerate(lines):
+                    record = json.loads(line)
+                    self.assertIn("hash", record, "core writes must be chained")
+                    record.setdefault("details", {})["tampered"] = "by-attacker"
+                    lines[i] = json.dumps(record)
                 path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
                 result = self.tripwire.audit_chain_intact()

@@ -78,6 +78,11 @@ function scenario({ readOnly = false, owner = true, spgAllowed = false, disclose
   };
   const fakeRequire = (m) => {
     if (m === 'path') return path;
+    // The SPG check resolves its interpreter through the shared helper (the
+    // python3 literal was replaced, fresh-system review 2026-10-21); without
+    // this the require threw, the daemon's catch failed closed and no guest
+    // was ever admitted here.
+    if (m === '../shared/js/python_bin') return { pythonBin: () => 'python3' };
     if (m === 'child_process') return {
       spawnSync: () => ({ status: 0, stdout: JSON.stringify({ allowed: spgAllowed }) }),
     };

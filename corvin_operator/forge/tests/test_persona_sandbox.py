@@ -231,7 +231,9 @@ def main() -> int:
             # Browser runs above shared the host network namespace. The
             # runner must have emitted a tool.network_share event for each
             # such run. Coder runs (deny) must NOT have emitted one.
-            audit_file = Path(td) / "global" / "forge" / "audit.jsonl"
+            # ADR-0654: ONE chain per tenant, <CORVIN_HOME>/tenants/<tid>/global/forge/audit.jsonl
+            # (tenant_audit_chain); the legacy <CORVIN_HOME>/global/forge/ is no longer written.
+            audit_file = Path(td) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
             t("audit file exists after network-allowing runs",
               audit_file.exists(), detail=str(audit_file))
             if audit_file.exists():
@@ -291,4 +293,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import _licence_pin  # ADR-0701: a plain-script run loads no conftest tier pin
+    _licence_pin.pin()
     raise SystemExit(main())

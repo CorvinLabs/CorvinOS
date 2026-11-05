@@ -102,7 +102,9 @@ def _read_audit_events(path: Path) -> list[dict]:
 
 
 def _forge_audit_path(tmp: Path) -> Path:
-    return tmp / "corvinos" / "global" / "forge" / "audit.jsonl"
+    # THE tenant chain (consent._audit_path → tenant_audit_chain, ADR-0654); the
+    # legacy <home>/global/forge/audit.jsonl is no longer written.
+    return tmp / "corvinos" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
 
 
 def _all_audit_events(tmp: Path) -> list[dict]:

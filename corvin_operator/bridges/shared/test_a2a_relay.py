@@ -698,6 +698,15 @@ class TestSharedKidAckOverRealRelay(unittest.TestCase):
         import uvicorn
         from fastapi import FastAPI
 
+        # a2a.network is member-only (2026-10-21): on an unlicensed sandbox the
+        # issuer answers the ack with license_required. Pin the tier RESOLVER to
+        # member; the gate itself runs unmodified. The free-tier refusal has its
+        # own test (test_free_install_answers_relay_ping_and_ack_with_license_required).
+        from corvin_operator.license import capability_api as _ca
+        _tier_pin = mock.patch.object(_ca, "active_tier", lambda **_k: "member")
+        _tier_pin.start()
+        self.addCleanup(_tier_pin.stop)
+
         state = relay.RelayState()
         app = FastAPI()
         app.include_router(relay.build_relay_router(state))

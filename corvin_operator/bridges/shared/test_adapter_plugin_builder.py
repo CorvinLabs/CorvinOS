@@ -59,6 +59,11 @@ def _fresh_adapter(env_overrides: dict):
     adapter._house_rules_classifier = (
         lambda task, rules, auth, **_kw: ("", 1.0, "test-benign")
     )
+    # Plugin-Builder needs a member seat (ADR-0701: forge.create). An unlicensed
+    # sandbox resolves to free, so pin the tier RESOLVER — the gate itself runs
+    # unmodified (same seam as corvin_operator/forge/tests/conftest.py).
+    from corvin_operator.license import capability_api  # noqa: PLC0415
+    capability_api.active_tier = lambda **_k: "member"
     return adapter
 
 

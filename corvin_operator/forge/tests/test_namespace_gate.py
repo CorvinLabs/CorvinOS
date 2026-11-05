@@ -71,11 +71,23 @@ class _PersonaMCPClient(MCPClient):
         # Don't let a stale FORGE_PERSONA from outside the test confuse
         # the audit event — the new gate is the SUT.
         env.pop("FORGE_PERSONA", None)
+        # Security events (tool.namespace_denied, ...) go to THE tenant chain under
+        # CORVIN_HOME (ADR-0654, mcp_server._server_audit_chain), not to the
+        # workspace's audit.jsonl: give the child a home inside the workspace so
+        # _audit_events can read them back without touching a shared chain.
+        # FORGE_ROOT (set suite-wide by run-all-tests.sh) outranks CORVIN_HOME there,
+        # so point it at this workspace too.
+        env["CORVIN_HOME"] = str(root / "_home")
+        env["FORGE_ROOT"] = str(root)
+        env.pop("VOICE_AUDIT_PATH", None)
         self.root = root
+        # ADR-0701: the child resolves the licence tier itself; pin it to member
+        # (same prelude as test_mcp.py) so the namespace gate, not the tier gate, is tested.
+        import _licence_pin  # noqa: PLC0415
         self.proc = subprocess.Popen(
-            [sys.executable, str(TEST_ROOT / "forge.py"),
-             "--root", str(root), "mcp",
-             "--permission-mode", permission_mode],
+            _licence_pin.launch_argv(str(TEST_ROOT / "forge.py"),
+                                     "--root", str(root), "mcp",
+                                     "--permission-mode", permission_mode),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1,
             cwd=str(TEST_ROOT), env=env, encoding="utf-8", errors="replace",
@@ -89,18 +101,20 @@ class _PersonaMCPClient(MCPClient):
 
 
 def _audit_events(root: Path) -> list[dict]:
-    p = root / "audit.jsonl"
-    if not p.exists():
-        return []
+    """Records of the workspace chain AND the child's tenant chain (see MCPClient)."""
     out = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+    for p in (root / "audit.jsonl",
+              root / "_home" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"):
+        if not p.exists():
             continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     return out
 
 
@@ -284,4 +298,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import _licence_pin  # ADR-0701: a plain-script run loads no conftest tier pin
+    _licence_pin.pin()
     raise SystemExit(main())

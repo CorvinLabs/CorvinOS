@@ -29,12 +29,20 @@ LEDGER = sl.ledger_path(WD)
 
 
 def _bash(cmd):
-    cwd = os.getcwd()
+    cwd, pwd = os.getcwd(), os.environ.get("PWD")
     os.chdir(WD)                 # the hook resolves relative paths against its cwd
+    # ...and expands ``$PWD`` from its environment, which the shell that runs the real
+    # hook sets to that cwd. chdir alone leaves the caller's PWD behind — under
+    # run-all-tests.sh that is corvin_operator/bridges, a protected path.
+    os.environ["PWD"] = str(WD)
     try:
         return path_gate.check({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(WD)})
     finally:
         os.chdir(cwd)
+        if pwd is None:
+            os.environ.pop("PWD", None)
+        else:
+            os.environ["PWD"] = pwd
 
 
 def test_ledger_lives_outside_the_worker_cwd():

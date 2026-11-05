@@ -45,6 +45,11 @@ def _section(title: str) -> None:
 
 def _set_sandbox(tmp: Path) -> None:
     os.environ["CORVIN_HOME"] = str(tmp / "corvin")
+    # FORGE_ROOT / VOICE_AUDIT_PATH (run-all-tests.sh sets the first suite-wide)
+    # outrank CORVIN_HOME in the bridge audit writer: the records would land
+    # outside the chain this test reads back.
+    os.environ.pop("FORGE_ROOT", None)
+    os.environ.pop("VOICE_AUDIT_PATH", None)
     (tmp / "corvin" / "global" / "forge").mkdir(parents=True, exist_ok=True)
 
 

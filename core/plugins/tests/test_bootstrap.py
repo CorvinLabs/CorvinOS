@@ -148,9 +148,17 @@ class TestAssertCompliance(unittest.TestCase):
         _audit.audit_event("bridge.login", channel="test", user="u1")
         _audit.audit_event("bridge.login", channel="test", user="u2")
         lines = path.read_text(encoding="utf-8").splitlines()
-        record = json.loads(lines[0])
-        record["details"]["user"] = "tampered"
-        lines[0] = json.dumps(record)
+        # Tamper EVERY chained record. A single tampered record in the tail is SEALED by
+        # a chained compliance.chain_discontinuity seam and the boot continues (F-A13,
+        # tripwire.audit_chain_intact; reported by audit_chain_history_clean). This
+        # test passed with one tampered record only while the chain held exactly two
+        # (2 problems >= 2 records = whole-chain failure); a fresh install's first
+        # write now also records instance.key_rotated, so a one-record tamper is
+        # sealed. A whole-chain failure is the shape that must refuse the boot.
+        for i, line in enumerate(lines):
+            record = json.loads(line)
+            record.setdefault("details", {})["tampered"] = "yes"
+            lines[i] = json.dumps(record)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         with self.assertRaises(Exception) as ctx:

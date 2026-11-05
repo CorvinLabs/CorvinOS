@@ -376,7 +376,9 @@ def case_runner_e2e() -> None:
               detail=f"leak_line={_leak!r}")
 
             # ---- audit: tool.secrets_injected event written ----------
-            audit_path = td_path / "global" / "forge" / "audit.jsonl"
+            # ADR-0654: ONE chain per tenant, <CORVIN_HOME>/tenants/<tid>/global/forge/audit.jsonl
+            # (tenant_audit_chain); the legacy <CORVIN_HOME>/global/forge/ is no longer written.
+            audit_path = td_path / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
             events = _read_audit(audit_path)
             inj_events = [e for e in events
                           if e.get("event_type") == "tool.secrets_injected"]
@@ -551,4 +553,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import _licence_pin  # ADR-0701: a plain-script run loads no conftest tier pin
+    _licence_pin.pin()
     raise SystemExit(main())

@@ -284,7 +284,10 @@ def test_outcome_rules() -> None:
 # Helpers that hand a denial BACK to their caller, which reports it — their
 # own returns do not end a turn.
 _RETURNS_TO_CALLER = {"_run_pre_dispatch_gates"}
-_GATE_RETURN = re.compile(r"^\s+return (\w*gate_denial|\w*_msg|_m7_hr|refusal or .*)\s*$")
+# 54e5bca66 (ADR-2268) renamed the L34/L35 OS-turn refusals to ``l34_route.refusal`` and
+# ``_route_problem``; the sweep must keep seeing them, or the positive control drops below 10.
+_GATE_RETURN = re.compile(
+    r"^\s+return (\w*gate_denial|\w*_msg|_m7_hr|refusal or .*|l34_route\.refusal|_route_problem)\s*$")
 
 
 def test_every_gate_return_reports() -> None:

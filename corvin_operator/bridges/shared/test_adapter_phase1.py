@@ -368,6 +368,12 @@ def test_system_prompt_language_pin() -> None:
             @staticmethod
             def load(*a, **k):
                 return {"display_language": "de"}
+            # The adapter asks display_language_pin() first (an installer locale
+            # seed is not a pin); without this the delegation below read the real
+            # profile and found no pin.
+            @staticmethod
+            def display_language_pin(*a, **k):
+                return "de"
             def __getattr__(self, name):  # delegate anything else to the real module
                 return getattr(orig, name)
         adapter._voice_profile = _Prof()

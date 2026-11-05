@@ -135,7 +135,7 @@ def test_corvin_home_alone_does_not_redirect_slot() -> None:
         t("path is NOT derived from CORVIN_HOME",
           p != Path(td) / "plugin-slot", detail=f"got {p}")
         t("path ends with the real repo dyn/ dir",
-          str(p).endswith("/operator/skill-forge/skills/dyn"),
+          str(p).endswith("/corvin_operator/skill-forge/skills/dyn"),
           detail=f"got {p}")
     _clear_env()
 
@@ -180,8 +180,8 @@ def test_repo_walk_when_no_env() -> None:
         r = _fresh_registry()
         p = r.plugin_slot_dir()
     s = str(p)
-    t("ends with /operator/skill-forge/skills/dyn",
-      s.endswith("/operator/skill-forge/skills/dyn"),
+    t("ends with /corvin_operator/skill-forge/skills/dyn",
+      s.endswith("/corvin_operator/skill-forge/skills/dyn"),
       detail=f"got {s}")
     t("no warning", "deprecation" not in buf.getvalue().lower())
     _clear_env()

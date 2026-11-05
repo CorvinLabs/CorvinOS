@@ -74,6 +74,12 @@ def _child_env(home: Path, slot: Path) -> dict:
     env["CORVIN_HOME"] = str(home)
     env["CORVIN_PLUGIN_SLOT_DIR"] = str(slot)
     env["CORVIN_FORCE_SCOPE"] = "session"
+    # This suite moves CORVIN_HOME per case. FORGE_ROOT / VOICE_AUDIT_PATH (set suite-wide
+    # by run-all-tests.sh) redirect the bridge audit writer (audit.audit_path) away from
+    # the moved home's chain, so the child would write session.reset somewhere the case
+    # never looks (case 5).
+    env.pop("FORGE_ROOT", None)
+    env.pop("VOICE_AUDIT_PATH", None)
     return env
 
 
@@ -578,10 +584,12 @@ def case_09_budget_reset() -> None:
 
 
 def case_10_free_tier_refused() -> None:
-    """ADR-0701 G1/G2: without the member pin both creates are refused and
+    """ADR-0701 G1: without the member pin a forge TOOL create is refused and
     nothing reaches disk — the seeding helpers above pin ``member`` on purpose,
-    this case keeps the refusal itself proven."""
-    print("\n=== case 10: free tier is refused skill + tool creation ===")
+    this case keeps the refusal itself proven. Skills are no longer member-only:
+    ADR-2095 (1c1f7aa64) gives the free tier ``skill_forge_per_day`` skill
+    writes, so a first free-tier skill create SUCCEEDS."""
+    print("\n=== case 10: free tier: skill within quota, tool creation refused ===")
     sandbox = _make_sandbox("10")
     home = sandbox / "home"
     slot = sandbox / "slot"
@@ -590,13 +598,10 @@ def case_10_free_tier_refused() -> None:
         _create_skill(home, slot, channel_id=cid, name="demo.free",
                       body="# demo.free\n\nx\n", description="free skill",
                       grade=None, tier="free")
-        bad("free tier: skill creation was NOT refused")
+        ok("free tier: first skill create allowed (ADR-2095 daily quota)")
     except subprocess.CalledProcessError as e:
-        if "license_required" in (e.stderr or ""):
-            ok("free tier: skill creation refused (license_required)")
-        else:
-            bad(f"free tier: skill creation failed for another reason: "
-                f"{(e.stderr or '')[-300:]}")
+        bad(f"free tier: skill creation within the daily quota failed: "
+            f"{(e.stderr or '')[-300:]}")
     try:
         _create_forge_tool(home, slot, channel_id=cid, name="free_tool",
                            tier="free")
@@ -608,10 +613,9 @@ def case_10_free_tier_refused() -> None:
             bad(f"free tier: tool creation failed for another reason: "
                 f"{(e.stderr or '')[-300:]}")
     leaked = [p for p in _sessions_root(home).rglob("*")
-              if p.is_file() and ("free_tool" in p.name or "demo_free" in p.name
-                                  or "demo.free" in p.name)] \
+              if p.is_file() and "free_tool" in p.name] \
         if _sessions_root(home).exists() else []
-    eq(leaked, [], "free tier: nothing written to the session scope")
+    eq(leaked, [], "free tier: no forge tool written to the session scope")
     shutil.rmtree(sandbox, ignore_errors=True)
 
 

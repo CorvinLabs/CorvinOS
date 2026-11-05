@@ -296,56 +296,9 @@ def main() -> int:
         failures.append(f"case-C: {e}")
         print(f"FAIL: case-C: {e}")
 
-    # ── Case D: Auto-Routing — KEINE persona im profile, aber router an
-    # Settings haben routing.mode=auto per Default. Mit ROUTER_FAKE set
-    # we die Router-reply statt Haiku zu callen.
-    setup_sandbox({})  # leere chat_profiles → Router darf entscheiden
-    ARGS_DUMP.unlink(missing_ok=True)
-    for d in (INBOX, OUTBOX, PROCESSED):
-        for f in d.glob("*.json"):
-            f.unlink()
-
-    env_router = env.copy()
-    env_router["ROUTER_FAKE"] = "1"
-    env_router["ROUTER_FAKE_RESULT"] = (
-        '{"persona":"research","confidence":0.95,"why":"explicit web task"}'
-    )
-    proc = run_adapter_once(env_router)
-    try:
-        write_inbox("04_auto", "auto-route-chat", "open example.com und screenshot")
-        wait_for_processed(1, timeout=10.0)
-        time.sleep(0.2)
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-
-    dump = load_args_dump()
-    print(f"[case D] dumped {len(dump)} fake claude-call(s)")
-    try:
-        e = find_call(dump, "auto-route-chat")
-        if e is None:
-            raise AssertionError("no dump entry for auto-routed chat")
-        args = e["args"]
-        # Erwartung: Router pickte browser → MCP-Config + browser-Tools.
-        if "--mcp-config" not in args:
-            raise AssertionError(f"auto-routing → kein --mcp-config: {args}")
-        mcp_path = args[args.index("--mcp-config") + 1]
-        mcp_doc = json.loads(Path(mcp_path).read_text(encoding="utf-8"))
-        if "playwright" not in mcp_doc.get("mcpServers", {}):
-            raise AssertionError(f"router → browser, aber kein playwright-MCP: {mcp_doc}")
-        sys_prompt = system_prompt_from_args(args)
-        # router may pick research (now carries Playwright) instead of browser
-        if ("research agent" not in sys_prompt.lower()
-                and "browser automation agent" not in sys_prompt.lower()
-                and "web research" not in sys_prompt.lower()):
-            raise AssertionError("auto-routing: web-persona prompt fehlt")
-        print("PASS: auto-routing greift bei leerem profile + Router-Pick")
-    except AssertionError as e:
-        failures.append(f"case-D: {e}")
-        print(f"FAIL: case-D: {e}")
+    # Case D (router picks a persona for an empty profile) was removed with the
+    # persona auto-router itself (0f0a80c34, ADR-0537 T-0100): no ROUTER_FAKE reader
+    # exists any more, the deterministic fallback below is the only path.
 
     # ── Case E: Router returns nichts (ROUTER_FAKE leer) → Fallback assistant
     setup_sandbox({})

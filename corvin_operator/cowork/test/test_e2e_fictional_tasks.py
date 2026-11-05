@@ -6,11 +6,8 @@ injection, MCP dispatch). This file proves the CHAIN a real chat turn
 actually walks for a made-up user request:
 
     fictional user message
-      -> Layer 5 router picks a persona (real router.route(), heuristic
-         backend where deterministic/free; documented skip where the
-         router needs a paid embedding call, since ADR-0190 is about
-         capability WIRING, not semantic-router accuracy — that's a
-         pre-existing, untouched Layer 5 component)
+      -> the chat's persona (pinned profile; the Layer 5 auto-router was
+         removed in 0f0a80c34)
       -> resolver.resolve(persona) gates the tool surface
       -> the capability map (system-prompt brief) discloses the same
          picture honestly
@@ -52,31 +49,10 @@ def expect(cond: bool, label: str, detail: str = "") -> None:
         print(f"FAIL: {msg}")
 
 
-# ── Layer 5: real router, real personas, no LLM call (heuristic backend) ──
-
-def _routing_cases() -> None:
-    import router  # type: ignore
-
-    personas = [
-        {"name": "browser", "routing_exclude": False},
-        {"name": "research", "routing_exclude": False},
-        {"name": "assistant", "routing_exclude": True},
-    ]
-
-    fictional_tasks = [
-        ("Öffne mal die Webseite von meiner Bank und fülle das Login-Formular aus", "browser"),
-        ("Open the URL example.com and click on the pricing link", "browser"),
-        ("Recherchiere im Internet die aktuellen Zinssätze für Tagesgeld", "research"),
-        ("Search the web for the cheapest flight to Lisbon next month", "research"),
-    ]
-    for text, expected_persona in fictional_tasks:
-        result = router.route(text, personas)
-        expect(
-            result is not None and result.get("persona") == expected_persona,
-            f"fictional task {text!r} routes to persona {expected_persona!r}",
-            f"got {result}",
-        )
-
+# Layer 5 routing cases were removed with the persona auto-router itself
+# (router.py deleted in 0f0a80c34, ADR-0537 T-0100): a chat's persona is
+# its pinned profile or the deterministic assistant fallback, so the chain
+# below starts at resolver.resolve(persona).
 
 # ── ADR-0190 wired capabilities: gated correctly per persona ──────────────
 
@@ -96,8 +72,10 @@ def _capability_gating_cases() -> None:
             "mcp__forge__datasource_connect", "assistant", "homeassistant",
         ),
         (
+            # 675c99230: the chat A2A path is the two-step forge tool, not the
+            # ungated corvin_orchestration one.
             "Send a task to our Hetzner instance to restart the worker pool.",
-            "mcp__corvin_orchestration__a2a_send", "orchestrator", "homeassistant",
+            "mcp__forge__a2a_send", "assistant", "homeassistant",
         ),
         (
             "Run the expense-approval-pipeline workflow with this month's receipts.",
@@ -144,14 +122,12 @@ def _planned_capability_honesty_cases() -> None:
 
     fictional_tasks = [
         "What's my current compute quota for today, am I close to the limit?",
-        "Query our RAG knowledge base for every doc mentioning 'GDPR erasure'.",
         "Show me which CorvinOS instances are paired as A2A friends with us.",
     ]
     out = resolver.resolve("assistant", overrides={})
     brief = out.get("append_system", "")
     for cap_id, marker in (
         ("license.status", "Reading your current license tier"),
-        ("rag.query", "Querying the tenant's ingested-document"),
         ("a2a.peers", "Listing/inspecting configured A2A peer"),
     ):
         expect(
@@ -160,7 +136,8 @@ def _planned_capability_honesty_cases() -> None:
             f"(covers fictional tasks like {fictional_tasks[0]!r})",
         )
     # Never silently implied as callable.
-    for missing_tool in ("license_status", "rag_query", "a2a_list_peers"):
+    # rag.query is wired now (mcp__forge__rag_query) and left this list.
+    for missing_tool in ("license_status", "a2a_list_peers"):
         expect(
             not any(missing_tool in t for t in (out.get("allowed_tools") or [])),
             f"no tool resembling {missing_tool!r} is exposed (would be an ADR-0190 "
@@ -248,7 +225,6 @@ def main() -> int:
     # resolver still serves operator-shipped personas from $COWORK_USER_DIR.
     _, user_dir = fx.sandbox("corvin-e2e-fictional-personas-")
     fx.write_personas(user_dir, fx.DEFAULT_SET)
-    _routing_cases()
     _capability_gating_cases()
     _planned_capability_honesty_cases()
     _live_tool_execution_case()

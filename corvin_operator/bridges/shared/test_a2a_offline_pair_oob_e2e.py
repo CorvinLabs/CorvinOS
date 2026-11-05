@@ -82,8 +82,11 @@ class _Install:
 
     def env(self, **extra: str) -> dict:
         env = dict(os.environ)
+        # CORVIN_INSTANCE_ID_PATH: run-all-tests.sh pins ONE instance-id file for its whole
+        # L38 block, which made both installations the same instance (sender_is_self).
         for k in ("FORGE_ROOT", "CORVIN_TENANT_ID", "VOICE_AUDIT_PATH", "CORVIN_A2A_ATTESTATION_DISABLED",
-                  "CORVIN_TEST_MODE", "CORVIN_FEATURES_URL", "CORVIN_LICENSE_KEY"):
+                  "CORVIN_TEST_MODE", "CORVIN_FEATURES_URL", "CORVIN_LICENSE_KEY",
+                  "CORVIN_INSTANCE_ID_PATH"):
             env.pop(k, None)
         env.update({
             "CORVIN_HOME": str(self.home), "XDG_CONFIG_HOME": str(self.xdg),
@@ -122,6 +125,7 @@ class _Install:
         stack = contextlib.ExitStack()
         stack.enter_context(mock.patch.dict(os.environ, {"CORVIN_HOME": str(self.home),
                                                          "CORVIN_AUDIT_ANCHOR_KEY": str(self.anchor)}))
+        os.environ.pop("CORVIN_INSTANCE_ID_PATH", None)  # restored by patch.dict on exit
         stack.enter_context(mock.patch.object(_se, "_ANCHOR_KEY_LOADED", False))
         stack.enter_context(mock.patch.object(_se, "_ANCHOR_KEY", None))
         return stack

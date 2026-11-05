@@ -148,7 +148,8 @@ def build_audit_head(origin_id: "str | None" = None,
 
     When ``origin_id`` resolves to a known origin, the body is HMAC-SHA256-signed
     with that origin's ``recv_key`` so the requesting peer can authenticate it.
-    Otherwise ``signature`` is ``""`` (the peer falls back to transport trust).
+    Otherwise ``signature`` is a decoy of the same shape under a random
+    per-process key (no origin-existence oracle); it verifies under no peer key.
     """
     if instance_id is None:
         try:
@@ -183,6 +184,70 @@ def build_audit_head(origin_id: "str | None" = None,
 
 import secrets as _secrets  # noqa: E402
 _DECOY_KEY = _secrets.token_bytes(32)
+
+
+# ── Request authentication (review SRF-7) ──────────────────────────────────
+# The head (chain hash, event count, last-activity time) used to be answered to
+# any caller. Only a paired origin may ask: it signs
+# {"op":"audit_head","origin_id","issued_at","nonce"} with the pairing hmac_key
+# (the key a ping is signed with), and issued_at must be inside the same window
+# as a ping/task envelope. A replay inside the window only re-reads a head the
+# key holder could read anyway.
+HEAD_REQUEST_WINDOW_S = 300
+
+
+def _head_request_canonical(origin_id: str, issued_at: int, nonce: str) -> bytes:
+    return json.dumps({"op": "audit_head", "origin_id": origin_id,
+                       "issued_at": int(issued_at), "nonce": nonce},
+                      sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def sign_head_request(origin_id: str, hmac_key_hex: str, *,
+                      issued_at: "int | None" = None, nonce: "str | None" = None) -> dict:
+    """Query parameters a paired peer sends to ``GET /v1/a2a/audit-head``."""
+    import time as _t
+    ts = int(_t.time()) if issued_at is None else int(issued_at)
+    n = nonce or _secrets.token_hex(16)
+    sig = _hmac.new(bytes.fromhex(hmac_key_hex), _head_request_canonical(origin_id, ts, n),
+                    hashlib.sha256).hexdigest()
+    return {"origin_id": origin_id, "issued_at": str(ts), "nonce": n, "sig": sig}
+
+
+def verify_head_request(params: dict, *, registry=None, now: "float | None" = None) -> bool:
+    """True only for a fresh request signed with a known origin's hmac_key.
+    Every failure is the same False (the caller answers one opaque 403)."""
+    import time as _t
+    origin_id = str(params.get("origin_id") or "")[:128]
+    nonce = str(params.get("nonce") or "")
+    sig = str(params.get("sig") or "").lower()
+    try:
+        issued_at = int(str(params.get("issued_at") or ""))
+    except ValueError:
+        return False
+    if not origin_id or not (8 <= len(nonce) <= 128) or len(sig) != 64:
+        return False
+    try:
+        int(sig, 16)
+    except ValueError:
+        return False
+    try:
+        if registry is None:
+            import sys as _sys
+            here = str(Path(__file__).resolve().parent)
+            if here not in _sys.path:
+                _sys.path.insert(0, here)
+            from remote_trigger_receiver import OriginRegistry  # type: ignore
+            registry = OriginRegistry()
+        cfg = registry.load(origin_id)
+        key = bytes.fromhex(cfg["hmac_key"])
+    except Exception:
+        return False
+    expected = _hmac.new(key, _head_request_canonical(origin_id, issued_at, nonce),
+                         hashlib.sha256).hexdigest()
+    if not _hmac.compare_digest(sig, expected):
+        return False
+    current = _t.time() if now is None else now
+    return abs(current - issued_at) <= HEAD_REQUEST_WINDOW_S
 
 
 # ── Sender side (anomaly detection) ─────────────────────────────────────────

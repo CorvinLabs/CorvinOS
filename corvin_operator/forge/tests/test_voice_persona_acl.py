@@ -204,7 +204,7 @@ def test_resolver_injects_allowed_forged_tools_via_template_var():
         "mcp_servers": {
             "forge": {
                 "command": "python3",
-                "args": ["{{REPO_ROOT}}/operator/forge/forge.py", "mcp"],
+                "args": ["{{REPO_ROOT}}/corvin_operator/forge/forge.py", "mcp"],
                 "env": {
                     "FORGE_ROOT": "{{HOME}}/.config/corvin-voice/forge",
                     "FORGE_ALLOWED_TOOLS": "{{ALLOWED_FORGED_TOOLS}}",
@@ -263,4 +263,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import _licence_pin  # ADR-0701: a plain-script run loads no conftest tier pin
+    _licence_pin.pin()
     raise SystemExit(main())

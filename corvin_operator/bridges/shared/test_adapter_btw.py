@@ -91,7 +91,9 @@ def test_inject_btw_roundtrip() -> None:
         msg = json.loads(line)
         assert msg["type"] == "user"
         assert msg["message"]["role"] == "user"
-        assert msg["message"]["content"] == "hallo welt"
+        # ADR-0648 am. 2: the raw-stdin path frames through guard_prompt_head
+        # (sentinel line + @-neutraliser), never the verbatim chat text.
+        assert msg["message"]["content"] == adapter._guard_prompt_head("hallo welt")
         print(f"PASS: cat received clean JSONL line — {line[:80]}")
     finally:
         try: proc.kill()
@@ -307,7 +309,7 @@ def test_process_one_btw_with_running() -> None:
         line = out.strip()
         msg = json.loads(line)
         assert msg["type"] == "user"
-        assert msg["message"]["content"] == "und bitte auch X prüfen"
+        assert msg["message"]["content"] == adapter._guard_prompt_head("und bitte auch X prüfen")
         print(f"PASS: line landed in subproc + ACK: {ack['text']!r}")
     finally:
         if proc is not None:

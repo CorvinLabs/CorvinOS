@@ -38,14 +38,19 @@ def main() -> int:
     sandbox, user_dir = fx.sandbox()
     resolver = fx.reload_resolver()
 
-    # ── 0. Bundle is gone: nothing resolves without an operator persona ────
-    expect(not resolver.BUNDLE_DIR.is_dir(),
-           "bundle persona dir no longer exists (personas eliminated, e7e3560e)",
-           str(resolver.BUNDLE_DIR))
+    # ── 0. Bundle holds ONLY the minimal assistant persona ────────────────
+    # e7e3560e removed every bundle persona; 14fbb749f restored a minimal
+    # assistant.json (capability flags only) so live workers get their MCP
+    # wiring back. Nothing else resolves without an operator persona.
+    bundle = sorted(p.stem for p in resolver.BUNDLE_DIR.glob("*.json")) \
+        if resolver.BUNDLE_DIR.is_dir() else []
+    expect(bundle == ["assistant"],
+           "bundle persona dir holds only assistant.json (14fbb749f)", str(bundle))
     expect(resolver.load("coder") is None,
            "load(coder) → None with an empty user dir (no bundle fallback)")
-    expect(resolver.list_available() == [],
-           "list_available() → [] with an empty user dir")
+    expect([p.get("name") for p in resolver.list_available()] == ["assistant"],
+           "list_available() → ['assistant'] with an empty user dir",
+           str(resolver.list_available()))
 
     # ── 1. load: user-dir persona found ────────────────────────────────────
     fx.write_personas(user_dir, {"coder": fx.CODER, "research": fx.RESEARCH,

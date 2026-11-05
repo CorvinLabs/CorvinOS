@@ -56,6 +56,13 @@ class _BaseStoreTests:
     has_chat_args = True  # roles/consent/quota/disclosure/proposal
     path_attr = "_store_path"
     store_subdir = ""  # subdir under global/ for the per-chat file
+    # 9cd47ca33 (review SEC-6): a store whose default (no tenant_id) path is the
+    # process tenant's, <home>/tenants/_default/global/<store>/ — the pre-tenancy
+    # root sat outside every tenant's Art. 17 sweep.
+    default_is_tenanted = False
+    # 86bad7527 (CRITICAL-3): a store that REQUIRES an explicit tenant_id and has
+    # no default path at all.
+    requires_tenant = False
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp(prefix="corvin-store-tenant-")
@@ -80,10 +87,18 @@ class _BaseStoreTests:
         return func(**kwargs)
 
     def test_legacy_path_unchanged(self):
+        if self.requires_tenant:
+            with self.assertRaises(TypeError):
+                self._call_path()
+            return
         path = self._call_path()
-        # Path must include /global/ but NOT /tenants/
         self.assertIn("global", path.parts)
-        self.assertNotIn("tenants", path.parts)
+        if self.default_is_tenanted:
+            idx = path.parts.index("tenants")
+            self.assertEqual(path.parts[idx + 1], "_default")
+        else:
+            # Path must include /global/ but NOT /tenants/
+            self.assertNotIn("tenants", path.parts)
 
     def test_tenant_path_under_tenants(self):
         path = self._call_path(tenant_id="acme")
@@ -98,11 +113,13 @@ class _BaseStoreTests:
         self.assertIn("_default", path.parts)
 
     def test_audit_path_legacy(self):
+        """No tenant_id → THE process tenant's chain (ADR-0654: one chain per
+        tenant; the legacy <home>/global/forge/audit.jsonl is no longer written)."""
         if not hasattr(self.mod, "_audit_path"):
             self.skipTest(f"{self.module_name} has no _audit_path")
         path = self.mod._audit_path()
-        self.assertEqual(path.parts[-3:], ("global", "forge", "audit.jsonl"))
-        self.assertNotIn("tenants", path.parts)
+        self.assertEqual(path.parts[-5:],
+                         ("tenants", "_default", "global", "forge", "audit.jsonl"))
 
     def test_audit_path_tenanted(self):
         if not hasattr(self.mod, "_audit_path"):
@@ -115,11 +132,13 @@ class RolesStoreTests(_BaseStoreTests, unittest.TestCase):
     module_name = "roles"
     has_chat_args = True
     path_attr = "_store_path"
+    default_is_tenanted = True
 
 
 class ConsentStoreTests(_BaseStoreTests, unittest.TestCase):
     module_name = "consent"
     has_chat_args = True
+    requires_tenant = True
 
 
 class QuotaStoreTests(_BaseStoreTests, unittest.TestCase):
@@ -130,6 +149,7 @@ class QuotaStoreTests(_BaseStoreTests, unittest.TestCase):
 class DisclosureStoreTests(_BaseStoreTests, unittest.TestCase):
     module_name = "disclosure"
     has_chat_args = True
+    default_is_tenanted = True
 
 
 class ProposalStoreTests(_BaseStoreTests, unittest.TestCase):

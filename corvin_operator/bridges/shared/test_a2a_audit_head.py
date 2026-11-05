@@ -69,7 +69,11 @@ def test_build_audit_head_unsigned() -> None:
         p = Path(d) / "audit.jsonl"
         _write_chain(p, 3)
         body = ah.build_audit_head(origin_id="", instance_id="iid-x", audit_path=p)
-        t("unsigned: signature empty", body["signature"] == "")
+        # No origin-existence oracle (52028827a, round 7): an unknown origin gets
+        # a decoy signature of the same 64-hex shape, never "".
+        sig = body["signature"]
+        t("unknown origin: decoy signature has the real shape",
+          len(sig) == 64 and all(c in "0123456789abcdef" for c in sig), detail=sig)
         t("unsigned: carries instance_id", body["instance_id"] == "iid-x")
         t("unsigned: carries count", body["event_count"] == 3)
 
