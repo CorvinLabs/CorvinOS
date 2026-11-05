@@ -661,5 +661,3 @@ classified_not_learning:
     reason: persistent registry of in-flight tasks and phases
   - path: core/vibe_engineering/vector_store.py
     reason: semantic vector storage with an in-memory fallback; stores, does not learn
-  - path: core/vibe_engineering/vibe_orchestrator_worker_integration.py
-    reason: wires a worker pool into the orchestrator

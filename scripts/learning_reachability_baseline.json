@@ -33,7 +33,6 @@
   "core/vibe_engineering/task_heartbeat.py",
   "core/vibe_engineering/task_orchestrator.py",
   "core/vibe_engineering/task_registry.py",
-  "core/vibe_engineering/vector_store.py",
-  "core/vibe_engineering/vibe_orchestrator_worker_integration.py"
+  "core/vibe_engineering/vector_store.py"
  ]
 }

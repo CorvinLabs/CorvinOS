@@ -200,16 +200,48 @@ def _receiver_tenant(tenant_id: "str | None") -> str:
     the rule ``remote_trigger_receiver._resolve_tenant_id`` applies too — never a raw
     environment read. Raises on an invalid id; the caller refuses the spawn.
     """
-    try:
-        from forge.tenants import current_tenant, validate_tenant_id  # type: ignore[import-not-found]
-    except ImportError:
-        _forge = str(Path(__file__).resolve().parents[2] / "forge")
-        if _forge not in sys.path:
-            sys.path.append(_forge)
-        from forge.tenants import current_tenant, validate_tenant_id  # type: ignore[import-not-found]
+    mod = _forge_tenants_module()
     if tenant_id is not None:
-        return validate_tenant_id(tenant_id)
-    return current_tenant()
+        return mod.validate_tenant_id(tenant_id)
+    return mod.current_tenant()
+
+
+_FORGE_TENANTS_MODULE: Any = None
+
+
+def _forge_tenants_module() -> Any:
+    """``forge.tenants`` resolved by FILE, immune to the ``forge`` name collision.
+
+    A process that has ``corvin_operator/`` on ``sys.path`` ahead of
+    ``corvin_operator/forge/`` (the license package lives there, and the gateway
+    dispatcher and pytest add it) binds the name ``forge`` to the NAMESPACE package
+    ``corvin_operator/forge/`` — which has no ``tenants`` — and caches it in
+    ``sys.modules``. Every ``from forge.tenants import …`` in that process then
+    raises ``ModuleNotFoundError`` and this worker refused every inbound task
+    (``tenant-unresolved``, measured on the full suite run of 3282ed405). The
+    resolver is loaded once from its known path; ``tenants.py`` imports only the
+    standard library, so loading it standalone changes nothing it does.
+    """
+    global _FORGE_TENANTS_MODULE
+    if _FORGE_TENANTS_MODULE is not None:
+        return _FORGE_TENANTS_MODULE
+    try:
+        from forge import tenants as mod  # type: ignore[import-not-found]
+        if hasattr(mod, "current_tenant") and hasattr(mod, "validate_tenant_id"):
+            _FORGE_TENANTS_MODULE = mod
+            return mod
+    except ImportError:
+        pass
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "forge" / "forge" / "tenants.py"
+    spec = importlib.util.spec_from_file_location("_corvin_forge_tenants", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"forge tenant resolver not loadable from {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _FORGE_TENANTS_MODULE = mod
+    return mod
 
 
 def _attested_model_of(result: Any) -> str:
@@ -837,7 +869,7 @@ def spawn_a2a_worker(
             status="rejected", raw_output="", parsed_output={},
             duration_ms=_ms(start), persona=persona, engine_name="claude_code",
             reason_code="gate_error",
-            error=f"tenant-unresolved (fail-closed): {type(_texc).__name__}"[:300],
+            error=f"tenant-unresolved (fail-closed): {type(_texc).__name__}: {_texc}"[:300],
         )
 
     # 1a.2 Platform credentials (review DLG-25). On a Bedrock/Vertex/Foundry host the

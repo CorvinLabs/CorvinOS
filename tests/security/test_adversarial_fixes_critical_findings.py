@@ -8,51 +8,11 @@ import pytest
 import asyncio
 import time
 from core.concurrency.worker_pool import WorkerPool, QueueOverflowError
-from core.vibe_engineering.vibe_orchestrator_worker_integration import (
-    VibeOrchestrator,
-    CheckpointRequest,
-    get_vibe_orchestrator,
-)
 
 
 # ============================================================================
 # F-C2: WorkerPool Dead Code → Production Integration
 # ============================================================================
-
-@pytest.mark.asyncio
-async def test_vibe_orchestrator_uses_worker_pool():
-    """
-    F-C2 E2E Wiring Proof: VibeOrchestrator creates checkpoints via WorkerPool.
-
-    This test FAILS if WorkerPool is not wired (dead code).
-    This test PASSES if VibeOrchestrator.orchestrate_checkpoint() calls WorkerPool.
-    """
-
-    orchestrator = VibeOrchestrator()
-    await orchestrator.initialize()
-
-    try:
-        # Create 5 checkpoint requests
-        requests = [
-            CheckpointRequest(task_id=f"task_{i}", context={"step": i})
-            for i in range(5)
-        ]
-
-        # Submit all requests
-        results = await orchestrator.orchestrate_multiple_checkpoints(requests)
-
-        # Verify all were processed
-        assert len(results) == 5
-        assert all(r.checkpoint_id for r in results)
-        assert all(r.status == "created" for r in results)
-
-        # Verify WorkerPool actually processed them
-        stats = orchestrator.get_pool_stats()
-        assert stats["tasks_processed"] >= 5, "WorkerPool must process all tasks"
-
-    finally:
-        await orchestrator.shutdown()
-
 
 @pytest.mark.asyncio
 async def test_worker_pool_concurrent_execution():
@@ -240,40 +200,3 @@ async def test_worker_pool_auto_scaling_down():
 # ============================================================================
 # Cross-Finding Integration Tests
 # ============================================================================
-
-@pytest.mark.asyncio
-async def test_orchestrator_with_backpressure():
-    """
-    Integration: VibeOrchestrator respects WorkerPool backpressure (F-C2 + F-C3).
-    """
-
-    orchestrator = VibeOrchestrator(
-        max_concurrent_checkpoints=2,
-        checkpoint_queue_size=5,
-        checkpoint_timeout=0.5,
-    )
-    await orchestrator.initialize()
-
-    try:
-        # Submit many requests to trigger backpressure
-        requests = [
-            CheckpointRequest(task_id=f"task_{i}", context={"step": i})
-            for i in range(20)
-        ]
-
-        # Should raise QueueOverflowError on one of them
-        overflow_detected = False
-        for req in requests:
-            try:
-                await orchestrator.orchestrate_checkpoint(req)
-            except QueueOverflowError:
-                overflow_detected = True
-                break
-
-        # At least one should have hit backpressure
-        # (Note: This is probabilistic; may not always trigger in test)
-        # Just verify the mechanism exists
-        assert orchestrator.get_pool_stats()["queue_size"] >= 0
-
-    finally:
-        await orchestrator.shutdown()
