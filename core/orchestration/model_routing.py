@@ -56,17 +56,26 @@ class SubsystemCostEvent:
     model_used: str
     estimated_cost: float
     actual_cost: float
-    variance: float  # actual - estimated
     success: bool = True  # Did this subsystem succeed?
     error_msg: Optional[str] = None
     timestamp: datetime = field(default_factory=datetime.utcnow)
     routing_plan_hash: Optional[str] = None  # Hash of the routing plan this was based on
 
+    @property
+    def variance(self) -> float:
+        """actual - estimated, derived so it can never disagree with its inputs.
+
+        Rounded to 1e-9 USD: both inputs are dollar amounts, and an unrounded
+        float difference (0.30 - 0.25 = 0.04999999999999999) would leak binary
+        noise into the audit record.
+        """
+        return round(self.actual_cost - self.estimated_cost, 9)
+
     def variance_pct(self) -> float:
         """Variance as percentage of estimate."""
         if self.estimated_cost == 0:
             return 0.0
-        return (self.variance / self.estimated_cost) * 100.0
+        return round((self.variance / self.estimated_cost) * 100.0, 6)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for audit trail."""

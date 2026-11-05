@@ -39,14 +39,19 @@ BASE = "/v1/console/autonomous-forge"
 def forge_client(tmp_path: Path):
     home = tmp_path / "corvin_home"
     (home / "tenants" / "_default" / "global" / "auth").mkdir(parents=True)
-    keys = ("CORVIN_HOME", "CORVIN_TENANT_ID", "VOICE_AUDIT_PATH", "XDG_CONFIG_HOME",
-            "CORVIN_AUDIT_ANCHOR_KEY")
+    # CORVIN_AUDIT_ANCHOR_KEY is deliberately NOT moved per test: the root
+    # conftest already points it at the session sandbox, and the audit writer
+    # loads the key ONCE per process (security_events._anchor_key). Moving the
+    # path here MAC'd this test's chain with the cached session key while its
+    # out-of-tree sidecars went under the new path, so verify_chain reported
+    # every record as mac_tampered whenever an earlier test in the same process
+    # had already written an audit record.
+    keys = ("CORVIN_HOME", "CORVIN_TENANT_ID", "VOICE_AUDIT_PATH", "XDG_CONFIG_HOME")
     prev = {k: os.environ.get(k) for k in keys}
     os.environ.update({
         "CORVIN_HOME": str(home), "CORVIN_TENANT_ID": "_default",
         "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
         "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
-        "CORVIN_AUDIT_ANCHOR_KEY": str(tmp_path / "anchor.key"),
     })
 
     from fastapi import FastAPI
@@ -105,9 +110,20 @@ def serve(home: Path, channel: str) -> str:
 
 
 def follow_up(home: Path, channel: str, text: str) -> None:
+    """One organic follow-up grade from ``channel``.
+
+    Production dedupes a user-scope skill's follow-up grades per TENANT
+    (``skill_inject.followup_dedupe_key``, review c120 r4_s1-3): one allowance
+    per signal kind per 24 h, so one operator cannot farm a skill by praising it
+    in several chats. These tests model several independent users, one per
+    chat, so each chat gets its own allowance through ``dedupe_channel`` — the
+    override that function documents for exactly this case. The per-tenant
+    rule itself is pinned by the skill_inject follow-up tests.
+    """
     import skill_inject as si
     si.grade_from_user_followup(channel_id=channel, profile={}, user_text=text,
-                                prev_run_id=f"run-{channel}", prev_skill_names=[SKILL])
+                                prev_run_id=f"run-{channel}", prev_skill_names=[SKILL],
+                                dedupe_channel=channel)
 
 
 def chain_records(home: Path) -> list[dict]:

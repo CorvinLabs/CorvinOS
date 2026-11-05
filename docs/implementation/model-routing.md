@@ -123,7 +123,10 @@ event = tracker.track_subsystem_cost(
 
 **Features:**
 - Records SubsystemCostEvent (immutable, audit-ready)
-- Compares actual vs. estimated cost
+- Compares actual vs. estimated cost — against the estimate the plan made
+  (`reasoning[<subsystem>]["estimated_cost"]`, recorded by `compute_routing_plan`;
+  a single-route plan without it uses `estimated_total_cost`; otherwise the
+  default per-model table)
 - Alerts on >30% variance
 - Includes routing plan hash for traceability
 
@@ -139,11 +142,13 @@ class SubsystemCostEvent:
     model_used: str
     estimated_cost: float
     actual_cost: float
-    variance: float
     success: bool
     error_msg: Optional[str]
     timestamp: datetime
     routing_plan_hash: Optional[str]  # SHA256 of routing plan
+
+    @property
+    def variance(self) -> float: ...  # actual - estimated, derived (rounded to 1e-9 USD)
 ```
 
 ### Integration Points

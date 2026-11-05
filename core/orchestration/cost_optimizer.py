@@ -99,10 +99,13 @@ class CostOptimizer:
                 "model": model,
             }
 
-        # Compute total estimated cost
+        # Compute total estimated cost. Each subsystem's estimate is kept in
+        # the plan so CostTracker measures variance against the number this
+        # plan actually estimated (template overrides + multipliers included).
         total_cost = 0.0
         for subsystem, model in routes.items():
             estimate = self._estimate_subsystem_cost(subsystem, model, template)
+            reasoning[subsystem]["estimated_cost"] = estimate.estimated_cost
             total_cost += estimate.estimated_cost
 
         # Estimate overall confidence
@@ -253,7 +256,6 @@ class CostTracker:
             model_used=model_used,
             estimated_cost=estimated_cost,
             actual_cost=actual_cost,
-            variance=actual_cost - estimated_cost,
             success=success,
             error_msg=error_msg,
             routing_plan_hash=hash_routing_plan(routing_plan),
@@ -277,10 +279,24 @@ class CostTracker:
         model: str,
         routing_plan: ModelRoutingPlan,
     ) -> float:
-        """Extract estimated cost for a subsystem from routing plan."""
-        # This is a simplified lookup; in practice, you'd recompute or cache
+        """The estimate the routing plan made for this subsystem.
+
+        Variance is only meaningful against the number the plan itself
+        estimated. Order: the per-subsystem estimate recorded by
+        ``compute_routing_plan`` (when the subsystem ran on the planned
+        model); for a single-route plan, the plan's total; otherwise the
+        default per-model table.
+        """
         if subsystem in routing_plan.subsystem_routes:
-            # Rough estimate based on model
+            planned_model = routing_plan.subsystem_routes[subsystem]
+            if planned_model == model:
+                recorded = (routing_plan.reasoning.get(subsystem) or {}).get(
+                    "estimated_cost"
+                )
+                if isinstance(recorded, (int, float)):
+                    return float(recorded)
+                if len(routing_plan.subsystem_routes) == 1:
+                    return float(routing_plan.estimated_total_cost)
             model_costs = {
                 ModelChoice.HAIKU: 0.20,
                 ModelChoice.SONNET: 0.40,

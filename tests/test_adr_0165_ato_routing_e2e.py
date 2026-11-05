@@ -13,6 +13,11 @@ Note: Tests use tenant_id="test_no_defaults" to isolate ATO testing from
 Tier 2.5 (tenant engine defaults). In production, ATO recommendations are
 applied at Tier 2.8, which comes after Tier 2.5 per the resolver's tier
 ordering documented in model_selector.resolve_os_model() docstring.
+
+Model ids: automatic tiers (ATO at 2.8, Tier 3) route to the NEWEST member of a
+family (ADR-2090 model lineage), so expectations use ms.tier_model(<family>) —
+never the curated DEFAULT_* floor constants or a literal id, which go stale on
+every release.
 """
 
 import pytest
@@ -39,7 +44,7 @@ class TestATORoutingTier28:
         )
 
         # Tier 2.8 should return the ATO recommendation
-        assert result == ms.DEFAULT_LOW  # haiku
+        assert result == ms.tier_model("haiku")  # haiku
         assert "haiku" in result.lower()
 
     def test_resolve_os_model_ato_sonnet_recommendation(self):
@@ -58,7 +63,7 @@ class TestATORoutingTier28:
         )
 
         # Tier 2.8 should return the ATO recommendation
-        assert result == ms.DEFAULT_HIGH  # sonnet
+        assert result == ms.tier_model("sonnet")  # sonnet
         assert "sonnet" in result.lower()
 
     def test_resolve_os_model_ato_opus_recommendation(self):
@@ -77,7 +82,7 @@ class TestATORoutingTier28:
         )
 
         # Tier 2.8 should return the ATO recommendation
-        assert result == "claude-opus-4-7"
+        assert result == ms.tier_model("opus")
         assert "opus" in result.lower()
 
     def test_resolve_os_model_explicit_override_beats_ato(self):
@@ -117,8 +122,8 @@ class TestATORoutingTier28:
         )
 
         # Should NOT use haiku, should use Tier 3 (adaptive)
-        assert result != ms.DEFAULT_LOW
-        assert result == ms.DEFAULT_HIGH  # Tier 3 → HIGH by default
+        assert result != ms.tier_model("haiku")
+        assert result == ms.tier_model("sonnet")  # Tier 3 → HIGH by default
 
     def test_resolve_os_model_ato_fallthrough_no_recommendation(self):
         """When recommended_model is None, ATO should not apply."""
@@ -136,7 +141,7 @@ class TestATORoutingTier28:
         )
 
         # Should fallthrough to Tier 3 (adaptive)
-        assert result == ms.DEFAULT_HIGH
+        assert result == ms.tier_model("sonnet")
 
     def test_resolve_os_model_ato_none_hint(self):
         """When ato_plan_hint is None, should skip Tier 2.8."""
@@ -148,7 +153,7 @@ class TestATORoutingTier28:
         )
 
         # Should use Tier 3 (adaptive)
-        assert result == ms.DEFAULT_HIGH
+        assert result == ms.tier_model("sonnet")
 
 
 class TestATORoutingAudit:
@@ -222,7 +227,7 @@ class TestATORoutingAudit:
 
         event = ato_events[0]
         assert "selected_model" in event["details"]
-        assert event["details"]["selected_model"] == ms.DEFAULT_LOW
+        assert event["details"]["selected_model"] == ms.tier_model("haiku")
 
     def test_audit_not_emitted_when_ato_doesnt_apply(self):
         """When ATO doesn't apply (confidence too low), no ATO audit event."""
@@ -285,7 +290,7 @@ class TestATORoutingEdgeCases:
         )
 
         # Should fallthrough to Tier 3
-        assert result == ms.DEFAULT_HIGH
+        assert result == ms.tier_model("sonnet")
 
     def test_ato_hint_case_insensitive(self):
         """Model names in ATO hint should be case-insensitive."""
@@ -302,7 +307,7 @@ class TestATORoutingEdgeCases:
         )
 
         # Should still work (case-insensitive lookup)
-        assert result == ms.DEFAULT_HIGH
+        assert result == ms.tier_model("sonnet")
         assert "sonnet" in result.lower()
 
     def test_ato_invalid_model_name(self):

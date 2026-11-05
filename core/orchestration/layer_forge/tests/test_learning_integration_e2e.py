@@ -37,6 +37,18 @@ def layer_forge_orchestrator(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_HOME", str(home))
     monkeypatch.setenv("CORVIN_TENANT_ID", TENANT)
 
+    # The REVIEW phase is an LLM call (Opus, "be skeptical"): unpatched, this suite
+    # spent the operator's real engine budget and its verdict was a coin toss — a
+    # FLAGGED verdict then (correctly) refuses promote() without an override. That
+    # external boundary is the one thing replaced here, exactly as
+    # tests/forge_bundle/conftest.py does; every other gate runs for real. The
+    # FLAGGED-needs-override rule is covered by test_phase3a_feedback_loops.py.
+    from core.orchestration.layer_forge import orchestrator as _orch_mod
+    from core.orchestration.layer_forge.review import ReviewVerdict
+
+    monkeypatch.setattr(_orch_mod, "review_layer_definition",
+                        lambda manifest, enforcement, **_k: ReviewVerdict("PASS", flags=[]))
+
     from core.orchestration.layer_forge.orchestrator import LayerForgeOrchestrator
 
     return LayerForgeOrchestrator(TENANT), home

@@ -37,6 +37,18 @@ def _drain(agen) -> list[dict]:
     return asyncio.run(_collect())
 
 
+#: Module-name roots this file fakes. ``corvin_operator.license`` is listed although
+#: nothing here assigns it: the licence package's ``_TwinFinder`` aliases it to
+#: whatever ``license`` is in sys.modules at the time, so an import of the twin
+#: while the fake is installed makes the FAKE the twin, for the rest of the process.
+_FAKED_ROOTS = ("license", "corvin_operator.license", "acs_runtime")
+
+
+def _faked_names() -> set[str]:
+    return {k for k in sys.modules
+            if any(k == r or k.startswith(r + ".") for r in _FAKED_ROOTS)}
+
+
 class _FakeLicenseLimitError(Exception):
     """Stand-in for license.limits.LicenseLimitError so we don't need the module."""
 
@@ -72,6 +84,16 @@ class _FakeACSResult:
 
 class ACSQuotaFallbackTest(unittest.TestCase):
     def setUp(self) -> None:
+        # Snapshot sys.modules under the faked roots: the fakes below REPLACE the real
+        # ``license`` package and ``acs_runtime``, and the licence twin finder then
+        # aliases ``corvin_operator.license`` to the fake. The old tearDown popped
+        # three names and left that alias behind, so every later test in the process
+        # doing ``from license import validator`` got the empty fake ("cannot import
+        # name 'validator' from 'license' (unknown location)") — that is what turned
+        # test_autonomous_forge_canary_e2e red when it ran after this file. Only these
+        # roots are restored; a whole-dict restore would also evict every module
+        # first imported during the test.
+        self._saved_mods = {m: sys.modules[m] for m in _faked_names()}
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["CORVIN_HOME"] = self.tmp.name
         os.environ["CORVIN_TENANT_ID"] = "_default"
@@ -93,9 +115,10 @@ class ACSQuotaFallbackTest(unittest.TestCase):
         self.tmp.cleanup()
         for k in ("CORVIN_HOME", "CORVIN_TENANT_ID"):
             os.environ.pop(k, None)
-        # Clean up injected fake modules
-        for mod_name in ("license", "license.compute_quota", "license.limits", "acs_runtime"):
+        # Put back exactly what was there before (the real modules, or nothing).
+        for mod_name in _faked_names() - set(self._saved_mods):
             sys.modules.pop(mod_name, None)
+        sys.modules.update(self._saved_mods)
 
     def _pin_house_rules_allowed(self):
         """Force house-rules classifier to ALLOW so we reach the delegation gate."""
@@ -288,20 +311,25 @@ class ACSQuotaFallbackTest(unittest.TestCase):
         prompt = "review and refactor the auth module"
 
         import corvin_console._spawn_gates as _sg  # type: ignore[import]
-        original_fn = _sg.check_console_spawn_or_refusal
+        # The turn's gates run through resolve_console_spawn (chat_runtime._route_off_loop,
+        # ADR-2268) — check_console_spawn_or_refusal is only its non-switching wrapper for
+        # other callers, so patching the wrapper reached no gate of this turn at all.
+        original_fn = _sg.resolve_console_spawn
 
-        call_count = {"n": 0}
+        call_count = {"n": 0, "engines": []}
 
-        def _fake_gate(task_text, tenant_id=None, persona=None, channel=None,
-                       chat_key=None, engine_id=None):
+        def _fake_gate(task_text, *, tenant_id=None, persona=None, channel=None,
+                       chat_key=None, engine_id=None, classification=None,
+                       switchable=False):
             call_count["n"] += 1
+            call_count["engines"].append(engine_id)
             # First call: ACS gate → pass (delegation proceeds to quota check).
             # Second call: fallback-engine gate → block.
             if engine_id == "acs":
-                return None
-            return _GATE_REFUSAL
+                return _sg._FallbackRoute(refusal=None, engine_id=engine_id)
+            return _sg._FallbackRoute(refusal=_GATE_REFUSAL, engine_id=engine_id)
 
-        _sg.check_console_spawn_or_refusal = _fake_gate  # type: ignore[assignment]
+        _sg.resolve_console_spawn = _fake_gate  # type: ignore[assignment]
         try:
             with (
                 patch.object(self.cr, "_delegation_enabled", return_value=True),
@@ -311,7 +339,7 @@ class ACSQuotaFallbackTest(unittest.TestCase):
             ):
                 events = _drain(self.cr.stream_turn(self.sess, prompt))
         finally:
-            _sg.check_console_spawn_or_refusal = original_fn  # type: ignore[assignment]
+            _sg.resolve_console_spawn = original_fn  # type: ignore[assignment]
 
         types_seen = [e.get("type") for e in events]
 
