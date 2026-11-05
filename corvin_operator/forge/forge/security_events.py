@@ -1441,6 +1441,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "learning.preference":            "INFO",
     "learning.preference.set":        "INFO",
     "learning.retention":             "INFO",
+    # event_persistence.cleanup_old_events skipped a partition holding foreign-tenant
+    # records (review 2026-11-05 LW-6: was unregistered, so it landed at INFO)
+    "learning.cross_tenant_contamination_detected": "CRITICAL",
     "learning.skill_executed":        "INFO",
     "learning.token.metrics":         "INFO",
     "learning.tool.executed":         "INFO",
@@ -5110,7 +5113,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "learning.plugin_error_recovered": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     "learning.preference": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     "learning.preference.set": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
-    "learning.retention": frozenset({"audit_ref", "deleted_count", "partitions_rewritten", "retention_days"}),
+    "learning.retention": frozenset({"audit_ref", "deleted_count", "partitions_rewritten", "retention_days",
+                                     "contaminated_partitions"}),
+    # file: the partition's date-named file; foreign_tenants: validated tenant ids (system ids)
+    "learning.cross_tenant_contamination_detected": frozenset({
+        "tenant_id", "file", "cross_tenant_count", "foreign_tenants"}),
     "learning.skill_executed": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     "learning.token.metrics": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     "learning.tool.executed": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
