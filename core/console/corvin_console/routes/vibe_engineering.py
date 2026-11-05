@@ -79,25 +79,26 @@ def _find_assembly_dir(tenant_id: str) -> "Path | None":
 def _write_pipeline_config(tenant_id: str, pipeline: list) -> None:
     """Persist spec.context_engineering.pipeline into tenant.corvin.yaml.
 
-    ATOMIC (review R6): a naked ``write_text`` over the tenant spec can be torn by
-    a crash or a concurrent writer, and this one file also carries every feature
-    flag (incl. the compliance-adjacent ones) — a truncated read then reads as
-    "flag absent = off". Mirrors ``routes/engine.py::_save_tenant_yaml``
-    (temp + replace), the established writer for this exact file.
+    Through ``corvin_console.tenant_yaml.update`` - the one console writer of this
+    file: locked read-modify-write, atomic temp + ``os.replace``, mode 0o600 set
+    BEFORE the replace (review SRF-3: this writer used to leave the file at umask,
+    0o664, and the gateway then refused every run). A file that exists but cannot
+    be parsed raises ``TenantYamlUnreadable`` and nothing is written - it is never
+    read as ``{}`` and rewritten with the pipeline alone.
     """
-    import os  # noqa: PLC0415
-    import yaml  # noqa: PLC0415
-    p = Path(_forge_paths.tenant_global_dir(tenant_id)) / "tenant.corvin.yaml"
-    data = {}
-    if p.exists():
-        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    spec = data.setdefault("spec", {})
-    ce = spec.setdefault("context_engineering", {})
-    ce["pipeline"] = pipeline
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(f".yaml.tmp.{os.getpid()}")
-    tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    os.replace(tmp, p)
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
+    p = Path(_forge_paths.tenant_global_dir(tenant_id)) / _ty.FILENAME
+
+    def _set(data: dict) -> None:
+        spec = data.get("spec")
+        if not isinstance(spec, dict):
+            spec = data["spec"] = {}
+        ce = spec.get("context_engineering")
+        if not isinstance(ce, dict):
+            ce = spec["context_engineering"] = {}
+        ce["pipeline"] = pipeline
+
+    _ty.update(p, _set)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")  # brief_sha256 shape; blocks path traversal
 
@@ -387,7 +388,20 @@ async def put_pipeline(
     normalised = [{"stage": (e.get("stage") if isinstance(e, dict) else e),
                    **({"config": e["config"]} if isinstance(e, dict) and e.get("config") else {})}
                   for e in pipeline]
-    _write_pipeline_config(rec.tenant_id, normalised)
+    from .. import tenant_yaml as _ty  # noqa: PLC0415
+    try:
+        _write_pipeline_config(rec.tenant_id, normalised)
+    except _ty.TenantYamlUnreadable:
+        from .. import audit as console_audit  # noqa: PLC0415
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="cel.pipeline_update", target_kind="tenant_config",
+            target_id="spec.context_engineering.pipeline", reason="tenant-yaml-unreadable",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="tenant configuration is unreadable; fix or restore it before changing the pipeline",
+        ) from None
     return {"ok": True, "pipeline": normalised}
 
 
@@ -492,17 +506,9 @@ def _resolve_session_id(db: Any, tenant_id: str, requested: str) -> str | None:
     """
     if requested and requested != "current":
         return requested
-    try:
-        import sqlite3  # noqa: PLC0415
-        with sqlite3.connect(db.db_path) as conn:
-            row = conn.execute(
-                "SELECT session_id FROM token_metrics WHERE tenant_id = ? "
-                "ORDER BY id DESC LIMIT 1",
-                (tenant_id,),
-            ).fetchone()
-        return row[0] if row else None
-    except Exception:  # noqa: BLE001
-        return None
+    # The tenant's own database (<tenant_home>/learning/token_metrics.db, LRN-14);
+    # a query error propagates to the caller, which reports it as an error.
+    return db.latest_session_id(tenant_id)
 
 
 def _read_live_task_events(tenant_id: str, limit: int = 100) -> list[dict]:

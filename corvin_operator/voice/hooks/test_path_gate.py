@@ -95,6 +95,33 @@ def main() -> int:
         blocked=True,
     )
 
+    # 3b. Learning state directly under <tenant>/global/ → DENY (review 2026-11-05
+    # LRN-10): forged operator CEL-stage grades, a reset ADR-0760 epoch (the Free-tier
+    # savings meter counts from it), the L08 learner's statistics.
+    for _leaf in ("ce_stage_grades.json", "usage_epoch.json",
+                  "model_confidence_stats.json", "ce_stage_grades.json.lock"):
+        _p = f"{HOME}/tenants/acme/global/{_leaf}"
+        expect(f"Write to tenant global learning state {_leaf}",
+               {"tool_name": "Write", "tool_input": {"file_path": _p, "content": "{}"}},
+               blocked=True)
+        expect(f"Bash rm tenant global learning state {_leaf}",
+               {"tool_name": "Bash", "tool_input": {"command": f"rm -f {_p}"}},
+               blocked=True)
+        expect(f"Bash touch tenant global learning state {_leaf}",
+               {"tool_name": "Bash", "tool_input": {"command": f"touch {_p}"}},
+               blocked=True)
+    # positive controls: a same-named file in a session workdir, and an unrelated
+    # file in <tenant>/global/, stay writable
+    expect("Write ce_stage_grades.json inside a session workdir (allowed)",
+           {"tool_name": "Write", "tool_input": {
+               "file_path": f"{HOME}/tenants/acme/sessions/w/ce_stage_grades.json",
+               "content": "{}"}},
+           blocked=False)
+    expect("Write an unrelated file in <tenant>/global (allowed)",
+           {"tool_name": "Write", "tool_input": {
+               "file_path": f"{HOME}/tenants/acme/global/notes.txt", "content": "x"}},
+           blocked=False)
+
     # 4. Write to slot-mirror under repo's operator/skill-forge/skills/dyn/ → DENY
     if REPO is not None:
         expect(

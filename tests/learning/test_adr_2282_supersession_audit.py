@@ -145,7 +145,15 @@ KEPT = {
 
 
 def _present(path):
-    return (REPO / path).exists()
+    """A superseded path is present when it holds SOURCE: a directory left with only a
+    stale, untracked ``__pycache__`` (core/learning/completion_detectors/ after its
+    modules were deleted) imports nothing - Python never loads bytecode whose source is
+    gone - so it is not a superseded module coming back."""
+    p = REPO / path
+    if p.is_dir():
+        return any(f.is_file() and "__pycache__" not in f.relative_to(p).parts
+                   for f in p.rglob("*"))
+    return p.exists()
 
 
 def _uncovered(superseded, kept, present):
@@ -175,3 +183,16 @@ def test_uncovered_detection_positive_control():
     ]
     real = {"ADR-0000": ("core/learning/__never_existed__.py", "README.md")}
     assert _uncovered(real, {}, _present) == [("ADR-0000", "README.md")]
+
+
+def test_a_directory_with_only_stale_bytecode_is_not_present(tmp_path, monkeypatch):
+    import sys
+
+    mod = sys.modules[__name__]
+    (tmp_path / "gone" / "__pycache__").mkdir(parents=True)
+    (tmp_path / "gone" / "__pycache__" / "x.cpython-311.pyc").write_bytes(b"\0")
+    (tmp_path / "back").mkdir()
+    (tmp_path / "back" / "x.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "REPO", tmp_path)
+    assert not _present("gone/")
+    assert _present("back/")

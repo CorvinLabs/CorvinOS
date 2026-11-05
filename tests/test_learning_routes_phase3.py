@@ -164,8 +164,6 @@ def test_every_learning_post_requires_csrf(tmp_path: Path):
         posts = [
             ("/v1/console/learning/override", {"loop": "core", "param": "alpha", "new_value": 0.2, "reason": "x"}),
             ("/v1/console/learning/rollback/v1", None),
-            ("/v1/console/learning/grade", {"pattern_id": "p", "grade": 0.5}),
-            ("/v1/console/learning/note", {"pattern_id": "p", "text": "n"}),
             ("/v1/console/tools/t1/rating", {"rating": 5}),
             ("/v1/console/skills/s1/rating", {"rating": 5}),
             ("/v1/console/learning/patterns/p1/confirm", None),
@@ -188,19 +186,20 @@ def _seed_execution(sb, skill_id: str) -> None:
         lom="core/skills/skill_registry_phase1.py:execute"))
 
 
-def test_grade_on_unknown_pattern_is_404_and_stores_nothing(tmp_path: Path):
-    # The console builds a fresh LearningIntegration per request, whose pattern
-    # store is in-memory; a grade on a pattern it does not know described
-    # nothing and used to be stored anyway (ADR-0534 Layer 2).
+def test_dead_grade_and_note_routes_are_gone(tmp_path: Path):
+    # LRN-18 (2026-11-05): POST /learning/grade and /learning/note acted on a fresh
+    # LearningIntegration's in-memory node cache, which nothing in production fills,
+    # so both answered 404 for every pattern. They are removed, not faked.
     with console_client(tmp_path) as sb:
-        r = sb.client.post(
-            "/v1/console/learning/grade",
-            json={"pattern_id": "pattern_x", "grade": 0.7, "reason": "SECRET-REASON hunter2"},
-            headers=sb.csrf_headers,
-        )
-        assert r.status_code == 404, r.text
+        for path, body in (("/v1/console/learning/grade", {"pattern_id": "p", "grade": 0.7}),
+                           ("/v1/console/learning/note", {"pattern_id": "p", "text": "n"})):
+            r = sb.client.post(path, json=body, headers=sb.csrf_headers)
+            assert r.status_code in (404, 405), (path, r.status_code, r.text)
         assert [e for e in sb.events_on_disk() if e["event_type"] == "feedback"] == []
-        assert "hunter2" not in (sb.chain.read_text(encoding="utf-8") if sb.chain.exists() else "")
+        # constructing the route's integration creates no tenant-less directory
+        r = sb.client.get("/v1/console/learning/nodes")
+        assert r.status_code == 200, r.text
+        assert not (sb.tenant_home.parent.parent / "learning").exists()
 
 
 def test_grade_is_chained_and_reason_is_not_persisted(tmp_path: Path):

@@ -663,6 +663,12 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str, source: str 
     if "skill_forge" not in mcp:
         env: dict[str, str] = {
             "SKILL_FORGE_PERSONA": persona_name,
+            # The caller tag the server's namespace/privilege gate reads
+            # (mcp_server.SkillForgeMCPServer.caller_persona). Without it on the
+            # server's OWN env, a spawner that does not export it (the console
+            # web-chat) left the worker a wildcard caller (review 2026-11-05
+            # LRN-1). Same pair delegate's mcp_config_builder already sets.
+            "CORVIN_CALLER_PERSONA": persona_name,
             # The skill-forge MCP server lives at
             # `<repo>/operator/skill-forge/skill_forge/mcp_server.py` and
             # imports `forge.policy` for the namespace gate. Both packages

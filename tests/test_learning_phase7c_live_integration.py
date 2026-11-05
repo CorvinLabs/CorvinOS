@@ -63,8 +63,9 @@ def check_console_routes():
 
     checks = {
         "GET /learning/nodes endpoint": "def get_learning_nodes" in content,
-        "POST /learning/grade endpoint": "def grade_pattern" in content,
-        "POST /learning/note endpoint": "def add_operator_note" in content,
+        # /learning/grade and /learning/note were removed 2026-11-05 (LRN-18): always 404
+        "no dead POST /learning/grade": '"/learning/grade"' not in content,
+        "no dead POST /learning/note": '"/learning/note"' not in content,
         "Tenant isolation": "rec.tenant_id" in content or "tenant_id" in content,
         "JSON response": 'return {"' in content or "response_model" in content,
     }

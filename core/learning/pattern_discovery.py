@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from core.paths.tenant import corvin_home
 from typing import Optional
 from collections import defaultdict, Counter
 import json
@@ -63,18 +62,21 @@ class FailureClusterer:
 
     MIN_SAMPLES_FOR_PROPOSAL = 50
 
-    def __init__(self, store: LearningEventStore, base_dir: Path = None):
+    def __init__(self, store: LearningEventStore, base_dir: Path):
         """Initialize clusterer.
 
         Args:
             store: LearningEventStore for reading events
-            base_dir: Where to store cluster and discovery logs (default: ~/.corvin/learning/discoveries)
+            base_dir: Where to store cluster and discovery logs - the TENANT's
+                ``<tenant_home>/learning/discoveries`` (LearningIntegration passes it).
+                There is no tenant-less default: ``<corvin_home>/learning/discoveries``
+                belonged to no tenant and was created on every console request
+                (review 2026-11-05 LRN-18). Created on the first write, not here.
         """
         self.store = store
         if base_dir is None:
-            base_dir = corvin_home() / "learning" / "discoveries"
+            raise TypeError("FailureClusterer needs the tenant's discoveries directory")
         self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(parents=True, exist_ok=True)
 
         # In-memory cluster accumulator
         # Key: (error_type, context_signature)

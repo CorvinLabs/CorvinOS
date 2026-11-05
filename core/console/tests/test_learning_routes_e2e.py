@@ -178,15 +178,13 @@ class TestLearningNodesRoute(unittest.TestCase):
             # LearningIntegration was constructed for the tenant under CORVIN_HOME
             self.assertTrue((home / "tenants" / tid / "learning").is_dir())
 
-    def test_grade_unknown_pattern_does_not_500_on_constructor(self):
-        """The old constructor crashed (AnomalyDetector(store) → TypeError) before
-        any handler ran; grading now reaches the handler — and a grade on a
-        pattern that does not exist is a 404 (ADR-0534 Layer 2), not a stored
-        signal about nothing."""
+    def test_grade_route_is_removed(self):
+        """POST /learning/grade acted on an in-memory node cache nothing fills, so it
+        answered 404 for every pattern; it is removed (review 2026-11-05 LRN-18)."""
         with _sandbox(Path(self._tmp)) as (client, home, tid):
             r = client.post("/v1/console/learning/grade",
                             json={"pattern_id": "pattern_nope", "grade": 0.5, "reason": "x"})
-            self.assertEqual(r.status_code, 404, r.text)
+            self.assertIn(r.status_code, (404, 405), r.text)
             self.assertEqual([e for e in _events_on_disk(home, tid) if e["event_type"] == "feedback"], [])
 
 

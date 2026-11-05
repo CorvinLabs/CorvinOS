@@ -39,7 +39,8 @@ class LearningIntegration:
         # Operator-feedback anomaly detector (window-based; takes window_size,
         # NOT a store — passing the store made deque(maxlen=<store>) raise).
         self.anomaly_detector = AnomalyDetector()
-        self.pattern_clusterer = FailureClusterer(self.store)
+        # tenant-scoped (LRN-18): <tenant_home>/learning/discoveries
+        self.pattern_clusterer = FailureClusterer(self.store, base_dir=store_path / "discoveries")
     
     async def execute_method_with_learning(
         self,

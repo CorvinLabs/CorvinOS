@@ -163,9 +163,12 @@ def main() -> int:
         # a Discord/Telegram persona shell — they would set caller_persona
         # to "coder" and trip the namespace-gate on test tool names.
         for k in (
-            "CORVIN_CALLER_PERSONA", "CORVIN_CHANNEL_ID",
+            "CORVIN_CALLER_PERSONA", "SKILL_FORGE_PERSONA", "CORVIN_CHANNEL_ID",
         ):
             env.pop(k, None)
+        # The operator's NAMED wildcard persona: an absent persona is refused
+        # on every mutating tool (review 2026-11-05 LRN-1).
+        env["CORVIN_CALLER_PERSONA"] = "skill-forge"
         env["CORVIN_HOME"] = td
         env["CORVIN_FORCE_SCOPE"] = "user"
         env["CORVIN_PLUGIN_SLOT_DIR"] = slot

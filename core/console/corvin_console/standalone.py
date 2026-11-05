@@ -474,24 +474,16 @@ def create_app() -> FastAPI:
         # fails, token metrics simply won't be recorded (graceful degradation).
         try:
             from core.learning.event_emitter import EventEmitter
-            from core.learning.event_store import EventStore as _LearningEventStore
+            from core.learning.event_store import TenantEventStores
             from core.learning.token_metrics_db import TokenMetricsDB
             from core.learning.token_metrics_store import TokenMetricsStore
             from core.learning.token_measurement_hook import initialize_token_hook
 
-            # Get tenant paths
-            _tenant_id = "_default"
-            try:
-                from corvin_operator.forge.forge.paths import tenant_home  # type: ignore[import-not-found]
-                _tenant_dir = tenant_home(_tenant_id)
-            except ImportError:
-                # Fallback for testing environments
-                _tenant_dir = Path.home() / ".corvin" / "tenants" / _tenant_id
-
-            # EventEmitter(event_store, queue_size) — wraps the tenant's learning
-            # EventStore; the (tenant_dir, tenant_id) form never existed.
-            _emitter = EventEmitter(_LearningEventStore(Path(_tenant_dir)))
-            _db = TokenMetricsDB()  # Auto-creates ~/.corvin/token_metrics.db
+            # EventEmitter(event_store, queue_size) over ONE BOUND learning store
+            # per tenant: the _default store used to take every tenant's events
+            # (review 2026-11-05, LRN-2).
+            _emitter = EventEmitter(TenantEventStores())
+            _db = TokenMetricsDB()  # per tenant: <tenant_home>/learning/token_metrics.db
             _store = TokenMetricsStore(_emitter, db=_db)
             _hook = initialize_token_hook(_store, _emitter)
             log.info("✓ Token measurement hook initialized")

@@ -72,6 +72,11 @@ systems:
   - id: L01
     name: Learning host and Data Hub daemon
     state: A
+    # One host per PROCESS tenant (CORVIN_TENANT_ID), by construction: the audit chokepoint
+    # refuses any other tenant's record (ADR-0562), and the brake and learned-config writes
+    # are audit-first, so a process can learn - and freeze - only for its own tenant. Review
+    # 2026-11-05 LRN-3 (a host per tenant directory) is not built for that reason;
+    # tests/learning/test_review_20261105_lrn_hosts_e2e.py pins the premise. L02 likewise.
     callers:
       - core/gateway/corvin_gateway/app.py:547:_lh.start
       - core/console/corvin_console/app.py:896:learning_host.start
@@ -88,10 +93,10 @@ systems:
     name: Anomaly monitor (learning host, every 300 s)
     state: A
     callers:
-      - core/background/learning_host.py:300:anomaly_monitor.scan
+      - core/background/learning_host.py:313:anomaly_monitor.scan
     readers:
       # an anomaly in FREEZES_LEARNING freezes the learned config (ADR-2304 learning brake)
-      - core/background/learning_host.py:329:self._freeze
+      - core/background/learning_host.py:342:self._freeze
     tests:
       - tests/learning/test_anomaly_monitor.py
       # ADR-2304: two anomalies freeze - SkillAdapter configs on oscillation of their versions or
@@ -117,11 +122,11 @@ systems:
     name: Feedback gate (throttle, reality check, trust weight)
     state: A
     callers:
-      - core/learning/event_store.py:149:admit(
-      - core/console/corvin_console/routes/stream4_skill_feedback.py:174:admit(
+      - core/learning/event_store.py:164:admission(
+      - core/console/corvin_console/routes/stream4_skill_feedback.py:176:admit(
     readers:
       # the verdict decides the write: a refused signal raises FeedbackRejected and nothing is stored
-      - core/learning/event_store.py:149:admit(
+      - core/learning/event_store.py:164:admission(
     tests:
       - core/learning/tests/test_operator_feedback.py
       - core/console/tests/test_learning_loop_routes_e2e.py
@@ -131,7 +136,7 @@ systems:
     state: B
     callers:
       # writer 1: the operator star rating (stream4) -> loop closure -> SkillAdapter
-      - core/console/corvin_console/routes/stream4_skill_feedback.py:314:apply_outcome_to_skill
+      - core/console/corvin_console/routes/stream4_skill_feedback.py:340:apply_outcome_to_skill
       - core/skills/feedback/loop_closure.py:407:apply_config_delta
       # writer 2: the optimizer epoch of POST /v1/console/learning/feedback (PLAN-0966 A2)
       - core/console/corvin_console/routes/method_discovery_api.py:418:run_optimizer_epoch
@@ -163,7 +168,7 @@ systems:
         proxy_of: routing correctness of the router's de-escalation advice
         writes: confidence_threshold
         validity: unmeasured
-        consumer: corvin_operator/bridges/shared/delegation_policy.py:235:output.get("confidence_threshold"
+        consumer: corvin_operator/bridges/shared/delegation_policy.py:250:output.get("confidence_threshold"
         target: none
         guard: task success of the turns routed to native
         control: >-
@@ -179,7 +184,7 @@ systems:
         proxy_of: routing correctness of the router's de-escalation advice
         writes: confidence_threshold
         validity: unmeasured
-        consumer: corvin_operator/bridges/shared/delegation_policy.py:235:output.get("confidence_threshold"
+        consumer: corvin_operator/bridges/shared/delegation_policy.py:250:output.get("confidence_threshold"
         target: none
         guard: task success of the turns routed to native
         control: >-
@@ -201,9 +206,9 @@ systems:
       - corvin_operator/bridges/shared/adapter.py:3415:collect_active_skills
       - corvin_operator/bridges/shared/adapter.py:12885:grade_from_user_followup
       - corvin_operator/bridges/shared/adapter.py:13545:auto_grade_from_output
-      - corvin_operator/skill-forge/skill_forge/mcp_server.py:516:promote
+      - corvin_operator/skill-forge/skill_forge/mcp_server.py:544:promote
       - core/console/corvin_console/routes/chat.py:772:grade_followup
-      - core/console/corvin_console/chat_runtime.py:8741:record_turn_skills
+      - core/console/corvin_console/chat_runtime.py:8812:record_turn_skills
     readers:
       # the injection gate: a skill with no grade or a mean score <= 0 is not injected
       - corvin_operator/bridges/shared/skill_inject.py:742:spec.n_grades
@@ -218,15 +223,15 @@ systems:
     name: CEL turn grades
     state: B
     callers:
-      - core/console/corvin_console/chat_runtime.py:8512:_cel_record_outcome
-      - core/console/corvin_console/chat_runtime.py:9275:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:8583:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:9365:_cel_record_outcome
     tests:
       - corvin_operator/context_engineering/tests/test_grades_adr0285.py
     intake: >-
       Advisory only. The native console path records success=True for every
-      turn that reaches its end (chat_runtime.py:9275), so the grade means "turn
+      turn that reaches its end (chat_runtime.py:9365), so the grade means "turn
       completed", not "the stage helped"; the delegated (ACS/TDE) branch records
-      the run's own result (ok or bounded stop, chat_runtime.py:8512). Behind the
+      the run's own result (ok or bounded stop, chat_runtime.py:8583). Behind the
       outcome_feedback_loop flag (default off). An automatic grade never makes a
       stage default-eligible, only an operator grade does. It may steer stage
       selection only with a measured outcome source (T-0128 was cancelled for want
@@ -250,7 +255,7 @@ systems:
       - corvin_operator/bridges/shared/adapter.py:5485:shadow_classify_task
       - corvin_operator/bridges/shared/adapter.py:6975:report_turn_outcome
       - corvin_operator/bridges/shared/adapter.py:7014:report_turn_outcome
-      - core/console/corvin_core/task_manager.py:676:_update_model_selection_confidence
+      - core/console/corvin_core/task_manager.py:684:_update_model_selection_confidence
       # reader: GET /v1/console/v1/engine/config -> the Models page task cards
       - core/console/corvin_console/routes/engine_api.py:667:optimizer.get_stats
     tests:
@@ -372,20 +377,20 @@ systems:
       # decision record, one per turn: a turn that stays native is recorded by the triage
       # (delegation_policy.resolve_delegation_route), a delegation-worthy one by
       # resolve_worker_engine, a turn neither reached by the unrouted fallback
-      - core/console/corvin_console/chat_runtime.py:4323:resolve_delegation_route
-      - core/console/corvin_console/chat_runtime.py:4622:_shared_target
-      - core/console/corvin_console/chat_runtime.py:4660:route_and_record
+      - core/console/corvin_console/chat_runtime.py:4324:resolve_delegation_route
+      - core/console/corvin_console/chat_runtime.py:4626:_shared_target
+      - core/console/corvin_console/chat_runtime.py:4664:route_and_record
       - corvin_operator/bridges/shared/adapter.py:9872:resolve_delegation_route
       - corvin_operator/bridges/shared/adapter.py:9523:resolve_worker_engine
       - corvin_operator/bridges/shared/adapter.py:9731:route_and_record
       # outcome record, joined to the decision by turn_id
-      - core/console/corvin_console/chat_runtime.py:4698:record_turn_outcome
+      - core/console/corvin_console/chat_runtime.py:4764:record_turn_outcome
       - corvin_operator/bridges/shared/adapter.py:9785:record_turn_outcome
       # console engine guard: a cleared Phase 2 Skill route onto an unavailable engine
       # records its decision and a judged ok:false outcome (the bridge does the same)
-      - core/console/corvin_console/routes/chat.py:1006:record_unavailable_skill_route
+      - core/console/corvin_console/routes/chat.py:1013:record_unavailable_skill_route
       # operator reset of a tripped rollback judge (POST .../learning/routing/rollback/reset)
-      - core/console/corvin_console/routes/learning.py:901:rollback_detector.reset_rollback
+      - core/console/corvin_console/routes/learning.py:838:rollback_detector.reset_rollback
     tests:
       - core/console/tests/test_l5_routing_loop_console_e2e.py
       - tests/e2e/test_l5_routing_loop_bridge_e2e.py

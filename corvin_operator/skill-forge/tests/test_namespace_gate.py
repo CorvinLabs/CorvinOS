@@ -5,7 +5,8 @@ Mirrors operator/forge/tests/test_namespace_gate.py for SkillForge:
   1. ``coder`` may register ``code.review_checklist``.
   2. ``coder`` may NOT register ``inbox.foo`` — error envelope, audit
      event ``skill.namespace_denied`` fires.
-  3. Missing CORVIN_CALLER_PERSONA → wildcard, any name works.
+  3. Missing caller persona → refused (LRN-1: never a wildcard); the
+     operator's wildcard is a NAMED persona without a prefix (``skill-forge``).
   4. Persona not in policy.persona_namespaces → wildcard.
   5. Successful skill_create / skill_grade / skill_promote audit events
      carry ``details.caller_persona``.
@@ -271,21 +272,40 @@ def test_coder_blocked_outside_namespace():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
-# -- Case 3: missing env → wildcard ------------------------------------------
+# -- Case 3: missing persona → refused; named wildcard → any name ------------
 
-def test_no_caller_persona_falls_back_to_wildcard():
-    print("\n[case 3: no CORVIN_CALLER_PERSONA → any name works]")
+OPERATOR = "skill-forge"  # named persona without a prefix = the operator's wildcard
+
+
+def test_no_caller_persona_is_refused_not_wildcard():
+    print("\n[case 3: no caller persona → every mutation refused (LRN-1)]")
     sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-3-"))
     try:
         client = _SFMCPClient(corvin_home=sandbox, caller_persona=None)
+        try:
+            client.initialize()
+            for tool, args in (
+                ("skill_create", _create_args("anything.goes")),
+                ("skill_grade", {"name": "anything.goes", "run_id": "r", "score": 1.0}),
+                ("skill_promote", {"name": "anything.goes", "to": "user", "force": True}),
+                ("skill_purge", {"name": "anything.goes", "reason": "x"}),
+            ):
+                r = _call(client, tool, args)
+                assert r.get("isError") is True, (tool, r)
+                assert "no caller persona" in r["content"][0]["text"], (tool, r)
+            t("absent persona refused on every mutating tool", True)
+        finally:
+            client.close()
+        client = _SFMCPClient(corvin_home=sandbox, caller_persona=OPERATOR)
         try:
             client.initialize()
             r = client.request("tools/call",
                                {"name": "skill_create",
                                 "arguments": _create_args("anything.goes")})
             ok = r["result"].get("isError") is False
-            t("any name registers without CALLER_PERSONA", ok,
+            t("named wildcard persona registers any name", ok,
               detail=("" if ok else r["result"]["content"][0]["text"]))
+            assert ok, r
         finally:
             client.close()
     finally:
@@ -368,7 +388,7 @@ def test_coder_cannot_grade_purge_or_promote_foreign_skill():
     sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-6-"))
     try:
         # the victim is created by an unrestricted (wildcard) caller
-        owner = _SFMCPClient(corvin_home=sandbox, caller_persona=None)
+        owner = _SFMCPClient(corvin_home=sandbox, caller_persona=OPERATOR)
         try:
             owner.initialize()
             r = _call(owner, "skill_create", _create_args("assistant.victim"))
@@ -440,7 +460,7 @@ def test_create_scope_gate():
         finally:
             coder.close()
 
-        operator = _SFMCPClient(corvin_home=sandbox, caller_persona=None)
+        operator = _SFMCPClient(corvin_home=sandbox, caller_persona=OPERATOR)
         try:
             operator.initialize()
             r = _call(operator, "skill_create", _create_args("ops.direct_user", scope="user"))
@@ -471,7 +491,7 @@ def test_create_scope_gate():
 def main() -> int:
     test_coder_can_register_in_namespace()
     test_coder_blocked_outside_namespace()
-    test_no_caller_persona_falls_back_to_wildcard()
+    test_no_caller_persona_is_refused_not_wildcard()
     test_unknown_persona_falls_back_to_wildcard()
     test_caller_persona_in_audit_details()
     test_coder_cannot_grade_purge_or_promote_foreign_skill()

@@ -17,7 +17,7 @@ import pytest
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    """Point the hard-coded `~/.corvin/token_metrics.db` at a throwaway home."""
+    """A throwaway CORVIN_HOME (and HOME, to prove ``~`` is never used)."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
@@ -28,9 +28,11 @@ def isolated_home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _rows(home: Path) -> list[sqlite3.Row]:
-    db = home / ".corvin" / "token_metrics.db"
+def _rows(home: Path, tenant_id: str = "_default") -> list[sqlite3.Row]:
+    # <tenant_home>/learning/token_metrics.db, never ~/.corvin/token_metrics.db (LRN-14)
+    db = home / ".corvin" / "tenants" / tenant_id / "learning" / "token_metrics.db"
     assert db.exists(), "write path did not even create the database"
+    assert not (home / ".corvin" / "token_metrics.db").exists(), "the shared legacy file came back"
     with sqlite3.connect(db) as conn:
         conn.row_factory = sqlite3.Row
         return list(conn.execute("SELECT * FROM token_metrics"))
@@ -100,3 +102,6 @@ def test_rows_are_tenant_isolated(isolated_home):
     b = db.query_by_session("shared", "tenant_b")
     assert [r["turn_id"] for r in a] == ["a"]
     assert [r["turn_id"] for r in b] == ["b"]
+    # and each tenant's rows live in that tenant's own file (LRN-14)
+    assert [r["turn_id"] for r in _rows(isolated_home, "tenant_a")] == ["a"]
+    assert [r["turn_id"] for r in _rows(isolated_home, "tenant_b")] == ["b"]

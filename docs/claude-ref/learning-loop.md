@@ -26,7 +26,7 @@ register entry is A. Three CI checks hold it (all in `run-all-tests.sh`):
 | Check | File | Fails on |
 |---|---|---|
 | Register | `tests/learning/test_learning_systems_register.py` | a caller, reader or contract `consumer` whose file does not exist or whose needle (≥ 4 characters, starting with an identifier: the called function, `module.attr`, `call(arg, "literal"`) is not CODE in the statement of the cited line and at most 1 line from it — the file is tokenized, so a needle inside a comment, a docstring or another string does not count. A caller must be the statement's call, an argument of a call (a registration) or a decorated definition; an import NEVER counts, and a call nested in another call's arguments counts only on its own line. A reader or consumer must USE the value: called, tested in `if`/`while`/`return`/`for`, passed to a call that is not a route registration, or assigned to a plain name (not `_`, not an attribute or subscript store such as `self._x = v`) that occurs later in the file — anywhere in it, not only in the same function (review c120 r3_s3-1..3, r4_s3-4; the remaining limits — code that never runs, a reused name — are listed in the test's module header). Every ref must be production code: one into a test file (`tests/`, `test_*`, `*_test`, `conftest`, `*.test.*`) fails (r4_s3-3). In a JS/TS/TSX file, comments (also a JSX `{/* <X /> */}`) and string/template literals are blanked before the `needle(` / `<Needle` match (r4_s3-2). Negative controls on copies: the L18 `<LearningOverview>` reader inside a JSX comment, a block comment, a string and a template literal; an L06 entry backed only by a test file's call; every ref shifted by ±2 and ±3 lines, three needles swapped to a REAL neighbouring call (`register_live_turn`, `meta.get`, `monitoring_route`), five calls deleted while their import survives 1-3 lines above, an import line cited as caller, the L06 injection gate replaced by a dead tuple, the L12 readiness gate bypassed with the name left as a bare expression, the L19 router registration named as a reader, the L05 reader and the L19 scheduler start turned into comments, the L15 guidance call deleted while `out["guidance"]` stays one line below, a needle that exists nowhere, the needle `t`. Also a missing test file, an A without caller or without a reader, an A that still states an `intake` or whose recorded readiness (`measured`) is not ready on every surface (so promoting L05 or L12 fails while the ADR-2092 gates do not hold), an entry with `promoted_from` (L08, L19) that lost its contract, a B without `intake`, a B without a valid `signal_contract` (ADR-2303, below; `proxy_of`, `target`, `consumer` must be strings — YAML `no`/`false` loads as a bool and fails), a D without a resolving ADR id or with every module gone, an unclassified unreachable `core/vibe_engineering` module, and a row of the table below that differs from the register |
-| Reachability ratchet | `scripts/learning_reachability.py` + `scripts/learning_reachability_baseline.json`, `tests/learning/test_learning_reachability_ratchet.py` | a NEW unreachable module in the learning scopes (same graph as `zero_caller_sweep`), and a STALE baseline entry (module reachable again or deleted). Shrink-only |
+| Reachability ratchet | `scripts/learning_reachability.py` + `scripts/learning_reachability_baseline.json`, `tests/learning/test_learning_reachability_ratchet.py` | a NEW unreachable module in the learning scopes (same graph as `zero_caller_sweep`), and a STALE baseline entry (module reachable again or deleted). Shrink-only. A re-export in `core/learning/__init__.py` is not reachability (`REEXPORT_BLIND_INITS`, review 2026-11-05 LRN-19): `import core.learning.x` reaches none of the package's re-exports and `from core.learning import Name` only the module `Name` comes from; `import core.learning` / `import *` still follow the whole `__init__`, a module-path string (`soft_dependencies`) does not. Measured 2026-11-05: no `core/learning` module was reachable only through the `__init__`; applying the rule to every scoped package would expose 17 more (`core/vibe_engineering`, `core/skills/feedback`, the DoD verifier) - a per-module decision, not done here. A module-level sweep cannot see a dead FUNCTION (e.g. `integrate_feedback_outcome`) |
 | Call-site pins | `tests/learning/test_learning_call_site_pins.py` | L06 injection gate / follow-up grade and L10 distill scheduling / injection through `adapter.process_one`; L14 `emit_*_confidence` through `POST /v1/console/forge-bundles/import`. Each was shown red with its call site cut |
 
 <!-- register-table:start (kept equal to core/learning/learning_systems.yaml by the register test) -->
@@ -100,7 +100,11 @@ nothing), and the pin `test_l10_a_real_turn_yields_a_distilled_model` passes thr
 proxies (0.85 / 0.2 "bridge turn ended without / with an error", 0.95 / 0.3 per finished task) and
 the selection never reads it; its operator-facing reader is the Models page (`GET /v1/engine/config`
 → each task card), which since 2026-10-27 labels the number "no-error score (proxy)" instead of
-"NN% confident" (review c120: twelve error-free turns read as "76% confident"). The 19 unreachable `core/vibe_engineering` modules are classified
+"NN% confident" (review c120: twelve error-free turns read as "76% confident"). A finished task
+credits the learner of the task's OWN tenant (`task.input["tenant_id"]`, exactly like the OUTCOME
+sink); `record_event`'s `tenant_id` argument defaults to `_default` and no closer passes it, so until
+2026-11-05 every tenant's outcomes moved `_default`'s statistics (LRN-4). A task without a tenant is
+dropped. The 19 unreachable `core/vibe_engineering` modules are classified
 not-learning in the register (`classified_not_learning`), none is retired by ADR-2281.
 
 ## The loop
@@ -241,6 +245,13 @@ are accepted and reduced to `has_text`/`text_length` (`has_reason`/
 `reason_length`) before the event is written (`operator_feedback.build_rating_event`,
 `LearningIntegration.grade_pattern` — the latter now writes through the
 audit-first `event_store.EventStore`, not the unchained TreeOfThoughts JSONL).
+`POST learning/grade` and `POST learning/note` were removed on 2026-11-05 (LRN-18):
+each request built a fresh `LearningIntegration` whose node cache nothing in production
+fills, so both answered 404 for every pattern, and no console page called them.
+`GET learning/nodes` stays (it falls back to the earned tree from the CEL stage grades).
+The integration's failure clusterer writes under the TENANT
+(`<tenant_home>/learning/discoveries`, created on first write); it used to create a
+tenant-less `<corvin_home>/learning/discoveries` on every request.
 `EventStore(tenant_home, tenant_id=…)` is tenant-bound: an event carrying any
 other tenant is refused before the chain write.
 
@@ -298,6 +309,23 @@ LRN-22). The protection stored feedback gets is the ADR-0534 gate below.
 `savings_meter` (ADR-2259) counts a turn whose token field is malformed (`"1.5e3"`,
 negative, bool) but does not price it; one such record used to raise out of the scan
 and leave the Free-tier cap on `meter_warming` forever (LRN-16).
+The L07 CEL stage-grade store (`context_engineering/stages/grades.py`,
+`<tenant>/global/ce_stage_grades.json`) takes an exclusive lock (`ce_stage_grades.json.lock`,
+flock + an in-process lock) around every load-append-save and writes through a unique
+`mkstemp` temp file; 4 threads x 50 grades kept 49 of 200 before. An unreadable store raises
+`GradeStoreUnreadable` (writers refuse, `is_default_eligible` answers False, the turn loop logs):
+it used to read as `{}`, so the next grade replaced every prior operator grade (LRN-11). The
+store, `usage_epoch.json` and `model_confidence_stats.json` (and their lock/temp siblings) are
+path-gate protected like `learning/` and `skills/` (LRN-10).
+
+ADR-0365 token metrics: `chat_runtime` records every console OS turn that reports `usage`
+(`record_turn_metrics` after the `turn_usage` event; imported and never called until
+2026-11-05, so the Vibe dashboard's token panel read an empty table) into the tenant's own
+`<tenant_home>/learning/token_metrics.db` (`TokenMetricsDB()` resolves the file per tenant;
+the old default `~/.corvin/token_metrics.db` was one file for every tenant, outside erasure and
+ignoring `CORVIN_HOME`). L36 layer `L-token-metrics` (`erasure_handlers.TokenMetricsHandler`)
+deletes the rows naming the subject as user or session. A measurement, not a learning system:
+no register entry (LRN-14).
 `model_selection_learning_listener.fetch_unprocessed_outcomes` / `run_epoch` were
 deleted (LRN-20): they could never return anything; the L08 learner is fed by
 `TaskManager` calling `process_outcome` per finished task.
@@ -710,7 +738,7 @@ WebSocket in one window — exactly one 0.9 grade, in either order.
 | Compliance tier | `SkillMetadata.tier` (`compliance` / `core` / `installed`) | `os.capabilities` is `compliance`: `unregister()` / `disable_skill()` raise `SkillDisableRefused`, the 3-failure auto-disable is refused — every refusal is audited as `skill.disable.refused`. |
 | Lost-update guard | `SkillAdapter._locked()` | `fcntl.flock` on `<config>.lock` + RELOAD inside the lock around `run_optimizer_epoch` / `rollback`; two concurrent feedback requests advance the epoch by two, never one. |
 | Namespace gate | `skill_forge.registry.SkillRegistry(caller_persona=…)` | create/update/delete/grade/promote are gated on `forge.policy` namespaces when a persona is attached (MCP server hands its turn persona over; console routes act as `assistant` → `assistant.*` only, 422 otherwise). Fail-closed when the policy cannot be loaded. |
-| Grade cap | `SkillRegistry.grade(..., organic=False)` | non-organic grades (self-award, auto, bootstrap) are clamped to `AUTO_GRADE_CAP_MAX = 0.3` and audited `capped`; only a caller vouching for a real run passes `organic=True` (MCP `skill_grade` with a `run_id` from the wildcard/operator caller only — a NAMESPACED persona's MCP grade is a self-award and is capped, its run id is a string it chose; `skill_inject.grade_from_user_followup` — an outcome grade backed by the previous turn's `run_id` and the operator's own follow-up). The post-turn auto-grade stays non-organic. The note prefix `outcome` is reserved for organic grades (the autopilot's loss signal reads it): a non-organic grade carrying it is stored as `self-reported: …`. A namespaced persona may not pass `force=True` to MCP `skill_promote` (refused, `skill.scope_denied`), the same rule as for a project/user create (review 2026-11-05 LR-1..LR-3). `grade()` is audit-first: the `skill.grade` record commits before the grade is persisted; a failed record raises and persists nothing. |
+| Grade cap | `SkillRegistry.grade(..., organic=False)` | non-organic grades (self-award, auto, bootstrap) are clamped to `AUTO_GRADE_CAP_MAX = 0.3` and audited `capped`; only a caller vouching for a real run passes `organic=True` (MCP `skill_grade` with a `run_id` from a NAMED wildcard persona only — the operator names `skill-forge` or `forge`; a NAMESPACED persona's MCP grade is a self-award and is capped, its run id is a string it chose; `skill_inject.grade_from_user_followup` — an outcome grade backed by the previous turn's `run_id` and the operator's own follow-up). The post-turn auto-grade stays non-organic. The note prefix `outcome` is reserved for organic grades (the autopilot's loss signal reads it): a non-organic grade carrying it is stored as `self-reported: …`. A namespaced persona may not pass `force=True` to MCP `skill_promote` (refused, `skill.scope_denied`), the same rule as for a project/user create (review 2026-11-05 LR-1..LR-3). The MCP server takes its caller from `CORVIN_CALLER_PERSONA`, else `SKILL_FORGE_PERSONA` (the name the cowork resolver puts on the server's own env, which now carries both); an ABSENT persona is not a wildcard: every mutating tool is refused (`namespace-gate: no caller persona`) and it gets no force, no project/user create and no organic grade. Until then the console web-chat worker - wired by the resolver, never exporting `CORVIN_CALLER_PERSONA` - was a wildcard caller that could force-promote session->user and grade its own run ids organically (LRN-1, `tests/learning/test_review_20261105_lrn_hosts_e2e.py` starts the server from the console's own `--mcp-config`). `grade()` is audit-first: the `skill.grade` record commits before the grade is persisted; a failed record raises and persists nothing. |
 | Ungraded injection | `skill_context.resolve_inject_ungraded` | conjunctive: `CORVIN_DELEGATE_INJECT_SKILLS_UNGRADED=1` alone never widens; `=0` always narrows. |
 
 ## Invariants (must NOT be weakened)
@@ -1128,7 +1156,12 @@ lifespans stop the host on shutdown.
 **Single-tenant per process, by construction.** The core audit writer refuses a record for any tenant
 other than the process tenant (ADR-0562), so a learning host can only audit - and therefore only run -
 for `CORVIN_TENANT_ID`. Producers drop events for any other tenant instead of letting an unread inbox
-grow.
+grow. The same chokepoint makes the brake and every learned-config write of a foreign tenant fail
+(both are audit-first), so a console process cannot write another tenant's SkillAdapter config at
+all: one host per process tenant covers everything that process can learn. Review 2026-11-05
+(LRN-3) asked for a host per tenant directory; it is not built for this reason, and
+`tests/learning/test_review_20261105_lrn_hosts_e2e.py::test_lrn3_a_process_cannot_learn_for_a_foreign_tenant`
+pins the premise. A second tenant learns in its own process (`CORVIN_TENANT_ID`).
 
 **Limits, stated.** Operator *ratings* of these skills do not feed the daemon (the ADR-0534 gate admits a rating only for a subject
 with a recorded execution; prompt skills record none) - the live feedback source is the operator's follow-up in the next turn.

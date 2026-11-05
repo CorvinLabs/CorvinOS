@@ -7,32 +7,74 @@ Immutable events are always written to EventStore; DB is write-through cache.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sqlite3
 import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Iterator, Optional, Sequence
 
 from core.learning.event_schema import LearningEvent, LearningEventType
 
 
-class TokenMetricsDB:
-    """Persistent storage backend for token metrics."""
+#: File name of a tenant's token-metrics database, under ``<tenant_home>/learning/``.
+DB_FILENAME = "token_metrics.db"
 
-    def __init__(self, db_path: str | Path = "~/.corvin/token_metrics.db"):
+
+def default_db_path(tenant_id: str) -> Path:
+    """``<tenant_home>/learning/token_metrics.db`` - honours ``CORVIN_HOME``.
+
+    Until 2026-11-05 the default was ``~/.corvin/token_metrics.db``: one file for every
+    tenant, outside the tenant home, outside GDPR Art. 17 erasure, and ignoring
+    ``CORVIN_HOME`` (review LRN-14). Under ``learning/`` it is a tenant's learning state:
+    path-gate protected and removed with the tenant."""
+    from core.paths.tenant import tenant_learning_dir  # noqa: PLC0415 - validates the id
+
+    return tenant_learning_dir(tenant_id) / DB_FILENAME
+
+
+class TokenMetricsDB:
+    """Persistent storage backend for token metrics.
+
+    Without ``db_path`` every operation opens the database of the tenant it is asked about
+    (:func:`default_db_path`), so one instance serves every tenant of a process and no row
+    of tenant A is ever stored in tenant B's file. An explicit ``db_path`` pins one file
+    (tests, tooling)."""
+
+    def __init__(self, db_path: str | Path | None = None):
         """Initialize database backend.
 
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to one SQLite database file, or None for the per-tenant default
         """
-        self.db_path = Path(db_path).expanduser()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize_schema()
+        self.db_path: Optional[Path] = Path(db_path).expanduser() if db_path is not None else None
+        self._ready: set[Path] = set()
+        if self.db_path is not None:
+            self._initialize_schema(self.db_path)
 
-    def _initialize_schema(self):
+    def path_for(self, tenant_id: str) -> Path:
+        """The database file that holds ``tenant_id``'s rows."""
+        return self.db_path if self.db_path is not None else default_db_path(tenant_id)
+
+    @contextlib.contextmanager
+    def _connect(self, tenant_id: str, *, create: bool = True) -> Iterator[Optional[sqlite3.Connection]]:
+        """An open connection to the tenant's database (closed on exit - an open handle
+        blocks deleting the file on Windows). ``create=False`` yields None when the file
+        does not exist, so a read never creates an empty database."""
+        path = self.path_for(tenant_id)
+        if not create and not path.exists():
+            yield None
+            return
+        if path not in self._ready:
+            self._initialize_schema(path)
+        with contextlib.closing(sqlite3.connect(str(path))) as conn:
+            yield conn
+
+    def _initialize_schema(self, path: Path):
         """Create tables if they don't exist."""
-        with sqlite3.connect(self.db_path) as conn:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.closing(sqlite3.connect(str(path))) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS token_metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,6 +132,7 @@ class TokenMetricsDB:
             """)
 
             conn.commit()
+        self._ready.add(path)
 
     async def insert_token_metrics(self, event: LearningEvent) -> str:
         """Insert token metrics event into database (non-blocking via thread).
@@ -112,7 +155,7 @@ class TokenMetricsDB:
         def _insert_sync() -> None:
             """Blocking I/O — runs in thread pool."""
             try:
-                with sqlite3.connect(self.db_path) as conn:
+                with self._connect(event.tenant_id) as conn:
                     conn.execute("""
                         INSERT INTO token_metrics (
                             event_id, turn_id, session_id, tenant_id, user_id,
@@ -172,7 +215,9 @@ class TokenMetricsDB:
         Returns:
             List of token metrics records
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect(tenant_id, create=False) as conn:
+            if conn is None:
+                return []
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM token_metrics
@@ -193,7 +238,9 @@ class TokenMetricsDB:
         Returns:
             Token metrics record if found
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect(tenant_id, create=False) as conn:
+            if conn is None:
+                return None
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM token_metrics
@@ -221,7 +268,9 @@ class TokenMetricsDB:
         Returns:
             List of token metrics records
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect(tenant_id, create=False) as conn:
+            if conn is None:
+                return []
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM token_metrics
@@ -355,6 +404,47 @@ class TokenMetricsDB:
             "subsystems": self.aggregate_by_subsystem(session_id, tenant_id),
         }
 
+    def latest_session_id(self, tenant_id: str) -> Optional[str]:
+        """The session of this tenant's most recent row, or None when it has none."""
+        with self._connect(tenant_id, create=False) as conn:
+            if conn is None:
+                return None
+            row = conn.execute(
+                "SELECT session_id FROM token_metrics WHERE tenant_id = ? "
+                "ORDER BY id DESC LIMIT 1", (tenant_id,)).fetchone()
+        return row[0] if row else None
+
+    def erase_subject(self, tenant_id: str, subject_id: str) -> int:
+        """GDPR Art. 17: delete the tenant's rows that name ``subject_id`` as their user or
+        their session. ``subject_id == tenant_id`` deletes every row of the tenant. Returns
+        the number of rows deleted; an absent database deletes nothing. Raises on a database
+        error - an erasure that could not run must not read as done."""
+        if not subject_id:
+            return 0
+        with self._connect(tenant_id, create=False) as conn:
+            if conn is None:
+                return 0
+            if subject_id == tenant_id:
+                cur = conn.execute("DELETE FROM token_metrics WHERE tenant_id = ?", (tenant_id,))
+            else:
+                cur = conn.execute(
+                    "DELETE FROM token_metrics WHERE tenant_id = ? AND (user_id = ? OR session_id = ?)",
+                    (tenant_id, subject_id, subject_id))
+            conn.commit()
+            return int(cur.rowcount or 0)
+
+    def _tenant_files(self, tenant_id: Optional[str]) -> list[tuple[str, Path]]:
+        """``(tenant, file)`` pairs a maintenance pass covers."""
+        if self.db_path is not None or tenant_id:
+            return [(tenant_id or "", self.path_for(tenant_id or "_default"))]
+        from core.paths.tenant import corvin_home  # noqa: PLC0415
+
+        root = Path(corvin_home()) / "tenants"
+        if not root.is_dir():
+            return []
+        return [(d.name, d / "learning" / DB_FILENAME) for d in sorted(root.iterdir())
+                if (d / "learning" / DB_FILENAME).is_file()]
+
     def cleanup_old_metrics(self, days_old: int = 30, tenant_id: str = None) -> int:
         """MEDIUM FIX #6: Delete old metrics records based on TTL (age-based eviction).
 
@@ -369,30 +459,31 @@ class TokenMetricsDB:
 
         cutoff_date = (datetime.utcnow() - timedelta(days=days_old)).isoformat()
 
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                if tenant_id:
-                    cursor = conn.execute("""
-                        DELETE FROM token_metrics
-                        WHERE created_at < ? AND tenant_id = ?
-                    """, (cutoff_date, tenant_id))
-                else:
-                    cursor = conn.execute("""
-                        DELETE FROM token_metrics
-                        WHERE created_at < ?
-                    """, (cutoff_date,))
+        deleted_count = 0
+        for tid, path in self._tenant_files(tenant_id):
+            if not path.exists():
+                continue
+            try:
+                with contextlib.closing(sqlite3.connect(str(path))) as conn:
+                    if tenant_id:
+                        cursor = conn.execute("""
+                            DELETE FROM token_metrics
+                            WHERE created_at < ? AND tenant_id = ?
+                        """, (cutoff_date, tenant_id))
+                    else:
+                        cursor = conn.execute("""
+                            DELETE FROM token_metrics
+                            WHERE created_at < ?
+                        """, (cutoff_date,))
+                    conn.commit()
+                    deleted_count += int(cursor.rowcount or 0)
+            except sqlite3.Error as e:
+                logging.error(f"Failed to cleanup old metrics ({tid or path.name}): {e}")
 
-                conn.commit()
-                deleted_count = cursor.rowcount
-
-                logging.info(
-                    f"Cleanup old metrics: deleted {deleted_count} records older than {days_old} days"
-                )
-
-                return deleted_count
-        except sqlite3.Error as e:
-            logging.error(f"Failed to cleanup old metrics: {e}")
-            return 0
+        logging.info(
+            f"Cleanup old metrics: deleted {deleted_count} records older than {days_old} days"
+        )
+        return deleted_count
 
 
 # ---------------------------------------------------------------------------

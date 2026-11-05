@@ -151,16 +151,27 @@ class SkillForgeMCPServer:
         # Layer 9 — caller-persona namespace gate. The bridge adapter exports
         # CORVIN_CALLER_PERSONA per turn so any persona can opt into
         # skill-forge while only being able to register skills under its own
-        # prefix. Empty / missing => wildcard (legacy behaviour).
+        # prefix. Empty / missing => unprivileged, NOT wildcard (LRN-1, below).
         # The persona_namespaces map is owned by forge.policy.Policy — both
         # plugins read the same source of truth so a coder may register both
         # ``code.foo`` (forge tool) and ``code.bar`` (skill-forge skill).
         # The env var is this subprocess's TRANSPORT for the persona; the
         # registry itself never reads it — it is handed the value explicitly
         # and enforces the same gate on every mutation (defence in depth).
+        #
+        # SKILL_FORGE_PERSONA is the name the cowork resolver puts on THIS
+        # server's own env (resolver._inject_skill_forge_capability); it is the
+        # caller persona too. Reading only CORVIN_CALLER_PERSONA left the console
+        # web-chat worker (which the resolver wires, but which never exports
+        # CORVIN_CALLER_PERSONA) a wildcard caller that could force-promote
+        # across scopes and grade its own run ids as organic (review 2026-11-05
+        # LRN-1). An ABSENT persona is NOT a wildcard: it is unprivileged and
+        # owns no namespace (see _is_unprivileged_caller / _namespace_check).
+        # The operator's explicit wildcard is a NAMED persona that has no
+        # prefix in persona_namespaces (``skill-forge`` / ``forge``).
         self.caller_persona = (
-            os.environ.get("CORVIN_CALLER_PERSONA")
-            or ""
+            (os.environ.get("CORVIN_CALLER_PERSONA") or "").strip()
+            or (os.environ.get("SKILL_FORGE_PERSONA") or "").strip()
         )
         self.multi = MultiSkillRegistry(caller_persona=self.caller_persona or None)
         self._policy: Any = None  # lazy — resolved on first need
@@ -209,17 +220,34 @@ class SkillForgeMCPServer:
         return self._policy
 
     def _namespace_check(self, name: str) -> tuple[bool, str]:
-        """Returns (allowed, reason). Wildcard cases return (True, '')."""
+        """Returns (allowed, reason). Wildcard cases return (True, '').
+
+        A caller with NO persona owns no namespace, so every mutation by name is
+        refused (LRN-1): an unidentified caller is never the operator."""
+        if not self.caller_persona:
+            return False, (
+                "namespace-gate: no caller persona (neither CORVIN_CALLER_PERSONA "
+                "nor SKILL_FORGE_PERSONA is set); an unidentified caller may not "
+                "mutate skills. The operator names a wildcard persona "
+                "(e.g. 'skill-forge') explicitly."
+            )
         policy = self._get_policy()
         if policy is None or policy is False:
-            return True, ""  # forge package unavailable → no gate
+            return True, ""  # forge package unavailable → no name gate
         return policy.namespace_check(self.caller_persona, name)
 
-    def _is_namespaced_persona(self) -> bool:
-        """True when the caller persona owns a prefix (i.e. is NOT wildcard)."""
+    def _is_unprivileged_caller(self) -> bool:
+        """True unless the caller is a NAMED persona without a prefix (the
+        operator's explicit wildcard). Unprivileged callers may not force a
+        promotion, mint into project/user, or write organic grades.
+
+        Fail-closed: an absent persona, a namespaced persona, and an unreadable
+        policy (we cannot tell who owns what) are all unprivileged (LRN-1)."""
+        if not self.caller_persona:
+            return True
         policy = self._get_policy()
         if policy is None or policy is False:
-            return False
+            return True
         return policy.namespace_for(self.caller_persona) is not None
 
     def _deny_if_outside_namespace(self, msgid: Any, name: str, *, tool: str) -> bool:
@@ -385,8 +413,8 @@ class SkillForgeMCPServer:
 
     def _call_skill_create(self, msgid: Any, args: dict) -> None:
         # Layer 9 — namespace gate. Coder may register code.* skills, browser
-        # may register browser.* skills, etc. Wildcard (no caller_persona env
-        # OR persona missing from policy) = legacy unrestricted behaviour.
+        # may register browser.* skills, etc. A NAMED persona missing from the
+        # policy is the wildcard; NO persona at all is refused (LRN-1).
         name = args.get("name", "")
         if self._deny_if_outside_namespace(msgid, name, tool="skill_create"):
             return
@@ -396,7 +424,7 @@ class SkillForgeMCPServer:
         ws_scope = args.get("scope") or detect_scope()
         force = bool(args.get("force", False))
         if ws_scope in GATED_CREATE_SCOPES:
-            if self._is_namespaced_persona():
+            if self._is_unprivileged_caller():
                 reason = (
                     f"scope-gate: persona {self.caller_persona!r} may only "
                     f"create skills in {PERSONA_CREATE_SCOPES}; earn "
@@ -500,7 +528,7 @@ class SkillForgeMCPServer:
         # exactly like force on a project/user create: a namespaced persona
         # must EARN higher scopes through the grade gates (D-05, review
         # 2026-11-05 LR-1 — the create gate was routed around through promote).
-        if force and self._is_namespaced_persona():
+        if force and self._is_unprivileged_caller():
             reason = (
                 f"scope-gate: persona {self.caller_persona!r} may not pass "
                 f"force=True to skill_promote; earn {to!r} through the grade gates"
@@ -530,15 +558,16 @@ class SkillForgeMCPServer:
         # AUTO_GRADE_CAP_MAX (review 2026-11-05 LR-2: three made-up run ids at
         # 1.0 lifted a persona's own skill over the session->project bar). The
         # organic quality signal is the operator's follow-up
-        # (skill_inject.grade_from_user_followup). Only the wildcard/operator
-        # caller keeps the run_id-backed organic grade.
+        # (skill_inject.grade_from_user_followup). Only a NAMED wildcard
+        # (operator) caller keeps the run_id-backed organic grade; an absent
+        # persona never does (LRN-1).
         run_id = str(args.get("run_id", "") or "")
         spec = self.multi.grade(
             name=name,
             run_id=run_id,
             score=float(args.get("score", 0.0)),
             notes=args.get("notes", ""),
-            organic=bool(run_id) and not self._is_namespaced_persona(),
+            organic=bool(run_id) and not self._is_unprivileged_caller(),
         )
         self._tool_envelope(msgid, ok=True, data={
             "ok": True, "n_grades": spec.n_grades,

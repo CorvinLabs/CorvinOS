@@ -55,10 +55,10 @@ def test_lr1_namespaced_persona_cannot_force_promote_past_the_gates():
 
 
 def test_lr1_operator_force_still_works():
-    """The wildcard (operator) caller keeps its audited force=True override."""
+    """The NAMED wildcard (operator) caller keeps its audited force=True override."""
     sandbox = Path(tempfile.mkdtemp(prefix="sf-lr1b-"))
     try:
-        op = _SFMCPClient(corvin_home=sandbox, caller_persona=None)
+        op = _SFMCPClient(corvin_home=sandbox, caller_persona="skill-forge")
         try:
             op.initialize()
             r = _call(op, "skill_create", _create_args("ops.lr1_skill", scope="session"))

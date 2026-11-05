@@ -498,9 +498,17 @@ class TaskManager:
     def _update_model_selection_confidence(
         task: "Task",
         event: dict[str, Any],
-        tenant_id: str,
     ) -> None:
-        """Update model selection confidence scores for task outcome (ADR-0644, fail-soft)."""
+        """Update model selection confidence scores for task outcome (ADR-0644, fail-soft).
+
+        The tenant is the task's OWN metadata, exactly like the OUTCOME sink: record_event's
+        ``tenant_id`` argument defaults to ``_default`` and no production closer passes it, so
+        every tenant's outcome was credited to ``_default``'s statistics (review 2026-11-05
+        LRN-4). A task without a tenant is dropped, never guessed."""
+        tenant_id = task.input.get("tenant_id") if isinstance(task.input, dict) else None
+        if not isinstance(tenant_id, str) or not tenant_id:
+            logger.debug("model selection outcome dropped: task %s has no tenant", task.task_id)
+            return
         try:
             from core.learning.model_selection_learning_listener import (  # noqa: PLC0415
                 get_listener,
@@ -526,7 +534,7 @@ class TaskManager:
             )
 
             # Process outcome (updates confidence scores)
-            listener.process_outcome(outcome, tenant_id or "_default")
+            listener.process_outcome(outcome, tenant_id)
         except Exception:  # noqa: BLE001 — model selection learning failure never breaks task
             logger.debug(
                 "Model selection confidence update failed for task %s",
@@ -673,7 +681,7 @@ class TaskManager:
                     # ADR-0644 Model Selection Learning: process outcome for confidence
                     # updates (fail-soft: if model selection learning is not available,
                     # continue without recording).
-                    self._update_model_selection_confidence(task, event, tenant_id)
+                    self._update_model_selection_confidence(task, event)
 
                 self._write_meta(task_id, task)
 

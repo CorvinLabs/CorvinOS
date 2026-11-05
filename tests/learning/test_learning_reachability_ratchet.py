@@ -122,3 +122,39 @@ def test_check_cli_exits_nonzero_on_new_module(tmp_path, capsys):
     lr.write_baseline(lr.load_baseline()[1:], short)
     assert lr.main(["--check", "--baseline", str(short)]) == 1
     assert "1 not in baseline" in capsys.readouterr().out
+
+
+# ── LRN-19: a re-export in core/learning/__init__.py is not reachability ───────
+
+REEXPORT_SEED = "core/learning/_lrn19_reexported_only.py"
+
+
+@pytest.fixture(scope="module")
+def reexport_box(tmp_path_factory):
+    """A sandbox where a new module is imported ONLY by core/learning/__init__.py."""
+    box = tmp_path_factory.mktemp("learning_ratchet_reexport")
+    _sandbox_copy(box)
+    init = box / "core" / "learning" / "__init__.py"
+    original = init.read_text(encoding="utf-8")
+    init.unlink()   # break the hard link first: the repo's __init__ is never written
+    init.write_text(original + "\nfrom ._lrn19_reexported_only import LRN19_SEED  # noqa\n",
+                    encoding="utf-8")
+    (box / REEXPORT_SEED).write_text("LRN19_SEED = 1\n", encoding="utf-8")
+    assert "_lrn19" not in (REPO / "core" / "learning" / "__init__.py").read_text(encoding="utf-8")
+    return box
+
+
+def test_lrn19_module_reached_only_by_the_package_reexport_is_unreachable(reexport_box):
+    # positive control: the plain sweep counts the __init__'s import as reachability
+    saved = zcs.REPO
+    zcs.REPO = reexport_box.resolve()
+    try:
+        idx = zcs.Index(zcs.production_files())
+        plain = {f.relative_to(zcs.REPO).as_posix() for f in zcs.reachable(idx)}
+    finally:
+        zcs.REPO = saved
+    assert REEXPORT_SEED in plain, "control: the plain sweep must see the re-export"
+    _, dead = lr.unreachable(reexport_box)
+    assert REEXPORT_SEED in dead, "a module only core/learning/__init__ imports counted as reachable"
+    # and a module that production code imports BY NAME through the package stays reachable
+    assert "core/learning/integration.py" not in dead

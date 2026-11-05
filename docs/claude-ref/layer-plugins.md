@@ -356,6 +356,12 @@ events.
   `scope=project|user` is refused for namespaced personas and requires
   `force=True` (audited `skill.create_forced_scope`) for operator/wildcard
   callers (D-05) — the promotion gates cannot be skipped by minting high.
+- The MCP server's caller is `CORVIN_CALLER_PERSONA`, else `SKILL_FORGE_PERSONA`
+  (the cowork resolver sets both on the server's own env). The operator's
+  wildcard is a NAMED persona without a prefix (`forge`, `skill-forge`); an
+  ABSENT persona is refused on every mutating tool and never gets `force`,
+  a project/user create or an organic grade (review 2026-11-05 LRN-1: the
+  console web-chat worker exported no caller tag and was a wildcard caller).
 - Scope detection reuses `forge.scope.detect_scope()` and
   `forge.scope.scope_root()` — there is no skill-forge-specific
   detector. Tests must therefore set `CORVIN_FORCE_SCOPE` exactly

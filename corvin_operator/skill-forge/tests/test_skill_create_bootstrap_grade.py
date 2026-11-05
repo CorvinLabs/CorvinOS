@@ -45,7 +45,8 @@ def sandbox(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("CORVIN_HOME", str(home))
     monkeypatch.setenv("CORVIN_PLUGIN_SLOT_DIR", str(tmp_path / "slot"))
-    monkeypatch.delenv("CORVIN_CALLER_PERSONA", raising=False)
+    # A named wildcard (operator) persona: an ABSENT persona is refused (LRN-1).
+    monkeypatch.setenv("CORVIN_CALLER_PERSONA", "skill-forge")
     # "task" scope (forge/scope.py::scope_root) ignores CORVIN_HOME entirely —
     # it resolves to <platform-tmpdir>/.corvin/tasks/<CORVIN_TASK_ID>/forge, a
     # location SHARED across every test process on the machine unless pinned.

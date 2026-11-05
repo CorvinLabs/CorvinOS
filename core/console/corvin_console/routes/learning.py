@@ -2,8 +2,6 @@
 
 Endpoints:
   GET  /v1/console/learning/nodes    — fetch all TreeNodes with confidences
-  POST /v1/console/learning/grade    — operator grades a pattern (chained, no free text)
-  POST /v1/console/learning/note     — operator adds note to pattern (in-memory node)
   POST /v1/console/tools/{tool_id}/rating      — rate a tool (Gap 7)
   POST /v1/console/skills/{skill_id}/rating    — rate a skill (Gap 7)
   GET  /v1/console/tools/{tool_id}/feedback    — tool feedback stats (Gap 7)
@@ -28,8 +26,14 @@ audit-first ``event_store.EventStore`` and the core chain, or answers 503
 "not wired" — never a constant.
 
 Tenant: always ``session.tenant_id`` from the authenticated ``SessionRecord``.
-Mutations: ``require_csrf``. Free text (``feedback_text``, grade ``reason``)
-is accepted but NEVER persisted (only presence + length).
+Mutations: ``require_csrf``. Free text (``feedback_text``) is accepted but
+NEVER persisted (only presence + length).
+
+``POST /learning/grade`` and ``POST /learning/note`` were removed 2026-11-05
+(review LRN-18): they acted on a fresh ``LearningIntegration``'s in-memory node
+cache, which no production code ever fills, so both answered 404 for every
+pattern; no console page called them. Grading a learning subject goes through
+the CEL stage grades (``/vibe-engineering/grades/{stage_id}``) and the Skill ratings below.
 """
 from __future__ import annotations
 
@@ -39,7 +43,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import Field, BaseModel
+from pydantic import BaseModel
 
 from ..deps import require_csrf, require_session
 
@@ -76,21 +80,6 @@ def _require_learning() -> None:
 
 
 router = APIRouter()
-
-
-class GradeRequest(BaseModel):
-    """Operator grades a pattern."""
-    pattern_id: str
-    # A finite float in [-1, 1]; NaN/inf used to clamp to +1.0 — the strongest
-    # positive learning signal from garbage input (round-2 review, R2-B5).
-    grade: float = Field(..., ge=-1.0, le=1.0, allow_inf_nan=False)
-    reason: str = ""  # accepted, never persisted (presence + length only)
-
-
-class NoteRequest(BaseModel):
-    """Operator adds a note to a pattern."""
-    pattern_id: str
-    text: str
 
 
 class TreeNodeJSON(BaseModel):
@@ -216,58 +205,6 @@ async def get_learning_nodes(
     except Exception as e:
         logger.exception("learning/nodes failed for tenant %s", session.tenant_id)
         raise HTTPException(status_code=500, detail=f"Failed to load nodes: {type(e).__name__}")
-
-
-@router.post("/learning/grade")
-async def grade_pattern(
-    request: GradeRequest,
-    integration: LearningIntegration = Depends(get_learning_integration),
-    session = Depends(require_csrf),
-):
-    """Operator manually grades a pattern.
-
-    The grade is committed to the core hash chain + ADR-0314 store BEFORE the
-    confidence moves (``LearningIntegration.grade_pattern``); the free-text
-    ``reason`` is not stored.
-    """
-    grade = max(-1.0, min(1.0, request.grade))
-    try:
-        event_id = integration.grade_pattern(request.pattern_id, grade, reason=request.reason)
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Pattern not found")
-    except FeedbackRejected as e:  # ADR-0534 trust gate (throttle), audited
-        raise HTTPException(status_code=422, detail={
-            "error": "feedback_rejected", "reason": e.reason, "audit_ref": e.audit_ref})
-    except RuntimeError as e:  # chain did not commit → nothing was graded
-        raise HTTPException(status_code=503, detail=f"audit chain unavailable: {e}")
-
-    node = integration.store.get_node(request.pattern_id)
-    return {
-        "pattern_id": request.pattern_id,
-        "new_confidence": node.confidence if node else None,
-        "event_id": event_id,
-        "status": "success",
-    }
-
-
-@router.post("/learning/note")
-async def add_operator_note(
-    request: NoteRequest,
-    integration: LearningIntegration = Depends(get_learning_integration),
-    session = Depends(require_csrf),
-):
-    """Operator adds a note to a pattern (in-memory node; attributed by session fingerprint)."""
-    node = integration.store.get_node(request.pattern_id)
-    if not node:
-        raise HTTPException(status_code=404, detail="Pattern not found")
-
-    node.add_operator_note(session.sid_fingerprint, request.text)
-
-    return {
-        "pattern_id": request.pattern_id,
-        "notes_count": len(node.operator_notes),
-        "status": "success",
-    }
 
 
 # ============================================================================

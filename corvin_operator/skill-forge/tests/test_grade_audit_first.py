@@ -50,7 +50,8 @@ def srv_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_PROJECT_ROOT", "")
     monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "anchor.key"))
     _isolate_anchor_key_cache(monkeypatch)
-    monkeypatch.delenv("CORVIN_CALLER_PERSONA", raising=False)
+    # A named wildcard (operator) persona: an ABSENT persona is refused (LRN-1).
+    monkeypatch.setenv("CORVIN_CALLER_PERSONA", "skill-forge")
     from skill_forge.multi_registry import MultiSkillRegistry
     reg = MultiSkillRegistry(tenant_id="_default")
     reg.create(scope="user", name=NAME, type="learned-experience", description="d",
