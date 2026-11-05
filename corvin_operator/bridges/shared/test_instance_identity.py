@@ -730,6 +730,64 @@ class TestRevocationStatusCached(_TempIBCHomeMixin, unittest.TestCase):
         self.assertEqual(instance_identity.revocation_status_cached(), "unknown")
 
 
+class TestDeferredAuditBinding(unittest.TestCase):
+    """A record deferred from inside signing (instance.key_rotated) is bound to
+    the chain and signing identity of the moment it was RAISED. The thread used
+    to resolve both when it ran; a caller that had dropped CORVIN_HOME by then
+    got the record — and a new instance key — in ``<checkout>/.corvin``
+    (run-all-tests.sh 2026-11-05, test_dialectic_voice_summary)."""
+
+    _KEYS = ("CORVIN_HOME", "CORVIN_INSTANCE_KEY_PATH")
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self._prev = {k: os.environ.get(k) for k in self._KEYS}
+        os.environ.pop("CORVIN_INSTANCE_KEY_PATH", None)
+        os.environ["CORVIN_HOME"] = str(self.tmp / "a")
+
+    def tearDown(self) -> None:
+        for k, v in self._prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self._tmp.cleanup()
+
+    def _defer(self) -> tuple:
+        with mock.patch.object(instance_identity.threading, "Thread") as fake_thread:
+            instance_identity._audit_tls.signing = True
+            try:
+                instance_identity._audit_ibc("instance.key_rotated", "WARNING", {})
+            finally:
+                instance_identity._audit_tls.signing = False
+        self.assertEqual(fake_thread.call_count, 1)
+        kwargs = fake_thread.call_args.kwargs
+        return kwargs["target"], kwargs["args"]
+
+    def test_record_is_dropped_when_home_changed_before_the_thread_ran(self) -> None:
+        target, args = self._defer()
+        os.environ["CORVIN_HOME"] = str(self.tmp / "b")  # the caller moved on
+        with mock.patch.object(instance_identity, "_write_audit") as write:
+            target(*args)
+        write.assert_not_called()
+
+    def test_record_is_dropped_when_home_was_dropped(self) -> None:
+        target, args = self._defer()
+        os.environ.pop("CORVIN_HOME", None)  # repo-marker / ~/.corvin fallback
+        with mock.patch.object(instance_identity, "_write_audit") as write:
+            target(*args)
+        write.assert_not_called()
+
+    def test_record_goes_to_the_chain_resolved_when_raised(self) -> None:
+        expected = instance_identity._audit_chain_path()
+        target, args = self._defer()
+        with mock.patch.object(instance_identity, "_write_audit") as write:
+            target(*args)
+        write.assert_called_once()
+        self.assertEqual(write.call_args.kwargs["path"], expected)
+
+
 class TestCILint(unittest.TestCase):
     def test_no_anthropic_import(self) -> None:
         import ast

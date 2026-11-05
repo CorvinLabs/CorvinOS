@@ -35,6 +35,13 @@ def _clean_env(td):
     ):
         os.environ.pop(k, None)
     os.environ["CORVIN_HOME"] = td
+    # The project scope is ``<git toplevel>/.corvin/forge`` unless
+    # CORVIN_PROJECT_ROOT names one. Without it, test_promote's promote-to-project
+    # wrote tool "prom" (manifest, impl and a ``tool.created`` record in the
+    # workspace's sibling ``audit.jsonl``) into the CHECKOUT's ``.corvin/forge`` —
+    # the live install's legacy chain when run from the main checkout
+    # (run-all-tests.sh 2026-11-05).
+    os.environ["CORVIN_PROJECT_ROOT"] = str(Path(td) / "project")
 
 
 def test_shadowing():

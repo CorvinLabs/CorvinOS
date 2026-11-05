@@ -65,22 +65,62 @@ except ImportError:
 _audit_tls = threading.local()
 
 
-def _write_audit(event_type: str, severity: str, details: dict) -> None:
+def _audit_chain_path() -> Path:
+    try:
+        from .audit import audit_path as _audit_path  # type: ignore[import-not-found]
+    except ImportError:
+        from audit import audit_path as _audit_path  # type: ignore[import-not-found,no-redef]
+    return _audit_path()
+
+
+def _write_audit(event_type: str, severity: str, details: dict,
+                 path: "Path | None" = None) -> None:
     try:
         _forge_parent = Path(__file__).resolve().parents[2] / "forge"
         if str(_forge_parent) not in sys.path:
             sys.path.insert(0, str(_forge_parent))
         from forge import security_events as _se  # type: ignore[import-not-found]
-        try:
-            from .audit import audit_path as _audit_path  # type: ignore[import-not-found]
-        except ImportError:
-            from audit import audit_path as _audit_path  # type: ignore[import-not-found,no-redef]
-        path = _audit_path()
+        if path is None:
+            path = _audit_chain_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         _se.write_event(path, event_type, severity=severity, tool="", run_id="",
                         details=details, hash_chain=True)
     except Exception:  # noqa: BLE001
         pass  # best-effort — never block IBC operations
+
+
+def _signing_identity() -> "tuple[str, str]":
+    """(home, instance key) a record written NOW would be signed under."""
+    return (os.path.abspath(str(corvin_home())),
+            os.path.abspath(str(instance_key_path())))
+
+
+def _write_deferred(event_type: str, severity: str, details: dict,
+                    path: Path, identity: "tuple[str, str]") -> None:
+    """Thread body of a deferred record: write it where it was RAISED.
+
+    The chain path and the signing identity are resolved on the raising thread.
+    This thread runs later (it waits for the outer write's lock), and resolving
+    them again here read whatever the process environment said by then: a test
+    that had moved or dropped ``CORVIN_HOME`` in between got the record — signed
+    with a freshly minted instance key — in ``<checkout>/.corvin`` (the
+    repo-marker fallback), i.e. the live install's chain (run-all-tests.sh,
+    2026-11-05). If the home or the key path changed in between, signing would
+    mint or use the key of a DIFFERENT install, so the record is dropped with a
+    warning instead of being written into a foreign chain. A real process never
+    changes its home or its instance key path mid-run.
+    """
+    try:
+        now = _signing_identity()
+    except Exception:  # noqa: BLE001
+        now = None
+    if now != identity:
+        import logging as _lg
+        _lg.getLogger("corvin.instance").warning(
+            "deferred %s not written: the signing identity changed from %s to %s "
+            "before the record could be signed", event_type, identity, now)
+        return
+    _write_audit(event_type, severity, details, path=path)
 
 
 def _audit_ibc(event_type: str, severity: str, details: dict) -> None:
@@ -96,10 +136,18 @@ def _audit_ibc(event_type: str, severity: str, details: dict) -> None:
     fresh install generates the instance key and audits that — while the
     writer's non-reentrant lock is held. An event raised inside the signing
     call is therefore written from a separate thread, which waits for the
-    outer write to release the lock instead of deadlocking on it.
+    outer write to release the lock instead of deadlocking on it. The record
+    is bound to its chain and signing identity HERE, on the raising thread
+    (see :func:`_write_deferred`).
     """
     if getattr(_audit_tls, "signing", False):
-        threading.Thread(target=_write_audit, args=(event_type, severity, details),
+        try:
+            identity = _signing_identity()
+            path = _audit_chain_path()
+        except Exception:  # noqa: BLE001
+            return  # best-effort, like _write_audit
+        threading.Thread(target=_write_deferred,
+                         args=(event_type, severity, details, path, identity),
                          name="ibc-audit-deferred").start()
         return
     _write_audit(event_type, severity, details)

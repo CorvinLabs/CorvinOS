@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from unittest import mock
 
@@ -43,7 +44,13 @@ def _section(title: str) -> None:
     print(f"\n=== {title} ===")
 
 
+_SANDBOX_KEYS = ("CORVIN_HOME", "FORGE_ROOT", "VOICE_AUDIT_PATH")
+_saved_env: "dict[str, str | None]" = {}
+
+
 def _set_sandbox(tmp: Path) -> None:
+    if not _saved_env:
+        _saved_env.update({k: os.environ.get(k) for k in _SANDBOX_KEYS})
     os.environ["CORVIN_HOME"] = str(tmp / "corvin")
     # FORGE_ROOT / VOICE_AUDIT_PATH (run-all-tests.sh sets the first suite-wide)
     # outrank CORVIN_HOME in the bridge audit writer: the records would land
@@ -51,6 +58,27 @@ def _set_sandbox(tmp: Path) -> None:
     os.environ.pop("FORGE_ROOT", None)
     os.environ.pop("VOICE_AUDIT_PATH", None)
     (tmp / "corvin" / "global" / "forge").mkdir(parents=True, exist_ok=True)
+
+
+def _leave_sandbox(tmp: Path) -> None:
+    """Undo _set_sandbox: RESTORE the caller's values, never just pop them.
+
+    Popping CORVIN_HOME left the rest of this process on the repo-marker
+    fallback, ``<checkout>/.corvin`` — the live install when run from the main
+    checkout. The first audit write of a case mints the sandbox instance key and
+    defers its ``instance.key_rotated`` record to a thread; it is joined here so
+    it lands in this case's sandbox, not after the sandbox is gone
+    (run-all-tests.sh 2026-11-05: that record reached the checkout's chain).
+    """
+    for th in threading.enumerate():
+        if th.name == "ibc-audit-deferred" and th is not threading.current_thread():
+            th.join(timeout=10)
+    shutil.rmtree(tmp, ignore_errors=True)
+    for k, v in _saved_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 
 
 def _fresh_dialectic():
@@ -138,8 +166,7 @@ def case_judge_off_returns_candidate() -> None:
             "no audit event for skipped judge"
         print("  pass — mode=off: candidate unchanged, no subprocess, no audit")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        _leave_sandbox(tmp)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -176,8 +203,7 @@ def case_judge_cli_faithful() -> None:
         assert d_evts[0]["details"]["mode"] == "cli", d_evts
         print("  pass — FAITHFUL verdict ships candidate + audits cli mode")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        _leave_sandbox(tmp)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -223,8 +249,7 @@ def case_judge_cli_corrected() -> None:
         assert "CORRECTED" not in json.dumps(det), det
         print("  pass — CORRECTED replaces candidate + audit shows corrected (content-free)")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        _leave_sandbox(tmp)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -255,8 +280,7 @@ def case_judge_cli_unparseable_defaults_to_faithful() -> None:
             assert verdict == "faithful", verdict
         print("  pass — 5 unparseable shapes all default to faithful (safe)")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        _leave_sandbox(tmp)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -288,8 +312,7 @@ def case_judge_cli_timeout() -> None:
         assert verdict == "faithful", verdict
         print("  pass — timeout AND missing-cli both default to ship candidate")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        _leave_sandbox(tmp)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -319,8 +342,7 @@ def case_summarize_judge_off_no_spawn() -> None:
             f"judge must not spawn when mode=off, got {fake_run.call_count} calls"
         print("  pass — judge stays inert when site mode is off (default)")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        _leave_sandbox(tmp)
         os.environ.pop("VOICE_SUMMARIZE_BACKEND", None)
 
 
@@ -356,8 +378,7 @@ def case_summarize_judge_cli_corrects() -> None:
         assert d_evts[0]["details"]["choice"].startswith("corrected"), d_evts
         print("  pass — full pipe-through corrects the candidate + audits")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        _leave_sandbox(tmp)
         os.environ.pop("VOICE_SUMMARIZE_BACKEND", None)
 
 
@@ -409,8 +430,7 @@ def case_judge_cli_live_real_claude() -> None:
             assert leak not in blob, f"content leaked into audit record: {leak!r}"
         print("  pass — real claude judge ran; audit record is content-free")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        _leave_sandbox(tmp)
         if stub is not None:
             os.environ["ANTHROPIC_API_KEY"] = stub
 
