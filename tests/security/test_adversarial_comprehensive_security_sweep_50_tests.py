@@ -36,8 +36,14 @@ class TestPluginSandboxEscape:
         """Plugin attempts to forge Line of Moral Responsibility. DENY + log."""
         # Simulate plugin trying to emit an event with a forged LoM
         from core.security.context import SecurityContext
+        from core.skills.skill_registry_phase1 import SkillsRegistry
 
-        ctx = SecurityContext(tenant_id="_default", user_id="user1")
+        # SecurityContext's real signature (ADR-0469, bb3fe08c8): there is no
+        # `user_id` field — the caller is the `actor`.
+        ctx = SecurityContext(actor="user1", action="skill.execute",
+                              resource="os.delegation_router",
+                              capability_required="skill.execute",
+                              tenant_id="_default", transport="test")
 
         # Attempt 1: Direct LoM forgery
         forged_event = {
@@ -48,10 +54,13 @@ class TestPluginSandboxEscape:
             "output": {"action": "steal_data"}
         }
 
-        # System should REJECT or log as tampered
-        assert forged_event.get("lom_hash") != hashlib.sha256(
-            "malicious.ForgedSkill::execute:L999".encode()
-        ).hexdigest(), "LoM hash mismatch detected"
+        # The REAL ADR-0537 binder: a LoM naming no resolvable source binds to
+        # nothing (None) — never to a hash a forger could have pre-computed.
+        assert SkillsRegistry._compute_lom_hash(forged_event["lom"]) is None
+        # A real LoM binds to its source, and the forged hash is not it.
+        real = SkillsRegistry._compute_lom_hash(
+            "core/skills/skill_registry_phase1.py:_compute_lom_hash")
+        assert real is not None and real != forged_event["lom_hash"]
 
         # Audit event should be logged
         audit_event = {
@@ -402,31 +411,30 @@ class TestAuditChainTampering:
 
     def test_audit_chain_verification_before_boot(self):
         """Boot tripwire verifies chain integrity. Bad chain → boot FAILS."""
-        # Simulate boot sequence
-        chain_file = "/tmp/audit_chain_test.jsonl"
+        # The previous body verified an inline stub that compared only the
+        # prev_hash LINKS — a record whose content and hash were rewritten
+        # passed it. Exercise the REAL verifier the boot tripwire uses instead.
+        import sys as _sys
+        _forge = str(Path(__file__).resolve().parents[2] / "corvin_operator" / "forge")
+        if _forge not in _sys.path:
+            _sys.path.insert(0, _forge)
+        from forge import security_events as se
 
-        # Valid chain
-        valid_events = [
-            {"event_id": "1", "hash": "abc123", "prev_hash": "0"},
-            {"event_id": "2", "hash": "def456", "prev_hash": "abc123"}
-        ]
+        with tempfile.TemporaryDirectory() as td:
+            chain = Path(td) / "chain.jsonl"
+            se.write_event(chain, "audit_chain_verified", details={"tenant_id": "_default"})
+            se.write_event(chain, "audit_chain_verified", details={"tenant_id": "_default"})
+            ok, problems = se.verify_chain(chain, allow_missing_key=True)
+            assert ok, f"Valid chain passes: {problems}"
 
-        # Tampered chain
-        tampered_events = [
-            {"event_id": "1", "hash": "abc123", "prev_hash": "0"},
-            {"event_id": "2", "hash": "BADBADBAD", "prev_hash": "abc123"}
-        ]
-
-        # Boot tripwire verification
-        def verify_chain(events):
-            for i, event in enumerate(events):
-                if i > 0:
-                    if event["prev_hash"] != events[i-1]["hash"]:
-                        return False
-            return True
-
-        assert verify_chain(valid_events) is True, "Valid chain passes"
-        assert verify_chain(tampered_events) is False, "Tampered chain fails boot"
+            lines = chain.read_text(encoding="utf-8").splitlines()
+            rec = json.loads(lines[1])
+            rec["event"] = "audit_chain_tampered_by_test"   # content edit, links kept
+            lines[1] = json.dumps(rec)
+            chain.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            ok, problems = se.verify_chain(chain, allow_missing_key=True)
+            assert not ok, "Tampered chain fails boot"
+            assert any(p.get("issue") == "tampered" for p in problems), problems
 
     def test_audit_timestamp_monotonic(self):
         """Audit events have strictly increasing timestamps. Reordering detected."""
@@ -664,15 +672,17 @@ class TestAuthBypassCrossTenant:
         payload = {"user_id": "user1", "exp": int(time.time()) + 3600}
         valid_jwt = jwt.encode(payload, secret_key, algorithm="HS256")
 
-        # Attacker modifies JWT (changes signature)
-        forged_jwt = valid_jwt[:-10] + "fakesigxxx"
+        # Attacker re-signs the token with a key they control. (The previous
+        # forgery spliced 10 characters onto the signature, which PyJWT refuses
+        # earlier as a base64-padding DecodeError — the test then failed on the
+        # exception TYPE although the forgery was refused.)
+        header, body, _sig = valid_jwt.split(".")
+        forged_jwt = jwt.encode(payload, "attacker-key", algorithm="HS256")
+        assert forged_jwt.split(".")[:2] == [header, body]
 
         # Verification fails
-        try:
+        with pytest.raises(jwt.InvalidSignatureError):
             jwt.decode(forged_jwt, secret_key, algorithms=["HS256"])
-            assert False, "Should have raised exception"
-        except jwt.InvalidSignatureError:
-            assert True, "Invalid signature detected"
 
     def test_expired_jwt_denied(self):
         """Expired JWT is DENIED."""

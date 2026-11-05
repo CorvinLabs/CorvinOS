@@ -50,30 +50,28 @@ class TestLoggingLevels:
                 max_workers=4,
                 queue_size=10,
                 timeout_seconds=0.5,
-                enable_auto_scaling=True
+                enable_auto_scaling=True,
+                min_workers=1,  # an elastic pool needs a floor below the cap
             )
             await pool.start()
+            gate = asyncio.Event()
+            subs = []
 
             try:
-                # Fill queue to trigger scale-up
-                for _ in range(8):
-                    try:
-                        await asyncio.wait_for(
-                            pool.submit(asyncio.sleep, 10),
-                            timeout=0.1
-                        )
-                    except (asyncio.TimeoutError, Exception):
-                        break
-
-                # Give scaler time to run
-                await asyncio.sleep(1.5)
+                # Fill queue to trigger scale-up: scheduled, gated submissions
+                # (awaiting `submit` inline runs each task to completion).
+                subs = [asyncio.create_task(pool.submit(gate.wait)) for _ in range(8)]
+                await asyncio.sleep(0.2)
 
                 # Should have an INFO log about scaling up
                 assert any(
                     record.levelname == "INFO" and "Auto-scale UP" in record.message
                     for record in caplog.records
                 ), f"No INFO log about scale-up. Records: {caplog.text}"
+                gate.set()
+                await asyncio.gather(*subs)
             finally:
+                gate.set()
                 await pool.stop()
 
     @pytest.mark.asyncio
@@ -82,10 +80,12 @@ class TestLoggingLevels:
         with caplog.at_level(logging.ERROR):
             pool = WorkerPool(max_workers=1, queue_size=1, timeout_seconds=0.1)
             await pool.start()
+            gate = asyncio.Event()
 
             try:
-                # Fill queue
-                await pool.submit(asyncio.sleep, 10)
+                # Fill worker + queue with scheduled, gated submissions.
+                held = [asyncio.create_task(pool.submit(gate.wait)) for _ in range(2)]
+                await asyncio.sleep(0.05)
 
                 # Overflow attempt
                 try:
@@ -98,7 +98,10 @@ class TestLoggingLevels:
                     record.levelname == "ERROR" and "Queue overflow" in record.message
                     for record in caplog.records
                 ), f"No ERROR log about overflow. Records: {caplog.text}"
+                gate.set()
+                await asyncio.gather(*held)
             finally:
+                gate.set()
                 await pool.stop()
 
     @pytest.mark.asyncio
@@ -227,10 +230,12 @@ class TestLogMessageContent:
         with caplog.at_level(logging.ERROR):
             pool = WorkerPool(max_workers=1, queue_size=5, timeout_seconds=0.2)
             await pool.start()
+            gate = asyncio.Event()
 
             try:
-                # Fill queue
-                await pool.submit(asyncio.sleep, 10)
+                # Fill worker + queue (1 running, 5 queued), scheduled and gated.
+                held = [asyncio.create_task(pool.submit(gate.wait)) for _ in range(6)]
+                await asyncio.sleep(0.05)
 
                 # Trigger overflow
                 try:
@@ -245,5 +250,8 @@ class TestLogMessageContent:
                 assert overflow_log is not None
                 # Should include queue size
                 assert "/" in overflow_log.message  # size/capacity format
+                gate.set()
+                await asyncio.gather(*held)
             finally:
+                gate.set()
                 await pool.stop()

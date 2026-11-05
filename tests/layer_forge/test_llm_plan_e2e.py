@@ -107,6 +107,32 @@ class TestLLMManifestGeneration:
             assert result == mock_manifest
             assert result["id"] == "l34-audit"
 
+    def test_default_model_is_the_newest_opus_not_a_literal(self):
+        """CLAUDE.md (ADR-2090): never hardcode a model id where tier_model()
+        exists. The default used to be the literal "claude-opus-5"."""
+        import inspect
+        import sys
+        from pathlib import Path as _P
+        from core.orchestration.layer_forge import llm_plan
+
+        shared = str(_P(llm_plan.__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared")
+        if shared not in sys.path:
+            sys.path.insert(0, shared)
+        from model_selector import tier_model
+
+        for fn in (llm_plan.generate_manifest_from_intent, llm_plan.plan_layer_definition):
+            assert inspect.signature(fn).parameters["model"].default is None
+        assert llm_plan.default_plan_model() == tier_model("opus")
+
+        with patch("anthropic.Anthropic") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client_class.return_value = mock_client
+            mock_msg = MagicMock()
+            mock_msg.content = [MagicMock(text=json.dumps({"id": "x"}))]
+            mock_client.messages.create.return_value = mock_msg
+            llm_plan.plan_layer_definition("L34", "audit L10")
+            assert mock_client.messages.create.call_args.kwargs["model"] == tier_model("opus")
+
     def test_generate_manifest_mock_invalid_json(self):
         """Mock LLM returns invalid JSON."""
         with patch("anthropic.Anthropic") as mock_client_class:

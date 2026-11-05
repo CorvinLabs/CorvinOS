@@ -533,6 +533,15 @@ class ADRLoader:
             # in the title together with a non-weak title word ("forge.create
             # capability" for "Who can create forge tools?").
             strong = [t for t in hits if not _is_weak(t)]
+            # A word found ONLY in the body preview is a strong term only when it
+            # is rare (SINGLE_TERM_MIN_IDF). Measured 2026-11-05: ~100 ADRs added
+            # since the labelled set was recorded (1014 → 1116 files) turned
+            # everyday requests into hits on one title word plus one common body
+            # word — "three day trip" → "90-day retention" + "three" in the
+            # preview, "days until Christmas 2026" → "until" + the year (idf
+            # 0.16: nearly every ADR carries a date). Such a body word still adds
+            # to the score; it just cannot be the second of the two matched terms.
+            strong = [t for t in strong if t in title or known[t] >= SINGLE_TERM_MIN_IDF]
             if any(t in title for t in strong):
                 strong += [t for t in hits if t in _WEAK_VERBS and t in title]
             if not strong:

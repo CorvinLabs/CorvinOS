@@ -164,10 +164,12 @@ NAMED = [
 #: 2026-10-03 (KB migration, ADR-2113): two more adjacent ADRs entered the loaded
 #: corpus — ADR-0265 ("A2A file-permission gate", had no frontmatter before) and
 #: ADR-2193 ("skill/hook injection", imported from a session output). Same class.
+#: 2026-11-05 (corpus 1116 files): ADR-2283 ("Repair the live learning PATHS that
+#: … learn OUTSIDE the chain") — two title words, same lexical-adjacency class.
 AMBIGUOUS = [
 
     ("Path gate hook blocks file writes outside workdir",
-     {"ADR-0652", "ADR-0295", "ADR-0673", "ADR-0265", "ADR-2193"}),
+     {"ADR-0652", "ADR-0295", "ADR-0673", "ADR-0265", "ADR-2193", "ADR-2283"}),
     # The short-question single-word rule (+2 held-out hits) admits the voice-
     # summary ADR here; recorded as its known cost, not hidden.
     ("Can you summarize this PDF for me?", {"ADR-0596"}),

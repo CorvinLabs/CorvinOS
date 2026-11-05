@@ -93,7 +93,11 @@ class MemoryMatch:
    `MIN_RELEVANCE` (0.22), its matched terms carry ≥ min(`MIN_EVIDENCE` 4.0, 80 % of
    the question's own idf) — so "audit chain" still matches — and it matches two
    terms (one only for a one-word question, or a ≤ 3-word all-known question whose
-   rare word is in the ADR's title: "Bedrock 403"). Results below 50 % of the best
+   rare word is in the ADR's title: "Bedrock 403"). A word found only in the
+   preview counts as one of the two terms only when it is rare (idf ≥
+   `SINGLE_TERM_MIN_IDF` 4.1): with the corpus at 1116 files (2026-11-05)
+   "three day trip" matched "90-day retention" plus "three" in a preview and
+   "until Christmas 2026" matched "until" plus the year. Results below 50 % of the best
    score are cut (strictly: a body-only mention of every term scores exactly half
    a title match). Superseded/rejected ADRs never match; ties break on raw
    evidence. `L35` and `Layer 35` are the same token; `Art. 17` is one token;

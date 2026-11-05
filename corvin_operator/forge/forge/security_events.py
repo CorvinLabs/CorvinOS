@@ -5651,8 +5651,10 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "plugin.security_violation": frozenset({
         "tenant_id", "plugin_id", "violation_type", "aspect", "lom", "violation_count"}),
     # core/plugins/corvin_plugins/trust.py — ``operator`` (a person identifier)
-    # is deliberately NOT admitted; the plugin digest identifies what was trusted.
-    "plugin.consent_granted": frozenset({"tenant_id", "plugin_id", "digest"}),
+    # is deliberately NOT admitted; the emitter sends ``operator_ref``, a fixed
+    # ``op:<12 hex>`` SHA-256 fingerprint (trust.operator_ref). The plugin digest
+    # identifies what was trusted.
+    "plugin.consent_granted": frozenset({"tenant_id", "plugin_id", "digest", "operator_ref"}),
     # forge/tenant_migrate.py — fixed directory names, a count, the method.
     "tenant.path_migrated": frozenset({"tenant_id", "method", "subdirs", "subdir_count"}),
     # core/audit/durability.py — counts and the truncation offset; ``errors``

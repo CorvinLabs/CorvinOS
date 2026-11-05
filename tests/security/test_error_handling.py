@@ -72,13 +72,54 @@ class TestQueueOverflowError:
         pool = WorkerPool(max_workers=1, queue_size=1, timeout_seconds=0.1)
         await pool.start()
 
+        gate = asyncio.Event()
         try:
-            # Fill queue with slow task
-            await pool.submit(asyncio.sleep, 10)
+            # `submit` returns the task's RESULT, so awaiting it inline runs the
+            # task to completion and never fills anything. Occupy the one worker
+            # and the one queue slot with scheduled, gated submissions instead.
+            running = asyncio.create_task(pool.submit(gate.wait))
+            queued = asyncio.create_task(pool.submit(gate.wait))
+            await asyncio.sleep(0.05)
 
             # Try to submit another task (should timeout)
             with pytest.raises(QueueOverflowError):
                 await pool.submit(asyncio.sleep, 1)
+            gate.set()
+            await asyncio.gather(running, queued)
+        finally:
+            gate.set()
+            await pool.stop()
+
+    @pytest.mark.asyncio
+    async def test_task_timeout_is_not_reported_as_overflow(self):
+        """A task that itself raises TimeoutError is the TASK's error: it used to
+        be caught by the enqueue handler and re-raised as QueueOverflowError."""
+        pool = WorkerPool(max_workers=1, queue_size=1, timeout_seconds=0.1)
+        await pool.start()
+
+        async def times_out():
+            raise asyncio.TimeoutError("upstream call timed out")
+
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await pool.submit(times_out)
+            assert pool.overflow_errors == 0
+        finally:
+            await pool.stop()
+
+    @pytest.mark.asyncio
+    async def test_elastic_scale_down_never_cancels_a_busy_worker(self):
+        """Scale-down used to cancel an arbitrary worker — a running task was
+        killed and its submitter awaited a future nobody resolved."""
+        pool = WorkerPool(max_workers=2, queue_size=10, min_workers=1,
+                          idle_retire_seconds=0.0)
+        await pool.start()
+        try:
+            result = await asyncio.wait_for(
+                asyncio.gather(pool.submit(asyncio.sleep, 1.5, "a"),
+                               pool.submit(asyncio.sleep, 1.5, "b")),
+                timeout=4.0)
+            assert result == ["a", "b"]
         finally:
             await pool.stop()
 

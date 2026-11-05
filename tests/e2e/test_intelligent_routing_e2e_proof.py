@@ -34,7 +34,16 @@ from core.skills.os_skills.intelligent_router_integration import (
 
 
 def create_synthetic_tasks():
-    """Create 10 synthetic tasks with varying complexity."""
+    """Create 10 synthetic tasks with varying complexity.
+
+    Expectations follow the CURRENT `IntelligentRouter._classify_tier` rules, not
+    the original 500/3000-token boundaries this suite was written against
+    (8b9a8f672). a9d9e9280 and the Phase 2 tuning c13c34e9b moved them to
+    SIMPLE < 30 <= MEDIUM < 150 <= COMPLEX, and an analysis keyword on a > 80-char
+    task escalates to COMPLEX — consistent with the operator policy in CLAUDE.md
+    (reviews/analysis are complex, a short work request is medium, only
+    conversation is simple).
+    """
     tasks = [
         {
             "name": "task_1_simple_math",
@@ -46,12 +55,13 @@ def create_synthetic_tasks():
         {
             "name": "task_2_simple_code",
             "input": "Write a hello world function in Python",
-            "expected_tier": "simple",
-            "expected_model": _HAIKU,
+            # A short work request (30 <= 80 < 150 tokens) is MEDIUM.
+            "expected_tier": "medium",
+            "expected_model": _SONNET,
             "token_estimate": 80,
         },
         {
-            "name": "task_3_medium_analysis",
+            "name": "task_3_complex_analysis",
             "input": """Analyze this code for performance issues:
 
 def fibonacci(n):
@@ -60,16 +70,17 @@ def fibonacci(n):
     return fibonacci(n-1) + fibonacci(n-2)
 
 What's the time complexity?""",
-            "expected_tier": "medium",
-            "expected_model": _SONNET,
+            # Analysis keyword on a substantive task, and 750 >= 150 tokens.
+            "expected_tier": "complex",
+            "expected_model": _OPUS,
             "token_estimate": 750,
         },
         {
             "name": "task_4_medium_refactor",
-            "input": "Refactor this codebase " * 50,
+            "input": "Refactor this codebase " * 5,
             "expected_tier": "medium",
             "expected_model": _SONNET,
-            "token_estimate": 1500,
+            "token_estimate": 100,
         },
         {
             "name": "task_5_complex_design",
@@ -93,18 +104,18 @@ Provide detailed design with trade-offs.""" * 10,
             "token_estimate": 4500,
         },
         {
-            "name": "task_7_boundary_500",
-            "input": "Boundary test at 500 tokens",
-            "expected_tier": "medium",  # 500 is MEDIUM boundary
+            "name": "task_7_boundary_30",
+            "input": "Boundary test at 30 tokens",
+            "expected_tier": "medium",  # 30 is the MEDIUM lower boundary
             "expected_model": _SONNET,
-            "token_estimate": 500,
+            "token_estimate": 30,
         },
         {
-            "name": "task_8_boundary_3000",
-            "input": "Boundary test at 3000 tokens",
-            "expected_tier": "complex",  # 3000 is COMPLEX boundary
+            "name": "task_8_boundary_150",
+            "input": "Boundary test at 150 tokens",
+            "expected_tier": "complex",  # 150 is the COMPLEX lower boundary
             "expected_model": _OPUS,
-            "token_estimate": 3000,
+            "token_estimate": 150,
         },
         {
             "name": "task_9_empty",
@@ -167,7 +178,10 @@ def test_e2e_routing_with_10_synthetic_tasks():
             tier_match = decision.tier == task_spec["expected_tier"]
             model_match = decision.model == task_spec["expected_model"]
             confidence_ok = decision.confidence >= 0.60
-            cost_ok = 0.0 < decision.cost_estimate < 10.0
+            # An empty task has no input tokens and therefore no estimated
+            # cost — $0.00 is the correct estimate, not an out-of-bounds one.
+            cost_ok = (0.0 <= decision.cost_estimate < 10.0 if not task_spec["input"]
+                       else 0.0 < decision.cost_estimate < 10.0)
             latency_ok = 0 < decision.latency_estimate_ms < 100_000
 
             all_ok = (

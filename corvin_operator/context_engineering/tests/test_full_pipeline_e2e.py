@@ -256,12 +256,22 @@ class FullPipelineE2E(unittest.TestCase):
             # allow Gate-1 (the raw task), deny once the brief content shows up
             return (len(seen) == 1, "denied by test")
 
+        # The brief's CONTENT is ambient: in the sandboxed CORVIN_HOME there is no
+        # memory match and no ADR matches this task, so the real rendering is ""
+        # and there is nothing for Gate-2 to inspect (it correctly skips an empty
+        # payload). Pin a non-empty fallback rendering so the test exercises the
+        # contract under test — the fallback channel is part of Gate-2's payload —
+        # instead of depending on whatever the live stores happen to hold.
+        pl = sys.modules["context_engineering.pipeline"]
+        marker = "MEMORY: fallback-brief-marker-7f3a"
         with patch.object(self.llm.subprocess, "run",
-                          side_effect=RuntimeError("llm down")):  # → deterministic
+                          side_effect=RuntimeError("llm down")), \
+             patch.object(pl, "render_brief_to_text", return_value=marker):  # → deterministic
             bundle, trace = self.ce.run_full_pipeline(
                 TASK_CSV, meter=False, gate_fn=gate, persona_patterns=["*"],
                 persona_caps=FORGE_CAPS)
         self.assertGreaterEqual(len(seen), 2, "Gate-2 ran on a synthesis-less turn")
+        self.assertIn(marker, seen[1], "Gate-2 saw the deterministic brief")
         self.assertIn("gate2_denied", trace,
                       "the deterministic brief is part of the inspected payload")
 

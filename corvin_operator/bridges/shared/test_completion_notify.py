@@ -561,7 +561,7 @@ def test_flag_on_all_gates_pass_delivers_via_gate_exactly_once(monkeypatch) -> N
         _flag_on_overlay("acme")
         # Mock ONLY the house-rules boundary (fail-closed gate) → PASS.
         monkeypatch.setattr(P, "_house_rules_allows",
-                            lambda text, *, channel, chat_key: True)
+                            lambda text, *, channel, chat_key, tenant_id: True)
         # Spy on the real primitive to PROVE the gate path (not the direct write)
         # was taken, and with the record's tenant.
         seen: list = []
@@ -604,7 +604,7 @@ def test_flag_on_rate_limited_leaves_record_ready_and_retries(monkeypatch) -> No
 
         _flag_on_overlay("acme")
         monkeypatch.setattr(P, "_house_rules_allows",
-                            lambda text, *, channel, chat_key: True)
+                            lambda text, *, channel, chat_key, tenant_id: True)
         monkeypatch.setattr(P, "MAX_PER_WINDOW", 0)  # every emit floods → RATE_LIMITED
 
         tid = cn.register(channel="discord", chat_id=_SNOWFLAKE, sender="u1",
@@ -644,7 +644,7 @@ def test_flag_on_resolved_for_record_tenant_not_env(monkeypatch) -> None:
         assert ff.is_enabled(_FLAG_ID, "_default") is False
         monkeypatch.setenv("CORVIN_TENANT_ID", "_default")  # ambient env is the OFF tenant
         monkeypatch.setattr(P, "_house_rules_allows",
-                            lambda text, *, channel, chat_key: True)
+                            lambda text, *, channel, chat_key, tenant_id: True)
         seen: list = []
         real_emit = P.emit_proactive
 

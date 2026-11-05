@@ -139,6 +139,32 @@ class TestClassifier:
         assert "ADR-0105" not in ids, "a dependency edge alone is not relevance"
         assert all(m.relevance >= MIN_RELEVANCE for m in got)
 
+    def test_duplicate_id_takes_one_slot(self, corpus):
+        """ADR-0103 is carried by two files; the classifier returns it once."""
+        task = SimpleNamespace(normalized=SimpleNamespace(
+            summary="context filter priority tree by intent classification"))
+        ids = [m.id for m in ADRClassifier(corpus).find_relevant_adrs(task, max_results=5)]
+        assert ids.count("ADR-0103") == 1, ids
+
+    def test_body_only_common_word_is_not_a_second_term(self, tmp_path):
+        """A title word plus a COMMON preview word is not a match (2026-11-05:
+        "three day trip" → "90-day retention" + "three" in a preview)."""
+        d = tmp_path / "decisions"
+        d.mkdir()
+        _adr(d, "0001-retention.md", id_="ADR-0001", status="ACCEPTED",
+             title="Audit flow guard and 90-day retention default",
+             body="Three changes land together.")
+        for i in range(40):
+            _adr(d, f"0{100 + i}-filler.md", id_=f"ADR-0{100 + i}", status="ACCEPTED",
+                 title=f"Filler decision {i}", body="Three things about the platform runtime.")
+        loader = ADRLoader(adr_repo_path=str(d))
+        assert loader.score_query(tokenize("plan a three day trip")) == []
+        # The same two words both in the TITLE still match.
+        _adr(d, "0002-three-day.md", id_="ADR-0002", status="ACCEPTED",
+             title="Three day grace period for retention")
+        loader = ADRLoader(adr_repo_path=str(d))
+        assert [i for i, _ in loader.score_query(tokenize("three day grace"))][:1] == ["ADR-0002"]
+
     def test_graph_traversal_carries_the_classifier_score(self, corpus):
         gt = GraphTraversal(enable_adr=False)
         gt.adr_classifier = ADRClassifier(corpus)
@@ -216,6 +242,7 @@ class TestRealCorpusRegression:
                 if got:
                     noisy.append((qq, got))
         # Measured 2026-10-02 after R7: 4 of 515, all ungrammatical "Let's <question>".
+        # 2026-11-05 (1116 files, body-only words must be rare to count): 5, same class.
         assert len(noisy) <= 6, noisy
 
     def test_a_named_adr_keeps_its_best_lexical_neighbour(self):
@@ -248,7 +275,14 @@ class TestRealCorpusRegression:
         clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
         got = [m.id for m in clf.find_relevant_adrs(
             SimpleNamespace(normalized=SimpleNamespace(summary="Dual-Gate Context Pipeline")))]
-        assert len(got) == len(set(got)) == 5 and "ADR-0513" in got, got
+        # Until 2026-11-05 this also pinned ADR-0513 ("Dual Plugin Architecture")
+        # as the 5th result. It matched on "dual" in its title plus the common
+        # preview words "gate"/"context" (idf 1.85/0.58) — the exact weak-match
+        # class the body-only rarity rule in score_query now refuses, and not the
+        # invariant this test is about (one slot per id). The hermetic twin with a
+        # real duplicate id is TestClassifier::test_duplicate_id_takes_one_slot.
+        assert got[0] == "ADR-0300", got
+        assert len(got) == len(set(got)) == 5, got
 
     def test_observer_block_does_not_steer_retrieval(self):
         clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))

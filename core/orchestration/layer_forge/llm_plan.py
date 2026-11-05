@@ -32,6 +32,25 @@ class LLMPlanError(ValueError):
     pass
 
 
+def default_plan_model() -> str:
+    """The newest registered Opus (``model_selector.tier_model("opus")``,
+    ADR-2090), resolved at call time — never a hardcoded id: the literal default
+    (``"claude-opus-5"``) kept planning on an old snapshot after a newer Opus
+    shipped, and would name a retired one once it is withdrawn."""
+    import sys  # noqa: PLC0415
+    shared = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared")
+    if shared not in sys.path:
+        sys.path.insert(0, shared)
+    try:
+        from model_selector import tier_model  # noqa: PLC0415
+        model = tier_model("opus")
+    except Exception as e:  # noqa: BLE001 - reported to the caller, not swallowed
+        raise LLMPlanError(f"cannot resolve the plan model: {e}") from e
+    if not model:
+        raise LLMPlanError("cannot resolve the plan model: tier_model('opus') is empty")
+    return str(model)
+
+
 @dataclass(frozen=True)
 class LayerPlanInput:
     """Input to the LLM planner."""
@@ -122,7 +141,7 @@ def generate_manifest_from_intent(
     layer_id: str,
     intent: str,
     *,
-    model: str = "claude-opus-5",
+    model: str | None = None,
     max_tokens: int = 2048,
 ) -> dict:
     """Call Claude to generate a layer-definition manifest.
@@ -130,7 +149,7 @@ def generate_manifest_from_intent(
     Args:
         layer_id: The layer identifier (e.g., 'L34')
         intent: Description of what the layer should do
-        model: Model to use (default: opus for best quality)
+        model: Model to use (default None: the newest Opus, default_plan_model())
         (no sampling parameters: the installed SDK's messages.create() takes no `temperature`;
         the plan is validated and gated afterwards, not trusted to be deterministic)
         max_tokens: Max tokens in response
@@ -143,6 +162,8 @@ def generate_manifest_from_intent(
     """
     from . import llm_client
 
+    if not model:
+        model = default_plan_model()
     try:
         client = llm_client.get_client(timeout=PLAN_TIMEOUT_S, max_retries=PLAN_MAX_RETRIES)
     except Exception as e:
@@ -183,7 +204,7 @@ def plan_layer_definition(
     layer_id: str,
     intent: str,
     *,
-    model: str = "claude-opus-5",
+    model: str | None = None,
 ) -> dict:
     """Public API for layer-definition planning.
 

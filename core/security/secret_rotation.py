@@ -253,11 +253,29 @@ class RotationDaemon:
             backup_dir = self.tenant_home / "backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
 
-            # Timestamp for unique backup file
-            timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-            backup_path = backup_dir / f"credentials-{timestamp}.tar.gz"
+            # Unique, never-overwritten backup file. The name used to carry
+            # whole seconds only, so a second backup within the same second
+            # silently REPLACED the first; and tarfile created it at the umask
+            # mode (0o664 here) before the chmod below — a window in which a
+            # credential archive was world-readable. Create it exclusively at
+            # 0o600 from the start; on a name collision take the next suffix.
+            timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+            fd = -1
+            for n in range(100):
+                suffix = f"-{n}" if n else ""
+                backup_path = backup_dir / f"credentials-{timestamp}{suffix}.tar.gz"
+                try:
+                    fd = os.open(backup_path,
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                                 | getattr(os, "O_NOFOLLOW", 0), 0o600)
+                    break
+                except FileExistsError:
+                    continue
+            if fd < 0:
+                raise FileExistsError(f"no free backup name for {timestamp} in {backup_dir}")
+            out = os.fdopen(fd, "wb")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with out, tempfile.TemporaryDirectory() as tmpdir:
                 tmpdir_path = Path(tmpdir)
 
                 # Collect files to backup
@@ -275,7 +293,7 @@ class RotationDaemon:
                         logger.debug(f"Backed up: {file_path}")
 
                 # Create tar.gz with mode 0o600
-                with tarfile.open(backup_path, "w:gz") as tar:
+                with tarfile.open(fileobj=out, mode="w:gz") as tar:
                     for file_path in files_to_backup:
                         if file_path.exists():
                             arcname = file_path.name

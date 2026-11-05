@@ -482,3 +482,32 @@ class TestDurabilityUnderLoad:
         assert metrics.fsync_count >= 50
         # wal_writes should be significant (at least 50 * 2 for BEGIN/COMMIT)
         assert metrics.wal_writes >= 100
+
+
+def test_crash_recovery_record_reaches_the_chain_with_its_tenant(tmp_path):
+    """The `compliance.crash_recovery` record is written through the real chain
+    writer, tenant-attributed. It used to be built without `tenant_id` (required
+    on AuditEntry since ADR-0007), so the constructor raised into the logging
+    `except` and no recovery was ever recorded."""
+    log = tmp_path / "queue.jsonl"
+    manager = AuditDurabilityManager(log, tenant_id="acme", enable_wal=True)
+    for i in range(3):
+        manager.record(AuditEntry(
+            event_type=f"event_{i}", actor="system", action="write",
+            resource=f"res_{i}", result="success",
+            timestamp=f"2026-08-12T10:00:0{i}Z", tenant_id="acme"))
+    # An in-flight write: BEGIN without COMMIT.
+    with open(log.with_suffix(".wal"), "a", encoding="utf-8") as f:
+        json.dump({"record_type": "begin", "timestamp": "2026-08-12T10:00:10Z",
+                   "entry_id": "99_2026-08-12T10:00:10Z",
+                   "details": {"event_type": "event_99"}, "checksum": "00000000"}, f)
+        f.write("\n")
+
+    recovered = AuditDurabilityManager(log, tenant_id="acme", enable_wal=True)
+
+    assert recovered.get_metrics().crash_recoveries == 1
+    on_disk = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rec = [r for r in on_disk if r["event_type"] == "compliance.crash_recovery"]
+    assert len(rec) == 1, on_disk
+    assert rec[0]["tenant_id"] == "acme"
+    assert AuditDurabilityManager(log, tenant_id="acme", enable_wal=False).verify_chain()

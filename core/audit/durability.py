@@ -548,6 +548,10 @@ class AuditDurabilityManager:
                 resource=str(self.log_file),
                 result="success" if report.recovery_successful else "partial",
                 timestamp=report.recovered_at,
+                # Required since ADR-0007: without it the constructor raised
+                # TypeError into the except below and NO crash-recovery record
+                # was ever written.
+                tenant_id=self.tenant_id,
                 details={
                     "tenant_id": self.tenant_id,
                     "records_recovered": report.records_recovered,

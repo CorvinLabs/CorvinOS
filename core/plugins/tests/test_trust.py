@@ -213,7 +213,33 @@ def test_consent_grant_emits_an_audit_event(tmp_path):
         audit_emit=lambda e, d: seen.append((e, d)),
     )
     assert seen and seen[0][0] == "plugin.consent_granted"
-    assert seen[0][1]["operator"] == "alice"
+    # The raw operator identifier never reaches the chain: the allowlist drops
+    # an ``operator`` field, so the emitter sends a fixed-shape fingerprint.
+    assert "operator" not in seen[0][1]
+    assert seen[0][1]["operator_ref"] == trust.operator_ref("alice")
+    assert seen[0][1]["operator_ref"].startswith("op:") and "alice" not in seen[0][1]["operator_ref"]
+
+
+def test_consent_grant_operator_ref_survives_the_real_audit_writer(tmp_path):
+    """Through the real writer: ``operator_ref`` is kept by the allowlist, the
+    name is not on the chain."""
+    import json
+    import sys
+    from pathlib import Path as _P
+    _forge = str(_P(__file__).resolve().parents[3] / "corvin_operator" / "forge")
+    if _forge not in sys.path:
+        sys.path.insert(0, _forge)
+    from forge import security_events as se
+
+    chain = tmp_path / "chain.jsonl"
+    trust.grant_consent(
+        "com.example.r", corvin_home=tmp_path, operator="alice", digest="abc",
+        audit_emit=lambda e, d: se.write_event(chain, e, details=d))
+    rec = json.loads(chain.read_text(encoding="utf-8").splitlines()[-1])
+    details = rec.get("details") or {}
+    assert details.get("operator_ref") == trust.operator_ref("alice")
+    assert "operator_ref" not in (details.get("_dropped_fields") or [])
+    assert "alice" not in chain.read_text(encoding="utf-8")
 
 
 def test_corrupt_consent_file_denies(tmp_path):

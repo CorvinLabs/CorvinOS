@@ -92,20 +92,28 @@ async def test_queue_overflow_raises_error():
 
     pool = WorkerPool(max_workers=1, queue_size=5, timeout_seconds=0.1)
     await pool.start()
+    gate = asyncio.Event()
 
     try:
-        # Fill queue
-        for i in range(5):
-            await pool.submit(asyncio.sleep, 1.0)  # Long-running tasks
+        # Occupy the worker and fill the queue (1 running + 5 queued). `submit`
+        # returns the RESULT, so awaiting it inline would run each task to the
+        # end and never fill the queue — schedule gated submissions instead.
+        held = [asyncio.create_task(pool.submit(gate.wait)) for _ in range(6)]
+        await asyncio.sleep(0.05)
 
-        # 6th task should fail with QueueOverflowError (not silent drop)
+        # Next task should fail with QueueOverflowError (not silent drop)
         with pytest.raises(QueueOverflowError) as exc_info:
             await pool.submit(asyncio.sleep, 1.0, timeout_seconds=0.1)
 
-        assert "Queue full" in str(exc_info.value)
+        assert "Queue overflow" in str(exc_info.value)
         assert pool.overflow_errors == 1
 
+        # Backpressure lost nothing: every held task still completes.
+        gate.set()
+        await asyncio.gather(*held)
+
     finally:
+        gate.set()
         await pool.stop()
 
 
@@ -153,6 +161,7 @@ async def test_worker_pool_auto_scaling_up():
         max_workers=8,
         queue_size=100,
         enable_auto_scaling=True,
+        min_workers=1,  # a pool started AT its cap has nothing to scale up to
     )
     await pool.start()
 
@@ -163,13 +172,15 @@ async def test_worker_pool_auto_scaling_up():
         async def slow_task():
             await asyncio.sleep(0.5)
 
+        # Scheduled, not bare coroutines: a coroutine object is not run until
+        # awaited, so the queue stayed empty during the wait below.
         tasks = [
-            pool.submit(slow_task, timeout_seconds=2)
+            asyncio.create_task(pool.submit(slow_task, timeout_seconds=2))
             for _ in range(80)  # 80% of 100
         ]
 
         # Give scaler time to react
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(0.3)
 
         scaled_workers = len(pool.active_workers)
 

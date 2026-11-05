@@ -14,6 +14,7 @@ ADR-0863 Phase 7 Compliance:
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -256,19 +257,29 @@ class TestStorageIsolation:
         self,
         isolated_storage: Dict,
     ) -> None:
-        """Workflow metadata files must not be world-readable."""
+        """Workflow metadata and chat files must not be world-readable.
 
-        tenant_path = isolated_storage["tenant_a"]["path"]
-        metadata_file = tenant_path / "workflow.meta.json"
-        metadata_file.write_text('{"id": "wid_a", "title": "Workflow A"}', encoding="utf-8")
+        The previous body wrote its OWN file with ``write_text`` and checked the
+        test process's umask — it never reached the console's writer. Drive the
+        real storage helpers of ``routes/workflows.py`` instead (meta via
+        ``_write_atomic``, chat via ``_append_chat_line``), under the sandboxed
+        CORVIN_HOME the repo conftest sets."""
+        _console = str(Path(__file__).resolve().parents[2] / "core" / "console")
+        if _console not in sys.path:
+            sys.path.insert(0, _console)
+        from corvin_console.routes import workflows as wf
 
-        # Check permissions
-        stat_info = os.stat(metadata_file)
-        perms = stat_info.st_mode & 0o777
+        tenant = "tenant_a"
+        meta = wf._meta_path(tenant, "wid_a")
+        wf._write_atomic(meta, {"id": "wid_a", "title": "Workflow A"})
+        wf._append_chat_line(tenant, "wid_a", {"role": "user", "text": "hello"})
+        chat = wf._chat_path(tenant, "wid_a")
 
-        # Must not be world-readable (perms & 0o004 == 0)
-        assert (perms & 0o004) == 0, \
-            f"Metadata file is world-readable: {oct(perms)}"
+        for f in (meta, chat):
+            perms = os.stat(f).st_mode & 0o777
+            # Must not be readable by group or others (perms & 0o044 == 0)
+            assert (perms & 0o044) == 0, \
+                f"{f.name} is readable beyond its owner: {oct(perms)}"
 
 
 # ============================================================================
@@ -450,9 +461,17 @@ class TestCSRFProtection:
         safe_methods = ["GET", "HEAD", "OPTIONS"]
         requires_csrf_methods = ["POST", "PUT", "PATCH", "DELETE"]
 
-        # Log for verification
-        _log.info(f"Safe methods (no CSRF): {safe_methods}")
-        _log.info(f"State-changing methods (require CSRF): {requires_csrf_methods}")
+        # The body used to only `_log.info(...)` these lists through a logger
+        # this module never defined (NameError) — it asserted nothing. Check the
+        # REAL console router guard (`deps.require_session_csrf_on_mutation`):
+        # exactly the state-changing methods demand the CSRF token.
+        _console = str(Path(__file__).resolve().parents[2] / "core" / "console")
+        if _console not in sys.path:
+            sys.path.insert(0, _console)
+        from corvin_console import deps as _deps
+
+        assert set(requires_csrf_methods) <= set(_deps._MUTATING_METHODS)
+        assert not (set(safe_methods) & set(_deps._MUTATING_METHODS))
 
 
 # ============================================================================

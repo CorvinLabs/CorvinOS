@@ -104,14 +104,19 @@ class TestRotationDaemonBackup:
     """Backup creation (atomic, fail-closed)."""
 
     @pytest.fixture
-    def daemon(self):
-        """Create daemon with temp tenant home."""
+    def daemon(self, tmp_path):
+        """Create daemon with temp tenant home.
+
+        `RotationDaemon` resolves the tenant home inside ``__init__`` (a lazy
+        import of ``forge.paths.tenant_home`` since 4e6d1a475), so there is no
+        module-level ``get_tenant_home`` to patch; point the instance at a temp
+        home instead."""
         audit_backend = MagicMock()
-        with patch("core.security.secret_rotation.get_tenant_home"):
-            daemon = RotationDaemon(
-                tenant_id="test_tenant",
-                audit_backend=audit_backend,
-            )
+        daemon = RotationDaemon(
+            tenant_id="test_tenant",
+            audit_backend=audit_backend,
+        )
+        daemon.tenant_home = tmp_path / "tenant_home"
         return daemon
 
     def test_backup_creates_tar_gz(self, daemon, tmp_path):
@@ -236,7 +241,15 @@ class TestRotationDaemonPhase2:
                 "OPENAI_API_KEY=OPENAI_PLACEHOLDER_KEY_20260920\n", encoding="utf-8"
             )
 
-            with patch("pathlib.Path.expanduser", return_value=env_file):
+            # `_verify_rotation` scans three credential files; a blanket
+            # `return_value` mapped all three onto this one file and counted it
+            # three times. Map only service.env; the others do not exist.
+            missing = Path(tmpdir) / "absent"
+
+            def _expand(self):
+                return env_file if self.name == "service.env" else missing
+
+            with patch("pathlib.Path.expanduser", new=_expand):
                 count = daemon._verify_rotation()
                 assert count == 2, f"Expected 2 PLACEHOLDER strings, found {count}"
 

@@ -440,7 +440,12 @@ def _append_chat_line(tenant_id: str, wid: str, line: dict[str, Any]) -> None:
     _ensure_dir(path.parent)
 
     with _bounded_flock(lock_path, f"workflow chat append {wid!r}"):
-        with open(path, "a", encoding="utf-8") as fh:
+        # Created owner-only, like every `_write_atomic` sibling (mkstemp, 0o600):
+        # a plain open(path, "a") created the chat log — operator text — at the
+        # umask mode, 0o664 on this host (GDPR Art. 32).
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                     | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 

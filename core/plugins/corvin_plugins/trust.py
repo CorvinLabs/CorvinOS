@@ -203,6 +203,12 @@ def consent_granted(
     return isinstance(entry, dict) and entry.get("approved") is True
 
 
+def operator_ref(operator: str) -> str:
+    """``op:<12 hex>`` — a SHA-256 fingerprint of the operator identifier for
+    the audit chain (closed shape, never the identifier itself)."""
+    return "op:" + hashlib.sha256(str(operator or "").encode("utf-8")).hexdigest()[:12]
+
+
 def grant_consent(
     plugin_id: str,
     *,
@@ -240,7 +246,12 @@ def grant_consent(
                 {
                     "plugin_id": plugin_id,
                     "tenant_id": tenant_id,
-                    "operator": operator,
+                    # The operator's identifier is a person identifier and the
+                    # audit allowlist drops a raw ``operator`` field. Record a
+                    # fixed-shape fingerprint instead: it lets an auditor match
+                    # the decision to the operator named in this tenant's
+                    # consent file without the chain carrying the name.
+                    "operator_ref": operator_ref(operator),
                     "digest": digest,
                 },
             )

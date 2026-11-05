@@ -8,7 +8,8 @@ Prevents silent task loss + provides elastic scaling for high-load scenarios.
 
 Features:
     - Bounded queue with backpressure (fail-fast on overflow)
-    - Auto-scaling based on queue usage (75% scale-up, 25% scale-down)
+    - Auto-scaling: grows from min_workers the moment a task is queued with no
+      idle worker (and at > 75% queue usage); retires idle workers only
     - Audit trail for task execution and overflow events
     - Configurable timeouts and bounds validation
     - Per-task latency tracking and statistics
@@ -90,6 +91,8 @@ class WorkerPool:
         queue_size: int = 1000,
         timeout_seconds: float = 30,
         enable_auto_scaling: bool = True,
+        min_workers: Optional[int] = None,
+        idle_retire_seconds: float = 5.0,
     ) -> None:
         """
         Initialize WorkerPool with bounds validation (F-M1 fix).
@@ -98,7 +101,15 @@ class WorkerPool:
             max_workers: Number of concurrent workers (1–256)
             queue_size: Maximum pending tasks (1–10000)
             timeout_seconds: Default timeout for operations (0.1–3600)
-            enable_auto_scaling: Enable automatic worker scaling
+            enable_auto_scaling: Enable automatic worker scaling. An elastic
+                pool starts with ``min_workers`` workers and grows to
+                ``max_workers`` the moment a task is queued with no idle worker
+                to take it; a fixed pool (False) runs ``max_workers`` throughout.
+            min_workers: Floor of an elastic pool (1..max_workers). Default
+                None = max_workers: the pool starts full and never shrinks, so
+                auto-scaling only acts when a lower floor is given
+            idle_retire_seconds: An elastic pool retires a worker only after it
+                has been IDLE this long — never a busy one
 
         Raises:
             ValueError: If any parameter is out of bounds
@@ -116,11 +127,28 @@ class WorkerPool:
             raise ValueError(
                 f"timeout_seconds must be 0.1–3600, got {timeout_seconds}"
             )
+        if min_workers is None:
+            min_workers = max_workers
+        if not (1 <= min_workers <= max_workers):
+            raise ValueError(
+                f"min_workers must be 1–max_workers ({max_workers}), got {min_workers}"
+            )
+        if idle_retire_seconds < 0:
+            raise ValueError(
+                f"idle_retire_seconds must be >= 0, got {idle_retire_seconds}"
+            )
 
         self.max_workers: int = max_workers
         self.queue_size: int = queue_size
         self.timeout_seconds: float = timeout_seconds
         self.enable_auto_scaling: bool = enable_auto_scaling
+        self.min_workers: int = min_workers
+        self.idle_retire_seconds: float = idle_retire_seconds
+        # worker task -> monotonic time it started waiting for work. A worker is
+        # in here only while it is blocked on the queue, so scale-down can pick
+        # an IDLE worker; cancelling an arbitrary one (the previous behaviour)
+        # killed a running task whose submitter then waited forever.
+        self._idle_since: dict[asyncio.Task[None], float] = {}
 
         self.queue: asyncio.Queue[tuple] = asyncio.Queue(maxsize=queue_size)
         self.active_workers: set[asyncio.Task[None]] = set()
@@ -137,7 +165,8 @@ class WorkerPool:
         """
         Start worker pool and spawn initial workers.
 
-        Spawns max_workers worker tasks and optionally starts the
+        Spawns max_workers worker tasks (a fixed pool) or min_workers (an
+        elastic pool, which then grows on demand) and optionally starts the
         auto-scaler. Must be called before submitting tasks.
 
         Raises:
@@ -152,11 +181,12 @@ class WorkerPool:
             f"queue_size={self.queue_size}, auto_scaling={self.enable_auto_scaling}"
         )
 
-        # Spawn initial workers
-        for _ in range(self.max_workers):
-            worker = asyncio.create_task(self._worker_loop())
-            self.active_workers.add(worker)
-            worker.add_done_callback(self.active_workers.discard)
+        # Spawn initial workers. An elastic pool starts at its floor: starting at
+        # max_workers made the scale-UP rule (`current < max_workers`)
+        # unreachable from a fresh pool.
+        initial = self.min_workers if self.enable_auto_scaling else self.max_workers
+        for _ in range(initial):
+            self._spawn_worker()
 
         # Start auto-scaler if enabled
         if self.enable_auto_scaling:
@@ -246,20 +276,17 @@ class WorkerPool:
 
         timeout = timeout_seconds if timeout_seconds is not None else self.timeout_seconds
 
-        # Try to enqueue with timeout (backpressure)
-        try:
-            future: asyncio.Future[Any] = asyncio.Future()
-            task_item = (coro, args, kwargs, future)
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        task_item = (coro, args, kwargs, future)
 
+        # Only the ENQUEUE is under the backpressure timeout. The result wait is
+        # outside it: a task that itself raises TimeoutError used to be reported
+        # as a queue overflow (and counted in overflow_errors).
+        try:
             await asyncio.wait_for(
                 self.queue.put(task_item),
                 timeout=timeout
             )
-
-            # Wait for result
-            result = await future
-            return result
-
         except asyncio.TimeoutError:
             self.overflow_errors += 1
             # F-M3: Logging Consistency (ERROR level for backpressure)
@@ -291,6 +318,33 @@ class WorkerPool:
 
             raise error
 
+        self._scale_up_if_saturated()
+        return await future
+
+    def _spawn_worker(self) -> asyncio.Task[None]:
+        worker = asyncio.create_task(self._worker_loop())
+        self.active_workers.add(worker)
+        worker.add_done_callback(self.active_workers.discard)
+        return worker
+
+    def _scale_up_if_saturated(self) -> None:
+        """Elastic scale-up: more queued tasks than idle workers → add workers
+        (up to max_workers) now, not at the next scaler tick, so a long task in
+        one worker never holds a short one behind it while capacity is left."""
+        if not self.enable_auto_scaling or self._is_shutdown:
+            return
+        pending = self.queue.qsize()
+        idle = len(self._idle_since)
+        while pending > idle and len(self.active_workers) < self.max_workers:
+            before = len(self.active_workers)
+            self._spawn_worker()
+            idle += 1
+            # F-M3: Logging Consistency (INFO for scaling decisions)
+            logger_info(
+                f"Auto-scale UP: {before}→{len(self.active_workers)} workers "
+                f"({pending} queued, {pending / self.queue_size:.1%} full)"
+            )
+
     async def _worker_loop(self) -> None:
         """
         Worker loop: dequeue and execute tasks.
@@ -303,9 +357,12 @@ class WorkerPool:
 
         Internal method (not for direct use).
         """
+        me = asyncio.current_task()
+        future: Optional[asyncio.Future[Any]] = None
         while True:
             try:
                 # Dequeue task with timeout to allow graceful shutdown
+                self._idle_since.setdefault(me, time.monotonic())
                 try:
                     coro, args, kwargs, future = await asyncio.wait_for(
                         self.queue.get(),
@@ -314,6 +371,7 @@ class WorkerPool:
                 except asyncio.TimeoutError:
                     # No tasks for a while; continue waiting
                     continue
+                self._idle_since.pop(me, None)
 
                 # Execute task + capture result/error
                 start = time.time()
@@ -322,9 +380,11 @@ class WorkerPool:
                         result = await coro(*args, **kwargs)
                     else:
                         result = coro(*args, **kwargs)
-                    future.set_result(result)
+                    if not future.done():
+                        future.set_result(result)
                 except Exception as e:
-                    future.set_exception(e)
+                    if not future.done():
+                        future.set_exception(e)
                     # F-M3: Logging (DEBUG level for per-task execution)
                     logger_debug(f"Task execution error: {e}")
                 finally:
@@ -333,14 +393,20 @@ class WorkerPool:
                     self.tasks_processed += 1
 
                 self.queue.task_done()
+                future = None
 
             except asyncio.CancelledError:
+                # A task cut off mid-run (stop()) must not leave its submitter
+                # awaiting a future nobody will ever resolve.
+                if future is not None and not future.done():
+                    future.cancel()
                 logger_debug("Worker cancelled; exiting")
                 break
             except Exception as e:
                 # F-M3: Logging (ERROR level for worker failures)
                 logger_error(f"Worker fatal error (exiting): {e}")
                 break
+        self._idle_since.pop(me, None)
 
     async def _monitor_and_scale(self) -> None:
         """
@@ -369,20 +435,23 @@ class WorkerPool:
 
                 # Scale up: queue getting full
                 if queue_usage > 0.75 and current_workers < self.max_workers:
-                    new_worker = asyncio.create_task(self._worker_loop())
-                    self.active_workers.add(new_worker)
-                    new_worker.add_done_callback(self.active_workers.discard)
+                    self._spawn_worker()
                     # F-M3: Logging Consistency (INFO for scaling decisions)
                     logger_info(
                         f"Auto-scale UP: {current_workers}→{len(self.active_workers)} workers "
                         f"(queue {queue_usage:.1%} full)"
                     )
 
-                # Scale down: queue mostly empty
-                elif queue_usage < 0.25 and current_workers > 1:
-                    # Cancel one worker (simplistic; could be more graceful)
-                    if self.active_workers:
-                        worker = next(iter(self.active_workers))
+                # Scale down: queue mostly empty — retire ONE worker that has
+                # been idle for idle_retire_seconds, never a busy one, never
+                # below min_workers.
+                elif queue_usage < 0.25 and current_workers > self.min_workers:
+                    now = time.monotonic()
+                    stale = [w for w, since in self._idle_since.items()
+                             if now - since >= self.idle_retire_seconds and not w.done()]
+                    if stale:
+                        worker = stale[0]
+                        self._idle_since.pop(worker, None)
                         worker.cancel()
                         # F-M3: Logging Consistency (INFO for scaling decisions)
                         logger_info(

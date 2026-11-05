@@ -71,7 +71,34 @@ def test_route_with_intelligent_selection_complex():
 
 
 def test_route_with_intelligent_selection_medium():
-    """Medium task → Sonnet."""
+    """Medium task → Sonnet.
+
+    A short work request (30 <= tokens < 150, no analysis keyword) is MEDIUM —
+    `_classify_tier` after a9d9e9280 / Phase 2 c13c34e9b, and the operator policy
+    in CLAUDE.md ("a short work request is medium"). This test used to send a
+    root-cause ANALYSIS at token_count=1500, "medium" only under the original
+    500/3000 boundaries (8b9a8f672); under the current rules that task is
+    complex, pinned below in test_route_analysis_request_is_complex.
+    """
+    from core.skills.os_skills.intelligent_router_integration import IntelligentRouterBridge
+
+    medium_task = ("Write a Python function that parses an ISO-8601 date string "
+                   "and returns a datetime, raising ValueError on invalid input.")
+
+    decision = IntelligentRouterBridge.route_with_intelligent_selection(
+        medium_task,
+        token_count=60,
+        tenant_id="_default",
+    )
+
+    assert decision.tier == "medium", f"Expected medium tier, got {decision.tier}"
+    assert decision.model == _SONNET, f"Expected Sonnet, got {decision.model}"
+    print(f"✓ Medium task: {decision.model} (tier={decision.tier})")
+
+
+def test_route_analysis_request_is_complex():
+    """A root-cause analysis request is COMPLEX (analysis keyword on a > 80-char
+    task, and >= 150 tokens) — the operator policy routes analysis to Opus."""
     from core.skills.os_skills.intelligent_router_integration import IntelligentRouterBridge
 
     medium_task = """Analyze the following code and suggest improvements:
@@ -87,12 +114,12 @@ def test_route_with_intelligent_selection_medium():
 
     decision = IntelligentRouterBridge.route_with_intelligent_selection(
         medium_task,
-        token_count=1500,  # Explicit medium range
+        token_count=1500,
         tenant_id="_default",
     )
 
-    assert decision.tier == "medium", f"Expected medium tier, got {decision.tier}"
-    print(f"✓ Medium task: {decision.model} (tier={decision.tier})")
+    assert decision.tier == "complex", f"Expected complex tier, got {decision.tier}"
+    assert decision.model == _OPUS, f"Expected Opus, got {decision.model}"
 
 
 def test_get_model_for_task():
