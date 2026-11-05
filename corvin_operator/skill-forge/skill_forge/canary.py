@@ -166,6 +166,27 @@ def required_candidate_samples(traffic_percent: int) -> int:
     return MIN_SAMPLES * max(1, reached)
 
 
+def step_entered_ts(state: dict) -> float:
+    """When the canary entered its CURRENT traffic step: the newest ``started``
+    or ``traffic`` event, else ``created_at``, else 0."""
+    ts = [float(e.get("ts") or 0.0) for e in state.get("events") or []
+          if e.get("type") in ("started", "traffic")]
+    if ts:
+        return max(ts)
+    return float(state.get("created_at") or 0.0)
+
+
+def candidate_outcomes_at_step(state: dict) -> int:
+    """Candidate outcome grades recorded since the current step was entered.
+    The cumulative count alone let grades banked at 10 % (autopilot off, or a
+    burst between two passes) decide the 25 % and 50 % steps as well
+    (refutation 2026-11-05)."""
+    since = step_entered_ts(state)
+    return sum(1 for g in state.get("grades") or []
+               if g.get("variant") == "candidate" and g.get("kind") == OUTCOME
+               and float(g.get("ts") or 0.0) >= since)
+
+
 def evaluate(state: dict) -> dict[str, str]:
     """The gate verdict for an active canary — pure, shown in the console and
     executed by the autopilot.
@@ -195,6 +216,11 @@ def evaluate(state: dict) -> dict[str, str]:
         return {"decision": "hold",
                 "reason": f"{cand['outcome_n']}/{needed} candidate outcome grades for this "
                           f"traffic step"}
+    at_step = candidate_outcomes_at_step(state)
+    if mean >= ref and at_step < MIN_SAMPLES:
+        return {"decision": "hold",
+                "reason": f"{at_step}/{MIN_SAMPLES} candidate outcome grades since this "
+                          f"traffic step began"}
     if mean >= ref:
         if int(state.get("traffic_percent", 0)) >= TRAFFIC_STEPS[-1]:
             return {"decision": "ready",

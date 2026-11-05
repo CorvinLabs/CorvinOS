@@ -291,6 +291,53 @@ def _is_ledger_store_path(path: str | Path) -> bool:
             or ("web_chat" in parts and (str(path).endswith(".turns.jsonl") or "sessions" in parts)))
 
 
+#: Learning state a tenant keeps directly under ``<tenant>/global/`` (not under
+#: learning/ or skills/). A worker writing them forged operator CEL-stage grades
+#: (a non-builtin stage became default-eligible, L07), reset the ADR-0760 epoch
+#: that the ADR-2259 Free-tier savings meter counts from, or rewrote the L08
+#: learner's statistics (review 2026-11-05 LRN-10). Their lock / temp siblings
+#: (``<name>.lock``, ``<name>.<x>.tmp``) are covered too.
+_TENANT_GLOBAL_LEARNING_FILES = (
+    "ce_stage_grades.json",
+    "usage_epoch.json",
+    "model_confidence_stats.json",
+)
+
+
+def _is_tenant_global_learning_name(name: str) -> bool:
+    return any(name == f or name.startswith(f + ".") or name.startswith("." + f + ".")
+               for f in _TENANT_GLOBAL_LEARNING_FILES)
+
+
+def _is_tenant_learning_rel(rel_parts: list[str]) -> bool:
+    """``rel_parts`` (relative to the corvin home) names
+    ``tenants/<tid>/{learning,skills}/…`` or one of the learning-state files in
+    ``tenants/<tid>/global/`` — anchored, so a ``learning`` folder in a session
+    workdir does not match."""
+    if len(rel_parts) >= 3 and rel_parts[0] == "tenants" and rel_parts[2] in ("learning", "skills"):
+        return True
+    return (len(rel_parts) == 4 and rel_parts[0] == "tenants" and rel_parts[2] == "global"
+            and _is_tenant_global_learning_name(rel_parts[3]))
+
+
+def _is_tenant_learning_path(path: str | Path) -> bool:
+    """A path inside a tenant's learning state / learned Skill configs. Never raises
+    (unresolvable → protected). Used by the create-command branch of
+    ``_bash_targets`` as well as ``is_protected_path``: that branch checks only
+    the anchored stores, and without this ``patch``/``xxd -r``/``split``/``touch``
+    rewrote ``rollback_state.json`` or the router config unchecked (refutation
+    2026-11-05)."""
+    try:
+        abs_str = str(_abs(path))
+        home_str = _ref(_corvin_home())
+    except Exception:  # noqa: BLE001
+        return True
+    sep = os.sep
+    if not abs_str.startswith(home_str + sep):
+        return False
+    return _is_tenant_learning_rel(abs_str[len(home_str):].lstrip(sep).split(sep))
+
+
 def is_protected_path(path: str | Path) -> bool:
     """True if writing to *path* should be blocked."""
     if not path:
@@ -342,8 +389,7 @@ def is_protected_path(path: str | Path) -> bool:
         # readiness gate (review 2026-11-05 DR-3). Only the learning code writes
         # here. Anchored at <home>/tenants/<tid>/{learning,skills}/ so a project
         # directory named "learning" inside a session workdir stays writable.
-        if (len(rel_parts) >= 3 and rel_parts[0] == "tenants"
-                and rel_parts[2] in ("learning", "skills")):
+        if _is_tenant_learning_rel(rel_parts):
             return True
         # ADR-0014 — admin-UI plugin operator-token store + session
         # records + CSRF secrets. Operator-managed via the plugin's
@@ -1571,7 +1617,10 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
             # Only the ledger-class stores: a session workdir sits under the
             # corvin home, and the full protected set (memory/, admin/,
             # compute/, …) blocked `mkdir memory` in it (review R10-3).
-            if any(_is_ledger_store_path(a) for a in _all_nonflag(toks[1:])):
+            # The tenant learning/skills rule is anchored at the tenant root, so
+            # it has no such false positive and is checked here too.
+            if any(_is_ledger_store_path(a) or _is_tenant_learning_path(a)
+                   for a in _all_nonflag(toks[1:])):
                 return [], True
         elif cmd_name in _TARGET_ALL_CMDS:
             # truncate/ln/chmod/chown/chattr/rm/rmdir/unlink/shred/...: EVERY

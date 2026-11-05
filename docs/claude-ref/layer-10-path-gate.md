@@ -30,7 +30,13 @@ path is denied, not allowed.
   `rollback_state.json` cleared a tripped L5 rollback without the audited
   operator reset, and appended ledger lines could pass the ADR-2092 readiness
   gate. The rule is anchored at the tenant root, so a project folder named
-  `learning` inside a session workdir stays writable.
+  `learning` inside a session workdir stays writable. Because it is anchored,
+  the create/overwrite commands (`patch`, `xxd`, `split`, `touch`, `mkdir`, …),
+  which are otherwise checked against the ledger stores only, check it too —
+  `patch`/`xxd -r` rewrote the router config before (refutation 2026-11-05).
+  Not covered (gate-wide, every protected tree): `git -C <dir> init/clean`,
+  a symlinked `CORVIN_HOME` or tenant directory (the target is resolved, the
+  home is not), and case variants on a case-insensitive file system.
 
 ## Protected-tree semantics (`_touches_corvin_tree`)
 

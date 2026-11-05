@@ -703,9 +703,15 @@ once it has 5 grades, else the live mean recorded at start. Candidate <
 reference − 0.15 → rollback (needs only the first 5). Candidate ≥ reference →
 next step of `10 → 25 → 50`; at 50 → `ready` (awaits approval). Moving forward
 needs `MIN_SAMPLES` grades PER STEP REACHED (`required_candidate_samples`: 5 at
-10 %, 10 at 25 %, 15 at 50 %), so each step decides on grades the previous one
-did not see — a flat 5 let the same five grades walk 10 → 25 → 50 → ready in
-three autopilot passes (review 2026-11-05 LR-5). Usage auto-grades (capped 0.3) are
+10 %, 10 at 25 %, 15 at 50 %) AND `MIN_SAMPLES` recorded since the current
+step began (`candidate_outcomes_at_step`, from the newest `started`/`traffic`
+event), so each step decides on grades the previous one did not see — a flat 5
+let the same five grades walk 10 → 25 → 50 → ready in three autopilot passes
+(review 2026-11-05 LR-5), and the cumulative count alone still let 15 grades
+banked at 10 % (autopilot off) do the same (refutation 2026-11-05). With the
+follow-up dedupe (one organic grade per tenant, signal kind and 24 h for a
+user/project skill) `ready` therefore takes at least ~15 days of approvals —
+slow, not unreachable: a canary has no expiry. Usage auto-grades (capped 0.3) are
 counted, never averaged.
 
 **Approve** replaces the registry body AND its grades with the candidate's

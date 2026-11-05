@@ -117,6 +117,33 @@ def test_lr5_each_traffic_step_needs_new_candidate_evidence(tmp_path):
         assert canary["verdict"]["decision"] == "hold", canary["verdict"]
 
 
+def test_lr5_grades_banked_before_a_step_do_not_walk_the_canary_to_ready(tmp_path):
+    """Refutation 2026-11-05: the cumulative count (5/10/15) still let grades
+    collected at 10 % (e.g. while the autopilot was off) carry the 25 % AND 50 %
+    decisions — 15 grades at 10 % reached ``ready`` in three passes with not one
+    grade observed at 25 % or 50 %."""
+    with forge_client(tmp_path) as (client, root, home):
+        resp = post(client, "/fork", {"skill_id": SKILL, "instruction": "warn on duplicate keys"})
+        assert resp.status_code == 202, resp.text
+        assert wait_fork(client, resp.json()["run_id"])["status"] == "success"
+        from skill_creator import autonomous
+        store = autonomous.canary_store(root)
+        for n in range(15):
+            store.record_grade(SKILL, variant="candidate", score=0.9, run_id=f"c{n}", kind="outcome")
+            store.record_grade(SKILL, variant="live", score=0.1, run_id=f"l{n}", kind="outcome")
+        for _ in range(3):
+            autonomous.tick(root)
+        canary = client.get(f"{BASE}/status").json()["canaries"][0]
+        assert canary["status"] == "canary" and canary["traffic_percent"] == 25, canary
+        assert canary["verdict"]["decision"] == "hold", canary["verdict"]
+        # five NEW grades at 25 % move it on (positive control)
+        for n in range(5):
+            store.record_grade(SKILL, variant="candidate", score=0.9, run_id=f"d{n}", kind="outcome")
+        autonomous.tick(root)
+        canary = client.get(f"{BASE}/status").json()["canaries"][0]
+        assert canary["traffic_percent"] == 50, canary
+
+
 @pytest.mark.xfail(strict=True, reason="LR-4 open: needs an operator decision whether the "
                    "ADR-0760 counting epoch may narrow the ADR-2259 allowance meter")
 def test_lr4_counting_window_reset_does_not_lift_the_free_savings_cap(tmp_path, monkeypatch):

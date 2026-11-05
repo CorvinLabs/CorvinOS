@@ -181,6 +181,36 @@ def test_dr3_a_learning_folder_in_a_session_workdir_stays_writable(tmp_path):
     assert _run_path_gate_hook(home, write) == 0
 
 
+@pytest.mark.parametrize("form", [
+    "patch {t} /tmp/d.diff",
+    "xxd -r /tmp/hex {t}",
+    "split -b 1 /tmp/src {t}",
+    "touch {t}",
+])
+@pytest.mark.parametrize("leaf", [
+    ("learning", "routing", "rollback_state.json"),
+    ("learning", "routing", "routing_ledger.jsonl"),
+    ("skills", "os_delegation_router_config.json"),
+])
+def test_dr3_create_commands_cannot_rewrite_the_gate_state(tmp_path, form, leaf):
+    """Refutation 2026-11-05: the create-command branch of ``_bash_targets``
+    (patch/xxd/split/touch/...) checked only the ledger-class stores, so
+    ``patch <router config>`` or ``xxd -r`` rewrote the files DR-3 protects."""
+    home = tmp_path / "corvin_home"
+    target = home.joinpath("tenants", "_default", *leaf)
+    target.parent.mkdir(parents=True)
+    target.write_text("{}\n")
+    cmd = {"tool_name": "Bash", "tool_input": {"command": form.format(t=target)}}
+    assert _run_path_gate_hook(home, cmd) == 2, cmd
+
+
+def test_dr3_create_commands_in_a_session_workdir_learning_folder_stay_allowed(tmp_path):
+    home = tmp_path / "corvin_home"
+    d = home.joinpath("tenants", "_default", "sessions", "w", "learning")
+    cmd = {"tool_name": "Bash", "tool_input": {"command": f"mkdir -p {d} && touch {d}/n.md"}}
+    assert _run_path_gate_hook(home, cmd) == 0
+
+
 # ── DR-5 (OPEN): an operator's "correct" rating switches the router's advice off ───
 
 @_OPEN
