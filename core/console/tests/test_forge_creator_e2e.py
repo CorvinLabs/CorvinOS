@@ -177,6 +177,31 @@ def chain_actions(client, tenant: str | None = None) -> list[str]:
     return out
 
 
+def chain_records(client, event_type: str, tenant: str | None = None) -> list[dict]:
+    chain = client.home / "tenants" / (tenant or client.tenant) / "global" / "forge" / "audit.jsonl"
+    out = []
+    if chain.exists():
+        for line in chain.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if (rec.get("event_type") or rec.get("event")) == event_type:
+                out.append(rec)
+    return out
+
+
+def assert_one_execution_record_per_case(client, cases: int, tenant: str | None = None) -> None:
+    """Exactly one runner-written ``forge.tool_executed`` per sandbox execution, on the tenant chain."""
+    recs = chain_records(client, "forge.tool_executed", tenant)
+    assert len(recs) == cases, recs
+    run_ids = [r.get("run_id") for r in recs]
+    assert all(run_ids) and len(set(run_ids)) == cases, run_ids  # one record per run, none doubled
+    for r in recs:
+        assert r.get("tool") == "assistant.word_count", r
+        assert (r.get("details") or {}).get("sandbox", "").startswith("bwrap"), r
+
+
 def listed_tools(client) -> list[str]:
     resp = client.get("/v1/console/forge/tools")
     assert resp.status_code == 200, resp.text
@@ -199,8 +224,9 @@ def test_tool_run_registers_a_sandbox_tested_tool(tmp_path):
         assert "assistant.word_count" in listed_tools(client)
         actions = chain_actions(client)
         assert "tool.generated_created" in actions
-        # Each execution of generated code is on the TENANT chain.
+        # Each execution of generated code is ONE runner record on the TENANT chain.
         assert actions.count("forge.tool_executed") == 2
+        assert_one_execution_record_per_case(client, 2)
 
 
 def test_tool_that_fails_its_sandbox_tests_is_not_registered(tmp_path):
@@ -213,6 +239,10 @@ def test_tool_that_fails_its_sandbox_tests_is_not_registered(tmp_path):
         assert body["tool"]["tests"]["passed"] < body["tool"]["tests"]["total"]
         assert "assistant.word_count" not in listed_tools(client)
         assert "tool.generated_creation_failed" in chain_actions(client)
+        # Failing executions are recorded too — once each, never doubled.
+        recs = chain_records(client, "forge.tool_executed")
+        assert len(recs) >= body["tool"]["tests"]["total"], recs
+        assert len({r.get("run_id") for r in recs}) == len(recs), recs
 
 
 def test_tool_with_a_forbidden_import_never_runs_or_registers(tmp_path):
@@ -286,6 +316,7 @@ def test_a_second_tool_with_the_same_name_is_refused_before_running(tmp_path):
         assert body["status"] == "failed"
         assert "already exists" in body["message"]
         assert chain_actions(client).count("forge.tool_executed") == 2  # only the first run executed
+        assert_one_execution_record_per_case(client, 2)
 
 
 def test_the_registry_licence_gate_asks_for_the_session_tenant(tmp_path, monkeypatch):
@@ -308,6 +339,9 @@ def test_the_registry_licence_gate_asks_for_the_session_tenant(tmp_path, monkeyp
         assert body["status"] == "success", body
         assert asked and set(asked) == {"acme"}
         assert (client.home / "tenants" / "acme" / "forge" / "registry.json").exists()
+        # The runner records each execution on the SESSION tenant's chain, not the process's.
+        assert_one_execution_record_per_case(client, 2, tenant="acme")
+        assert chain_records(client, "forge.tool_executed", tenant="_default") == []
 
 
 # ── Plugin Forge ────────────────────────────────────────────────────────────

@@ -131,6 +131,7 @@ def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None 
             policy=policy,
             caller_persona=caller_persona,
             extra_env=extra_env,
+            tenant_id=tenant_id,  # the run is recorded on THIS tenant's chain
         )
         # Forge wraps non-envelope stdout into the standard AWP envelope:
         #   {"ok": true, "status": 200, "data": <tool_output>, "meta": {...}}

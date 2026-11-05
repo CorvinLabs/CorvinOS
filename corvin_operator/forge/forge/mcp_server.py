@@ -2535,6 +2535,9 @@ class MCPServer:
         # and emits audit events around the actual run_tool() call.  For CC
         # engines the broker is still active but its path-gate is supplementary
         # — CC's native PreToolUse hooks remain the primary gate.
+        # The tenant this server serves: the run is recorded on its chain.
+        from .tenants import current_tenant as _current_tenant  # noqa: PLC0415
+        _run_tenant = _current_tenant(None)
         if self._teb is not None:
             # Build a call-scoped executor closure (thread-safe: captures
             # local variables, never mutates shared broker state).
@@ -2542,6 +2545,7 @@ class MCPServer:
             _call_permission_mode = self.permission_mode
             _call_policy = self.policy
             _call_persona = self.forge_persona
+            _call_tenant = _run_tenant
 
             def _scoped_executor(tool_name: str, args: dict) -> Any:
                 try:
@@ -2550,6 +2554,7 @@ class MCPServer:
                         permission_mode=_call_permission_mode,
                         policy=_call_policy,
                         caller_persona=_call_persona,
+                        tenant_id=_call_tenant,
                     )
                 except SchemaError as _se:
                     # Re-raise with "schema error: " prefix so the TEB's
@@ -2636,6 +2641,8 @@ class MCPServer:
                 # env-trust at the runner choke-point — even if FORGE_PERSONA
                 # in the runner's env were tampered with, the kwarg wins.
                 caller_persona=self.forge_persona,
+                # The tenant this server serves — the run is recorded on its chain.
+                tenant_id=_run_tenant,
             )
         except SchemaError as e:
             # caller-side problem — does NOT count as a tool failure

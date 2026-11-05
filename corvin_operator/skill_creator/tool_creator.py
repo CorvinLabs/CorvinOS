@@ -253,10 +253,12 @@ class ToolCreatorOrchestrator:
         the tenant registry. Generated code runs ONLY inside bubblewrap — on a
         host without it the run refuses before executing anything (the runner
         would otherwise fall back to rlimits on the bare host). Every execution
-        is recorded on the TENANT chain as ``forge.tool_executed``.
+        is recorded ONCE on the TENANT chain as ``forge.tool_executed`` — by the
+        runner, which is handed this creator's tenant; the creator writes no
+        second record. A run the chain cannot record fails the whole test phase.
         """
         from forge.registry import Registry  # noqa: PLC0415
-        from forge.runner import run_tool  # noqa: PLC0415
+        from forge.runner import AuditWriteFailed, run_tool  # noqa: PLC0415
         from forge.sandbox import have_bwrap  # noqa: PLC0415
 
         if not have_bwrap():
@@ -277,7 +279,8 @@ class ToolCreatorOrchestrator:
                 try:
                     res = run_tool(registry, draft.name, case.get("input") or {},
                                    permission_mode="yes", policy=self._policy(),
-                                   use_sandbox=True, caller_persona=CALLER_PERSONA)
+                                   use_sandbox=True, caller_persona=CALLER_PERSONA,
+                                   tenant_id=self.tenant_id)
                     entry["sandbox"] = res.sandbox
                     entry["output"] = res.data
                     if not str(res.sandbox).startswith("bwrap"):
@@ -288,27 +291,14 @@ class ToolCreatorOrchestrator:
                         mismatch = _subset_mismatch(case.get("expect"), res.data)
                         if mismatch:
                             entry["error"] = mismatch
+                except AuditWriteFailed:
+                    raise  # an unrecorded execution is not a failing case, it is a failed run
                 except Exception as exc:  # noqa: BLE001 — a crashing case is a failing case
                     entry["error"] = f"{type(exc).__name__}: {str(exc)[-400:]}"
                 entry["passed"] = "error" not in entry
-                self._audit_execution(draft.name, res, entry["passed"])
                 results.append(entry)
         return {"cases": results, "passed": sum(1 for r in results if r["passed"]),
                 "total": len(results)}
-
-    def _audit_execution(self, name: str, res: Any, passed: bool) -> None:
-        """One tenant-chain record per execution of generated code (metadata only)."""
-        from forge.paths import tenant_audit_chain  # noqa: PLC0415
-        from forge.security_events import write_event  # noqa: PLC0415
-        write_event(
-            tenant_audit_chain(self.tenant_id), "forge.tool_executed", tool=name,
-            run_id=getattr(res, "run_id", "") or "",
-            details={"status": "passed" if passed else "failed",
-                     "exit_code": int(getattr(res, "exit_code", -1)),
-                     "duration_ms": int(float(getattr(res, "duration_s", 0.0)) * 1000),
-                     "sandbox": str(getattr(res, "sandbox", "none")),
-                     "cache_hit": False},
-        )
 
     # -- the run ----------------------------------------------------------
 

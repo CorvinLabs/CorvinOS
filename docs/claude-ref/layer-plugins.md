@@ -804,9 +804,11 @@ primitives (`Policy.name_allowed`, `Policy.namespace_check("assistant", …)`,
 schema-valid input, and a free name. The test loop registers the draft in a throw-away
 `Registry` in a temp dir (never the tenant store) and runs each case **only inside
 bubblewrap**: no `bwrap` → the run refuses before executing anything; a case not labelled
-`bwrap*` fails. Each execution is a `forge.tool_executed` record on the TENANT chain
-(written by `tool_creator._audit_execution`; the runner's own record still goes to the
-legacy global chain — known follow-up). A fix may not rename the tool or rewrite its test
+`bwrap*` fails. Each execution is exactly ONE `forge.tool_executed` record on the TENANT
+chain, written fail-closed by the forge runner (`runner._emit_tool_executed`) on the chain
+of the tenant the caller passed (`run_tool(..., tenant_id=…)` → `RunContext.tenant_id`;
+`None` = the process tenant). The creator passes its own tenant and writes no record of its
+own; a record the chain refuses raises `AuditWriteFailed` and fails the run. A fix may not rename the tool or rewrite its test
 cases. The tool reaches `MultiRegistry(tenant).create(scope="user")` only when every case
 passed, the security review completed and confirmed nothing; the registry's licence gate is
 decided for the multi-registry's tenant (`Registry.create(tenant_id=…)`). A failed run

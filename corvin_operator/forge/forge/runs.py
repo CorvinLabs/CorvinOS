@@ -34,6 +34,10 @@ class RunContext:
     tool_sha: str
     input_sha: str
     payload: dict[str, Any] = field(default_factory=dict)
+    # The tenant whose ONE audit chain records this run (ADR-0007). Passed by
+    # the caller of ``run_tool(..., tenant_id=...)``; ``begin_run`` resolves an
+    # absent value to the process tenant once, so a ctx always names a tenant.
+    tenant_id: str | None = field(default=None, kw_only=True)
 
     @property
     def manifest_path(self) -> Path:    return self.dir / "run_manifest.json"
@@ -59,6 +63,7 @@ def begin_run(
     budget: dict | None = None,
     augment=None,  # callable(payload, artifacts_dir) -> augmented_payload
     redact=None,   # callable(augmented_payload) -> safe_for_manifest_payload
+    tenant_id: str | None = None,
 ) -> RunContext:
     """Allocate a run folder, optionally augment the payload, write the manifest.
 
@@ -68,7 +73,12 @@ def begin_run(
     fields masked — that copy goes into the manifest, but the real payload is
     kept in ``ctx.payload`` for the subprocess (and the cache key, which is
     computed from the real payload so identical real inputs still hit cache).
+
+    ``tenant_id`` names the tenant whose audit chain records the run; ``None``
+    resolves to the process tenant (``CORVIN_TENANT_ID`` → ``_default``).
     """
+    from .tenants import current_tenant as _current_tenant  # noqa: PLC0415
+    tid = _current_tenant(tenant_id)
     # Sub-second precision in the timestamp so lexicographic sort == chronological
     now = time.time()
     ts = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(now))
@@ -106,6 +116,7 @@ def begin_run(
         tool_sha=tool_sha,
         input_sha=isha,
         payload=augmented,
+        tenant_id=tid,
     )
 
 

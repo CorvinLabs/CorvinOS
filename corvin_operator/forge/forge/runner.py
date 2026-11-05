@@ -59,6 +59,12 @@ class TamperError(ToolError):
     pass
 
 
+class AuditWriteFailed(ToolError):
+    """Raised when the run's ``forge.tool_executed`` record cannot be written
+    to the tenant's audit chain. The run is reported as failed: an execution
+    of tool code that the chain does not record is not admissible."""
+
+
 class SecretACLDenied(ToolError):
     """Raised when the caller persona is not on the allow-list for one or
     more keys the tool declares in meta.secrets."""
@@ -258,7 +264,9 @@ def _audit_path_for(ctx: RunContext) -> Path:
 
     Mirrors the inline lookup the network_share path uses: prefer
     ``ctx.audit_path`` when present (newer ctx), else fall back to the
-    tenant's ONE chain (``tenant_audit_chain``). Until 2026-11-05 the fallback
+    ONE chain of the run's tenant (``tenant_audit_chain(ctx.tenant_id)`` — the
+    tenant the ``run_tool`` caller passed, else the process tenant resolved by
+    ``begin_run``). Until 2026-11-05 the fallback
     was the pre-ADR-0007 host-wide ``<corvin_home>/global/forge/audit.jsonl``,
     a file no verifier or report reads (review SEC-7).
     """
@@ -272,14 +280,18 @@ def _audit_path_for(ctx: RunContext) -> Path:
 def _emit_tool_executed(ctx: RunContext, *, status: str, exit_code: int,
                         duration_s: float, sandbox: str,
                         cache_hit: bool = False) -> None:
-    """Emit a hash-chain ``forge.tool_executed`` event for EVERY tool run
-    (success / non-zero-exit / timeout). Audit gap closure: the normal run
-    path previously left no tamper-evident chain entry — only conditional
-    events (network_share/secrets_injected/denials) fired. Metadata ONLY:
-    tool name, run id, outcome, timing, sandbox — never payload or output.
+    """Emit the ONE hash-chain ``forge.tool_executed`` record of a tool run
+    (success / non-zero-exit / tool-reported error / timeout / replay) on the
+    chain of the run's tenant (``ctx.tenant_id``). Metadata ONLY: tool name,
+    run id, outcome, timing, sandbox — never payload or output.
+
+    Fail-closed: an execution the chain cannot record is a failed run. The
+    write error is raised as :class:`AuditWriteFailed` (a ``ToolError``), so
+    every caller that handles a failed run handles this one too. Callers do
+    not write a second ``forge.tool_executed`` record of their own.
     """
+    from .security_events import write_event as _swe
     try:
-        from .security_events import write_event as _swe
         _swe(
             _audit_path_for(ctx), "forge.tool_executed",
             severity="INFO", tool=ctx.tool_name, run_id=ctx.id,
@@ -287,8 +299,11 @@ def _emit_tool_executed(ctx: RunContext, *, status: str, exit_code: int,
                      "duration_ms": int(duration_s * 1000),
                      "sandbox": sandbox, "cache_hit": bool(cache_hit)},
         )
-    except Exception:  # noqa: BLE001 — observability is best-effort
-        pass
+    except Exception as exc:  # noqa: BLE001 — re-raised as a failed run
+        raise AuditWriteFailed(
+            f"tool {ctx.tool_name!r} run {ctx.id}: forge.tool_executed could not be "
+            f"recorded on the audit chain ({type(exc).__name__}: {exc})"
+        ) from exc
 
 
 def _check_tamper(spec: ToolSpec) -> None:
@@ -403,7 +418,12 @@ def run_tool(
     policy: Policy | None = None,
     caller_persona: str | None = None,
     extra_env: dict[str, str] | None = None,
+    tenant_id: str | None = None,
 ) -> RunResult:
+    """Run one forged tool. ``tenant_id`` names the tenant whose audit chain
+    records the run (``forge.tool_executed`` and the conditional events); a
+    caller that serves a tenant other than the process's MUST pass it.
+    ``None`` resolves to the process tenant."""
     spec = registry.get(name)
     if spec is None:
         raise ToolError(f"unknown tool {name!r}")
@@ -475,6 +495,7 @@ def run_tool(
         input_payload=payload,
         augment=_inject_artifacts,
         redact=_redact_secrets,
+        tenant_id=tenant_id,
     )
     payload = ctx.payload
 
@@ -1069,6 +1090,8 @@ def run_tool(
             stdout_data=envelope, stderr_text=stderr_text,
             summary=str(error) if error else "tool reported ok=false",
         )
+        _emit_tool_executed(ctx, status="error", exit_code=rc,
+                            duration_s=duration, sandbox=sandbox_label)
         raise ToolError(
             f"tool {name!r} reported error: {error or 'ok=false'}"
         )
@@ -1096,6 +1119,8 @@ def run_tool(
             summary=(f"artifact_budget.exceeded: "
                      f"{artifact_total} > {applied_budget.artifact_bytes}"),
         )
+        _emit_tool_executed(ctx, status="error", exit_code=rc,
+                            duration_s=duration, sandbox=sandbox_label)
         raise ToolError(
             f"tool {name!r} artifact_budget.exceeded: "
             f"wrote {artifact_total} bytes, budget {applied_budget.artifact_bytes}"

@@ -25,6 +25,7 @@ from forge.runner import (
     ToolError,
     run_tool,
 )
+from forge.tenants import current_tenant
 
 
 def _default_root() -> Path:
@@ -162,6 +163,8 @@ def cmd_call(args) -> int:
             timeout=args.timeout,
             permission_mode=mode,
             use_sandbox=not args.no_sandbox,
+            # The CLI acts for the process tenant; the run lands on its chain.
+            tenant_id=current_tenant(None),
         )
     except SchemaError as e:
         print(f"schema error: {e}", file=sys.stderr)

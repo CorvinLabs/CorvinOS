@@ -276,7 +276,7 @@ class RunForge:
         # self-test inside the sandbox; the first successful sandboxed run also records the approval (sha-bound)
         try:
             res = run_tool(registry, name, dict(test_input), timeout=SELF_TEST_TIMEOUT_S, permission_mode="yes",
-                           use_sandbox=True, policy=policy)
+                           use_sandbox=True, policy=policy, tenant_id=self.tenant_id)
         except Exception as exc:  # noqa: BLE001 - schema error, tamper, tool error, timeout
             self._discard(registry, name)
             return self._reject_tool(name, R_SELFTEST, iteration, f"{type(exc).__name__}: {exc}"[:200])
@@ -338,7 +338,7 @@ class RunForge:
             return _skip(R_CREATE)
         try:
             res = run_tool(reg, name, dict(test_input), timeout=SELF_TEST_TIMEOUT_S, permission_mode="yes",
-                           use_sandbox=True, policy=Policy())
+                           use_sandbox=True, policy=Policy(), tenant_id=self.tenant_id)
             good = (res.ok and res.sandbox == "bwrap" and isinstance(res.data, dict)
                     and (not expect or subset_match(res.data, expect)))
         except Exception:  # noqa: BLE001
