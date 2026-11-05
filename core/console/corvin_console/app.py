@@ -709,6 +709,94 @@ def headless_enabled(tenant_id: str | None = None) -> bool:
         return False
 
 
+def _autobuild_forbidden() -> bool:
+    """True when the import-time SPA auto-build must not run here.
+
+    Under pytest (``PYTEST_CURRENT_TEST`` or the root conftest's session sandbox
+    marker) a missing ``dist/`` is a test-environment fact, not a reason to build
+    the operator's frontend from a test process; ``CORVIN_CONSOLE_NO_AUTOBUILD=1``
+    is the operator's explicit off switch (CI images that ship no node).
+    """
+    import os as _os
+    if _os.environ.get("CORVIN_CONSOLE_NO_AUTOBUILD", "").strip() == "1":
+        return True
+    return bool(_os.environ.get("PYTEST_CURRENT_TEST") or _os.environ.get("CORVIN_PYTEST_SESSION_SANDBOX"))
+
+
+def _autobuild_into_next_and_swap(logger) -> bool:
+    """Build the SPA into ``dist.next/`` and swap it in atomically, under a lock.
+
+    Returns True when ``dist/index.html`` exists afterwards (built here or by the
+    process that held the lock meanwhile). Never builds straight into ``dist/``:
+    vite empties its outDir first, which took the live console down for the
+    length of every build and let concurrent importers race on one directory.
+    """
+    import os
+    import shutil
+    import subprocess
+
+    web_next_dir = _NEXT_DIST_DIR.parent
+    next_dir = web_next_dir / "dist.next"
+    prev_dir = web_next_dir / "dist.prev"
+    lock_path = web_next_dir / ".autobuild.lock"
+    try:
+        lock_fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as e:
+        logger.error("Auto-build: cannot open %s (%s) — not building", lock_path, e)
+        return False
+    try:
+        _lock_exclusive(lock_fd)
+        if (_NEXT_DIST_DIR / "index.html").exists():
+            return True  # another process built it while we waited
+        # A bare "npm" fails with FileNotFoundError ([WinError 2]) on Windows:
+        # CreateProcess does not do the PATHEXT search that resolves
+        # "npm" -> "npm.CMD"; shutil.which performs it (fresh-install finding
+        # 2026-09-14: the auto-build silently no-op'd on every Windows install).
+        npm_cmd = shutil.which("npm")
+        if npm_cmd is None:
+            raise FileNotFoundError("npm not found on PATH")
+        if not (web_next_dir / "node_modules").is_dir():
+            _run_tree_safe([npm_cmd, "install"], cwd=web_next_dir, check=True,
+                           capture_output=True, timeout=300)
+        if next_dir.exists():
+            shutil.rmtree(next_dir)
+        _run_tree_safe([npm_cmd, "run", "build", "--", "--outDir", "dist.next", "--emptyOutDir"],
+                       cwd=web_next_dir, check=True, capture_output=True, timeout=300)
+        if not (next_dir / "index.html").exists():
+            logger.error("Auto-build produced no %s/index.html — not swapping", next_dir)
+            return False
+        if prev_dir.exists():
+            shutil.rmtree(prev_dir)
+        if _NEXT_DIST_DIR.exists():
+            os.rename(_NEXT_DIST_DIR, prev_dir)
+        os.rename(next_dir, _NEXT_DIST_DIR)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(
+            "Auto-build failed: %s. Manual rebuild needed: cd %s && npm install && npm run build",
+            e, web_next_dir,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+        logger.error(
+            "Auto-build error (%s): npm may not be installed or build timed out. "
+            "Manual rebuild: cd %s && npm install && npm run build",
+            type(e).__name__, web_next_dir,
+        )
+    finally:
+        os.close(lock_fd)
+    return False
+
+
+def _lock_exclusive(fd: int) -> None:
+    """Blocking exclusive lock on *fd* (fcntl on POSIX, msvcrt on Windows)."""
+    try:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except ImportError:  # Windows
+        import msvcrt
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+
+
 def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
     """Mount the web-next console SPA at ``url_prefix``.
 
@@ -739,65 +827,35 @@ def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
         logger.info("Console SPA mounted at %s", url_prefix)
         return
 
-    # SPA not built — attempt auto-build on startup (production hardening)
-    logger.warning(
-        "Console SPA not found at %s. Attempting auto-build...",
-        _NEXT_DIST_DIR,
-    )
-
-    import shutil
-    import subprocess
-    try:
-        web_next_dir = _NEXT_DIST_DIR.parent
-        # A bare "npm" fails with FileNotFoundError ([WinError 2]) on Windows:
-        # CreateProcess (no shell=True) does not do the PATHEXT-style search
-        # that resolves "npm" -> "npm.CMD" the way a real shell does. Resolve
-        # the actual executable via shutil.which first — it performs that
-        # PATHEXT search itself and returns the concrete "npm.CMD" path,
-        # which CreateProcess CAN launch directly (verified 2026-09-14
-        # fresh-install finding: the auto-build silently no-op'd on every
-        # Windows install, always falling through to the "npm may not be
-        # installed" branch even with npm genuinely on PATH).
-        npm_cmd = shutil.which("npm")
-        if npm_cmd is None:
-            raise FileNotFoundError("npm not found on PATH")
-        _run_tree_safe(
-            [npm_cmd, "install"],
-            cwd=web_next_dir,
-            check=True,
-            capture_output=True,
-            timeout=300,  # 5-min timeout for npm install
+    # SPA not built — attempt auto-build on startup (production hardening).
+    #
+    # Review 2026-11-05: NEVER under pytest, and never straight into dist/.
+    # This ran at import time (module level below), vite empties its outDir
+    # first, and every concurrent test process that imported the console while
+    # dist/index.html was missing started its own `npm run build` into the
+    # SAME dist/ — three builds at once were measured, and while dist/ was
+    # empty the LIVE console served from this checkout had no SPA. The build
+    # now goes into dist.next/ and is swapped in atomically under a lock, the
+    # way scripts/console-deploy.sh does, so /console never stops answering;
+    # a second importer waits for the lock and finds the finished build.
+    if _autobuild_forbidden():
+        logger.warning(
+            "Console SPA not found at %s and auto-build is disabled here (pytest / "
+            "CORVIN_CONSOLE_NO_AUTOBUILD) — serving the build-failed page", _NEXT_DIST_DIR,
         )
-        _run_tree_safe(
-            [npm_cmd, "run", "build"],
-            cwd=web_next_dir,
-            check=True,
-            capture_output=True,
-            timeout=300,  # 5-min timeout for npm run build
+    else:
+        logger.warning(
+            "Console SPA not found at %s. Attempting auto-build...",
+            _NEXT_DIST_DIR,
         )
-        logger.info("Auto-build succeeded. Console SPA is now available.")
-
-        # Try to mount again
-        if (_NEXT_DIST_DIR / "index.html").exists():
+        if _autobuild_into_next_and_swap(logger) and (_NEXT_DIST_DIR / "index.html").exists():
             app.mount(
                 url_prefix,
                 _SPAStaticFiles(directory=str(_NEXT_DIST_DIR), html=True),
                 name="corvin_console_static",
             )
+            logger.info("Auto-build succeeded. Console SPA mounted at %s", url_prefix)
             return
-    except subprocess.CalledProcessError as e:
-        logger.error(
-            "Auto-build failed: %s. Manual rebuild needed: cd %s && npm install && npm run build",
-            e,
-            _NEXT_DIST_DIR.parent,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        logger.error(
-            "Auto-build error (%s): npm may not be installed or build timed out. "
-            "Manual rebuild: cd %s && npm install && npm run build",
-            type(e).__name__,
-            _NEXT_DIST_DIR.parent,
-        )
 
     # Fallback: register helpful error route if build fails
     from fastapi.responses import HTMLResponse as _HTMLResponse

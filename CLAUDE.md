@@ -1284,7 +1284,10 @@ curl -s http://127.0.0.1:8765/console/ | grep -o 'assets/[^"]*\.js'  # must be t
 boot. If the console booted while `dist/` was absent, it registered the 503 "build failed"
 fallback route instead of the SPA mount and keeps serving it — a rebuild alone will NOT recover
 it, only a restart will. When `dist/` existed at boot, `_SPAStaticFiles` resolves per request and
-a rebuild is picked up live.
+a rebuild is picked up live. **The import-time auto-build (missing `dist/index.html`) never runs
+under pytest or with `CORVIN_CONSOLE_NO_AUTOBUILD=1`, and otherwise builds into `dist.next/` and
+swaps under a lock** — until 2026-11-05 it built straight into `dist/` from every test process
+that imported the console, three builds at once, and took the live SPA down meanwhile.
 
 **A bare 404 on `/console` (not 503) is a BACKEND import failure, not a build problem.** The
 live host is `corvin-webui.service` (`corvin_gateway.app` on :8765); it mounts the console
