@@ -36,8 +36,15 @@ def test_config_event_keeps_tenant_chain_verifiable(tmp_path, monkeypatch):
 
     ok, problems = se.verify_chain(chain)
     assert ok, problems
-    lines = chain.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 3 and '"config.set_rejected"' in lines[1]
+    import json
+    types = [json.loads(ln)["event_type"]
+             for ln in chain.read_text(encoding="utf-8").splitlines()]
+    # A fresh CORVIN_HOME mints its instance signing key on the first signed
+    # write and records that on the chain (``instance.key_rotated``); it is not
+    # a config record, so it is not counted here.
+    types = [t for t in types if t != "instance.key_rotated"]
+    assert types == ["audit.chain_anchor_written", "config.set_rejected",
+                     "audit.chain_anchor_written"], types
 
 
 def test_config_event_lands_on_the_events_own_tenant_chain(tmp_path, monkeypatch):
@@ -47,5 +54,16 @@ def test_config_event_lands_on_the_events_own_tenant_chain(tmp_path, monkeypatch
 
     gw.build_config_manager()._log_audit(
         tenant_id="acme", event_type="config.set_success", details={}, severity="info")
-    assert fp.tenant_audit_chain("acme").exists()
+    import json
+    from forge import security_events as se
+    acme = fp.tenant_audit_chain("acme")
+    assert acme.exists()
     assert not fp.tenant_audit_chain("_default").exists()
+    recs = [json.loads(ln) for ln in acme.read_text(encoding="utf-8").splitlines()]
+    assert [r["event_type"] for r in recs if r["event_type"].startswith("config.")] \
+        == ["config.set_success"]
+    # The chain is the tenant: no foreign tenant tag (the chokepoint refuses one).
+    assert all("tenant_id" not in (r.get("details") or {}) for r in recs
+               if r["event_type"] == "config.set_success")
+    ok, problems = se.verify_chain(acme)
+    assert ok, problems

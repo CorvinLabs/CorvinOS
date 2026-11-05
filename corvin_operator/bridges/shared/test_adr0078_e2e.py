@@ -36,6 +36,15 @@ from a2a_http_server import build_server, serve_in_thread  # noqa: E402
 from remote_trigger_receiver import NonceStore              # noqa: E402
 import instance_attestation as att                          # noqa: E402
 
+import pytest  # noqa: E402
+
+# The receiver runs the REAL a2a.network licence gate (member-only, ADR-0700
+# §2.1). These tests are about the trust anchor, not the licence verdict, so the
+# file opts into the member tier explicitly; its name carries no ``a2a`` marker
+# the shared conftest could key on, and without this every envelope was
+# rejected with ``license_required`` before min_trust was ever evaluated.
+pytestmark = pytest.mark.licence_tier("member")
+
 
 # ── Test keys ─────────────────────────────────────────────────────────────
 
@@ -84,6 +93,16 @@ def _envelope(attestation: dict | None = None, **kwargs) -> dict:
         "attachments":        [],
         "signature":          "",
     }
+    if attestation is not None:
+        # The receiver binds the IAC to the HMAC-covered sender_instance_id
+        # (remote_trigger_receiver: ``attestation_instance_mismatch``, the R1
+        # replay fix). An honest sender attests for ITSELF, so the envelope
+        # names the IAC's subject unless a test overrides it. Before this, every
+        # attested envelope here carried ``sender_instance_id=""`` and the
+        # "rejected" tests below passed on the mismatch, not on the reason they
+        # name (wrong CA, expiry, tamper, tier).
+        env["sender_instance_id"] = str(
+            (attestation.get("cert") or {}).get("instance_id", ""))
     env.update(kwargs)
     if attestation is not None:
         env["sender_attestation"] = attestation
@@ -191,6 +210,14 @@ class TestMinTrustCommunity(_ServerFixture):
                                    ca_privkey_hex=self.__class__.ca_priv)
         resp = _post(self.url, _envelope(attestation=iac))
         self.assertEqual(resp["status"], "ok")
+
+    def test_replayed_iac_of_another_instance_rejected(self):
+        # A valid IAC presented by a sender that is not its subject is a replay.
+        iac = att.sign_attestation(instance_id="inst-victim", tier="verified",
+                                   ca_privkey_hex=self.__class__.ca_priv)
+        resp = _post(self.url, _envelope(attestation=iac,
+                                         sender_instance_id="inst-attacker"))
+        self.assertEqual(resp["status"], "rejected")
 
     def test_wrong_ca_rejected(self):
         wrong_priv, _ = att.generate_ca_keypair()

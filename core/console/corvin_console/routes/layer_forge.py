@@ -308,27 +308,12 @@ def apply_gate_threshold(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     body: GateThresholdApplyBody,
 ) -> dict[str, Any]:
-    """Apply a gate-threshold change (operator-explicit, audited, never auto-applied).
+    """Apply a gate-threshold change - REFUSED on this build (501, nothing written).
 
-    Phase 4 A1: Operator explicitly applies threshold changes; suggestions are never
-    auto-applied. The change is recorded in the audit chain fail-closed.
-
-    Input:
-        gate_id: Quality gate identifier
-        new_threshold: New threshold value
-        reason: Why this threshold is being applied
-
-    Output (success):
-        {
-            "status": "SUCCESS",
-            "gate_id": "schema_check",
-            "new_threshold": 0.85,
-            "reason": "Overcautious feedback: 8/10 overrides succeeded",
-            "audit_event": "layer_forge.gate_threshold_applied"
-        }
-
-    Output (failure):
-        {status: "FAILED", error: "..."}
+    Phase 4 A1 designed an operator-explicit, audited apply. No store holds a
+    gate threshold and no gate reads one, so the route answers
+    ``501 Not Implemented`` with the reason in ``detail`` and writes no audit
+    record. ``POST /layer-forge/gate-thresholds/analyze`` is the real surface.
     """
     # Nothing persists a gate threshold: the registry stores none and no gate
     # reads one. This route used to emit ``layer_forge.gate_threshold_applied``

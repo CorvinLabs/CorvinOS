@@ -28,10 +28,17 @@ class ForgeConfigAudit:
 
         chain = _fp.tenant_audit_chain(tenant_id)
         chain.parent.mkdir(parents=True, exist_ok=True)
+        # The chain IS the tenant: the record lands on ``tenant_id``'s own chain
+        # and carries no ``tenant_id`` field. The gateway is multi-tenant while
+        # its process tenant is one (``_default``), and the forge chokepoint
+        # refuses a record tagged with any other tenant (AuditTenantMismatch,
+        # F-A6) - tagging it dropped every config event of a non-default
+        # tenant. Same rule as the gateway's routing records and engine spans.
+        _details = {k: v for k, v in (details or {}).items() if k != "tenant_id"}
         _se.write_event(
             chain, str(event_type),
             severity=str(severity).upper() if severity else None,
-            details={**(details or {}), "tenant_id": tenant_id},
+            details=_details,
             hash_chain=True,
         )
         return ""

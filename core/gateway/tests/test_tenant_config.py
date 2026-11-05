@@ -132,18 +132,48 @@ class RoundTripTests(unittest.TestCase):
 
 
 class SchemaStrictnessTests(unittest.TestCase):
-    def test_extra_key_at_spec_level_rejected(self):
+    def test_extra_key_at_spec_level_accepted(self):
+        # ADR-0759 (CLAUDE.md "Worker-Engine Model Routing"): tenant.corvin.yaml is
+        # CO-OWNED, so ``spec`` is ``extra="allow"`` - the console's keys
+        # (spec.engine_models, spec.web_chat, ...) must not make the gateway refuse
+        # the file. This test used to demand a rejection; that policy made 100% of
+        # gateway runs fail before an engine spawned and was deliberately reversed.
         with sandbox(("acme",)) as home:
             p = _yaml_path(home, "acme")
             p.write_text(yaml.safe_dump({
                 "apiVersion": "corvin/v1",
                 "kind":       "Tenant",
                 "metadata":   {"id": "acme"},
-                "spec":       {"unknown_key": True},
+                "spec":       {"unknown_key": True,
+                               "engine_models": {"claude_code": {"os_model": "x"}}},
             }), encoding="utf-8")
             os.chmod(p, 0o600)
-            with self.assertRaises(TenantConfigMalformed):
-                load("acme")
+            c = load("acme")
+            self.assertEqual(c.metadata.id, "acme")
+
+    def test_extra_key_in_admission_sub_models_still_rejected(self):
+        # The relaxation is SCOPED: data_residency, budget, compute and
+        # engine_trust gate engine admission and keep ``extra="forbid"``, so a
+        # typo (``forbid_engine`` for ``forbid_engines``) fails loudly instead of
+        # silently disabling a restriction.
+        cases = {
+            "data_residency": {"forbid_engine": ["codex"]},
+            "budget":         {"max_run_per_day": 3},
+            "compute":        {"enable": False},
+            "engine_trust":   {"min_teir": "high"},
+        }
+        for block, body in cases.items():
+            with self.subTest(block=block), sandbox(("acme",)) as home:
+                p = _yaml_path(home, "acme")
+                p.write_text(yaml.safe_dump({
+                    "apiVersion": "corvin/v1",
+                    "kind":       "Tenant",
+                    "metadata":   {"id": "acme"},
+                    "spec":       {block: body},
+                }), encoding="utf-8")
+                os.chmod(p, 0o600)
+                with self.assertRaises(TenantConfigMalformed):
+                    load("acme")
 
     def test_wrong_api_version_rejected(self):
         with sandbox(("acme",)) as home:

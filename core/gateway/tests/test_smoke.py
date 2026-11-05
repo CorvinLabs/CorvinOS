@@ -100,6 +100,21 @@ _TLS_CERT, _TLS_KEY = _make_selfsigned(_TLS_DIR)
 _TLS_VERIFY_CTX = ssl.create_default_context(cafile=_TLS_CERT)
 
 
+def _stdlib_server_tls_context() -> ssl.SSLContext:
+    """A SERVER-side TLS context built from the stdlib class, never truststore's.
+
+    ``corvin_gateway.app`` calls ``truststore.inject_into_ssl()`` at import
+    (4c80aca66), which swaps ``ssl.SSLContext`` process-wide. truststore's class
+    is client-only: its ``wrap_socket`` verifies the PEER's chain unconditionally,
+    and a listening server socket has no peer (``sslobj is None`` ->
+    AttributeError). The loopback stub is a server, so it takes the original
+    stdlib class from the MRO; the dispatcher under test keeps the injected
+    client context and its verification.
+    """
+    cls = next(c for c in ssl.SSLContext.__mro__ if c.__module__ == "ssl")
+    return cls(ssl.PROTOCOL_TLS_SERVER)
+
+
 # ── Sandbox + uvicorn bootstrap ──────────────────────────────────────
 
 
@@ -225,7 +240,7 @@ class _StubServer:
 
         self._server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
         # PENTEST-6: webhook.url must be https, so the stub serves TLS.
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx = _stdlib_server_tls_context()
         ctx.load_cert_chain(_TLS_CERT, _TLS_KEY)
         self._server.socket = ctx.wrap_socket(self._server.socket, server_side=True)
         self._server.handle_error = lambda *a, **k: None  # type: ignore[assignment]

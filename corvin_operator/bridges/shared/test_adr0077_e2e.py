@@ -40,6 +40,15 @@ from a2a_http_server import build_server, serve_in_thread  # noqa: E402
 from remote_trigger_receiver import NonceStore  # noqa: E402
 from a2a_nonce_store import PersistentNonceStore  # noqa: E402
 
+import pytest  # noqa: E402
+
+# The receiver runs the REAL a2a.network licence gate (member-only, ADR-0700
+# §2.1); these tests are about L38 hardening, not the licence verdict. The file
+# name carries no ``a2a`` marker the shared conftest keys on, so it opts in
+# explicitly — without this it passed only when an earlier test in the same run
+# had left a licensed tier behind, and failed alone (``license_required``).
+pytestmark = pytest.mark.licence_tier("member")
+
 
 # ── Test keys ─────────────────────────────────────────────────────────────
 

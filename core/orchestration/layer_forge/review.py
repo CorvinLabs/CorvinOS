@@ -128,7 +128,8 @@ def review_layer_definition(
 
     try:
         client = llm_client.get_client(timeout=REVIEW_TIMEOUT_S, max_retries=REVIEW_MAX_RETRIES)
-        flags = _adversarial_review(client, manifest, enforcement_verdicts, prompt_version=prompt_version)
+        flags = _adversarial_review(client, manifest, enforcement_verdicts,
+                                    prompt_version=prompt_version, tenant_id=tenant_id)
 
         if not flags:
             return ReviewVerdict("PASS", flags=[], reason="No adversarial concerns", prompt_version=prompt_version)
@@ -141,10 +142,31 @@ def review_layer_definition(
         return ReviewVerdict("ERROR", reason=f"Unexpected review error: {type(e).__name__}", prompt_version=prompt_version)
 
 
-def _review_model(client) -> str:
+def _review_model(client, tenant_id: str = "_default") -> str:
+    """The review model: the engine client's own model, else the top tier.
+
+    The top tier is ``model_selector.top_model(tenant_id)`` — the tenant's saved
+    Console COMPLEX choice, else the NEWEST Opus (ADR-2090, CLAUDE.md "OS-Model
+    Routing"). This was a literal Opus 5 id, which kept the review on
+    that id after the registry moved on (Opus 5.5) and ignored the operator's
+    COMPLEX choice.
+    """
     from . import llm_client
 
-    return llm_client.model_for(client, "claude-opus-5")
+    return llm_client.model_for(client, _top_model(tenant_id))
+
+
+def _top_model(tenant_id: str) -> str:
+    try:
+        import model_selector  # type: ignore[import-not-found]  # bridges/shared
+    except ImportError:
+        import sys
+
+        shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
+        if str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        import model_selector  # type: ignore[import-not-found]  # noqa: F811
+    return model_selector.top_model(tenant_id)
 
 
 def select_canary_version(entry_id: str, *, tenant_id: str = "_default", storage_root: Optional[Path] = None) -> str:
@@ -225,6 +247,8 @@ def _adversarial_review(
     manifest: dict,
     enforcement_verdicts: list[EnforcementVerdict],
     prompt_version: str = REVIEW_PROMPT_VERSION,
+    *,
+    tenant_id: str = "_default",
 ) -> list[ReviewFlag]:
     """Call LLM with adversarial prompt; parse response to extract flags.
 
@@ -280,7 +304,7 @@ Your response:"""
 
     try:
         response = client.messages.create(
-            model=_review_model(client),
+            model=_review_model(client, tenant_id),
             max_tokens=200,
             messages=[{"role": "user", "content": full_prompt}],
         )

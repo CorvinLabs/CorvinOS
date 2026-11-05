@@ -272,21 +272,34 @@ class TestFinding6_SubstringKeywordMatching:
         """Exact keywords should still trigger classification."""
         router = IntelligentRouter()
 
-        # Tasks that SHOULD be classified as MEDIUM
+        # Tasks that SHOULD be classified as MEDIUM. The Phase 2 conservative
+        # keyword rule (c13c34e9b, 2026-09-20, documented in _classify_tier) bumps
+        # SIMPLE->MEDIUM only when the creation keyword sits in a task longer than
+        # 50 characters; this suite predates that rule by an hour and used
+        # one-liners, so its tasks are now long enough for the rule to apply.
         positive_tasks = [
-            "Write a function to calculate primes",  # "write" present
-            "Implement a new API endpoint",  # "implement" present
-            "Create a database schema",  # "create" present
+            "Write a function to calculate all primes below a configurable bound",
+            "Implement a new API endpoint that lists the tenant's open tasks",
+            "Create a database schema for invoices, customers and their payments",
         ]
 
         for task in positive_tasks:
+            assert len(task) > 50
             tier, confidence, signal = router._classify_tier(
                 token_count=20,  # Short
                 pre_computed_complexity=None,
                 task_input=task
             )
             # Should bump to MEDIUM due to keyword
-            assert tier == ModelTier.MEDIUM or tier == ModelTier.COMPLEX
+            assert tier == ModelTier.MEDIUM or tier == ModelTier.COMPLEX, task
+
+        # ...and a one-liner with the same keyword is NOT bumped (the rule's
+        # other half: a trivial request stays on the cheap tier).
+        tier, _, _ = router._classify_tier(
+            token_count=20, pre_computed_complexity=None,
+            task_input="Write a function to calculate primes",
+        )
+        assert tier == ModelTier.SIMPLE
 
 
 # ==============================================================================
@@ -401,8 +414,13 @@ class TestFinding11_TenantIDValidation:
         # Invalid tenant IDs should not be accepted in audit
         invalid_tenants = [
             "",  # Empty
-            "tenant-with-spaces",  # Spaces not allowed
+            # The fixture used to read "tenant-with-spaces" - which holds no space
+            # and IS a valid ADR-0007 id; the case now actually contains spaces.
+            "tenant with spaces",  # Spaces not allowed
             "tenant_with_/slash",  # Slash not allowed
+            "acme\n",  # Trailing newline (``re.match`` + ``$`` let it through)
+            "TENANT_ABC",  # Uppercase: ADR-0007 ids are lowercase
+            "-leading-hyphen",  # Hyphen not allowed as the first char
             None,  # None
         ]
 
@@ -417,7 +435,9 @@ class TestFinding11_TenantIDValidation:
         valid_tenants = [
             "_default",
             "tenant-123",
-            "TENANT_ABC",
+            # "TENANT_ABC" was listed here; ADR-0007 (core.tenants.validate_tenant_id,
+            # the one validator) admits lowercase only, so it moved to the invalid list.
+            "tenant-with-hyphens",
             "tenant_v2",
         ]
 

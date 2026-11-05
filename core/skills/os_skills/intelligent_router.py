@@ -804,8 +804,12 @@ class IntelligentRouter:
     def _is_valid_tenant_id(tenant_id: str) -> bool:
         """Validate tenant_id before using it in audit logs (GDPR compliance).
 
-        A valid tenant_id is a non-empty string matching the pattern [a-zA-Z0-9_-].
-        This prevents injection attacks and PII leakage into audit logs.
+        Delegates to the ONE ADR-0007 validator (``core.tenants.validate_tenant_id``):
+        lowercase alphanumeric + underscore (+ hyphen after the first char), 1-63
+        chars, whole-string match. This module used to carry its own
+        ``re.match(r"^[a-zA-Z0-9_-]+$")``, which accepted uppercase ids and a
+        trailing newline (``"acme\\n"``) - ids no tenant directory can carry, so a
+        decision passed here that ``tenant_home()`` would refuse.
 
         Args:
             tenant_id: The tenant identifier to validate
@@ -815,9 +819,13 @@ class IntelligentRouter:
         """
         if not isinstance(tenant_id, str) or not tenant_id:
             return False
-        # Allow alphanumeric, underscore, and hyphen (common for tenant identifiers)
-        import re
-        return bool(re.match(r"^[a-zA-Z0-9_-]+$", tenant_id))
+        from core.tenants import validate_tenant_id  # noqa: PLC0415
+
+        try:
+            validate_tenant_id(tenant_id)
+        except ValueError:
+            return False
+        return True
 
     def get_stats(self) -> Dict[str, Any]:
         """Get routing statistics from decision history."""

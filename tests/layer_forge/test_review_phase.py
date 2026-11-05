@@ -161,3 +161,87 @@ class TestReviewPhaseIntegration:
 
             assert result_dict["review_verdict"]["status"] == "FLAGGED"
             assert "untested_complexity" in result_dict["review_verdict"]["flags"]
+
+
+class TestReviewModelRouting:
+    """The review model comes from the routing resolver, never a literal id.
+
+    CLAUDE.md "OS-Model Routing" (ADR-2090): never hardcode a model id where
+    ``tier_model()`` / ``top_model()`` exists. ``review.py`` used to send the
+    literal ``"claude-opus-5"`` to an API client.
+    """
+
+    class _FakeApiClient:
+        """An API client: no ``model`` attribute, records what it was asked for."""
+
+        def __init__(self):
+            self.asked = []
+            outer = self
+
+            class _Messages:
+                def create(self, *, model, max_tokens, messages):
+                    outer.asked.append(model)
+
+                    class _Block:
+                        text = "[]"
+
+                    class _Resp:
+                        content = [_Block()]
+
+                    return _Resp()
+
+            self.messages = _Messages()
+
+    def _run(self, monkeypatch, client, tenant_id):
+        from core.orchestration.layer_forge import llm_client
+        from core.orchestration.layer_forge.review import review_layer_definition
+
+        monkeypatch.setattr(llm_client, "get_client", lambda **_k: client)
+        return review_layer_definition(
+            {"id": "", "targets": []}, [], prompt_version="v1.0", tenant_id=tenant_id)
+
+    @staticmethod
+    def _model_selector():
+        from core.orchestration.layer_forge import review
+
+        review._top_model("_default")  # puts bridges/shared on sys.path if needed
+        import model_selector  # type: ignore[import-not-found]
+
+        return model_selector
+
+    def test_api_client_gets_the_tenants_top_tier_model(self, monkeypatch):
+        ms = self._model_selector()
+        seen = []
+
+        def _console_tier(task_type, tenant_id):
+            seen.append((task_type, tenant_id))
+            return "claude-opus-test-pick"
+
+        monkeypatch.setattr(ms, "_console_tier", _console_tier)
+        client = self._FakeApiClient()
+        verdict = self._run(monkeypatch, client, "acme")
+        assert verdict.status == "PASS", verdict
+        assert client.asked == ["claude-opus-test-pick"]
+        assert ("COMPLEX", "acme") in seen
+
+    def test_without_a_console_choice_the_newest_opus_is_used(self, monkeypatch):
+        ms = self._model_selector()
+        monkeypatch.setattr(ms, "_console_tier", lambda *_a, **_k: None)
+        client = self._FakeApiClient()
+        verdict = self._run(monkeypatch, client, "_default")
+        assert verdict.status == "PASS", verdict
+        assert client.asked == [ms.tier_model("opus")]
+        assert "opus" in client.asked[0]
+
+    def test_engine_client_keeps_its_own_model(self, monkeypatch):
+        client = self._FakeApiClient()
+        client.model = "engine-own-model"
+        verdict = self._run(monkeypatch, client, "_default")
+        assert verdict.status == "PASS", verdict
+        assert client.asked == ["engine-own-model"]
+
+    def test_no_literal_model_id_in_review_module(self):
+        from core.orchestration.layer_forge import review
+
+        src = Path(review.__file__).read_text(encoding="utf-8")
+        assert '"claude-opus-5"' not in src

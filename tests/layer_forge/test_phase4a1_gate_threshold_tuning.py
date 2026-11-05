@@ -292,8 +292,14 @@ class TestConsoleGateThresholdRoute:
                 if any(key.startswith(p) for p in ("corvin_console", "corvin_gateway", "forge")):
                     del sys.modules[key]
 
-    def test_console_apply_route_audits_threshold(self, console_client):
-        """Console POST /gate-thresholds/apply audits the threshold change (no auto-apply)."""
+    def test_console_apply_route_refuses_honestly(self, console_client):
+        """Console POST /gate-thresholds/apply answers 501 and writes no audit record.
+
+        No store holds a gate threshold and no gate reads one, so a 200 would be
+        cosmetic and a ``gate_threshold_applied`` record would be fiction in the
+        hash chain (console is a production surface, ADR-0763: fabricate nothing).
+        The route refuses; this pins the refusal, never a faked success.
+        """
         client, csrf, home = console_client
 
         h = {"X-CSRF-Token": csrf}
@@ -304,30 +310,18 @@ class TestConsoleGateThresholdRoute:
         }
 
         r = client.post("/v1/console/layer-forge/gate-thresholds/apply", json=body, headers=h)
-        assert r.status_code == 200, r.text
-        response = r.json()
+        assert r.status_code == 501, r.text
+        detail = r.json().get("detail", "")
+        assert "not implemented on this build" in detail
+        assert "gate-thresholds/analyze" in detail
 
-        assert response["status"] == "SUCCESS"
-        assert response["gate_id"] == "http_test_gate"
-        assert response["new_threshold"] == 0.75
-
-        # CRITICAL: Verify audit event on disk (real chain write, not mocked)
         chain = home / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
-        assert chain.exists(), "Audit chain must be created"
-
-        events = [
-            json.loads(l) for l in chain.read_text(encoding="utf-8").splitlines()
-            if l.strip() and "gate_threshold_applied" in l
-        ]
-        assert len(events) >= 1, "gate_threshold_applied event must be in audit chain"
-
-        event = events[0]
-        assert event["details"]["gate_id"] == "http_test_gate"
-        assert event["details"]["new_threshold"] == 0.75
-        assert event["details"]["actor"] == "console"
+        lines = chain.read_text(encoding="utf-8").splitlines() if chain.exists() else []
+        applied = [l for l in lines if "gate_threshold_applied" in l]
+        assert applied == [], "a refused apply must not leave an 'applied' record"
 
     def test_console_apply_never_auto_applies(self, console_client):
-        """Console route returns audit success but never auto-applies to registry."""
+        """Nothing is applied and nothing claims success, for any body."""
         client, csrf, home = console_client
 
         h = {"X-CSRF-Token": csrf}
@@ -338,14 +332,14 @@ class TestConsoleGateThresholdRoute:
         }
 
         r = client.post("/v1/console/layer-forge/gate-thresholds/apply", json=body, headers=h)
-        assert r.status_code == 200
+        assert r.status_code == 501, r.text
+        assert "SUCCESS" not in r.text
 
-        # Verify: audit event is recorded, but gate threshold is NOT persisted to registry
-        # (Real persistence would require a separate explicit apply operation)
-        # For now, the message says "not yet persisted to registry"
-        response = r.json()
-        assert "not yet persisted to registry" in response.get("message", "").lower() or \
-               "pending" in response.get("message", "").lower()
+        # Positive control: without the CSRF header the same route is refused
+        # before the handler runs, so the 501 above came from the mounted
+        # handler, not from a missing route.
+        r2 = client.post("/v1/console/layer-forge/gate-thresholds/apply", json=body)
+        assert r2.status_code in (401, 403), r2.text
 
 
 class TestE2EGateThresholdLoop:

@@ -2405,9 +2405,18 @@ class RemoteTriggerReceiver:
                         # sender_instance_id. (Full per-instance-key binding is
                         # the IBC signing key, ADR-0145 — this is the available
                         # structural step that closes cross-instance IAC replay.)
+                        # The subject is read from the CA-SIGNED ``cert`` — the
+                        # IAC shape is ``{"cert": {...,"instance_id"}, "sig"}``
+                        # (instance_attestation.sign_attestation). This used to
+                        # read a top-level ``instance_id`` that no IAC carries,
+                        # so every attested envelope was refused and min_trust
+                        # >= community admitted nobody; an unsigned top-level
+                        # field must never be the binding anyway.
                         _att_iid = ""
                         if isinstance(env.sender_attestation, dict):
-                            _att_iid = str(env.sender_attestation.get("instance_id", ""))
+                            _cert = env.sender_attestation.get("cert")
+                            if isinstance(_cert, dict):
+                                _att_iid = str(_cert.get("instance_id", ""))
                         if not _att_iid or _att_iid != (env.sender_instance_id or ""):
                             raise ValidationError(
                                 "attestation_instance_mismatch", recv_key

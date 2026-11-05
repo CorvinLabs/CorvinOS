@@ -182,10 +182,12 @@ _A2A_TEST_FILE_MARKERS = ("a2a", "remote_trigger")
 @pytest.fixture(autouse=True)
 def _a2a_member_tier(request, monkeypatch):
     name = Path(str(request.node.fspath)).name
-    if not any(m in name for m in _A2A_TEST_FILE_MARKERS):
+    marker = request.node.get_closest_marker("licence_tier")
+    # An A2A file whose name carries no marker (``test_adr0078_e2e.py``) opts in
+    # explicitly with a module-level ``pytestmark = pytest.mark.licence_tier(...)``.
+    if marker is None and not any(m in name for m in _A2A_TEST_FILE_MARKERS):
         yield
         return
-    marker = request.node.get_closest_marker("licence_tier")
     tier = marker.args[0] if marker else "member"
     try:
         from corvin_operator.license import capability_api
