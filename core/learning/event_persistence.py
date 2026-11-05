@@ -263,6 +263,44 @@ def core_audit_event(
     return audit_ref
 
 
+# ── Partition lines ─────────────────────────────────────────────────────────
+
+
+def _record_of(line: str) -> Optional[dict]:
+    """The record on one partition line, or ``None`` for a torn / foreign line.
+
+    A writer that died mid-append (or a full disk) leaves a fragment. Every reader
+    skips it instead of raising: one fragment used to abort ``read_events`` (the
+    ``/learning/patterns`` reader) and the GDPR Art. 17 erasure of the whole
+    learning layer (review 2026-11-05, LW-2).
+    """
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def _append_line(path: Path, line: str) -> None:
+    """Append one whole line; a torn tail gets a newline first so it never swallows it."""
+    data = line.encode("utf-8")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        size = os.fstat(fd).st_size
+        if size > 0:
+            os.lseek(fd, size - 1, os.SEEK_SET)  # O_APPEND: the write still goes to the end
+            if os.read(fd, 1) != b"\n":
+                data = b"\n" + data
+        view = memoryview(data)
+        while view:
+            n = os.write(fd, view)
+            if n <= 0:
+                raise OSError("learning event append wrote 0 bytes")
+            view = view[n:]
+    finally:
+        os.close(fd)
+
+
 # ── Store ───────────────────────────────────────────────────────────────────
 
 
@@ -339,8 +377,7 @@ class EventStore:
         event_dict = event.to_audit_event()
         event_dict["audit_ref"] = audit_ref
         events_file = self.events_dir / f"{event.timestamp_utc.date().isoformat()}.jsonl"
-        with open(events_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event_dict) + "\n")
+        _append_line(events_file, json.dumps(event_dict) + "\n")
 
         # 3. Update KG index (SECOND, async-safe; never blocks on failure)
         # ADR-0907 Stream 2.2: Auto-Indexing Hook
@@ -408,6 +445,10 @@ class EventStore:
         """Read events from store with filtering (newest first)."""
         self._bind(tenant_id)
         events: list[LearningEvent] = []
+        if since is not None and since.tzinfo is None:
+            # Stored timestamps are UTC; a naive ``since`` is UTC too. Comparing it
+            # with the aware stored value raised TypeError (review 2026-11-05, LW-4).
+            since = since.replace(tzinfo=timezone.utc)
 
         for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
             if len(events) >= limit:
@@ -418,8 +459,8 @@ class EventStore:
                     if not line.strip():
                         continue
 
-                    event_dict = json.loads(line)
-                    if self._is_tombstone(event_dict):
+                    event_dict = _record_of(line)
+                    if event_dict is None or self._is_tombstone(event_dict):
                         continue
 
                     # Tenant isolation
@@ -476,7 +517,8 @@ class EventStore:
         fd, tmp_name = tempfile.mkstemp(prefix=f".{events_file.stem}.", suffix=".tmp", dir=str(events_file.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.writelines(remaining)
+                # a kept torn tail has no newline: terminate it, or the tombstone joins it
+                f.writelines(ln if ln.endswith("\n") else ln + "\n" for ln in remaining)
                 if tombstone is not None:
                     f.write(json.dumps(tombstone) + "\n")
                 f.flush()
@@ -511,7 +553,10 @@ class EventStore:
         contaminated_files = []
 
         for events_file in self.events_dir.glob("*.jsonl"):
-            file_date = datetime.fromisoformat(events_file.stem).date()
+            try:
+                file_date = datetime.fromisoformat(events_file.stem).date()
+            except ValueError:
+                continue  # not a date partition: never this method's to delete
             if file_date >= cutoff_date:
                 continue
 
@@ -522,7 +567,9 @@ class EventStore:
                 for line in f:
                     if not line.strip():
                         continue
-                    event_dict = json.loads(line)
+                    event_dict = _record_of(line)
+                    if event_dict is None:
+                        continue  # torn fragment of an expired partition: removed with it
                     if event_dict.get("tenant_id") != tenant_id:
                         cross_tenant_count += 1
                         cross_tenant_ids.add(event_dict.get("tenant_id", "unknown"))
@@ -557,7 +604,9 @@ class EventStore:
                 for line in f:
                     if not line.strip():
                         continue
-                    event_dict = json.loads(line)
+                    event_dict = _record_of(line)
+                    if event_dict is None:
+                        continue
                     if event_dict.get("tenant_id") == tenant_id:
                         deleted_count += 1
                     else:
@@ -609,11 +658,21 @@ class EventStore:
         for events_file in sorted(self.events_dir.glob("*.jsonl")):
             remaining: list[str] = []
             removed_here = 0
+            torn_removed = False
             with open(events_file, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
-                    event_dict = json.loads(line)
+                    event_dict = _record_of(line)
+                    if event_dict is None:
+                        # A torn fragment cannot be attributed to a user. One that still
+                        # carries this user's id is removed with the user's records (it
+                        # is not an event, so it is not counted); any other stays.
+                        if json.dumps(user_id) in line:
+                            torn_removed = True
+                            continue
+                        remaining.append(line)
+                        continue
                     if (
                         not self._is_tombstone(event_dict)
                         and event_dict.get("tenant_id") == tenant_id
@@ -622,7 +681,11 @@ class EventStore:
                         removed_here += 1
                     else:
                         remaining.append(line)
+            if removed_here == 0 and not torn_removed:
+                continue
             if removed_here == 0:
+                self._rewrite_partition(events_file, remaining, tombstone=None)
+                partitions += 1
                 continue
             tombstone = {
                 "event_type": TOMBSTONE_EVENT_TYPE,
@@ -656,8 +719,8 @@ class EventStore:
                 for line in f:
                     if not line.strip():
                         continue
-                    event_dict = json.loads(line)
-                    if self._is_tombstone(event_dict):
+                    event_dict = _record_of(line)
+                    if event_dict is None or self._is_tombstone(event_dict):
                         continue
                     if event_dict.get("tenant_id") == tenant_id:
                         count += 1
@@ -695,8 +758,8 @@ class EventStore:
                     if not line.strip():
                         continue
 
-                    event_dict = json.loads(line)
-                    if self._is_tombstone(event_dict):
+                    event_dict = _record_of(line)
+                    if event_dict is None or self._is_tombstone(event_dict):
                         continue
 
                     # Tenant + type filter

@@ -326,8 +326,19 @@ class FeedbackValidator:
 
     @staticmethod
     def _is_valid_tenant(tenant_id: str) -> bool:
-        """Validate tenant_id format (alphanumeric + underscores)."""
-        return bool(tenant_id) and len(tenant_id) <= 128 and all(c.isalnum() or c == '_' for c in tenant_id)
+        """The canonical tenant rule (``core.tenants.validation``), not a private copy.
+
+        The private copy refused every hyphenated tenant (``acme-corp``) the core
+        creates and audits, so their feedback was never recorded, and accepted
+        upper case and reserved names the core refuses (review 2026-11-05, LW-3).
+        """
+        from core.tenants.validation import validate_tenant_id  # noqa: PLC0415
+
+        try:
+            validate_tenant_id(tenant_id)
+        except ValueError:
+            return False
+        return True
 
     def _emit_audit_event(self, event_type: str, **kwargs) -> None:
         """Emit audit event for signature verification (if backend available)."""

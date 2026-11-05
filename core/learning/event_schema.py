@@ -6,7 +6,7 @@ F4: Unbounded Payload Fix — max_payload_size=4KB validation + drop oversized e
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 from uuid import uuid4
@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 # F4: Maximum payload size (4 KB) to prevent unbounded memory growth
 MAX_PAYLOAD_SIZE_BYTES = 4 * 1024  # 4 KB
+
+
+def _utc_naive(ts: datetime) -> datetime:
+    """``ts`` as a naive UTC datetime (an aware one is converted, a naive one is UTC)."""
+    return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo is not None else ts
 
 
 class LearningEventType(str, Enum):
@@ -102,7 +107,9 @@ class LearningEvent:
             "user_id": self.user_id,
             "skill_name": self.skill_name,
             "session_id": self.session_id,
-            "timestamp": self.timestamp_utc.isoformat() + "Z",
+            # One stored form, ``YYYY-MM-DDTHH:MM:SS[.ffffff]Z``: an AWARE timestamp used to
+            # become ``...+00:00Z``, which no reader can parse (review 2026-11-05, LW-4).
+            "timestamp": _utc_naive(self.timestamp_utc).isoformat() + "Z",
             "event_id": self.event_id,
             "payload": self.payload,
             "tags": self.tags,

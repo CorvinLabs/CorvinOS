@@ -154,14 +154,19 @@ class EventStore:
             try:
                 event_dict = event.to_dict()
 
-                # F2: Scrub PII from event payload before writing to disk (GDPR Art. 32)
-                event_dict = _scrub_pii_deep(event_dict)
+                # F2: Scrub PII from event payload before writing to disk (GDPR Art. 32).
+                # Only the PAYLOAD fields: the identity fields (tenant_id, skill_id,
+                # event_id, timestamp, lom, ...) are system identifiers every reader joins
+                # on, and scrubbing them turned a valid tenant "customer-0123456789" into
+                # "customer-[PHONE]" - a record no reader of that tenant ever saw again
+                # (review 2026-11-05, LW-5).
+                for _key in _PAYLOAD_FIELDS:
+                    event_dict[_key] = _scrub_pii_deep(event_dict.get(_key))
 
                 event_dict["audit_ref"] = audit_ref
                 line = json.dumps(event_dict, separators=(",", ":")) + "\n"
 
-                with open(event_file, "a", encoding="utf-8") as f:
-                    f.write(line)
+                _append_record(event_file, line.encode("utf-8"))
 
             except IOError as e:
                 raise IOError(f"Failed to write learning event: {e}")
@@ -352,3 +357,35 @@ class EventStore:
                     continue
 
         return count
+
+
+def _append_record(path: Path, line: bytes) -> None:
+    """Append one whole record line to a partition (O_APPEND, written to the end in full).
+
+    A partition whose tail is a torn line (a writer that died mid-append, a full disk) gets a
+    newline first, so the torn bytes stay their own unparseable line and never swallow THIS
+    record: the chain record for it has already committed, and gluing the line onto the torn
+    fragment made the disk side unreadable to every reader (review 2026-11-05, LW-1). Same
+    rule as ``feedback_gate._append_line``.
+    """
+    import os  # noqa: PLC0415 - kept local: the module header is pinned by the learning register
+
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        size = os.fstat(fd).st_size
+        if size > 0:
+            os.lseek(fd, size - 1, os.SEEK_SET)  # O_APPEND: the write still goes to the end
+            if os.read(fd, 1) != b"\n":
+                line = b"\n" + line
+        view = memoryview(line)
+        while view:
+            n = os.write(fd, view)
+            if n <= 0:
+                raise OSError("learning event append wrote 0 bytes")
+            view = view[n:]
+    finally:
+        os.close(fd)
+
+
+#: The record fields that carry producer-supplied content and are PII-scrubbed on write (LW-5).
+_PAYLOAD_FIELDS = ("signal", "skill_config_delta")
