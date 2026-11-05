@@ -22,6 +22,26 @@ from corvin_plugins import bootstrap  # noqa: E402
 from corvin_plugins.providers import context_retriever as cr  # noqa: E402
 
 
+def _marketplace_source_present() -> bool:
+    """The plugin's source is an EXTERNAL dependency (the Corvin-Marketplace checkout,
+    `CORVIN_MARKETPLACE_ROOT`, a sibling checkout or the synced cache). A worktree
+    under /tmp has none of them, and discovery then honestly answers ``[]`` — that
+    is the resolver working, not the plugin missing (review 2026-11-05)."""
+    # Skip ONLY when no source location exists at all; a root that exists but lacks
+    # the plugin is a real failure the tests below must report.
+    try:
+        return Path(bootstrap._marketplace_root()).is_dir()
+    except Exception:  # noqa: BLE001 - an unresolvable root is "no source", not a test error
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _marketplace_source_present(),
+    reason="no Corvin-Marketplace source resolvable here (set CORVIN_MARKETPLACE_ROOT "
+           "or check out ../Corvin-Marketplace next to CorvinOS)",
+)
+
+
 @pytest.fixture(autouse=True)
 def _clean_registry():
     cr.clear()
