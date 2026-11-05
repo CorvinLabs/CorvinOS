@@ -23,7 +23,11 @@ import sys
 import time
 from pathlib import Path
 
-SANDBOX   = Path(os.environ.get("ADAPTER_TEST_SANDBOX", "/tmp/adapter-test-sandbox"))
+# A fresh directory per run unless the caller pins one: two runner instances
+# (two sessions, CI + a local run) sharing the fixed /tmp/adapter-test-sandbox
+# wiped each other's inbox mid-test (review 2026-11-05).
+SANDBOX   = Path(os.environ.get("ADAPTER_TEST_SANDBOX")
+                 or __import__("tempfile").mkdtemp(prefix="adapter-test-sandbox-"))
 INBOX     = SANDBOX / "inbox"
 OUTBOX    = SANDBOX / "outbox"
 PROCESSED = SANDBOX / "processed"
@@ -40,6 +44,16 @@ ITEMS = [
     ("04_discordA_second", "discord",  "chatA"),
     ("05_discordB_second", "discord",  "chatB"),
 ]
+
+# Readiness probe. The adapter's boot (license, audit-chain verify, ACP skill
+# boot, house-rules CLI probe, self-test) runs BEFORE its poll loop starts and
+# takes several seconds under load -- measured 5 s on 2026-11-05, which a fixed
+# "sleep 0.4 then start the clock" folded into `elapsed` and failed the
+# parallelism check at 9.33 s although the log showed two clean 2.0 s batches.
+# The clock therefore starts only once this envelope (own chat, so it never
+# serialises with ITEMS) has been processed: proof the poll loop is live.
+WARMUP = ("00_warmup", "telegram", "chatWarmup")
+BOOT_TIMEOUT = 120.0
 
 # 2.0s (was 0.5s → 1.0s → 2.0s): a larger per-item delay raises the signal/
 # jitter ratio so the fixed overhead (subprocess startup, poll cadence, thread
@@ -77,20 +91,28 @@ def write_inbox(item_id: str, channel: str, chat: str) -> None:
         "from":    f"sender-{chat}",
         "text":    f"hello from {item_id}",
     }
-    (INBOX / f"{item_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+    # Atomic, like the daemons' shared/js/inbox_write.js: the adapter polls
+    # `*.json`, so a bare write_text could be read half-written.
+    tmp = INBOX / f"{item_id}.json.tmp"
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(tmp, INBOX / f"{item_id}.json")
 
 
-def wait_for_processed(n_expected: int, timeout: float) -> list[Path]:
-    """Warte bis n_expected Inbox-Files in PROCESSED/ gelandet sind. Das ist
-    der saubere Indikator for "Item complete verarbeitet" — Outbox-Files
-    sind variabel (Text + Voice + Status + Heartbeat), processed/ ist 1:1."""
+def _processed(ids: set[str]) -> list[Path]:
+    return [f for f in PROCESSED.glob("*.json") if f.stem in ids]
+
+
+def wait_for_processed(ids: set[str], timeout: float) -> list[Path]:
+    """Wait until every inbox id in `ids` has landed in PROCESSED/ -- the clean
+    "item fully processed" signal (outbox files vary: text, voice, status,
+    heartbeat; processed/ is 1:1 with the inbox)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        files = list(PROCESSED.glob("*.json"))
-        if len(files) >= n_expected:
+        files = _processed(ids)
+        if len(files) >= len(ids):
             return files
         time.sleep(0.05)
-    return list(PROCESSED.glob("*.json"))
+    return _processed(ids)
 
 
 def main() -> int:
@@ -125,12 +147,17 @@ def main() -> int:
         stderr=subprocess.STDOUT,
     )
     try:
-        time.sleep(0.4)   # let the adapter start its event loop
+        write_inbox(*WARMUP)
+        if not wait_for_processed({WARMUP[0]}, BOOT_TIMEOUT):
+            print(f"FAIL: adapter never processed the warm-up envelope within "
+                  f"{BOOT_TIMEOUT:.0f}s (boot hung?)")
+            print(f"adapter log: {LOG_FILE}")
+            return 1
 
         t0 = time.monotonic()
         for item_id, channel, chat in ITEMS:
             write_inbox(item_id, channel, chat)
-        processed_files = wait_for_processed(len(ITEMS), WAIT_TIMEOUT)
+        processed_files = wait_for_processed({i[0] for i in ITEMS}, WAIT_TIMEOUT)
         # Outbox files (text + voice + status) to the Auswertung weiter unten;
         # echte completion-Indikation kommt aus processed/.
         files = list(OUTBOX.glob("*.json"))
@@ -202,11 +229,12 @@ def main() -> int:
     log_text = LOG_FILE.read_text(encoding="utf-8")
     fakes = [ln for ln in log_text.splitlines()
              if "[fake] sleep" in ln or "[fake-stream] sleep" in ln]
-    if len(fakes) != len(ITEMS):
-        print(f"FAIL: expected {len(ITEMS)} fake calls, log shows {len(fakes)}")
+    if len(fakes) != len(ITEMS) + 1:  # + the warm-up envelope
+        print(f"FAIL: expected {len(ITEMS) + 1} fake calls (incl. warm-up), "
+              f"log shows {len(fakes)}")
         print(log_text)
         return 1
-    print(f"PASS: adapter logged all {len(fakes)} fake-claude calls")
+    print(f"PASS: adapter logged all {len(fakes)} fake-claude calls (incl. warm-up)")
 
     print("\nALL CHECKS PASSED.")
     return 0
