@@ -79,7 +79,7 @@ systems:
     # tests/learning/test_review_20261105_lrn_hosts_e2e.py pins the premise. L02 likewise.
     callers:
       - core/gateway/corvin_gateway/app.py:547:_lh.start
-      - core/console/corvin_console/app.py:901:learning_host.start
+      - core/console/corvin_console/app.py:959:learning_host.start
       - core/console/corvin_console/standalone.py:370:_lh.start
     readers:
       # the daemon state (weights, queue, cooldowns) on the console's learning dashboard
