@@ -57,7 +57,9 @@ def validate_tenant_id(tenant_id: str) -> str:
         raise InvalidTenantID("tenant_id must not be empty")
     if tenant_id.startswith("__"):
         raise InvalidTenantID(f"tenant_id {tenant_id!r} starts with '__' (reserved)")
-    if not _TENANT_ID_RE.match(tenant_id):
+    # fullmatch: ``match`` with ``$`` also matched before a final newline, so
+    # ``"acme\n"`` passed (review 2026-11-05, LRN-15).
+    if not _TENANT_ID_RE.fullmatch(tenant_id):
         raise InvalidTenantID(
             f"tenant_id {tenant_id!r} fails charset rule "
             f"[a-z0-9_][a-z0-9_-]{{0,62}} (lower-case, DNS-label-like)"

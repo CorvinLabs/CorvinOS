@@ -85,6 +85,12 @@ class TestRecentOutcomes:
         # tail = i in 2..11 → failures at i = 3, 6, 9 → 7 successes
         assert successes == 7
 
-    def test_empty_store_is_no_evidence(self, tmp_path: Path):
+    def test_empty_store_is_no_evidence(self, tmp_path: Path, monkeypatch):
         assert recent_outcomes(TENANT, store=EventStore(tmp_path / "t")) == (0, 0)
-        assert recent_outcomes(TENANT, store=None) in ((0, 0),)
+        # No booted registry: no store, no evidence. (With a booted one the process-wide
+        # store now reads TENANT's own directory - LRN-2 - which earlier tests in the same
+        # process may have written to, so the booted case is not asserted here.)
+        from core.skills import skill_registry_phase1 as reg
+
+        monkeypatch.setattr(reg, "_global_registry", None)
+        assert recent_outcomes(TENANT, store=None) == (0, 0)

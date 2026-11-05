@@ -103,7 +103,10 @@ _LEARNING_EVENT_ALLOWLISTS: dict[str, frozenset[str]] = {
             "method.observation", "method.discovered",
         )
     },
-    "learning.retention": frozenset({"retention_days", "deleted_count", "partitions_rewritten", "audit_ref"}),
+    # ``scope``: closed token - ``events`` (cleanup_old_events, both stores' records of the
+    # shared partition directory) | ``feedback_gate`` (feedback_gate.prune_ledgers).
+    "learning.retention": frozenset({"retention_days", "deleted_count", "partitions_rewritten",
+                                     "contaminated_partitions", "scope", "audit_ref"}),
     # core/learning/phase7_orchestrator_bridge.py (NOT WIRED as of 2026-09-27)
     **{
         name: frozenset({
@@ -279,6 +282,89 @@ def _record_of(line: str) -> Optional[dict]:
     except ValueError:
         return None
     return rec if isinstance(rec, dict) else None
+
+
+def _stored_ts(value: Any) -> Optional[datetime]:
+    """A stored ``timestamp`` as an aware UTC datetime, or ``None`` when unreadable.
+
+    Accepts the current form (``...Z``) and the pre-LW-4 form an aware producer wrote
+    (``...+00:00Z``), which ``fromisoformat`` refuses (refutation 2026-11-05).
+    """
+    if not isinstance(value, str):
+        return None
+    text = value[:-1] if value.endswith("Z") else value
+    try:
+        ts = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+
+
+def _is_own_record(rec: dict) -> bool:
+    """A record of THIS store (not a tombstone, not an ``event_store.EventStore`` line).
+
+    Both stores share ``<tenant>/learning/events/YYYY-MM-DD.jsonl`` (review 2026-11-05,
+    LRN-6): this store's event types are ``learning.``-prefixed, the ADR-0314 store's are
+    the bare ``EventType`` values (``outcome``, ``feedback``). Every reader below filters by
+    schema instead of moving files, so retention and erasure keep one directory to walk.
+    """
+    etype = rec.get("event_type")
+    return (isinstance(etype, str) and etype.startswith("learning.")
+            and etype != TOMBSTONE_EVENT_TYPE)
+
+
+def _event_of(rec: dict) -> Optional[LearningEvent]:
+    """The ``LearningEvent`` a partition record holds, or ``None`` for one this store cannot rebuild.
+
+    The partitions are SHARED with ``event_store.EventStore`` (the live ADR-0314 store writes
+    ``<tenant>/learning/events/`` too: no ``instance_id``, event type ``outcome``), and older
+    records may carry a legacy timestamp; such a record is skipped, never allowed to abort the
+    whole read (refutation 2026-11-05, extends LW-2).
+    """
+    event_ts = _stored_ts(rec.get("timestamp"))
+    event_type = rec.get("event_type")
+    if event_ts is None or not isinstance(event_type, str):
+        return None
+    try:
+        return LearningEvent(
+            event_type=LearningEventType(event_type.replace("learning.", "")),
+            tenant_id=rec["tenant_id"],
+            instance_id=rec["instance_id"],
+            user_id=rec.get("user_id"),
+            skill_name=rec.get("skill_name"),
+            session_id=rec["session_id"],
+            timestamp_utc=event_ts,
+            event_id=rec["event_id"],
+            payload=copy.deepcopy(rec.get("payload", {})),
+            audit_id=rec.get("audit_ref", rec.get("audit_id")),
+            tags=list(rec.get("tags", [])),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _fragment_names_user(line: str, user_id: str) -> bool:
+    """Whether a torn fragment carries ``user_id`` - whole, or cut inside its value.
+
+    A writer that died inside the ``user_id`` value leaves ``..."user_id": "alice@exa``:
+    still the subject's data, so the Art. 17 erasure removes it too (refutation
+    2026-11-05). A fragment cut inside a value that is not a prefix of this id stays.
+
+    The minimum is ONE character of the id (LRN-27, the restrictive direction): a
+    fragment is not an event and no reader can use it, so removing a fragment that
+    another subject's id merely shares a first letter with costs nothing, while keeping
+    a short prefix of this subject's id would keep their data after a COMPLETED erasure.
+    """
+    quoted = json.dumps(user_id)
+    if quoted in line:
+        return True
+    tail = line.rstrip("\r\n")
+    key = '"user_id": "'
+    at = tail.rfind(key)
+    if at < 0:
+        return False
+    cut = tail[at + len(key) - 1:]  # the opening quote + the torn part of the value
+    return len(cut) > 1 and '"' not in cut[1:] and quoted.startswith(cut)
 
 
 def _append_line(path: Path, line: str) -> None:
@@ -460,7 +546,7 @@ class EventStore:
                         continue
 
                     event_dict = _record_of(line)
-                    if event_dict is None or self._is_tombstone(event_dict):
+                    if event_dict is None or not _is_own_record(event_dict):
                         continue
 
                     # Tenant isolation
@@ -475,26 +561,11 @@ class EventStore:
                     if session_id and event_dict.get("session_id") != session_id:
                         continue
 
-                    # Preserve UTC timezone: "2026-09-21T12:34:56Z" → "2026-09-21T12:34:56+00:00"
-                    event_ts = datetime.fromisoformat(event_dict["timestamp"].replace("Z", "+00:00"))
-                    if since and event_ts < since:
+                    event = _event_of(event_dict)
+                    if event is None:
+                        continue  # not this store's record (see _event_of)
+                    if since and event.timestamp_utc < since:
                         continue
-
-                    # Reconstruct event
-                    event_type_value = event_dict["event_type"].replace("learning.", "")
-                    event = LearningEvent(
-                        event_type=LearningEventType(event_type_value),
-                        tenant_id=event_dict["tenant_id"],
-                        instance_id=event_dict["instance_id"],
-                        user_id=event_dict.get("user_id"),
-                        skill_name=event_dict.get("skill_name"),
-                        session_id=event_dict["session_id"],
-                        timestamp_utc=event_ts,
-                        event_id=event_dict["event_id"],
-                        payload=copy.deepcopy(event_dict.get("payload", {})),
-                        audit_id=event_dict.get("audit_ref", event_dict.get("audit_id")),
-                        tags=list(event_dict.get("tags", [])),
-                    )
                     events.append(event)
 
                     if len(events) >= limit:
@@ -608,7 +679,10 @@ class EventStore:
                     if event_dict is None:
                         continue
                     if event_dict.get("tenant_id") == tenant_id:
-                        deleted_count += 1
+                        # Both stores' records expire with the partition they share
+                        # (LRN-13); a tombstone is not an event and is not counted.
+                        if not self._is_tombstone(event_dict):
+                            deleted_count += 1
                     else:
                         # This should never happen (we validated above), but keep for safety
                         remaining_lines.append(line)
@@ -627,6 +701,7 @@ class EventStore:
             "learning.retention",
             tenant_id=tenant_id,
             details={
+                "scope": "events",
                 "retention_days": retention_days,
                 "deleted_count": deleted_count,
                 "partitions_rewritten": touched_files,
@@ -668,7 +743,7 @@ class EventStore:
                         # A torn fragment cannot be attributed to a user. One that still
                         # carries this user's id is removed with the user's records (it
                         # is not an event, so it is not counted); any other stays.
-                        if json.dumps(user_id) in line:
+                        if _fragment_names_user(line, user_id):
                             torn_removed = True
                             continue
                         remaining.append(line)
@@ -720,8 +795,8 @@ class EventStore:
                     if not line.strip():
                         continue
                     event_dict = _record_of(line)
-                    if event_dict is None or self._is_tombstone(event_dict):
-                        continue
+                    if event_dict is None or not _is_own_record(event_dict):
+                        continue  # torn, tombstone or the ADR-0314 store's record (LRN-6)
                     if event_dict.get("tenant_id") == tenant_id:
                         count += 1
 
@@ -759,7 +834,7 @@ class EventStore:
                         continue
 
                     event_dict = _record_of(line)
-                    if event_dict is None or self._is_tombstone(event_dict):
+                    if event_dict is None or not _is_own_record(event_dict):
                         continue
 
                     # Tenant + type filter

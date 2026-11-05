@@ -6,10 +6,11 @@ and confidence optimizer updates. Without this listener, OUTCOME events are reco
 never fed to the optimizer for learning.
 
 Phase 1A (2026-09-14): Initial implementation
-- Reads OUTCOME learning events from the audit chain (EventStore)
+- Receives each finished task's outcome from TaskManager (push; the pull reader
+  ``fetch_unprocessed_outcomes`` never worked and was removed 2026-11-05, LRN-20)
 - Converts to ConfidenceOptimizer.process_feedback() calls
 - Emits confidence_updated events to audit trail
-- Runs as background service or on-demand via TaskManager integration
+- Runs on-demand via TaskManager integration (one call per finished task)
 
 Constraints (ADR-2153):
 - Audit-first: every confidence update is hash-chained before persisting
@@ -22,7 +23,6 @@ from __future__ import annotations
 import logging
 from typing import Optional, Any, Dict
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +44,15 @@ class ModelSelectionOutcome:
 class ModelSelectionLearningListener:
     """Consumes OUTCOME learning events and updates model confidence scores.
 
-    Example:
-        listener = ModelSelectionLearningListener()
-        # When task completes, TaskManager.record_event calls emit_task_outcome()
-        # which writes an OUTCOME event to the audit chain. This listener reads it:
-        outcomes = listener.fetch_unprocessed_outcomes(tenant_id="_default")
-        for outcome in outcomes:
-            listener.process_outcome(outcome, tenant_id="_default")
+    Push, not pull: ``TaskManager._update_model_selection_confidence`` builds one
+    :class:`ModelSelectionOutcome` per finished task and calls :meth:`process_outcome`.
+
+    ``fetch_unprocessed_outcomes`` / ``run_epoch`` (a pull path) were removed on
+    2026-11-05 (review LRN-20): it passed ``order="desc"``, which ``query_events`` does
+    not accept, so the swallowed TypeError made it return ``[]`` on every call; it read
+    ``backend.store`` where the backend holds an emitter; nothing marked an outcome as
+    processed, so a working version would have fed the same outcomes to the optimizer on
+    every epoch; and no production code called it.
     """
 
     def __init__(self):
@@ -81,86 +83,6 @@ class ModelSelectionLearningListener:
         except Exception as e:  # noqa: BLE001
             logger.debug("Could not load model selection config: %s", type(e).__name__)
             return None
-
-    def fetch_unprocessed_outcomes(
-        self,
-        tenant_id: str,
-        limit: int = 100,
-        store: Optional[Any] = None,
-    ) -> list[ModelSelectionOutcome]:
-        """
-        Fetch recent OUTCOME events that haven't been processed for model selection yet.
-
-        Args:
-            tenant_id: Tenant to query
-            limit: Max outcomes to fetch
-            store: EventStore (tests); default is the booted registry's
-
-        Returns:
-            List of ModelSelectionOutcome objects
-        """
-        if not tenant_id:
-            return []
-
-        st = store
-        if st is None:
-            try:
-                from core.skills import skill_registry_phase1 as _reg  # noqa: PLC0415
-                registry = getattr(_reg, "_global_registry", None)
-                backend = getattr(registry, "learning_backend", None) if registry else None
-                st = getattr(backend, "store", None)
-            except Exception:  # noqa: BLE001
-                return []
-
-        if st is None:
-            return []
-
-        outcomes = []
-        try:
-            from core.learning.learning_events import EventType  # noqa: PLC0415
-
-            # Query OUTCOME events for this tenant (most recent first)
-            events = st.query_events(
-                tenant_id=tenant_id,
-                event_type=EventType.OUTCOME,
-                limit=limit,
-                order="desc",  # newest first
-            )
-
-            for event in events:
-                signal = event.signal or {}
-                if not signal.get("task_id"):
-                    continue
-
-                task_type = signal.get("task_type", "unknown")
-                if not task_type or task_type == "unknown":
-                    # Skip outcomes with unknown task type (can't route to confidence)
-                    logger.debug("Skipping outcome with unknown task_type: %s", event.get("id"))
-                    continue
-
-                # Extract model_used from task input (stored in the event somehow?)
-                # For now: model_used comes from task input, which is NOT in OUTCOME event.
-                # We need to join with task metadata.
-                # Fallback: model_used from skill that generated the decision.
-                # TODO(phase1b): enhance OUTCOME event to include model_used
-
-                outcome = ModelSelectionOutcome(
-                    task_id=signal.get("task_id", ""),
-                    model_used=signal.get("model_used", ""),  # May be empty
-                    task_type=task_type,
-                    status=signal.get("status", ""),
-                    exit_code=signal.get("exit_code"),
-                    duration_ms=signal.get("duration_ms"),
-                    engine=signal.get("engine"),
-                    success=signal.get("success", False),
-                    timestamp=event.timestamp or datetime.now(timezone.utc).isoformat(),
-                )
-                if outcome.model_used:  # Only process if model_used is known
-                    outcomes.append(outcome)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to fetch outcomes: %s", type(e).__name__)
-
-        return outcomes
 
     def process_outcome(
         self,
@@ -215,41 +137,6 @@ class ModelSelectionLearningListener:
         except Exception as e:  # noqa: BLE001 — never break task processing
             logger.warning("Failed to process outcome: %s: %s", type(e).__name__, e)
             return False
-
-    def run_epoch(
-        self,
-        tenant_id: str,
-        limit: int = 50,
-    ) -> tuple[int, int]:
-        """
-        Run one processing epoch: fetch outcomes and update confidence.
-
-        Args:
-            tenant_id: Tenant to process
-            limit: Max outcomes per epoch
-
-        Returns:
-            (processed, skipped) count tuple
-        """
-        outcomes = self.fetch_unprocessed_outcomes(tenant_id, limit=limit)
-        processed = 0
-        skipped = 0
-
-        for outcome in outcomes:
-            if self.process_outcome(outcome, tenant_id):
-                processed += 1
-            else:
-                skipped += 1
-
-        if processed > 0:
-            logger.info(
-                "ModelSelection learning epoch: %d processed, %d skipped (tenant=%s)",
-                processed,
-                skipped,
-                tenant_id,
-            )
-
-        return processed, skipped
 
 
 # Singleton instance (lazy-loaded)

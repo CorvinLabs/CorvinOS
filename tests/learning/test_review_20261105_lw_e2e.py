@@ -187,3 +187,87 @@ def test_lw5_identity_fields_survive_the_pii_scrub(tmp_path, monkeypatch):
                                            signal={"note": "call 555-123-4567"}))
     got = store.query_events(tenant, event_type=EventType.METRIC)
     assert got[0].signal == {"note": "call [PHONE]"}
+
+
+def test_lw1b_count_after_a_torn_line_is_not_lost(tmp_path):
+    """Refutation 2026-11-05: LW-1 put the record written after a torn tail on its own line,
+    but ``event_store.EventStore.count_events`` (behind ``GET /learning/status`` event_counts,
+    the maturity panel and features_phase2) aborted the WHOLE file on the first unparseable
+    line - so that committed record was still invisible to every count, and the same route
+    reported it in ``recent_outcomes`` while ``event_counts`` said 0."""
+    with _sandbox(tmp_path, seed_execution=False) as (client, home, tenant_id, emitter, _chain):
+        from core.learning.learning_events import EventType, LearningEvent
+
+        ev = LearningEvent.create(event_type=EventType.OUTCOME, skill_id="os.delegation_router",
+                                  tenant_id=tenant_id, signal={"task_id": "t1", "success": True})
+        _tear_partition(home, tenant_id, ev.timestamp.split("T")[0])
+        assert emitter.write_sync(ev)
+        r = client.get("/v1/console/learning/status")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["recent_outcomes"]["total"] == 1
+        assert body["event_counts"]["outcome"] == 1, "committed record behind a torn line not counted"
+
+
+def test_lw2b_erasure_removes_a_fragment_torn_inside_the_subject_id(tmp_path):
+    """Refutation 2026-11-05: LW-2 removed a torn fragment only when it carried the subject's
+    COMPLETE quoted id. A writer that died inside the ``user_id`` value leaves
+    ``..."user_id": "alice@exa`` - the subject's personal data, which survived a COMPLETED
+    Art. 17 erasure. A fragment torn inside ANOTHER subject's id stays."""
+    with _sandbox(tmp_path, seed_execution=False) as (_client, home, tenant_id, _emitter, _chain):
+        from core.learning.event_persistence import EventStore as PersistenceStore
+        from core.learning.event_schema import LearningEvent as PLearningEvent, LearningEventType
+
+        store = PersistenceStore(tenant_id)
+        subject = "alice@example.com"
+        ev = PLearningEvent(event_type=LearningEventType("feedback.user_provided"), tenant_id=tenant_id,
+                            instance_id="i1", user_id=subject, skill_name="s", session_id="sess1",
+                            payload={"x": 1}, timestamp_utc=datetime.utcnow())
+        asyncio.run(store.write_event(ev, tenant_id))
+        part = _events_dir(home, tenant_id) / f"{ev.timestamp_utc.date().isoformat()}.jsonl"
+        full = json.dumps(ev.to_audit_event())
+        cut = full.index(json.dumps(subject)) + len('"alice@exa')
+        other = full.replace(json.dumps(subject), json.dumps("bob@example.com"))
+        cut_other = other.index('"bob@example.com"') + len('"bob@exa')
+        with open(part, "a", encoding="utf-8") as fh:
+            fh.write(other[:cut_other] + "\n" + full[:cut] + "\n")
+
+        from erasure_handlers import LearningEventHandler, LayerStatus  # type: ignore
+
+        res = LearningEventHandler(tenant_id=tenant_id).purge(subject, "req-1")
+        assert res.status == LayerStatus.APPLIED, res.reason
+        left = part.read_text(encoding="utf-8")
+        assert "alice@exa" not in left, "subject's torn fragment survived the erasure"
+        assert '"bob@exa' in left, "another subject's fragment was removed"
+
+
+def test_lw2c_read_events_survives_legacy_and_co_resident_records(tmp_path):
+    """Refutation 2026-11-05: ``event_persistence.read_events`` still RAISED on a parseable line
+    it cannot reconstruct - (a) a record written before LW-4 with the old aware timestamp
+    form ``...+00:00Z`` (one sits in a real install's 2026-09-03 partition), (b) a record of
+    ``event_store.EventStore``, which writes into the SAME ``<tenant>/learning/events/``
+    partitions (no ``instance_id``, event type ``outcome``). One such line aborted the whole
+    read, i.e. the ``/learning/patterns`` reader LW-2 claimed to have made fragment-proof."""
+    with _sandbox(tmp_path, seed_execution=False) as (_client, home, tenant_id, emitter, _chain):
+        from core.learning.event_persistence import EventStore as PersistenceStore
+        from core.learning.event_schema import LearningEvent as PLearningEvent, LearningEventType
+        from core.learning.learning_events import EventType, LearningEvent
+
+        store = PersistenceStore(tenant_id)
+        ev = PLearningEvent(event_type=LearningEventType("feedback.user_provided"), tenant_id=tenant_id,
+                            instance_id="i1", user_id="user-42", skill_name="s", session_id="sess1",
+                            payload={"x": 1}, timestamp_utc=datetime.utcnow())
+        asyncio.run(store.write_event(ev, tenant_id))
+        # (b) the live store's record in the same partition
+        assert emitter.write_sync(LearningEvent.create(event_type=EventType.OUTCOME,
+                                                       skill_id="os.delegation_router", tenant_id=tenant_id,
+                                                       signal={"task_id": "t1", "success": True}))
+        # (a) a legacy aware-timestamp record
+        legacy = dict(ev.to_audit_event(), event_id="legacy-1",
+                      timestamp=ev.timestamp_utc.isoformat() + "+00:00Z")
+        part = _events_dir(home, tenant_id) / f"{ev.timestamp_utc.date().isoformat()}.jsonl"
+        with open(part, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(legacy) + "\n")
+
+        got = asyncio.run(store.read_events(tenant_id=tenant_id))
+        assert sorted(e.event_id for e in got) == sorted([ev.event_id, "legacy-1"])

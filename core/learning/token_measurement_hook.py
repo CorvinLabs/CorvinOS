@@ -193,22 +193,14 @@ def _autoinit_token_hook() -> Optional[TokenMeasurementHook]:
     """
     global _hook
     try:
-        from pathlib import Path  # noqa: PLC0415
-
         from core.learning.event_emitter import EventEmitter  # noqa: PLC0415
-        from core.learning.event_store import EventStore as _LearningEventStore  # noqa: PLC0415
+        from core.learning.event_store import TenantEventStores  # noqa: PLC0415
         from core.learning.token_metrics_db import TokenMetricsDB  # noqa: PLC0415
         from core.learning.token_metrics_store import TokenMetricsStore  # noqa: PLC0415
 
-        tenant_id = "_default"
-        try:
-            from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
-            tenant_dir = tenant_home(tenant_id)
-        except Exception:  # noqa: BLE001
-            from core.paths.tenant import tenant_home as _core_tenant_home  # noqa: PLC0415
-            tenant_dir = _core_tenant_home(tenant_id)
-
-        emitter = EventEmitter(_LearningEventStore(Path(tenant_dir)))
+        # One BOUND store per tenant: a turn of tenant acme lands in acme's
+        # directory, never the _default one (review 2026-11-05, LRN-2).
+        emitter = EventEmitter(TenantEventStores())
         _hook = TokenMeasurementHook(TokenMetricsStore(emitter, db=TokenMetricsDB()), emitter)
         logger.info("Token measurement hook auto-initialized")
     except Exception as exc:  # noqa: BLE001

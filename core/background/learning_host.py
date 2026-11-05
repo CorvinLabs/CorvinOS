@@ -59,6 +59,8 @@ MAX_INTERVAL_S = 30.0
 SOURCE_CHECK_S = 300.0
 ANOMALY_CHECK_S = 300.0
 PRUNE_CHECK_S = 24 * 3600.0      # the Data Hub tidies up after itself once a day (``datahub_unified.prune``)
+RETENTION_CHECK_S = 24 * 3600.0  # learning-store retention, once a day (LRN-13)
+LEARNING_RETENTION_DAYS = 90     # CLAUDE.md § Phase 3: "90-day retention default"
 SAVE_EVERY_TICKS_WHEN_IDLE = 10
 RETRY_FAILED_S = 3600.0          # a failed/partial regeneration is retried after an hour
 RETRY_REFUSED_S = 24 * 3600.0    # a refused one (secret in the source, ...) after a day
@@ -153,13 +155,20 @@ class LearningHost:
     def __init__(self, tenant_id: str = "_default", *,
                  sources: Optional[Callable[[str], list]] = None,
                  regenerate: Optional[Callable[..., Any]] = None,
-                 prune: Optional[Callable[..., Any]] = None):
+                 prune: Optional[Callable[..., Any]] = None,
+                 retention: Optional[Callable[..., Any]] = None):
         self.tenant_id = tenant_id
         self.daemon = DataHubLearningDaemon(tenant_id)
         self.cursor: dict[str, Any] = {}
         self._sources = sources
         self._regenerate = regenerate
         self._prune = prune
+        self._retention = retention
+        self._last_retention_check = 0.0
+        # In memory only: a restart re-runs the (idempotent, audited) pass rather than
+        # writing state for an idle host, which would start the unused-skill clock.
+        self.retention_state: dict[str, Any] = {"last_at": "", "events_removed": 0,
+                                                "ledger_lines_removed": 0, "last_error": ""}
         self._last_source_check = 0.0
         self._last_anomaly_check = 0.0
         self._last_prune_check = 0.0
@@ -268,6 +277,10 @@ class LearningHost:
         if now - self._last_prune_check >= PRUNE_CHECK_S:
             self._last_prune_check = now
             work += await self._prune_once(now)
+
+        if now - self._last_retention_check >= RETENTION_CHECK_S:
+            self._last_retention_check = now
+            await self._retention_once(now)
 
         batch =await self.daemon.regeneration_scheduler.get_ready_batch()
         for i, skill_id in enumerate(batch):
@@ -405,6 +418,26 @@ class LearningHost:
             self._dirty = True
         return removed
 
+    async def _retention_once(self, now: float) -> None:
+        """Daily learning-store retention (LRN-13): the shared ``learning/events`` partitions
+        (both stores' records) and the ADR-0534 gate's ledgers lose what is older than
+        ``LEARNING_RETENTION_DAYS``. Each half chains its own ``learning.retention`` record
+        (counts only). A failed pass is logged and retried tomorrow; it never stops the host."""
+        fn = self._retention or _default_retention
+        try:
+            res = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: fn(self.tenant_id, now=now, retention_days=LEARNING_RETENTION_DAYS))
+        except Exception as exc:  # noqa: BLE001 - retried tomorrow, the host carries on
+            logger.warning("learning retention pass failed (%s)", type(exc).__name__)
+            self.retention_state.update({"last_at": _iso(now), "last_error": type(exc).__name__})
+            return
+        res = res if isinstance(res, dict) else {}
+        self.retention_state.update({
+            "last_at": _iso(now), "last_error": "",
+            "events_removed": int(res.get("events_removed") or 0),
+            "ledger_lines_removed": int(res.get("ledger_lines_removed") or 0),
+        })
+
     async def _check_sources(self) -> int:
         """A hash change of a watched source is a ``data_changed`` event for the skills built on it."""
         provider = self._sources or _default_sources
@@ -503,6 +536,7 @@ class LearningHost:
             "regenerations": self.regenerations[-10:], "cursor": dict(self.cursor),
             "standby": bool(getattr(self, "standby", False)), "lease": self.lease.held,
             "decisions": len(d.audit_trail), "prune": dict(self.prune_state),
+            "retention": dict(self.retention_state),
         }
 
     def _stop_requested(self) -> bool:
@@ -572,6 +606,26 @@ def _iso(ts: float) -> str:
         return datetime.utcfromtimestamp(ts).isoformat() + "Z"
     except (OverflowError, OSError, ValueError):     # a clock far outside the calendar (tests, broken RTC)
         return ""
+
+
+def _default_retention(tenant_id: str, *, now: float, retention_days: int) -> dict[str, int]:
+    """Production retention of the tenant's learning stores (LRN-13).
+
+    ``event_persistence.EventStore.cleanup_old_events`` rewrites the expired date partitions of
+    ``<tenant>/learning/events`` - the directory BOTH learning stores write, so both stores'
+    records expire with their partition - and chains ``learning.retention`` (scope ``events``);
+    ``feedback_gate.prune_ledgers`` trims ``learning/feedback_gate`` (scope ``feedback_gate``).
+    The routing ledger has its own owner and is not touched here.
+    """
+    from core.learning import feedback_gate  # noqa: PLC0415
+    from core.learning.event_persistence import EventStore  # noqa: PLC0415
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+    removed = asyncio.run(EventStore(tenant_id).cleanup_old_events(
+        tenant_id=tenant_id, retention_days=retention_days))
+    sweep = feedback_gate.prune_ledgers(tenant_home(tenant_id), tenant_id,
+                                        retention_days=retention_days, now=now)
+    return {"events_removed": int(removed), "ledger_lines_removed": sweep.lines_removed}
 
 
 def _default_prune(tenant_id: str, *, now: float, used_ids, observing_since):

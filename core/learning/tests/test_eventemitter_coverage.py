@@ -105,9 +105,12 @@ class TestEventEmitterContract:
         # Audit-first: the core chain admits only the PROCESS tenant, so the
         # tenant_a event is emitted from a tenant_a process (ADR-0007).
         monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_a")
-        good = _ev(tenant_id="tenant_a")
-        assert event_emitter.emit(good) is True
-        assert _wait_for(lambda: event_store.count_events("tenant_a") == 1)
+        foreign = _ev(tenant_id="tenant_a")
+        # The store's directory is tenants/_default: a tenant_a event must never land there
+        # (review 2026-11-05, LRN-2). It is queued, then refused and counted as a loss.
+        assert event_emitter.emit(foreign) is True
+        assert _wait_for(lambda: event_emitter.write_failures == 1)
+        assert event_store.count_events("tenant_a") == 0
         assert event_store.count_events("_default") == 0
 
     def test_queue_full_drop_is_counted_and_reported(self, event_store: EventStore):
@@ -186,8 +189,9 @@ class TestEmitterWiring:
             src = "\n".join(l for l in site.read_text(encoding="utf-8").splitlines() if not l.lstrip().startswith("#"))
             assert "EventEmitter(" in src, site
             assert not bad.search(src), f"{site}: legacy EventEmitter construction"
-            assert re.search(r"EventEmitter\(\s*_?LearningEventStore\(", src), \
-                f"{site}: must construct EventEmitter(EventStore(tenant_home))"
+            # one BOUND store per tenant behind the process-wide emitter (LRN-2)
+            assert re.search(r"EventEmitter\(\s*TenantEventStores\(", src), \
+                f"{site}: must construct EventEmitter(TenantEventStores())"
 
     def test_no_await_on_sync_emit_in_learning_modules(self):
         """emit()/stop() are synchronous — ``await emitter.emit(...)`` is a TypeError."""

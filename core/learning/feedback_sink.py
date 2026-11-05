@@ -11,11 +11,15 @@ This module collects three types of feedback:
 All feedback is validated, scrubbed of PII, buffered for confidence thresholds, and
 emitted as immutable FEEDBACK events to the audit-first EventStore.
 
-Security Fix #1 — Loop Hijacking Mitigation (ADR-0640):
-- Cryptographic signatures (HMAC-SHA256) protect feedback from tampering
-- Signatures verified before optimizer processes feedback
-- Timestamp binding prevents replay attacks
-- Tenant-scoped keys prevent cross-tenant signature reuse
+Signature (ADR-0640 "Security Fix #1") — what it does and does NOT do (review 2026-11-05, LRN-21):
+- A feedback event MAY carry an HMAC-SHA256 ``signature`` (tenant-scoped key, timestamp
+  bound). When present, ``FeedbackValidator.validate`` verifies it and refuses a bad one.
+- It is NOT required: no production producer signs, so unsigned feedback is accepted and
+  stays ``signature_verified=False``. The signature is therefore no protection against an
+  unsigned injection; the protection every stored FEEDBACK event gets is the ADR-0534 trust
+  gate (``feedback_gate``: throttle, reality check, trust weight).
+- ``signature_verified`` is never taken from the caller: ``__post_init__`` resets it to
+  False and only a successful verification in ``validate`` sets it.
 
 Fail-soft: validation failures drop feedback silently (with audit trail), never raising
 exceptions that could break the user experience.
@@ -61,9 +65,10 @@ class FeedbackEvent:
     - Audit-logged (every event recorded)
     - Cryptographically signed (prevents hijacking attacks)
 
-    Security Fix #1 — Loop Hijacking Mitigation:
-    - signature: HMAC-SHA256 over canonical JSON payload
-    - signature_verified: Flag indicating if signature was validated
+    Signature (optional, see the module docstring):
+    - signature: HMAC-SHA256 over canonical JSON payload, verified by ``validate`` when present
+    - signature_verified: True only after ``FeedbackValidator.validate`` verified it; a value
+      passed in by the caller is discarded
     """
     feedback_id: str                           # UUID4
     skill_id: str                              # e.g., "os.delegation_router"
@@ -88,6 +93,10 @@ class FeedbackEvent:
 
     def __post_init__(self):
         """Validate feedback on creation."""
+        # Never a caller's claim: ``create(signature_verified=True)`` / the constructor used
+        # to mark unverified feedback as verified (LRN-21). Only ``validate`` sets it.
+        if self.signature_verified:
+            object.__setattr__(self, "signature_verified", False)
         if not self.tenant_id:
             raise ValueError("tenant_id is required (GDPR Art. 32)")
         if not self.skill_id:
@@ -120,13 +129,13 @@ class FeedbackEvent:
         source: str = "user",
         lom: Optional[str] = None,
         signature: Optional[str] = None,
-        signature_verified: bool = False,
     ) -> FeedbackEvent:
         """Factory for creating new feedback events.
 
         Args:
-            signature: HMAC-SHA256 signature (optional, but required for prod)
-            signature_verified: Flag indicating signature was validated (fail-closed)
+            signature: HMAC-SHA256 signature (optional; verified by ``validate`` when present).
+                There is no ``signature_verified`` argument: verification is ``validate``'s
+                finding, never the caller's claim (LRN-21).
         """
         return cls(
             feedback_id=str(uuid4()),
@@ -142,7 +151,6 @@ class FeedbackEvent:
             source=source,
             lom=lom,
             signature=signature,
-            signature_verified=signature_verified,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -210,6 +218,7 @@ class FeedbackValidator:
     """Validates feedback before emission (fail-closed, GDPR Art. 32)."""
 
     FEEDBACK_WINDOW_MINUTES = 60  # Only feedback within 60min of execution
+    CLOCK_SKEW_SECONDS = 5        # a timestamp later than now by more than this is refused
     CONFIDENCE_THRESHOLD = 0.6    # Require ≥60% confidence for buffering
     MIN_BUFFER_SIZE = 10          # Collect ≥10 feedback samples before tuning
 
@@ -316,13 +325,19 @@ class FeedbackValidator:
     @staticmethod
     def _is_within_feedback_window(timestamp_iso: str) -> bool:
         """Check if feedback timestamp is within allowed window (60 min)."""
+        # Both sides in UTC and both bounds: ``now.replace(tzinfo=feedback.tzinfo)`` RELABELLED
+        # the UTC clock with the feedback's offset (a +02:00 timestamp was judged two hours
+        # off), a naive timestamp raised TypeError, and with no lower bound a timestamp in
+        # the future always passed (review 2026-11-05, LRN-22). A naive timestamp is UTC.
         try:
             feedback_time = datetime.fromisoformat(timestamp_iso.replace('Z', '+00:00'))
-            now = datetime.now(timezone.utc).replace(tzinfo=feedback_time.tzinfo)
-            delta = now - feedback_time
-            return delta <= timedelta(minutes=FeedbackValidator.FEEDBACK_WINDOW_MINUTES)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             return False
+        if feedback_time.tzinfo is None:
+            feedback_time = feedback_time.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - feedback_time.astimezone(timezone.utc)
+        return (-timedelta(seconds=FeedbackValidator.CLOCK_SKEW_SECONDS) <= delta
+                <= timedelta(minutes=FeedbackValidator.FEEDBACK_WINDOW_MINUTES))
 
     @staticmethod
     def _is_valid_tenant(tenant_id: str) -> bool:

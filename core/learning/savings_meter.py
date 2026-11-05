@@ -106,6 +106,29 @@ def _month_key(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
 
 
+_TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens",
+               "cache_read_input_tokens")
+
+
+def _token(value) -> "int | None":
+    """A stored token count as a non-negative int; ``None`` when it is not one.
+
+    Absent / ``null`` is 0 (an engine that did not report that split). An integral float
+    (``1500.0``) and a decimal string (``"1500"``) are accepted, as ``int()`` accepted them.
+    """
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and value >= 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 def _ingest(raw: bytes, acc: _Acc) -> None:
     try:
         rec = json.loads(raw.decode("utf-8", errors="replace"))
@@ -120,11 +143,17 @@ def _ingest(raw: bytes, acc: _Acc) -> None:
     if (acc.epoch and ts < acc.epoch) or _month_key(ts) != acc.month:
         return
     det = rec.get("details") or {}
+    if not isinstance(det, dict):
+        return
     acc.total_turns += 1
+    tok = [_token(det.get(k)) for k in _TOKEN_KEYS]
+    if any(t is None for t in tok):
+        # One malformed value (``"1.5e3"``, a negative, a bool) used to raise ValueError out
+        # of the scan: the warm-up thread swallowed it, cached nothing, and the Free-tier cap
+        # answered ``meter_warming`` forever (review 2026-11-05, LRN-16). The turn is counted
+        # but not priced (its split is unknown), like a turn without token data.
+        return
     model = str(det.get("model") or "")
-    tok = [int(det.get("input_tokens") or 0), int(det.get("output_tokens") or 0),
-           int(det.get("cache_creation_input_tokens") or 0),
-           int(det.get("cache_read_input_tokens") or 0)]
     if not model or not any(tok) or _price_for_model(model) is None:
         return
     slot = acc.by_model.setdefault(model, [0, 0, 0, 0, 0])

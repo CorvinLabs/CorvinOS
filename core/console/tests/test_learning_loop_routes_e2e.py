@@ -206,9 +206,10 @@ class LearningLoopRoutesE2E(unittest.TestCase):
             # excellent+repeat → confidence_threshold; "fast" → speed_weight; "clear" → clarity_weight
             params = {h["param"] for h in body["hypotheses"]}
             self.assertEqual(params, {"confidence_threshold", "speed_weight", "clarity_weight"})
-            # baseline phase (epoch <= 50): tested, not accepted — reported honestly
+            # no outcome recorded yet: the epoch is skipped as "no evidence", not counted as a
+            # 0 % baseline window (review 2026-11-05, LRN-12) — reported honestly
             self.assertTrue(all(h["accepted"] is False for h in body["hypotheses"]))
-            self.assertTrue(all(h["optimizer_reason"] == "baseline_collection_phase" for h in body["hypotheses"]))
+            self.assertTrue(all(h["optimizer_reason"] == "no_evidence" for h in body["hypotheses"]))
             self.assertEqual(body["current_config"]["confidence_threshold"], 0.7)
 
             emitter.stop(timeout=5.0)
@@ -226,10 +227,12 @@ class LearningLoopRoutesE2E(unittest.TestCase):
             console = [c for c in _console_chain(home, tenant_id) if "feedback_received" in json.dumps(c)]
             self.assertGreaterEqual(len(console), 1)
 
-            # the optimizer epoch was persisted under the TENANT home (never ~/.corvin)
+            # no outcome window: no epoch advanced, nothing persisted (LRN-12); a fortiori
+            # nothing under ~/.corvin. Persisting under the TENANT home is covered by
+            # tests/learning/test_review_20261105_lrn_e2e.py::test_lrn26_*.
             cfg = home / "tenants" / tenant_id / "skills" / "os_delegation_router_config.json"
-            self.assertTrue(cfg.is_file(), cfg)
-            self.assertEqual(json.loads(cfg.read_text(encoding="utf-8"))["optimizer"]["epoch"], 4)  # 1 + 3 hypotheses
+            if cfg.is_file():
+                self.assertEqual(json.loads(cfg.read_text(encoding="utf-8"))["optimizer"]["epoch"], 1)
 
     def test_feedback_the_trust_gate_rejects_never_reaches_the_optimizer(self):
         """ADR-0534 on the live route: no matching execution → 422, nothing learned.

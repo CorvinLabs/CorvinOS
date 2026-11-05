@@ -16,15 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_tenant_id(tenant_id: str) -> None:
-    """Validate tenant_id format (alphanumeric + underscore, no path traversal).
+    """Validate tenant_id with the canonical rule (no private copy).
 
-    FIX #6: Prevent tenant isolation bypass (GDPR Art. 32).
+    FIX #6: Prevent tenant isolation bypass (GDPR Art. 32). Delegates to
+    ``core.tenants.validation.validate_tenant_id``: the private regex here accepted
+    ``ACME``, ``-x``, the reserved ``test`` and a trailing newline, all of which
+    the core refuses (review 2026-11-05, LRN-15).
     """
-    if not tenant_id or not isinstance(tenant_id, str):
-        raise ValueError(f"Invalid tenant_id: must be non-empty string, got {tenant_id!r}")
+    from core.tenants.validation import validate_tenant_id  # noqa: PLC0415
 
-    if not re.match(r'^[a-zA-Z0-9_-]+$', tenant_id):
-        raise ValueError(f"Invalid tenant_id format: {tenant_id!r}")
+    validate_tenant_id(tenant_id)
 
 
 def _scrub_pii(text: Optional[str]) -> Optional[str]:
@@ -141,12 +142,31 @@ class EventStore:
                 f"Tenant mismatch: store is bound to {self.tenant_id!r}, "
                 f"event carries {event.tenant_id!r}"
             )
+        if (self.tenant_id is None and self.tenant_home.parent.name == "tenants"
+                and event.tenant_id != self.tenant_home.name):
+            # An unbound store over ``<home>/tenants/<tid>`` still names its tenant: the
+            # process-wide emitter's unbound ``_default`` store wrote every tenant's events
+            # into the ``_default`` directory (review 2026-11-05, LRN-2). Process-wide
+            # writers use ``TenantEventStores``; this refuses the old shape outright.
+            raise ValueError(
+                f"Tenant mismatch: store directory belongs to {self.tenant_home.name!r}, "
+                f"event carries {event.tenant_id!r}"
+            )
         if event.event_type is EventType.FEEDBACK:
             # ADR-0534: every feedback signal passes the trust gate (throttle →
             # reality check → trust weight) before it becomes learnable state.
-            # Raises FeedbackRejected (audited) — nothing is written then.
-            from core.learning.feedback_gate import admit  # noqa: PLC0415
-            event = admit(event, self, subject_verified=subject_verified)
+            # Raises FeedbackRejected (audited) — nothing is written then. The
+            # chain + disk write runs INSIDE the admission: when it fails, the
+            # gate's "accepted" is voided and learning.feedback_not_stored is
+            # chained, so no reader counts feedback that was never stored
+            # (review 2026-11-05, LRN-9).
+            from core.learning.feedback_gate import admission  # noqa: PLC0415
+            with admission(event, self, subject_verified=subject_verified) as admitted:
+                return self._write_audited(admitted)
+        return self._write_audited(event)
+
+    def _write_audited(self, event: LearningEvent) -> str:
+        """The chain record, then the disk line (see :meth:`write_event`)."""
         with self._lock:
             audit_ref = self._audit_chain_first(event)
             event_file = self._get_event_file(event.timestamp)
@@ -162,6 +182,7 @@ class EventStore:
                 # (review 2026-11-05, LW-5).
                 for _key in _PAYLOAD_FIELDS:
                     event_dict[_key] = _scrub_pii_deep(event_dict.get(_key))
+                _keep_execution_output(event, event_dict)
 
                 event_dict["audit_ref"] = audit_ref
                 line = json.dumps(event_dict, separators=(",", ":")) + "\n"
@@ -266,15 +287,25 @@ class EventStore:
                                 data = json.loads(line)
                             except json.JSONDecodeError as e:
                                 logger.warning(
-                                    f"Corrupted JSON line in {event_file}: {e} — event LOST "
-                                    f"at {datetime.utcnow().isoformat()}Z"
+                                    "Corrupted JSON line in %s (%s at char %d) - event LOST",
+                                    event_file.name, e.msg, e.pos,
                                 )
                                 continue
 
-                            # FIX #13: Validate required fields before reconstruction (prevent KeyError)
-                            required_fields = {"event_id", "event_type", "skill_id", "tenant_id", "timestamp"}
-                            if not all(field in data for field in required_fields):
-                                logger.warning(f"Skipping malformed event: missing fields {required_fields - set(data.keys())} in {data}")
+                            # FIX #13 + LRN-6: only THIS store's records. The partition
+                            # directory is shared with event_persistence (its records,
+                            # tombstones included, carry a ``learning.``-prefixed type and
+                            # no skill_id); those are skipped silently. A record of this
+                            # schema that lacks a field is named by its missing FIELDS and
+                            # file only - never the record: a foreign line carries user_id
+                            # and payload (review 2026-11-05, LRN-5).
+                            if not isinstance(data, dict) or _is_foreign_schema(data):
+                                continue
+                            missing = _missing_fields(data)
+                            if missing:
+                                logger.warning(
+                                    "Skipping malformed learning event in %s: missing fields %s",
+                                    event_file.name, sorted(missing))
                                 continue
 
                             if data.get("tenant_id") != tenant_id:
@@ -347,13 +378,25 @@ class EventStore:
                         for line in f:
                             if not line.strip():
                                 continue
-                            data = json.loads(line)
+                            # A torn line is skipped on its own: the file-level
+                            # except used to drop every record AFTER it from the
+                            # count, i.e. exactly the record LW-1 keeps readable
+                            # (refutation 2026-11-05).
+                            try:
+                                data = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            # Same records query_events returns: never a tombstone or an
+                            # event_persistence record from the shared directory, never a
+                            # record missing a field (review 2026-11-05, LRN-6).
+                            if not _is_store_record(data):
+                                continue
                             if data.get("tenant_id") != tenant_id:
                                 continue
                             if event_type and data.get("event_type") != event_type.value:
                                 continue
                             count += 1
-                except (json.JSONDecodeError, IOError):
+                except IOError:
                     continue
 
         return count
@@ -389,3 +432,89 @@ def _append_record(path: Path, line: bytes) -> None:
 
 #: The record fields that carry producer-supplied content and are PII-scrubbed on write (LW-5).
 _PAYLOAD_FIELDS = ("signal", "skill_config_delta")
+
+#: The fields every record of THIS store carries (``query_events`` rebuilds from them).
+_REQUIRED_FIELDS = frozenset({"event_id", "event_type", "skill_id", "tenant_id", "timestamp"})
+_EVENT_TYPE_VALUES = frozenset(t.value for t in EventType)
+
+
+def _is_foreign_schema(data: dict) -> bool:
+    """A record of the sibling ``event_persistence`` store (or its tombstone).
+
+    Both stores write ``<tenant>/learning/events/YYYY-MM-DD.jsonl`` (review 2026-11-05,
+    LRN-6). The sibling's event types are ``learning.``-prefixed
+    (``learning.method.observation``, ``learning.tombstone``); this store's are the bare
+    ``EventType`` values. Filtering by schema in every reader keeps the files where they
+    are - no migration, no second directory, nothing for erasure/retention to miss.
+    """
+    etype = data.get("event_type")
+    return isinstance(etype, str) and etype.startswith("learning.")
+
+
+def _missing_fields(data: dict) -> set[str]:
+    return set(_REQUIRED_FIELDS - data.keys())
+
+
+def _is_store_record(data: Any) -> bool:
+    """A complete record of this store with a known event type."""
+    return (isinstance(data, dict) and not _is_foreign_schema(data)
+            and not _missing_fields(data) and data.get("event_type") in _EVENT_TYPE_VALUES)
+
+
+def _keep_execution_output(event: LearningEvent, event_dict: dict) -> None:
+    """Store a ``skill_executed`` signal's ``output`` exactly as produced (LRN-17).
+
+    ``output`` is the ADR-0534 Layer-2 join subject: a feedback producer claims
+    ``execution_output_hash(signal)`` over it, and ``reality_check`` recomputes the hash
+    from the STORED record. The regex scrub rewrote system values inside it (a Unix
+    timestamp became ``[PHONE]``, a 40-hex job id ``[TOKEN]``), so every honest claim over
+    such an output was refused as ``output_hash_mismatch``. It is excluded from this scrub
+    because its producers scrub it at the source - the registry passes
+    ``SkillRegistry._scrub_pii_from_output(result.output)``, the video producer builds it
+    from ids, counts and enums only - and a second, lossy pass here cannot be undone by a
+    reader. Every other signal field is still scrubbed.
+    """
+    if event.event_type is not EventType.SKILL_EXECUTED:
+        return
+    original = event.signal if isinstance(event.signal, dict) else None
+    scrubbed = event_dict.get("signal")
+    if original is not None and "output" in original and isinstance(scrubbed, dict):
+        scrubbed["output"] = original["output"]
+
+
+class TenantEventStores:
+    """One BOUND :class:`EventStore` per tenant behind one ``write_event``/``query_events``.
+
+    The process-wide learning emitter (``core/skills/boot.py``, the token hook) used to
+    wrap ``EventStore(tenant_home(boot_tenant))`` UNBOUND: an OUTCOME of tenant ``acme``
+    landed in the boot tenant's events directory, ``recent_outcomes("acme")`` read the
+    boot tenant's directory, and acme's Art. 17 erasure never reached those records
+    (review 2026-11-05, LRN-2). This keeps a dict keyed by tenant; each entry is bound to
+    its tenant, so it refuses any event that names another one, and every read goes to the
+    directory of the tenant it names.
+    """
+
+    def __init__(self, home_of: Optional[Any] = None):
+        if home_of is None:
+            from core.paths.tenant import tenant_home as home_of  # noqa: PLC0415
+        self._home_of = home_of
+        self._stores: Dict[str, EventStore] = {}
+        self._guard = threading.Lock()
+
+    def for_tenant(self, tenant_id: str) -> EventStore:
+        _validate_tenant_id(tenant_id)
+        with self._guard:
+            store = self._stores.get(tenant_id)
+            if store is None:
+                store = EventStore(Path(self._home_of(tenant_id)), tenant_id=tenant_id)
+                self._stores[tenant_id] = store
+            return store
+
+    def write_event(self, event: LearningEvent, *, subject_verified: bool = False) -> str:
+        return self.for_tenant(event.tenant_id).write_event(event, subject_verified=subject_verified)
+
+    def query_events(self, tenant_id: str, *args: Any, **kwargs: Any) -> list[LearningEvent]:
+        return self.for_tenant(tenant_id).query_events(tenant_id, *args, **kwargs)
+
+    def count_events(self, tenant_id: str, event_type: Optional[EventType] = None) -> int:
+        return self.for_tenant(tenant_id).count_events(tenant_id, event_type)

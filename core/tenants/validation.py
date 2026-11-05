@@ -66,7 +66,9 @@ def validate_tenant_id(tenant_id: str) -> str:
 
     # Format check: lowercase alphanumeric + underscore (+ hyphen after the
     # first char), 1-63 chars — identical to forge.tenants.
-    if not re.match(TENANT_ID_REGEX, tenant_id):
+    # fullmatch: ``re.match`` with ``$`` also matched before a final newline, so
+    # ``"acme\n"`` passed and named a different directory (review 2026-11-05, LRN-15).
+    if not re.fullmatch(TENANT_ID_REGEX, tenant_id):
         raise ValueError(
             f"tenant_id contains invalid characters: {tenant_id!r}. "
             f"Only lowercase alphanumeric, underscore and hyphen (not leading) allowed (1-63 chars)."

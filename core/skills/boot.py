@@ -87,9 +87,13 @@ def _default_learning_backend(tenant_id: str) -> Optional[Any]:
     try:
         from forge.tenants import tenant_home  # type: ignore[import-not-found]
         from core.learning.event_emitter import EventEmitter
-        from core.learning.event_store import EventStore
+        from core.learning.event_store import TenantEventStores
 
-        store = EventStore(tenant_home(tenant_id))
+        # One BOUND store per tenant: this emitter carries every tenant's
+        # OUTCOME and feedback, and the boot tenant's unbound store wrote them
+        # all into the boot tenant's directory (review 2026-11-05, LRN-2).
+        tenant_home(tenant_id)  # the boot tenant must still resolve
+        store = TenantEventStores(tenant_home)
         return LearningEmitterBackend(EventEmitter(store), session_id="boot")
     except Exception as exc:  # noqa: BLE001
         logger.info("skills learning backend not wired (%s)", type(exc).__name__)

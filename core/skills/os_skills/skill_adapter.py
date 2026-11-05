@@ -553,10 +553,26 @@ class SkillAdapter:
                 for v in self.state.config_versions
             ] + list(getattr(self, "_unparsed_versions", []) or []),
         }
-        tmp = self.config_file.with_suffix(".tmp")
+        # A unique temp file (two writers never share one), fsynced, owner-only, then
+        # renamed by ``_commit_tmp``: the fixed ``<config>.tmp`` at umask, never synced,
+        # could leave an unreadable config after a crash - read as BrakeStateUnreadable,
+        # i.e. learning frozen fail-closed (review 2026-11-05, LRN-26).
+        import tempfile  # noqa: PLC0415
+
         try:
-            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            fd, name = tempfile.mkstemp(prefix=f".{self.config_file.name}.", suffix=".tmp",
+                                        dir=str(self.config_file.parent))
+        except OSError as e:
+            raise RuntimeError(f"Failed to persist SkillAdapter config: {e}") from e
+        tmp = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(data, indent=2))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o600)
         except (IOError, OSError) as e:
+            self._drop_tmp(tmp)
             raise RuntimeError(f"Failed to persist SkillAdapter config: {e}") from e
         return tmp
 
@@ -623,18 +639,32 @@ class SkillAdapter:
         if self.state.frozen:
             raise self._refuse_frozen("skill_config")
         label = UNVERIFIED_CAUSALITY
+        # An empty outcome window is NO evidence (``recent_outcomes`` returns (0, 0) before
+        # any outcome exists), not a 0 % success rate: it used to become the baseline, so
+        # the first real window after 50 such epochs "improved" by its whole rate and the
+        # hypothesis was accepted (review 2026-11-05, LRN-12). Such an epoch is skipped: the
+        # counter does not advance and nothing is persisted.
+        if recent_total <= 0:
+            return False, "no_evidence"
         self.state.epoch += 1
-        recent_success_rate = recent_successes / recent_total if recent_total > 0 else 0.0
+        recent_success_rate = recent_successes / recent_total
 
-        # Phase 1–50: Baseline collection (no changes)
+        # Phase 1–50: Baseline collection (no changes). The baseline is the MEAN over the
+        # baseline windows (running mean: the n-th window folds in with weight 1/n), not the
+        # last single window, which one unlucky window used to set on its own (LRN-12).
+        # ``epoch`` starts at 1, so the first counted window is epoch 2 → n = epoch - 1.
         if self.state.epoch <= 50:
-            self.state.baseline_success_rate = recent_success_rate
+            n = max(1, self.state.epoch - 1)
+            self.state.baseline_success_rate += (
+                recent_success_rate - self.state.baseline_success_rate) / n
             self._persist()
             return False, "baseline_collection_phase"
 
         # Phase 2–100: Test one hypothesis per epoch
         if self.state.epoch <= 100 and hypothesis:
             self.state.current_success_rate = recent_success_rate
+            # Every tested hypothesis counts, accepted or not (it counted rejections only).
+            self.state.hypotheses_tested += 1
             improvement = self.state.current_success_rate - self.state.baseline_success_rate
             mde = self.state.mde_threshold
 
@@ -670,7 +700,6 @@ class SkillAdapter:
                 return True, f"improvement_{improvement:.2%}_accepted{label}"
             else:
                 # Reject: keep current config
-                self.state.hypotheses_tested += 1
                 self._persist()
                 return False, f"improvement_{improvement:.2%}_below_mde_{mde}"
 

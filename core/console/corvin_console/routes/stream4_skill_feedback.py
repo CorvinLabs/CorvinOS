@@ -153,12 +153,14 @@ class FeedbackStatusResponse(BaseModel):
 # Routes
 # ============================================================================
 
-def _admit_through_trust_gate(req, tenant_id: str, signal, producer: str) -> float:
-    """Run ADR-0534's gate for this feedback; return its trust weight or raise 422.
+def _admit_through_trust_gate(req, tenant_id: str, signal, producer: str) -> tuple[float, str]:
+    """Run ADR-0534's gate for this feedback; return ``(trust weight, admitted event id)`` or raise 422.
 
     ``producer`` is the authenticated principal (the session's consent
     subject): the gate keys the trust weight on a hash of it, so one bad
-    producer cannot lower another's weight on the same skill.
+    producer cannot lower another's weight on the same skill. The event id is
+    what :func:`feedback_gate.void_admission` names when this route then fails
+    to chain or store the feedback (review 2026-11-05, LRN-9).
     """
     from core.learning.event_store import EventStore  # noqa: PLC0415
     from core.learning.feedback_gate import FeedbackRejected, admit  # noqa: PLC0415
@@ -176,7 +178,21 @@ def _admit_through_trust_gate(req, tenant_id: str, signal, producer: str) -> flo
     except FeedbackRejected as e:
         raise HTTPException(status_code=422, detail={
             "error": "feedback_rejected", "reason": e.reason, "audit_ref": e.audit_ref})
-    return float(admitted.signal["trust_weight"])
+    return float(admitted.signal["trust_weight"]), probe.event_id
+
+
+def _void_admission(event_id: str, stage: str, exc: BaseException) -> None:
+    """Void the gate's "accepted" for feedback this route did not store (LRN-9).
+
+    A void that cannot be chained is logged by type only; the route's own error
+    (the 500 the caller sees) is what propagates.
+    """
+    from core.learning.feedback_gate import void_admission  # noqa: PLC0415
+
+    try:
+        void_admission(event_id, stage=stage, error_type=type(exc).__name__)
+    except Exception as void_exc:  # noqa: BLE001 — the original failure is the answer
+        logger.error("feedback admission %s not voided (%s)", event_id, type(void_exc).__name__)
 
 
 @router.post("", response_model=SkillFeedbackResponse)
@@ -270,30 +286,40 @@ async def submit_skill_feedback(
         # ADR-0534 trust gate — this is the one route whose feedback moves a
         # live skill config, so it must not bypass the gate EventStore applies
         # to every stored FEEDBACK event. Rejection: audited, nothing stored.
-        trust_weight = _admit_through_trust_gate(
+        trust_weight, admitted_id = _admit_through_trust_gate(
             req, rec.tenant_id, signal, "console:" + consent_subject(rec))
 
-        # Audit-first: the outcome signal is chained before anything is stored. The
-        # helper reports False instead of raising, so a missing commit aborts here.
-        outcome = "yes" if signal is True else "no" if signal is False else "other"
-        if not emit_skill_audit_event(
-            "skill_feedback",
-            req.skill_id,
-            rec.tenant_id,
-            line_of_moral_responsibility="stream4_skill_feedback.submit_skill_feedback",
-            details={"feedback_type": "outcome", "signal": outcome, "tenant_id": rec.tenant_id},
-        ):
-            raise HTTPException(status_code=500, detail="Audit chain unavailable — feedback not stored")
+        # From here the gate's ledger says "accepted". If the audit record or the
+        # stored history then fails, nothing was stored: the accepted entry is voided
+        # (learning.feedback_not_stored chained) so the throttle, the producer's trust
+        # history and the anomaly monitor never count it (review 2026-11-05, LRN-9).
+        stage = "route_audit"
+        try:
+            # Audit-first: the outcome signal is chained before anything is stored. The
+            # helper reports False instead of raising, so a missing commit aborts here.
+            outcome = "yes" if signal is True else "no" if signal is False else "other"
+            if not emit_skill_audit_event(
+                "skill_feedback",
+                req.skill_id,
+                rec.tenant_id,
+                line_of_moral_responsibility="stream4_skill_feedback.submit_skill_feedback",
+                details={"feedback_type": "outcome", "signal": outcome, "tenant_id": rec.tenant_id},
+            ):
+                raise HTTPException(status_code=500, detail="Audit chain unavailable — feedback not stored")
 
-        history_store.append(
-            rec.tenant_id,
-            feedback_id=feedback_event.feedback_id,
-            timestamp=feedback_event.timestamp,
-            skill_id=req.skill_id,
-            subject_id=req.subject_id,
-            rating=req.rating,
-            category=req.category,
-        )
+            stage = "route_store"
+            history_store.append(
+                rec.tenant_id,
+                feedback_id=feedback_event.feedback_id,
+                timestamp=feedback_event.timestamp,
+                skill_id=req.skill_id,
+                subject_id=req.subject_id,
+                rating=req.rating,
+                category=req.category,
+            )
+        except BaseException as exc:
+            _void_admission(admitted_id, stage, exc)
+            raise
 
         logger.info(
             "Feedback submitted: skill=%s, subject=%s, rating=%d, tenant=%s",
