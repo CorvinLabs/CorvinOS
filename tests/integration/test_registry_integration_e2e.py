@@ -456,8 +456,16 @@ class TestErrorHandlingAndRollback:
     def test_invalid_tenant_id_rejected(self):
         """Test that invalid tenant IDs are rejected early."""
         # Act: Try to create bridge with invalid tenant ID
-        with pytest.raises(ValueError, match="invalid"):
+        # The bridge delegates to core.tenants.validate_tenant_id, whose traversal branch
+        # names the cause ("path traversal characters"); the old ``match="invalid"`` only
+        # fit the character-class branch.
+        with pytest.raises(ValueError, match="path traversal"):
             RegistryIntegrationBridge("../../../etc/passwd")
+        with pytest.raises(ValueError, match="invalid characters"):
+            RegistryIntegrationBridge("Acme Corp")
+        # Trailing newline: fullmatch since a0b71c4cb (``re.match`` + ``$`` let it through).
+        with pytest.raises(ValueError, match="invalid characters"):
+            RegistryIntegrationBridge("acme\n")
 
     def test_skill_grade_validation(self, skill_adapter):
         """Test that skill grades are clamped to [0, 1]."""

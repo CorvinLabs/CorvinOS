@@ -81,7 +81,6 @@ class TestModelSelectionLearningE2E:
         task_manager.record_event(
             task_id,
             {"event": "task.started", "engine": "claude"},
-            tenant_id="_test_tenant",
         )
 
         # Step 3: Mock the optimizer to capture calls
@@ -103,7 +102,10 @@ class TestModelSelectionLearningE2E:
                     "exit_code": 0,
                     "summary": "Task succeeded",
                 },
-                tenant_id="_test_tenant",
+                # No tenant_id here — exactly like every production closer. Since
+                # 1a0bfcef0 (review 2026-11-05 LRN-4) the L08 learner is credited
+                # to the task's OWN tenant from create_task, never to record_event's
+                # ``_default`` argument; this call shape is what proves it.
             )
 
             # Step 5: Verify listener.process_outcome was called with correct outcome
@@ -114,7 +116,7 @@ class TestModelSelectionLearningE2E:
 
             # Get the call arguments
             call_args = mock_listener.process_outcome.call_args
-            outcome, tenant = call_args[0], call_args[1]  # positional args
+            outcome, tenant = call_args.args  # process_outcome(outcome, tenant_id)
 
             # Verify outcome structure
             assert isinstance(outcome, ModelSelectionOutcome), (

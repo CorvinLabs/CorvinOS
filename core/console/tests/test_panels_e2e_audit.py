@@ -32,6 +32,9 @@ def client_with_auth():
         tenant_id="test-tenant",
         token_fingerprint="token-fp-123",
         csrf_secret="csrf-secret-xyz",
+        # Required fields since 43b39860b (one-time CSRF nonce).
+        csrf_nonce="0" * 32,
+        csrf_nonce_issued_at=0.0,
         created_at=0,
         last_seen_at=0,
         expires_at=9999999999,

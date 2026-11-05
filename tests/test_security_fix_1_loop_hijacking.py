@@ -12,6 +12,8 @@ Tests:
 - Bonus Test: Cross-tenant signature reuse prevented
 """
 
+import dataclasses
+
 import pytest
 import time
 from datetime import datetime, timedelta, timezone
@@ -66,62 +68,33 @@ class TestLoopHijackingMitigation:
         - Sign it with HMAC-SHA256
         - Verify signature passes validation
         """
-        # Prepare feedback for signing (exclude signature and signature_verified fields)
-        feedback_dict = {
-            "feedback_id": feedback_event.feedback_id,
-            "skill_id": feedback_event.skill_id,
-            "task_id": feedback_event.task_id,
-            "tenant_id": feedback_event.tenant_id,
-            "timestamp": feedback_event.timestamp,
-            "outcome_feedback": feedback_event.outcome_feedback.value,
-            "quality_rating": feedback_event.quality_rating,
-            "preference_feedback": None,
-            "reason": None,
-            "confidence": feedback_event.confidence,
-            "source": "user",
-            "lom": None,
-            # Do NOT include signature and signature_verified in the payload to be signed
-        }
+        # Sign exactly the payload FeedbackValidator.validate verifies: to_dict() minus
+        # the two signature fields. The previous body signed ``feedback_event`` and then
+        # verified a SECOND FeedbackEvent.create(...) — a fresh uuid4 feedback_id and a
+        # new timestamp, both inside the signed payload — so it could never match (red
+        # since e271a5081; nothing in the signer changed).
+        feedback_dict = feedback_event.to_dict()
+        feedback_dict.pop("signature", None)
+        feedback_dict.pop("signature_verified", None)
 
-        # Sign the feedback
-        signature, error = signature_validator.sign_feedback(
-            "_default", feedback_dict
-        )
+        signature, error = signature_validator.sign_feedback("_default", feedback_dict)
         assert signature is not None, f"Sign failed: {error}"
         assert len(signature) == 64  # HMAC-SHA256 = 64 hex chars
 
-        # Create event with signature
-        signed_event = FeedbackEvent.create(
-            skill_id=feedback_event.skill_id,
-            task_id=feedback_event.task_id,
-            tenant_id=feedback_event.tenant_id,
-            outcome_feedback=OutcomeFeedbackType.YES,
-            quality_rating=5,
-            confidence=0.95,
-            signature=signature,
-        )
+        # The same event (same id + timestamp), now carrying its signature.
+        signed_event = dataclasses.replace(feedback_event, signature=signature)
+        assert signed_event.signature_verified is False  # never the caller's claim (a0b71c4cb)
 
-        # Now create the dict again WITHOUT signature fields for validation
-        verify_dict = {
-            "feedback_id": signed_event.feedback_id,
-            "skill_id": signed_event.skill_id,
-            "task_id": signed_event.task_id,
-            "tenant_id": signed_event.tenant_id,
-            "timestamp": signed_event.timestamp,
-            "outcome_feedback": signed_event.outcome_feedback.value if signed_event.outcome_feedback else None,
-            "quality_rating": signed_event.quality_rating,
-            "preference_feedback": None,
-            "reason": signed_event.reason,
-            "confidence": signed_event.confidence,
-            "source": signed_event.source,
-            "lom": signed_event.lom,
-        }
-
-        # Verify directly
+        # Direct verification ...
         is_valid, error = signature_validator.validate_feedback_signature(
-            "_default", verify_dict, signature
+            "_default", feedback_dict, signature
         )
         assert is_valid, f"Validation failed: {error}"
+
+        # ... and through the production validator, which is what sets the flag.
+        ok, err = feedback_validator.validate(signed_event)
+        assert ok, err
+        assert signed_event.signature_verified is True
 
     # ── Test 2: Tampered Feedback is Rejected ────────────────────────────────
 
@@ -238,12 +211,29 @@ class TestLoopHijackingMitigation:
             "lom": None,
         }
 
-        # Verification should fail (signature was keyed to tenant_a, not tenant_b)
+        # tenant_b has no key yet: verification never auto-creates one, it fails closed.
+        is_valid, error = signature_validator.validate_feedback_signature(
+            "tenant_b", feedback_dict_b, signature
+        )
+        assert not is_valid
+        assert "key not found" in error.lower()
+
+        # Once tenant_b HAS its own key, the tenant_a signature is still refused — the
+        # case the test is named for (it used to assert "mismatch" without ever creating
+        # tenant_b's key, so it only ever reached the missing-key branch above).
+        own_sig, err = signature_validator.sign_feedback("tenant_b", feedback_dict_b)
+        assert own_sig is not None, err
+        assert own_sig != signature
         is_valid, error = signature_validator.validate_feedback_signature(
             "tenant_b", feedback_dict_b, signature
         )
         assert not is_valid
         assert "mismatch" in error.lower()
+        # Positive control: tenant_b's own signature over the same payload verifies.
+        ok, err = signature_validator.validate_feedback_signature(
+            "tenant_b", feedback_dict_b, own_sig
+        )
+        assert ok, err
 
     # ── Integration Test: Full Workflow ──────────────────────────────────────
 

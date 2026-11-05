@@ -26,7 +26,8 @@ import pytest
 from core.learning.event_emitter import EventEmitter
 from core.learning.event_store import EventStore
 from core.learning.learning_events import EventType, LearningEvent
-from core.learning.operator_feedback import OperatorFeedbackHandler
+from core.learning.feedback_gate import FeedbackRejected
+from core.learning.operator_feedback import OperatorFeedbackHandler, skill_subject_id
 
 TENANT = "_default"
 
@@ -51,6 +52,15 @@ def event_emitter(event_store: EventStore):
     emitter.stop(timeout=5.0)
 
 
+def _seed_execution(store: EventStore, skill_id: str) -> None:
+    """A real SKILL_EXECUTED record (audit-first, through the store) for the gate to find."""
+    store.write_event(LearningEvent.create(
+        event_type=EventType.SKILL_EXECUTED, skill_id=skill_id, tenant_id=TENANT,
+        signal={"output": {"ok": True}},
+        lom="tests/integration/test_eventemitter_universal.py:_seed_execution",
+    ))
+
+
 def _count(store: EventStore, **kw) -> int:
     return len(store.query_events(tenant_id=TENANT, **kw))
 
@@ -59,35 +69,45 @@ class TestEventEmitterUniversalWiring:
     """Real producers → real emitter → real store (audit-first)."""
 
     def test_operator_feedback_event_persistence(self, event_emitter, event_store):
+        # ADR-0534 trust gate (ea7701276): a rating is stored only when its subject has a
+        # SKILL_EXECUTED record in the window; a tool has none to verify against and is
+        # refused (subject_not_verifiable). This test predates the gate and rated two
+        # never-executed subjects with ``write_failures == 0`` — stale, not a regression.
+        _seed_execution(event_store, "json-parsing")
         handler = OperatorFeedbackHandler(
             event_store=event_store, min_sample_size=1, event_emitter=event_emitter
         )
-        before = _count(event_store)
+        before = _count(event_store, event_type=EventType.FEEDBACK)
 
-        handler.record_tool_rating(
-            tool_id="python-executor", tool_name="Python Executor", rating=5, tenant_id=TENANT
-        )
         handler.record_skill_rating(
             skill_id="json-parsing", skill_name="JSON Parser", rating=4, tenant_id=TENANT
         )
+        handler.record_tool_rating(
+            tool_id="python-executor", tool_name="Python Executor", rating=5, tenant_id=TENANT
+        )
 
         event_emitter.stop()  # drains the queue (worker joins)
-        assert event_emitter.write_failures == 0
+        # The refused tool rating is an OBSERVABLE write failure in the worker, never silence.
+        assert event_emitter.write_failures == 1
         assert event_emitter.dropped == 0
-        assert _count(event_store) == before + 2
-        # Every disk record carries the core-chain reference (audit-FIRST).
-        for ev in event_store.query_events(tenant_id=TENANT):
+        stored = event_store.query_events(tenant_id=TENANT, event_type=EventType.FEEDBACK)
+        assert len(stored) == before + 1
+        assert stored[-1].skill_id == skill_subject_id("json-parsing")
+        for ev in stored:
             assert ev.tenant_id == TENANT
 
-
-
-
     def test_event_emitter_fallback_to_event_store(self, event_store):
-        """No emitter → the handler writes to the SAME store directly."""
+        """No emitter → the handler writes to the SAME store directly (gate included)."""
+        _seed_execution(event_store, "test-skill")
         handler = OperatorFeedbackHandler(event_store=event_store, min_sample_size=1, event_emitter=None)
-        before = _count(event_store)
-        handler.record_tool_rating(tool_id="test-tool", tool_name="Test", rating=5, tenant_id=TENANT)
-        assert _count(event_store) == before + 1
+        before = _count(event_store, event_type=EventType.FEEDBACK)
+        handler.record_skill_rating(skill_id="test-skill", skill_name="Test", rating=5, tenant_id=TENANT)
+        assert _count(event_store, event_type=EventType.FEEDBACK) == before + 1
+        # Direct path: the gate's refusal reaches the caller as FeedbackRejected.
+        with pytest.raises(FeedbackRejected) as exc:
+            handler.record_tool_rating(tool_id="test-tool", tool_name="Test", rating=5, tenant_id=TENANT)
+        assert exc.value.reason == "subject_not_verifiable"
+        assert _count(event_store, event_type=EventType.FEEDBACK) == before + 1
 
     def test_tenant_isolation_in_event_emission(self, event_emitter, event_store):
         """A foreign tenant's event never lands under this tenant's directory."""

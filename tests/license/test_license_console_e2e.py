@@ -118,3 +118,56 @@ def test_apply_unverifiable_key_is_rejected_and_not_written(con):
     assert "signature verification failed" in resp.json()["detail"]
     assert not list(con.home.rglob("license.key"))
     assert con.client.get(f"{BASE}/info").json()["tier"] == "free"
+
+
+def _owner_session_for_tenant(tenant_id: str, con):
+    """A real persisted owner session whose record names ``tenant_id``."""
+    import dataclasses
+
+    from corvin_console import auth
+    from fastapi.testclient import TestClient
+
+    rec = auth.create_session(tenant_id="_default", token_fingerprint="test-fp")
+    rec = dataclasses.replace(rec, tenant_id=tenant_id)
+    auth._write_record(rec)
+    client = TestClient(con.client.app, raise_server_exceptions=False)
+    client.cookies.set("corvin_console_sid", rec.sid)
+    return client
+
+
+def test_audit_tail_validates_the_tenant_with_the_canonical_fullmatch(con, tmp_path):
+    """``/audit-tail`` builds a file path from the session's tenant. It used a private
+    ``re.compile(...).match`` whose ``$`` also matches before a trailing newline, so
+    ``"_default\\n"`` passed and named a different file. It now calls
+    ``core.tenants.validate_tenant_id`` (fullmatch since a0b71c4cb)."""
+    import json as _json
+
+    import corvin_console.routes.license as license_route
+
+    reads: list[str] = []
+
+    def fake_tail_path(tenant_id: str) -> Path:
+        reads.append(tenant_id)
+        p = tmp_path / "tails" / repr(tenant_id) / "tail.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_json.dumps({"timestamp": 1, "event_type": "license.loaded",
+                                  "details": {"tier": "member"}}) + "\n", encoding="utf-8")
+        return p
+
+    with mock.patch.object(license_route, "_verifier", object()), \
+         mock.patch.object(license_route.console_audit, "_audit_path", fake_tail_path):
+        # Positive control: the valid tenant reaches the file and gets its event back.
+        ok = con.client.get(f"{BASE}/audit-tail")
+        assert ok.status_code == 200, ok.text
+        assert [e["event_type"] for e in ok.json()] == ["license.loaded"]
+        assert reads == ["_default"]
+
+        bad = _owner_session_for_tenant("_default\n", con).get(f"{BASE}/audit-tail")
+        if bad.status_code == 200:
+            # The session layer let the record through: the route itself must refuse
+            # to build a path from it.
+            assert bad.json() == []
+        else:
+            assert bad.status_code in (401, 403), bad.text
+    # The newline tenant never reached path construction.
+    assert reads == ["_default"], reads

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import sys
 import tempfile
@@ -34,6 +33,7 @@ from .. import auth as session_auth
 from .. import audit as console_audit
 from .. import _bootstrap
 from ..deps import require_csrf, require_session, verify_reauth
+from core.tenants import validate_tenant_id
 
 _forge_paths = _bootstrap.forge_paths
 
@@ -87,8 +87,6 @@ _APPLY_KEY_LOCK = threading.Lock()
 
 _MAX_LICENSE_FILE_SIZE = 10 * 1024  # 10 KB for JWT
 
-# ADR-0007: tenant_id charset rule — mirrors forge.forge.tenants._TENANT_ID_RE
-_TENANT_ID_RE = re.compile(r"^[a-z0-9_][a-z0-9_-]{0,62}$")
 
 _AUDIT_TAIL_DETAILS_ALLOWLIST = frozenset({
     "tier", "jti", "feature", "limit_value", "requested_value", "reason",
@@ -592,8 +590,14 @@ async def get_license_audit(
     events: list[AuditEvent] = []
 
     try:
-        # ADR-0007: validate tenant_id before constructing file paths
-        if not _TENANT_ID_RE.match(rec.tenant_id):
+        # ADR-0007: validate tenant_id before constructing file paths, with the ONE
+        # canonical validator. The private ``re.compile(...).match`` copy this replaced
+        # let a tenant with a trailing newline through (``$`` matches before a final
+        # "\n") and named a different directory (review 2026-11-05, LRN-15; the core
+        # validator moved to fullmatch in a0b71c4cb).
+        try:
+            validate_tenant_id(rec.tenant_id)
+        except ValueError:
             return events
         # Use the same path as audit.py:_audit_path() — forge/audit.jsonl under the tenant global dir
         audit_file = console_audit._audit_path(rec.tenant_id)

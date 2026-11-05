@@ -87,7 +87,11 @@ class PluginManifest:
     version: str
     tier: PluginSourceTier
     category: str
-    description: str
+    # Optional: validate_generated_plugin requires exactly plugin_id/name/version/tier/
+    # category, so a manifest without a description PASSED validation and then crashed
+    # here with "missing 1 required positional argument: 'description'" — deploy
+    # reported a load failure for a plugin its own validator had just accepted.
+    description: str = ""
     source_url: Optional[str] = None
     dependencies: List[str] = field(default_factory=list)
     requires_capabilities: List[str] = field(default_factory=list)

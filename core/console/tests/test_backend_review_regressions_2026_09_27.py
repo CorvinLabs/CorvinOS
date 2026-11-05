@@ -54,8 +54,17 @@ class DodVerifierRoutesTest(unittest.TestCase):
     def test_feedback_and_history_work_and_do_not_leak(self):
         with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _):
             h = {"X-CSRF-Token": csrf}
+            # Since 6ed6e3eaf (ADR-2284) feedback rates a RECORDED verification (its task
+            # type picks the weights to tune); rating an unverified task id is a 422. Record
+            # one through the real route first.
+            r = client.post("/v1/console/api/dod/verify", headers=h,
+                            json={"task_id": "t1", "task_type": "feature",
+                                  "commit_msg": "fix: reproduce with pytest"})
+            self.assertEqual(r.status_code, 200, r.text)
             r = client.post("/v1/console/api/dod/feedback", headers=h,
-                            json={"task_id": "t1", "check_name": "tests", "feedback": "accurate",
+                            # check_name is validated against CHECK_TO_WEIGHT since
+                            # 6ed6e3eaf (ADR-2284); "tests" was never one of its keys.
+                            json={"task_id": "t1", "check_name": "test_evidence", "feedback": "accurate",
                                   "note": "private remark 4711"})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertTrue(r.json()["accepted"])
@@ -71,7 +80,10 @@ class DodVerifierRoutesTest(unittest.TestCase):
 
             r = client.get("/v1/console/api/dod/history/t1")
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(r.json()["verifications"], [])
+            # Exactly the one verification recorded above, and never the feedback note.
+            history = r.json()["verifications"]
+            self.assertEqual([(v["task_id"], v["task_type"]) for v in history], [("t1", "feature")])
+            self.assertNotIn("4711", repr(history))
 
 
 if __name__ == "__main__":
