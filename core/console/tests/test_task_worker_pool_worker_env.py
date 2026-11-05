@@ -36,7 +36,7 @@ _SECRETS = {
 
 _FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys
-out = os.environ["FAKE_CLAUDE_OUT"]
+out = os.environ["CORVIN_FAKE_CLAUDE_OUT"]
 json.dump({"argv": sys.argv[1:], "env": dict(os.environ)},
           open(os.path.join(out, "spawn.json"), "w"))
 sys.stdin.read()
@@ -55,7 +55,7 @@ def fake_claude(tmp_path, monkeypatch):
     binary = tmp_path / "claude"
     binary.write_text(_FAKE_CLAUDE, encoding="utf-8")
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("FAKE_CLAUDE_OUT", str(out))
+    monkeypatch.setenv("CORVIN_FAKE_CLAUDE_OUT", str(out))
     monkeypatch.setenv("CORVIN_CLAUDE_BIN", str(binary))
     monkeypatch.setenv("CLAUDE_BIN", str(binary))
     for name, value in _SECRETS.items():
@@ -136,6 +136,6 @@ def test_worker_model_is_the_task_tenants_console_choice(fake_claude, corvin_hom
 
 def test_task_worker_env_refuses_when_the_strip_is_unavailable(monkeypatch):
     """Fail-closed: no shared strip helper → no env → no spawn."""
-    monkeypatch.setattr(twp, "_acs_worker_env_helpers", lambda: None)
+    monkeypatch.setattr(twp, "_acs_build_worker_env", lambda: None)
     with pytest.raises(RuntimeError, match="worker env"):
         twp._worker_spawn_env("beta")

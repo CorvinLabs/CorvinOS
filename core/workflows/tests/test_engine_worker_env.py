@@ -52,7 +52,7 @@ def _gates_and_forge_only_here(monkeypatch):
 FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, sys
 classifier = "--max-turns" in sys.argv
-with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
+with open(os.environ["CORVIN_FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps({"argv": sys.argv[1:], "env": dict(os.environ)}) + "\\n")
 reply = ({"violated_rule_id": "", "confidence": 0.0, "reason": "ok"} if classifier
          else {"ok": True})
@@ -84,7 +84,7 @@ def cli_env(tmp_path, monkeypatch):
     claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "spawns.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
-    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
+    monkeypatch.setenv("CORVIN_FAKE_CLAUDE_LOG", str(log))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     for name, value in _SECRETS.items():
         monkeypatch.setenv(name, value)

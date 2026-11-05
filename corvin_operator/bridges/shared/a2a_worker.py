@@ -85,50 +85,94 @@ except ImportError:
         attested_model = None  # type: ignore[assignment]
 
 
-def _secret_env_overrides(base: "dict[str, str]", *,
-                          restore_platform: bool = False) -> dict[str, str]:
-    """``{name: ""}`` for every secret-shaped variable of ``base`` a worker must not see.
-
-    The SAME rule as the ACS worker/manager spawn (``acs_runtime._strip_worker_secrets``
-    — explicit list + name-pattern catch-all + the credential-bearing URL/DSN value
-    check, public keys and location pointers kept). ``restore_platform=True`` then puts
-    back the Bedrock/Vertex/Foundry credential chain (``_restore_platform_credentials``);
-    the caller passes it ONLY when the worker can read neither files nor a shell
-    (review DLG-25 — see ``_worker_can_read_env``). The engine merges its ``env`` over
-    ``os.environ``, so an empty string is how a name is removed. Raises when the helpers
-    are unimportable — the caller refuses the spawn.
-    """
+def _acs_runtime_module():
+    """``acs_runtime`` (bridges/shared) — the ONE worker-env rule lives there."""
     try:
-        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
-            _restore_platform_credentials, _strip_worker_secrets,
-        )
+        import acs_runtime  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError:
         _shared = str(Path(__file__).resolve().parent)
         if _shared not in sys.path:
             sys.path.insert(0, _shared)
-        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
-            _restore_platform_credentials, _strip_worker_secrets,
-        )
-    kept = dict(base)
-    _strip_worker_secrets(kept)
-    if restore_platform:
-        _restore_platform_credentials(kept, dict(base))
-    return {name: "" for name in base if name not in kept}
+        import acs_runtime  # type: ignore[import-not-found]  # noqa: PLC0415
+    return acs_runtime
+
+
+def _secret_env_overrides(base: "dict[str, str]", *, tenant_id: str = "_default",
+                          restore_platform: bool = False,
+                          restore_engine_credential: bool = False) -> dict[str, str]:
+    """The env OVERLAY for an A2A worker: ``""`` for every name it must not see.
+
+    The SAME rule as every other worker (``acs_runtime.worker_env_overlay`` — deny-by-default,
+    refutation RD-1), with two differences for a REMOTE peer's worker: the operator's
+    ``spec.worker_env.keep`` list is NOT applied (it is a grant to the operator's own
+    workers), and no provider redirect. ``restore_platform`` puts back the
+    Bedrock/Vertex/Foundry chain, ``restore_engine_credential`` the host's own env credential
+    (RD-4) — the caller passes them ONLY for an origin that can read neither files nor a
+    shell (DLG-25 / RD-10, :func:`_credential_safe_tools`). The engine merges its ``env``
+    over ``os.environ``, so an empty string is how a name is removed. Raises when the helper
+    is unimportable — the caller refuses the spawn.
+    """
+    acs = _acs_runtime_module()
+    src = {str(k): str(v) for k, v in base.items()}
+    env = acs.build_worker_env(
+        tenant_id, source_env=src, operator_keep=False,
+        platform=restore_platform, engine_credential=restore_engine_credential,
+        redirect=False)
+    overlay = {name: "" for name in src if name not in env}
+    overlay.update({k: v for k, v in env.items() if src.get(k) != v})
+    # ADR-0144 F-C4-02 contract: the known credential names are blanked EXPLICITLY even when
+    # absent from ``base`` (the engine merges over ``os.environ`` at spawn time) — unless
+    # this worker was deliberately handed one of them above.
+    for name in (*acs._WORKER_SECRET_ENV_STRIP, *acs._ENGINE_ENV_CREDENTIALS,
+                 "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
+        if name not in env:
+            overlay.setdefault(name, "")
+    return overlay
 
 
 # Tools through which a worker can read its own environment (/proc/self/environ, `env`):
 # the shell family and the file readers. The receiver denies all of them when an origin
 # has neither ``allow_bash`` nor ``allow_read_files`` (remote_trigger_receiver: _SHELL_TOOLS,
-# Read/Grep/NotebookRead) and denies the subagent tools whenever bash is denied.
+# Read/Grep/NotebookRead) and denies the subagent tools whenever bash is denied. This
+# list decides only whether an origin was GRANTED a reader (then a credential host refuses).
 _ENV_READING_TOOLS = frozenset({
     "Bash", "PowerShell", "Monitor", "Read", "Grep", "NotebookRead", "Task", "Agent",
 })
 
+#: RD-10 — the ALLOW list for a worker that is handed a credential: tools that reach the
+#: network or keep the todo list and can read neither a file nor the environment. Such a
+#: worker is spawned with ``--tools=<these, minus the origin's denials>``, so a tool that
+#: is not on this list — a future or renamed reader, a background-shell reader, a
+#: Skill/slash command — is not available to it at all; a denylist of known names could
+#: never promise that.
+_ENV_SAFE_TOOLS = ("WebFetch", "WebSearch", "TodoWrite")
+
 
 def _worker_can_read_env(disallowed_tools: "list[str] | None") -> bool:
-    """True unless EVERY tool that could read the worker's environment is denied."""
+    """True unless EVERY known tool that could read the worker's environment is denied."""
     denied = {str(t) for t in (disallowed_tools or [])}
     return not _ENV_READING_TOOLS <= denied
+
+
+def _credential_safe_tools(allowed_tools: "list[str] | None",
+                           disallowed_tools: "list[str] | None") -> "list[str] | None":
+    """The ``--tools`` set of a worker that receives a credential, or ``None`` (refuse).
+
+    ``None`` when the origin may read the environment: a known reader is not denied, or
+    the origin's explicit ``allowed_tools`` names any tool outside :data:`_ENV_SAFE_TOOLS`
+    (RD-10: what is not on the allow list is not vouched for). Otherwise the allow list
+    minus the origin's denials (intersected with its ``allowed_tools`` when given) — the
+    exact set the CLI will expose.
+    """
+    if _worker_can_read_env(disallowed_tools):
+        return None
+    denied = {str(t) for t in (disallowed_tools or [])}
+    if allowed_tools is not None:
+        allowed = {str(t) for t in allowed_tools}
+        if not allowed <= set(_ENV_SAFE_TOOLS):
+            return None
+        return [t for t in _ENV_SAFE_TOOLS if t in allowed and t not in denied]
+    return [t for t in _ENV_SAFE_TOOLS if t not in denied]
 
 
 def _active_platform_id(source_env: "dict[str, str]") -> str:
@@ -147,16 +191,134 @@ def _active_platform_id(source_env: "dict[str, str]") -> str:
     return str(getattr(spec, "id", "") or "") if spec is not None else ""
 
 
+class UnjudgeableAttachment(ValueError):
+    """An inbound attachment whose content the L34 classifier cannot be shown (RD-3)."""
+
+
+_BOMS = (
+    (b"\x00\x00\xfe\xff", "utf-32-be"), (b"\xff\xfe\x00\x00", "utf-32-le"),
+    (b"\xef\xbb\xbf", "utf-8-sig"), (b"\xfe\xff", "utf-16-be"), (b"\xff\xfe", "utf-16-le"),
+)
+#: Magic numbers of the compressed containers a worker could unpack (gzip, zlib, zip,
+#: bzip2, xz, zstd, 7z). Unpacked within the size cap and judged, or refused.
+_GZIP_MAGIC = b"\x1f\x8b"
+_ZIP_MAGIC = b"PK\x03\x04"
+_OTHER_ARCHIVE_MAGIC = (b"BZh", b"\xfd7zXZ\x00", b"\x28\xb5\x2f\xfd", b"7z\xbc\xaf\x27\x1c")
+
+
+def _is_zlib(raw: bytes) -> bool:
+    return (len(raw) >= 2 and raw[0] == 0x78 and raw[1] in (0x01, 0x5E, 0x9C, 0xDA)
+            and ((raw[0] << 8) | raw[1]) % 31 == 0)
+
+
+def _charset_of(mime: str) -> str:
+    for part in mime.split(";")[1:]:
+        k, _, v = part.partition("=")
+        if k.strip().lower() == "charset":
+            return v.strip().strip('"').lower()
+    return ""
+
+
+def _decode_text(raw: bytes, mime: str) -> "str | None":
+    """The text of ``raw`` (BOM, declared ``charset=``, UTF-8, then a NUL-pattern UTF-16/32
+    sniff), with NULs removed; ``None`` when it is not text in any of them (RD-3)."""
+    for bom, enc in _BOMS:
+        if raw.startswith(bom):
+            return raw.decode(enc, errors="replace").replace("\x00", "")
+    declared = _charset_of(mime)
+    if declared:
+        try:
+            return raw.decode(declared).replace("\x00", "")
+        except (LookupError, UnicodeDecodeError):
+            pass
+    try:
+        return raw.decode("utf-8").replace("\x00", "")
+    except UnicodeDecodeError:
+        pass
+    # BOM-less UTF-16/32: mostly-ASCII text whose code units carry NUL high bytes at a
+    # fixed position. Decided per lane (byte index mod 4); a binary file (an image) has
+    # NULs scattered, not in fixed lanes, and stays undecoded.
+    if len(raw) >= 4:
+        sample = raw[:4096]
+
+        def _nul(lane: int, step: int) -> float:
+            part = sample[lane::step]
+            return part.count(0) / max(1, len(part))
+
+        candidates = []
+        if len(raw) % 4 == 0:
+            candidates += [("utf-32-le", _nul(1, 4) > 0.9 and _nul(2, 4) > 0.9 and _nul(3, 4) > 0.9),
+                           ("utf-32-be", _nul(0, 4) > 0.9 and _nul(1, 4) > 0.9 and _nul(2, 4) > 0.9)]
+        if len(raw) % 2 == 0:
+            candidates += [("utf-16-le", _nul(1, 2) > 0.9 and _nul(0, 2) < 0.1),
+                           ("utf-16-be", _nul(0, 2) > 0.9 and _nul(1, 2) < 0.1)]
+        for enc, hit in candidates:
+            if hit:
+                try:
+                    return raw.decode(enc).replace("\x00", "")
+                except UnicodeDecodeError:
+                    continue
+    return None
+
+
+def _decompress_within_cap(raw: bytes, budget: int) -> "list[bytes]":
+    """The members of a gzip / zlib / zip container, unpacked within ``budget`` bytes.
+    Raises :class:`UnjudgeableAttachment` past the budget or on a corrupt container."""
+    import io
+    import zlib
+    import zipfile
+    try:
+        if raw.startswith(_GZIP_MAGIC) or _is_zlib(raw):
+            outs: list[bytes] = []
+            rest, used = raw, 0
+            while rest:   # every member of a multi-member gzip, not only the first
+                d = zlib.decompressobj(zlib.MAX_WBITS | 32)   # auto-detects gzip / zlib headers
+                out = d.decompress(rest, budget - used + 1)
+                used += len(out)
+                if used > budget or d.unconsumed_tail:
+                    raise UnjudgeableAttachment("compressed attachment over the size cap")
+                if not d.eof:
+                    raise UnjudgeableAttachment("truncated compressed attachment")
+                outs.append(out)
+                rest = d.unused_data
+                if rest and not rest.startswith(_GZIP_MAGIC):
+                    raise UnjudgeableAttachment("trailing data after a compressed member")
+            return outs
+        if raw.startswith(_ZIP_MAGIC):
+            members: list[bytes] = []
+            used = 0
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    with zf.open(info) as fh:
+                        data = fh.read(budget - used + 1)
+                    used += len(data)
+                    if used > budget:
+                        raise UnjudgeableAttachment("compressed attachment over the size cap")
+                    members.append(data)
+            return members
+    except UnjudgeableAttachment:
+        raise
+    except Exception as exc:  # noqa: BLE001 — a corrupt container is not judged, it is refused
+        raise UnjudgeableAttachment(f"corrupt compressed attachment ({type(exc).__name__})") from exc
+    raise UnjudgeableAttachment("compressed attachment in an unsupported container")
+
+
 def _inbound_attachment_texts(inbound_attachments: "list | None") -> list[str]:
-    """The decoded TEXT of every inbound attachment, for the L34 gate (review DLG-17).
+    """The decoded TEXT of every inbound attachment, for the L34 gate (review DLG-17, RD-3).
 
     The worker is told to read these files, so their content goes to the engine as surely
     as the instruction does. Bounded by the receiver's own caps
     (``a2a_attachments.MAX_ATTACHMENTS_COUNT`` / ``MAX_ATTACHMENTS_TOTAL_BYTES``) — a set
-    over the caps raises. A file that is not UTF-8 and not declared as text (an image, an
-    archive) carries no text this classifier can judge and is skipped; a ``text/*`` /
-    JSON / XML / CSV file that is not valid UTF-8 is decoded with replacement and judged
-    anyway. A digest/base64 failure raises — the caller refuses (fail-closed).
+    over the caps raises. Decoding (RD-3): a BOM (UTF-8/16/32) or a declared ``charset=``
+    wins, then UTF-8, then a BOM-less UTF-16/32 sniff; NULs are removed before judging —
+    so a ``text/plain; charset=utf-16`` or ``application/octet-stream`` UTF-16 file is read
+    as the text it is. A gzip / zlib / zip attachment is unpacked within the SAME size cap
+    and each member judged; any other archive (bzip2, xz, zstd, 7z), a corrupt one or one
+    over the cap raises :class:`UnjudgeableAttachment` — the caller refuses (judged,
+    fail-closed). A file that is no text in any encoding (an image) carries nothing this
+    classifier can judge and is skipped, as before. A digest/base64 failure raises.
     """
     atts = list(inbound_attachments or [])
     if not atts:
@@ -182,13 +344,36 @@ def _inbound_attachment_texts(inbound_attachments: "list | None") -> list[str]:
         if total > MAX_ATTACHMENTS_TOTAL_BYTES:
             raise ValueError("inbound attachments over the size cap")
         mime = str(getattr(att, "mime", "") or "").lower()
+        if raw.startswith(_OTHER_ARCHIVE_MAGIC):
+            raise UnjudgeableAttachment("compressed attachment in an unsupported container")
+        members = None
+        if raw.startswith((_GZIP_MAGIC, _ZIP_MAGIC)):
+            members = _decompress_within_cap(raw, MAX_ATTACHMENTS_TOTAL_BYTES - total)
+        elif _is_zlib(raw):
+            # A two-byte zlib header is not an unambiguous magic ("x^" starts text too):
+            # judged as zlib when it inflates, as text otherwise.
+            try:
+                members = _decompress_within_cap(raw, MAX_ATTACHMENTS_TOTAL_BYTES - total)
+            except UnjudgeableAttachment as exc:
+                if "over the size cap" in str(exc) or _decode_text(raw, mime) is None:
+                    raise
+        if members is not None:
+            for member in members:
+                total += len(member)
+                if total > MAX_ATTACHMENTS_TOTAL_BYTES:
+                    raise UnjudgeableAttachment("compressed attachment over the size cap")
+                text = _decode_text(member, "")
+                if text is None:
+                    raise UnjudgeableAttachment("compressed attachment holds no judgeable text")
+                texts.append(text)
+            continue
         texty = mime.startswith("text/") or any(
             m in mime for m in ("json", "xml", "csv", "yaml", "javascript"))
-        try:
-            texts.append(raw.decode("utf-8"))
-        except UnicodeDecodeError:
-            if texty:
-                texts.append(raw.decode("utf-8", errors="replace"))
+        text = _decode_text(raw, mime)
+        if text is not None:
+            texts.append(text)
+        elif texty:
+            texts.append(raw.decode("utf-8", errors="replace").replace("\x00", ""))
     return texts
 
 
@@ -206,42 +391,28 @@ def _receiver_tenant(tenant_id: "str | None") -> str:
     return mod.current_tenant()
 
 
-_FORGE_TENANTS_MODULE: Any = None
+def _forge_module(name: str) -> Any:
+    """``forge.<name>`` from the REAL forge package (refutation RD-2, ``_forge_imports``).
+
+    A process that has ``corvin_operator/`` on ``sys.path`` ahead of
+    ``corvin_operator/forge/`` binds ``forge`` to the NAMESPACE package — 0b1f9073e
+    loaded only the tenant resolver by file, and every other ``forge`` import on this
+    path (the L34/L44 audit writers) still failed. The shared helper heals the binding
+    for the whole process.
+    """
+    try:
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        _shared = str(Path(__file__).resolve().parent)
+        if _shared not in sys.path:
+            sys.path.insert(0, _shared)
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    return forge_module(name)
 
 
 def _forge_tenants_module() -> Any:
-    """``forge.tenants`` resolved by FILE, immune to the ``forge`` name collision.
-
-    A process that has ``corvin_operator/`` on ``sys.path`` ahead of
-    ``corvin_operator/forge/`` (the license package lives there, and the gateway
-    dispatcher and pytest add it) binds the name ``forge`` to the NAMESPACE package
-    ``corvin_operator/forge/`` — which has no ``tenants`` — and caches it in
-    ``sys.modules``. Every ``from forge.tenants import …`` in that process then
-    raises ``ModuleNotFoundError`` and this worker refused every inbound task
-    (``tenant-unresolved``, measured on the full suite run of 3282ed405). The
-    resolver is loaded once from its known path; ``tenants.py`` imports only the
-    standard library, so loading it standalone changes nothing it does.
-    """
-    global _FORGE_TENANTS_MODULE
-    if _FORGE_TENANTS_MODULE is not None:
-        return _FORGE_TENANTS_MODULE
-    try:
-        from forge import tenants as mod  # type: ignore[import-not-found]
-        if hasattr(mod, "current_tenant") and hasattr(mod, "validate_tenant_id"):
-            _FORGE_TENANTS_MODULE = mod
-            return mod
-    except ImportError:
-        pass
-    import importlib.util
-
-    path = Path(__file__).resolve().parents[2] / "forge" / "forge" / "tenants.py"
-    spec = importlib.util.spec_from_file_location("_corvin_forge_tenants", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"forge tenant resolver not loadable from {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    _FORGE_TENANTS_MODULE = mod
-    return mod
+    """``forge.tenants`` — kept as a name for callers; resolved through :func:`_forge_module`."""
+    return _forge_module("tenants")
 
 
 def _attested_model_of(result: Any) -> str:
@@ -880,7 +1051,11 @@ def spawn_a2a_worker(
     # shell (the environment is then unreachable); otherwise refuse the spawn, audited.
     # No per-origin opt-in exists on purpose — handing a peer the cloud account is not a
     # setting; route such a host's A2A through a signing proxy instead.
-    _env_readable = _worker_can_read_env(disallowed_tools)
+    # RD-10: the decision is an ALLOW list — ``_credential_safe_tools`` is the exact tool
+    # set a credential-holding worker gets (``--tools=``), ``None`` when the origin may
+    # read the environment.
+    _safe_tools = _credential_safe_tools(allowed_tools, disallowed_tools)
+    _env_readable = _safe_tools is None
     try:
         _platform = _active_platform_id(dict(os.environ))
     except Exception as _pexc:  # noqa: BLE001 — cannot tell → refuse
@@ -902,6 +1077,50 @@ def spawn_a2a_worker(
             reason_code="gate",
             error=(f"platform-credentials-refused: this host signs with the {_platform} "
                    "credential chain and the origin may read files or run a shell"),
+        )
+    # 1a.3 The engine's own ENV credential (refutation RD-4). On a host whose only Claude
+    # credential is ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN (no login file, no
+    # platform — the documented Docker install) the worker cannot authenticate without
+    # it. The DLG-25 rule applies: restored only for an origin that can read neither files
+    # nor a shell (then with the RD-10 tool allow list), otherwise refused and audited.
+    try:
+        _engine_cred = sorted(_acs_runtime_module()._engine_env_credential(dict(os.environ)))
+    except Exception as _cexc:  # noqa: BLE001 — cannot tell → refuse
+        return WorkerResult(
+            status="rejected", raw_output="", parsed_output={},
+            duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+            reason_code="gate_error",
+            error=f"engine-credential-unresolved (fail-closed): {type(_cexc).__name__}"[:300],
+        )
+    if _engine_cred and not _platform and _env_readable:
+        _emit_worker_session_audit(
+            "A2A.worker_engine_credential_refused",
+            task_id=str(task_id), origin_id=str(origin_id),
+            auth_kind="+".join(
+                {"ANTHROPIC_API_KEY": "api_key", "CLAUDE_CODE_OAUTH_TOKEN": "oauth_token"}[n]
+                for n in _engine_cred),
+            reason="origin_can_read_environment", tenant_id=_tid,
+        )
+        return WorkerResult(
+            status="rejected", raw_output="", parsed_output={},
+            duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+            reason_code="gate",
+            error=("engine-credential-refused: this host authenticates the engine with an "
+                   "environment credential and the origin may read files or run a shell"),
+        )
+    _restore_credential = bool(_platform or _engine_cred) and not _env_readable
+
+    # RD-2: every gate below writes its decision through ``forge.security_events``. A
+    # process whose ``forge`` binding cannot reach it would let L34 approve with no
+    # record — refuse instead (this also heals a namespace-bound ``forge``).
+    try:
+        _forge_module("security_events").write_event  # noqa: B018 — load check
+    except Exception as _aexc:  # noqa: BLE001
+        return WorkerResult(
+            status="rejected", raw_output="", parsed_output={},
+            duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+            reason_code="gate_error",
+            error=f"audit-writer-unavailable (fail-closed): {type(_aexc).__name__}"[:300],
         )
 
     # 1b. Layer 34 — data-classification × engine-egress gate (review fix).
@@ -927,7 +1146,18 @@ def spawn_a2a_worker(
             # DLG-17: the inbound attachments the worker is told to read are judged
             # with the instruction; the class is max() over all of them. A decode or
             # size-cap failure raises → gate_error (fail-closed).
-            _l34_texts = [clean, *_inbound_attachment_texts(inbound_attachments)]
+            try:
+                _l34_texts = [clean, *_inbound_attachment_texts(inbound_attachments)]
+            except UnjudgeableAttachment as _uexc:
+                # RD-3: an attachment the classifier cannot be shown (an unsupported or
+                # corrupt archive, one that unpacks past the size cap) is refused — the
+                # worker could unpack it, the gate could not judge it.
+                return WorkerResult(
+                    status="rejected", raw_output="", parsed_output={},
+                    duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+                    reason_code="data_flow",
+                    error=f"data-flow-denied: attachment not judgeable ({_uexc})"[:300],
+                )
             # Opt-in (adapter parity): no tenant data_classification config → allow,
             # except a SECRET task, which the built-in floor refuses (T-0254).
             _guard = load_guard_for_tenant(_tid)
@@ -1230,33 +1460,24 @@ def spawn_a2a_worker(
     # and all other adapter-level secrets into the subprocess. The env override dict
     # is merged on top — setting to "" makes the subprocess see an empty string
     # (validators treat "" as "no key" and fall back to disk-based lookup).
+    # The fixed names below are not credentials but configuration a remote peer's worker
+    # must not inherit (they are in the CORVIN_/FORGE_ namespaces the ONE rule admits):
     _ENV_CLEAR = {
-        "CORVIN_LICENSE_KEY": "",
-        "OPENAI_API_KEY": "",
-        "OPENAI_APIKEY": "",
-        "ANTHROPIC_API_KEY": "",
-        "ANTHROPIC_AUTH_TOKEN": "",    # cleared: never inherit an OS-turn auth token
-        "ANTHROPIC_BASE_URL": "",      # cleared: prevents SSRF redirect to an internal endpoint
-        "CORVIN_STT_OPENAI_KEY": "",
-        "GMAIL_APP_PASSWORD": "",
-        "GMAIL_USER": "",              # PII: email address from service.env
-        "OLLAMA_API_KEY": "",
-        "HETZNER_API_TOKEN": "",
         "FORGE_ROOT": "",              # disables user-scope Forge MCP in A2A subprocess
         "CORVIN_TEST_MODE": "",        # prevents test-mode bypass if adapter runs in CI
         "CORVIN_FEATURES_URL": "",     # prevents SSRF to mock-features server via Forge MCP
     }
-    # The fixed list above cannot enumerate an operator's secrets (GITHUB_TOKEN,
-    # PGPASSWORD, CORVIN_WDAT_KEY, a bot token, any *_API_KEY): the engine copies
-    # os.environ, so every one of them reached a worker a REMOTE peer drives —
-    # readable with Read(/proc/self/environ) or Bash once the origin opts in. Clear
-    # everything the ACS worker strip removes (same name-pattern rule), restoring
-    # the active platform's own credential chain (ADR-0759) ONLY for an origin that can
-    # read neither files nor a shell — any other origin was refused at 1a.2 (DLG-25).
+    # Every credential (and everything else outside the worker base set) is removed by the
+    # ONE deny-by-default rule (RD-1) — ANTHROPIC_BASE_URL/_AUTH_TOKEN, every *_API_KEY,
+    # GMAIL_*, bot tokens, URL credentials. The active platform's chain (ADR-0759) or the
+    # host's env credential (RD-4) comes back ONLY for an origin that can read neither files
+    # nor a shell — any other origin was refused at 1a.2 / 1a.3 (DLG-25).
     # Fail-closed: no strip helper, no spawn.
     try:
-        _ENV_CLEAR = {**_secret_env_overrides(
-            dict(os.environ), restore_platform=bool(_platform) and not _env_readable), **_ENV_CLEAR}
+        _ENV_CLEAR = {**_ENV_CLEAR, **_secret_env_overrides(
+            dict(os.environ), tenant_id=_tid,
+            restore_platform=bool(_platform) and _restore_credential,
+            restore_engine_credential=bool(_engine_cred) and _restore_credential)}
     except Exception as exc:  # noqa: BLE001
         shutil.rmtree(workspace, ignore_errors=True)
         return WorkerResult(
@@ -1287,6 +1508,10 @@ def spawn_a2a_worker(
     # claude-CLI-specific); other engines keep their own MCP posture.
     if engine_name == "claude_code":
         _spawn_kwargs["extra_args"] = ["--strict-mcp-config"]
+        if _restore_credential:
+            # RD-10: a worker holding a credential gets the ALLOW list as its whole tool
+            # set — no tool outside it exists for this worker, whatever its name.
+            _spawn_kwargs["extra_args"].append("--tools=" + ",".join(_safe_tools or []))
         # ADR-2232: a federated agent's model, normalised like every pin
         # (a provider-qualified id would 404 at the CLI — ADR-0952).
         if model:

@@ -60,13 +60,27 @@ except Exception:  # pragma: no cover - fail-closed: absent capability blocks sp
 # ADR-0077 S-3: per-origin rate-limit bucket.
 _RateBucket = collections.namedtuple("_RateBucket", ["tokens", "last_refill"])
 
+
+def _forge_mod(name: str):
+    """``forge.<name>`` from the REAL forge package, healing a namespace-bound ``forge``
+    (refutation RD-2 — ``_forge_imports.forge_module``). Raises ImportError like the
+    plain import it replaces."""
+    try:
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    return forge_module(name)
+
 # ── forge security_events — direct import for audit-first strict write ────
 _forge_se: Any = None
 try:
     _forge_parent = Path(__file__).resolve().parents[2] / "forge"
     if str(_forge_parent) not in sys.path:
         sys.path.insert(0, str(_forge_parent))
-    from forge import security_events as _forge_se  # type: ignore[import-not-found]
+    _forge_se = _forge_mod("security_events")  # type: ignore[import-not-found]
 except Exception:
     _forge_se = None
 
@@ -108,7 +122,7 @@ def _resolve_tenant_id() -> str:
     or the env value is invalid, so the event is written rather than dropped.
     """
     try:
-        from forge.tenants import current_tenant  # type: ignore[import-not-found]
+        current_tenant = _forge_mod("tenants").current_tenant  # type: ignore[import-not-found]
         return current_tenant()
     except Exception:  # noqa: BLE001
         return "_default"
@@ -2421,6 +2435,13 @@ class RemoteTriggerReceiver:
                             raise ValidationError(
                                 "attestation_instance_mismatch", recv_key
                             )
+                        # RS-3 (refutation 2026-11-05): ``sender_instance_id`` is
+                        # chosen by the SENDER, so "cert id == sender id" let a
+                        # paired peer replay a verified instance's IAC under that
+                        # instance's name. The cert subject must equal the instance
+                        # bound to the KEY this envelope verified with — recorded
+                        # at pairing, or pinned at the first attested contact.
+                        self._bind_attested_instance(env, origin_config, _att_iid, recv_key)
             except (ImportError, Exception) as _att_exc:
                 # ValidationError from the block above must propagate.
                 if isinstance(_att_exc, ValidationError):
@@ -2734,6 +2755,100 @@ class RemoteTriggerReceiver:
         sig = _hmac.new(recv_key, resp.canonical_payload(), hashlib.sha256).hexdigest()
         resp.signature = sig
         return resp
+
+    # RS-3: suffix of the receiver-side TOFU pin of an origin key's attested instance.
+    # Not ``.json`` - the origin registry never reads it as a config.
+    _ATTESTED_PIN_SUFFIX = ".attested_instance"
+
+    def _recorded_instance_ids(self, origin_id: str, origin_config: dict) -> list[str]:
+        """Instance ids the PAIRING bound to this origin key: the origin config's
+        ``_peer_instance_id`` / ``sender_instance_id_pin`` / ``_invite_issuer`` and the same-named endpoint
+        config's ``_peer_instance_id`` / ``instance_id`` (an invite records the peer
+        there). Values the sender cannot choose per envelope."""
+        ids = [str(origin_config.get(k) or "").strip()
+               for k in ("_peer_instance_id", "sender_instance_id_pin", "_invite_issuer")]
+        try:
+            data = json.loads((self._endpoints_dir() / f"{origin_id}.json").read_text("utf-8"))
+        except (OSError, ValueError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            ids += [str(data.get(k) or "").strip() for k in ("_peer_instance_id", "instance_id")]
+        return [i for i in ids if i]
+
+    def _instance_bound_elsewhere(self, origin_id: str, iid: str) -> bool:
+        """True when ``iid`` is bound to ANOTHER origin key of this receiver (recorded at
+        pairing or TOFU-pinned): a borrowed attestation cannot claim a known instance."""
+        d = Path(self._registry._dir)
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            return False
+        for f in entries:
+            other = f.name
+            if other.endswith(".json"):
+                other = other[:-5]
+                try:
+                    cfg = json.loads(f.read_text("utf-8"))
+                except (OSError, ValueError, TypeError):
+                    continue
+                if other != origin_id and isinstance(cfg, dict) and \
+                        iid in self._recorded_instance_ids(other, cfg):
+                    return True
+            elif other.endswith(self._ATTESTED_PIN_SUFFIX):
+                other = other[: -len(self._ATTESTED_PIN_SUFFIX)]
+                try:
+                    pinned = f.read_text("utf-8").strip()
+                except OSError:
+                    continue
+                if other != origin_id and pinned == iid:
+                    return True
+        return False
+
+    def _bind_attested_instance(self, env: TaskEnvelope, origin_config: dict,
+                                att_iid: str, recv_key: bytes) -> None:
+        """RS-3: accept an IAC only for the instance bound to the envelope's signing key.
+
+        The key's instance is what the pairing recorded; where it recorded none the first
+        attested contact pins it (TOFU, ``O_EXCL`` file next to the origin config, audited
+        ``A2A.instance_pinned``) and every later attested envelope must name the same
+        instance. A TOFU pin is refused for an instance already bound to another origin key.
+        Raises ``ValidationError`` (audited ``a2a.attestation_failed``) on a mismatch."""
+        def _refuse(reason: str) -> None:
+            self._audit_best_effort("a2a.attestation_failed", "WARNING",
+                                    {"origin_id": env.origin_id, "reason": reason})
+            raise ValidationError("attestation_instance_mismatch", recv_key)
+
+        recorded = self._recorded_instance_ids(env.origin_id, origin_config)
+        if recorded:
+            if any(r != att_iid for r in recorded):
+                _refuse("attestation_not_bound_instance")
+            return
+        pin = Path(self._registry._dir) / f"{env.origin_id}{self._ATTESTED_PIN_SUFFIX}"
+        try:
+            pinned = pin.read_text("utf-8").strip()
+        except FileNotFoundError:
+            pinned = ""
+        if pinned:
+            if pinned != att_iid:
+                _refuse("attestation_pin_mismatch")
+            return
+        if self._instance_bound_elsewhere(env.origin_id, att_iid):
+            _refuse("attestation_instance_bound_elsewhere")
+        try:
+            fd = os.open(pin, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                         0o600)
+        except FileExistsError:
+            # A concurrent first contact won the pin: judge against what it wrote.
+            if pin.read_text("utf-8").strip() != att_iid:
+                _refuse("attestation_pin_mismatch")
+            return
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(att_iid)
+        self._audit_best_effort(
+            "A2A.instance_pinned", "INFO",
+            {"origin_id": env.origin_id, "reason": "tofu_first_attested_contact",
+             "source": "receiver"},
+        )
 
     def _reconnect_binding_rejection(self, env: TaskEnvelope, new_url: str) -> str | None:
         kid = env.origin_id
@@ -3291,7 +3406,7 @@ def _clag_gate_a2a(layer_id: str) -> None:
     broken chain — callers MUST NOT swallow it.
     """
     try:
-        from forge import clag as _clag_mod  # type: ignore[import-not-found]
+        _clag_mod = _forge_mod("clag")  # type: ignore[import-not-found]
     except ImportError as _exc:
         # FND-17: tie the fail-open decision to the SAME signal as audit
         # availability. _forge_se is the module-level `from forge import

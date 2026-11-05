@@ -696,6 +696,35 @@ EVENT_SEVERITY: dict[str, str] = {
     "A2A.reconnect_failed": "WARNING",
     "A2A.subagents_force_restricted": "WARNING",
     "A2A.worker_platform_credentials_refused": "WARNING",
+    # Refutation RD-4 (a2a_worker): an env-credential host (ANTHROPIC_API_KEY /
+    # CLAUDE_CODE_OAUTH_TOKEN, no login file, no platform) refused an A2A worker whose
+    # origin may read the environment — the sibling of the platform refusal above.
+    "A2A.worker_engine_credential_refused": "WARNING",
+    # Refutation RD-1 (acs_runtime.build_worker_env): the operator's closed
+    # spec.worker_env.keep list, audited once per process+tenant when loaded/changed.
+    "worker_env.keep_loaded": "INFO",
+    # Refutation RD-8: the workflow runner's records, written by the orchestration MCP
+    # server (prefix ``workflow``) onto the tenant chain. A terminal FAILED run is
+    # raised to ERROR and a CANCELLED one to WARNING by the sink (state-derived).
+    "workflow.run.started": "INFO",
+    "workflow.run.resumed": "INFO",
+    "workflow.run.level": "INFO",
+    "workflow.run.paused": "INFO",
+    "workflow.run.terminal": "INFO",
+    "workflow.run.resume_refused": "WARNING",
+    # Refutation RS-13: a pre-existing workflow chat log found group/other
+    # accessible on append and tightened to 0o600 (once per file).
+    "workflow.chat_log_mode_repaired": "INFO",
+    "workflow.node.started": "INFO",
+    "workflow.node.completed": "INFO",
+    "workflow.node.skipped": "INFO",
+    "workflow.node.branch_skipped": "INFO",
+    "workflow.node.attempt_failed": "WARNING",
+    "workflow.node.failed": "WARNING",
+    "workflow.node.branch_failed": "WARNING",
+    # core/monitoring/metrics_recorders.WorkflowMetricsRecorder (was on the unregistered
+    # baseline).
+    "workflow.completed": "INFO",
     "A2A.attestation_disabled_bypass": "WARNING",
     "a2a.manifest_required_unavailable": "WARNING",
     # 2026-09-25 A2A adversarial review — events added by the fixes.
@@ -1015,6 +1044,13 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2091 — tenant runs floor_only (egress denies the cloud classifier
     # host): the decision was taken on the Tier-0 floor, no classifier ran.
     "house_rules.floor_only":           "INFO",
+    # Refutation RS-10 (2026-11-05): the L44 decision records themselves had no
+    # severity entry, so spawn_gates' construction-failure deny (which looks its
+    # severity up here) was written as INFO. Same mapping as HouseRulesGate._decide.
+    "house_rules.denied":               "CRITICAL",
+    "house_rules.escalated":            "WARNING",
+    "house_rules.warned":               "WARNING",
+    "house_rules.allowed":              "INFO",
     # PHASE 1: Critical Audit 100% Completeness (2026-09-24)
     # ─────────────────────────────────────────────────────────────────────────
     # Layer 10 — Context Engineering (context_snapshots.py)
@@ -1414,6 +1450,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "learning.feedback_accepted":             "INFO",
     # compensates a feedback_accepted whose ledger append failed (review c120 r2_s1-9)
     "learning.feedback_not_stored":           "WARNING",
+    # a void that did not reach every ledger file: the "accepted" still counts (refutation RL-1/RL-2)
+    "learning.feedback_void_failed":          "ERROR",
     "learning.feedback_throttled":            "WARNING",
     "learning.feedback_rejected":             "WARNING",
     "learning.feedback_reality_mismatch":     "WARNING",
@@ -1456,6 +1494,9 @@ EVENT_SEVERITY: dict[str, str] = {
     # event_persistence.cleanup_old_events skipped a partition holding foreign-tenant
     # records (review 2026-11-05 LW-6: was unregistered, so it landed at INFO)
     "learning.cross_tenant_contamination_detected": "CRITICAL",
+    # event_persistence.repair_foreign_records moved / removed other tenants' records
+    # from a tenant's partition, once (refutation 2026-11-05 RL-10)
+    "learning.cross_tenant_records_repaired": "WARNING",
     "learning.skill_executed":        "INFO",
     "learning.token.metrics":         "INFO",
     "learning.tool.executed":         "INFO",
@@ -3760,6 +3801,39 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # registry provider id; `reason` is the closed code `origin_can_read_environment`.
     "A2A.worker_platform_credentials_refused": frozenset(
         {"task_id", "origin_id", "platform", "reason", "tenant_id"}),
+    # Refutation RD-4: `auth_kind` is a closed enum (api_key | oauth_token |
+    # api_key+oauth_token — never a value); `reason` the closed code
+    # `origin_can_read_environment`.
+    "A2A.worker_engine_credential_refused": frozenset(
+        {"task_id", "origin_id", "auth_kind", "reason", "tenant_id"}),
+    # Refutation RD-1: `names` = comma-joined variable NAMES the operator keeps (never a
+    # value), `count`, `rejected` = entries that were not valid names.
+    "worker_env.keep_loaded": frozenset({"names", "count", "rejected", "tenant_id"}),
+    # Refutation RD-8: closed field sets of the workflow runner's records (run_id travels
+    # at the top level of the record, not in details). `error` is the node failure's
+    # exception text — a free-text key, PII-scanned by the floor like every `error`.
+    "workflow.run.started": frozenset(
+        {"workflow", "engine", "input_keys", "levels", "nodes", "tenant_id"}),
+    "workflow.run.resumed": frozenset(
+        {"workflow", "engine", "input_keys", "levels", "nodes", "tenant_id"}),
+    "workflow.run.level": frozenset({"level", "nodes", "tenant_id"}),
+    "workflow.run.paused": frozenset({"node_id", "channel", "chat_id", "tenant_id"}),
+    "workflow.run.terminal": frozenset(
+        {"state", "node_id", "nodes", "failed_branches", "skipped", "tenant_id"}),
+    "workflow.run.resume_refused": frozenset({"node_id", "tenant_id"}),
+    # RS-13: the workflow id and the octal mode found - no path, no chat content.
+    "workflow.chat_log_mode_repaired": frozenset({"workflow_id", "prior_mode", "tenant_id"}),
+    "workflow.node.started": frozenset({"node_id", "node_type", "tenant_id"}),
+    "workflow.node.completed": frozenset(
+        {"node_id", "node_type", "wall_ms", "attempts", "tenant_id"}),
+    "workflow.node.skipped": frozenset({"node_id", "node_type", "tenant_id"}),
+    "workflow.node.branch_skipped": frozenset({"node_id", "chosen", "skipped", "tenant_id"}),
+    "workflow.node.attempt_failed": frozenset(
+        {"node_id", "node_type", "attempt", "error", "tenant_id"}),
+    "workflow.node.failed": frozenset(
+        {"node_id", "node_type", "error", "attempts", "error_strategy", "tenant_id"}),
+    "workflow.node.branch_failed": frozenset({"node_id", "skipped", "tenant_id"}),
+    "workflow.completed": frozenset({"workflow_id", "status", "duration_ms", "tenant_id"}),
     "A2A.attestation_disabled_bypass": frozenset({"origin_id", "reason"}),
     "a2a.manifest_required_unavailable": frozenset({"origin_id", "reason"}),
     # CLI pairing events (corvin_a2a.py, round 7: their fields were dropped).
@@ -4005,6 +4079,16 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "tenant_id", "rule_id", "action", "reason", "persona", "channel",
         "chat_key", "engine_id", "confidence", "matched_pattern_count",
     }),
+    # Refutation RS-10: the L44 decision records, closed - the same set
+    # house_rules.py registers at import (its _AUDIT_ALLOWED + error_type +
+    # audit_ref + tenant_id), now static so the record keeps its fields even
+    # when the gate module was never imported in this process. NEVER task text.
+    **{_hr_evt: frozenset({
+        "rule_id", "action", "persona", "channel", "chat_key", "engine_id",
+        "reason", "confidence", "matched_pattern_count", "error_type",
+        "audit_ref", "tenant_id",
+    }) for _hr_evt in ("house_rules.denied", "house_rules.escalated",
+                       "house_rules.warned", "house_rules.allowed")},
     # ADR-0141 — Layer Integrity Protocol. Strictly metadata: a reason code,
     # which layers / counts, and network-attestation match flags. NEVER file
     # paths, file content, or modification timestamps.
@@ -5153,7 +5237,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "learning.feedback.user_provided": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     # ADR-0534 feedback trust gate — ids, counts, closed-enum reasons only.
     "learning.feedback_accepted": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "trust_weight", "executions_in_window"}),
-    "learning.feedback_not_stored": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "stage", "error_type"}),
+    "learning.feedback_not_stored": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "stage", "error_type", "voided_files"}),
+    # voided_files: 0..2 of the 3 ledger files; reason: lock_busy | ledger_append_failed
+    "learning.feedback_void_failed": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "stage", "error_type", "voided_files", "reason"}),
     "learning.feedback_throttled": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "signals_in_window", "max_allowed", "window_sec"}),
     "learning.feedback_rejected": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "executions_in_window"}),
     "learning.feedback_reality_mismatch": frozenset({"audit_ref", "tenant_id", "skill_id", "feedback_event_id", "source_key", "reason", "executions_in_window"}),
@@ -5198,6 +5284,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # file: the partition's date-named file; foreign_tenants: validated tenant ids (system ids)
     "learning.cross_tenant_contamination_detected": frozenset({
         "tenant_id", "file", "cross_tenant_count", "foreign_tenants"}),
+    # foreign_tenants: only ids that passed validate_tenant_id (system ids)
+    "learning.cross_tenant_records_repaired": frozenset({
+        "audit_ref", "tenant_id", "file", "moved_count", "removed_count", "foreign_tenants"}),
     "learning.skill_executed": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     "learning.token.metrics": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),
     "learning.tool.executed": frozenset({"audit_ref", "event_id", "event_type", "lom", "session_id", "skill_id", "skill_name", "skill_version", "tags", "tenant_id"}),

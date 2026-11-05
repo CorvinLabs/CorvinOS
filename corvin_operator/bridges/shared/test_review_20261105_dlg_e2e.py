@@ -123,7 +123,7 @@ def test_dlg1_acs_manager_and_worker_refuse_a_credential_under_the_review_policy
     assert _calls(tmp_path) == [], "a credential-bearing task reached the manager"
     assert any(r.get("event_type") == "acs.manager_l34_blocked" for r in _chain(sandbox))
 
-    monkeypatch.setenv("DX_SUBTASK", "use this: " + SECRET_TEXT)
+    monkeypatch.setenv("CORVIN_DX_SUBTASK", "use this: " + SECRET_TEXT)
     _run_acs(_spec("prepare the release"))
     workers = [c for c in _calls(tmp_path) if c["kind"] == "worker"]
     assert all(TOKEN_FRAGMENT not in c["stdin"] for c in workers)
@@ -153,9 +153,11 @@ _URL_SECRETS = {
     "PARTNER_HOOK_URL": "https://partner.example/hook?token=abcdef123456",
     "ANALYTICS_DSN": "https://k3y@analytics.example/2",
 }
+# Refutation RD-1: deny-by-default — a plain location pointer survives only inside the
+# worker base set or Corvin's own namespaces; `UPSTREAM_REPO_URL` is no longer inherited.
 _URL_SAFE = {
     "CORVIN_DOCS_URL": "https://docs.example.com/guide",
-    "UPSTREAM_REPO_URL": "https://github.com/org/repo.git",
+    "CORVIN_UPSTREAM_REPO_URL": "https://github.com/org/repo.git",
     "HOME": "/home/x",
 }
 
@@ -185,8 +187,8 @@ def test_dlg2_acs_worker_and_manager_spawn_env_has_no_url_credential(sandbox, tm
 def test_dlg2_a2a_worker_env_has_no_url_credential(sandbox, tmp_path, monkeypatch):
     for k, v in _URL_SECRETS.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.setenv("DX_SHIM_MODE", "stream")
-    monkeypatch.setenv("DX_SHIM_PROBE", ",".join(_URL_SECRETS))
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_PROBE", ",".join(_URL_SECRETS))
     res = _spawn_a2a()
     calls = _calls(tmp_path)
     assert calls, f"positive control: the engine never ran ({res.status}: {res.error})"
@@ -207,7 +209,7 @@ def test_dlg25_platform_host_refuses_an_origin_that_can_read_the_environment(
         sandbox, tmp_path, monkeypatch):
     for k, v in _AWS.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.setenv("DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
     res = _spawn_a2a(disallowed_tools=["Read", "Grep", "NotebookRead"])  # Bash still allowed
     assert res.status == "rejected" and res.reason_code == "gate", (res.status, res.error)
     assert _calls(tmp_path) == [], "the engine ran with the cloud credential chain"
@@ -224,8 +226,8 @@ def test_dlg25_platform_host_restores_the_chain_when_nothing_can_read_it(
     for k, v in _AWS.items():
         monkeypatch.setenv(k, v)
     monkeypatch.setenv("GITHUB_TOKEN", "gh-operator-secret-value")
-    monkeypatch.setenv("DX_SHIM_MODE", "stream")
-    monkeypatch.setenv("DX_SHIM_PROBE", "AWS_SECRET_ACCESS_KEY,AWS_ACCESS_KEY_ID,GITHUB_TOKEN")
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_PROBE", "AWS_SECRET_ACCESS_KEY,AWS_ACCESS_KEY_ID,GITHUB_TOKEN")
     res = _spawn_a2a(disallowed_tools=list(_ALL_ENV_READERS_DENIED))
     calls = _calls(tmp_path)
     assert calls, f"the engine never ran ({res.status}: {res.error})"
@@ -236,7 +238,7 @@ def test_dlg25_platform_host_restores_the_chain_when_nothing_can_read_it(
 
 def test_dlg25_non_platform_host_is_unchanged_for_a_capable_origin(sandbox, tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
-    monkeypatch.setenv("DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
     res = _spawn_a2a()  # every tool allowed, no platform: runs as before
     assert _calls(tmp_path), f"positive control: the engine never ran ({res.status}: {res.error})"
 
@@ -253,7 +255,7 @@ def _att(name: str, mime: str, content: bytes):
 def test_dlg17_a_credential_in_an_attachment_is_refused(sandbox, tmp_path, monkeypatch, policy):
     if policy:
         _write_policy(sandbox)
-    monkeypatch.setenv("DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
     ok = _spawn_a2a(inbound_attachments=[_att("notes.txt", "text/plain", b"release notes v2")])
     assert _calls(tmp_path), f"positive control: a benign attachment runs ({ok.status}: {ok.error})"
     (tmp_path / "shim.jsonl").unlink()
@@ -268,7 +270,7 @@ def test_dlg17_a_credential_in_an_attachment_is_refused(sandbox, tmp_path, monke
 
 def test_dlg17_a_corrupt_attachment_fails_closed_before_the_engine(sandbox, tmp_path, monkeypatch):
     _write_policy(sandbox)
-    monkeypatch.setenv("DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
     bad = _att("notes.txt", "text/plain", b"release notes")
     bad.sha256 = "0" * 64
     res = _spawn_a2a(inbound_attachments=[bad])
@@ -277,7 +279,7 @@ def test_dlg17_a_corrupt_attachment_fails_closed_before_the_engine(sandbox, tmp_
 
 
 def test_dlg17_a_binary_attachment_is_not_misread_as_text(sandbox, tmp_path, monkeypatch):
-    monkeypatch.setenv("DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
     png = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
     res = _spawn_a2a(inbound_attachments=[_att("pic.png", "image/png", png)])
     assert _calls(tmp_path), f"a binary attachment must not block the run ({res.status}: {res.error})"
@@ -443,3 +445,438 @@ def test_dlg16_worker_session_events_are_registered(event, fields):
     from forge import security_events as se
     assert event in se.EVENT_SEVERITY
     assert se._EVENT_ALLOWLIST.get(event) == frozenset(fields)
+
+
+# ══ Refutation round (RD-1..RD-10, 2026-11-05) — copies of the refutation repros ═════════
+# The repro files of that round (scratchpad refute_delegation/) are reproduced here through
+# the same real boundaries: the ACS runtime and the A2A worker spawn the recording `claude`
+# shim, the gates write the sandbox chain.
+
+# Built from parts: this file must not itself carry a credential-shaped literal.
+_PAT = "ghp_" + TOKEN_FRAGMENT
+_RD1_LEAKS = {
+    "REPO_URL": f"https://{_PAT}@github.com/org/repo.git",
+    "PG_URL": "postgresql://app@db.internal:5432/prod?pass" + "word=hunter2-prod",
+    "EXPORT_URL": ("https://bucket.s3.amazonaws.com/x?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+                   "&X-Amz-Cred" "ential=AKIAEXAMPLE%2F20261105&X-Amz-Signature=abc"
+                   "&X-Amz-Security-Token=FwoGZXIvYXdzEJr"),
+    "REDIS_HOST": "redis://:s3cr3tpass@redis.internal:6379/0",
+    "MONGO_ENDPOINT": "mongodb://admin:s3cr3tpass@mongo.internal/admin",
+    "AMQP_ADDR": "amqp://guest:s3cr3tpass@rabbit.internal/",
+    "DATABASE_URL_RO": "postgres://ro:s3cr3tpass@db.internal/prod",
+    "CELERY_BROKER": "redis://:s3cr3tpass@redis.internal/1",
+    "TEAMS_WEBHOOK_URL": "https://contoso.webhook.office.com/webhookb2/abc@def/IncomingWebhook/1/2",
+    "ALERT_HOOK_URL": "https://hooks.zapier.com/hooks/catch/123456/abcdef/",
+    "SERVICE_URL": "https://api.example.com/v1?auth=eyJhbGciOiJIUzI1NiJ9.x.y",
+    "GRAFANA_URL": "https://grafana.example.com/?apiKey=glsa_abcdef",
+}
+# The same shapes inside Corvin's own namespace — admitted by name, caught by the VALUE rule.
+_RD1_NAMESPACED = {f"CORVIN_RD_{k}": v for k, v in _RD1_LEAKS.items()}
+
+
+def test_rd1_strip_is_deny_by_default_and_the_value_rule_holds_inside_the_namespace():
+    import acs_runtime
+
+    env = {**_RD1_LEAKS, **_RD1_NAMESPACED, "HOME": "/home/x", "PATH": "/usr/bin",
+           "LC_ALL": "C.UTF-8", "CORVIN_DOCS_URL": "https://docs.example.com/guide",
+           "UNRELATED_SETTING": "plain"}
+    acs_runtime._strip_worker_secrets(env)
+    assert not set(_RD1_LEAKS) & set(env), sorted(set(_RD1_LEAKS) & set(env))
+    assert not set(_RD1_NAMESPACED) & set(env), sorted(set(_RD1_NAMESPACED) & set(env))
+    assert "UNRELATED_SETTING" not in env, "a name outside the base set was inherited"
+    for kept in ("HOME", "PATH", "LC_ALL", "CORVIN_DOCS_URL"):
+        assert kept in env, f"positive control: {kept} must survive"
+
+
+def test_rd1_no_leak_shape_reaches_an_acs_worker_or_manager(sandbox, tmp_path, monkeypatch):
+    for k, v in {**_RD1_LEAKS, **_RD1_NAMESPACED}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("CORVIN_DOCS_URL", "https://docs.example.com/guide")
+    _run_acs(_spec("summarise the release notes"))
+    calls = _calls(tmp_path)
+    assert {"manager", "worker"} <= {c["kind"] for c in calls}, "positive control: both ran"
+    for c in calls:
+        leaked = (set(_RD1_LEAKS) | set(_RD1_NAMESPACED)) & set(c["env_names"])
+        assert not leaked, f"{c['kind']} spawn env carries {sorted(leaked)}"
+        assert {"HOME", "PATH", "CORVIN_DOCS_URL"} <= set(c["env_names"]), c["env_names"]
+
+
+def test_rd1_a2a_overlay_blanks_every_leak_shape():
+    import a2a_worker
+
+    over = a2a_worker._secret_env_overrides({**_RD1_LEAKS, "HOME": "/home/x"})
+    assert all(over.get(k) == "" for k in _RD1_LEAKS), {k: over.get(k) for k in _RD1_LEAKS}
+    assert "HOME" not in over
+
+
+def _write_tenant_yaml(home: Path, text: str) -> None:
+    cfg = home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(text, encoding="utf-8")
+    cfg.chmod(0o600)
+
+
+def test_rd1_operator_keep_list_reaches_operator_workers_audited_never_a2a(
+        sandbox, tmp_path, monkeypatch):
+    import acs_runtime
+
+    acs_runtime._WORKER_ENV_KEEP_AUDITED.clear()
+    _write_tenant_yaml(sandbox, "spec:\n  worker_env:\n    keep: [MY_TOOL_HOME, 'not a name']\n")
+    monkeypatch.setenv("MY_TOOL_HOME", "/opt/tool")
+    monkeypatch.setenv("CORVIN_DX_SHIM_PROBE", "MY_TOOL_HOME")
+    _run_acs(_spec("summarise the release notes"))
+    calls = _calls(tmp_path)
+    assert calls and all(c["env_probe"]["MY_TOOL_HOME"] == "/opt/tool" for c in calls), calls
+    recs = [r for r in _chain(sandbox) if r.get("event_type") == "worker_env.keep_loaded"]
+    assert len(recs) == 1, f"audited once per process+tenant, got {len(recs)}"
+    assert recs[0]["details"].get("names") == "MY_TOOL_HOME", recs[0]
+    assert recs[0]["details"].get("rejected") == 1, recs[0]
+
+    (tmp_path / "shim.jsonl").unlink()
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    res = _spawn_a2a()
+    a2a_calls = _calls(tmp_path)
+    assert a2a_calls, f"positive control: the A2A engine ran ({res.status}: {res.error})"
+    assert a2a_calls[-1]["env_probe"]["MY_TOOL_HOME"] == "", "a remote peer got the keep list"
+
+
+# ── RD-4: an env-credential host (the documented Docker install) ──────────────────────
+
+
+_APIKEY = "sk-ant-api03-" + "rdfour" * 6
+
+
+@pytest.fixture()
+def apikey_host(tmp_path, monkeypatch):
+    """A host whose ONLY Claude credential is ANTHROPIC_API_KEY: an empty HOME (no login
+    file), no platform flag, no CLAUDE_CONFIG_DIR."""
+    home = tmp_path / "op-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", _APIKEY)
+    for name in ("CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK",
+                 "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+        monkeypatch.delenv(name, raising=False)
+    return home
+
+
+def test_rd4_acs_worker_and_manager_keep_the_engine_key_on_an_apikey_host(
+        sandbox, apikey_host, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-operator-secret-value")
+    monkeypatch.setenv("CORVIN_DX_SHIM_PROBE", "ANTHROPIC_API_KEY,GITHUB_TOKEN")
+    _run_acs(_spec("summarise the release notes"))
+    calls = _calls(tmp_path)
+    assert {"manager", "worker"} <= {c["kind"] for c in calls}, "positive control: both ran"
+    for c in calls:
+        assert c["env_probe"]["ANTHROPIC_API_KEY"] == _APIKEY, (c["kind"], "lost its credential")
+        assert c["env_probe"]["GITHUB_TOKEN"] == "", "an unrelated secret came back with the key"
+
+
+def test_rd4_subscription_host_still_strips_the_env_key(sandbox, apikey_host, tmp_path, monkeypatch):
+    creds = apikey_host / ".claude" / ".credentials.json"
+    creds.parent.mkdir()
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CORVIN_DX_SHIM_PROBE", "ANTHROPIC_API_KEY")
+    _run_acs(_spec("summarise the release notes"))
+    calls = _calls(tmp_path)
+    assert calls and all(c["env_probe"]["ANTHROPIC_API_KEY"] == "" for c in calls)
+
+
+def test_rd4_gateway_task_and_workflow_envs_keep_the_engine_key(sandbox, apikey_host):
+    from core.console.corvin_console import task_worker_pool as twp
+    from core.gateway.corvin_gateway import dispatcher
+    from core.workflows.corvin_workflows import engines_claude
+
+    base = {"PATH": "/usr/bin:/bin", "HOME": str(apikey_host), "ANTHROPIC_API_KEY": _APIKEY,
+            "OPENAI_API_KEY": "sk-openai-operator"}
+    overlay = dispatcher._worker_spawn_env("_default", persona="assistant", run_id="r1", base=base)
+    assert "ANTHROPIC_API_KEY" not in overlay or overlay["ANTHROPIC_API_KEY"] == _APIKEY, overlay
+    assert overlay.get("OPENAI_API_KEY") == "", overlay
+    assert twp._worker_spawn_env("_default").get("ANTHROPIC_API_KEY") == _APIKEY
+    assert engines_claude._worker_spawn_env("_default").get("ANTHROPIC_API_KEY") == _APIKEY
+
+
+def test_rd4_a2a_refuses_a_capable_origin_and_audits(sandbox, apikey_host, tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    res = _spawn_a2a()   # every tool allowed
+    assert res.status == "rejected" and res.reason_code == "gate", (res.status, res.error)
+    assert _calls(tmp_path) == [], "the engine ran with the host key for a capable origin"
+    recs = [r for r in _chain(sandbox)
+            if r.get("event_type") == "A2A.worker_engine_credential_refused"]
+    assert recs, "the refusal left no audit record"
+    det = recs[-1]["details"]
+    assert det.get("auth_kind") == "api_key" and det.get("origin_id") == "peer-dlg", det
+    assert det.get("reason") == "origin_can_read_environment", det
+
+
+def test_rd4_rd10_a2a_restores_the_key_with_the_tool_allow_list(
+        sandbox, apikey_host, tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_PROBE", "ANTHROPIC_API_KEY")
+    res = _spawn_a2a(disallowed_tools=list(_ALL_ENV_READERS_DENIED) + ["WebSearch"])
+    calls = _calls(tmp_path)
+    assert calls, f"the engine never ran ({res.status}: {res.error})"
+    assert calls[-1]["env_probe"]["ANTHROPIC_API_KEY"] == _APIKEY
+    tools = [a for a in calls[-1]["argv"] if a.startswith("--tools=")]
+    assert tools == ["--tools=WebFetch,TodoWrite"], calls[-1]["argv"]
+
+
+# ── RD-10: the restore decision is an ALLOW list ──────────────────────────────────────
+
+
+def test_rd10_an_origin_granted_a_tool_outside_the_allow_list_is_refused(
+        sandbox, tmp_path, monkeypatch):
+    for k, v in _AWS.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    res = _spawn_a2a(allowed_tools=["WebFetch", "Skill"],
+                     disallowed_tools=list(_ALL_ENV_READERS_DENIED))
+    assert res.status == "rejected" and res.reason_code == "gate", (res.status, res.error)
+    assert _calls(tmp_path) == []
+
+
+def test_rd10_platform_restore_runs_with_the_allow_list_as_the_whole_tool_set(
+        sandbox, tmp_path, monkeypatch):
+    for k, v in _AWS.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    res = _spawn_a2a(disallowed_tools=list(_ALL_ENV_READERS_DENIED))
+    calls = _calls(tmp_path)
+    assert calls, f"the engine never ran ({res.status}: {res.error})"
+    assert "--tools=WebFetch,WebSearch,TodoWrite" in calls[-1]["argv"], calls[-1]["argv"]
+
+
+# ── RD-2 / RD-9: a namespace-bound `forge` must not let a gate approve unaudited ──────
+
+
+_RD2_SCRIPT = r'''
+import json, os, sys
+REPO = sys.argv[1]
+sys.path.insert(0, REPO + "/corvin_operator")
+import forge                                     # the namespace package, cached
+assert getattr(forge, "__file__", None) is None, "precondition: forge is the namespace"
+sys.path.insert(0, REPO + "/corvin_operator/forge")
+sys.path.insert(0, REPO + "/corvin_operator/bridges/shared")
+sys.path.insert(0, REPO)
+import house_rules
+house_rules._house_rules_classifier = lambda task, rules, auth, **kw: ("", 0.0, "test clear")
+import a2a_worker, spawn_gates
+out = {"tenant": a2a_worker._receiver_tenant("_default")}
+out["l34"] = spawn_gates.check_l34("claude_code", "_default", prompt="summarise the notes",
+                                   persona="assistant")
+out["l44"] = spawn_gates.check_l44("summarise the notes", "_default", persona="assistant")
+out["forge_file"] = getattr(sys.modules["forge"], "__file__", None)
+chain = os.path.join(os.environ["CORVIN_HOME"], "tenants", "_default", "global", "forge",
+                     "audit.jsonl")
+out["events"] = [json.loads(l).get("event_type") for l in open(chain)] if os.path.exists(chain) else []
+print(json.dumps(out))
+'''
+
+
+def test_rd2_rd9_gates_audit_in_a_process_whose_forge_is_the_namespace_package(tmp_path):
+    import json
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[3]
+    home = tmp_path / "home"
+    _write_tenant_yaml(home, POLICY)
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("FORGE_ROOT", "PYTHONPATH", "VOICE_AUDIT_PATH")}
+    env.update(CORVIN_HOME=str(home), XDG_CONFIG_HOME=str(tmp_path / "xdg"),
+               CORVIN_AUDIT_ANCHOR_KEY=str(tmp_path / "anchor.key"), CORVIN_TENANT_ID="_default")
+    p = subprocess.run([sys.executable, "-c", _RD2_SCRIPT, str(repo)], env=env,
+                       capture_output=True, text=True, cwd=str(tmp_path), timeout=180)
+    assert p.returncode == 0, p.stderr[-3000:]
+    out = json.loads(p.stdout.strip().splitlines()[-1])
+    assert out["tenant"] == "_default"
+    assert out["l34"] is None and out["l44"] is None, out
+    assert out["forge_file"] and out["forge_file"].endswith("forge/forge/__init__.py"), out
+    assert any(e and e.startswith("data_flow.") for e in out["events"]), out
+    assert any(e and e.startswith("house_rules.") for e in out["events"]), out
+
+
+def test_rd2_a_gate_whose_audit_writer_cannot_load_refuses(sandbox, monkeypatch):
+    import spawn_gates
+
+    real = spawn_gates._forge_module
+
+    def _boom(name):
+        if name == "security_events":
+            raise ModuleNotFoundError(f"No module named 'forge.{name}'")
+        return real(name)
+
+    monkeypatch.setattr(spawn_gates, "_forge_module", _boom)
+    for refusal in (spawn_gates.check_l34("claude_code", "_default", prompt="hello"),
+                    spawn_gates.check_l35("claude_code", "_default"),
+                    spawn_gates.check_l44("hello", "_default")):
+        assert refusal is not None and "audit writer" in refusal, refusal
+
+
+# ── RD-3: attachments the worker can read are judged in every encoding ───────────────
+
+
+def _gzip(data: bytes) -> bytes:
+    import gzip
+    return gzip.compress(data)
+
+
+def _zip(data: bytes) -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("deploy.env", data)
+    return buf.getvalue()
+
+
+def _bz2(data: bytes) -> bytes:
+    import bz2
+    return bz2.compress(data)
+
+
+@pytest.mark.parametrize("name,mime,blob", [
+    ("deploy.env", "text/plain; charset=utf-16", lambda s: s.encode("utf-16")),
+    ("deploy.env", "application/octet-stream", lambda s: s.encode("utf-16-le")),
+    ("deploy.env", "application/octet-stream", lambda s: s.encode("utf-32")),
+    ("deploy.env.gz", "application/gzip", lambda s: _gzip(s.encode())),
+    ("deploy.zip", "application/zip", lambda s: _zip(s.encode())),
+    ("deploy.env.bz2", "application/x-bzip2", lambda s: _bz2(s.encode())),
+])
+def test_rd3_an_encoded_or_compressed_credential_attachment_is_refused(
+        sandbox, tmp_path, monkeypatch, name, mime, blob):
+    _write_policy(sandbox)
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    res = _spawn_a2a(inbound_attachments=[_att(name, mime, blob(SECRET_TEXT))])
+    assert res.status == "rejected" and res.reason_code == "data_flow", (res.status, res.error)
+    assert _calls(tmp_path) == [], "an attachment carrying a credential reached the engine"
+
+
+def test_rd3_a_benign_compressed_attachment_runs(sandbox, tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    res = _spawn_a2a(inbound_attachments=[
+        _att("notes.txt.gz", "application/gzip", _gzip(b"release notes v2")),
+        _att("notes16.txt", "text/plain; charset=utf-16", "release notes".encode("utf-16"))])
+    assert _calls(tmp_path), f"benign attachments must run ({res.status}: {res.error})"
+
+
+def test_rd3_a_compressed_attachment_past_the_size_cap_is_refused(sandbox, tmp_path, monkeypatch):
+    from a2a_attachments import MAX_ATTACHMENTS_TOTAL_BYTES
+
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    bomb = _gzip(b"a" * (MAX_ATTACHMENTS_TOTAL_BYTES + 10))
+    res = _spawn_a2a(inbound_attachments=[_att("big.gz", "application/gzip", bomb)])
+    assert res.status == "rejected" and res.reason_code == "data_flow", (res.status, res.error)
+    assert _calls(tmp_path) == []
+
+
+# ── RD-5: no tenant, or a padded one, refuses at every gate entry ─────────────────────
+
+
+@pytest.mark.parametrize("tenant", [None, "", "_default ", " _default", "_DEFAULT"])
+def test_rd5_every_gate_entry_refuses_a_missing_or_malformed_tenant(sandbox, tenant):
+    import spawn_gates
+
+    _write_policy(sandbox)
+    assert spawn_gates.check_l34("claude_code", "_default", prompt="hello") is None  # control
+    for refusal in (
+        spawn_gates.check_l34("claude_code", tenant, prompt="hello"),   # type: ignore[arg-type]
+        spawn_gates.check_l35("claude_code", tenant),                   # type: ignore[arg-type]
+        spawn_gates.check_l44("hello", tenant),                         # type: ignore[arg-type]
+        spawn_gates.check_l44_floor("hello", tenant),                   # type: ignore[arg-type]
+        spawn_gates.resolve_l34_route("claude_code", tenant, prompt="hello").refusal,  # type: ignore[arg-type]
+    ):
+        assert refusal is not None and "no tenant" in refusal, (tenant, refusal)
+
+
+def test_rd5_the_bridge_gate_tenant_is_validated(monkeypatch, sandbox):
+    adapter = _bridge_adapter(monkeypatch)
+    assert adapter._bridge_gate_tenant(None) == "_default"
+    assert adapter._bridge_gate_tenant("_default ") is None
+    monkeypatch.setenv("CORVIN_TENANT_ID", "Bad Tenant")
+    assert adapter._bridge_gate_tenant(None) is None
+
+    class _Eng:
+        name = "claude_code"
+
+    msg = adapter._check_compliance_or_fail(_Eng(), prompt="hi", persona=None, channel="x",
+                                            chat_key="c", tenant_id=None)
+    assert msg is not None and "tenant" in msg, msg
+
+
+# ── RD-6: an ACS run ended by an INNER gate is not judged as an engine failure ───────
+
+
+def test_rd6_acs_result_names_the_inner_gate_refusal(sandbox, tmp_path):
+    res = _run_acs(_spec(SECRET_TEXT))
+    assert res.status == "failed" and res.gate_refusal == "manager_l34_blocked", res
+
+
+def test_rd6_bridge_records_an_inner_gate_refusal_as_not_judged(sandbox, monkeypatch):
+    import acs_runtime as rt
+    import corvin_console.feature_flags as ff
+
+    adapter = _bridge_adapter(monkeypatch)
+
+    class _InnerGate:
+        def __init__(self, **kw):
+            pass
+
+        async def run(self, spec, run_id=None, **kw):
+            return rt.ACSResult(run_id=run_id or "x", workflow_id="w", status="failed",
+                                error="L34 data classification gate blocked the manager prompt",
+                                gate_refusal="manager_l34_blocked")
+
+    quota = types.ModuleType("license.compute_quota")
+    quota.increment_and_check = lambda *a, **k: None
+    meta = {"turn_id": adapter._new_route_turn_id()}
+    saved = sys.modules.get("license.compute_quota")
+    sys.modules["license.compute_quota"] = quota
+    try:
+        with patch.object(ff, "is_enabled",
+                          side_effect=lambda fid, tid="_default": fid == "bridge_worker_engine_parity"), \
+             patch.object(ff, "worker_engine_mode", return_value="native"), \
+             patch.object(adapter, "_check_compliance_or_fail", return_value=None), \
+             patch.object(adapter, "_check_egress_or_fail", return_value=None), \
+             patch.object(rt, "ACSRuntime", _InnerGate):
+            answer, _ = adapter._maybe_delegate_worker(
+                "/delegate compare two things", channel="sandbox-dlg", chat_key="c6",
+                persona="", tenant_id="_default", meta=meta)
+    finally:
+        if saved is None:
+            sys.modules.pop("license.compute_quota", None)
+        else:
+            sys.modules["license.compute_quota"] = saved
+    assert answer is None and meta.get("routed_engine") == "acs", meta
+    adapter._TURN_OUTCOME.failed = None
+    adapter._TURN_OUTCOME.refused = None
+    adapter._LAST_OS_TURN_STATUS["c6"] = "ok"
+    adapter._report_route_outcome("_default", meta, "the native answer", "c6", time.monotonic())
+    outs = [r for r in _ledger() if r.get("turn_id") == meta["turn_id"]
+            and r.get("kind") == "outcome"]
+    assert outs, _ledger()
+    assert outs[-1].get("excluded") == "no_engine" and outs[-1].get("ok") is not True, outs[-1]
+
+
+# ── RD-8: the workflow records the orchestration MCP server writes are registered ─────
+
+
+def test_rd8_workflow_records_are_registered_carry_run_id_and_state_severity(sandbox):
+    from core.orchestration.corvin_orchestration import mcp_server as ms
+    from forge import security_events as se
+
+    assert ms._FORGE_AVAILABLE
+    sink = ms._audit_sink_for("_default", "workflow", run_id="run-rd8")
+    for ev, det in [("run.level", {"level": 0, "nodes": ["a"]}),
+                    ("node.started", {"node_id": "a", "node_type": "agent"}),
+                    ("run.terminal", {"state": "failed", "node_id": "a"}),
+                    ("run.terminal", {"state": "complete", "nodes": 1, "failed_branches": 0,
+                                      "skipped": 0})]:
+        sink({"event": ev, **det})
+    rows = [r for r in _chain(sandbox) if str(r.get("event_type", "")).startswith("workflow.")]
+    assert len(rows) == 4, rows
+    for r in rows:
+        assert r["event_type"] in se.EVENT_SEVERITY and r["event_type"] in se._EVENT_ALLOWLIST
+        assert r.get("run_id") == "run-rd8", r
+        assert not r.get("details", {}).get("_dropped_fields"), r
+    terminal = [r for r in rows if r["event_type"] == "workflow.run.terminal"]
+    assert [t["severity"] for t in terminal] == ["ERROR", "INFO"], terminal

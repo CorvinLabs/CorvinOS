@@ -331,7 +331,12 @@ A Free install takes no part in the A2A network: the sender refuses every send a
 (`rejected`, "A2A network requires a member seat"), and the receiver answers `/v1/a2a/receive`,
 `/v1/a2a/ping` and `/v1/a2a/friendship-ack` with 403 `license_required` (since 2026-10-21 — before,
 ping and friendship-ack still answered, so a free install was distinguishable from one that is not
-listening). The verdict is `license.capability_decision` on the chain; an ALLOW is remembered for
+listening). Since 2026-11-05 (review SRF-7) the stdlib listener's GET routes are gated the same way:
+`/healthz`, `/metrics` and `/v1/a2a/audit-head` answer 403 `license_required` on a Free install;
+otherwise `/healthz` is content-free (`{"ok": true}`, no instance id), `/metrics` answers loopback
+callers only (404 to a network peer) and `/v1/a2a/audit-head` answers only a request signed by a
+paired origin (`layer-integrity-protocol.md` § Tier 4). Proof:
+`corvin_operator/bridges/shared/test_a2a_get_routes_gated.py` (real loopback HTTP). The verdict is `license.capability_decision` on the chain; an ALLOW is remembered for
 10 minutes per tenant (`a2a_license_gate.ALLOW_CACHE_TTL_S`, `reset_allow_cache()` on licence
 reload) because the connectivity manager pings every ~30 s and one idle member install wrote 4 347
 identical records in three days; a DENY is never cached. The protocol E2E hosts
@@ -2407,3 +2412,45 @@ no longer replaces the default result schema: `RemoteTriggerSender.send(attachme
 into whatever schema the caller has, and the CLI's `data` for a plain run is unchanged with and without the flag.
 Tests: `test_a2a_objects_review.py::TestMediaContainersStillReadTheirText`, the media cases of
 `test_a2a_large_object_reference_e2e.py` (direct and relay), `TestCliPullsReferences`.
+
+### Inbound worker environment and attachments (refutation RD, 2026-11-05)
+
+- **Environment.** `a2a_worker._secret_env_overrides` is the deny-by-default worker rule
+  (`acs_runtime.build_worker_env`) without the operator's `spec.worker_env.keep` list and
+  without a provider redirect: everything outside the base set and Corvin's own
+  non-secret names is passed as `""`; the known credential names are blanked explicitly.
+- **Credentials for a remote peer's worker** (DLG-25, RD-4, RD-10). On a platform host
+  (Bedrock/Vertex/Foundry) or an env-credential host (`ANTHROPIC_API_KEY` /
+  `CLAUDE_CODE_OAUTH_TOKEN`, no Claude login file) the credential is handed over only when
+  the origin can read neither files nor a shell; otherwise the task is refused
+  (`reason_code: gate`) and audited (`A2A.worker_platform_credentials_refused` /
+  `A2A.worker_engine_credential_refused`, `auth_kind` = `api_key`/`oauth_token`). A worker
+  that does receive one runs with `--tools=<WebFetch, WebSearch, TodoWrite minus the
+  origin's denials>` — an allow list, so a tool that is not on it does not exist for that
+  worker. An origin whose `allowed_tools` names anything else is refused.
+- **Attachments** (DLG-17, RD-3). Judged by L34 with the instruction after decoding by BOM,
+  declared `charset=`, UTF-8 and a BOM-less UTF-16/32 sniff (NULs removed). gzip / zlib /
+  zip are unpacked within the 1 MiB attachment cap and every member judged; any other
+  archive, a corrupt one or one past the cap is refused (`reason_code: data_flow`).
+- **Audit writer** (RD-2). A process whose `forge` is bound to the namespace package
+  `corvin_operator/forge/` is healed by `_forge_imports.forge_module`; when
+  `forge.security_events` still cannot be loaded the task is refused
+  (`audit-writer-unavailable`) — a gate decision without its record never runs.
+
+## Attestation is bound to the signing key, not to a sender-chosen id (refutation 2026-11-05, RS-3)
+
+With `min_trust` above `none`, an attested envelope is accepted only when the CA-signed
+`cert.instance_id` equals (a) the envelope's `sender_instance_id` AND (b) the instance bound to
+the origin key the envelope verified with: the pairing's `_peer_instance_id` /
+`sender_instance_id_pin` / `_invite_issuer`, or the same-named endpoint config's
+`_peer_instance_id` / `instance_id`. `sender_instance_id` is chosen by the sender, so (a) alone
+let a paired peer replay a verified instance's IAC (every outbound envelope carries one) under
+that instance's name. Where the pairing records no instance, the FIRST attested contact pins it
+(`<origins>/<origin_id>.attested_instance`, `O_EXCL`, 0o600, audited `A2A.instance_pinned`
+reason `tofu_first_attested_contact`); a later mismatch is refused (`a2a.attestation_failed`
+reason `attestation_pin_mismatch`), and a TOFU pin is refused for an instance already bound to
+another origin key (`attestation_instance_bound_elsewhere`). Residual (TOFU): on an unbound
+pairing whose very first attested envelope is the replay, the attacker's claim is pinned -
+record the peer's instance at pairing (`--offline-pair`, friendship ack, invite issuer) to
+close it. Code: `remote_trigger_receiver._bind_attested_instance`; tests:
+`tests/security/test_review_20261105_sec_e2e.py::test_rs3_*`.

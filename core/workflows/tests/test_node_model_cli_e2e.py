@@ -20,7 +20,7 @@ REPORTED = "reported-model-1"
 FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, sys
 argv = sys.argv[1:]
-with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
+with open(os.environ["CORVIN_FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps({"argv": argv}) + "\\n")
 reply = ({"violated_rule_id": "", "confidence": 0.0, "reason": "ok"} if "--max-turns" in argv
          else {"ok": True})
@@ -65,7 +65,7 @@ def test_cli_run_passes_the_node_model_and_writes_the_resolution_event(tmp_path)
     env = dict(os.environ)  # keeps the sandboxed CORVIN_HOME / XDG / anchor key of the test session
     env.update({
         "PATH": f"{bindir}{os.pathsep}{env.get('PATH', '')}",
-        "FAKE_CLAUDE_LOG": str(log),
+        "CORVIN_FAKE_CLAUDE_LOG": str(log),
         "CORVIN_TENANT_ID": "_default",
         # what the launcher gives the service: the package, and the forge package the audit writer needs
         "PYTHONPATH": os.pathsep.join([str(REPO / "core" / "workflows"), str(REPO / "corvin_operator" / "forge")]),

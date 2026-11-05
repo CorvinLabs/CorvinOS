@@ -144,6 +144,18 @@ sudo docker logs -f corvin
 
 Access: `http://localhost:8765/console/` (wait 30–60 sec for boot)
 
+### The API key and the workers
+
+With `ANTHROPIC_API_KEY` in `.env` and no Claude login file in the container, the key
+IS the engine's credential, so every worker the platform starts (ACS, `/task`, workflow
+agent nodes, gateway runs) receives it — and nothing else from `.env` that is not on the
+worker allow list (`OPENAI_API_KEY`, bot tokens, DB URLs stay out). An inbound A2A task
+receives it only when the peer's origin may read neither files nor a shell; otherwise
+that task is refused and audited. To hand a worker one more variable (e.g. an
+authenticated `HTTPS_PROXY`), list its NAME under `spec.worker_env.keep` in
+`tenant.corvin.yaml`. Details: `docs/claude-ref/layer-engines.md` § "Worker
+environment — deny-by-default".
+
 ---
 
 ## Access Methods

@@ -54,9 +54,9 @@ _SECRETS = {
 #: binary). Records argv and the env names this test asserts on.
 _RECORDER = r"""#!/usr/bin/env python3
 import json, os, sys, uuid
-out = os.environ["FAKE_CLAUDE_OUT"]
+out = os.environ["CORVIN_FAKE_CLAUDE_OUT"]
 argv = sys.argv[1:]
-watch = json.loads(os.environ.get("FAKE_CLAUDE_WATCH", "[]"))
+watch = json.loads(os.environ.get("CORVIN_FAKE_CLAUDE_WATCH", "[]"))
 env = {k: os.environ.get(k) for k in watch}
 with open(os.path.join(out, "spawn-%s.json" % uuid.uuid4().hex), "w") as fh:
     json.dump({"argv": argv, "env": env}, fh)
@@ -85,13 +85,13 @@ def gateway(tmp_path, monkeypatch):
     binary = tmp_path / "claude-recorder"
     binary.write_text(_RECORDER, encoding="utf-8")
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("FAKE_CLAUDE_OUT", str(out))
+    monkeypatch.setenv("CORVIN_FAKE_CLAUDE_OUT", str(out))
     monkeypatch.setenv("CORVIN_CLAUDE_BIN", str(binary))
     monkeypatch.delenv("ADAPTER_FAKE_CLAUDE", raising=False)
     for name, value in _SECRETS.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv(
-        "FAKE_CLAUDE_WATCH",
+        "CORVIN_FAKE_CLAUDE_WATCH",
         json.dumps([*_SECRETS, "CORVIN_TENANT_ID", "CORVIN_CHANNEL_ID"]),
     )
 

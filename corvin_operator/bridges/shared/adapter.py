@@ -54,6 +54,20 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
+def _forge_mod(name: str):
+    """``forge.<name>`` from the REAL forge package, healing a namespace-bound ``forge``
+    (refutation RD-2 — ``_forge_imports.forge_module``). Raises ImportError like the
+    plain import it replaces."""
+    try:
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    return forge_module(name)
+
+
 def _use_os_trust_store() -> None:
     """Anchor TLS verification to the OS trust store for the in-process TTS/STT
     providers (edge-tts via aiohttp, the OpenAI client).
@@ -400,9 +414,7 @@ if not _IS_TEST_SANDBOX:
         if str(_forge_root) not in sys.path:
             sys.path.insert(0, str(_forge_root))
         from corvin_operator.forge.forge.paths import corvin_home as _corvin_home_resolver  # type: ignore
-        from forge.tenant_migrate import (  # type: ignore
-            migrate_to_default_tenant_if_needed as _migrate_tenant,
-        )
+        _migrate_tenant = _forge_mod("tenant_migrate").migrate_to_default_tenant_if_needed
         _tenant_result = _migrate_tenant(
             corvin_home_path=_corvin_home_resolver(),
         )
@@ -538,7 +550,7 @@ def _audit_event(event_type, *args, user="", chat_key="", details=None, **kwargs
 # ``_dropped_fields``) — an unregistered event therefore lands in the chain
 # with its reason/count stripped. Metadata only, never user content.
 try:
-    from forge.security_events import register_event_allowlist as _reg_allow  # type: ignore
+    _reg_allow = _forge_mod("security_events").register_event_allowlist  # type: ignore
     _reg_allow("bridge.inbox_poison_quarantined", {"file", "bytes", "reason"})
     _reg_allow("bridge.processed_swept", {"removed", "bytes", "retention_days"})
     _reg_allow("bridge.persona_routed", {"confidence", "why_len", "why_sha256"})
@@ -2179,6 +2191,25 @@ def _tenant_yaml_path(tenant_id: str):
     return tenant_dir / "global" / "tenant.corvin.yaml"
 
 
+def _bridge_gate_tenant(tenant_id: "str | None") -> "str | None":
+    """The tenant a bridge gate judges against (refutation RD-5), ``None`` when invalid.
+
+    An explicit id is validated; ``None`` is this bridge PROCESS's tenant through the
+    canonical resolver ``forge.tenants.current_tenant()`` (``CORVIN_TENANT_ID`` validated,
+    else ``_default``) — a bridge serves exactly one tenant, so that is the turn's own. A
+    malformed id (``"_default "``) is never passed on to be judged with no policy.
+    """
+    try:
+        try:
+            from _forge_imports import forge_module  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from ._forge_imports import forge_module  # type: ignore  # noqa: PLC0415
+        return forge_module("tenants").current_tenant(tenant_id)
+    except Exception as e:  # noqa: BLE001 — InvalidTenantID or no resolver: the gates refuse
+        log(f"gate tenant unresolved ({type(e).__name__}) — the gates refuse (fail-closed)")
+        return None
+
+
 def _check_compliance_or_fail(
     engine: object,
     *,
@@ -2210,7 +2241,10 @@ def _check_compliance_or_fail(
         return ("[compliance] Spawn rejected: the engine has no registered name, "
                 "so its data-classification locality cannot be verified "
                 "(fail-closed).")
-    tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    tid = _bridge_gate_tenant(tenant_id)
+    if tid is None:
+        return ("[compliance] Spawn rejected: the bridge's tenant id is invalid, so its "
+                "data-classification policy cannot be resolved (fail-closed).")
     try:
         from spawn_gates import check_l34 as _sg_l34  # type: ignore
     except Exception as e:  # noqa: BLE001
@@ -2267,7 +2301,10 @@ def _check_egress_or_fail(
     if not isinstance(engine_name, str) or not engine_name:
         log("egress gate: engine.name missing, fail-open")
         return None
-    tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    tid = _bridge_gate_tenant(tenant_id)
+    if tid is None:
+        return ("[egress] Spawn rejected: the bridge's tenant id is invalid, so its egress "
+                "policy cannot be resolved (fail-closed).")
     try:
         from spawn_gates import check_l35 as _sg_l35  # type: ignore
     except Exception as e:  # noqa: BLE001
@@ -2300,7 +2337,7 @@ def _resolve_os_turn_route(
     functions, so the route logic can never loosen a gate.
     """
     engine_name = getattr(engine, "name", None)
-    tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    tid = _bridge_gate_tenant(tenant_id) or ""   # "" → resolve_l34_route refuses (RD-5)
     try:
         from spawn_gates import L34Route, resolve_l34_route  # type: ignore
     except Exception:  # noqa: BLE001
@@ -2670,7 +2707,7 @@ def _check_house_rules_or_fail(
         # the 3-arg writer. Fail-soft on any lookup/import problem (observability only).
         def _hr_classifier_audit(event_type: str, details: dict) -> None:
             try:
-                from forge.security_events import EVENT_SEVERITY as _ev_sev  # type: ignore
+                _ev_sev = _forge_mod("security_events").EVENT_SEVERITY  # type: ignore
                 severity = _ev_sev.get(event_type, "INFO")
             except Exception:  # noqa: BLE001 — severity lookup is best-effort
                 severity = "INFO"
@@ -2784,7 +2821,7 @@ def _check_clag_spawn_or_fail(*, channel: str, chat_key: str) -> str | None:
     still detects tampered chains.
     """
     try:
-        from forge import clag as _clag_mod  # type: ignore
+        _clag_mod = _forge_mod("clag")  # type: ignore
     except ImportError as _imp_exc:
         # Distinguish "forge genuinely absent" (minimal deployment, fail-open)
         # from "forge is installed but clag is broken" (fail-closed — a broken
@@ -3588,7 +3625,7 @@ def _resolve_spawn_inputs(
             # Emit audit events — use direct write_event (no _forge_se in scope).
             try:
                 try:
-                    from forge.security_events import write_event as _acs_we  # type: ignore[import]
+                    _acs_we = _forge_mod("security_events").write_event  # type: ignore[import]
                 except ImportError:
                     from security_events import write_event as _acs_we  # type: ignore[import]
                 _acs_home = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
@@ -3630,7 +3667,7 @@ def _resolve_spawn_inputs(
             log(f"acs_x classify failed: {_acs_err}")
             try:
                 try:
-                    from forge.security_events import write_event as _acs_we_e  # type: ignore[import]
+                    _acs_we_e = _forge_mod("security_events").write_event  # type: ignore[import]
                 except ImportError:
                     from security_events import write_event as _acs_we_e  # type: ignore[import]
                 _acs_home_e = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
@@ -3676,7 +3713,7 @@ def _resolve_spawn_inputs(
             # occurred in the audit log, violating EU AI Act Art. 13 transparency.
             try:
                 try:
-                    from forge.security_events import write_event as _ato_we  # type: ignore[import]
+                    _ato_we = _forge_mod("security_events").write_event  # type: ignore[import]
                 except ImportError:
                     from security_events import write_event as _ato_we  # type: ignore[import]
                 _ato_home = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
@@ -9422,8 +9459,13 @@ def _run_acs_delegation(
                 answer = inner.strip()
                 break
     if not answer:
-        _mark_delegation_failure(failure, "failed")
-        log(f"{log_prefix}: run produced no text — direct turn")
+        # RD-6: a run that ended because an INNER pre-spawn gate refused (manager/worker
+        # L34/L35, gates unavailable) was decided by a gate, not by the engine — recorded
+        # as not judged, exactly like the outer gate-refusal branch above.
+        _gate_refusal = str(getattr(res, "gate_refusal", "") or "")
+        _mark_delegation_failure(failure, "no_engine" if _gate_refusal else "failed")
+        log(f"{log_prefix}: run produced no text"
+            f"{' (inner gate: ' + _gate_refusal + ')' if _gate_refusal else ''} — direct turn")
         return None
     # The user sees WHY the fan-out ran and how it ended, not only the answer text.
     # A summary that cannot be built must never cost the delegated answer.
@@ -9889,7 +9931,9 @@ def _maybe_delegate_worker(
     """Bridge worker-engine parity (ADR-0255).
 
     ``tenant_id`` is REQUIRED: the turn's own tenant, decided once by
-    ``process_one`` (review DLG-23 — no environment fallback in here).
+    ``process_one`` through ``_bridge_gate_tenant`` — the canonical validated resolver of
+    this single-tenant bridge process (review DLG-23 / RD-5). Nothing in here reads the
+    environment; a missing or invalid tenant is refused by the gates.
 
     Gives a bridge turn the SAME reach the console already has: the
     operator's Settings → AI Engines ``worker_engine`` mode (native/acs/tde),
@@ -12214,7 +12258,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         # `artifact.session_purged` audit event lands while we can still
         # read the manifest (audit-first contract).
         try:
-            from forge import artifacts as _art_mod  # type: ignore
+            _art_mod = _forge_mod("artifacts")  # type: ignore
             session_key = f"{channel}:{chat_key}"
             # ADR-0007 — thread the session's tenant so the purge targets the
             # SAME tenant the writer used. Without this a non-default tenant's
@@ -12230,8 +12274,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             log(f"reset session: artifact-purge failed ({type(e).__name__}: {e})")
         # Purge Forge session tools (Layer 8 contract — before workdir rmtree).
         try:
-            from forge.scope import scope_root as _fscope  # type: ignore
-            from forge.registry import Registry as _FReg  # type: ignore
+            _fscope = _forge_mod("scope").scope_root  # type: ignore
+            _FReg = _forge_mod("registry").Registry  # type: ignore
             _fchan_id = f"{channel}:{chat_key}"
             # ADR-0007 / ADR-0433: scope_root is tenant-native and tenant_id
             # is keyword-only + mandatory. The call omitted it after the
@@ -13219,7 +13263,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         # everything else — including any failure — so the normal gated
         # dispatcher below stays the default path. May also return a
         # `/delegate`-stripped prompt even on the degrade path.
-        _route_tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        # RD-5: the bridge's tenant is its PROCESS tenant — decided once here through the
+        # canonical validated resolver (an invalid CORVIN_TENANT_ID is refused by every gate,
+        # never silently judged as another tenant), then passed to every gate below.
+        _route_tid = _bridge_gate_tenant(None) or ""
         _deleg_meta: dict = {"turn_id": _new_route_turn_id()}
         _route_t0 = time.monotonic()
         _LAST_OS_TURN_STATUS.pop(chat_key, None)
@@ -14504,7 +14551,7 @@ def main() -> int:
     # INFO/WARNING in the self-test result above).
     try:
         try:
-            from forge.clag import verify_chain_anchor as _boot_vca  # type: ignore[import]
+            _boot_vca = _forge_mod("clag").verify_chain_anchor  # type: ignore[import]
         except ImportError:
             from clag import verify_chain_anchor as _boot_vca  # type: ignore[import]
         _boot_ap_env = os.environ.get("VOICE_AUDIT_PATH")
@@ -14542,7 +14589,7 @@ def main() -> int:
             _sl_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
             _sl_ap = _sl_ch / "tenants" / _sl_tid / "global" / "forge" / "audit.jsonl"
             try:
-                from forge.security_events import write_event as _sl_we  # type: ignore[import]
+                _sl_we = _forge_mod("security_events").write_event  # type: ignore[import]
             except ImportError:
                 from security_events import write_event as _sl_we  # type: ignore[import]
             _sl_we(_sl_ap, "license.gate_bypassed", details={"reason": _sl_reason})
@@ -14582,7 +14629,7 @@ def main() -> int:
             _lm_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
             _lm_ap = _lm_ch / "tenants" / _lm_tid / "global" / "forge" / "audit.jsonl"
             try:
-                from forge.security_events import write_event as _lm_we  # type: ignore[import]
+                _lm_we = _forge_mod("security_events").write_event  # type: ignore[import]
             except ImportError:
                 from security_events import write_event as _lm_we  # type: ignore[import]
             _lm_we(_lm_ap, "license.module_unavailable",
@@ -14689,7 +14736,7 @@ def main() -> int:
     # (import lock inside a handler can deadlock against concurrent imports).
     _m2_wca = None
     try:
-        from forge.clag import write_chain_anchor as _m2_wca  # type: ignore[import]
+        _m2_wca = _forge_mod("clag").write_chain_anchor  # type: ignore[import]
     except ImportError:
         try:
             from clag import write_chain_anchor as _m2_wca  # type: ignore[import]

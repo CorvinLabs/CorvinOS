@@ -48,17 +48,17 @@ _SHIM = r'''#!__PY__
 import json, os, sys
 argv = sys.argv[1:]
 stdin = sys.stdin.read()
-log = os.environ["DX_SHIM_LOG"]
+log = os.environ["CORVIN_DX_SHIM_LOG"]
 manager = "--disallowedTools" in argv
 with open(log, "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"argv": argv, "stdin": stdin, "kind": "manager" if manager else "worker",
                          "env_names": sorted(os.environ),
                          "env_probe": {k: os.environ.get(k, "") for k in
-                                       os.environ.get("DX_SHIM_PROBE", "").split(",") if k}}) + "\n")
+                                       os.environ.get("CORVIN_DX_SHIM_PROBE", "").split(",") if k}}) + "\n")
 calls = sum(1 for _ in open(log, encoding="utf-8"))
 usage = {"input_tokens": 11, "output_tokens": 7,
          "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 300}
-mode = os.environ.get("DX_SHIM_MODE", "acs")
+mode = os.environ.get("CORVIN_DX_SHIM_MODE", "acs")
 if mode == "stream":
     print(json.dumps({"type": "system", "subtype": "init", "model": "claude-sonnet-5",
                       "session_id": "s1"}))
@@ -68,7 +68,7 @@ if mode == "stream":
 if manager:
     if calls == 1:
         decision = {"decision": "DELEGATE", "reasoning": "split",
-                    "subtasks": [{"id": "w1", "instructions": os.environ.get("DX_SUBTASK", "say hi"),
+                    "subtasks": [{"id": "w1", "instructions": os.environ.get("CORVIN_DX_SUBTASK", "say hi"),
                                   "expected_output": {}, "success_criteria": "done"}]}
     else:
         decision = {"decision": "COMPLETE", "reasoning": "done",
@@ -108,7 +108,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     monkeypatch.delenv("FORGE_ROOT", raising=False)
     monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
-    monkeypatch.setenv("DX_SHIM_LOG", str(tmp_path / "shim.jsonl"))
+    monkeypatch.setenv("CORVIN_DX_SHIM_LOG", str(tmp_path / "shim.jsonl"))
     monkeypatch.setenv("CORVIN_CLAUDE_BIN", str(_make_shim(tmp_path)))
     # Documented dual-env licence bypass of _assert_engine_licensed (test-only).
     monkeypatch.setenv("CORVIN_AGENTS_SKIP_LIVE", "1")
@@ -166,7 +166,7 @@ def test_dx1_acs_manager_never_receives_a_credential_from_the_task(sandbox, tmp_
 
 def test_dx1_acs_worker_never_receives_a_credential_written_by_the_manager(sandbox, tmp_path,
                                                                           monkeypatch):
-    monkeypatch.setenv("DX_SUBTASK", "use this: " + SECRET_TEXT)
+    monkeypatch.setenv("CORVIN_DX_SUBTASK", "use this: " + SECRET_TEXT)
     _run_acs(_spec("prepare the release"))
     kinds = [c["kind"] for c in _calls(tmp_path)]
     assert "manager" in kinds, f"positive control: the manager never ran ({kinds})"
@@ -212,8 +212,8 @@ def test_dx2_a2a_worker_env_carries_no_operator_secret(sandbox, tmp_path, monkey
 
     for k, v in _OPERATOR_SECRETS.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.setenv("DX_SHIM_MODE", "stream")
-    monkeypatch.setenv("DX_SHIM_PROBE", ",".join(_OPERATOR_SECRETS))
+    monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
+    monkeypatch.setenv("CORVIN_DX_SHIM_PROBE", ",".join(_OPERATOR_SECRETS))
     shim = os.environ["CORVIN_CLAUDE_BIN"]
     home = Path(getattr(a2a_worker, "_CORVIN_HOME_SNAPSHOT_A2A", "/nonexistent"))
     for name in ("compute_quota.json", ".compute_quota.json.lock"):
@@ -258,7 +258,7 @@ def test_refute_dx1_manager_gate_classifies_content_with_a_policy(sandbox, tmp_p
 
 def test_refute_dx1_worker_gate_classifies_content_with_a_policy(sandbox, tmp_path, monkeypatch):
     _write_tenant_policy(sandbox)
-    monkeypatch.setenv("DX_SUBTASK", "use this: " + SECRET_TEXT)
+    monkeypatch.setenv("CORVIN_DX_SUBTASK", "use this: " + SECRET_TEXT)
     _run_acs(_spec("prepare the release"))
     kinds = [c["kind"] for c in _calls(tmp_path)]
     assert "manager" in kinds, f"positive control: the manager never ran ({kinds})"
@@ -277,7 +277,7 @@ sys.path.insert(0, "__FORGE__")
 from forge import paths, security_events
 security_events.write_event(paths.tenant_audit_chain("_default"), "a2a.task_received",
                             details={"origin_id": "peer-anchor"})
-with open(os.environ["DX_SHIM_LOG"], "a", encoding="utf-8") as fh:
+with open(os.environ["CORVIN_DX_SHIM_LOG"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"anchor": os.environ.get("CORVIN_AUDIT_ANCHOR_KEY", "<unset>")}) + "\n")
 print(json.dumps({"type": "system", "subtype": "init", "model": "claude-sonnet-5", "session_id": "s1"}))
 print(json.dumps({"type": "result", "subtype": "success", "is_error": False,

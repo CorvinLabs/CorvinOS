@@ -448,6 +448,11 @@ class ACSResult:
     # Per-run trace (RunTrace): one dict per step and the loss after each gated COMPLETE.
     steps: list = field(default_factory=list)
     loss_history: list = field(default_factory=list)
+    # Refutation RD-6: the FIRST inner pre-spawn gate refusal of a run that did not succeed
+    # (``manager_l34_blocked`` / ``worker_l35_blocked`` / ``*_gates_unavailable`` …), "" when
+    # none. A caller judging the delegated engine reads it as "not judged" (no_engine): the
+    # engine never ran for that part, a gate decided — never an engine failure.
+    gate_refusal: str = ""
 
 
 _STEP_DECISIONS = ("DELEGATE", "COMPLETE", "FAIL", "INVALID")
@@ -671,6 +676,9 @@ class RunContext:
     # (last non-empty) and the summed four-way token split, for the manager span.
     manager_reported_model: str = ""
     manager_usage: dict = field(default_factory=dict)
+    # Refutation RD-6: every inner pre-spawn gate refusal of this run, in order (shared by
+    # reference through ``dataclasses.replace``, like ``forge_feedback``).
+    gate_refusals: list = field(default_factory=list)
     # Adversarial review finding: BudgetEnvelope.check() was called ONLY at
     # the top-level manager loop, against the ROOT budget. Recursive
     # delegation (_dispatch_workers → _run_one → DELEGATE → _dispatch_workers
@@ -704,8 +712,7 @@ def _corvin_home() -> Path:
     # regardless of which process invokes acs_runtime (uvicorn, adapter, CLI).
     # forge is always on PYTHONPATH in a running CorvinOS instance.
     try:
-        from forge import paths as _fp  # type: ignore[import-untyped]
-        return _fp.corvin_home()
+        return _forge_module("paths").corvin_home()
     except Exception:  # noqa: BLE001
         pass
     return Path.home() / ".corvin"
@@ -747,8 +754,7 @@ def _run_dir(tenant_id: str, bridge: str, chat: str, run_id: str) -> Path:
     # honours any pre-existing legacy ``web:<sid>`` dir (no reader≠writer drift).
     sessions_base = _corvin_home() / "tenants" / tenant_id / "sessions"
     try:
-        from forge import paths as _fp  # type: ignore[import-untyped]
-        session_dir = _fp.safe_session_subdir(sessions_base, f"{bridge}:{chat}")
+        session_dir = _forge_module("paths").safe_session_subdir(sessions_base, f"{bridge}:{chat}")
     except Exception:  # noqa: BLE001 — forge.paths always present in a live instance
         # Same rule without forge: ':' is illegal in a Windows path component.
         sep = "_" if os.name == "nt" else ":"
@@ -757,6 +763,19 @@ def _run_dir(tenant_id: str, bridge: str, chat: str, run_id: str) -> Path:
 
 
 _FORGE_PATH = str(Path(__file__).resolve().parents[2] / "forge")
+
+
+def _forge_module(name: str):
+    """``forge.<name>`` from the REAL forge package (refutation RD-2 — see ``_forge_imports``).
+
+    A plain ``from forge import X`` fails in a process that bound ``forge`` to the namespace
+    package ``corvin_operator/forge/``; this heals that binding instead.
+    """
+    try:
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        from ._forge_imports import forge_module  # type: ignore[no-redef]  # noqa: PLC0415
+    return forge_module(name)
 
 
 def _audit_path(tenant_id: str) -> Path:
@@ -849,9 +868,7 @@ def _resolve_worker_model(explicit: str | None, tenant_id: str) -> str:
 def _write_audit(tenant_id: str, event_type: str, details: dict) -> None:
     """Best-effort L16 audit write. Never raises into caller."""
     try:
-        if _FORGE_PATH not in sys.path:
-            sys.path.insert(0, _FORGE_PATH)
-        from forge import security_events as _sec  # type: ignore[import-untyped]
+        _sec = _forge_module("security_events")
         # Tenant attribution: CLAUDE.md requires every event to carry tenant_id, and
         # the ACS records carried none (the chain file was the only binding). Tag it
         # ONLY for the process's own tenant: write_event refuses a foreign tenant_id
@@ -860,8 +877,7 @@ def _write_audit(tenant_id: str, event_type: str, details: dict) -> None:
         # record untagged, as before: untagged beats lost.
         if tenant_id and "tenant_id" not in details:
             try:
-                from forge.tenants import current_tenant  # type: ignore[import-untyped]
-                if tenant_id == current_tenant():
+                if tenant_id == _forge_module("tenants").current_tenant():
                     details = {**details, "tenant_id": tenant_id}
             except Exception:  # noqa: BLE001
                 pass
@@ -1606,14 +1622,48 @@ def _assert_engine_licensed(engine_id: str) -> None:
         raise RuntimeError(f"license-gate-error (fail-closed): {type(_exc).__name__}") from _exc
 
 
-# Secrets/PII that must NOT reach an ACS worker/manager subprocess. Workers run
-# with full tools + --max-turns 20, so a prompt-injected subtask could exfiltrate
-# any of these via Bash (round-2: the 2-var ANTHROPIC-only strip missed OPENAI /
-# provider / messaging / license creds that operators demonstrably have in env —
-# router.py/adapter embeddings+TTS use OPENAI_API_KEY). Mirrors a2a_worker._ENV_CLEAR
-# but drops the feature-config vars (FORGE_ROOT/TEST_MODE/FEATURES_URL) so ACS
-# worker behaviour is unchanged. ANTHROPIC_* is stripped here and re-set by
-# _apply_provider_redirect ONLY in explicit provider mode.
+# ── Worker environment: DENY-BY-DEFAULT (refutation RD-1, 2026-11-05) ─────────────────
+# Every tool-capable worker (ACS worker/manager, inbound A2A, gateway run, console /task,
+# workflow agent node) gets its environment from ONE rule, :func:`build_worker_env`:
+#
+#   (a) the base set below — what a process needs to run at all (POSIX + Windows), plus
+#       the proxy / CA-bundle names the CLI needs to reach its API;
+#   (b) every name in Corvin's own namespaces (``CORVIN_`` ``CLAUDE_`` ``VOICE_``
+#       ``FORGE_`` ``SKILL_FORGE_``) EXCEPT a secret by the name rule ``_SECRET_NAME_RE``
+#       (unchanged) or the explicit list ``_WORKER_SECRET_ENV_STRIP``;
+#   (c) the engine's OWN credential per auth mode (``_engine_env_credential``);
+#   (d) the names the operator declares in ``spec.worker_env.keep`` of tenant.corvin.yaml
+#       (closed list, audited once when loaded; operator-driven workers only);
+#   (e) the Bedrock/Vertex/Foundry chain (``_restore_platform_credentials``).
+#
+# Everything else is NOT inherited (an overlay over ``os.environ`` passes it as ``""``).
+# The value rule (``_value_carries_credential``) stays as a second line over (a)/(b).
+# Before this, the rule was a denylist of name patterns plus URL value shapes, and the
+# refutation round found 11 credential shapes it let through (a PAT as URL userinfo, a
+# ``?password=`` DSN, an AWS presigned URL, ``REDIS_HOST=redis://:pw@…``, Teams/Zapier
+# webhooks …): a denylist on shapes keeps losing that game.
+_WORKER_ENV_BASE = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TERM", "COLORTERM",
+    "TZ", "TMPDIR", "TMP", "TEMP", "PWD",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",   # compared upper-cased: the
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",  # lower-case forms are kept too
+    "NODE_EXTRA_CA_CERTS",                                  # the claude CLI is a Node app
+    "PYTHONPATH", "PYTHONIOENCODING", "PYTHONUTF8", "VIRTUAL_ENV",   # the CLI's hooks
+    # Windows: a process does not start reliably without these.
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE",
+    "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES",
+    "PROGRAMFILES(X86)", "COMMONPROGRAMFILES", "USERNAME", "USERDOMAIN", "COMPUTERNAME",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+})
+_WORKER_ENV_BASE_PREFIXES = ("LC_", "XDG_")
+#: Corvin's own namespaces: kept, minus every secret-shaped name (rule (b)).
+_WORKER_ENV_CORVIN_PREFIXES = ("CORVIN_", "CLAUDE_", "VOICE_", "FORGE_", "SKILL_FORGE_")
+
+# The second line (kept from round-2..DLG-2): the explicit names that are credentials
+# although their names are not secret-shaped. Under deny-by-default only the ones inside
+# the namespaces of rule (b) can still matter (CORVIN_*), but the list also judges a
+# caller's declared ``extra`` names and an operator ``keep`` never re-admits through it
+# implicitly — keep is explicit.
 _WORKER_SECRET_ENV_STRIP = (
     "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
     "OPENAI_API_KEY", "OPENAI_APIKEY", "CORVIN_STT_OPENAI_KEY",
@@ -1637,28 +1687,38 @@ _WORKER_SECRET_ENV_STRIP = (
     "DATABASE_URL", "GPG_PASSPHRASE",
 )
 
-# The VALUE of a `*_URL` / `*_URI` / `*_DSN` variable is a credential when it carries
-# userinfo with a password (`scheme://user:pass@host`), is a webhook (`/api/webhooks/`,
-# `hooks.slack.com`), or carries a token in its query string. A `*_DSN` with any
-# userinfo (`https://<key>@sentry…`) is one too — the user part IS the key there.
+# The VALUE rule — the second line over every admitted name, whatever its suffix (RD-1).
+# A value is a credential when it carries URL USERINFO at all (`scheme://user@host` —
+# GitHub takes a PAT as the user, Sentry a key; with or without `:password`), a webhook
+# (Discord/Slack/Teams/Zapier or any `/webhook(s)/` path), or a query/fragment parameter
+# whose name ends in a credential stem (`token`, `key`, `secret`, `sig(nature)`,
+# `password`, `pwd`, `auth`, `credential` — this covers `X-Amz-Credential`,
+# `X-Amz-Signature`, `X-Amz-Security-Token`, `apiKey`, `access_token`, Azure `sig=`).
 # A separate rule on purpose: `_SECRET_NAME_RE` stays a NAME rule (CLAUDE.md, ADR-0759).
-_URL_CREDENTIAL_RE = re.compile(
-    r"(://[^/@\s:]*:[^/@\s]+@|/api/webhooks/|hooks\.slack\.com/|"
-    r"[?&](?:token|access_token|api_key|apikey|key|sig|signature|secret)=)",
+_URL_USERINFO_RE = re.compile(r"[a-z][a-z0-9+.\-]*://[^/@\s?#]+@", re.IGNORECASE)
+_WEBHOOK_RE = re.compile(
+    r"(/api/webhooks/|hooks\.slack\.com/|\.webhook\.office\.com/|hooks\.zapier\.com/|"
+    r"/webhooks?/)",
     re.IGNORECASE,
 )
-_DSN_USERINFO_RE = re.compile(r"://[^/@\s]+@")
+_QUERY_CREDENTIAL_RE = re.compile(
+    r"[?&#;][\w.\-]*(?:token|key|secret|sig|signature|password|passwd|pwd|auth|credential)=",
+    re.IGNORECASE,
+)
 
 
-def _url_value_carries_credential(name_upper: str, value: object) -> bool:
-    """True when a location-shaped variable's VALUE is itself a bearer credential."""
+def _value_carries_credential(name_upper: str, value: object) -> bool:
+    """True when a variable's VALUE is itself a bearer credential (any name)."""
     if not isinstance(value, str) or not value:
         return False
     if "PASSPHRASE" in name_upper:
         return True
-    if name_upper.endswith(("_URL", "_URI", "_DSN")) and _URL_CREDENTIAL_RE.search(value):
-        return True
-    return name_upper.endswith("_DSN") and bool(_DSN_USERINFO_RE.search(value))
+    return bool(_URL_USERINFO_RE.search(value) or _WEBHOOK_RE.search(value)
+                or _QUERY_CREDENTIAL_RE.search(value))
+
+
+# Kept under its old name for callers/tests that import it (DLG-2).
+_url_value_carries_credential = _value_carries_credential
 
 
 # A denylist can never enumerate every secret an operator exports (GITHUB_TOKEN,
@@ -1687,24 +1747,43 @@ _WORKER_SECRET_NAME_ALLOW = {
 }
 
 
-def _strip_worker_secrets(env: dict) -> None:
-    """Remove every real credential/PII var from a worker/manager spawn env
-    BEFORE _apply_provider_redirect (which re-injects only the provider cred in
-    provider mode). Fail-closed against credential exfiltration by a tool-capable
-    subprocess (path-audit 2026-07-07 round-2/round-4)."""
-    for _k in _WORKER_SECRET_ENV_STRIP:
-        env.pop(_k, None)
-    # Pattern catch-all for operator-set secrets the explicit list can't enumerate.
+_WORKER_SECRET_ENV_STRIP_UPPER = frozenset(n.upper() for n in _WORKER_SECRET_ENV_STRIP)
+
+
+def _worker_env_name_admitted(name: str) -> bool:
+    """Rules (a)+(b): is this NAME one a worker may inherit at all (before the secret rules)?"""
+    nu = name.upper()
+    return (nu in _WORKER_ENV_BASE or nu.startswith(_WORKER_ENV_BASE_PREFIXES)
+            or nu.startswith(_WORKER_ENV_CORVIN_PREFIXES))
+
+
+def _is_worker_secret(name: str, value: object) -> bool:
+    """The secret rules over an admitted (or caller-declared) name: explicit list, the
+    VALUE rule, then the NAME rule ``_SECRET_NAME_RE`` (public keys / location pointers kept)."""
+    nu = name.upper()
+    if nu in _WORKER_SECRET_ENV_STRIP_UPPER:
+        return True
+    if nu in _WORKER_SECRET_NAME_ALLOW or "PUBKEY" in nu or "PUBLIC_KEY" in nu:
+        return False
+    if _value_carries_credential(nu, value):
+        return True   # DLG-2 / RD-1: a webhook, URL userinfo, a credential query parameter
+    if nu.endswith(("_PATH", "_DIR", "_URL", "_HOME", "_FILE")):
+        return False  # location pointer, not the secret itself
+    return bool(_SECRET_NAME_RE.search(name))
+
+
+def _strip_worker_secrets(env: dict, *, keep: "frozenset[str] | set[str] | tuple" = ()) -> None:
+    """Reduce a spawn env IN PLACE to what a worker may inherit — deny-by-default (RD-1).
+
+    Keeps only rules (a)+(b) of the block comment above minus every secret
+    (``_is_worker_secret``), plus the names in ``keep`` (rule (d), taken as declared).
+    The engine credential (c) and the platform chain (e) are put back by
+    :func:`build_worker_env`; call that, not this, from a spawn site."""
+    kept = set(keep or ())
     for _k in list(env.keys()):
-        ku = _k.upper()
-        if ku in _WORKER_SECRET_NAME_ALLOW or "PUBKEY" in ku or "PUBLIC_KEY" in ku:
+        if _k in kept:
             continue
-        if _url_value_carries_credential(ku, env.get(_k)):
-            env.pop(_k, None)   # DLG-2: a webhook / DSN / password-bearing URL
-            continue
-        if ku.endswith(("_PATH", "_DIR", "_URL", "_HOME", "_FILE")):
-            continue  # location pointer, not the secret itself
-        if _SECRET_NAME_RE.search(_k):
+        if not _worker_env_name_admitted(_k) or _is_worker_secret(_k, env.get(_k)):
             env.pop(_k, None)
 
 
@@ -1774,6 +1853,162 @@ def _apply_provider_redirect(env: dict, tenant_id: str) -> None:
         env.update(resolve_claude_code_provider_env(tenant_id))
     except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
         return
+
+
+# ── Rule (d): the operator's closed keep list ────────────────────────────────────────────
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
+_TENANT_ID_SHAPE_RE = re.compile(r"[a-z0-9_][a-z0-9_-]{0,62}")
+_WORKER_ENV_KEEP_AUDITED: "dict[str, tuple]" = {}
+_WORKER_ENV_KEEP_LOCK = threading.Lock()
+
+
+def _operator_worker_env_keep(tenant_id: str) -> frozenset:
+    """``spec.worker_env.keep`` of the tenant's ``tenant.corvin.yaml`` — the names the
+    operator explicitly hands to operator-driven workers (rule (d)).
+
+    A closed list of exact variable NAMES; an entry that is not a valid name is rejected
+    (counted, never kept). No file / no key → nothing. An unreadable file keeps NOTHING
+    (fail-closed: the strict default applies). The loaded list is audited once per
+    process and tenant (``worker_env.keep_loaded``: the names — never a value — the count
+    and the number rejected) and again whenever it changes.
+    """
+    if not isinstance(tenant_id, str) or not _TENANT_ID_SHAPE_RE.fullmatch(tenant_id):
+        return frozenset()
+    cfg = _corvin_home() / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
+    if not cfg.is_file():
+        return frozenset()
+    try:
+        import yaml  # type: ignore[import-untyped]  # noqa: PLC0415
+        data = yaml.safe_load(cfg.read_text("utf-8")) or {}
+        spec = data.get("spec") if isinstance(data, dict) else None
+        block = spec.get("worker_env") if isinstance(spec, dict) else None
+        raw = block.get("keep") if isinstance(block, dict) else None
+    except Exception as exc:  # noqa: BLE001 — unreadable ⇒ keep nothing (strict default)
+        log.warning("worker env: tenant %s keep list unreadable (%s) — nothing kept",
+                    tenant_id, type(exc).__name__)
+        return frozenset()
+    if raw is None:
+        return frozenset()
+    entries = raw if isinstance(raw, list) else [raw]
+    names = sorted({e for e in entries if isinstance(e, str) and _ENV_NAME_RE.fullmatch(e)})
+    rejected = len(entries) - sum(1 for e in entries
+                                  if isinstance(e, str) and _ENV_NAME_RE.fullmatch(e))
+    sig = (tuple(names), rejected)
+    with _WORKER_ENV_KEEP_LOCK:
+        first = _WORKER_ENV_KEEP_AUDITED.get(tenant_id) != sig
+        if first:
+            _WORKER_ENV_KEEP_AUDITED[tenant_id] = sig
+    if first:
+        _write_audit(tenant_id, "worker_env.keep_loaded",
+                     {"names": ",".join(names), "count": len(names), "rejected": rejected})
+    return frozenset(names)
+
+
+# ── Rule (c): the engine's own credential (refutation RD-4) ─────────────────────────────
+#: The env-var credentials the ``claude`` CLI authenticates with on its own (Anthropic
+#: Console API key, long-lived OAuth token from ``claude setup-token``).
+_ENGINE_ENV_CREDENTIALS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
+
+
+def _claude_login_file_present(source_env: "dict[str, str]") -> bool:
+    """Does the host have a Claude Code login FILE (the OAuth subscription)?
+
+    Existence only — the file is never read. Resolved from the SOURCE env's home (and
+    ``CLAUDE_CONFIG_DIR``), the same four paths ``engine_detection`` probes. macOS keeps
+    the login in the Keychain, not a file: there an env credential is restored when set,
+    which is what the OS turn itself authenticates with.
+    """
+    paths: "list[Path]" = []
+    cfg = (source_env.get("CLAUDE_CONFIG_DIR") or "").strip()
+    if cfg:
+        paths.append(Path(os.path.expanduser(cfg)) / ".credentials.json")
+    home = (source_env.get("HOME") or source_env.get("USERPROFILE") or "").strip()
+    base = Path(home) if home else Path.home()
+    paths += [base / ".claude" / ".credentials.json", base / ".claude" / "credentials.json",
+              base / ".config" / "claude" / ".credentials.json",
+              base / ".config" / "claude" / "credentials.json"]
+    return any(p.is_file() for p in paths)
+
+
+def _engine_env_credential(source_env: "dict[str, str]") -> "dict[str, str]":
+    """The engine credential to restore for a worker — ``{}`` unless the host's auth mode IS
+    an environment credential (RD-4).
+
+    That mode is: ``ANTHROPIC_API_KEY`` and/or ``CLAUDE_CODE_OAUTH_TOKEN`` set, no platform
+    mode (Bedrock/Vertex/Foundry — the chain is rule (e)), and no Claude login file. It is
+    the documented headless/Docker install (``.env`` with the key): there the strip left
+    every gateway run, /task worker, workflow node and ACS worker without any credential.
+    On a subscription host the env key stays stripped, as before (the worker uses the
+    login file). Provider mode is decided by the caller (:func:`build_worker_env`), which
+    never restores a native key next to a redirect.
+    """
+    present = {n: source_env[n] for n in _ENGINE_ENV_CREDENTIALS
+               if isinstance(source_env.get(n), str) and source_env[n].strip()}
+    if not present:
+        return {}
+    try:
+        from engine_models import active_platform_provider  # type: ignore  # noqa: PLC0415
+        if active_platform_provider(source_env) is not None:
+            return {}
+    except ImportError:
+        pass   # no registry ⇒ no platform mode can be declared on this host
+    if _claude_login_file_present(source_env):
+        return {}
+    return present
+
+
+def build_worker_env(
+    tenant_id: str,
+    *,
+    source_env: "dict[str, str] | None" = None,
+    extra: "dict[str, str] | None" = None,
+    operator_keep: bool = True,
+    engine_credential: bool = True,
+    platform: bool = True,
+    redirect: bool = True,
+) -> "dict[str, str]":
+    """THE worker environment (refutation RD-1/RD-4) — every tool-capable worker spawn calls
+    this (directly or through :func:`worker_env_overlay`), never its own copy.
+
+    ``source_env`` (default ``os.environ``) → deny-by-default reduction (rules (a)+(b),
+    minus secrets) with the operator keep list (d) when ``operator_keep`` → the caller's
+    declared ``extra`` names (run ids, a datasource's connection env), judged by the secret
+    rules but not by the base allowlist → the platform chain (e) when ``platform`` → the
+    tenant's provider redirect when ``redirect`` → the engine's own env credential (c) when
+    ``engine_credential`` and NO provider redirect applies (a native key is never handed to
+    a third-party endpoint).
+
+    The remote-driven A2A worker passes ``operator_keep=False`` and decides ``platform`` /
+    ``engine_credential`` itself (DLG-25 / RD-10).
+    """
+    src = {str(k): str(v) for k, v in (os.environ if source_env is None else source_env).items()}
+    keep = _operator_worker_env_keep(tenant_id) if operator_keep else frozenset()
+    env = dict(src)
+    _strip_worker_secrets(env, keep=keep)
+    for name, value in (extra or {}).items():
+        if not _is_worker_secret(str(name), value):
+            env[str(name)] = str(value)
+    if platform:
+        _restore_platform_credentials(env, src)
+    red: "dict[str, str]" = {}
+    if redirect:
+        _apply_provider_redirect(red, tenant_id)
+    if engine_credential and not (red.get("ANTHROPIC_BASE_URL") or red.get("CORVIN_CC_PROVIDER")):
+        env.update(_engine_env_credential(src))
+    env.update(red)
+    return env
+
+
+def worker_env_overlay(tenant_id: str, *, source_env: "dict[str, str] | None" = None,
+                       **kwargs: Any) -> "dict[str, str]":
+    """:func:`build_worker_env` as an OVERLAY for an engine that merges its ``env`` over
+    ``os.environ`` (``ClaudeCodeEngine.spawn``): every name the worker must not see is
+    passed as ``""`` (how a name is removed there), every added/changed name with its value."""
+    src = {str(k): str(v) for k, v in (os.environ if source_env is None else source_env).items()}
+    env = build_worker_env(tenant_id, source_env=src, **kwargs)
+    overlay = {name: "" for name in src if name not in env}
+    overlay.update({k: v for k, v in env.items() if src.get(k) != v})
+    return overlay
 
 
 def _write_system_prompt_tmp_file(system: str, tenant_id: str) -> str | None:
@@ -1926,11 +2161,10 @@ def _call_manager_sync(
     # user's task verbatim, so it goes through the ONE shared neutraliser.
     # Reply contract unaffected — the JSON envelope is parsed from stdout.
     prompt = _guard_prompt_head(prompt)
-    env = os.environ.copy()
+    # RD-1/RD-4: the ONE worker env rule — deny-by-default, the engine's own credential,
+    # the platform chain (ADR-0759), the provider redirect (ADR-0181 M3 #6).
+    env = build_worker_env(tenant_id)
     env["VOICE_HOOK_RECURSION"] = "1"
-    _strip_worker_secrets(env)  # full secret/PII strip (round-2)
-    _restore_platform_credentials(env)  # ADR-0759 — Bedrock/Vertex/Foundry chain
-    _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     # Windows fresh-install fix (adversarial-review finding, same bug class
     # already fixed in chat_runtime.py / agents/claude_code.py / codex_cli.py
     # / opencode_cli.py / the legacy call_claude() fallback): `_MANAGER_SYSTEM`
@@ -2262,23 +2496,14 @@ def _call_worker_sync(
     # user's task verbatim, so it goes through the ONE shared neutraliser.
     # Reply contract unaffected — the JSON envelope is parsed from stdout.
     prompt = _guard_prompt_head(prompt)
-    env = os.environ.copy()
+    # The ONE worker env rule (RD-1/RD-4): deny-by-default, the engine's own credential,
+    # the platform chain (ADR-0759), the provider redirect (ADR-0181 M3 #6). Workers run
+    # with full tools and --max-turns 20, so a prompt-injected subtask could otherwise
+    # read any operator secret via Bash. ``extra_env`` (ADR-0109 M6 worker context,
+    # ADR-0127 datasource connection env) is admitted by the secret rules only, so a
+    # datasource's PGPASSWORD still never reaches the worker.
+    env = build_worker_env(tenant_id, extra=extra_env)
     env["VOICE_HOOK_RECURSION"] = "1"
-    # ADR-0109 M6: propagate ACS worker context for engine-trace hooks
-    if extra_env is not None:
-        env.update(extra_env)
-    # H2: strip the operator's real Anthropic credentials before the worker
-    # subprocess is spawned — mirrors the manager path (_call_manager_sync).
-    # Workers run with full tools and --max-turns 20, so a prompt-injected
-    # subtask could otherwise exfiltrate the live key via Bash. Must happen
-    # BEFORE _apply_provider_redirect (see its docstring: "Call AFTER stripping
-    # the real Anthropic creds"); done after the extra_env merge so nothing can
-    # re-inject a live cred into the spawn env. Full secret/PII set (round-2):
-    # the old 2-var ANTHROPIC-only strip left OPENAI/provider/messaging/license
-    # creds exfiltrable by a prompt-injected tool-capable subtask.
-    _strip_worker_secrets(env)
-    _restore_platform_credentials(env)  # ADR-0759 — Bedrock/Vertex/Foundry chain
-    _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     timeout = _effective_worker_timeout(budget)
     # max-turns fallback: _DEFAULT_WORKER_TURNS (unconfigured = ceiling, 2026-07-20).
     # History: 5 was too tight — workers hit the limit mid-tool-use and returned
@@ -2638,6 +2863,7 @@ async def _dispatch_workers(
                 _l34_result = _l34_content_gate(_sg_l34, _engine_id, ctx.tenant_id,
                                                 _cls, prompt)
                 if _l34_result is not None:
+                    ctx.gate_refusals.append("worker_l34_blocked")
                     _write_audit(ctx.tenant_id, "acs.worker_l34_blocked", {
                         "run_id": ctx.run_id, "worker_id": wid, "engine": _engine_id,
                     })
@@ -2647,6 +2873,7 @@ async def _dispatch_workers(
                     )
                 _l35_result = _sg_l35(_engine_id, ctx.tenant_id)
                 if _l35_result is not None:
+                    ctx.gate_refusals.append("worker_l35_blocked")
                     _write_audit(ctx.tenant_id, "acs.worker_l35_blocked", {
                         "worker_id": wid, "engine": _engine_id,
                     })
@@ -2657,6 +2884,7 @@ async def _dispatch_workers(
             except Exception as _gate_exc:  # noqa: BLE001
                 # H1: L34/L35 import failure → fail-closed (CLAUDE.md load-bearing invariant).
                 # Spawning without gates would bypass GDPR Art. 32 data-flow controls.
+                ctx.gate_refusals.append("worker_gates_unavailable")
                 _write_audit(ctx.tenant_id, "acs.worker_gates_unavailable", {
                     "run_id": ctx.run_id, "worker_id": wid, "engine": _engine_id,
                     "reason": type(_gate_exc).__name__,
@@ -3035,6 +3263,7 @@ async def _manager_loop(
         from spawn_gates import check_l34 as _sg_l34, check_l35 as _sg_l35  # type: ignore
         _mgr_l34 = _sg_l34(_mgr_engine, ctx.tenant_id, classification=_mgr_cls)
         if _mgr_l34 is not None:
+            ctx.gate_refusals.append("manager_l34_blocked")
             _write_audit(ctx.tenant_id, "acs.manager_l34_blocked", {
                 "run_id": ctx.run_id, "engine": _mgr_engine,
             })
@@ -3046,6 +3275,7 @@ async def _manager_loop(
             )
         _mgr_l35 = _sg_l35(_mgr_engine, ctx.tenant_id)
         if _mgr_l35 is not None:
+            ctx.gate_refusals.append("manager_l35_blocked")
             _write_audit(ctx.tenant_id, "acs.manager_l35_blocked", {
                 "run_id": ctx.run_id, "engine": _mgr_engine,
             })
@@ -3058,6 +3288,7 @@ async def _manager_loop(
     except Exception as _mgr_gate_exc:  # noqa: BLE001
         # H1+H2: fail-closed (not fail-open); use `log` (module-level logger).
         log.debug("[acs] Manager gates import failed (fail-closed): %s", type(_mgr_gate_exc).__name__)
+        ctx.gate_refusals.append("manager_gates_unavailable")
         _write_audit(ctx.tenant_id, "acs.manager_gates_unavailable", {
             "run_id": ctx.run_id, "engine": _mgr_engine,
             "reason": type(_mgr_gate_exc).__name__,
@@ -3104,6 +3335,7 @@ async def _manager_loop(
             _mgr_content_l34 = (f"L34 gate error ({type(_mgr_content_exc).__name__}); "
                                 "refusing to spawn the manager")
         if _mgr_content_l34 is not None:
+            ctx.gate_refusals.append("manager_l34_blocked")
             _write_audit(ctx.tenant_id, "acs.manager_l34_blocked", {
                 "run_id": ctx.run_id, "engine": _mgr_engine,
             })
@@ -3894,6 +4126,8 @@ class ACSRuntime:
             )
 
         result.run_dir = run_dir
+        if result.status != "success" and ctx.gate_refusals and not result.gate_refusal:
+            result.gate_refusal = str(ctx.gate_refusals[0])   # RD-6
         if not result.elapsed_s:
             # Result paths that do not carry a duration (the unexpected-error one) showed "0 s"
             # for a run that took seconds or hours.

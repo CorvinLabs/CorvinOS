@@ -18,7 +18,7 @@ from test_mcp_server import TestOrchestrationServerBase, _call, _drive
 FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, sys
 argv = sys.argv[1:]
-with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
+with open(os.environ["CORVIN_FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps({"argv": argv}) + "\\n")
 reply = ({"violated_rule_id": "", "confidence": 0.0, "reason": "ok"} if "--max-turns" in argv
          else {"ok": True})
@@ -58,9 +58,9 @@ class TestMcpWorkflowRunNodeModel(TestOrchestrationServerBase):
         claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
         self.log = self.home / "calls.jsonl"
         self._saved = {k: os.environ.get(k) for k in
-                       ("PATH", "FAKE_CLAUDE_LOG", "CORVIN_HELPER_MODEL_WORKFLOW_NODE", "CORVIN_TENANT_ID")}
+                       ("PATH", "CORVIN_FAKE_CLAUDE_LOG", "CORVIN_HELPER_MODEL_WORKFLOW_NODE", "CORVIN_TENANT_ID")}
         os.environ["PATH"] = f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"
-        os.environ["FAKE_CLAUDE_LOG"] = str(self.log)
+        os.environ["CORVIN_FAKE_CLAUDE_LOG"] = str(self.log)
         os.environ.pop("CORVIN_HELPER_MODEL_WORKFLOW_NODE", None)
         os.environ["CORVIN_TENANT_ID"] = "_default"
         (self.home / "tenants" / "_default" / "workflows" / "mcp_node_model.awp.yaml").write_text(

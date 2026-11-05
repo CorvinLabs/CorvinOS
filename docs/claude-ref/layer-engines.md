@@ -2270,7 +2270,9 @@ operator deployment:
     IS assigned (so L35 validated its host) but no route could be built (no model for an
     OpenAI-format provider, a resolver error). The console refuses such a turn; the
     bridge logs the reason and still spawns (its strict refusal belongs to T-0229).
-    `ANTHROPIC_API_KEY` is not dropped: it is the operator's native credential.
+    `ANTHROPIC_API_KEY` is not dropped from the OS-turn env: it is the operator's native
+    credential. (A WORKER spawn is a different rule — deny-by-default, where the key comes
+    back only on an env-credential host: see "Worker environment — deny-by-default" below.)
     A tenant without an assignment, or one assigned `anthropic`, never refuses here.
   - **One home resolver.** `engine_models._corvin_home()` now calls
     `spawn_gates._resolve_corvin_home(None)`: `CORVIN_HOME`, else the checkout's
@@ -3132,7 +3134,7 @@ a stub `claude` binary, the real `_dispatch_workers` and `_call_worker_sync`).
 |---|---|
 | ACS manager span (`_end_mgr_span`) | closes on the model the manager CLI REPORTED and the SUMMED `usage_split` of every manager turn (`_WorkerProcessHolder` keeps the parsed envelope). The configured model is used only when no turn reported anything (dry run). Before: configured model, zero tokens, every manager turn $0.00 |
 | ACS manager + worker L34 | `check_l34` receives the PROMPT content, not only the workflow's declared class: the worker prompt is built before the gate, the manager prompt (state, snapshot, earlier worker results) is checked every iteration; a gate error refuses the spawn. Before: a credential in an `acs_delegate` task reached a cloud worker |
-| inbound A2A worker env | `_secret_env_overrides` blanks every name `acs_runtime._strip_worker_secrets` removes (pattern catch-all; `_restore_platform_credentials` only for an origin that can read neither files nor a shell — DLG-25 below) — including `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` when set as env vars, exactly like ACS workers; the CLI's credentials FILE is unaffected. No helper → no spawn |
+| inbound A2A worker env | `_secret_env_overrides` blanks every name the ONE worker rule does not admit (`acs_runtime.build_worker_env`, deny-by-default since the RD round below; the operator keep list is NOT applied to a remote peer's worker). The platform chain or the host's env credential comes back only for an origin that can read neither files nor a shell (DLG-25 / RD-4 / RD-10 below); the CLI's credentials FILE is unaffected. No helper → no spawn |
 | `core/delegate` `run_delegate` | writes its `engine.span` pair on EVERY surface; `CORVIN_SESSION_DIR` gates only the WDAT run directory and its `acs.*` records. Before: bridge-OS and ACS-adapter delegations had no span at all. Still open: no span on a FAILED delegation, and TDE workers (`worker_ipc.SubprocessWorkerIPC`) emit none |
 
 Guarded by `corvin_operator/bridges/shared/test_review_20261105_dx_e2e.py` and
@@ -3143,7 +3145,7 @@ Guarded by `corvin_operator/bridges/shared/test_review_20261105_dx_e2e.py` and
 | Path | Rule now |
 |---|---|
 | L34 declared class (DLG-1) | `spawn_gates.check_l34(classification=…, prompt=…)` classifies the prompt EVEN WITH a tenant policy and judges `max(declared, content)`; a classifier error refuses. Before: with a `tenant.corvin.yaml` the declared `internal` replaced the content's class, so DX-1 held only on no-policy installs. `acs_runtime._l34_content_gate` is one call again |
-| worker env strip (DLG-2) | `_WORKER_SECRET_ENV_STRIP` adds the webhook/DSN names the repo reads (`DISCORD_WEBHOOK_URL`, `SLACK_WEBHOOK_URL`, `CORVIN_SLACK_WEBHOOK_URL`, `SLACK_WEBHOOK_URL_MARKETPLACE_SLO`, `SENTRY_DSN`) plus `DATABASE_URL`, `GPG_PASSPHRASE`; `_url_value_carries_credential` strips any `*_URL`/`*_URI`/`*_DSN` whose VALUE carries `user:pass@`, `/api/webhooks/`, `hooks.slack.com/` or a `token=`/`key=`/`sig=`-style query, any `*_DSN` with userinfo, and any `*PASSPHRASE*`. A value rule, not a widening of `_SECRET_NAME_RE`. ACS workers/managers and the A2A worker share it |
+| worker env strip (DLG-2, superseded by RD-1 below) | `_WORKER_SECRET_ENV_STRIP` adds the webhook/DSN names the repo reads (`DISCORD_WEBHOOK_URL`, `SLACK_WEBHOOK_URL`, `CORVIN_SLACK_WEBHOOK_URL`, `SLACK_WEBHOOK_URL_MARKETPLACE_SLO`, `SENTRY_DSN`) plus `DATABASE_URL`, `GPG_PASSPHRASE`; `_url_value_carries_credential` strips any `*_URL`/`*_URI`/`*_DSN` whose VALUE carries `user:pass@`, `/api/webhooks/`, `hooks.slack.com/` or a `token=`/`key=`/`sig=`-style query, any `*_DSN` with userinfo, and any `*PASSPHRASE*`. A value rule, not a widening of `_SECRET_NAME_RE`. ACS workers/managers and the A2A worker share it |
 | A2A worker on a platform host (DLG-25) | decision: the Bedrock/Vertex/Foundry chain is restored ONLY when the origin can read neither files nor a shell (`_worker_can_read_env`: Bash, PowerShell, Monitor, Read, Grep, NotebookRead, Task, Agent all denied); otherwise the spawn is refused (`reason_code: gate`) and audited as `A2A.worker_platform_credentials_refused` (task, origin, platform, reason). No per-origin opt-in — a remote peer is never handed the cloud account; the long-term route is a signing proxy |
 | inbound A2A tenant (DLG-23) | `spawn_a2a_worker(tenant_id=…)` decides the tenant once (`_receiver_tenant`: explicit id validated, else `forge.tenants.current_tenant()`) and passes it to L34, L35 and L44; the receiver does not pass it yet (open, `remote_trigger_receiver.py`) |
 | ACS manager usage (DLG-22) | `_communicate_capped(stdout_tail=…)` keeps the last 16 KiB of stdout, so a manager answer over `_MANAGER_OUTPUT_CAP` is still priced from the envelope's `usage`/`modelUsage` (`_envelope_usage_from_tail`); `_absorb_manager_envelope` sums a turn on the success AND the raise path; the run's `tokens` budget is charged the REPORTED input+output (`_manager_tokens`, the worker's definition), the word estimate only when nothing was reported |
@@ -3154,12 +3156,13 @@ Guarded by `corvin_operator/bridges/shared/test_review_20261105_dlg_e2e.py` and
 
 **The three other worker spawns (review DLG, 2026-11-05).** Every tool-capable
 `claude -p` that runs a task now gets the ACS worker environment, built by the
-SAME `acs_runtime` helpers (imported, never copied): a copy of the process env →
-`_strip_worker_secrets` → `_restore_platform_credentials` →
-`_apply_provider_redirect(tenant)`. Helpers unimportable → no spawn. Consequence
-shared with ACS workers: an `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` set
-as an ENV VAR is stripped too (re-set only in explicit provider mode); the CLI's
-credentials FILE is unaffected.
+SAME `acs_runtime` helper (imported, never copied): `build_worker_env(tenant)` /
+`worker_env_overlay(tenant)` — the deny-by-default rule of the RD round below.
+Helper unimportable → no spawn. An `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`
+set as an ENV VAR reaches these workers ONLY on an env-credential host (no Claude
+login file, no platform mode, no provider redirect — the documented Docker
+install); on a subscription host it is stripped and the worker uses the login file;
+in explicit provider mode the redirect sets the provider's own credential.
 
 | Path | Rule now |
 |---|---|
@@ -3178,6 +3181,50 @@ span END `model_id: ""`), `core/console/tests/test_task_worker_pool_worker_env.p
 (real `TaskWorkerPool._execute_task`) and
 `core/workflows/tests/test_engine_worker_env.py` (real `DAGRunner` +
 `ClaudeCliEngine`).
+
+**Worker environment — deny-by-default (refutation round RD, 2026-11-05).** The
+DLG-2 strip was a denylist of name patterns plus URL value shapes; the refutation
+round found 11 credential shapes it let through (a PAT as URL userinfo, a
+`?password=` DSN, an AWS presigned URL, `REDIS_HOST=redis://:pw@…`, Teams/Zapier
+webhooks, `?auth=`). The rule is now inverted. `acs_runtime.build_worker_env(tenant)`
+— called by the ACS worker AND manager, the inbound A2A worker
+(`_secret_env_overrides`), the gateway run (`worker_env_overlay`), the console
+`/task` worker and the workflow agent node — gives a worker exactly:
+
+| Rule | What | Where |
+|---|---|---|
+| (a) base set | `PATH HOME USER LOGNAME SHELL LANG LANGUAGE TERM COLORTERM TZ TMPDIR TMP TEMP PWD`, `LC_*`, `XDG_*`, `HTTP(S)_PROXY NO_PROXY ALL_PROXY` (either case), `SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS`, `PYTHONPATH PYTHONIOENCODING PYTHONUTF8 VIRTUAL_ENV` (the CLI's hooks), and the Windows process essentials (`SYSTEMROOT COMSPEC PATHEXT USERPROFILE APPDATA LOCALAPPDATA …`) | `_WORKER_ENV_BASE` |
+| (b) Corvin's namespaces | every `CORVIN_*` `CLAUDE_*` `VOICE_*` `FORGE_*` `SKILL_FORGE_*` name EXCEPT a secret by `_SECRET_NAME_RE` (unchanged), the explicit `_WORKER_SECRET_ENV_STRIP` list, or the value rule | `_worker_env_name_admitted`, `_is_worker_secret` |
+| (c) engine credential | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from the parent, only when that IS the host's auth mode: no Claude login file under the source env's `HOME` / `CLAUDE_CONFIG_DIR`, no platform flag, and no provider redirect for the tenant (a native key is never handed to a third-party endpoint). macOS keeps the login in the Keychain, so there a set env key is restored — the key the OS turn itself uses | `_engine_env_credential` |
+| (d) operator keep list | exact names in `tenant.corvin.yaml::spec.worker_env.keep` (closed list; an entry that is not a valid name is rejected; an unreadable file keeps nothing). Audited once per process and tenant (and on every change) as `worker_env.keep_loaded` (`names`, `count`, `rejected` — names only, never a value). Operator-driven workers only — never the A2A worker | `_operator_worker_env_keep` |
+| (e) platform chain | Bedrock/Vertex/Foundry, unchanged (ADR-0759) | `_restore_platform_credentials` |
+| caller's declared names | ACS `extra_env` (run/worker ids, an ADR-0127 datasource env) — judged by the secret rules, not by the base set, so a datasource's `PGPASSWORD` still never arrives | `build_worker_env(extra=…)` |
+
+Everything else is not inherited (an overlay passes it as `""`). The value rule stays
+as the second line over (a)/(b), now independent of the name's suffix: any URL
+userinfo (`scheme://user@host`, with or without `:password`), a webhook path or host
+(Discord, Slack, `*.webhook.office.com`, `hooks.zapier.com`, `/webhook(s)/`), or a
+query/fragment parameter whose name ends in `token`/`key`/`secret`/`sig(nature)`/
+`password`/`pwd`/`auth`/`credential` (covers `X-Amz-Credential`/`-Signature`/
+`-Security-Token`, `apiKey`, Azure `sig=`). Consequence: an authenticated proxy
+(`HTTPS_PROXY=http://user:pw@proxy`) is stripped unless the operator lists it in
+`spec.worker_env.keep`; a fake `claude` in a test reads its configuration from a
+`CORVIN_*` name.
+
+| Path | Rule now (RD round) |
+|---|---|
+| A2A on an env-credential host (RD-4) | the DLG-25 rule: the key is restored only for an origin that can read neither files nor a shell; otherwise refused (`reason_code: gate`) and audited as `A2A.worker_engine_credential_refused` (`task_id`, `origin_id`, `auth_kind` = `api_key`/`oauth_token`, `reason`, `tenant_id`) |
+| A2A credential restore (RD-10) | decided by an ALLOW list: a worker that receives the platform chain or the env key is spawned with `--tools=<WebFetch, WebSearch, TodoWrite minus the origin's denials>` — a tool outside that list (a future/renamed reader, a background-shell reader, a Skill) does not exist for it. An origin whose explicit `allowed_tools` names anything outside the list is refused |
+| `forge` namespace binding (RD-2/RD-9) | `corvin_operator/bridges/shared/_forge_imports.py::forge_module(name)` returns the real `forge.<name>`; a process that bound `forge` to the namespace package `corvin_operator/forge/` is RE-POINTED (`sys.modules['forge']` replaced by the real package, loaded by package spec; namespace entries evicted; logged once). `spawn_gates`, `a2a_worker`, `acs_runtime`, `adapter`, `remote_trigger_receiver` and `model_selector` load forge through it. `check_l34`/`check_l35`/`check_l44`/`check_l44_floor` and the A2A worker REFUSE when `forge.security_events` cannot be loaded; the L44 "audit disabled but gate continues" no-op writer is gone |
+| A2A attachments (RD-3) | decoded by BOM (UTF-8/16/32), declared `charset=`, UTF-8, then a fixed-lane NUL sniff for BOM-less UTF-16/32; NULs removed before judging. gzip (multi-member) / zlib / zip are unpacked within the same 1 MiB cap and every member judged; bzip2/xz/zstd/7z, a corrupt or truncated container, or one past the cap is refused (`reason_code: data_flow`) |
+| gate tenant (RD-5) | `check_l34`, `check_l35`, `check_l44`, `check_l44_floor`, `decide_l34_route`, `resolve_l34_route`, `detector_on` take the caller's tenant through `validate_tenant_id` (`_require_tenant`) — no env fallback, a padded `"_default "` is refused. The bridge decides its tenant once through `adapter._bridge_gate_tenant` (`forge.tenants.current_tenant()`, validated — a bridge serves one tenant) |
+| ACS inner gate refusal (RD-6) | `ACSResult.gate_refusal` names the first inner refusal (`manager_l34_blocked`, `worker_l35_blocked`, `*_gates_unavailable` …) of a run that did not succeed; the bridge records such a delegation as NOT judged (`no_engine`), like the outer gate branch |
+| orchestration MCP workflow records (RD-8) | `workflow.run.*` / `workflow.node.*` registered with closed field sets; `run_id` at the top level of every record; severity from the registry, a terminal `failed` run ERROR and `cancelled` WARNING. `workflow.completed` (metrics recorder) registered too |
+
+Guarded by `corvin_operator/bridges/shared/test_review_20261105_dlg_e2e.py::test_rd*`
+(recording `claude` shim through the real ACS runtime and A2A worker; a fresh
+interpreter with `forge` bound to the namespace package for RD-2/RD-9; real chain
+writes) and the gateway / `/task` / workflow env tests above.
 
 Guarded by `tests/e2e/test_a2a_worker_span_priceable_adr0759_e2e.py` (20 tests):
 the real `spawn_a2a_worker` against a stub engine and the REAL chain writer,
@@ -3576,7 +3623,11 @@ That reasoning ("no less trusted than the process that spawned it") holds for an
 ACS worker, which runs the OPERATOR's task. It does not hold for the inbound A2A
 worker, which runs a REMOTE peer's: there the chain is restored only when the
 origin can read neither files nor a shell, and the spawn is refused (audited,
-`A2A.worker_platform_credentials_refused`) otherwise (review DLG-25, 2026-11-05).
+`A2A.worker_platform_credentials_refused`) otherwise (review DLG-25, 2026-11-05);
+a restored worker gets the RD-10 tool allow list as its whole tool set. The same
+holds for the env credential of an API-key host (RD-4,
+`A2A.worker_engine_credential_refused`). Since the RD round the strip itself is
+deny-by-default (`build_worker_env`, see "Worker environment — deny-by-default").
 
 ### `model_catalog_refresh_failed` was the loudest event in the chain
 

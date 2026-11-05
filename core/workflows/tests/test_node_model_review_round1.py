@@ -28,7 +28,7 @@ import json, os, sys
 _i = sys.argv.index("-p") + 1 if "-p" in sys.argv else 0
 if _i and (_i == len(sys.argv) or sys.argv[_i].startswith("-")) and not sys.stdin.isatty():
     sys.argv.insert(_i, sys.stdin.buffer.read().decode("utf-8"))
-with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
+with open(os.environ["CORVIN_FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps(sys.argv[1:]) + "\\n")
 classifier = "--max-turns" in sys.argv
 reply = ({"violated_rule_id": "", "confidence": 0.0, "reason": "ok"} if classifier else {"ok": True})
@@ -61,7 +61,7 @@ def cli_log(tmp_path, monkeypatch):
             f'@echo off\r\n"{sys.executable}" "{claude}" %*\r\n', encoding="utf-8")
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
-    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
+    monkeypatch.setenv("CORVIN_FAKE_CLAUDE_LOG", str(log))
     monkeypatch.delenv("CORVIN_HELPER_MODEL_WORKFLOW_NODE", raising=False)
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     return log

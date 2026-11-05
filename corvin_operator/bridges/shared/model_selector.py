@@ -17,6 +17,20 @@ import sys
 from pathlib import Path
 from typing import Final
 
+
+def _forge_mod(name: str):
+    """``forge.<name>`` from the REAL forge package, healing a namespace-bound ``forge``
+    (refutation RD-2 — ``_forge_imports.forge_module``). Raises ImportError like the
+    plain import it replaces."""
+    try:
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    return forge_module(name)
+
 # Logging is best-effort; the selector must stay pure-stdlib + cheap.
 try:
     import sys as _sys
@@ -581,7 +595,7 @@ def _write_event(event_type: str, details: dict) -> None:
     """Best-effort write to the unified forge audit chain."""
     try:
         try:
-            from forge.security_events import write_event  # type: ignore
+            write_event = _forge_mod("security_events").write_event  # type: ignore
         except ImportError:
             try:
                 import sys as _sys
@@ -667,7 +681,7 @@ def _register_classified_allowlist() -> None:
     safe."""
     try:
         try:
-            from forge.security_events import register_event_allowlist  # type: ignore
+            register_event_allowlist = _forge_mod("security_events").register_event_allowlist  # type: ignore
         except ImportError:
             from security_events import register_event_allowlist  # type: ignore
         register_event_allowlist("os_model.classified", _ALLOWED_FIELDS_CLASSIFIED)

@@ -1549,3 +1549,19 @@ Every bridge daemon spawns the product's CLIs through `shared/js/python_bin.js::
 `PYTHON` → `python3` on PATH → the tool venv at uv's default location → the literal `python3`. A README
 install on a bare system has no `python3`; before the resolver every slash command would have failed
 with ENOENT there. The Claude Code hooks resolve the same way through `voice/hooks/with_python.sh`.
+
+## Worker environment (deny-by-default, refutation RD, 2026-11-05)
+
+Every tool-capable worker the adapter or the console starts — ACS worker and manager,
+`/task`, workflow agent node, gateway run, inbound A2A — gets its environment from ONE
+rule, `acs_runtime.build_worker_env(tenant)`: a base set (`PATH`, `HOME`, locale,
+`TMPDIR`, proxy / CA-bundle names, the Windows process essentials), every `CORVIN_*` /
+`CLAUDE_*` / `VOICE_*` / `FORGE_*` name that is not a secret, the engine's own env
+credential on an API-key host, the Bedrock/Vertex/Foundry chain on a platform host and
+the names the operator lists in `tenant.corvin.yaml::spec.worker_env.keep` (audited as
+`worker_env.keep_loaded`; never for a remote peer's A2A worker). Nothing else is
+inherited. Full rule: [layer-engines.md](layer-engines.md) § "Worker environment —
+deny-by-default". The bridge's gates take the tenant from
+`adapter._bridge_gate_tenant` (the validated process tenant) — no gate reads
+`CORVIN_TENANT_ID` itself; an ACS run that an inner gate ended is recorded as not
+judged (`no_engine`, `ACSResult.gate_refusal`).

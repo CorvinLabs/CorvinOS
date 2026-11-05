@@ -58,6 +58,7 @@ _WID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 try:
     from corvin_operator.forge.forge.paths import tenant_audit_chain as _tenant_audit_chain  # type: ignore[import]
     from forge.security_events import write_event as _write_event  # type: ignore[import]
+    from forge.security_events import EVENT_SEVERITY as _EVENT_SEVERITY  # type: ignore[import]
     from corvin_operator.forge.forge.tenants import current_tenant as _current_tenant  # type: ignore[import]
     from corvin_operator.forge.forge.tenants import tenant_home as _tenant_home  # type: ignore[import]
     _FORGE_AVAILABLE = True
@@ -71,10 +72,30 @@ except ImportError:
         return Path.home() / ".corvin" / "tenants" / (tenant_id or "_default")
 
 
-def _audit_sink_for(tenant_id: str, prefix: str) -> Callable[[dict], None] | None:
+#: A terminal run's severity follows its state (refutation RD-8): the registry's INFO is the
+#: complete run's; a failed run is an ERROR, a cancelled one a WARNING.
+_TERMINAL_STATE_SEVERITY = {"failed": "ERROR", "cancelled": "WARNING"}
+
+
+def _record_severity(event_type: str, event: dict) -> str:
+    """The severity of one runner record: the registry's (``EVENT_SEVERITY``), raised for a
+    failed / cancelled terminal state. An unregistered name is a WARNING, never a silent INFO."""
+    sev = _EVENT_SEVERITY.get(event_type, "WARNING")
+    if event_type.endswith(".run.terminal"):
+        sev = _TERMINAL_STATE_SEVERITY.get(str(event.get("state") or ""), sev)
+    return sev
+
+
+def _audit_sink_for(tenant_id: str, prefix: str,
+                    run_id: str = "") -> Callable[[dict], None] | None:
     """Best-effort audit sink writing to the forge hash chain. Returns None
     (not a no-op callable) when forge is unavailable so callers that treat
-    ``audit_sink=None`` as "skip" don't pay a wasted call."""
+    ``audit_sink=None`` as "skip" don't pay a wasted call.
+
+    Every record carries the run's id at the TOP LEVEL (``run_id=``) — the runner puts it
+    in the details of only two records — and its severity from the registry, raised for a
+    failed or cancelled run (refutation RD-8: every record used to be a hard-coded INFO
+    with ``run_id: ""``). The ``event``/``run_id`` keys are not repeated in ``details``."""
     if not _FORGE_AVAILABLE:
         return None
     # THE tenant chain (CLAUDE.md "ONE audit chain per tenant", ADR-0654) —
@@ -93,8 +114,12 @@ def _audit_sink_for(tenant_id: str, prefix: str) -> Callable[[dict], None] | Non
 
     def _sink(event: dict) -> None:
         ev = event.get("event", "event")
+        event_type = f"{prefix}.{ev}"
+        rid = str(event.get("run_id") or run_id or "")
+        details = {k: v for k, v in event.items() if k not in ("event", "run_id")}
         try:
-            _write_event(audit_path, f"{prefix}.{ev}", severity="INFO", details=event)
+            _write_event(audit_path, event_type, severity=_record_severity(event_type, event),
+                         run_id=rid, details=details)
         except Exception as exc:  # noqa: BLE001 — never let audit shaping abort a live run
             # Visible, never silent: stdout is the JSON-RPC channel, stderr
             # is the MCP host's log.
@@ -200,12 +225,122 @@ except ImportError:
     except ImportError:
         _lic_get_limit = _WF_FREE_TIER_FALLBACK.get  # type: ignore[assignment]
 
-# In-process running-workflow counter (chat-path runs). The console's runs
-# are counted separately via their on-disk *.meta.json registry; this
-# counter covers the DAGRunner invocations this server itself started,
-# which never appear in that registry.
-_ACTIVE_WORKFLOW_RUNS = 0
-_ACTIVE_WORKFLOW_LOCK = threading.Lock()
+# Running chat-path (MCP) workflow runs: one SLOT FILE per run under
+# ``<tenant_home>/workflows/.mcp_running/<slot>.json`` (``{"pid", "started"}``),
+# counted and created under a file lock, like ``license/compute_quota``. The
+# console's runs are counted separately via their *.meta.json registry.
+#
+# Until RS-11/RS-12 (refutation 2026-11-05) this was a module-global integer:
+# every ``claude -p`` turn spawns its OWN orchestration MCP server, so each
+# turn's server saw 0 and concurrent turns in different chats each passed a
+# cap of 1. A slot whose process is gone (a killed turn) is reaped on the next
+# count, so a crash never leaks a slot.
+_SLOT_DIRNAME = ".mcp_running"
+_SLOT_LOCK_TIMEOUT_S = 10.0
+_ACTIVE_WORKFLOW_LOCK = threading.Lock()  # in-process serialisation of the file lock
+
+
+def _slot_dir(tenant_id: str) -> Path:
+    return _tenant_home(tenant_id) / "workflows" / _SLOT_DIRNAME
+
+
+class _SlotLock:
+    """Exclusive, bounded lock on ``<slot dir>/.lock`` (POSIX flock, Windows
+    msvcrt range lock). Raises ``TimeoutError`` at the deadline - the caller
+    refuses (fail-closed)."""
+
+    def __init__(self, d: Path) -> None:
+        self._d = d
+
+    def __enter__(self) -> "_SlotLock":
+        _ACTIVE_WORKFLOW_LOCK.acquire()
+        try:
+            self._d.mkdir(parents=True, exist_ok=True)
+            self._fd = os.open(str(self._d / ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        except BaseException:
+            _ACTIVE_WORKFLOW_LOCK.release()
+            raise
+        deadline = time.monotonic() + _SLOT_LOCK_TIMEOUT_S
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt  # noqa: PLC0415
+                    msvcrt.locking(self._fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl  # noqa: PLC0415
+                    fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.monotonic() >= deadline:
+                    os.close(self._fd)
+                    _ACTIVE_WORKFLOW_LOCK.release()
+                    raise TimeoutError("workflow slot lock busy")
+                time.sleep(0.02)
+
+    def __exit__(self, *_exc: object) -> None:
+        try:
+            if os.name == "nt":
+                import msvcrt  # noqa: PLC0415
+                os.lseek(self._fd, 0, os.SEEK_SET)
+                msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl  # noqa: PLC0415
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self._fd)
+            _ACTIVE_WORKFLOW_LOCK.release()
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        import ctypes  # noqa: PLC0415
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # type: ignore[attr-defined]
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _count_mcp_running_locked(d: Path) -> int:
+    """Live slots in ``d``; a slot of a dead process is removed. Caller holds the lock.
+    An unreadable slot counts as running (fail-closed: it may be a live run)."""
+    n = 0
+    for f in d.glob("*.json"):
+        try:
+            pid = int(json.loads(f.read_text(encoding="utf-8")).get("pid", 0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            n += 1
+            continue
+        if _pid_alive(pid):
+            n += 1
+        else:
+            f.unlink(missing_ok=True)
+    return n
+
+
+def _active_mcp_runs(tenant_id: str) -> int:
+    """Running MCP-started workflow runs of ``tenant_id`` across EVERY process."""
+    d = _slot_dir(tenant_id)
+    if not d.is_dir():
+        return 0
+    with _SlotLock(d):
+        return _count_mcp_running_locked(d)
+
+
+def _release_workflow_slot(slot: "Path | None") -> None:
+    if slot is not None:
+        slot.unlink(missing_ok=True)
 
 # Whether a workflow needs a worker engine at all is decided by
 # corvin_workflows.node_requires_engine (one definition for every caller): a graph of
@@ -279,28 +414,41 @@ def _count_console_running(tenant_id: str) -> int:
     return count
 
 
-def _workflow_concurrency_refusal(tenant_id: str) -> str | None:
-    """None if a new run may start; a user-facing refusal string otherwise.
-    Fail-closed: if the limit or the current count cannot be determined,
-    refuse rather than granting unlimited concurrency."""
+def _acquire_workflow_slot(tenant_id: str) -> "tuple[str | None, Path | None]":
+    """``(None, slot)`` when a new run may start - the slot is TAKEN (count and
+    create under one file lock, so two processes cannot both pass a cap of 1);
+    ``(refusal, None)`` otherwise. An unlimited tier takes a slot too, so its
+    runs stay visible to a later count. Fail-closed: if the limit or the
+    current count cannot be determined, refuse rather than granting unlimited
+    concurrency."""
     try:
         limit = _lic_get_limit("workflows_concurrent")
     except Exception:  # noqa: BLE001
         limit = _WF_FREE_TIER_FALLBACK["workflows_concurrent"]
-    if limit is None:
-        return None  # unlimited tier
     try:
-        with _ACTIVE_WORKFLOW_LOCK:
-            active = _ACTIVE_WORKFLOW_RUNS
-        running = active + _count_console_running(tenant_id)
+        d = _slot_dir(tenant_id)
+        with _SlotLock(d):
+            if limit is not None:
+                running = _count_mcp_running_locked(d) + _count_console_running(tenant_id)
+                if running >= int(limit):
+                    return (f"license limit reached: {running} workflow run(s) already "
+                            f"active, workflows_concurrent={limit}. Wait for a run to "
+                            "finish or upgrade at https://corvin-labs.com/pricing"), None
+            slot = d / f"{secrets.token_hex(8)}.json"
+            fd = os.open(str(slot), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"pid": os.getpid(), "started": time.time()}, fh)
+            return None, slot
     except Exception:  # noqa: BLE001
         return ("cannot determine current workflow concurrency — refusing "
-                "to start a new run (fail-closed)")
-    if running >= int(limit):
-        return (f"license limit reached: {running} workflow run(s) already "
-                f"active, workflows_concurrent={limit}. Wait for a run to "
-                "finish or upgrade at https://corvin-labs.com/pricing")
-    return None
+                "to start a new run (fail-closed)"), None
+
+
+def _workflow_concurrency_refusal(tenant_id: str) -> str | None:
+    """Check-only form (``workflow_resume``): None if a new run may start."""
+    refusal, slot = _acquire_workflow_slot(tenant_id)
+    _release_workflow_slot(slot)
+    return refusal
 
 
 def _run_with_budget(
@@ -1024,13 +1172,23 @@ class OrchestrationServer:
         # without paying to instantiate an engine. Ordering also keeps the
         # refusal deterministic in environments where the `claude` CLI is
         # absent (CI) — otherwise engine_unavailable would mask the refusal.
-        refusal = _workflow_concurrency_refusal(tenant_id)
+        refusal, wf_slot = _acquire_workflow_slot(tenant_id)
         if refusal:
             self._respond(msgid, self._text_result(
                 {"status": "refused", "error": refusal}, is_error=True,
             ))
             return
+        # The slot is held from here: every return before the run is handed to its
+        # thread gives it back; after that the run's thread (or the failed hand-off) does.
+        slot = {"handed": False, "started": False, "path": wf_slot}
+        try:
+            self._call_workflow_run_holding(msgid, args, tenant_id, workflow_id, doc, slot)
+        finally:
+            if not slot["handed"]:
+                _release_workflow_slot(wf_slot)
 
+    def _call_workflow_run_holding(self, msgid: Any, args: dict, tenant_id: str,
+                                   workflow_id: str, doc: Any, slot: dict) -> None:
         # ADR-0152 LIC-MCP-WF-RUN-01: the MCP workflow_run spawns a billable
         # engine (agent nodes, fan_out, delegation_loop manager/workers, etc.)
         # but was missing compute_units_per_day + chat_turns_per_day gates —
@@ -1099,16 +1257,16 @@ class OrchestrationServer:
                 return
 
         budget_s = _clamp(args.get("budget_s"), lo=10, hi=600, default=120)
-        sink = _audit_sink_for(tenant_id, "workflow")
-        runner = _DAGRunner(doc, engine=engine, audit_sink=sink, tenant_id=tenant_id)
-
         # Pre-assign the run's id (rather than letting DAGRunner.run() pick
         # one internally) so a timeout response — returned before run()
         # itself returns — can still hand back a real, later-pollable
         # run_id, and so a background completion notification (registered
         # only if the run actually outlives budget_s, see
-        # _completion_notify_hooks) is keyed under the SAME id.
+        # _completion_notify_hooks) is keyed under the SAME id. The audit sink
+        # stamps it on every record (RD-8).
         run_id_hint = secrets.token_hex(8)
+        sink = _audit_sink_for(tenant_id, "workflow", run_id=run_id_hint)
+        runner = _DAGRunner(doc, engine=engine, audit_sink=sink, tenant_id=tenant_id)
         on_timeout, on_finish = _completion_notify_hooks(
             run_id_hint, tenant_id, f"workflow {workflow_id!r}",
         )
@@ -1119,20 +1277,14 @@ class OrchestrationServer:
         # returned let budget_s=10 calls start N concurrent runs on a cap-1
         # tier (SRF-8, 2026-11-05). The run's own thread releases it; the
         # caller releases it only if that thread never started.
-        global _ACTIVE_WORKFLOW_RUNS
-        with _ACTIVE_WORKFLOW_LOCK:
-            _ACTIVE_WORKFLOW_RUNS += 1
-        slot = {"started": False}
-
         def _run_holding_slot() -> Any:
-            global _ACTIVE_WORKFLOW_RUNS
             slot["started"] = True
             try:
                 return runner.run(inputs=args.get("inputs") or {}, run_id=run_id_hint)
             finally:
-                with _ACTIVE_WORKFLOW_LOCK:
-                    _ACTIVE_WORKFLOW_RUNS -= 1
+                _release_workflow_slot(slot["path"])
 
+        slot["handed"] = True
         try:
             result = _run_with_budget(
                 _run_holding_slot,
@@ -1140,9 +1292,8 @@ class OrchestrationServer:
                 on_timeout=on_timeout, on_finish=on_finish,
             )
         except Exception as exc:  # noqa: BLE001
-            if not slot["started"]:
-                with _ACTIVE_WORKFLOW_LOCK:
-                    _ACTIVE_WORKFLOW_RUNS -= 1
+            if not slot["started"]:  # the run's thread never ran: give the slot back
+                _release_workflow_slot(slot["path"])
             self._error(msgid, INTERNAL_ERROR, f"workflow run failed: {exc}")
             return
         self._respond(msgid, self._run_result_envelope(result))
@@ -1158,7 +1309,7 @@ class OrchestrationServer:
             return
         tenant_id = _current_tenant(None)
         budget_s = _clamp(args.get("budget_s"), lo=10, hi=600, default=120)
-        sink = _audit_sink_for(tenant_id, "workflow")
+        sink = _audit_sink_for(tenant_id, "workflow", run_id=run_id)
 
         # ADR-0152 LIC-MCP-WF-RESUME-01: the MCP workflow_resume continues a
         # paused run, spawning remaining agent nodes without compute_units_per_day

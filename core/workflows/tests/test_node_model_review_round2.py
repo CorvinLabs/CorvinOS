@@ -30,7 +30,7 @@ import json, os, sys
 _i = sys.argv.index("-p") + 1 if "-p" in sys.argv else 0
 if _i and (_i == len(sys.argv) or sys.argv[_i].startswith("-")) and not sys.stdin.isatty():
     sys.argv.insert(_i, sys.stdin.buffer.read().decode("utf-8"))
-with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
+with open(os.environ["CORVIN_FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps(sys.argv[1:]) + "\\n")
 classifier = "--max-turns" in sys.argv
 prompt = sys.argv[sys.argv.index("-p") + 1] if "-p" in sys.argv else ""
@@ -39,7 +39,7 @@ reply = ({"violated_rule_id": "", "confidence": 0.0, "reason": "ok"} if classifi
 env = {"type": "result", "subtype": "success", "is_error": False, "result": json.dumps(reply),
        "total_cost_usd": 0.01,
        "usage": {"input_tokens": 10, "output_tokens": 5},
-       "modelUsage": {os.environ.get("FAKE_REPORTED", "reported-model-1"): {"outputTokens": 5}}}
+       "modelUsage": {os.environ.get("CORVIN_FAKE_REPORTED", "reported-model-1"): {"outputTokens": 5}}}
 if not classifier and "MARK-ERRENV" in prompt:
     env["is_error"] = True
     print(json.dumps(env))
@@ -71,7 +71,7 @@ def cli_log(tmp_path, monkeypatch):
             f'@echo off\r\n"{sys.executable}" "{claude}" %*\r\n', encoding="utf-8")
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
-    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
+    monkeypatch.setenv("CORVIN_FAKE_CLAUDE_LOG", str(log))
     monkeypatch.delenv("CORVIN_HELPER_MODEL_WORKFLOW_NODE", raising=False)
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     return log
@@ -151,7 +151,7 @@ def test_the_profile_keeps_real_model_id_shapes_and_nothing_else(model, kept):
 
 def test_the_cli_json_reports_model_and_tokens_per_node(cli_log, tmp_path, monkeypatch):
     from corvin_workflows import cli
-    monkeypatch.setenv("FAKE_REPORTED", "reported-model-7")
+    monkeypatch.setenv("CORVIN_FAKE_REPORTED", "reported-model-7")
     wf = tmp_path / "cli_r2.awp.yaml"
     wf.write_text(yaml.safe_dump({"awp": "1.0.0", "workflow": {"name": "cli_r2", "description": "d"},
                                   "orchestration": {"engine": "dag", "graph": [

@@ -64,28 +64,22 @@ class SpawnRefusedError(ClaudeEngineError):
 def _worker_spawn_env(tenant_id: str) -> dict[str, str]:
     """The environment of a node's `claude -p` (review 2026-11-05, DLG-9).
 
-    The ACS worker rule, through ``acs_runtime``'s own helpers (bridges/shared, put on sys.path
-    by the prompt-guard bootstrap above) — never a copy: a copy of this process's environment →
-    ``_strip_worker_secrets`` (every operator credential) → ``_restore_platform_credentials``
-    (the Bedrock/Vertex/Foundry chain, only on a platform host) → ``_apply_provider_redirect``
-    (the tenant's provider egress, the host the L35 gate validated). ``CORVIN_TENANT_ID`` is the
-    run's tenant. Raises :class:`SpawnRefusedError` when the helpers cannot be imported.
+    THE worker rule, ``acs_runtime.build_worker_env`` (bridges/shared, put on sys.path by the
+    prompt-guard bootstrap above) — never a copy (refutation RD-1/RD-4): deny-by-default (a base
+    set + Corvin's own namespaces minus every secret + the tenant's ``spec.worker_env.keep``),
+    the engine's own env credential on an API-key host, the Bedrock/Vertex/Foundry chain on a
+    platform host, the tenant's provider egress (the host the L35 gate validated).
+    ``CORVIN_TENANT_ID`` is the run's tenant. Raises :class:`SpawnRefusedError` when the helper
+    cannot be imported.
     """
     try:
-        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
-            _apply_provider_redirect,
-            _restore_platform_credentials,
-            _strip_worker_secrets,
-        )
+        from acs_runtime import build_worker_env  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError as exc:
         raise SpawnRefusedError(
             f"worker env strip unavailable ({type(exc).__name__}) - refusing to spawn a workflow "
             "node with the operator's environment"
         ) from exc
-    env = dict(os.environ)
-    _strip_worker_secrets(env)
-    _restore_platform_credentials(env)
-    _apply_provider_redirect(env, tenant_id)
+    env = build_worker_env(tenant_id)
     env["CORVIN_TENANT_ID"] = tenant_id
     return env
 

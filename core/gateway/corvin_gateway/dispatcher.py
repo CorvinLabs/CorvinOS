@@ -159,42 +159,29 @@ def _worker_spawn_env(tenant_id: str, *, persona: str, run_id: str,
     """The env OVERLAY for a gateway run's engine spawn (review 2026-11-05, DLG-3).
 
     A gateway run executes a tenant-supplied prompt on a tool-capable engine,
-    so it gets exactly the environment an ACS worker gets — built by the SAME
-    helpers (``acs_runtime``), never a copy of them:
-
-    1. ``_strip_worker_secrets`` — every operator credential (explicit list +
-       name-pattern catch-all; public keys and location pointers kept);
-    2. ``_restore_platform_credentials`` — the Bedrock/Vertex/Foundry chain the
-       engine signs with, only when the host is in platform mode (ADR-0759);
-    3. ``_apply_provider_redirect`` — the tenant's provider egress, so the L35
-       gate and the actual egress agree (ADR-0181).
+    so it gets exactly the environment an ACS worker gets — the ONE rule,
+    ``acs_runtime.worker_env_overlay`` (refutation RD-1/RD-4), never a copy:
+    deny-by-default (a base set + Corvin's own namespaces minus every secret +
+    the tenant's ``spec.worker_env.keep``), the engine's own env credential on
+    an API-key host (RD-4), the Bedrock/Vertex/Foundry chain on a platform host
+    (ADR-0759), the tenant's provider redirect (ADR-0181).
 
     ``ClaudeCodeEngine.spawn`` merges its ``env`` OVER ``os.environ``, so a
     stripped name is passed as ``""`` — that is how it is removed. The three
     ``CORVIN_*`` keys bind the run's tenant, persona and channel.
 
-    Raises ``RuntimeError`` when the shared helpers cannot be imported: the
+    Raises ``RuntimeError`` when the shared helper cannot be imported: the
     caller fails the run rather than spawn with the operator's secrets.
     """
     try:
-        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
-            _apply_provider_redirect,
-            _restore_platform_credentials,
-            _strip_worker_secrets,
-        )
+        from acs_runtime import worker_env_overlay  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError as exc:
         raise RuntimeError(
             f"worker env strip unavailable ({type(exc).__name__}) — refusing to spawn "
             "a gateway run with the operator's environment"
         ) from exc
     src = dict(os.environ if base is None else base)
-    kept = dict(src)
-    _strip_worker_secrets(kept)
-    _restore_platform_credentials(kept, dict(src))
-    overlay: dict[str, str] = {name: "" for name in src if name not in kept}
-    redirect: dict[str, str] = {}
-    _apply_provider_redirect(redirect, tenant_id)
-    overlay.update(redirect)
+    overlay: dict[str, str] = worker_env_overlay(tenant_id, source_env=src)
     overlay.update({
         "CORVIN_TENANT_ID":      tenant_id,
         "CORVIN_CALLER_PERSONA": persona,

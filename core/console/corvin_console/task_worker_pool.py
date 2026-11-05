@@ -404,46 +404,37 @@ def _build_worker_argv(*, model: str | None = None) -> list[str]:
     return argv
 
 
-def _acs_worker_env_helpers():
-    """``(strip, restore, redirect)`` — the ACS worker env helpers, or ``None``.
+def _acs_build_worker_env():
+    """``acs_runtime.build_worker_env`` — THE worker env rule — or ``None``.
 
     Imported from ``acs_runtime`` (bridges/shared, on sys.path above), never
     copied: one rule for every tool-capable worker spawn.
     """
     try:
-        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
-            _apply_provider_redirect,
-            _restore_platform_credentials,
-            _strip_worker_secrets,
-        )
+        from acs_runtime import build_worker_env  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError:
         return None
-    return _strip_worker_secrets, _restore_platform_credentials, _apply_provider_redirect
+    return build_worker_env
 
 
 def _worker_spawn_env(tenant_id: str) -> dict[str, str]:
-    """The /task worker's environment (review 2026-11-05, DLG-8).
+    """The /task worker's environment (review 2026-11-05, DLG-8; refutation RD-1/RD-4).
 
-    Built like an ACS worker's: a copy of the console environment →
-    ``_strip_worker_secrets`` (every operator credential) →
-    ``_restore_platform_credentials`` (the Bedrock/Vertex/Foundry chain, only
-    on a platform host) → ``_apply_provider_redirect`` (the TASK tenant's
-    provider egress). ``CORVIN_TENANT_ID`` is the task's tenant, so the
-    worker's own hooks (path gate, forge) attribute to it and not to the
-    console process tenant. Raises ``RuntimeError`` when the helpers are
+    ``acs_runtime.build_worker_env(<task tenant>)``: deny-by-default (a base set +
+    Corvin's own namespaces minus every secret + the tenant's ``spec.worker_env.keep``),
+    the engine's own env credential on an API-key host, the Bedrock/Vertex/Foundry chain
+    on a platform host, the TASK tenant's provider egress. ``CORVIN_TENANT_ID`` is the
+    task's tenant, so the worker's own hooks (path gate, forge) attribute to it and not
+    to the console process tenant. Raises ``RuntimeError`` when the helper is
     unavailable: no strip, no spawn.
     """
-    helpers = _acs_worker_env_helpers()
-    if helpers is None:
+    build = _acs_build_worker_env()
+    if build is None:
         raise RuntimeError(
             "worker env strip unavailable (acs_runtime not importable) — refusing "
             "to spawn a /task worker with the console's environment"
         )
-    strip, restore, redirect = helpers
-    env = dict(os.environ)
-    strip(env)
-    restore(env)
-    redirect(env, tenant_id)
+    env = build(tenant_id)
     env["CORVIN_TENANT_ID"] = tenant_id
     return env
 

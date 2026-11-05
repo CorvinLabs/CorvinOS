@@ -801,6 +801,8 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
 _WORKER_REFUSAL_TEXT: dict[str, str] = {
     "data_flow": "The peer's data-flow gate blocked the task (its data class is not allowed for the peer's engine)",
     "gate_error": "A safety gate on the peer failed and refused the task (fail-closed) - try again later",
+    "gate": "The peer refused the task: its engine credentials cannot be handed to a task with file or "
+            "shell access (the peer's operator can grant this origin a narrower tool set)",
     "egress": "The peer's network-egress policy blocks its agent engine",
     "house_rules": "The peer's acceptable-use gate refused the task",
     "house_rules_unavailable": "The peer's acceptable-use gate is unavailable and refused the task (fail-closed) - "

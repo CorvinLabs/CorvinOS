@@ -47,7 +47,7 @@ REPORTED = "reported-model-1"
 
 FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, sys
-with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
+with open(os.environ["CORVIN_FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps(sys.argv[1:]) + "\\n")
 # The L44 house-rules gate runs its own classifier through this same `claude` (--max-turns 1):
 # answer it like a healthy model (no rule violated) so the gate really runs and really passes.
@@ -107,7 +107,7 @@ def cli_env(tmp_path, monkeypatch):
     claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
-    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
+    monkeypatch.setenv("CORVIN_FAKE_CLAUDE_LOG", str(log))
     monkeypatch.delenv("CORVIN_HELPER_MODEL_WORKFLOW_NODE", raising=False)
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     return log

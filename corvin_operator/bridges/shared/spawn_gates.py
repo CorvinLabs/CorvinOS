@@ -16,6 +16,11 @@ Invariants:
     missing module, a tampered/unparseable policy, or any gate/classifier
     error all REFUSE the turn (return a refusal string) — an acceptable-use
     guarantee must never evaporate into fail-open.
+  * Tenant + audit writer (refutation RD-2/RD-5, 2026-11-05): every gate entry takes the
+    CALLER's tenant through ``validate_tenant_id`` (no ``CORVIN_TENANT_ID`` fallback, no
+    padded id) and refuses when ``forge.security_events`` cannot be loaded — a namespace-
+    bound ``forge`` is healed first (``_forge_imports``). A decision without its record
+    is never an allow.
 """
 from __future__ import annotations
 
@@ -30,6 +35,73 @@ if TYPE_CHECKING:
     pass
 
 _log = logging.getLogger(__name__)
+
+
+def _forge_module(name: str):
+    """``forge.<name>`` from the REAL forge package (refutation RD-2, ``_forge_imports``).
+
+    A process whose ``forge`` is bound to the namespace package ``corvin_operator/forge/``
+    used to fail every ``from forge.X import`` here, and the gates approved without a record.
+    """
+    try:
+        from _forge_imports import forge_module  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        from ._forge_imports import forge_module  # type: ignore[no-redef]  # noqa: PLC0415
+    return forge_module(name)
+
+
+class _NoTenant(ValueError):
+    """The caller gave no valid tenant: there is no policy to judge against."""
+
+
+def _require_tenant(tenant_id: object) -> str:
+    """The caller's tenant, validated by the canonical rule (refutation RD-5).
+
+    Never the process environment: a multi-tenant host (the console) imports these gates,
+    so an env fallback would judge one tenant's prompt by another tenant's policy. A padded
+    or otherwise malformed id (``"_default "``) is refused too — it named a directory that
+    does not exist and was judged with NO policy. Raises :class:`_NoTenant`.
+    """
+    if not isinstance(tenant_id, str) or not tenant_id:
+        raise _NoTenant("no tenant given")
+    try:
+        return _forge_module("tenants").validate_tenant_id(tenant_id)
+    except Exception as exc:  # noqa: BLE001 — InvalidTenantID or an unloadable resolver
+        raise _NoTenant(f"invalid tenant id ({type(exc).__name__})") from exc
+
+
+def _no_tenant_refusal(tag: str, engine_id: str, why: str) -> str:
+    _log.warning("spawn_gates: %s — %s, fail-closed", tag, why)
+    return (
+        f"[{tag}] Spawn rejected: {why} for engine '{engine_id or '?'}', so the tenant's "
+        "policy cannot be resolved (fail-closed)."
+    )
+
+
+def _audit_writer_refusal(tag: str) -> "str | None":
+    """``None`` when the gate's audit writer (``forge.security_events``) can be loaded.
+
+    A gate decision without its record is the GDPR Art. 30 gap of refutation RD-2: the
+    L34 / L44 writers degraded to a no-op when ``forge`` could not be imported and the gate
+    still ALLOWED. Loading through :func:`_forge_module` first also heals a namespace-bound
+    ``forge`` for every later ``from forge.X import`` in this process (the writers in
+    ``data_classification`` / ``egress_gate``). Unloadable ⇒ a refusal string.
+    """
+    try:
+        se = _forge_module("security_events")
+        _forge_module("paths")
+        if not callable(getattr(se, "write_event", None)):
+            raise ImportError("forge.security_events has no write_event")
+    except Exception as exc:  # noqa: BLE001
+        _log.error("spawn_gates: audit writer unavailable (%s) — %s refuses (fail-closed)",
+                   type(exc).__name__, tag)
+        return (
+            f"[{tag}] Spawn rejected: the audit writer (forge.security_events) cannot be "
+            f"loaded ({type(exc).__name__}); a gate decision without its record is refused "
+            "(fail-closed). Contact the operator."
+        )
+    return None
+
 
 # ── Module-level mtime-keyed caches (moved from adapter.py) ──────────────────
 # Cache key: "{tenant_id}:{corvin_home}" — same tenant under different homes
@@ -106,6 +178,10 @@ def _load_l34_guard(tenant_id: str, corvin_home: Path | None):
     cannot be loaded (missing module, unreadable yaml) yields an ``_L34GuardLoadFailed``
     marker — never cached — and ``check_l34`` refuses on it.
     """
+    # RD-2: heal a namespace-bound ``forge`` BEFORE the guard is built, so its audit writer
+    # (data_classification.make_forge_audit_writer) is the real one and never a cached no-op.
+    # A failure here is refused by the caller (``_audit_writer_refusal``), not hidden.
+    _audit_writer_refusal("data-flow")
     home = _resolve_corvin_home(corvin_home)
     cfg_path = home / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
     try:
@@ -170,7 +246,10 @@ def detector_on(tenant_id: str, corvin_home: "Path | None" = None) -> bool:
     all see the same class. A tenant without a policy, or a guard that failed to load, is
     ``False``: those paths refuse or allow elsewhere.
     """
-    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        tenant = _require_tenant(tenant_id)   # RD-5: no env fallback; no tenant ⇒ detector off
+    except _NoTenant:
+        return False
     try:
         guard = _load_l34_guard(tenant, corvin_home)
     except Exception:  # noqa: BLE001
@@ -268,13 +347,16 @@ def check_l34(
     # host (the console) imports this gate too, so an env fallback would judge one
     # tenant's prompt by another tenant's policy. No tenant ⇒ nothing to judge against ⇒
     # refuse (fail-closed); every production caller passes the turn's own tenant.
-    if not isinstance(tenant_id, str) or not tenant_id.strip():
-        _log.warning("spawn_gates.check_l34: no tenant given — fail-closed")
-        return (
-            f"[data-flow] Spawn rejected: no tenant was given for engine '{engine_id}', so "
-            "its data-classification policy cannot be resolved (fail-closed)."
-        )
-    tenant = tenant_id
+    # RD-5: a padded / malformed id is refused too (validate_tenant_id), never resolved to a
+    # directory that does not exist and judged with no policy.
+    try:
+        tenant = _require_tenant(tenant_id)
+    except _NoTenant as exc:
+        return _no_tenant_refusal("data-flow", engine_id, f"no tenant (or an invalid one) was given ({exc})")
+    # RD-2: the guard's audit writer must be loadable, or an ALLOW would leave no record.
+    _aw = _audit_writer_refusal("data-flow")
+    if _aw is not None:
+        return _aw
     guard = _load_l34_guard(tenant, corvin_home)
     if guard is None:
         return _no_policy_secret_refusal(
@@ -410,8 +492,7 @@ def _l44_audit_path(tenant_id: str, corvin_home: "Path | None") -> Path:
     env_p = os.environ.get("VOICE_AUDIT_PATH")
     if env_p:
         return Path(env_p)
-    from forge import paths as _forge_paths  # type: ignore
-    return _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+    return _forge_module("paths").tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
 
 
 def _load_l44_overlay(tenant_id: str, corvin_home: "Path | None"):
@@ -517,7 +598,13 @@ def check_l44(
     if not task.strip():
         return None  # nothing to classify (status pings, empty resumes) — defensive
 
-    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        tenant = _require_tenant(tenant_id)   # RD-5: no env fallback
+    except _NoTenant as exc:
+        return _no_tenant_refusal("house-rules", engine_id, f"no tenant (or an invalid one) was given ({exc})")
+    _aw = _audit_writer_refusal("house-rules")   # RD-2: no record ⇒ no allow
+    if _aw is not None:
+        return _aw
 
     # ── Robust import with degradation ────────────────────────────────────────
     try:
@@ -539,20 +626,20 @@ def check_l44(
                       type(_overlay_exc).__name__)
             overlay = None
 
-        # Step 2: Setup audit writer (must succeed)
+        # Step 2: Setup audit writer (must succeed). RD-2: there is no silent fallback — a
+        # gate that cannot write its house_rules.* record refuses (fail-closed).
         try:
             _audit_write = _mk_writer(_l44_audit_path(tenant, corvin_home))
-        except Exception as _audit_exc:  # noqa: BLE001 — fallback to null writer
-            _log.warning("[house-rules] audit writer creation failed (%s) — using fallback",
-                        type(_audit_exc).__name__)
-            def _audit_write(event_type: str, severity: str, details: dict) -> None:
-                pass  # Silent fallback — audit disabled but gate continues
+        except Exception as _audit_exc:  # noqa: BLE001
+            _log.error("[house-rules] audit writer creation failed (%s) — fail-closed deny",
+                       type(_audit_exc).__name__)
+            return ("[house-rules] Acceptable-use gate cannot write its audit record — "
+                    "request blocked (fail-closed). Contact the operator.")
 
         # Step 3: Bridge audit arity (2-arg vs 3-arg)
         def _hr_classifier_audit(event_type: str, details: dict) -> None:
             try:
-                from forge.security_events import EVENT_SEVERITY as _ev_sev  # type: ignore
-                severity = _ev_sev.get(event_type, "INFO")
+                severity = _forge_module("security_events").EVENT_SEVERITY.get(event_type, "INFO")
             except Exception:  # noqa: BLE001 — severity lookup is best-effort
                 severity = "INFO"
             try:
@@ -695,7 +782,13 @@ def check_l44_floor(
     if not task.strip():
         return None
 
-    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        tenant = _require_tenant(tenant_id)   # RD-5: no env fallback
+    except _NoTenant as exc:
+        return _no_tenant_refusal("house-rules", engine_id, f"no tenant (or an invalid one) was given ({exc})")
+    _aw = _audit_writer_refusal("house-rules")   # RD-2
+    if _aw is not None:
+        return _aw
     try:
         import house_rules as _hr  # type: ignore
         from egress_gate import make_forge_audit_writer as _mk_writer  # type: ignore
@@ -710,11 +803,8 @@ def check_l44_floor(
             overlay = _load_l44_overlay(tenant, corvin_home)
         except Exception:  # noqa: BLE001
             overlay = None
-        try:
-            _audit_write = _mk_writer(_l44_audit_path(tenant, corvin_home))
-        except Exception:  # noqa: BLE001
-            def _audit_write(event_type: str, severity: str, details: dict) -> None:
-                pass
+        # RD-2: no silent no-op writer — an exception here reaches the fail-closed handler.
+        _audit_write = _mk_writer(_l44_audit_path(tenant, corvin_home))
 
         gate = _hr.HouseRulesGate.from_repo(
             audit_writer=_audit_write,
@@ -752,6 +842,7 @@ def _load_l35_gate(tenant_id: str, corvin_home: "Path | None"):
     Resolves the performance regression identified in the M1 code review
     (``load_egress_gate_for_tenant`` was called uncached on every spawn).
     """
+    _audit_writer_refusal("egress")   # RD-2: heal ``forge`` before the gate's writer is built
     home = _resolve_corvin_home(corvin_home)
     cfg_path = home / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
     try:
@@ -851,7 +942,13 @@ def check_l35(
         _log.debug("spawn_gates.check_l35: engine_id missing — fail-open")
         return None
 
-    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        tenant = _require_tenant(tenant_id)   # RD-5: no env fallback, no padded id
+    except _NoTenant as exc:
+        return _no_tenant_refusal("egress", engine_id, f"no tenant (or an invalid one) was given ({exc})")
+    _aw = _audit_writer_refusal("egress")   # RD-2
+    if _aw is not None:
+        return _aw
     gate = _load_l35_gate(tenant, corvin_home)
     if gate is None:
         if provider and not _provider_current_host(tenant, provider, corvin_home):
@@ -1004,7 +1101,10 @@ def decide_l34_route(
 
     if not isinstance(engine_id, str) or not engine_id:
         return RouteOutcome(kind="native")
-    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        tenant = _require_tenant(tenant_id)   # RD-5
+    except _NoTenant:
+        return RouteOutcome(kind="refuse", engine=engine_id, reason="gate_error")
 
     loaded = _load_l34_guard(tenant, corvin_home)
     if loaded is None:
@@ -1108,7 +1208,11 @@ def resolve_l34_route(
     After a reroute the second pass judges the PAIR (L34 ``validate_provider`` on the provider's
     current host, L35 on that host); any refusal there is final: there is never a second reroute.
     """
-    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        tenant = _require_tenant(tenant_id)   # RD-5: the OS-turn entry refuses without a tenant
+    except _NoTenant as exc:
+        return L34Route(refusal=_no_tenant_refusal(
+            "data-flow", engine_id, f"no tenant (or an invalid one) was given ({exc})"), engine_id=engine_id)
     common = dict(prompt=prompt, persona=persona, channel=channel, chat_key=chat_key,
                   classification=classification, corvin_home=corvin_home)
     out = decide_l34_route(engine_id, tenant, classification=classification, prompt=prompt,
