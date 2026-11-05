@@ -432,10 +432,9 @@ path = "hatch_build.py"
 "core/console/corvin_console" = "corvin_console"
 "core/console/corvin_core" = "corvin_core"
 "core/gateway/corvin_gateway" = "corvin_gateway"
-# corvin_license plugin (RS256 JWT gate) is imported as top-level `corvin_license`
-# throughout the codebase — remap so it lands at the wheel root rather than
-# core/license/corvin_license/ (which would break `from corvin_license.verifier import …`).
-"core/license/corvin_license" = "corvin_license"
+# (The `core/license/corvin_license` -> `corvin_license` remap was removed: that
+# package was deleted with the ADR-0111 legacy licence stack in 853ee7c54, so the
+# mapping pointed at nothing — tests/test_wheel_importability.py pins this.)
 
 # ── Every other core/<area>/<pkg> that is imported as a TOP-LEVEL module ──────
 # Without these the package files ship (they are under `packages = [... "core" ...]`)

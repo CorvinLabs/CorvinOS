@@ -386,15 +386,23 @@ class FallbackReGateE2ETest(_StreamTurnE2EBase):
         """Fake gate: PERMIT the ACS fan-out engine, REFUSE everything else —
         the exact shape of a residency policy that allows the delegation
         fan-out but forbids the direct claude_code engine."""
+        # Since 54e5bca66 (ADR-2268) every stream_turn gate — the first one and
+        # the fallback re-gate — goes through ``resolve_console_spawn`` (via
+        # ``_route_off_loop`` / ``_gate_off_loop``); ``check_console_spawn_or_refusal``
+        # is now a thin wrapper over it. Faking only the wrapper left the real,
+        # permitting gate in place, so the fallback spawned and this test read
+        # that as an L34/L35 bypass. Fake the function the console calls.
         sg = self.cr._spawn_gates
         deleg_id = sg.DELEGATION_ENGINE_ID
-        orig = sg.check_console_spawn_or_refusal
+        orig = sg.resolve_console_spawn
+        from spawn_gates import L34Route  # type: ignore  # noqa: PLC0415
 
         def _fake(prompt, *, engine_id="claude_code", **kw):
-            return None if engine_id == deleg_id else self.REFUSAL
+            refusal = None if engine_id == deleg_id else self.REFUSAL
+            return L34Route(refusal=refusal, engine_id=engine_id)
 
-        self.addCleanup(setattr, sg, "check_console_spawn_or_refusal", orig)
-        sg.check_console_spawn_or_refusal = _fake  # type: ignore[assignment]
+        self.addCleanup(setattr, sg, "resolve_console_spawn", orig)
+        sg.resolve_console_spawn = _fake  # type: ignore[assignment]
 
     def _run_fallback_turn(self, *, break_acs: bool = False,
                            acs_dir_as_file: bool = False):

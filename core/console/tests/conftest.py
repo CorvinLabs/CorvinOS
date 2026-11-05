@@ -22,10 +22,17 @@ the whole class without rewriting the individual tests.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import sys
+import types as _types
 
 import pytest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+import _deferred_audit  # noqa: E402  (this directory's helper, see _deferred_audit.py)
 
 # Top-level packages whose module identity must not leak between tests. Tests
 # routinely del/reload these; restoring them keeps every test's bound references
@@ -105,6 +112,76 @@ def _isolate_environ():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+# A FOURTH channel: the licence validator's process-wide load state.
+#
+# A test that drives the real bridge turn (``adapter.process_one``, e.g.
+# test_followup_grading_ws_e2e) runs ``license.validator.load_license_from_env()``
+# against ITS sandbox home. That sets ``_LICENSE_INITIALIZED`` and freezes
+# ``_CORVIN_HOME_SNAPSHOT`` for the rest of the process. From then on every
+# authenticated console request calls ``reload_from_disk()``
+# (auth.py::_compute_lic_proof), which before that load raised and changed
+# nothing — and after it re-reads the (gone) sandbox, finds no key and resets
+# the tier to Free. A later test that installs its tier with
+# ``validator._set_active_license({"tier": "member"})`` (test_forge_creator_e2e)
+# is therefore reverted on its first request: ``402 license_required`` for
+# ``forge.create`` in the full run, green in isolation. The validator works as
+# designed; the leak is the test process sharing one loaded licence across
+# sandboxes. A test MODULE that imports ``adapter`` at collection time loads the
+# licence before any test runs (adapter.py calls load_license_from_env() at
+# import), so a per-test snapshot is already polluted: the baseline is captured
+# in ``pytest_configure``, before collection, and every test starts from it and
+# hands it back. Only plain-data module globals are touched (no functions).
+_LICENCE_BASELINE: "tuple | None" = None
+
+
+def _validator_module():
+    for name in ("license.validator", "corvin_operator.license.validator"):
+        mod = sys.modules.get(name)
+        if mod is not None:
+            return mod
+    try:
+        return importlib.import_module("corvin_operator.license.validator")
+    except ImportError:  # licensing absent from this checkout: nothing to isolate
+        return None
+
+
+def _validator_state(mod) -> dict:
+    # Module-level ``types``: this runs in teardown, possibly while a test still
+    # has ``builtins.__import__`` patched to raise (test_healing_config).
+    return {
+        k: v for k, v in vars(mod).items()
+        if k.startswith("_") and not k.startswith("__")
+        and not isinstance(v, (_types.ModuleType, _types.FunctionType, type))
+        and not callable(v)
+    }
+
+
+def _capture_licence_baseline() -> None:
+    global _LICENCE_BASELINE
+    mod = _validator_module()
+    if mod is not None:
+        _LICENCE_BASELINE = (mod, _validator_state(mod))
+
+
+def _apply_licence_baseline() -> None:
+    if _LICENCE_BASELINE is None:
+        return
+    mod, saved = _LICENCE_BASELINE
+    for k in _validator_state(mod).keys() - saved.keys():
+        delattr(mod, k)
+    for k, v in saved.items():
+        setattr(mod, k, v)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_licence_load_state():
+    _apply_licence_baseline()
+    try:
+        yield
+    finally:
+        _apply_licence_baseline()
 
 
 # A THIRD pollution channel, and the only one that can wedge the whole run:
@@ -198,7 +275,38 @@ def _a2a_issuer_has_its_own_binding_key(request, tmp_path, monkeypatch):
 _A2A_TEST_FILE_MARKERS = ("a2a", "remote_trigger", "friendship", "agent_hub", "peer")
 
 
+def _join_deferred_identity_writes() -> None:
+    """Wait for ``ibc-audit-deferred`` threads (instance_identity._audit_ibc).
+
+    The first chain write in a fresh sandbox mints its instance key and records
+    ``instance.key_rotated`` from that short-lived thread, bound to the sandbox
+    chain at raise time (d0e049466). A ``TemporaryDirectory`` cleanup that runs
+    while it is still writing loses the race: ``OSError: [Errno 39] Directory not
+    empty: 'global'`` (test_acs_route_quota_fallback, test_model_catalog_egress_gate,
+    test_console_spawn_gates in a full run). The record is correct product
+    behaviour; the sandbox must outlive it. (See _deferred_audit.py; imported at
+    module level because a cleanup may run while a test has patched
+    ``builtins.__import__``.)"""
+    _deferred_audit.join_deferred_identity_writes()
+
+
+def _install_tempdir_cleanup_join() -> None:
+    import tempfile
+    orig = tempfile.TemporaryDirectory.cleanup
+    if getattr(orig, "_corvin_joins_deferred", False):
+        return
+
+    def cleanup(self, *a, **k):
+        _join_deferred_identity_writes()
+        return orig(self, *a, **k)
+
+    cleanup._corvin_joins_deferred = True
+    tempfile.TemporaryDirectory.cleanup = cleanup
+
+
 def pytest_configure(config):
+    _install_tempdir_cleanup_join()
+    _capture_licence_baseline()
     # Windows cannot delete a file another handle still holds open. The IBC audit
     # writer appends from a short-lived "ibc-audit-deferred" thread that may still
     # be finishing when a unittest ``TemporaryDirectory`` cleanup runs, so retry
@@ -247,6 +355,26 @@ def _a2a_member_tier(request, monkeypatch):
         a2a_license_gate.reset_allow_cache()
     except Exception:  # noqa: BLE001
         pass
+
+
+@pytest.fixture(autouse=True)
+def _forget_a2a_verdicts():
+    """Every test starts without remembered a2a.network verdicts.
+
+    ``a2a_license_gate`` caches a DENY per tenant (``_DENY_CACHE``) for a short
+    window. ``_a2a_member_tier`` above resets it only for A2A-named files, so a
+    Free-tier test anywhere earlier in the run left ``_default`` denied, and a
+    later test that pins the tier to member and reaches an A2A route
+    (test_route_lock_nonblocking_registries::test_cli_invite_...) was answered
+    from the cache: ``402 member_seat_required`` instead of its subject, the
+    wedged-lock 503. Isolated it passed."""
+    def _reset() -> None:
+        gate = sys.modules.get("a2a_license_gate")
+        if gate is not None:
+            gate.reset_allow_cache()
+    _reset()
+    yield
+    _reset()
 
 
 @pytest.fixture(autouse=True)

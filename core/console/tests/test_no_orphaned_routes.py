@@ -11,7 +11,7 @@ from pathlib import Path
 
 def test_no_orphaned_blueprints():
     """Verify no Flask blueprints exist that are not registered in app.py."""
-    routes_dir = Path(__file__).parent.parent / "routes"
+    routes_dir = Path(__file__).parent.parent / "corvin_console" / "routes"
     assert routes_dir.exists(), "routes directory not found"
 
     # Read app.py to find all imported route modules
@@ -53,7 +53,7 @@ def test_no_orphaned_blueprints():
 
 def test_no_vibe_plugins_api_artifact():
     """Verify vibe_plugins_api.py was deleted (it was orphaned with async Flask routes)."""
-    routes_dir = Path(__file__).parent.parent / "routes"
+    routes_dir = Path(__file__).parent.parent / "corvin_console" / "routes"
     vibe_plugins_file = routes_dir / "vibe_plugins_api.py"
 
     assert not vibe_plugins_file.exists(), (
@@ -65,7 +65,7 @@ def test_no_vibe_plugins_api_artifact():
 
 def test_no_fastapi_routes_reference_vibe_plugins():
     """Verify no FastAPI routes import or reference vibe_plugins_api."""
-    routes_dir = Path(__file__).parent.parent / "routes"
+    routes_dir = Path(__file__).parent.parent / "corvin_console" / "routes"
     app_file = routes_dir.parent / "app.py"
 
     content = app_file.read_text(encoding="utf-8")

@@ -52,6 +52,20 @@ def _refuse(*_a, **_k):
     raise RuntimeError("chain refused")
 
 
+def _join_deferred_identity_writes() -> None:
+    """Wait for the ``ibc-audit-deferred`` thread(s).
+
+    The first chain write in a fresh ``CORVIN_HOME`` mints the sandbox instance
+    key and records ``instance.key_rotated`` from a separate thread (it cannot
+    take the chain lock the outer write holds — instance_identity._audit_ibc,
+    bound at raise time since d0e049466). Measuring the chain before that thread
+    lands counts its record against whatever runs next — here, the refused
+    write — and a thread still running at tearDown writes after the sandbox is
+    gone. See _deferred_audit.py."""
+    from _deferred_audit import join_deferred_identity_writes
+    join_deferred_identity_writes()
+
+
 class LearnerAuditFirstTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -60,6 +74,7 @@ class LearnerAuditFirstTests(unittest.TestCase):
         MSO._optimizer = None
 
     def tearDown(self) -> None:
+        _join_deferred_identity_writes()
         MSO._optimizer = None
         if self._prev_home is None:
             os.environ.pop("CORVIN_HOME", None)
@@ -94,6 +109,7 @@ class LearnerAuditFirstTests(unittest.TestCase):
         stats_before = opt.get_stats("MEDIUM", MODEL).to_dict()
         hist_before = list(opt._confidence_history[("MEDIUM", MODEL, "_default")])
         file_before = self._history_file()
+        _join_deferred_identity_writes()
         chain_before = self._chain_lines()
 
         def refuse(*_a, **_k):

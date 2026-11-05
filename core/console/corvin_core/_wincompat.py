@@ -282,6 +282,7 @@ def _shim_unsafe(text: str) -> bool:
 def shim_text_transport(args, stdin):
     """``(argv, stdin_file|None, cleanup|None)``. Identity unless *args* is a list
     whose program is a ``claude*.cmd``/``.bat`` shim holding text cmd.exe mangles."""
+    import ntpath  # noqa: PLC0415
     import os  # noqa: PLC0415
 
     if not isinstance(args, (list, tuple)) or not args:
@@ -293,7 +294,9 @@ def shim_text_transport(args, stdin):
     exe = argv[0]
     if not (all(isinstance(a, str) for a in argv)
             and exe.lower().endswith((".cmd", ".bat"))
-            and os.path.basename(exe).lower().startswith("claude")):
+            # ntpath, not os.path: a .cmd shim path is a Windows path, and on a
+            # POSIX host os.path.basename("C:\\npm\\claude.cmd") is the whole string.
+            and ntpath.basename(exe).lower().startswith("claude")):
         return args, None, None
     sys_idx = [i for i in range(len(argv) - 1)
                if argv[i] in _SHIM_SYSPROMPT_FLAGS and _shim_unsafe(argv[i + 1])]

@@ -61,6 +61,23 @@ _SKIP_DIRS = {
     "build", ".idea", ".tox", "htmlcov",
 }
 
+
+def _submodule_paths() -> set[str]:
+    """Repo-relative paths of git submodules (``.gitmodules``).
+
+    A submodule is ANOTHER repository checked out at a pinned commit — e.g.
+    ``corvin_decisions`` is Corvin-Knowledge (ADR-0862/ADR-2205), whose own
+    ``scripts/kb_reviewer_claude.py`` spawns ``claude -p`` for the KB review
+    loop. This ledger governs CorvinOS code: a submodule file can neither import
+    CorvinOS's ``prompt_guard`` nor be fixed here, and its content changes with
+    every submodule bump. Nothing in CorvinOS calls that script."""
+    try:
+        text = (_REPO / ".gitmodules").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return set()
+    return {m.group(1).strip().strip("/")
+            for m in re.finditer(r"^\s*path\s*=\s*(.+)$", text, re.MULTILINE)}
+
 #: An argv element that is exactly ``-p`` (never ``--pin``, never ``ps -p``'s
 #: neighbours — those are filtered by the claude-binary requirement below).
 _DASH_P = re.compile(r"""(?<![\w-])["']-p["']""")
@@ -263,8 +280,14 @@ def _classify_source(src: str) -> str | None:
 def _discover() -> dict[str, str]:
     """rel-path → ``"argv"`` / ``"engine"`` for every spawn site in the repo."""
     found: dict[str, str] = {}
+    submodules = _submodule_paths()
     for dirpath, dirnames, filenames in os.walk(_SCAN_ROOT):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        rel_dir = Path(dirpath).relative_to(_REPO).as_posix()
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _SKIP_DIRS
+            and (d if rel_dir == "." else f"{rel_dir}/{d}") not in submodules
+        ]
         for fn in filenames:
             if not fn.endswith(".py") or fn.startswith("test_") or fn.endswith("_test.py"):
                 continue

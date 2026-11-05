@@ -37,7 +37,12 @@ sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 _SYNTH = "TEST-SYNTHESISED-PROMPT-77"
-_SKILL = "TEST-FORGED-SKILL-BODY-77"
+# A skill body passes the binding stage's fail-closed PII gate (cce86a13b,
+# binding._skill_body_is_sensitive) before it is rendered: a single 25-char
+# letters+digits token such as "TEST-FORGED-SKILL-BODY-77" trips its
+# high-entropy-secret heuristic and is (correctly) replaced by the redaction
+# placeholder. The marker is therefore ordinary prose, like a real skill body.
+_SKILL = "Test forged skill body 77: prefer small reviewed diffs."
 _DETERMINISTIC = "TEST-DETERMINISTIC-BRIEF-77"
 
 

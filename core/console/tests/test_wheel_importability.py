@@ -56,6 +56,17 @@ _VENDORED_MARKERS = ("/.venv/", "/venv/", "/site-packages/", "/node_modules/",
                      "/.git/", "/.claude/worktrees/", "/dist/", "/build/")
 
 
+#: core/<area>/<pkg> names that are ALSO the import name of a third-party
+#: distribution. A bare ``from <name> import`` of these reaches the dependency,
+#: not the core package, so such a hit is no evidence the package needs a remap.
+_THIRD_PARTY_NAME_COLLISIONS = {
+    # pip ``mcp`` (Model Context Protocol SDK): the bundled MCP servers do
+    # ``from mcp.server.fastmcp import FastMCP``. core/knowledge_graph/mcp is only
+    # ever imported qualified (``core.knowledge_graph.mcp.learning_loop_service``).
+    "mcp",
+}
+
+
 def _is_vendored(path: str) -> bool:
     p = "/" + path.lstrip("./")
     return any(m in p for m in _VENDORED_MARKERS)
@@ -72,7 +83,7 @@ class TestCorePackagesAreImportableTopLevel(unittest.TestCase):
         """Repo files that do ``import <pkg>`` / ``from <pkg>… `` (non-test)."""
         result = subprocess.run(
             ["grep", "-rEl", rf"^[[:space:]]*(from|import) {pkg}[. ]",
-             "--include=*.py", "core", "operator"],
+             "--include=*.py", "core", "corvin_operator"],  # operator/ -> corvin_operator/ (ADR-0730)
             cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         return [
@@ -88,6 +99,8 @@ class TestCorePackagesAreImportableTopLevel(unittest.TestCase):
             pkg = init.parent.name
             rel = init.parent.relative_to(REPO).as_posix()   # core/<area>/<pkg>
             area = init.parent.parent.relative_to(REPO).as_posix()  # core/<area>
+            if pkg in _THIRD_PARTY_NAME_COLLISIONS:
+                continue
             importers = self._top_level_importers(pkg)
             if not importers:
                 continue
@@ -167,7 +180,7 @@ class TestBareImportsResolveFromTheVendorBootstrap(unittest.TestCase):
         """Assert the fix is central, not 12 scattered try/except fallbacks."""
         result = subprocess.run(
             ["grep", "-rEl", r"^[[:space:]]*from clag import|^[[:space:]]*import clag$",
-             "--include=*.py", "operator", "core"],
+             "--include=*.py", "corvin_operator", "core"],  # operator/ -> corvin_operator/ (ADR-0730)
             cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         sites = [

@@ -33,10 +33,32 @@ for _p in [str(_OPERATOR), str(_OPERATOR / "license"), str(_OPERATOR / "forge"),
         sys.path.insert(0, _p)
 
 
+_RESET_PREFIXES = ("corvin_console", "corvin_gateway", "forge")
+
+
 def _reset_modules():
     for key in list(sys.modules):
-        if any(key.startswith(p) for p in ("corvin_console", "corvin_gateway", "forge")):
+        if any(key.startswith(p) for p in _RESET_PREFIXES):
             del sys.modules[key]
+
+
+def _snapshot_modules() -> dict:
+    return {k: m for k, m in sys.modules.items() if any(k.startswith(p) for p in _RESET_PREFIXES)}
+
+
+def _restore_modules(saved: dict) -> None:
+    """Put back the module objects that were loaded before the sandbox.
+
+    Dropping them for good left every later test module that bound
+    ``corvin_console.chat_runtime`` (or a route module) at collection time
+    holding the OLD object while ``patch("corvin_console....")`` resolved the
+    NEW one from ``sys.modules`` — the patch missed and e.g.
+    test_execution_log_route answered "404 session not found",
+    test_execution_context_wiring wrote to the real turns path,
+    test_engine_health_route / test_engine_setting_pins saw unpatched probes,
+    whenever a DAG/workflow module ran before them in the same process."""
+    _reset_modules()
+    sys.modules.update(saved)
 
 
 _WF = """awp: "1.1.0"
@@ -68,6 +90,7 @@ def _sandbox(tmp_path: Path):
     (home / "tenants" / tenant_id / "global" / "console" / "sessions").mkdir(parents=True)
 
     prev = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID")}
+    saved_modules = _snapshot_modules()
     os.environ["CORVIN_HOME"] = str(home)
     os.environ["CORVIN_TENANT_ID"] = tenant_id
     try:
@@ -92,7 +115,7 @@ def _sandbox(tmp_path: Path):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        _reset_modules()
+        _restore_modules(saved_modules)
 
 
 def _make_workflow(home: Path, tenant_id: str, wid: str) -> Path:

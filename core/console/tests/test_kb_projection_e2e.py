@@ -25,7 +25,29 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_admin_route import _audit_events, _sandbox  # noqa: E402
+from test_admin_route import _audit_events  # noqa: E402
+from test_admin_route import _sandbox as _console_sandbox  # noqa: E402
+
+
+@__import__("contextlib").contextmanager
+def _sandbox(tmp):
+    """The shared console sandbox, plus: every projector thread started inside it is stopped
+    (and joined) BEFORE the sandbox restores the environment.
+
+    Since 0105fa870 GET /kb/status calls ``kb_projection.ensure_started()``, so any test that
+    reads the status starts a projector thread in that sandbox's (freshly imported) module.
+    Left running, it outlived its test: it ticked against the NEXT test's KB and home, raced
+    that test's own projector (test_projector_thread_starts_and_heals_drift read drift_total 0
+    because a leaked thread healed the drift first), and after the last test it would tick
+    against the restored process environment."""
+    with _console_sandbox(tmp) as ctx:
+        try:
+            yield ctx
+        finally:
+            kp = sys.modules.get("corvin_console.kb_projection")
+            if kp is not None:
+                for t in list(kp._threads):
+                    kp.stop(t)
 
 _URL = "/v1/console/task-tracking"
 def _projects_root() -> Path:
@@ -356,8 +378,11 @@ class KbProjectionE2E(unittest.TestCase):
             bad.unlink()
             f1.write_text(f1.read_text(encoding="utf-8").replace("\nhalf-written\n", ""), encoding="utf-8")      # revert: back to clean
             self.assertEqual(self._sync_tick()["state"], "ok")
-            # tenant check: the projector serves one tenant
-            with self.assertRaisesRegex(service.TaskTrackingError, "another tenant"):
+            # tenant check: the operator's KB binds one tenant. Since 0105fa870 (ADR-2265)
+            # every other tenant gets only its OWN <tenant_home>/knowledge, so a foreign
+            # tenant has no KB bound at all and cannot move this KB's card.
+            with self.assertRaisesRegex(service.TaskTrackingError,
+                                        "no knowledge base is bound to this tenant"):
                 kb_projection.transition("acme", t1["id"], "in_progress")
 
     def test_kb_subprocess_never_sees_the_console_secrets(self):
@@ -385,9 +410,14 @@ class KbProjectionE2E(unittest.TestCase):
     def test_projector_thread_starts_and_heals_drift(self):
         """test-review finding 8: start()/_loop had no test; both hosts call it at boot."""
         import time as _t
-        from corvin_console import kb_projection
 
         with _sandbox(self.tmp) as (client, csrf, home, _):
+            # Import INSIDE the sandbox: _sandbox resets the corvin_console modules, so a
+            # module imported before it is not the one the routes use. Since 0105fa870 the
+            # /kb/status route calls ensure_started(), which on the route's (fresh) module
+            # started a SECOND projector thread; the two raced for the drift heal and the
+            # status read the one whose drift_total stayed 0.
+            from corvin_console import kb_projection
             kb_projection._started.discard("_default")
             kb_projection._state.pop("_default", None)
             self.assertTrue(kb_projection.start("_default"))

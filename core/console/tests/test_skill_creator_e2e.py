@@ -437,10 +437,6 @@ def test_sync_mode_is_capped_by_the_same_concurrency_gate(tmp_path, monkeypatch)
     concurrent sync call for the same tenant is refused with 429."""
     import threading
 
-    from corvin_console import forge_runs
-
-    monkeypatch.setattr(forge_runs, "MAX_RUNNING_PER_TENANT", 1)
-
     started = threading.Event()
     release = threading.Event()
 
@@ -468,6 +464,11 @@ def test_sync_mode_is_capped_by_the_same_concurrency_gate(tmp_path, monkeypatch)
         return client
 
     with console_client(tmp_path, slow_engine()) as (client, route):
+        # Cap the forge_runs module the ROUTE consults (bound at its import), not
+        # whatever ``corvin_console.forge_runs`` sys.modules holds at this moment:
+        # after a sibling module re-imported the console the two differ, and the
+        # cap was set on the wrong object — the second run went through (202).
+        monkeypatch.setattr(route.forge_runs, "MAX_RUNNING_PER_TENANT", 1)
         first_result = {}
 
         def first_call():

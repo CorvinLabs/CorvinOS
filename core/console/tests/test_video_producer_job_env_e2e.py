@@ -41,8 +41,24 @@ class _FakeProc:
 
 
 class JobEnvE2E(unittest.TestCase):
-    setUp, tearDown, _benign_l44 = (VideoProducerRoutesE2E.setUp, VideoProducerRoutesE2E.tearDown,
-                                   VideoProducerRoutesE2E._benign_l44)
+    _benign_l44 = VideoProducerRoutesE2E._benign_l44
+
+    def setUp(self):
+        VideoProducerRoutesE2E.setUp(self)
+        # _store_key writes service.env under the voice config dir, i.e.
+        # $XDG_CONFIG_HOME/corvin-voice. The console sandbox does not move XDG, so
+        # without this the key landed in the pytest SESSION's config dir and every
+        # later test in the run found a stored OpenAI key
+        # (test_video_producer_measure_e2e::test_no_key_is_a_skip... saw one).
+        self._prev_xdg = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = str(self._tmp / "xdg_config")
+
+    def tearDown(self):
+        if self._prev_xdg is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = self._prev_xdg
+        VideoProducerRoutesE2E.tearDown(self)
 
     @staticmethod
     def _store_key(value: str = _STORED) -> None:

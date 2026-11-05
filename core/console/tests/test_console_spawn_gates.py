@@ -45,6 +45,7 @@ sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 class ConsoleSpawnGatesE2E(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self._prev_env = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID")}
         os.environ["CORVIN_HOME"] = self.tmp.name
         os.environ["CORVIN_TENANT_ID"] = "_default"
         os.environ.pop("VOICE_AUDIT_PATH", None)
@@ -73,9 +74,16 @@ class ConsoleSpawnGatesE2E(unittest.TestCase):
     def tearDown(self) -> None:
         for obj, attr, original in reversed(self._patches):
             setattr(obj, attr, original)
+        # (conftest joins the deferred instance-identity write before every
+        # TemporaryDirectory cleanup — see _deferred_audit.py.)
         self.tmp.cleanup()
-        os.environ.pop("CORVIN_HOME", None)
-        os.environ.pop("CORVIN_TENANT_ID", None)
+        # Restore, never just pop: a popped CORVIN_HOME leaves the rest of the
+        # process on the repo-marker fallback, i.e. the checkout's live .corvin.
+        for k, v in self._prev_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     # ── deterministic classifier stubs (mirror test_chat_house_rules_gate) ───
     def _force_classifier(self, rid: str, conf: float = 0.95) -> None:

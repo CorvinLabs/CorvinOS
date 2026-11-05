@@ -2,7 +2,7 @@
 
 Regression guard for the 2026-07-24 review finding: `corvin_operator/orchestration`
 was vendored into the wheel (hatch_build.py) but never added to
-`_operator_bootstrap._OPERATOR_SUBTREES`, so `import tde.*` failed on every
+`_operator_bootstrap._OPERATOR_SUBTREES` (now corvin_core/, d50a54e52), so `import tde.*` failed on every
 pip install → `chat_runtime._tde_available()` returned False → the ADR-0217
 default (TDE for all non-big-data delegation) silently degraded to ACS on the
 primary distribution channel. This test proves the vendored orchestration dir
@@ -16,8 +16,8 @@ from pathlib import Path
 
 _BOOTSTRAP = (
     Path(__file__).resolve().parents[1]
-    / "corvin_console" / "_operator_bootstrap.py"
-)
+    / "corvin_core" / "_operator_bootstrap.py"
+)  # moved from corvin_console/ to corvin_core/ in d50a54e52 (ADR-0352 P2.3a)
 
 
 def _load_bootstrap():
@@ -34,7 +34,7 @@ def test_orchestration_in_operator_subtrees():
 
 def test_vendored_orchestration_lands_on_syspath(tmp_path, monkeypatch):
     ob = _load_bootstrap()
-    root = tmp_path / "corvin_console"
+    root = tmp_path / "corvin_core"
     orch = root / "_vendor" / "corvin_operator" / "orchestration"
     (orch / "tde").mkdir(parents=True)
     (orch / "__init__.py").write_text("", encoding="utf-8")
@@ -55,7 +55,7 @@ def test_vendored_orchestration_lands_on_syspath(tmp_path, monkeypatch):
 def test_source_tree_is_noop(tmp_path):
     """No _vendor dir → pure no-op, sys.path untouched."""
     ob = _load_bootstrap()
-    ob.__file__ = str(tmp_path / "corvin_console" / "_operator_bootstrap.py")
+    ob.__file__ = str(tmp_path / "corvin_core" / "_operator_bootstrap.py")
     before = list(sys.path)
     assert ob.ensure_operator_on_path() is False
     assert sys.path == before

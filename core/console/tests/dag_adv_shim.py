@@ -44,6 +44,19 @@ import time
 argv = sys.argv[1:]
 t0 = time.time()
 
+# The harness configuration lives in a file next to this script, not only in the
+# environment: since e1f1d8a8c every worker spawn (workflow node, ACS, gateway,
+# console /task, A2A) gets a deny-by-default environment from
+# acs_runtime.build_worker_env, so SHIM_* set by the test never reach the CLI.
+# An explicitly set variable still wins.
+try:
+    _cfg = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "shim_env.json")))
+except FileNotFoundError:
+    _cfg = {}
+for _k, _v in _cfg.items():
+    if not os.environ.get(_k):
+        os.environ[_k] = str(_v)
+
 
 def positional_prompt(a):
     out = [x for i, x in enumerate(a) if i and a[i - 1] == "-p" and not x.startswith("--")]
@@ -244,4 +257,11 @@ def install(tmp_path: Path, monkeypatch, *, mode: str = "canned", rules: Iterabl
     if max_usd is not None:
         monkeypatch.setenv("SHIM_MAX_USD", f"{max_usd:.2f}")
     monkeypatch.delenv("CORVIN_HELPER_MODEL_WORKFLOW_NODE", raising=False)
+    # Same values for the spawned shim, which may run with a scrubbed worker env.
+    cfg = {"SHIM_LOG": str(log), "SHIM_RULES": str(rules_path), "SHIM_MODE": mode}
+    if real_claude:
+        cfg["REAL_CLAUDE"] = real_claude
+    if max_usd is not None:
+        cfg["SHIM_MAX_USD"] = f"{max_usd:.2f}"
+    (bindir / "shim_env.json").write_text(json.dumps(cfg), encoding="utf-8")
     return Shim(bindir=bindir, log=log, rules_path=rules_path)

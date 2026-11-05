@@ -230,6 +230,10 @@ class WebhookHardeningTests(unittest.TestCase):
             client.post(f"/v1/console/webhook/{tid}/cheap", content=body,
                         headers={"X-Hub-Signature-256": _sign(body)})
             chain = home / "tenants" / tid / "global" / "forge" / "audit.jsonl"
+            # The first request was this sandbox's first chain write: its deferred
+            # instance.key_rotated record must land before the baseline is taken.
+            from _deferred_audit import join_deferred_identity_writes
+            join_deferred_identity_writes()
             before = len(chain.read_text(encoding="utf-8").splitlines()) if chain.exists() else 0
             resp = client.post(f"/v1/console/webhook/{tid}/cheap",
                                content=b"x" * (8 * 1024 * 1024))  # oversized AND unsigned

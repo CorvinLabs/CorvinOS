@@ -39,12 +39,9 @@ _KNOWN_DOUBLED = {
     "/v1/console/v1/monitoring", "/v1/console/v1/skill-forge",
 }
 
-# Paths the web UI calls with a plain fetch() of the single-prefix form; all
-# used to 404 because their routers carried prefix="/v1/console/...".
-_UI_CALLED = [
-    ("GET", "/v1/console/datahub/projects/{project_id}"),
-    ("GET", "/v1/console/datahub/projects/{project_id}/export"),
-]
+# The plain-fetch UI paths this file used to pin (_UI_CALLED) are gone: the last
+# two, /datahub/projects/{id}[/export], were removed together with their only UI
+# caller (the DataHub-creator panel) in 568906cc9, so the check had no subject.
 
 
 async def _noop() -> None:
@@ -115,16 +112,6 @@ class RoutePrefixTest(unittest.TestCase):
             self.assertNotIn("/v1/console/v1/console/control-plane", doubled)
             self.assertFalse({g for g in doubled if g.startswith("/v1/console/v1/console/")},
                              "a /v1/console/v1/console/* group is back")
-
-    def test_ui_called_paths_are_in_the_route_table(self):
-        with _sandbox(Path(tempfile.mkdtemp())):
-            from corvin_console.app import router
-            from fastapi import FastAPI
-            app = FastAPI()
-            app.include_router(router, prefix="/v1/console")
-            spec = app.openapi()["paths"]
-            missing = [(m, p) for m, p in _UI_CALLED if m.lower() not in spec.get(p, {})]
-            self.assertEqual(missing, [], "UI calls a path the console does not serve")
 
 
 if __name__ == "__main__":

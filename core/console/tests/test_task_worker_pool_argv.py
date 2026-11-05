@@ -58,12 +58,16 @@ SENTINEL_LINE = PROMPT_HEAD_SENTINEL + "\n"
 # distinguishable from a chat answer about the literal text "/pwn".
 PWN_COMMAND_MD = 'Translate the English word "apple" into German. Answer with exactly one word.\n'
 
+# CORVIN_-prefixed: since d661c162a/e1f1d8a8c the /task worker spawns with the
+# deny-by-default worker env (acs_runtime.build_worker_env), which keeps CORVIN_*
+# names minus secrets and blanks a plain FAKE_CLAUDE_OUT (same convention as
+# test_task_worker_pool_worker_env.py).
 _FAKE_CLAUDE = r'''#!/usr/bin/env bash
 # Fake `claude` for tests: record argv + stdin, answer like `claude -p`.
-out="${FAKE_CLAUDE_OUT:?}"
+out="${CORVIN_FAKE_CLAUDE_OUT:?}"
 python3 - "$@" <<'PY' > /dev/null
 import json, os, sys
-json.dump(sys.argv[1:], open(os.path.join(os.environ["FAKE_CLAUDE_OUT"], "argv.json"), "w"))
+json.dump(sys.argv[1:], open(os.path.join(os.environ["CORVIN_FAKE_CLAUDE_OUT"], "argv.json"), "w"))
 PY
 cat > "$out/stdin.txt"
 printf '%s\n' '{"type":"system","subtype":"init"}'
@@ -80,7 +84,7 @@ def fake_claude(tmp_path, monkeypatch):
     binary = tmp_path / "claude"
     binary.write_text(_FAKE_CLAUDE, encoding="utf-8")
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("FAKE_CLAUDE_OUT", str(out))
+    monkeypatch.setenv("CORVIN_FAKE_CLAUDE_OUT", str(out))
     monkeypatch.setenv("CORVIN_CLAUDE_BIN", str(binary))
     monkeypatch.setenv("CLAUDE_BIN", str(binary))
     return out

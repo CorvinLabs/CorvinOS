@@ -73,7 +73,10 @@ def test_audit_tail_since_parameter_in_route_signature():
 
     sig = inspect.signature(audit_tail)
     assert "since" in sig.parameters
-    assert sig.parameters["since"].default is None
+    # 9a72e0452 declared it as ``Query(default=None, ...)`` (documented in the
+    # OpenAPI schema): the signature default is the FieldInfo, whose default is None.
+    default = sig.parameters["since"].default
+    assert getattr(default, "default", default) is None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -182,8 +185,12 @@ def test_capabilities_manifest_does_not_hang():
 
     # Make request and measure time
     start = time.time()
+    # ``corvin_console.app.app`` includes the console router WITHOUT a prefix
+    # (create_app: ``_app.include_router(router)``); the hosts add /v1/console
+    # (standalone.py: ``include_router(router, prefix="/v1/console")``). On this
+    # object the route is /capabilities/manifest — /v1/console/... never existed here.
     response = client.get(
-        "/v1/console/capabilities/manifest",
+        "/capabilities/manifest",
         headers={"Authorization": "Bearer test-token"},
     )
     elapsed = time.time() - start

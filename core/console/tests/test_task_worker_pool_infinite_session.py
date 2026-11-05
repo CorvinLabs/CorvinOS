@@ -39,11 +39,13 @@ if str(_CONSOLE_PKG) not in sys.path:
 from corvin_console import task_worker_pool as twp  # noqa: E402
 from corvin_console.task_queue import TaskQueue, TaskStatus  # noqa: E402
 
+# CORVIN_-prefixed: the /task worker's deny-by-default env (d661c162a/e1f1d8a8c,
+# acs_runtime.build_worker_env) keeps CORVIN_* names and blanks other variables.
 _FAKE_CLAUDE = r'''#!/usr/bin/env bash
-out="${FAKE_CLAUDE_OUT:?}"
+out="${CORVIN_FAKE_CLAUDE_OUT:?}"
 python3 - "$@" <<'PY' > /dev/null
 import json, os, sys
-json.dump(sys.argv[1:], open(os.path.join(os.environ["FAKE_CLAUDE_OUT"], "argv.json"), "w"))
+json.dump(sys.argv[1:], open(os.path.join(os.environ["CORVIN_FAKE_CLAUDE_OUT"], "argv.json"), "w"))
 PY
 cat > "$out/stdin.txt"
 printf '%s\n' '{"type":"system","subtype":"init"}'
@@ -59,7 +61,7 @@ def fake_claude(tmp_path, monkeypatch):
     binary = tmp_path / "claude"
     binary.write_text(_FAKE_CLAUDE, encoding="utf-8")
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("FAKE_CLAUDE_OUT", str(out))
+    monkeypatch.setenv("CORVIN_FAKE_CLAUDE_OUT", str(out))
     monkeypatch.setenv("CORVIN_CLAUDE_BIN", str(binary))
     monkeypatch.setenv("CLAUDE_BIN", str(binary))
     return out

@@ -24,7 +24,12 @@ import json, os, sys
 argv = sys.argv[1:]
 positional = [a for i, a in enumerate(argv) if i and argv[i - 1] == "-p" and not a.startswith("--")]
 prompt = positional[0] if positional else sys.stdin.read()
-with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
+# The log sits beside bin/ (fake_cli): since e1f1d8a8c a workflow node spawns with the
+# deny-by-default worker env (acs_runtime.build_worker_env), so FAKE_CLAUDE_LOG set by
+# the test is blank in here.
+_log = os.environ.get("FAKE_CLAUDE_LOG") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "calls.jsonl")
+with open(_log, "a") as fh:
     fh.write(json.dumps({"argv": argv, "prompt": prompt}) + "\\n")
 if "--max-turns" not in argv and "MARK-FAIL" in prompt:      # a node whose spawn fails
     sys.stderr.write("simulated engine failure\\n")

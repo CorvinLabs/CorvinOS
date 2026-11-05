@@ -531,6 +531,14 @@ class TestR1Fixes:
         mods_to_remove = [k for k in sys.modules if "htrace_uploader" in k]
         for m in mods_to_remove:
             del sys.modules[m]
+        # The corvin_console/aco shim does ``from corvin_core.aco import
+        # htrace_uploader``: once ANY earlier test imported it, that returns the
+        # parent package's cached attribute — the old module, no longer in
+        # sys.modules — and the reload below raised "module ... not in
+        # sys.modules" in a full run. Drop the attribute so the import is fresh.
+        import corvin_core.aco as _core_aco
+        if hasattr(_core_aco, "htrace_uploader"):
+            delattr(_core_aco, "htrace_uploader")
         real_import = builtins.__import__
         def _no_fcntl(name, *args, **kwargs):
             if name == "fcntl":
