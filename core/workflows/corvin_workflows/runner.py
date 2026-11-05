@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+from pathlib import Path
 import time as _time_mod
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -332,6 +333,17 @@ class DAGRunner:
             done: set[str] = set(resume.completed_ids)
             skipped: set[str] = set(resume.skipped_ids)
             failed: set[str] = set(resume.failed_ids)
+            # D-01: nodes that failed under `fail_branch` before the pause are part of THIS
+            # run's result too (and of its failed-branch count), not only of the first pass.
+            _errs = (resume.checkpoint or {}).get("failed_errors") or {}
+            for _fid in sorted(failed):
+                if _fid in node_specs:
+                    _t = perf_counter()
+                    run.nodes[_fid] = NodeResult(
+                        node_id=_fid, node_type=node_specs[_fid].get("type", "agent"),
+                        started_at=_t, finished_at=_t, output={},
+                        error=str(_errs.get(_fid) or "failed before the pause"), status="failed",
+                    )
         else:
             state = {"__console_run__": True} if self._console_run else {}
             done = set()
@@ -369,6 +381,14 @@ class DAGRunner:
                     run.error = "cancelled"
                     run.final_state = state
                     self._audit("run.terminal", state="cancelled", node_id=nid)
+                    if resume is not None and resume.checkpoint:
+                        # D-02: what this pass already did (a delivered message, a peer task)
+                        # must not be done again by the next resume.
+                        self._save_failed_resume_progress(
+                            run=run, resume=resume, state=state, inputs=inputs,
+                            done=(set(run.nodes) | done) - skipped - {nid},
+                            skipped=skipped, failed=failed,
+                        )
                     return run
 
                 if nid in skipped:
@@ -558,6 +578,7 @@ class DAGRunner:
             completed_ids=sorted(done),
             skipped_ids=sorted(skipped),
             failed_ids=sorted(failed),
+            failed_errors={n: run.nodes[n].error for n in failed if n in run.nodes and run.nodes[n].error},
             paused_at_node=resume.paused_at_node,
             prompt=old.get("prompt", ""),
             channel=old.get("channel"),
@@ -596,6 +617,8 @@ class DAGRunner:
             completed_ids=sorted(done_now),
             skipped_ids=sorted(skipped_now),
             failed_ids=sorted(failed_now or ()),
+            failed_errors={n: run.nodes[n].error for n in (failed_now or ())
+                           if n in run.nodes and run.nodes[n].error},
             paused_at_node=pause.node_id,
             prompt=pause.prompt,
             channel=pause.channel,
@@ -628,6 +651,10 @@ class PauseExpired(RuntimeError):
 class WorkflowChanged(RuntimeError):
     """WF-06: the workflow file was edited after the run paused. Resuming would replay the
     saved node results against a different graph (missing nodes, other branches)."""
+
+
+class WorkflowFileMissing(RuntimeError):
+    """D-07: the workflow file a paused run was started from no longer exists."""
 
 
 class UnauthorizedReplier(PermissionError):
@@ -679,6 +706,10 @@ def resume_workflow(
             f"directed to a different recipient"
         )
 
+    if not Path(ckpt["workflow_path"]).exists():
+        raise WorkflowFileMissing(
+            f"run {run_id!r} was paused from a workflow file that is missing; restore it or start the run again"
+        )
     saved_sha = ckpt.get("workflow_sha256")
     if saved_sha and _checkpoint.file_sha256(ckpt["workflow_path"]) != saved_sha:
         raise WorkflowChanged(

@@ -195,7 +195,17 @@ def _r9b_selectors_follow_dependencies(doc: "WorkflowDoc") -> None:
         closure[nid] = seen
         return seen
 
+    peer_ids = {n["id"] for n in doc.graph if n.get("type") == "peer_agent"}
     for n in doc.graph:
+        # P-03: text written by ANOTHER installation never picks a recipient or the number of
+        # paid engine calls. It may be shown, searched and forwarded as data.
+        for key in ("chat_id_from", "items_from"):
+            sel = n.get(key)
+            if isinstance(sel, str) and sel.split(".", 1)[0] in peer_ids:
+                raise WorkflowInvalid(
+                    "R9", f"node {n['id']!r}: {key} {sel!r} reads an untrusted peer_agent reply; "
+                          f"a foreign reply may not decide {key.replace('_from', '')}",
+                )
         for sel in _selectors_of(n):
             root = sel.split(".", 1)[0]
             if root in ids and root not in reach(n["id"]):

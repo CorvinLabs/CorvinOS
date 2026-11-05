@@ -1,10 +1,12 @@
 """Outbound gate and audit helpers of the ``peer_agent`` node (ADR-2276).
 
 Everything the node sends to a paired peer installation leaves this organisation, so the check
-runs on OUR side, before anything is sent, on the exact payload:
+runs on OUR side, before anything is sent, on the exact payload - normalised first (NFKC, format
+and control characters removed), and that normalised text is the one that is sent (P-01):
 
 1. L44 acceptable use (``spawn_gates.check_l44`` - fail-closed by contract);
-2. the data grade of the payload (``data_classification.classify_task``): ``PUBLIC`` may go;
+2. the data grade of the payload (``data_classification.classify_task``; a ``[class:...]`` marker
+   may only raise it, never lower it - P-02): ``PUBLIC`` may go;
    anything above is refused unless the tenant policy releases that one endpoint
    (``spec.workflows.peer_policy.endpoints.<endpoint_id>.max_classification``: ``internal`` or
    ``confidential``; ``SECRET`` never) AND the operator stated the endpoint's GDPR role
@@ -20,7 +22,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -53,6 +57,23 @@ class PeerGateDecision:
     allowed: bool
     reason_code: str  # "" when allowed
     data_class: str  # grade name of the payload ("" when it could not be determined)
+    payload: str = ""  # the EXACT text that was judged - and the only text that may be sent (P-01)
+
+
+_MARKER_RE = re.compile(r"^\s*\[class:(public|internal|confidential|secret)\]\s*", re.IGNORECASE)
+
+
+def normalize_outbound(text: str) -> str:
+    """The text as the peer will read it: NFKC (fullwidth/compatibility forms collapse to ASCII)
+    with format, control, surrogate, private-use and unassigned characters removed (zero-width,
+    soft hyphen, bidi), except tab, newline and carriage return. A secret only disguised by such
+    characters is then judged in its collapsed form - and this collapsed text is what is sent, so
+    the gate's verdict and the bytes that leave are the same thing (P-01)."""
+    out = unicodedata.normalize("NFKC", text)
+    return "".join(
+        ch for ch in out
+        if ch in "\t\n\r" or unicodedata.category(ch) not in ("Cf", "Cc", "Cs", "Co", "Cn")
+    )
 
 
 def _shared_on_path() -> None:
@@ -128,14 +149,22 @@ def evaluate_peer_outbound(
         import spawn_gates as _sg  # type: ignore[import-not-found]  # noqa: PLC0415
         import data_classification as _dc  # type: ignore[import-not-found]  # noqa: PLC0415
 
+        payload = normalize_outbound(instruction)
         hr = _sg.check_l44(
-            instruction, tenant_id, persona="assistant", channel=GATE_CHANNEL,
+            payload, tenant_id, persona="assistant", channel=GATE_CHANNEL,
             chat_key=GATE_CHANNEL, engine_id=GATE_ENGINE_ID,
         )
         if hr is not None:
             return PeerGateDecision(False, REASON_L44, grade_name)
 
-        grade = _dc.classify_task(instruction, persona="assistant")
+        # P-02: a `[class:...]` marker may only RAISE the grade. The content is judged without it
+        # (secret patterns, personal data) and the stricter of the two counts; otherwise a leading
+        # `[class:public]` - writable by any upstream node - downgraded personal data to PUBLIC.
+        marker = _MARKER_RE.match(payload)
+        content = payload[marker.end():] if marker else payload
+        grade = _dc.classify_task(content, persona="assistant")
+        if marker:
+            grade = max(grade, _dc.DataClassification[marker.group(1).upper()])
         grade_name = grade.name
         released = None
         if grade > _dc.DataClassification.PUBLIC:
@@ -155,10 +184,53 @@ def evaluate_peer_outbound(
 
         if grade > _dc.DataClassification.PUBLIC and _er.role_of(cfg) == _er.ROLE_UNSET:
             return PeerGateDecision(False, REASON_ROLE_UNSET, grade_name)
-        return PeerGateDecision(True, "", grade_name)
+        return PeerGateDecision(True, "", grade_name, payload)
     except Exception as exc:  # noqa: BLE001 - any gate error refuses, never allows
         _log.error("[workflow-peer] outbound gate error (%s) - refused (fail-closed)", type(exc).__name__)
         return PeerGateDecision(False, REASON_GATE_UNAVAILABLE, grade_name)
+
+
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
+
+def _claim_path(tenant_id: str, task_id: str, after: dict | None) -> Path:
+    if not _TASK_ID_RE.match(task_id or ""):
+        raise ValueError("invalid task id")
+    name = task_id
+    if after is not None:
+        # A retry after a `rejected` row claims THAT generation: every runner that read the same
+        # rejected row computes the same name, so exactly one of them wins it (an unlink of the
+        # old claim followed by a create let two racing retriers both win).
+        import hashlib  # noqa: PLC0415
+        import json  # noqa: PLC0415
+
+        gen = hashlib.sha256(json.dumps(after, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+        name = f"{task_id}.{gen}"
+    return _tenant_policy_file(tenant_id).parent / "federation" / "peer_claims" / name
+
+
+def claim_task(tenant_id: str, task_id: str, *, after: dict | None = None) -> bool:
+    """Exclusive per-task send claim (exactly-once, P-05). True when the caller now owns the send.
+
+    The ledger row of a task only appears inside ``delegate()``; between a runner's ledger read
+    and that row a second runner of the same (run, node) would also see "nothing sent". The claim
+    file, created with ``O_EXCL`` right before the send, closes that window. ``after`` is the
+    prior ``rejected`` ledger row a retry follows (the peer refused before running anything).
+    Raises on an unusable claim directory (the caller refuses)."""
+    path = _claim_path(tenant_id, task_id, after)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
+    os.close(fd)
+    return True
+
+
+def release_task_claim(tenant_id: str, task_id: str, *, after: dict | None = None) -> None:
+    """Give a claim back when the send provably did not happen (the audit-first record could not
+    be written). Never called once ``delegate()`` was entered."""
+    _claim_path(tenant_id, task_id, after).unlink(missing_ok=True)
 
 
 def audit_peer_event(event: str, tenant_id: str, *, strict: bool = False, **fields: Any) -> bool:

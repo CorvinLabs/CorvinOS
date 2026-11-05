@@ -71,6 +71,7 @@ def save(
     completed_ids: list[str],
     skipped_ids: list[str] | None = None,
     failed_ids: list[str] | None = None,
+    failed_errors: dict[str, str] | None = None,
     paused_at_node: str,
     prompt: str,
     channel: str | None,
@@ -80,6 +81,8 @@ def save(
     tenant_id: str | None = None,
     timeout_s: float | None = None,
 ) -> Path:
+    if workflow_path:
+        workflow_path = str(Path(workflow_path).resolve())  # D-05: a relative path breaks the resume
     payload = {
         "run_id": run_id,
         "workflow_path": workflow_path,
@@ -90,6 +93,7 @@ def save(
         "completed_ids": completed_ids,
         "skipped_ids": skipped_ids or [],
         "failed_ids": failed_ids or [],
+        "failed_errors": {k: str(v)[:500] for k, v in (failed_errors or {}).items()},
         "paused_at_node": paused_at_node,
         "prompt": prompt,
         "channel": channel,
@@ -223,20 +227,37 @@ def _reap_stale_claim(p: Path) -> bool:
     claimed = p.with_suffix(".json.claimed")
     marker = _claim_marker(p)
     if marker.exists():
+        # D-03: the decision "stale" and the act of putting the checkpoint back are ONE step
+        # under a reap lock, and the decision is re-made inside it. Two reapers that both read
+        # the same dead marker cannot both act, and one that decided long ago cannot undo the
+        # live claim another resumer created since.
+        lock = marker.with_suffix(".claim.reap")
         try:
-            info = json.loads(marker.read_text(encoding="utf-8"))
-            stale = not _pid_alive(int(info["pid"]))
-        except (OSError, ValueError, KeyError, TypeError):
-            stale = _older_than(marker, STALE_CLAIM_AFTER_S)
-        if not stale:
+            fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            if _older_than(lock, 30):
+                lock.unlink(missing_ok=True)
             return False
+        os.close(fd)
         try:
-            if claimed.exists() and not p.exists():
-                os.replace(claimed, p)
-            marker.unlink(missing_ok=True)
-        except OSError:
-            return False
-        return True
+            if not marker.exists():
+                return True  # someone else finished the reap: the claim may be retried
+            try:
+                info = json.loads(marker.read_text(encoding="utf-8"))
+                stale = not _pid_alive(int(info["pid"]))
+            except (OSError, ValueError, KeyError, TypeError):
+                stale = _older_than(marker, STALE_CLAIM_AFTER_S)
+            if not stale:
+                return False
+            try:
+                if claimed.exists() and not p.exists():
+                    os.replace(claimed, p)
+                marker.unlink(missing_ok=True)
+            except OSError:
+                return False
+            return True
+        finally:
+            lock.unlink(missing_ok=True)
     return _reap_legacy_claim(p)
 
 

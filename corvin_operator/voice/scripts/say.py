@@ -1036,6 +1036,14 @@ def main() -> int:
             "usage: say.py <out_path> <text> [<lang> [<voice> [<provider>]]]\n"
         )
         return 2
+    if sys.argv[1].startswith("-"):
+        # say.py has no flags. A caller passing "--lang de --out x text" made
+        # it write the word "de" to a file named "--lang" in its CWD (SRF-5).
+        sys.stderr.write(
+            "say.py: argv[1] starts with '-' — say.py takes no flags.\n"
+            "usage: say.py <out_path> <text> [<lang> [<voice> [<provider>]]]\n"
+        )
+        return 2
     out_path = Path(sys.argv[1]).expanduser()
     text = sys.argv[2]
     lang = sys.argv[3] if len(sys.argv) > 3 else "de"

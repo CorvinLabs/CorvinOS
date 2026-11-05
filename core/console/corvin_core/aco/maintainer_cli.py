@@ -556,7 +556,8 @@ def cmd_healing_traces(args) -> int:
             print(f"  Local bundles   : {len(bundles)}")
             dropped_p = d / "dropped.count"
             if dropped_p.exists():
-                print(f"  Dropped records : {dropped_p.read_text(encoding="utf-8").strip()}")
+                dropped = dropped_p.read_text(encoding="utf-8").strip()
+                print(f"  Dropped records : {dropped}")
         return 0
 
     if action == "upload":

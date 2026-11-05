@@ -45,7 +45,7 @@ _RUNNER_PREAMBLE = "import json\nimport sys\n\n"
 _RUNNER_EPILOGUE = """
 
 if __name__ == "__main__":
-    _args = json.loads(sys.argv[1])
+    _args = json.loads(__ARGS_JSON__)  # the args live IN this file: argv is capped (~128 KiB)
     _result = main(**_args)
     if not isinstance(_result, dict):
         raise TypeError(f"code node main() must return a dict, got {type(_result).__name__}")
@@ -97,8 +97,13 @@ def run_sandboxed_python(
 
     with tempfile.TemporaryDirectory(prefix="awp_code_") as tmpdir:
         impl_path = Path(tmpdir) / "impl.py"
-        impl_path.write_text(_RUNNER_PREAMBLE + source + _RUNNER_EPILOGUE, encoding="utf-8")
-        args_json = json.dumps(args)
+        impl_path.write_text(
+            _RUNNER_PREAMBLE + source
+            + _RUNNER_EPILOGUE.replace("__ARGS_JSON__", repr(json.dumps(args))),
+            encoding="utf-8",
+        )
+        # D-06: the args are a string literal INSIDE impl.py, not argv[1] - one argv string is
+        # capped at 128 KiB (MAX_ARG_STRLEN), so a large input made the spawn fail with E2BIG.
 
         limits = Limits(cpu_seconds=timeout_s)
         env = stripped_env()
@@ -125,7 +130,7 @@ def run_sandboxed_python(
             if real_exec.parent.name == "bin" and not str(real_prefix).startswith("/usr"):
                 extra_ro.append(real_prefix)
             cmd = build_bwrap_cmd(
-                [str(real_exec), str(impl_path), args_json],
+                [str(real_exec), str(impl_path)],
                 impl_path,
                 allow_network=False,
                 extra_ro_binds=extra_ro or None,
@@ -143,7 +148,7 @@ def run_sandboxed_python(
                     f"may opt in by setting {_UNSANDBOXED_OPT_IN_ENV}=1 (runs with "
                     "rlimits + stripped env only — no filesystem/network isolation)."
                 )
-            cmd = [sys.executable, str(impl_path), args_json]
+            cmd = [sys.executable, str(impl_path)]
 
         run_kwargs: dict[str, Any] = dict(
             capture_output=True,

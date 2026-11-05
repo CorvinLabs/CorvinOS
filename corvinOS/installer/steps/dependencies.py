@@ -359,7 +359,11 @@ def _ensure_node_via_bootstrap() -> bool:
         os.environ["PATH"] = str(node_bin) + os.pathsep + os.environ.get("PATH", "")
     ok = bool(shutil.which("node")) and bool(shutil.which("npm"))
     if ok:
-        print(f"✓ node {subprocess.run(['node', '--version'], capture_output=True, text=True, check=False, encoding="utf-8", errors="replace").stdout.strip()} + npm ({node_bin})")
+        node_version = subprocess.run(
+            ['node', '--version'], capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
+        ).stdout.strip()
+        print(f"✓ node {node_version} + npm ({node_bin})")
     return ok
 
 

@@ -137,6 +137,15 @@ def validate_acceptance(case: Any) -> str | None:
     contains = expect.get("final_contains", {})
     if not isinstance(contains, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in contains.items()):
         return "expect.final_contains must map a path to a substring"
+    # G-02: a case that cannot fail proves nothing. An empty needle matches any value; an empty
+    # nodes_reached list asserts nothing; a path into `__internal__` state reads the runner's own
+    # bookkeeping, not what the workflow produced.
+    if any(not v.strip() for v in contains.values()):
+        return "expect.final_contains needs a non-empty substring for every path"
+    if any(any(seg.startswith("_") for seg in k.split(".")) for k in contains):
+        return "expect.final_contains paths may not start with an underscore (internal state)"
+    if not ("state" in expect or reached or contains):
+        return "expect must state at least one real expectation (state, nodes_reached or final_contains)"
     return None
 
 

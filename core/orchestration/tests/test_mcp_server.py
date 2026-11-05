@@ -674,7 +674,7 @@ orchestration:
         self.assertTrue(self._RUN_ID_RE.match(run_id or ""), run_id)
         # Bug 3 regression: the timeout envelope must only promise delivery
         # when hooks were actually registered for this call.
-        self.assertIn("It will be delivered to the originating chat", payload["error"])
+        self.assertIn("is sent to the originating chat", payload["error"])
         self.assertIn(f"run_id={run_id}", payload["error"])
 
         # The record must exist immediately (on_timeout runs synchronously,
@@ -705,6 +705,60 @@ orchestration:
         self.assertEqual(rec["state"], "ready")
         self.assertTrue(rec["ok"])
         self.assertIn("completed", rec["text"])
+
+    def test_timed_out_run_keeps_its_workflows_concurrent_slot_until_it_ends(self):
+        """SRF-8: the slot used to be released when the TOOL call returned on
+        timeout while the run kept executing — budget_s=10 calls then started N
+        concurrent runs on a cap-1 tier. Driven through the JSON-RPC server."""
+        import threading
+
+        import corvin_orchestration.mcp_server as m
+        self._write_smoke_workflow()
+        server = self._server()
+        release = threading.Event()
+        real_run = m._DAGRunner.run
+
+        def _held_run(self_runner, *a, **kw):
+            release.wait(10)
+            return real_run(self_runner, *a, **kw)
+
+        args = {"workflow_id": "m5_smoke", "inputs": {"a": 1, "b": 2}, "budget_s": 0.05}
+        with mock.patch.object(m._DAGRunner, "run", _held_run), \
+             mock.patch.object(m, "_clamp", self._passthrough_clamp), \
+             mock.patch.object(m, "_lic_get_limit", lambda key: 1), \
+             mock.patch.object(m, "_count_console_running", lambda tid: 0):
+            try:
+                first = _drive(server, [_call("workflow_run", args)])
+                second = _drive(self._server(), [_call("workflow_run", args, msgid=2)])
+            finally:
+                release.set()
+            p1 = json.loads(first[0]["result"]["content"][0]["text"])
+            p2 = json.loads(second[0]["result"]["content"][0]["text"])
+            self.assertEqual(p1["status"], "timeout")
+            self.assertEqual(p2["status"], "refused", p2)
+            self.assertIn("workflows_concurrent", p2["error"])
+            # Once the first run really ends, its slot is free again.
+            deadline = time.time() + 10
+            while time.time() < deadline and m._ACTIVE_WORKFLOW_RUNS:
+                time.sleep(0.05)
+            self.assertEqual(m._ACTIVE_WORKFLOW_RUNS, 0)
+            third = _drive(self._server(), [_call("workflow_run", {
+                "workflow_id": "m5_smoke", "inputs": {"a": 1, "b": 2}}, msgid=3)])
+        p3 = json.loads(third[0]["result"]["content"][0]["text"])
+        self.assertEqual(p3["status"], "complete", p3)
+        self.assertEqual(m._ACTIVE_WORKFLOW_RUNS, 0)
+
+    def test_timeout_text_does_not_promise_delivery_past_the_turn(self):
+        """SRF-8: the run lives in this per-turn tool server; the timeout text
+        must say it stops with the turn instead of promising delivery."""
+        import corvin_orchestration.mcp_server as m
+        out = m._run_with_budget(lambda: time.sleep(0.3), budget_s=0.05,
+                                 run_id_hint="abc", on_timeout=lambda: None,
+                                 on_finish=lambda v, e: None)
+        self.assertEqual(out["status"], "timeout")
+        self.assertIn("normally exits when the current turn ends", out["error"])
+        self.assertIn("'worker stopped' notice", out["error"])
+        self.assertNotIn("It will be delivered", out["error"])
 
     def test_workflow_run_within_budget_does_not_register_completion_notify(self):
         """The common (non-timeout) case must not produce a redundant
@@ -758,8 +812,14 @@ orchestration:
         # Bug 3 regression: with no hooks registered (no messenger origin),
         # the envelope must NOT claim a delivery it cannot make — it must say
         # so honestly instead of unconditionally promising delivery.
-        self.assertNotIn("It will be delivered", payload["error"])
+        self.assertNotIn("is sent to the originating chat", payload["error"])
         self.assertIn("No automatic delivery is configured", payload["error"])
+        # The run still holds its workflows_concurrent slot (SRF-8); let it
+        # end so the next test does not start at the cap.
+        deadline = time.time() + 10
+        while time.time() < deadline and m._ACTIVE_WORKFLOW_RUNS:
+            time.sleep(0.05)
+        self.assertEqual(m._ACTIVE_WORKFLOW_RUNS, 0)
 
     def test_workflow_resume_timeout_registers_completion_notify_and_returns_run_id(self):
         import corvin_orchestration.mcp_server as m
@@ -808,7 +868,7 @@ orchestration:
         self.assertTrue(resume_resp[0]["result"]["isError"])
         self.assertEqual(payload["status"], "timeout")
         self.assertEqual(payload["run_id"], run_id)
-        self.assertIn("It will be delivered to the originating chat", payload["error"])
+        self.assertIn("is sent to the originating chat", payload["error"])
 
         rec = self._read_record(run_id)
         self.assertEqual(rec["state"], "pending")

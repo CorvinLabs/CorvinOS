@@ -185,9 +185,23 @@ def module_name(f: Path) -> str:
     return ".".join(parts)
 
 
+#: The oldest Python ``pyproject.toml`` admits (``requires-python >= 3.11``).
+#: Every production file must parse under it: a 3.12-only construct in an
+#: installer module kills ``corvin-install`` at import on a 3.11 host (SRF-2).
+MIN_PYTHON = (3, 11)
+
+
 def _parse(f: Path) -> ast.AST | None:
+    """Parse with the oldest supported grammar. ``feature_version`` rejects
+    newer syntax the parser tracks (``type`` aliases, PEP 695 generics, ...)
+    on any interpreter, but NOT PEP 701 f-strings — 3.12+ accepts
+    ``f"{g("x")}"`` even with ``feature_version=(3, 11)``. That half needs a
+    real 3.11 interpreter, which is why the CI job runs this sweep on 3.11
+    (``.github/workflows/zero-caller-sweep.yml``) and ``main`` warns when it
+    runs on anything newer."""
     try:
-        return ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+        return ast.parse(f.read_text(encoding="utf-8", errors="replace"),
+                         feature_version=MIN_PYTHON)
     except (SyntaxError, ValueError):
         return None
 
@@ -967,12 +981,17 @@ def sweep() -> dict:
     dead = [i for i in impls if (REPO / i["file"]) not in live] + unscheduled_stages()
     # A file this interpreter cannot parse contributes no class and no edge —
     # a dead implementation written in newer syntax would pass silently (R10-2).
-    # Each is a finding of its own, baselined like a dead class.
+    # Each is a finding of its own, baselined like a dead class. The grammar is
+    # the OLDEST supported one (MIN_PYTHON). Only a real MIN_PYTHON interpreter
+    # rejects PEP 701 f-strings; on a newer one main() says the check is partial
+    # (SRF-2: two 3.12-only files reached main although the 3.11 CI job flags them).
+    ver = "%d.%d" % MIN_PYTHON
     dead += [{"file": str(f.relative_to(REPO)), "class": "<unparseable>",
-              "contract": "-", "kind": f"does not parse on Python {sys.version_info[0]}.{sys.version_info[1]}"}
+              "contract": "-", "kind": f"does not parse on Python {ver}"}
              for f in idx.files if idx.tree(f) is None]
     return {"modules": len(idx.files), "reachable": len(live),
-            "implementations": len(impls), "dead": sorted(dead, key=lambda d: (d["file"], d["class"]))}
+            "implementations": len(impls), "dead": sorted(dead, key=lambda d: (d["file"], d["class"])),
+            "min_python_checked": sys.version_info[:2] == MIN_PYTHON}
 
 
 def _key(d: dict) -> str:
@@ -1006,6 +1025,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{rep['modules']} modules, {rep['reachable']} reachable from entry points; "
               f"{rep['implementations']} contract implementations, {len(rep['dead'])} unreachable "
               f"({len(new)} not in baseline, {len(gone)} baseline entries now wired/removed)")
+    if not rep["min_python_checked"]:
+        # feature_version cannot reject PEP 701 f-strings on 3.12+: say the
+        # parse gate was partial instead of implying it looked (SRF-2).
+        print("WARNING: running on Python %d.%d, not %d.%d - 3.12-only f-string "
+              "syntax is NOT detected here; the CI job runs this on %d.%d"
+              % (sys.version_info[:2] + MIN_PYTHON * 2), file=sys.stderr)
     # A stale baseline line (the implementation was wired or deleted) must be
     # removed too, or it would later mask the same class going dead again.
     return 1 if (a.check and (new or gone)) else 0

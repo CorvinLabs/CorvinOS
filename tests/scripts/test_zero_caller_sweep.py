@@ -10,6 +10,8 @@ import functools
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
@@ -505,3 +507,30 @@ def test_an_unparseable_file_is_reported(tmp_path, monkeypatch):
     _tree(tmp_path, {"core/main.py": "x = 1\n", "core/broken.py": "def f(:\n"})
     _sandbox(monkeypatch, tmp_path)
     assert ("core/broken.py", "<unparseable>") in _dead()
+
+
+def test_newer_grammar_is_reported_on_any_interpreter(tmp_path, monkeypatch):
+    """SRF-2: the parse gate uses the OLDEST supported grammar
+    (``requires-python >= 3.11``), not the running interpreter's —
+    a PEP 695 ``type`` alias parses on 3.12 and must still be flagged."""
+    _tree(tmp_path, {"core/main.py": "x = 1\n", "core/newer.py": "type Alias = int\n"})
+    _sandbox(monkeypatch, tmp_path)
+    assert ("core/newer.py", "<unparseable>") in _dead()
+
+
+@pytest.mark.skipif(sys.version_info[:2] != (3, 11),
+                    reason="only a real 3.11 parser rejects PEP 701 f-strings; "
+                           "the CI job (zero-caller-sweep.yml) runs on 3.11")
+def test_pep701_fstring_is_reported_on_311(tmp_path, monkeypatch):
+    """SRF-2: ``f"{run("x", encoding="utf-8")}"`` broke corvin-install on 3.11."""
+    _tree(tmp_path, {"core/main.py": "x = 1\n",
+                     "core/fs.py": 'print(f"{str("a", encoding="utf-8")}")\n'})
+    _sandbox(monkeypatch, tmp_path)
+    assert ("core/fs.py", "<unparseable>") in _dead()
+
+
+def test_every_production_file_parses_on_the_oldest_supported_python():
+    """SRF-2 ratchet on the real tree: no production file outside the grammar
+    of MIN_PYTHON (fully enforced when this runs on 3.11, as in CI)."""
+    bad = [str(f.relative_to(z.REPO)) for f in z.production_files() if z._parse(f) is None]
+    assert bad == []

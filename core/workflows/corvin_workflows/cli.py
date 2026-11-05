@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -137,12 +138,19 @@ def _validate_workflow(name: str) -> int:
     return 0
 
 
+_INT_RE = re.compile(r"^-?(0|[1-9][0-9]*)$")
+_FLOAT_RE = re.compile(r"^-?(0|[1-9][0-9]*)\.[0-9]+$")
+
+
 def _parse_kv_inputs(raw: list[str]) -> dict[str, object]:
     """Turn ['ticker=NVDA', 'window_days=7', 'amount=1450.00'] into
     {ticker: 'NVDA', window_days: 7, amount: 1450.0}.
 
-    Integer- and float-shaped values are coerced; everything else stays a
-    string. JSON values are recognised by a leading '{' or '[' and parsed.
+    Plain decimal integers (``42``, ``-7``) and decimals (``2.5``) are
+    coerced; everything else stays a string - ``01234`` (a zip code),
+    ``NAN``, ``Infinity``, ``1_000``, ``--5`` are values Python's ``int()`` /
+    ``float()`` would silently reinterpret (D-04). JSON values are recognised
+    by a leading '{' or '[' and parsed; one that does not parse is an error.
     """
     out: dict[str, object] = {}
     for tok in raw:
@@ -154,14 +162,16 @@ def _parse_kv_inputs(raw: list[str]) -> dict[str, object]:
         if not k:
             raise SystemExit(f"input arg {tok!r} has empty key")
         if v.startswith("{") or v.startswith("["):
-            out[k] = json.loads(v)
-        elif v.lstrip("-").isdigit():
-            out[k] = int(v)
-        else:
             try:
-                out[k] = float(v)
-            except ValueError:
-                out[k] = v
+                out[k] = json.loads(v)
+            except ValueError as exc:
+                raise SystemExit(f"input arg {k!r}: value looks like JSON but does not parse ({exc})") from exc
+        elif _INT_RE.match(v):
+            out[k] = int(v)
+        elif _FLOAT_RE.match(v):
+            out[k] = float(v)
+        else:
+            out[k] = v
     return out
 
 
@@ -686,7 +696,7 @@ def _resume_workflow_cmd(run_id: str, reply: str, *, format_: str, engine_name: 
               file=sys.stderr)
         return 2
     from . import checkpoint as _checkpoint
-    from .runner import PauseExpired, WorkflowChanged
+    from .runner import PauseExpired, WorkflowChanged, WorkflowFileMissing
 
     # ADR-2308: the graph of the paused run, read before the resume claims the checkpoint, so the
     # JSON output applies the same per-node rules as a fresh run (attempts for nodes that call the
@@ -704,7 +714,7 @@ def _resume_workflow_cmd(run_id: str, reply: str, *, format_: str, engine_name: 
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     # A-10: distinct, traceback-free answers (exit 3 = cannot be resumed, 4 = already running).
-    except (PauseExpired, WorkflowChanged) as e:
+    except (PauseExpired, WorkflowChanged, WorkflowFileMissing) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 3
     except _checkpoint.AlreadyClaimedError as e:

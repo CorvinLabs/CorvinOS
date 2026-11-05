@@ -4727,31 +4727,40 @@ orchestration:
 """
 
 def _tts_b64(text: str, lang: str = "en") -> str | None:
-    """Generate TTS audio via say.py and return base64-encoded OGG, or None on failure."""
+    """Generate TTS audio via say.py and return base64-encoded audio, or None.
+
+    say.py is POSITIONAL: ``say.py <out_path> <text> [<lang>]``. This used to
+    pass ``--lang <lang> --out <tmp> <text>``, which say.py read as
+    out_path="--lang", text=<lang>: it spoke the word "en"/"de" into a file
+    named ``--lang`` in the console's CWD and every workflow voice reply came
+    back silent (SRF-5, 2026-11-05)."""
     say_script = _VOICE_SCRIPTS / "say.py"
     if not say_script.exists():
         return None
+    fd, tmp = tempfile.mkstemp(suffix=".ogg")
+    os.close(fd)
+    out = Path(tmp)
     try:
-        fd, tmp = tempfile.mkstemp(suffix=".ogg")
-        os.close(fd)
         result = subprocess.run(
-            [sys.executable, str(say_script), "--lang", lang, "--out", tmp, text],
+            [sys.executable, str(say_script), str(out), text, lang],
             capture_output=True,
             timeout=30,
         )
         if result.returncode != 0:
+            _log.warning("workflow voice reply: say.py exited %s", result.returncode)
             return None
-        audio_bytes = Path(tmp).read_bytes()
+        audio_bytes = out.read_bytes()
         if not audio_bytes:
             return None  # TTS silently disabled (no key etc.)
         return base64.b64encode(audio_bytes).decode("ascii")
-    except Exception:
+    except (OSError, subprocess.SubprocessError) as exc:
+        _log.warning("workflow voice reply: TTS failed: %s", type(exc).__name__)
         return None
     finally:
         try:
-            os.unlink(tmp)
-        except Exception:
-            pass
+            out.unlink(missing_ok=True)
+        except OSError as exc:
+            _log.warning("workflow voice reply: temp audio not removed: %s", type(exc).__name__)
 
 def _run_claude_for_design(prompt: str) -> str:
     """Call claude -p with the full prompt via stdin to avoid arg-length limits."""

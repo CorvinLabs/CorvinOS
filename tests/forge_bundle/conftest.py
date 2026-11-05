@@ -1,8 +1,9 @@
 """Fixtures for Forge Bundle export E2E tests (ADR-2229 Phase 2).
 
 Mirrors ``tests/layer_forge/conftest.py``'s ``tmp_corvin_home`` pattern, plus
-the three other forges' own storage roots: ``skills_gen``/``skills_packages``
-(host-global, matching ``skill_forge_distribution_routes.py``), the tool
+the three other forges' own storage roots: ``skills_gen`` (host-global,
+matching ``skill_forge_distribution_routes.py``; that route's package store is
+per tenant since SRF-18 and the bundle export never reads it), the tool
 registry (tenant+scope-rooted via ``MultiRegistry``), and the layer registry
 (tenant-rooted via ``layer_forge_home``).
 """

@@ -30,15 +30,27 @@ keys rejected** - in particular the tenant, run and task id can never come from 
 ## What happens at run time (`_execute_peer_agent`)
 
 1. The instruction is resolved. More than 16 KiB is refused (`instruction_too_large`), never truncated.
-2. **Exactly once.** `task_id = sha256(run_id + ":" + node_id)[:32]`. The runner passes the tenant, the run id and
+2. **Exactly once.** `task_id = sha256(len(run_id) + ":" + run_id + ":" + node_id)[:32]` (length-prefixed since
+   2026-11-05, P-05: `("a:b","c")` and `("a","b:c")` used to share an id; a ledger row under the old unprefixed id
+   still counts for a run that was in flight across the change). The runner passes the tenant, the run id and
    the workflow id in the run state (`__tenant_id__`, `__run_id__`, `__workflow__`); a resumed run keeps its id.
    If the delegation ledger already holds a task with that id whose status is not `rejected`, the node fails with
    `outcome_unknown` (audit `workflow.peer_outcome_unknown`) and **sends nothing**: it may have run at the peer.
    The operator decides (re-run the workflow). Only an explicit `rejected` (the peer refused before running
    anything) may be asked again.
 3. **Outbound gate** (`peer_gate.evaluate_peer_outbound`, fail-closed, on the exact payload):
-   L44 acceptable use -> data grade -> endpoint pairing. A refusal is audited `workflow.peer_refused` with a closed
-   reason code and never carries text.
+   the text is first normalised (`normalize_outbound`: NFKC, format/control characters such as zero-width space and
+   soft hyphen removed - what the peer's own sanitiser does), and the gate judges THAT text; the node then sends
+   exactly the judged text (`PeerGateDecision.payload`), never the raw one (P-01: a fullwidth or zero-width-split
+   credential passed the secret patterns and was reassembled at the peer). L44 acceptable use -> data grade ->
+   endpoint pairing. A `[class:...]` marker can only RAISE the grade: the content is classified without it and the
+   stricter of the two counts (P-02: a leading `[class:public]`, writable by any upstream node, downgraded personal
+   data). A refusal is audited `workflow.peer_refused` with a closed reason code and never carries text.
+3b. **Send claim** (`peer_gate.claim_task`, P-05). The ledger row appears only inside `delegate()`, so two runners
+   of the same (run, node) could both read "nothing sent". Right before the send the node creates
+   `<tenant>/global/federation/peer_claims/<task_id>` with `O_EXCL`; whoever fails to create it reports
+   `outcome_unknown` and sends nothing. A retry after a `rejected` row claims `<task_id>.<hash of that row>`, so
+   racing retriers still yield one sender. The claim is given back only when the audit-first record below fails.
 4. **Audit-first.** `workflow.peer_delegated` is written to the tenant chain, then `delegate()` writes
    `federation.task_delegated`; if either cannot be written, nothing is sent.
 5. The answer is mapped: `status`, `ok`, `result`, `untrusted: true`, `peer_instance_id`, `agent_address`,
@@ -80,6 +92,10 @@ It is capped at 16 KiB, passed through the sanitiser every inbound A2A instructi
 (`a2a_worker.sanitize_instruction`: NFKC, control characters, framing-escape rejection -> `peer_result_rejected`),
 flagged `untrusted: true`, and stored as data. Selectors can read it; nothing parses it as workflow YAML or node
 config. A later `agent` node that receives it in a prompt goes through the pre-spawn gates as usual.
+A peer reply never picks a recipient or the number of paid engine calls: the validator (R9, P-03) refuses a
+`chat_id_from` or `items_from` selector rooted at a `peer_agent` node (any field of it, not only `result`).
+`text_from` / `instruction_from` / `prompt_from` may still read it as data. Limit: the check is on the direct
+selector root; a `code` node that copies peer text into its own output launders it.
 
 ## Audit events (scalars only, no text)
 

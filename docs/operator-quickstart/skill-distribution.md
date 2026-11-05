@@ -8,6 +8,14 @@ This guide covers how to package, distribute, and install Skills using CorvinOS 
 
 ## Quick Start
 
+**Where packages live (since 2026-11-05, SRF-18).** Packages are stored per tenant in
+`<corvin_home>/tenants/<tenant>/skills_packages/`; list, download, metadata and install only
+ever see the calling session's tenant (another tenant's package answers 404). Packages written
+before that sit in the host-wide `<corvin_home>/skills_packages/`; only the host tenant
+(`_default`) still reads them — they are not moved. The generated-skill folders under
+`<corvin_home>/skills_gen/` stay host-wide, so only `_default` may package from them (403 for
+any other tenant).
+
 ### Package a Skill
 
 Package a generated Skill into a distributable ZIP:

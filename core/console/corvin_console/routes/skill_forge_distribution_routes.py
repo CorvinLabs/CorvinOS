@@ -45,12 +45,46 @@ router = APIRouter(prefix="/v1/skill-forge", tags=["skill-forge-v2"])
 # They were hard-wired to ``~/.corvin``, which on a test run or a relocated
 # install read and wrote the operator's LIVE home. The installed-skill store is
 # the SAME one ``/skills-manager`` manages (``skill_manager.get_installer``).
+#
+# SRF-18 (2026-11-05): the PACKAGE store is per tenant
+# (``<tenant_home>/skills_packages``). It used to be one host-wide folder, so a
+# session of any tenant listed, downloaded and installed every other tenant's
+# packages. Packages written before that live in the legacy host-wide folder;
+# they carry no tenant, so only the host operator's tenant (``_default``) still
+# reads them (never moved, never shown to another tenant).
+# ``skills_gen`` (the generated-skill folders /package reads) stays host-wide —
+# it has no tenant attribution and the forge-bundle export reads it too — so
+# only the ``_default`` tenant may package from it.
+_HOST_TENANT = "_default"
+
+
 def _skills_gen_root() -> Path:
     return _forge_paths.corvin_home() / "skills_gen"
 
 
-def _packages_root() -> Path:
+def _packages_root(tenant_id: str) -> Path:
+    return _forge_paths.tenant_home(tenant_id) / "skills_packages"
+
+
+def _legacy_packages_root() -> Path:
     return _forge_paths.corvin_home() / "skills_packages"
+
+
+def _package_roots(tenant_id: str) -> list[Path]:
+    """Where *tenant_id*'s packages live, own root first."""
+    roots = [_packages_root(tenant_id)]
+    if tenant_id == _HOST_TENANT:
+        roots.append(_legacy_packages_root())
+    return roots
+
+
+def _find_package(tenant_id: str, filename: str) -> Optional[Path]:
+    """The tenant's package named *filename* (a bare name), or None."""
+    for root in _package_roots(tenant_id):
+        candidate = root / filename
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _audit(rec: Any, action: str, target: str, *, ok: bool = True, reason: str = "") -> None:
@@ -128,7 +162,7 @@ async def package_skill(
                 "skill_id": "my_awesome_skill",
                 "version": "1.0.0",
                 "packaged_at": "2026-09-17T10:00:00Z",
-                "zip_path": "~/.corvin/skills_packages/...",
+                "zip_path": "<tenant_home>/skills_packages/...",
                 "checksum_count": 42,
                 "audit_trail_events": 8
             }
@@ -139,6 +173,9 @@ async def package_skill(
         HTTPException(400): Invalid Skill folder structure
         HTTPException(409): Package already exists
     """
+    if rec.tenant_id != _HOST_TENANT:
+        _audit(rec, "package", skill_id[:200], ok=False, reason="host_skills_gen_other_tenant")
+        raise HTTPException(status_code=403, detail="packaging from the host skills_gen folder is limited to the host tenant")
     try:
         # Resolve Skill folder — only inside the skills_gen root: packaging
         # WRITES ``.forge/`` metadata into the folder, so an arbitrary
@@ -164,7 +201,7 @@ async def package_skill(
         manifest = SkillManifestV2.from_dict(manifest_data)
 
         # Package Skill
-        packager = SkillPackager(_packages_root())
+        packager = SkillPackager(_packages_root(rec.tenant_id))
         zip_path, zip_hash, metadata = packager.package(skill_folder, manifest)
         metadata.pop("zip_path", None)  # absolute host path — not for the client
 
@@ -208,11 +245,15 @@ async def list_packages(rec: Annotated[Any, Depends(require_session)]) -> Dict:
         }
     """
     try:
-        packages_dir = _packages_root()
         packages = []
-
-        if packages_dir.exists():
-            for zip_file in packages_dir.glob("*.zip"):
+        seen: set[str] = set()
+        for packages_dir in _package_roots(rec.tenant_id):
+            if not packages_dir.is_dir():
+                continue
+            for zip_file in sorted(packages_dir.glob("*.zip")):
+                if zip_file.name in seen:
+                    continue  # the tenant's own root wins over the legacy one
+                seen.add(zip_file.name)
                 stat = zip_file.stat()
                 packages.append({
                     "filename": zip_file.name,
@@ -249,9 +290,9 @@ async def download_package(filename: str, rec: Annotated[Any, Depends(require_se
         if ".." in filename or "/" in filename or "\\" in filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        zip_path = _packages_root() / filename
+        zip_path = _find_package(rec.tenant_id, filename)
 
-        if not zip_path.exists():
+        if zip_path is None:
             raise HTTPException(status_code=404, detail=f"Package not found: {filename}")
 
         _audit(rec, "download", filename)
@@ -310,13 +351,23 @@ async def install_skill(
     if not zip_hash:
         raise HTTPException(status_code=400, detail="zip_hash is required")
 
-    root = _packages_root().resolve()
+    roots = [r.resolve() for r in _package_roots(rec.tenant_id)]
     candidate = Path(zip_path)
-    pkg_path = (candidate if candidate.is_absolute() else root / candidate).resolve()
-    if pkg_path.parent != root or pkg_path.suffix != ".zip":
-        raise HTTPException(status_code=400, detail="zip_path must name a .zip in the packages root")
-    if not pkg_path.is_file():
-        raise HTTPException(status_code=404, detail=f"Package not found: {pkg_path.name}")
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+        if resolved.parent not in roots or resolved.suffix != ".zip":
+            raise HTTPException(status_code=400, detail="zip_path must name a .zip in your packages root")
+        name = resolved.name
+    else:
+        if len(candidate.parts) != 1 or candidate.suffix != ".zip":
+            raise HTTPException(status_code=400, detail="zip_path must name a .zip in your packages root")
+        name = candidate.name
+    found = _find_package(rec.tenant_id, name)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"Package not found: {name}")
+    pkg_path = found.resolve()
+    if pkg_path.parent not in roots:  # a symlinked package pointing elsewhere
+        raise HTTPException(status_code=400, detail="zip_path must name a .zip in your packages root")
 
     metadata = _manifest_from_zip(pkg_path)
     target = f"{metadata['skill_id']}@{metadata['version']}"
@@ -395,11 +446,10 @@ async def get_package_metadata(skill_id: str, version: str, rec: Annotated[Any, 
     try:
         if not _is_safe_segment(skill_id) or not _is_safe_segment(version):
             raise HTTPException(status_code=400, detail="invalid skill_id or version")
-        packages_dir = _packages_root()
         zip_filename = f"{skill_id}_{version}.zip"
-        zip_path = packages_dir / zip_filename
+        zip_path = _find_package(rec.tenant_id, zip_filename)
 
-        if not zip_path.exists():
+        if zip_path is None:
             raise HTTPException(status_code=404, detail=f"Package not found: {zip_filename}")
 
         # Read metadata from .forge/ inside ZIP

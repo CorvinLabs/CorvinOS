@@ -214,7 +214,9 @@ class TestHTTPEndpoints:
         body = r.json()
         zip_hash = body["zip_hash"]
         assert "zip_path" not in body["metadata"]  # no absolute host path to the client
-        assert (home / "skills_packages" / "test_skill_1.0.0.zip").is_file()
+        # SRF-18: the package lands in the SESSION tenant's store, not a host-wide folder.
+        assert (home / "tenants" / "_default" / "skills_packages" / "test_skill_1.0.0.zip").is_file()
+        assert not (home / "skills_packages").exists()
 
         r = client.get(f"{BASE}/packages")
         assert [p["filename"] for p in r.json()["packages"]] == ["test_skill_1.0.0.zip"]
@@ -275,6 +277,78 @@ class TestHTTPEndpoints:
         r = client.get(f"{BASE}/installed")
         assert r.status_code == 200
         assert r.json() == {"skills": []}
+
+
+# ── SRF-18: the package store is per tenant ─────────────────────────────────
+
+
+def _client_for(tenant_id: str):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from corvin_console import auth as _auth
+    from corvin_console.routes import skill_forge_distribution_routes as dist
+
+    rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint=f"fp-{tenant_id}")
+    app = FastAPI()
+    app.include_router(dist.router, prefix="/v1/console")
+    c = TestClient(app, raise_server_exceptions=False)
+    c.cookies.set("corvin_console_sid", rec.sid)
+    c.headers.update({"X-CSRF-Token": _auth.derive_csrf_token(rec.csrf_secret, rec.sid)})
+    return c
+
+
+class TestTenantScopedPackages:
+    """SRF-18 (2026-11-05): one host-wide skills_packages folder let a session of
+    any tenant list, download, read the metadata of and install another
+    tenant's packages."""
+
+    def _package_as_default(self, client, home) -> str:
+        _make_skill(home / "skills_gen")
+        r = client.post(f"{BASE}/package?skill_id=test_skill")
+        assert r.status_code == 200, r.text
+        return r.json()["zip_hash"]
+
+    def test_another_tenant_cannot_list_download_read_or_install(self, client, home):
+        zip_hash = self._package_as_default(client, home)
+        (home / "tenants" / "tenantb" / "global" / "console" / "sessions").mkdir(parents=True)
+        other = _client_for("tenantb")
+        assert other.get(f"{BASE}/packages").json() == {"packages": []}
+        assert other.get(f"{BASE}/download/test_skill_1.0.0.zip").status_code == 404
+        assert other.get(f"{BASE}/packages/test_skill/1.0.0/metadata").status_code == 404
+        r = other.post(f"{BASE}/install", params={"zip_path": "test_skill_1.0.0.zip", "zip_hash": zip_hash})
+        assert r.status_code == 404, r.text
+        own = home / "tenants" / "_default" / "skills_packages" / "test_skill_1.0.0.zip"
+        r = other.post(f"{BASE}/install", params={"zip_path": str(own), "zip_hash": zip_hash})
+        assert r.status_code == 400, r.text
+        assert not (home / "skills_installed" / "test_skill").exists()
+        # The owning tenant still sees and downloads its own package.
+        assert [p["filename"] for p in client.get(f"{BASE}/packages").json()["packages"]] == [
+            "test_skill_1.0.0.zip"]
+        assert client.get(f"{BASE}/download/test_skill_1.0.0.zip").status_code == 200
+
+    def test_another_tenant_cannot_package_from_the_host_skills_gen(self, home):
+        _make_skill(home / "skills_gen")
+        (home / "tenants" / "tenantb" / "global" / "console" / "sessions").mkdir(parents=True)
+        r = _client_for("tenantb").post(f"{BASE}/package?skill_id=test_skill")
+        assert r.status_code == 403, r.text
+        assert not (home / "tenants" / "tenantb" / "skills_packages").exists()
+
+    def test_legacy_host_wide_packages_stay_readable_for_the_host_tenant_only(self, client, home, tmp_path):
+        skill = _make_skill(tmp_path / "gen")
+        _, zip_hash, _ = SkillPackager(home / "skills_packages").package(
+            skill, SkillManifestV2.from_dict(_MANIFEST))         # written before SRF-18
+        assert [p["filename"] for p in client.get(f"{BASE}/packages").json()["packages"]] == [
+            "test_skill_1.0.0.zip"]
+        assert client.get(f"{BASE}/download/test_skill_1.0.0.zip").status_code == 200
+        assert client.get(f"{BASE}/packages/test_skill/1.0.0/metadata").status_code == 200
+        r = client.post(f"{BASE}/install", params={"zip_path": "test_skill_1.0.0.zip",
+                                                    "zip_hash": zip_hash.split(":")[-1]})
+        assert r.status_code == 200, r.text
+        (home / "tenants" / "tenantb" / "global" / "console" / "sessions").mkdir(parents=True)
+        other = _client_for("tenantb")
+        assert other.get(f"{BASE}/packages").json() == {"packages": []}
+        assert other.get(f"{BASE}/download/test_skill_1.0.0.zip").status_code == 404
 
 
 # ── signed packages (ADR-2252): real keys, real packager, real installer ────

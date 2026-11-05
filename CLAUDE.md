@@ -937,7 +937,10 @@ lines into `user` · persist a refusal after a `yield` · put the volatile count
 header (breaks the append-only prefix) · build another "context bridge" —
 `scripts/zero_caller_sweep.py --check` fails CI on a new unreachable Subsystem/Skill/Stage/Plugin
 (never-IMPORTED only — one re-exported by a live package and never called passes it) and on a new
-production file Python 3.11 cannot parse.
+production file Python 3.11 cannot parse (the oldest `requires-python`; `feature_version=(3, 11)`
+everywhere, but only a real 3.11 interpreter rejects PEP 701 f-strings — CI runs it on 3.11, a
+newer local run prints a WARNING. That CI job was red for days while two such files broke
+`corvin-install` on 3.11 — SRF-2, 2026-11-05).
 
 → Full reference: [adapter-runtime.md](docs/claude-ref/adapter-runtime.md) § Session ledger
 

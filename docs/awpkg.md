@@ -92,8 +92,14 @@ claim and a marker that cannot be written is not a claim). `corvin-flow resume` 
 **Pauses.** `timeout_minutes` (`ask_human`) / `timeout_s` (`approval`) set a deadline stored in the
 checkpoint (`expires_at_ms`); resuming after it raises `PauseExpired` (the checkpoint is kept for
 inspection). `on_timeout.branch` is still declared intent only. A checkpoint also records the
-sha256 of the workflow file it paused from; editing the file afterwards makes the resume raise
-`WorkflowChanged` instead of replaying saved results against a different graph.
+sha256 of the workflow file it paused from (by absolute path); editing the file afterwards makes the resume raise
+`WorkflowChanged` instead of replaying saved results against a different graph, and a deleted file raises
+`WorkflowFileMissing` (`corvin-flow resume` exit 3). A node that failed under `fail_branch` before the pause is
+still reported failed (with its error) after the resume, and a resume that is cancelled re-saves the checkpoint with
+the nodes it already ran, so the next resume does not deliver a message twice (review round 3, D-01/D-02/D-05/D-07).
+CLI `key=value` inputs: only plain decimal integers and decimals are coerced; `01234`, `NAN`, `1_000`, `--5` stay
+strings, and a `{`/`[` value that is not valid JSON is an error (D-04). Code-node arguments travel inside the
+sandboxed script, not argv, so a large input no longer fails with E2BIG (D-06).
 
 **No LLM CLI required for engine-free workflows.** The `workflow_run` MCP tool
 constructs the `claude` engine only when the graph actually contains an
@@ -102,6 +108,14 @@ workflow built purely from `code` / `compute` / `merge` / `static` / `ask_human`
 / `deliver` nodes runs with **no `claude` CLI on PATH** — so a no-Claude install (and CI) can still execute deterministic pipelines.
 An engine-requiring workflow with no CLI fails fast with a clean
 `engine_unavailable` result instead of an opaque mid-run node error.
+
+**Time budget (`budget_s`, 10-600 s).** A `workflow_run` / `workflow_resume` that outlives its
+budget returns `status: timeout` with its `run_id`; the run is not killed but keeps executing on a
+thread of the orchestration MCP server, which is a child of the current `claude -p` turn and normally
+exits with it — the run then stops unfinished. Its result reaches a messenger chat only if it finishes
+before that; otherwise the registered completion record is reaped as "worker stopped". A `workflow_run` keeps its
+`workflows_concurrent` licence slot until it actually ends (the slot used to be released when the tool
+call returned, so repeated short-budget calls bypassed the cap — SRF-8, 2026-11-05).
 
 **Readiness.** In the console a draft reaches `ready` only through a measured report (validator, a synthetic
 stub run, an acceptance case, counted designer repairs), and the editor's former "Dry-run" is the **Synthetic

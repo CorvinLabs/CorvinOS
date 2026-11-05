@@ -412,9 +412,15 @@ def _run_with_budget(
                 # rescues the orphaned record (the common case this closes)
                 # or is a harmless repeat no-op (nothing was registered).
                 _fire_on_finish()
+        # Say only what this process can keep (SRF-8): the run lives on a
+        # thread of THIS tool server, a child of the per-turn `claude -p`. It
+        # ends with that turn, so the run usually stops unfinished soon after
+        # this reply. A result is delivered only if the run finishes first;
+        # otherwise the registered record is reaped as "worker stopped".
         delivery_note = (
-            f" It will be delivered to the originating chat when it "
-            f"finishes (run_id={run_id_hint})."
+            " If it finishes while this tool server is still alive, its result"
+            f" is sent to the originating chat (run_id={run_id_hint}); if the"
+            " server stops first, a 'worker stopped' notice is sent instead."
             if hooks_registered else
             " No automatic delivery is configured for this caller."
         )
@@ -422,8 +428,10 @@ def _run_with_budget(
             "status": "timeout",
             "run_id": run_id_hint,
             "error": (
-                f"exceeded budget_s={budget_s}s — the underlying run may "
-                "still be executing in the background; it was not killed."
+                f"exceeded budget_s={budget_s}s — the run was not killed and "
+                "keeps executing inside this tool server, which normally exits "
+                "when the current turn ends; the run then stops unfinished and "
+                "nodes it already ran may have had partial side effects."
                 + delivery_note
             ),
         }
@@ -1105,21 +1113,38 @@ class OrchestrationServer:
             run_id_hint, tenant_id, f"workflow {workflow_id!r}",
         )
 
+        # The workflows_concurrent slot is held for as long as the RUN lives,
+        # not as long as this tool call: a run that outlives budget_s keeps
+        # executing on its thread, so releasing the slot when the call
+        # returned let budget_s=10 calls start N concurrent runs on a cap-1
+        # tier (SRF-8, 2026-11-05). The run's own thread releases it; the
+        # caller releases it only if that thread never started.
         global _ACTIVE_WORKFLOW_RUNS
         with _ACTIVE_WORKFLOW_LOCK:
             _ACTIVE_WORKFLOW_RUNS += 1
+        slot = {"started": False}
+
+        def _run_holding_slot() -> Any:
+            global _ACTIVE_WORKFLOW_RUNS
+            slot["started"] = True
+            try:
+                return runner.run(inputs=args.get("inputs") or {}, run_id=run_id_hint)
+            finally:
+                with _ACTIVE_WORKFLOW_LOCK:
+                    _ACTIVE_WORKFLOW_RUNS -= 1
+
         try:
             result = _run_with_budget(
-                lambda: runner.run(inputs=args.get("inputs") or {}, run_id=run_id_hint),
+                _run_holding_slot,
                 budget_s=budget_s, run_id_hint=run_id_hint,
                 on_timeout=on_timeout, on_finish=on_finish,
             )
         except Exception as exc:  # noqa: BLE001
+            if not slot["started"]:
+                with _ACTIVE_WORKFLOW_LOCK:
+                    _ACTIVE_WORKFLOW_RUNS -= 1
             self._error(msgid, INTERNAL_ERROR, f"workflow run failed: {exc}")
             return
-        finally:
-            with _ACTIVE_WORKFLOW_LOCK:
-                _ACTIVE_WORKFLOW_RUNS -= 1
         self._respond(msgid, self._run_result_envelope(result))
 
     def _call_workflow_resume(self, msgid: Any, args: dict) -> None:

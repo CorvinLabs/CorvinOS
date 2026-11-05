@@ -54,6 +54,9 @@ Stored under `meta["acceptance"]` (`PUT /workflows/{wid}/acceptance`, 64 KiB cap
 node id it picks that node's answer (`{"approved": false}` rejects). `{"__raise__": true}` makes an engine
 call fail on purpose, to exercise a `fail_branch` (a failed node counts as expected only then).
 `expect` is required and non-empty; without a stored case the `acceptance` line is `unmeasured`.
+A case that cannot fail is refused (G-02, `readiness.validate_acceptance`): at least one of `state`, a non-empty
+`nodes_reached` or a non-empty `final_contains`; every `final_contains` substring non-empty; no path segment
+starting with `_` (that reads the runner's own bookkeeping such as `__console_run__`, not the workflow's output).
 
 ## Routes (`routes/workflow_readiness.py`)
 
