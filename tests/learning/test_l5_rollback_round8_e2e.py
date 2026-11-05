@@ -37,17 +37,19 @@ import sys
 import pytest
 
 from tests.learning.console_client import console_client
-from tests.learning.test_l5_rollback_lock_and_window_e2e import _seed, _skill_turn
+from tests.learning.test_l5_rollback_lock_and_window_e2e import _join_background, _seed, _skill_turn
 from tests.learning.test_l5_rollback_reset_route_e2e import RESET, _named, _trip
 from tests.learning.test_l5_rollback_round7b_e2e import _CHILD, _events
 
 
 @pytest.fixture(autouse=True)
 def _phase2(monkeypatch):
+    _join_background()  # a straggler from an earlier test must not judge this sandbox
     monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
     yield
     from core.skills.os_skills.monitoring import dual_write, rollback_detector
 
+    _join_background()  # nor may one of ours outlive this test
     rollback_detector.reset_for_tests()
     dual_write.reset_for_tests()
 

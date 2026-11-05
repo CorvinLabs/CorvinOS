@@ -395,10 +395,6 @@
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
-  "core/console/corvin_console/routes/conflict_resolver.py::ConflictResolver.__init__::Path.home() / '.corvin' / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
   "core/console/corvin_console/routes/dashboard.py::_audit_chain_status::_forge_paths.tenant_global_dir(tenant_id) / 'forge' / 'audit.jsonl'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
@@ -436,18 +432,6 @@
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "core/console/corvin_console/routes/features.py::_get_tenant_config_path::forge_paths.corvin_home() / 'tenants' / tenant_id / 'global'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/federation_model.py::CrossInstanceSync.__init__::Path.home() / '.corvin' / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/federation_model.py::FederatedLearning.__init__::Path.home() / '.corvin' / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/federation_model.py::FederationRegistry.__init__::Path.home() / '.corvin' / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },
@@ -532,14 +516,6 @@
     "reason": "measured-2026-10-24, not yet triaged"
   },
   "core/console/corvin_console/routes/github_sync.py::resume_auto_sync::Path(corvin_home) / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/github_webhook_events.py::EventProcessor.__init__::Path.home() / '.corvin' / 'tenants'": {
-    "count": 1,
-    "reason": "measured-2026-10-24, not yet triaged"
-  },
-  "core/console/corvin_console/routes/github_webhook_events.py::EventQueue.__init__::Path.home() / '.corvin' / 'tenants'": {
     "count": 1,
     "reason": "measured-2026-10-24, not yet triaged"
   },

@@ -66,6 +66,20 @@ def _join_judges(before=frozenset()) -> None:
             assert not t.is_alive(), "rollback judge hung"
 
 
+#: Every background thread the L5 rollback/readiness machinery starts. Each one resolves
+#: its paths from the PROCESS environment when it runs, so one still alive after its test
+#: acts on the NEXT test's sandbox (an ``l5-rollback-retry`` evaluate is a second judge).
+_L5_THREADS = ("l5-rollback-judge", "l5-rollback-retry", "l5-readiness")
+
+
+def _join_background(timeout: float = 60.0) -> None:
+    """Wait (join, no sleep) for every L5 background thread alive now."""
+    for t in threading.enumerate():
+        if t.name in _L5_THREADS and t is not threading.current_thread():
+            t.join(timeout=timeout)
+            assert not t.is_alive(), f"{t.name} hung"
+
+
 def _phase(tenant: str):
     from core.skills.os_skills.monitoring import dual_write
 

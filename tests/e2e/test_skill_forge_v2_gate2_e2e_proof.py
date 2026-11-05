@@ -35,7 +35,7 @@ sys.path.insert(0, str(corvinOS_root))
 
 # Import skill packager and manifest
 from core.skills.skill_packager import SkillPackager
-from core.skills.manifest_v2 import SkillManifestV2, BootLayer, SkillDomain
+from core.skills.manifest_v2 import SkillManifestV2
 
 # Color codes for terminal output
 class Colors:
@@ -667,64 +667,16 @@ def test_gate2_e2e_skill_forge_v2_full_pipeline():
         assert all_passed, "Gate 2 proof failed: Not all checks passed"
 
 
-def test_gate2_e2e_error_handling():
-    """
-    GATE 2 ERROR CASE: Verify error handling in the pipeline.
-
-    Tests that the pipeline gracefully handles:
-    - Missing manifest field
-    - Invalid ZIP structure
-    """
-
-    print("\n" + "=" * 80)
-    print("GATE 2 ERROR CASE: Error Handling")
-    print("=" * 80)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir_path = Path(tmpdir)
-
-        print_step(1, "Error Case: Invalid Manifest (Missing Field)")
-
-        # Create minimal skill folder but with invalid manifest
-        skill_dir = tmpdir_path / "invalid_skill"
-        skill_dir.mkdir()
-
-        # Create required directories
-        for subdir in ["src", "hooks", "tests", "scripts", "docs", "references"]:
-            (skill_dir / subdir).mkdir()
-
-        # Create invalid manifest (missing entry_point)
-        (skill_dir / "skill.json").write_text(
-            json.dumps({
-                "skill_id": "invalid_skill",
-                "name": "Invalid Skill",
-                "version": "1.0.0",
-                "description": "Missing entry_point field",
-                # entry_point is MISSING
-                "boot_layer": "installed",
-                "input_schema": {},
-                "output_schema": {},
-            }), encoding="utf-8"
-        )
-
-        (skill_dir / "README.md").write_text("# Invalid Skill\n", encoding="utf-8")
-
-        # Try to load manifest
-        try:
-            manifest_data = json.loads((skill_dir / "skill.json").read_text(encoding="utf-8"))
-            manifest = SkillManifestV2.from_dict(manifest_data)
-            print_error("Should have raised validation error")
-            assert False, "Expected jsonschema.ValidationError"
-        except Exception as e:
-            print_success(f"Caught expected error: {type(e).__name__}")
-            print_info(f"  Message: {str(e)[:60]}...")
-
-        print("\n" + "=" * 80)
+# The former ``test_gate2_e2e_error_handling`` asserted that a manifest without
+# ``entry_point`` is refused by jsonschema. That was the schema of the deleted
+# ``core.skills.phase1_manifest_v2`` (along with the unused ``BootLayer`` /
+# ``SkillDomain`` imports this file kept); the canonical ``core.skills.manifest_v2``
+# (37217ddf5, ADR-0533) makes ``entry_point`` optional. The test also caught its
+# own ``assert False`` in a bare ``except Exception``, so it could never fail.
 
 
 if __name__ == "__main__":
     # Run all tests
     test_gate2_e2e_skill_forge_v2_full_pipeline()
-    test_gate2_e2e_error_handling()
 
     print("\n" + Colors.SUCCESS + "All tests passed!" + Colors.RESET + "\n")

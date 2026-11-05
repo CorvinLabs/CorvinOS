@@ -94,6 +94,23 @@ class BtwQueueStreamE2E(unittest.TestCase):
         os.environ.clear()
         os.environ.update(cls._env_before)
 
+    def _gate(self, decide):
+        """Stand in for the console pre-spawn gate: ``decide(text, **kw)`` returns the
+        refusal string or None.
+
+        Patched at ``resolve_console_spawn``, the ONE gate function: since 54e5bca66
+        (ADR-2268) the OS turn calls it directly (it returns an ``L34Route``), and
+        ``check_console_spawn_or_refusal`` — what /btw notes and side turns call — is
+        a wrapper over it. Patching only the wrapper (as this file did) left the turn
+        gate real, so a test's slow or refusing gate never ran for the turn."""
+        from spawn_gates import L34Route  # type: ignore
+
+        def resolve(prompt, **kw):
+            return L34Route(refusal=decide(prompt, **kw),
+                            engine_id=kw.get("engine_id") or "claude_code")
+
+        return mock.patch.object(self.cr._spawn_gates, "resolve_console_spawn", side_effect=resolve)
+
     def _run(self, *, notes_expected: int, main_gate=None, note_texts=("say PINEAPPLE",)):
         """Run one turn; inject the notes at the first event the turn yields
         while its subprocess has not registered stdin yet (the generator is
@@ -102,7 +119,10 @@ class BtwQueueStreamE2E(unittest.TestCase):
         cr = self.cr
         os.environ["FAKE_NOTES"] = str(notes_expected)
         sess = cr.create_session("_default")
-        real_gate = cr._spawn_gates.check_console_spawn_or_refusal
+        _real_resolve = cr._spawn_gates.resolve_console_spawn
+
+        def real_gate(text, **kw):
+            return _real_resolve(text, **kw).refusal
 
         def gate(text, **kw):
             if text.startswith("say "):          # the notes themselves pass
@@ -121,7 +141,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
                         cr._btw_last_accept.pop(sess.chat_key, None)  # rate limit not under test
             return events, outcomes
 
-        with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=gate):
+        with self._gate(gate):
             events, outcomes = asyncio.run(go())
         return sess, events, outcomes
 
@@ -186,7 +206,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
             await t
             return ticks, evs
 
-        with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=slow_gate):
+        with self._gate(slow_gate):
             ticks, _evs = asyncio.run(go())
         self.assertGreaterEqual(ticks, 15, "the event loop stood still while the gate ran")
 
@@ -202,7 +222,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
         sess = cr.create_session("_default")
         cr._btw_turn_opened(sess.chat_key)
         try:
-            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", return_value=None):
+            with self._gate(lambda *_a, **_k: None):
                 o1 = asyncio.run(cr.inject_btw_web(sess, "say ONE", client_id="exp00001"))
                 cr._btw_pending[sess.chat_key][0]["ts"] -= cr.BTW_QUEUE_TTL_S + 5
                 cr._btw_last_accept.pop(sess.chat_key, None)
@@ -237,7 +257,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
                                               for i in range(4)])
             return same, distinct
         try:
-            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=slow_gate):
+            with self._gate(slow_gate):
                 same, distinct = asyncio.run(go())
             self.assertEqual({o.status for o in same}, {"queued"})
             self.assertEqual(len(cr._btw_pending[sess.chat_key]), 2)   # SAME once + one distinct
@@ -268,26 +288,35 @@ class BtwQueueStreamE2E(unittest.TestCase):
         """Review #1: with the gate off the loop a cancel could land between the
         recorded user line and the refusal, and the ledger re-supplied text no
         gate had cleared."""
-        import time as _time
+        import contextlib
+        import threading
         cr = self.cr
         sess = cr.create_session("_default")
+        # Events, not sleeps: the cancel must land WHILE the gate decides. A fixed
+        # 0.3 s sleep assumed the turn reached its gate by then; when the pre-gate
+        # path grew, the cancel landed before the user line was even recorded and
+        # the test measured nothing about the gate.
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
 
         def slow_refusing_gate(text, **kw):
-            _time.sleep(0.6)
-            return "[house-rules] refused"
+            entered.set()
+            try:
+                release.wait(30)
+                return "[house-rules] refused"
+            finally:
+                finished.set()
 
         async def go():
             async def consume():
                 return [ev async for ev in cr.stream_turn(sess, "forbidden question")]
             task = asyncio.create_task(consume())
-            await asyncio.sleep(0.3)          # the gate is deciding now
-            task.cancel()
+            self.assertTrue(await asyncio.to_thread(entered.wait, 30), "the turn never reached its gate")
+            task.cancel()                     # the gate is deciding now
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-            await asyncio.sleep(0.5)          # let the gate thread finish
-        import contextlib
-        with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal",
-                               side_effect=slow_refusing_gate):
+            release.set()
+            self.assertTrue(await asyncio.to_thread(finished.wait, 30), "the gate thread never finished")
+        with self._gate(slow_refusing_gate):
             asyncio.run(go())
         turns = cr.read_turns("_default", sess.sid)
         self.assertTrue(any(t.get("gate_refused") for t in turns), turns)
@@ -315,7 +344,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
             cr._btw_turn_opened(sess.chat_key)          # … turn N+1 starts while the gate runs
             return await task
         try:
-            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=slow_gate):
+            with self._gate(slow_gate):
                 out = asyncio.run(go())
             self.assertEqual(out.status, "no_active_stream")
             self.assertEqual(cr._btw_pending.get(sess.chat_key, []), [])
@@ -355,7 +384,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
     def test_a_note_that_never_reached_the_gate_gives_its_rate_slot_back(self):
         cr = self.cr
         sess = cr.create_session("_default")
-        with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", return_value=None):
+        with self._gate(lambda *_a, **_k: None):
             o1 = asyncio.run(cr.inject_btw_web(sess, "say IDLE", client_id="slot0001"))   # no open turn
             cr._btw_turn_opened(sess.chat_key)
             try:
@@ -374,7 +403,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
             cr._btw_pending[sess.chat_key] = [
                 {"text": f"old{i}", "via": "text", "ts": 0.0, "client_id": f"old{i:05d}"}
                 for i in range(cr.BTW_QUEUE_MAX)]
-            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", return_value=None):
+            with self._gate(lambda *_a, **_k: None):
                 out = asyncio.run(cr.inject_btw_web(sess, "say FRESH", client_id="fresh001"))
             self.assertEqual(out.status, "queued")
         finally:
@@ -399,7 +428,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
             calls.append(text)
             return "[refused]"
         try:
-            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=gate):
+            with self._gate(gate):
                 outs = [asyncio.run(cr.inject_btw_web(sess, f"say N{i}", client_id=f"loop{i:05d}"))
                         for i in range(10)]
             self.assertEqual(len(calls), 1, "the gate (an L44 model call) ran once per 2 s, not per request")
@@ -426,7 +455,7 @@ class BtwQueueStreamE2E(unittest.TestCase):
                 await t
             return await cr.inject_btw_web(sess, "say RETRY", client_id="canc0002")
         try:
-            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=slow_gate):
+            with self._gate(slow_gate):
                 out = asyncio.run(go())
             self.assertEqual(out.status, "queued")
         finally:

@@ -10,19 +10,21 @@ ADR-0613: Loss signals feed autonomous forge loop.
 """
 
 import json
-import tempfile
+import sys
 import time
-from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 import pytest
 
-from core.paths import tenant_audit_chain, corvin_home
-from corvin_operator.skill_forge.autonomous import (
-    LossTrigger,
-    SkillLossTriggerDetector,
-)
+# `corvin_operator/skill-forge/` carries a dash, so `corvin_operator.skill_forge`
+# never resolves as a plain import. The console registers that alias at runtime
+# (routes/autonomous_forge_routes.py); the shared test helper registers the same one.
+_SKILL_FORGE_TESTS = Path(__file__).resolve().parents[2] / "corvin_operator" / "skill-forge" / "tests"
+if str(_SKILL_FORGE_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_FORGE_TESTS))
+import _skill_forge_ns  # noqa: E402,F401 — registers corvin_operator.skill_forge
+
+from core.paths import tenant_audit_chain  # noqa: E402
 from corvin_operator.skill_forge.automation import (
     CronTriggerPoller,
     CronService,
@@ -37,47 +39,68 @@ def temp_corvin_home(monkeypatch, tmp_path):
     return tmp_path
 
 
+#: 10 correct + 5 incorrect outcomes -> confidence 10/15 (below the 0.70 threshold).
+LOW_CONFIDENCE = 10 / 15
+
+_FEEDBACK_FIELDS = frozenset({"skill_id", "skill_version", "tenant_id", "outcome_feedback"})
+
+
+def _core_security_events():
+    """The core chain writer (``corvin_operator/forge/forge/security_events``)."""
+    forge_dir = Path(__file__).resolve().parents[2] / "corvin_operator" / "forge"
+    if str(forge_dir) not in sys.path:
+        sys.path.insert(0, str(forge_dir))
+    from forge import security_events
+
+    return security_events
+
+
+def _write_skill_feedback(monkeypatch, tenant_id: str, skill_id: str, outcomes: list[bool]) -> Path:
+    """Write one chained ``skill.feedback`` record per outcome through the REAL writer.
+
+    The detector reads only what the core writer produces: a hash-chained record
+    (it verifies the chain first, fail-closed) whose payload sits under
+    ``details`` with the tenant's own id (audit-injection fix 3df49d947). Raw
+    unchained lines, as this file used to plant, are both refused by the chain
+    check and invisible to the ``details``-based filter. The writer refuses a
+    ``details.tenant_id`` other than the process tenant, so it is set per tenant.
+    """
+    se = _core_security_events()
+    se.register_event_allowlist("skill.feedback", _FEEDBACK_FIELDS)
+    chain = tenant_audit_chain(tenant_id)
+    chain.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    monkeypatch.setenv("CORVIN_TENANT_ID", tenant_id)
+    try:
+        for i, correct in enumerate(outcomes):
+            record = se.write_event(
+                chain, "skill.feedback", severity="INFO",
+                ts=now - 60 * (len(outcomes) - i),
+                details={
+                    "skill_id": skill_id,
+                    "skill_version": "1.0.0",
+                    "tenant_id": tenant_id,
+                    "outcome_feedback": {"correct": correct},
+                },
+            )
+            assert not (record.get("details") or {}).get("_dropped_fields"), record
+    finally:
+        monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    return chain
+
+
+def _chain_events(tenant_id: str, event_type: str) -> list[dict]:
+    chain = tenant_audit_chain(tenant_id)
+    return [
+        rec for rec in (json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip())
+        if rec.get("event_type") == event_type
+    ]
+
+
 @pytest.fixture
-def setup_tenant(temp_corvin_home):
-    """Setup test tenant with audit trail."""
-    tenant_dir = temp_corvin_home / "tenants" / "_default" / "global" / "forge"
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-
-    audit_file = tenant_dir / "audit.jsonl"
-
-    # Write some sample skill execution events
-    now = datetime.utcnow()
-    events = []
-
-    # 10 correct outcomes
-    for i in range(10):
-        event = {
-            "ts": (now - timedelta(hours=i)).timestamp(),
-            "event_type": "skill_executed",
-            "tenant_id": "_default",
-            "skill_id": "os.delegation_router",
-            "version": "1.0.0",
-            "outcome_feedback": {"correct": True},
-        }
-        events.append(event)
-
-    # 5 incorrect outcomes (creates 60% confidence = 0.60 < 0.70 threshold)
-    for i in range(5):
-        event = {
-            "ts": (now - timedelta(hours=10 + i)).timestamp(),
-            "event_type": "skill_executed",
-            "tenant_id": "_default",
-            "skill_id": "os.delegation_router",
-            "version": "1.0.0",
-            "outcome_feedback": {"correct": False},
-        }
-        events.append(event)
-
-    with open(audit_file, "w", encoding="utf-8") as f:
-        for event in events:
-            f.write(json.dumps(event) + "\n")
-
-    return audit_file
+def setup_tenant(temp_corvin_home, monkeypatch):
+    """Tenant ``_default`` whose chain carries 10 correct + 5 incorrect outcomes."""
+    return _write_skill_feedback(monkeypatch, "_default", "os.delegation_router", [True] * 10 + [False] * 5)
 
 
 def test_e2e_cron_detects_loss_triggers_forge(
@@ -86,7 +109,7 @@ def test_e2e_cron_detects_loss_triggers_forge(
     """E2E: Loss signal detected → forge triggered (autonomous enabled).
 
     Scenario:
-    1. Skill has low confidence (0.60 < 0.70 threshold)
+    1. Skill has low confidence (10/15 < 0.70 threshold)
     2. Create config with autonomous_forge_enabled=true
     3. Run cron poll
     4. Verify: Loss signal detected, forge triggered, audit logged
@@ -108,7 +131,7 @@ def test_e2e_cron_detects_loss_triggers_forge(
     # Verify loss signal detected
     assert len(triggers) == 1
     assert triggers[0].skill_id == "os.delegation_router"
-    assert triggers[0].confidence == 0.6  # 10 correct / 15 total
+    assert triggers[0].confidence == pytest.approx(LOW_CONFIDENCE)  # 10 correct / 15 total
     assert triggers[0].confidence < 0.70
 
     # Verify forge trigger file created
@@ -127,22 +150,15 @@ def test_e2e_cron_detects_loss_triggers_forge(
         trigger_data = json.load(f)
     assert trigger_data["skill_id"] == "os.delegation_router"
 
-    # Verify audit events written
-    audit_file = (
-        temp_corvin_home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-    )
-    with open(audit_file, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    # Find cron trigger events
-    cron_events = [
-        json.loads(line)
-        for line in lines
-        if json.loads(line).get("event_type") == "skill_forge_triggered_by_cron"
-    ]
-    assert len(cron_events) >= 1
-    assert cron_events[0]["skill_id"] == "os.delegation_router"
-    assert cron_events[0]["confidence"] == 0.6
+    # Verify chained audit events written (audit-first: alert, then optimizer)
+    cron_events = _chain_events("_default", "skill_forge_triggered_by_cron")
+    assert len(cron_events) == 1
+    assert cron_events[0]["details"]["skill_id"] == "os.delegation_router"
+    assert cron_events[0]["details"]["confidence"] == pytest.approx(LOW_CONFIDENCE)
+    optimizer_events = _chain_events("_default", "skill_forge_optimizer_triggered")
+    assert [e["details"]["skill_id"] for e in optimizer_events] == ["os.delegation_router"]
+    ok, problems = _core_security_events().verify_chain(tenant_audit_chain("_default"))
+    assert ok, problems
 
 
 def test_e2e_cron_respects_autonomous_disabled_flag(
@@ -151,7 +167,7 @@ def test_e2e_cron_respects_autonomous_disabled_flag(
     """E2E: Loss signal detected but forge NOT triggered (autonomous disabled).
 
     Scenario:
-    1. Skill has low confidence (0.60 < 0.70 threshold)
+    1. Skill has low confidence (10/15 < 0.70 threshold)
     2. Create config with autonomous_forge_enabled=false
     3. Run cron poll
     4. Verify: Loss signal detected, forge NOT triggered, audit logged
@@ -172,7 +188,7 @@ def test_e2e_cron_respects_autonomous_disabled_flag(
 
     # Verify loss signal detected
     assert len(triggers) == 1
-    assert triggers[0].confidence == 0.6
+    assert triggers[0].confidence == pytest.approx(LOW_CONFIDENCE)
 
     # Verify forge trigger file NOT created
     trigger_file = (
@@ -186,20 +202,11 @@ def test_e2e_cron_respects_autonomous_disabled_flag(
     )
     assert not trigger_file.exists()
 
-    # Verify cron trigger audit event still written
-    audit_file = (
-        temp_corvin_home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-    )
-    with open(audit_file, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    cron_events = [
-        json.loads(line)
-        for line in lines
-        if json.loads(line).get("event_type") == "skill_forge_triggered_by_cron"
-    ]
-    assert len(cron_events) >= 1
-    assert cron_events[0]["skill_id"] == "os.delegation_router"
+    # Verify cron trigger audit event still written, and no optimizer event
+    cron_events = _chain_events("_default", "skill_forge_triggered_by_cron")
+    assert len(cron_events) == 1
+    assert cron_events[0]["details"]["skill_id"] == "os.delegation_router"
+    assert _chain_events("_default", "skill_forge_optimizer_triggered") == []
 
 
 def test_e2e_operator_can_manually_trigger_cron(temp_corvin_home, setup_tenant):
@@ -280,7 +287,7 @@ def test_e2e_cron_service_manual_trigger(temp_corvin_home, setup_tenant):
     assert "elapsed_seconds" in result
 
 
-def test_e2e_multiple_tenants_polled_independently(temp_corvin_home):
+def test_e2e_multiple_tenants_polled_independently(temp_corvin_home, monkeypatch):
     """E2E: Multiple tenants polled independently with separate configurations.
 
     Scenario:
@@ -289,58 +296,9 @@ def test_e2e_multiple_tenants_polled_independently(temp_corvin_home):
     3. Run poll_all_tenants()
     4. Verify: Only _default has loss trigger
     """
-    # Setup _default with low confidence
-    default_dir = temp_corvin_home / "tenants" / "_default" / "global" / "forge"
-    default_dir.mkdir(parents=True, exist_ok=True)
-
-    now = datetime.utcnow()
-    default_events = []
-
-    # 10 correct + 5 incorrect = 0.67 confidence (below threshold)
-    for i in range(10):
-        default_events.append({
-            "ts": (now - timedelta(hours=i)).timestamp(),
-            "event_type": "skill_executed",
-            "tenant_id": "_default",
-            "skill_id": "test.skill",
-            "version": "1.0.0",
-            "outcome_feedback": {"correct": True},
-        })
-
-    for i in range(5):
-        default_events.append({
-            "ts": (now - timedelta(hours=10 + i)).timestamp(),
-            "event_type": "skill_executed",
-            "tenant_id": "_default",
-            "skill_id": "test.skill",
-            "version": "1.0.0",
-            "outcome_feedback": {"correct": False},
-        })
-
-    with open(default_dir / "audit.jsonl", "w", encoding="utf-8") as f:
-        for event in default_events:
-            f.write(json.dumps(event) + "\n")
-
-    # Setup tenant1 with high confidence
-    tenant1_dir = temp_corvin_home / "tenants" / "tenant1" / "global" / "forge"
-    tenant1_dir.mkdir(parents=True, exist_ok=True)
-
-    tenant1_events = []
-
-    # 100 correct + 0 incorrect = 1.0 confidence (above threshold)
-    for i in range(100):
-        tenant1_events.append({
-            "ts": (now - timedelta(hours=i % 24)).timestamp(),
-            "event_type": "skill_executed",
-            "tenant_id": "tenant1",
-            "skill_id": "test.skill",
-            "version": "1.0.0",
-            "outcome_feedback": {"correct": True},
-        })
-
-    with open(tenant1_dir / "audit.jsonl", "w", encoding="utf-8") as f:
-        for event in tenant1_events:
-            f.write(json.dumps(event) + "\n")
+    # _default: 10 correct + 5 incorrect (below threshold); tenant1: 100 correct (above).
+    _write_skill_feedback(monkeypatch, "_default", "test.skill", [True] * 10 + [False] * 5)
+    _write_skill_feedback(monkeypatch, "tenant1", "test.skill", [True] * 100)
 
     # Run poll
     poller = CronTriggerPoller()
