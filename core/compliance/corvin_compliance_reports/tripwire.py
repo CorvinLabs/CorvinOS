@@ -608,13 +608,22 @@ def _shared_module(name: str):
     repo_root = Path(__file__).resolve().parents[3]
     shared = repo_root / "corvin_operator" / "bridges" / "shared"
     target = shared / f"{name}.py"
-    loaded = sys.modules.get(name)
-    if loaded is not None:
+    private = f"_tripwire_shared_{name}"
+    # The private copy loaded for a shadowed ``name`` is reused too: re-executing the
+    # gate on every probe handed each caller a DIFFERENT module object, so a probe
+    # never saw the module a caller (or the tripwire's own fire tests) inspected or
+    # patched - whenever another ``data_classification``/``consent``/... was imported
+    # first (another checkout, the editable .pth), the "fires" tests went green-blind.
+    for key in (name, private):
+        cached = sys.modules.get(key)
+        if cached is None:
+            continue
         try:
-            if Path(getattr(loaded, "__file__", "") or "").resolve() == target.resolve():
-                return loaded
+            if Path(getattr(cached, "__file__", "") or "").resolve() == target.resolve():
+                return cached
         except OSError:
             pass
+    loaded = sys.modules.get(name)
     if not target.is_file():
         raise ImportError(f"{name}: not found in {shared}")
     # Siblings the gate imports by bare name must resolve from bridges/shared.
@@ -623,7 +632,7 @@ def _shared_module(name: str):
     if loaded is not None:
         # ``name`` is taken by a different module (the shadow); load the gate
         # privately rather than clobbering what the rest of the process imported.
-        spec = importlib.util.spec_from_file_location(f"_tripwire_shared_{name}", target)
+        spec = importlib.util.spec_from_file_location(private, target)
     else:
         spec = importlib.util.spec_from_file_location(name, target)
     if spec is None or spec.loader is None:

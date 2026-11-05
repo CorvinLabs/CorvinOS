@@ -35,6 +35,9 @@ mkdir -p "$CORVIN_HOME"
 export XDG_CONFIG_HOME="$_SUITE_SANDBOX/xdg_config"
 mkdir -p "$XDG_CONFIG_HOME"
 unset VOICE_CONFIG_DIR OPENAI_API_KEY CORVIN_TTS_OPENAI_KEY ELEVENLABS_API_KEY
+# A run started from a bridge turn inherits the turn's messenger origin; the
+# orchestration MCP suite asserts "no origin" (review 2026-11-05).
+unset CORVIN_CHANNEL_ID CORVIN_ORIGIN_SENDER
 # HOME and the audit anchor key are sandboxed too: the core audit writer keeps
 # sidecars under $HOME/.config/corvin-voice and reads the anchor key from
 # CORVIN_AUDIT_ANCHOR_KEY. Live suites (CLAUDE_LIVE_E2E=1) need the real HOME

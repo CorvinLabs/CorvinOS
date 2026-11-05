@@ -68,9 +68,20 @@ class TestOrchestrationServerBase(unittest.TestCase):
             "CORVIN_ALLOW_UNSANDBOXED_CODE": "1",
         })
         self.env_patch.start()
+        # The messenger origin is read from the PROCESS env (`_notify_origin_from_env`,
+        # `OrchestrationServer.caller_channel_id`). A run started from a bridge-spawned
+        # `claude -p` turn inherits CORVIN_CHANNEL_ID/CORVIN_ORIGIN_SENDER from the adapter,
+        # so every "no messenger origin" test registered a notify record there (full
+        # run-all-tests.sh, 2026-11-05). Each test starts without an origin and sets its own.
+        for name in ("CORVIN_CHANNEL_ID", "CORVIN_ORIGIN_SENDER"):
+            os.environ.pop(name, None)
+        # A cleanup, not tearDown: tests start their own patch.dict and stop it with
+        # addCleanup, which runs AFTER tearDown and would restore os.environ to the
+        # state at ITS start - this test's CORVIN_HOME, a deleted temp dir - for every
+        # later test. LIFO cleanups stop the inner patch first, then this one.
+        self.addCleanup(self.env_patch.stop)
 
     def tearDown(self):
-        self.env_patch.stop()
         self.home_tmp.cleanup()
         self.endpoints_tmp.cleanup()
 

@@ -59,3 +59,40 @@ def test_a_shadow_already_imported_as_consent_is_left_alone(tmp_path):
     res = _probe(tmp_path, pre_import="import consent  # the core/compliance shadow")
     assert res["ok"], res["detail"]
     assert res["consent"].endswith(os.path.join("core", "compliance", "consent.py"))
+
+
+def test_the_private_copy_under_a_shadow_is_one_module_not_one_per_probe(tmp_path):
+    # Under a shadow the gate is loaded privately. Re-executing it on every call handed
+    # each caller a different module object, so a probe never saw what a caller had
+    # inspected or patched: the L34 "fires when DataFlowDenied is gone" check passed
+    # green-blind whenever another ``data_classification`` was imported first (red in
+    # the full bridge runner, 2026-11-05).
+    code = (
+        "import json, sys, types\n"
+        "shadow = types.ModuleType('data_classification')\n"
+        "shadow.__file__ = '/elsewhere/data_classification.py'\n"
+        "sys.modules['data_classification'] = shadow\n"
+        "from corvin_compliance_reports import tripwire as t\n"
+        "a = t._shared_module('data_classification')\n"
+        "b = t._shared_module('data_classification')\n"
+        "orig = a.DataFlowDenied\n"
+        "del a.DataFlowDenied\n"
+        "r = t.flow_guard_present()\n"
+        "a.DataFlowDenied = orig\n"
+        "print(json.dumps({'same': a is b, 'ok': r.ok, 'detail': r.detail,\n"
+        "  'shadow_kept': sys.modules['data_classification'] is shadow}))\n"
+    )
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),
+        "CORVIN_HOME": str(tmp_path / "corvin"),
+        "PYTHONPATH": os.pathsep.join(str(REPO / p) for p in _UNIT_PYTHONPATH),
+    }
+    out = subprocess.run([sys.executable, "-c", code], env=env, cwd=str(tmp_path),
+                         capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
+    assert out.returncode == 0, out.stderr[-2000:]
+    res = json.loads(out.stdout.strip().splitlines()[-1])
+    assert res["same"], res
+    assert res["shadow_kept"], res
+    assert not res["ok"] and "DataFlowDenied" in res["detail"], res
