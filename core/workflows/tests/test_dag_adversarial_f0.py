@@ -539,9 +539,9 @@ def test_a_provider_qualified_pin_is_normalised_before_it_reaches_the_cli(tmp_pa
 
 
 def test_a_pin_this_process_cannot_verify_still_passes_through_and_is_never_replaced_silently(tmp_path, monkeypatch):
-    """ADR-0952: a pin is the operator's instruction. An id the process cannot verify (the model catalog is
-    empty here, so availability is 'permissive') is handed on unchanged: a wrong one fails visibly at the
-    CLI, dropping it would silently run a different model, which is the defect the Models console had."""
+    """ADR-0952: a pin is the operator's instruction. An id the process cannot verify is handed on
+    unchanged: a wrong one fails visibly at the CLI, dropping it would silently run a different model,
+    which is the defect the Models console had."""
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     _write_pin(tmp_path, worker_model="claude-no-such-model-9")
@@ -550,17 +550,20 @@ def test_a_pin_this_process_cannot_verify_still_passes_through_and_is_never_repl
     assert chosen == "claude-no-such-model-9", chosen
 
 
-def test_a_pin_the_catalog_knows_to_be_missing_falls_through_to_the_router(tmp_path, monkeypatch):
-    """When the catalog IS known and lacks the pinned id (a retired model), the pin is skipped with the
-    warning the fallback block writes, and the router answers as it did before this change."""
+def test_a_pin_absent_from_the_registry_is_not_treated_as_retired(tmp_path, monkeypatch):
+    """Review 2026-11-05 (DLG-19): the availability check is now REAL (it used to import a
+    ``model_catalog`` that ``engine_models`` never exported, so it answered True for everything, and
+    this test patched that fiction in). It applies to the router's pick and the engine default — never
+    to a pin: absence from the curated registry is not retirement (ADR-2090; a retired id is swapped for
+    its successor by model_lineage), and dropping the pin would silently run another model."""
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     _write_pin(tmp_path, worker_model="claude-retired-model-1")
-    import engine_models
-    monkeypatch.setattr(engine_models, "model_catalog", {"claude-haiku-4-5", "claude-sonnet-5-5"}, raising=False)
-    from core.gateway.corvin_gateway.dispatcher import RunDispatcher
+    from core.gateway.corvin_gateway.dispatcher import RunDispatcher, _model_is_available
+    # positive control: the registry really does not hold the id
+    assert _model_is_available("claude-retired-model-1", "claude_code") is False
     chosen = RunDispatcher._resolve_worker_model("_default", "claude_code", prompt="Write a hello world function")
-    assert chosen != "claude-retired-model-1" and "haiku" in chosen, chosen
+    assert chosen == "claude-retired-model-1", chosen
 
 
 def test_without_a_pin_the_router_still_chooses_by_prompt_weight(tmp_path, monkeypatch):

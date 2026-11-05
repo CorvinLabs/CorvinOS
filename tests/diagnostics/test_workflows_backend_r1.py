@@ -205,7 +205,7 @@ def test_wfb_r1_09_dag_engine_applies_the_same_spawn_gate(sandbox, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout='{"ok": true}', stderr="")
 
     monkeypatch.setattr("corvin_workflows.engines_claude.subprocess.run", fake_run)
-    eng = ClaudeCliEngine()
+    eng = ClaudeCliEngine(tenant_id="_default")
     with pytest.raises(ClaudeEngineError):
         eng.spawn(EngineCall(agent="a", instructions="refused text"))
     assert calls == [], "the DAG engine spawned claude although the console gate refused it"

@@ -61,6 +61,35 @@ class SpawnRefusedError(ClaudeEngineError):
     """A worker spawn the pre-spawn gates refused. Nothing was spawned."""
 
 
+def _worker_spawn_env(tenant_id: str) -> dict[str, str]:
+    """The environment of a node's `claude -p` (review 2026-11-05, DLG-9).
+
+    The ACS worker rule, through ``acs_runtime``'s own helpers (bridges/shared, put on sys.path
+    by the prompt-guard bootstrap above) — never a copy: a copy of this process's environment →
+    ``_strip_worker_secrets`` (every operator credential) → ``_restore_platform_credentials``
+    (the Bedrock/Vertex/Foundry chain, only on a platform host) → ``_apply_provider_redirect``
+    (the tenant's provider egress, the host the L35 gate validated). ``CORVIN_TENANT_ID`` is the
+    run's tenant. Raises :class:`SpawnRefusedError` when the helpers cannot be imported.
+    """
+    try:
+        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
+            _apply_provider_redirect,
+            _restore_platform_credentials,
+            _strip_worker_secrets,
+        )
+    except ImportError as exc:
+        raise SpawnRefusedError(
+            f"worker env strip unavailable ({type(exc).__name__}) - refusing to spawn a workflow "
+            "node with the operator's environment"
+        ) from exc
+    env = dict(os.environ)
+    _strip_worker_secrets(env)
+    _restore_platform_credentials(env)
+    _apply_provider_redirect(env, tenant_id)
+    env["CORVIN_TENANT_ID"] = tenant_id
+    return env
+
+
 _log = logging.getLogger(__name__)
 _ENGINE_ID = "claude_code"
 _GATE_CHANNEL = "workflow-engine"
@@ -395,9 +424,17 @@ class ClaudeCliEngine:
     def spawn(self, call: EngineCall) -> dict[str, Any]:
         self.history.append(call)
         prompt = _build_prompt(call)
+        # The tenant is the one this engine was constructed for — never the process env (review
+        # 2026-11-05, DLG-23: a run built with tenant_id=None resumed under the env tenant). Every
+        # constructor passes it; the CLI resolves it once at its own entry point.
+        tenant = self.tenant_id
+        if not tenant:
+            raise SpawnRefusedError(
+                f"spawn refused for agent={call.agent!r}: no tenant bound to this engine "
+                "(construct ClaudeCliEngine(tenant_id=...))"
+            )
         # WFB-R1-09: the gates judge the exact payload the worker receives (instructions, inputs
         # and upstream state). Refused → audit, then raise; nothing reaches the CLI below.
-        tenant = self.tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
         refusal = _pre_spawn_refusal(prompt, tenant)
         if refusal is not None:
             reason_code, text = refusal
@@ -427,13 +464,24 @@ class ClaudeCliEngine:
             "--model", model,
             "--output-format", "json",
             "--disallowedTools", _DENIED_TOOLS,
+            # DLG-9: only the MCP servers this spawn names — none — load. `_DENIED_TOOLS` covers
+            # built-in tools only; without this flag the operator's user/project MCP servers
+            # (mail, drive, the orchestration MCP's own a2a_send/acs_delegate) were callable by a
+            # node whose prompt carries upstream — possibly remote peer — output. Same flag the
+            # A2A worker passes (ADR-0144 F-C4-03).
+            "--strict-mcp-config",
         ]
+        # DLG-9: the ACS worker environment — operator secrets stripped, the platform credential
+        # chain restored, the tenant's provider redirect applied. Refuses the spawn when the
+        # shared helpers are unavailable.
+        env = _worker_spawn_env(tenant)
         span_id = _span_start(tenant, meta, model)
         _emit_resolution(tenant, meta, prompt, span_id)
         t0 = perf_counter()
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=self.timeout_s, encoding="utf-8", errors="replace",
+                env=env,
             )
         except subprocess.TimeoutExpired as e:
             _span_end(tenant, meta, span_id, "", {}, "error", t0)

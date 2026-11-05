@@ -551,7 +551,9 @@ def _build_engine(engine_name: str | None):
     if engine_name == "claude":
         from .engines_claude import ClaudeCliEngine
 
-        return ClaudeCliEngine()
+        # The CLI process IS the tenant boundary here: its tenant is resolved once, at this
+        # entry point, and bound to the engine (the engine never reads the env itself).
+        return ClaudeCliEngine(tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default")
     raise SystemExit(f"unknown --engine {engine_name!r} (expected 'stub' or 'claude')")
 
 

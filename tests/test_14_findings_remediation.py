@@ -358,13 +358,15 @@ class TestFinding9_ModelAvailabilityValidation:
         # Import is done in the dispatcher module
         from core.gateway.corvin_gateway.dispatcher import _model_is_available
 
-        # Default models should be available or permissively fail
-        assert _model_is_available(_HAIKU) in [True, False]
-        assert _model_is_available(_SONNET) in [True, False]
-        assert _model_is_available(_OPUS) in [True, False]
+        # The tier models are registered for the gateway's engine; an id the
+        # registry does not hold is a definite miss (review 2026-11-05, DLG-19:
+        # the helper used to answer True for everything).
+        for model in (_HAIKU, _SONNET, _OPUS):
+            assert _model_is_available(model, "claude_code") is True
+        assert _model_is_available("claude-nonexistent-9-9", "claude_code") is False
 
         # Empty string should be permissive
-        assert _model_is_available("") is True
+        assert _model_is_available("", "claude_code") is True
 
 
 class TestFinding10_UnboundedMemoryLeak:

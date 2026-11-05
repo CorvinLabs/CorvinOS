@@ -1672,6 +1672,24 @@ EVENT_SEVERITY: dict[str, str] = {
     "vault.get": "INFO",
     "vault.set": "INFO",
     "vault.unlock": "INFO",
+    # Review 2026-11-05 (SEC-9): security events the completeness scan could
+    # not see (written through adapter._audit_event / _audit_write / audit_emit)
+    # and so ran at the default INFO with floored details. Fields: _EVENT_ALLOWLIST.
+    "engine_trust.gate_fail_open": "WARNING",
+    "engine_trust.config_invalid": "CRITICAL",
+    "consent.gate_unavailable_drop": "WARNING",
+    "consent.group_chat_non_consenting_participants": "WARNING",
+    "gate_pipeline.self_test_failed": "CRITICAL",
+    "security.config_conflict": "WARNING",
+    "house_rules.allowed_after_lowconf": "WARNING",
+    "plugin.security_violation": "ERROR",
+    "plugin.consent_granted": "WARNING",
+    "tenant.path_migrated": "INFO",
+    "compliance.crash_recovery": "WARNING",
+    # EU AI Act Art. 73 incident lifecycle (incident_tracker.py, SEC-7).
+    "incident.opened": "CRITICAL",
+    "incident.status_changed": "INFO",
+    "incident.closed": "INFO",
 }
 
 
@@ -5602,6 +5620,49 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "tool.tamper_detected": frozenset({"error"}),
     # Fixed self-test vector LABELS (never the probed payloads) + a count.
     "path_gate.self_test_failed": frozenset({"failure_count", "first_failures"}),
+    # ── Review 2026-11-05 (SEC-9 / SEC-7 / SEC-8) — closed sets read at each emitter.
+    # adapter.py::_engine_trust_gate — reason is a closed code
+    # (engine_name_missing / load_min_tier_error / evaluate_trust_error /
+    # drift_check_error); error is exception text (free-text key, PII-scanned).
+    "engine_trust.gate_fail_open": frozenset({"tenant_id", "reason", "engine", "error"}),
+    # engine_trust.py::_audit_config_invalid — reason is a closed code
+    # (yaml_unparseable / config_unreadable / *_not_mapping / unknown_key /
+    # invalid_min_tier); enforced_tier is the fail-closed tier.
+    "engine_trust.config_invalid": frozenset({"tenant_id", "reason", "enforced_tier"}),
+    # adapter.py consent gate: reason consent_module_unavailable; uid / chat
+    # are the pseudonymised spine fields.
+    "consent.gate_unavailable_drop": frozenset({"tenant_id", "reason"}),
+    "consent.group_chat_non_consenting_participants": frozenset({
+        "tenant_id", "participant_count", "reason"}),
+    # adapter.py boot self-test of the gate pipeline order.
+    "gate_pipeline.self_test_failed": frozenset({"tenant_id", "reason"}),
+    # adapter.py whitelist/read-only collision: reason whitelist_read_only_collision.
+    "security.config_conflict": frozenset({"tenant_id", "reason"}),
+    # adapter.py L44 escalated -> allowed after a low-confidence verdict; chat_key
+    # is fingerprinted at the emitter (also registered at runtime by the adapter).
+    "house_rules.allowed_after_lowconf": frozenset({
+        "tenant_id", "rule_id", "reason_code", "confidence", "channel", "chat_key",
+        "overrides"}),
+    # core/plugins/corvin_plugins/security.py — the free-text ``details`` the
+    # emitter also passes is deliberately NOT admitted (paths / hostnames).
+    "plugin.security_violation": frozenset({
+        "tenant_id", "plugin_id", "violation_type", "aspect", "lom", "violation_count"}),
+    # core/plugins/corvin_plugins/trust.py — ``operator`` (a person identifier)
+    # is deliberately NOT admitted; the plugin digest identifies what was trusted.
+    "plugin.consent_granted": frozenset({"tenant_id", "plugin_id", "digest"}),
+    # forge/tenant_migrate.py — fixed directory names, a count, the method.
+    "tenant.path_migrated": frozenset({"tenant_id", "method", "subdirs", "subdir_count"}),
+    # core/audit/durability.py — counts and the truncation offset; ``errors``
+    # (free-text list) is deliberately NOT admitted.
+    "compliance.crash_recovery": frozenset({
+        "tenant_id", "records_recovered", "records_discarded", "truncation_point",
+        "error_count", "result"}),
+    # incident_tracker.py (EU AI Act Art. 73) — never the description.
+    "incident.opened": frozenset({
+        "tenant_id", "incident_id", "category", "severity", "trigger_event",
+        "trigger_chain_hash"}),
+    "incident.status_changed": frozenset({"tenant_id", "incident_id", "old_status", "new_status"}),
+    "incident.closed": frozenset({"tenant_id", "incident_id", "duration_hours"}),
 }
 
 #: Adversarial review round 2 (2026-09-27): fields that a module registers at

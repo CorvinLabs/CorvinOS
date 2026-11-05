@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
 import sys
 import time
@@ -111,25 +112,110 @@ try:
 except Exception:  # noqa: BLE001
     _espan = None  # type: ignore[assignment]
 
-_POLICY_EVENTS = {
-    "gateway.engine_denied":   "WARNING",
-    "gateway.zone_denied":     "WARNING",
-}
-for _evt, _sev in _POLICY_EVENTS.items():
-    _security_events.EVENT_SEVERITY.setdefault(_evt, _sev)
+# Every gateway.* / routing event this module writes is registered in
+# forge.security_events (EVENT_SEVERITY + _EVENT_ALLOWLIST). An import-time
+# ``EVENT_SEVERITY.setdefault`` used to stand in for that and left the events
+# without an allowlist, so their run_id/engine/reason were floored away
+# (review 2026-11-05, DLG-16).
+
+_log = logging.getLogger(__name__)
+
+
+def _audit_gateway(
+    event_type: str,
+    *,
+    tenant_id: str,
+    details: dict[str, Any] | None = None,
+    severity: str | None = None,
+) -> bool:
+    """Write one hash-chained record onto ``tenant_id``'s ONE audit chain.
+
+    The path comes from ``forge.paths.tenant_audit_chain`` (ADR-0654) — never
+    composed by hand. Best-effort for the caller (a failed write never wedges a
+    dispatch), but never silent: a refused write is logged with its class.
+    Returns whether the record committed.
+    """
+    try:
+        from forge import paths as _fp  # noqa: PLC0415 — same lazy guard as runs.py
+
+        _security_events.write_event(
+            _fp.tenant_audit_chain(tenant_id), event_type,
+            severity=severity, details=dict(details or {}),
+            hash_chain=True,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — audit must not wedge the run
+        _log.warning("gateway audit write %s for tenant %s failed: %s",
+                     event_type, tenant_id, type(exc).__name__)
+        return False
+
+
+def _worker_spawn_env(tenant_id: str, *, persona: str, run_id: str,
+                      base: "dict[str, str] | None" = None) -> dict[str, str]:
+    """The env OVERLAY for a gateway run's engine spawn (review 2026-11-05, DLG-3).
+
+    A gateway run executes a tenant-supplied prompt on a tool-capable engine,
+    so it gets exactly the environment an ACS worker gets — built by the SAME
+    helpers (``acs_runtime``), never a copy of them:
+
+    1. ``_strip_worker_secrets`` — every operator credential (explicit list +
+       name-pattern catch-all; public keys and location pointers kept);
+    2. ``_restore_platform_credentials`` — the Bedrock/Vertex/Foundry chain the
+       engine signs with, only when the host is in platform mode (ADR-0759);
+    3. ``_apply_provider_redirect`` — the tenant's provider egress, so the L35
+       gate and the actual egress agree (ADR-0181).
+
+    ``ClaudeCodeEngine.spawn`` merges its ``env`` OVER ``os.environ``, so a
+    stripped name is passed as ``""`` — that is how it is removed. The three
+    ``CORVIN_*`` keys bind the run's tenant, persona and channel.
+
+    Raises ``RuntimeError`` when the shared helpers cannot be imported: the
+    caller fails the run rather than spawn with the operator's secrets.
+    """
+    try:
+        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
+            _apply_provider_redirect,
+            _restore_platform_credentials,
+            _strip_worker_secrets,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            f"worker env strip unavailable ({type(exc).__name__}) — refusing to spawn "
+            "a gateway run with the operator's environment"
+        ) from exc
+    src = dict(os.environ if base is None else base)
+    kept = dict(src)
+    _strip_worker_secrets(kept)
+    _restore_platform_credentials(kept, dict(src))
+    overlay: dict[str, str] = {name: "" for name in src if name not in kept}
+    redirect: dict[str, str] = {}
+    _apply_provider_redirect(redirect, tenant_id)
+    overlay.update(redirect)
+    overlay.update({
+        "CORVIN_TENANT_ID":      tenant_id,
+        "CORVIN_CALLER_PERSONA": persona,
+        "CORVIN_CHANNEL_ID":     f"gateway:{run_id}",
+    })
+    return overlay
 
 
 # ── Engine protocol (minimal — for stub-in-test) ─────────────────────
 
 
-def _newest_haiku() -> str:
-    """Cheapest-model fallback: the operator's Console choice for the ``SIMPLE``
-    tier, else the newest available Haiku (ADR-2090 lineage)."""
+def _newest_haiku(tenant_id: str) -> str:
+    """Cheapest-model fallback: the RUN tenant's Console choice for the
+    ``SIMPLE`` tier, else the newest available Haiku (ADR-2090 lineage).
+
+    The tenant is required: ``console_selection`` falls back to the PROCESS
+    tenant (``CORVIN_TENANT_ID``) when given none, which in this multi-tenant
+    gateway handed tenant B the boot tenant's model (review 2026-11-05, DLG-6).
+    """
     try:
         from console_selection import saved_tier_model  # type: ignore  # noqa: PLC0415
         from model_lineage import latest  # type: ignore  # noqa: PLC0415
 
-        return saved_tier_model("SIMPLE") or latest("haiku") or "claude-haiku-4-5"
+        return (saved_tier_model("SIMPLE", tenant_id=tenant_id)
+                or latest("haiku") or "claude-haiku-4-5")
     except Exception:  # noqa: BLE001
         return "claude-haiku-4-5"
 
@@ -157,6 +243,8 @@ class _EngineLike(Protocol):
         # passing it unconditionally, so adding it here widens the protocol
         # without invalidating any existing implementation.
         model: str | None = None,
+        # OPTIONAL, probed the same way as ``model`` (see _engine_accepts_kw).
+        extra_args: list[str] | None = None,
     ) -> Iterator[Any]:
         ...
 
@@ -168,61 +256,67 @@ DEFAULT_BUDGET_S = 60
 """Wall-clock cap when ``budget_override.max_wall_clock_s`` is absent."""
 
 
-def _engine_accepts_model(engine: Any) -> bool:
-    """Does this engine's ``spawn`` take a ``model`` keyword?
+def _engine_accepts_kw(engine: Any, keyword: str) -> bool:
+    """Does this engine's ``spawn`` take ``keyword``?
 
-    Passing it blindly turned every engine WITHOUT the parameter into a
-    ``TypeError`` inside the worker thread, which surfaced as a generic
-    ``status="failed"`` run — a model preference silently converting working
-    dispatches into failures is a far worse outcome than not honouring the
-    preference. Probed, not assumed, and the result cached per class because
-    ``inspect.signature`` is not free and the engine is constructed per run.
+    Passing an optional keyword blindly turned every engine WITHOUT the
+    parameter into a ``TypeError`` inside the worker thread, which surfaced as
+    a generic ``status="failed"`` run — a model preference silently converting
+    working dispatches into failures is a far worse outcome than not honouring
+    the preference. Probed, not assumed, and the result cached per
+    (class, keyword) because ``inspect.signature`` is not free and the engine
+    is constructed per run.
     """
-    cls = type(engine)
-    cached = _MODEL_KW_SUPPORT.get(cls)
+    key = (type(engine), keyword)
+    cached = _SPAWN_KW_SUPPORT.get(key)
     if cached is not None:
         return cached
     try:
         params = inspect.signature(engine.spawn).parameters
-        supported = "model" in params or any(
+        supported = keyword in params or any(
             prm.kind is inspect.Parameter.VAR_KEYWORD for prm in params.values()
         )
     except (TypeError, ValueError):  # builtin / C-level callable
         supported = False
-    _MODEL_KW_SUPPORT[cls] = supported
+    _SPAWN_KW_SUPPORT[key] = supported
     return supported
 
 
-def _model_is_available(model_id: str) -> bool:
-    """Check if a model ID is available in the current installation.
+def _engine_accepts_model(engine: Any) -> bool:
+    """Does this engine's ``spawn`` take a ``model`` keyword? See
+    :func:`_engine_accepts_kw`."""
+    return _engine_accepts_kw(engine, "model")
 
-    This prevents routing to deprecated or unavailable models. If model
-    availability cannot be determined, defaults to True (permissive) so
-    unavailable import paths don't break routing.
 
-    Args:
-        model_id: Model identifier (e.g., "claude-haiku-4-5")
+def _model_is_available(model_id: str, engine_id: str) -> bool:
+    """Is ``model_id`` a model ``engine_id`` can run, per the engine registry?
 
-    Returns:
-        True if model is available or availability cannot be determined,
-        False if model is definitely unavailable.
+    ``False`` only on a DEFINITE miss: the registry describes ``engine_id`` and
+    ``engine_models.model_is_registered`` (the check ``resolve_step_model``
+    uses) does not find the id. An engine the registry does not describe
+    (a stub engine, a third-party engine) cannot be judged here and passes —
+    the CLI then validates the id itself.
+
+    Until 2026-11-05 this imported a ``model_catalog`` name ``engine_models``
+    never exports, so it returned True for every id and the "unavailable model
+    → fall back" branches below were dead (review DLG-19).
     """
     if not model_id:
-        return True  # Empty model ID is permissive
-
-    try:
-        # Try to check with the engine's model availability list
-        from engine_models import model_catalog  # type: ignore[import]  # noqa: PLC0415
-        return model_id in model_catalog or not model_catalog  # Permissive if empty
-    except Exception:  # noqa: BLE001
-        # If we can't determine availability, be permissive
-        # (fail-open on import/availability check failures)
         return True
+    try:
+        from engine_models import (  # type: ignore[import]  # noqa: PLC0415
+            load_registry, model_is_registered,
+        )
+    except ImportError:  # bridges subtree absent (unit sandbox): cannot judge
+        return True
+    if load_registry().get(engine_id) is None:
+        return True
+    return model_is_registered(model_id, engine_id)
 
 
-#: type -> does its spawn() accept model=. Bounded by the number of engine
-#: classes in the process, which is a handful.
-_MODEL_KW_SUPPORT: dict[type, bool] = {}
+#: (type, keyword) -> does its spawn() accept that keyword. Bounded by the
+#: number of engine classes in the process, which is a handful.
+_SPAWN_KW_SUPPORT: dict[tuple[type, str], bool] = {}
 
 
 def _default_engine_factory() -> _EngineLike:
@@ -282,20 +376,11 @@ class RunDispatcher:
         """Best-effort audit write into the tenant's unified chain.
 
         Mirror of ``runs._audit`` — failures never wedge the dispatch
-        path. Used by Phase 3.2 / 3.3 policy denials.
+        path. Used by Phase 3.2 / 3.3 policy denials and the engine spans.
+        The chain path is ``tenant_audit_chain`` (see :func:`_audit_gateway`).
         """
-        try:
-            from forge import paths as _fp  # local import: same lazy guard
-            chain_path = (
-                _fp.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
-            )
-            _security_events.write_event(
-                chain_path, event_type,
-                severity=severity, details=dict(details or {}),
-                hash_chain=True,
-            )
-        except Exception:
-            pass
+        _audit_gateway(event_type, tenant_id=tenant_id, details=details,
+                       severity=severity)
 
     @staticmethod
     def _usage_split(usage: "dict[str, Any] | None") -> dict[str, int]:
@@ -352,45 +437,43 @@ class RunDispatcher:
 
     @staticmethod
     def _pinned_worker_model(tenant_id: str, engine_id: str) -> str:
-        """The operator's ``spec.engine_models.<engine>.worker_model`` when it names a model that can run,
-        else ``""``. Silent on purpose: the caller falls through to routing and the engine default, and the
-        unavailable-pin warning is written once, in the fallback block of ``_resolve_worker_model``."""
+        """The operator's ``spec.engine_models.<engine>.worker_model``, normalised, else ``""``.
+
+        Read through ``console_selection.pinned_model`` — the ONE reader of the
+        Console Models-page choice — with the RUN's tenant. A pin is the
+        operator's instruction: like ``model_selector.normalise_pin`` it is
+        never dropped because this process cannot verify the id (an alias, a
+        snapshot newer than the registry); dropping it would silently
+        substitute another model, and a retired id is swapped for its
+        successor at ``ClaudeCodeEngine._build_args`` anyway.
+        """
         try:
-            from engine_models import get_tenant_engine_model  # type: ignore[import]  # noqa: PLC0415
-        except Exception:  # noqa: BLE001 - bridges subtree absent (unit sandbox)
+            from console_selection import pinned_model  # type: ignore[import]  # noqa: PLC0415
+        except ImportError:  # bridges subtree absent (unit sandbox)
             return ""
-        try:
-            configured = get_tenant_engine_model(tenant_id, engine_id, "worker_model")
-            if not configured:
-                return ""
-            try:
-                # The Console persists a pin provider-qualified ("anthropic/claude-opus-5"); the CLI rejects that.
-                from model_selector import normalise_pin  # type: ignore[import]  # noqa: PLC0415
-                configured = normalise_pin(configured, engine_id) or configured
-            except Exception:  # noqa: BLE001 - normalisation is never fatal
-                pass
-            return configured if _model_is_available(configured) else ""
-        except Exception:  # noqa: BLE001
-            return ""
+        return pinned_model("worker_model", tenant_id=tenant_id, engine_id=engine_id) or ""
 
     @staticmethod
-    def _resolve_worker_model(tenant_id: str, engine_id: str, prompt: str = "") -> str:
+    def _resolve_worker_model(tenant_id: str, engine_id: str, prompt: str = "",
+                              *, run_id: str = "") -> str:
         """The worker model for ``engine_id``: the operator's pin, else the prompt router, else the default.
 
         Order (decision 2026-10-29 "pin vor router"; before it the router came first and a pin only applied
         when the router was unavailable or there was no prompt, against the operator rule of 2026-10-13 that
         the model chosen on the Console Models page is the one that runs):
-        0. The operator's pin (spec.engine_models.<engine>.worker_model), when that model can run
-        1. Intelligent routing (if prompt provided AND router available): Haiku/Sonnet/Opus by task complexity
-        2. Operator-configured model again (reached only when the pin was unavailable: logged, then skipped)
-        3. Engine registry default
-        4. Fallback to Haiku if selected model is unavailable
-        5. Empty string (let engine use its own default)
+        0. The operator's pin (spec.engine_models.<engine>.worker_model), normalised, never dropped
+        1. Intelligent routing (if prompt provided AND router available): Haiku/Sonnet/Opus by task
+           complexity; the decision is audited on the tenant's chain (``intelligent_routing_decision``,
+           closed fields). A pick the engine registry definitely does not hold falls back to the
+           RUN tenant's cheap tier (``_newest_haiku(tenant_id)``)
+        2. Engine registry default (the run tenant's cheap tier when the registry does not hold it)
+        3. Empty string (let engine use its own default)
 
         Args:
-            tenant_id: Tenant scope
-            engine_id: Engine identifier ("native", "acs", "tde", etc.)
+            tenant_id: Tenant scope (the RUN's tenant — never the process tenant)
+            engine_id: Engine identifier (``engine.name``, e.g. "claude_code")
             prompt: Optional task/prompt for intelligent routing
+            run_id: The gateway run, recorded on the routing audit event
 
         Returns:
             Model ID string (e.g., "claude-haiku-4-5") or ""
@@ -400,9 +483,6 @@ class RunDispatcher:
         if pinned:
             return pinned
 
-        selected_model = ""
-
-        # Attempt intelligent routing if prompt is provided
         if prompt:
             try:
                 from core.skills.os_skills.intelligent_router_integration import (
@@ -415,84 +495,47 @@ class RunDispatcher:
                     latency_critical=(engine_id == "native"),
                     tenant_id=tenant_id,
                 )
-                selected_model = decision.model
-
-                # Log the routing decision to audit trail (best-effort, non-blocking)
-                try:
-                    _security_events.audit_event(
-                        "intelligent_routing_decision",
-                        {
-                            "model_selected": selected_model,
-                            "tier": decision.tier,
-                            "confidence": decision.confidence,
-                            # Store full reasoning (up to 2048 chars) to preserve context
-                            "reasoning": decision.reasoning[:2048],
-                            "engine": engine_id,
-                            "tenant_id": tenant_id,
-                        },
-                        severity="INFO",
-                    )
-                except Exception:  # noqa: BLE001 — audit is best-effort
-                    pass
-
-                # Validate model availability before returning
-                if selected_model and _model_is_available(selected_model):
-                    return selected_model
+            except Exception as _ir_exc:  # noqa: BLE001 — router unavailable/errored: engine default below
+                _log.debug("IntelligentRouter fallback: %s", type(_ir_exc).__name__)
+            else:
+                selected_model = str(decision.model or "")
+                if selected_model and _model_is_available(selected_model, engine_id):
+                    chosen = selected_model
                 elif selected_model:
-                    # Selected model is unavailable — log and fallback
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        f"Selected model {selected_model} is unavailable; "
-                        f"falling back to Haiku"
-                    )
-                    return _newest_haiku()  # Fallback to cheapest model
-
-            except Exception as _ir_exc:  # noqa: BLE001 — IntelligentRouter unavailable or errored
-                import logging
-                logging.getLogger(__name__).debug(
-                    f"IntelligentRouter fallback: {type(_ir_exc).__name__}"
-                )
-                # Fall through to operator config below
-
-        # Fallback to operator-configured model
-        try:
-            from engine_models import (  # type: ignore[import]  # noqa: PLC0415
-                get_tenant_engine_model, load_registry,
-            )
-        except Exception:  # noqa: BLE001 — bridges subtree absent (unit sandbox)
-            return ""
-        try:
-            configured = get_tenant_engine_model(tenant_id, engine_id, "worker_model")
-            # The Console persists a pin provider-qualified
-            # ("anthropic/claude-opus-5"); un-normalised it fails
-            # _model_is_available and the operator's own choice is silently
-            # replaced by the engine default. Same helper the OS pin tiers use.
-            if configured:
-                try:
-                    from model_selector import normalise_pin  # type: ignore[import]  # noqa: PLC0415
-                    configured = normalise_pin(configured, engine_id) or configured
-                except Exception:  # noqa: BLE001 — normalisation is never fatal
-                    pass
-            if configured:
-                # Validate availability of operator-configured model
-                if _model_is_available(configured):
-                    return configured
+                    _log.warning("routed model %s is not registered for %s; "
+                                 "falling back to the tenant's cheap tier",
+                                 selected_model, engine_id)
+                    chosen = _newest_haiku(tenant_id)
                 else:
-                    # Configured model unavailable — log and use engine default
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        f"Configured model {configured} is unavailable; "
-                        f"using engine default"
+                    chosen = ""
+                if chosen:
+                    # Closed fields only (review 2026-11-05, DLG-5): the router's free-text
+                    # ``reasoning`` paraphrases the tenant's prompt and is never written.
+                    # No tenant_id field: the record lands on the run tenant's own chain,
+                    # and the chokepoint refuses a tenant-tagged record for any tenant but
+                    # the process tenant (AuditTenantMismatch) — fatal in this
+                    # multi-tenant process.
+                    _audit_gateway(
+                        "intelligent_routing_decision", tenant_id=tenant_id, severity="INFO",
+                        details={
+                            "model": chosen,
+                            "tier": str(getattr(decision, "tier", "") or ""),
+                            "confidence": float(getattr(decision, "confidence", 0.0) or 0.0),
+                            "engine": engine_id,
+                            "run_id": run_id,
+                        },
                     )
+                    return chosen
 
-            spec = load_registry().get(engine_id)
-            default = (spec.default_worker_model() or "") if spec is not None else ""
-            if default and _model_is_available(default):
-                return default
-            # If engine default is also unavailable, fall back to Haiku
-            return _newest_haiku() if default else ""
-        except Exception:  # noqa: BLE001
+        try:
+            from engine_models import load_registry  # type: ignore[import]  # noqa: PLC0415
+        except ImportError:  # bridges subtree absent (unit sandbox)
             return ""
+        spec = load_registry().get(engine_id)
+        default = (spec.default_worker_model() or "") if spec is not None else ""
+        if default and _model_is_available(default, engine_id):
+            return default
+        return _newest_haiku(tenant_id) if default else ""
 
     # ------------------------------------------------------------------
     # Public surface
@@ -647,14 +690,17 @@ class RunDispatcher:
             tenant_id, run_id, loop,
         )
 
-        # Per-run env: tenant + persona + caller binding. The engine
-        # inherits os.environ + this overlay; CORVIN_TENANT_ID makes
-        # downstream forge/skill-forge writes land in the right tree.
-        spawn_env = {
-            "CORVIN_TENANT_ID":      tenant_id,
-            "CORVIN_CALLER_PERSONA": persona,
-            "CORVIN_CHANNEL_ID":     f"gateway:{run_id}",
-        }
+        # Per-run env OVERLAY (the engine merges it over os.environ): every
+        # operator secret blanked, the platform credential chain and the
+        # tenant's provider redirect restored, plus tenant + persona + caller
+        # binding (CORVIN_TENANT_ID makes downstream forge/skill-forge writes
+        # land in the right tree). Same rule as an ACS worker — see
+        # _worker_spawn_env (review 2026-11-05, DLG-3). No strip, no spawn.
+        try:
+            spawn_env = _worker_spawn_env(tenant_id, persona=persona, run_id=run_id)
+        except RuntimeError as exc:
+            self._set_terminal(tenant_id, run_id, "failed", error=str(exc)[:300])
+            return
 
         # Construct the engine HERE (not inside the worker thread) so
         # the budget-timeout path can call engine.cancel() to free the
@@ -890,9 +936,13 @@ class RunDispatcher:
         clean_prompt, _was_delegated = strip_delegate_prefix(prompt)
         # STEP 1 (ADR-0867): Use IntelligentRouter to select model based on task complexity
         # Use the cleaned prompt (without /delegate prefix) for routing decisions
-        worker_model = self._resolve_worker_model(tenant_id, _gw_engine_id, prompt=clean_prompt)
+        worker_model = self._resolve_worker_model(tenant_id, _gw_engine_id, prompt=clean_prompt,
+                                                  run_id=run_id)
         # ADR-0171 — engine.span.start (role=worker): every gateway engine run is
         # auditable as a span regardless of outcome (paired at all 4 exits below).
+        # The START record carries the REQUESTED model; every END record carries
+        # only what the engine REPORTED ("" when it reported none — unpriced,
+        # honest; ADR-0759, review 2026-11-05 DLG-20).
         self._emit_engine_span("start", tenant_id=tenant_id, run_id=run_id,
                                engine_id=engine_name, model_id=worker_model)
         try:
@@ -900,10 +950,15 @@ class RunDispatcher:
                 asyncio.to_thread(
                     self._spawn_collect,
                     engine=engine,
-                    prompt=prompt,
+                    # The STRIPPED prompt: delegation_policy.strip_delegate_prefix —
+                    # "the raw '/delegate' text must never reach an LLM". L34/L44
+                    # above judged the raw prompt, a superset (review DLG-18).
+                    prompt=clean_prompt,
                     env=spawn_env,
                     event_buffer=event_buffer,
                     model=worker_model or None,
+                    extra_args=(["--strict-mcp-config"]
+                                if _gw_engine_id == "claude_code" else None),
                 ),
                 timeout=float(budget_s),
             )
@@ -917,7 +972,7 @@ class RunDispatcher:
             except Exception:
                 pass
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
-                                   engine_id=engine_name, model_id=worker_model,
+                                   engine_id=engine_name, model_id="",
                                    status="error",
                                    duration_ms=int(duration * 1000))
             # Record timeout error metric
@@ -951,7 +1006,7 @@ class RunDispatcher:
             except Exception:
                 pass
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
-                                   engine_id=engine_name, model_id=worker_model,
+                                   engine_id=engine_name, model_id="",
                                    status="error",
                                    duration_ms=int(duration * 1000))
             # Record cancellation metric
@@ -977,7 +1032,7 @@ class RunDispatcher:
         except Exception as exc:  # engine crash, import error, etc.
             duration = time.time() - start
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
-                                   engine_id=engine_name, model_id=worker_model,
+                                   engine_id=engine_name, model_id="",
                                    status="error",
                                    duration_ms=int(duration * 1000))
             # Record error metric
@@ -1001,7 +1056,7 @@ class RunDispatcher:
             duration_ms = int(outcome.get("duration_ms", 0))
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
                                    engine_id=engine_name,
-                                   model_id=outcome.get("model") or worker_model,
+                                   model_id=outcome.get("model") or "",
                                    status="error",
                                    duration_ms=duration_ms,
                                    usage=outcome.get("usage"))
@@ -1023,7 +1078,7 @@ class RunDispatcher:
         tokens_used = outcome.get("usage", {}).get("output_tokens")
         self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
                                engine_id=engine_name,
-                               model_id=outcome.get("model") or worker_model,
+                               model_id=outcome.get("model") or "",
                                status="ok",
                                usage=outcome.get("usage"),
                                duration_ms=duration_ms)
@@ -1099,8 +1154,14 @@ class RunDispatcher:
         env: dict[str, str],
         event_buffer: RunEventBuffer | None = None,
         model: str | None = None,
+        extra_args: list[str] | None = None,
     ) -> dict[str, Any]:
         """Sync wrapper: drain the engine stream, project to dict.
+
+        ``extra_args`` (``--strict-mcp-config`` for claude_code: only the MCP
+        servers the spawn names — none — load, never the operator's user or
+        project servers) is passed only to an engine whose ``spawn`` takes it,
+        probed like ``model``.
 
         Runs inside an asyncio worker thread via :func:`asyncio.to_thread`.
         The engine instance is constructed in the parent coroutine so
@@ -1136,6 +1197,8 @@ class RunDispatcher:
             spawn_kwargs: dict[str, Any] = {"env": env}
             if model and _engine_accepts_model(engine):
                 spawn_kwargs["model"] = model
+            if extra_args and _engine_accepts_kw(engine, "extra_args"):
+                spawn_kwargs["extra_args"] = list(extra_args)
             for event in engine.spawn(prompt, **spawn_kwargs):
                 ev_type = getattr(event, "type", None)
                 if ev_type == "session_started" and not reported_model:
@@ -1175,9 +1238,8 @@ class RunDispatcher:
             "duration_ms": int((time.time() - start) * 1000),
             "error":       error,
             # "" when the engine never announced one (a crash before its init
-            # frame). The caller falls back to the REQUESTED id rather than
-            # writing an empty model into the span — an empty id is dropped
-            # from every usage roll-up, so it is the one value that must not
-            # reach the chain.
+            # frame). The caller closes the span on it as-is: an unreported
+            # model stays "" (unpriced, honest — ADR-0759), never the id that
+            # was REQUESTED, which would price the run at a guess.
             "model":       reported_model,
         }

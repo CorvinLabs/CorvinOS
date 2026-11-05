@@ -20,7 +20,7 @@ every release. The tests run against a sandboxed ``CORVIN_HOME`` without an oper
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -186,61 +186,49 @@ class TestModelDistribution:
 # Verify that routing decisions are logged immutably
 # ─────────────────────────────────────────────────────────────────────────────
 
-_AUDIT_DEFECT = (
-    "PRODUCT DEFECT (found 2026-10-30): RunDispatcher._resolve_worker_model calls "
-    "forge.security_events.audit_event(...) - that function does not exist, and 'intelligent_routing_decision' "
-    "is registered in neither EVENT_SEVERITY nor _EVENT_ALLOWLIST. The AttributeError is swallowed by the "
-    "best-effort 'except Exception: pass', so NO routing decision has ever been written to the audit chain. "
-    "strict xfail: this test turns green (XPASS → failure) the moment the dispatcher really emits the event."
-)
+# Fixed 2026-11-05 (review DLG-5): the dispatcher called a non-existent
+# ``security_events.audit_event`` and swallowed the AttributeError, so no routing
+# decision had ever been audited. It now writes ``intelligent_routing_decision``
+# through ``write_event`` onto the RUN tenant's chain, with closed fields only - the
+# router's free-text ``reasoning`` paraphrases the tenant's prompt and is never written.
+# These tests read the REAL chain of the sandboxed CORVIN_HOME (no mocked writer).
 
 
-def _events_double() -> MagicMock:
-    """A stand-in for the security_events module that only has the REAL module's attributes.
+def _routing_records(tenant: str = "_default") -> list[dict]:
+    import json  # noqa: PLC0415
 
-    A bare MagicMock accepts any attribute, so it would happily accept the dispatcher's call to the
-    non-existent ``audit_event`` and hide exactly the defect these tests exist to expose."""
-    from forge import security_events  # noqa: PLC0415
+    from forge import paths as fp  # noqa: PLC0415
 
-    return MagicMock(spec=security_events)
-
-
-def _routing_audit_calls(mock_events: MagicMock) -> list:
-    """Every call on the mocked security_events module that carries the routing-decision event name."""
-    found = []
-    for call in mock_events.mock_calls:
-        flat = list(call.args) + list(call.kwargs.values())
-        if any(a == "intelligent_routing_decision" for a in flat):
-            found.append(call)
-    return found
+    path = Path(fp.tenant_audit_chain(tenant))
+    if not path.exists():
+        return []
+    records = (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+               if line.strip())
+    return [r for r in records if r.get("event_type") == "intelligent_routing_decision"]
 
 
 class TestAuditTrailLogging:
     """Verify routing decisions are logged to audit trail."""
 
-    @pytest.mark.xfail(strict=True, reason=_AUDIT_DEFECT)
     def test_routing_decision_logged_to_audit_trail(self):
-        """Every routing decision should be logged."""
-        mock_events = _events_double()
-        with patch("core.gateway.corvin_gateway.dispatcher._security_events", mock_events):
-            RunDispatcher._resolve_worker_model(
-                tenant_id="_default", engine_id="native", prompt=_SIMPLE,
-            )
-        assert _routing_audit_calls(mock_events), "no routing decision reached the audit writer"
+        """Every routing decision is on the tenant's chain."""
+        before = len(_routing_records())
+        RunDispatcher._resolve_worker_model(
+            tenant_id="_default", engine_id="native", prompt=_SIMPLE, run_id="run-audit-1",
+        )
+        records = _routing_records()
+        assert len(records) == before + 1, "no routing decision reached the audit chain"
+        assert records[-1]["details"]["run_id"] == "run-audit-1"
 
-    @pytest.mark.xfail(strict=True, reason=_AUDIT_DEFECT)
-    def test_audit_trail_contains_model_and_reasoning(self):
-        """Audit log should contain model selected and reasoning."""
-        mock_events = _events_double()
-        with patch("core.gateway.corvin_gateway.dispatcher._security_events", mock_events):
-            model = RunDispatcher._resolve_worker_model(
-                tenant_id="_default", engine_id="native", prompt=_COMPLEX,
-            )
-        calls = _routing_audit_calls(mock_events)
-        assert calls, "no routing decision reached the audit writer"
-        payload = next(a for c in calls for a in list(c.args) + list(c.kwargs.values()) if isinstance(a, dict))
-        assert payload["model_selected"] == model
-        assert payload["reasoning"]
+    def test_audit_trail_contains_model_and_no_free_text(self):
+        """The record names the routed model and tier, and never the router's free text."""
+        model = RunDispatcher._resolve_worker_model(
+            tenant_id="_default", engine_id="native", prompt=_COMPLEX,
+        )
+        details = _routing_records()[-1]["details"]
+        assert details["model"] == model
+        assert details["tier"] and details["engine"] == "native"
+        assert "reasoning" not in details and not details.get("_dropped_fields")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -257,7 +245,7 @@ class TestDispatcherIntegration:
         import inspect
 
         src = inspect.getsource(RunDispatcher)
-        assert "self._resolve_worker_model(tenant_id, _gw_engine_id, prompt=clean_prompt)" in src
+        assert "self._resolve_worker_model(tenant_id, _gw_engine_id, prompt=clean_prompt," in src
 
 
 # ─────────────────────────────────────────────────────────────────────────────

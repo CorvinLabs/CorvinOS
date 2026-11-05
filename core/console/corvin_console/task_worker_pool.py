@@ -382,6 +382,15 @@ def _build_worker_argv(*, model: str | None = None) -> list[str]:
         return _ClaudeCodeEngine._build_args(
             "",  # prompt_via_stdin=True: never placed in argv
             binary=binary,
+            # bypassPermissions on purpose, the same mode as the console OS turn
+            # (chat_runtime._web_permission_mode) and the bridge personas: a
+            # headless background worker has no prompt UI, so a real
+            # --permission-mode leaves every tool request unanswered and the
+            # task hangs. The guardrails are the L10 path gate, the pre-spawn
+            # L34/L35/L44 gates above and the secret-stripped env
+            # (_worker_spawn_env) — not the CLI prompt. (The ACS worker passes
+            # no flag at all; it answers in one JSON envelope and is not
+            # expected to edit files.) Documented in layer-engines.md.
             permission_mode="bypassPermissions",
             model=model,
             prompt_via_stdin=True,
@@ -393,6 +402,68 @@ def _build_worker_argv(*, model: str | None = None) -> list[str]:
     argv += ["--input-format", "stream-json",
              "--output-format", "stream-json", "--verbose"]
     return argv
+
+
+def _acs_worker_env_helpers():
+    """``(strip, restore, redirect)`` — the ACS worker env helpers, or ``None``.
+
+    Imported from ``acs_runtime`` (bridges/shared, on sys.path above), never
+    copied: one rule for every tool-capable worker spawn.
+    """
+    try:
+        from acs_runtime import (  # type: ignore[import-not-found]  # noqa: PLC0415
+            _apply_provider_redirect,
+            _restore_platform_credentials,
+            _strip_worker_secrets,
+        )
+    except ImportError:
+        return None
+    return _strip_worker_secrets, _restore_platform_credentials, _apply_provider_redirect
+
+
+def _worker_spawn_env(tenant_id: str) -> dict[str, str]:
+    """The /task worker's environment (review 2026-11-05, DLG-8).
+
+    Built like an ACS worker's: a copy of the console environment →
+    ``_strip_worker_secrets`` (every operator credential) →
+    ``_restore_platform_credentials`` (the Bedrock/Vertex/Foundry chain, only
+    on a platform host) → ``_apply_provider_redirect`` (the TASK tenant's
+    provider egress). ``CORVIN_TENANT_ID`` is the task's tenant, so the
+    worker's own hooks (path gate, forge) attribute to it and not to the
+    console process tenant. Raises ``RuntimeError`` when the helpers are
+    unavailable: no strip, no spawn.
+    """
+    helpers = _acs_worker_env_helpers()
+    if helpers is None:
+        raise RuntimeError(
+            "worker env strip unavailable (acs_runtime not importable) — refusing "
+            "to spawn a /task worker with the console's environment"
+        )
+    strip, restore, redirect = helpers
+    env = dict(os.environ)
+    strip(env)
+    restore(env)
+    redirect(env, tenant_id)
+    env["CORVIN_TENANT_ID"] = tenant_id
+    return env
+
+
+def _task_worker_model(tenant_id: str) -> str | None:
+    """The worker model for a /task of ``tenant_id`` — the ACS worker rule.
+
+    ``acs_runtime._resolve_worker_model``: the Console Models-page worker pin
+    (read through ``console_selection.pinned_model``, the one reader of that
+    choice), then the tenant's default worker model, then the Console SIMPLE
+    tier / newest Haiku. Until 2026-11-05 the /task worker passed no
+    ``--model`` and ran the CLI default whatever the Console said (DLG-8).
+    ``None`` only when the resolver is unavailable (the CLI default then runs).
+    """
+    try:
+        from acs_runtime import _resolve_worker_model  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        logger.warning("acs_runtime unavailable: /task worker runs the CLI default model")
+        return None
+    return _resolve_worker_model(None, tenant_id) or None
 
 
 class TaskWorkerPool:
@@ -623,6 +694,27 @@ class TaskWorkerPool:
 
                 workdir.mkdir(parents=True, exist_ok=True)
 
+                # The worker's env (secrets stripped, task tenant bound) and model
+                # (the Console worker choice) — DLG-8. Built BEFORE the audit-first
+                # record so a refused env never leaves a "started" spawn behind.
+                try:
+                    worker_env = _worker_spawn_env(task.tenant_id)
+                except RuntimeError as e:
+                    logger.error("Task %s: %s", task.task_id, e)
+                    _task_audit_emit(
+                        "task.spawn_denied", audit_path,
+                        task_id=task.task_id, tenant_id=task.tenant_id,
+                        reason="worker-env-unavailable",
+                    )
+                    self.task_queue.update_status(task.task_id, TaskStatus.FAILED, exit_code=125)
+                    _snapshot_task_turn(
+                        task, status="denied", exit_code=125,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        reason_code="worker-env-unavailable",
+                    )
+                    return
+                worker_model = _task_worker_model(task.tenant_id)
+
                 # Audit-first: write task.spawn_started BEFORE spawning (M4, load-bearing).
                 # R4-F3 — FAIL-CLOSED. A refused/dropped write (e.g. the L16
                 # writer's AuditTenantMismatch for any tenant other than the
@@ -658,7 +750,7 @@ class TaskWorkerPool:
 
                 # Build argv via ClaudeCodeEngine._build_args() for correct hook config (M4).
                 # The instruction is NOT in argv — it is fed over stdin (F-E1).
-                argv = _build_worker_argv()
+                argv = _build_worker_argv(model=worker_model)
                 stdin_payload = _worker_stdin_payload(instruction)
 
                 self.task_queue.update_status(task.task_id, TaskStatus.RUNNING)
@@ -678,6 +770,7 @@ class TaskWorkerPool:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=str(workdir),
+                    env=worker_env,
                 )
 
                 # Register for abort (M6)
