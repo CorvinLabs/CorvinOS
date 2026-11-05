@@ -53,6 +53,72 @@ _OBSERVER_SESSION_TOKEN: str = secrets.token_hex(8)
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+# The sandbox decision and its CORVIN_HOME / VOICE_AUDIT_PATH redirect run BEFORE
+# any project import below. Those imports bind paths at import time: one of them
+# arms debug_logging's file handler, which resolved `<repo>/.corvin/logs/corvin.log`
+# while CORVIN_HOME was still unset and kept writing there after the redirect —
+# so every sandboxed adapter test that pops CORVIN_HOME logged into the checkout's
+# live install (measured 2026-11-05, test_adapter_in_flight.py on a clean worktree).
+ROOT = Path(__file__).resolve().parent
+def _adapter_is_test_sandbox() -> bool:
+    """True when this adapter runs as an isolated TEST sandbox — the signal
+    that redirects the audit chain, CORVIN_HOME, budgets and process table
+    into a throwaway dir and skips the production-only migrations.
+
+    Historically this was INFERRED from ADAPTER_INBOX being set, because only
+    tests ever set it. That inference broke the moment a real deployment
+    legitimately pinned ADAPTER_INBOX to align its queues with the daemons'
+    runtime dir (2026-07-22): production then forked its GDPR hash-chained
+    audit.jsonl to <corvin_home>/bridges/shared/audit.jsonl and re-rooted
+    CORVIN_HOME, silently splitting consent/opt-out state. The signal is now
+    EXPLICIT: CORVIN_ADAPTER_SANDBOX=1 forces sandbox, =0 forces production.
+    The ADAPTER_INBOX fallback is kept ONLY for backward-compat with the 24
+    existing test files that set ADAPTER_INBOX but not the flag; any code path
+    that pins ADAPTER_INBOX in production MUST also set
+    CORVIN_ADAPTER_SANDBOX=0 (bridge_manager does)."""
+    flag = os.environ.get("CORVIN_ADAPTER_SANDBOX")
+    if flag is not None:
+        return flag == "1"
+    return bool(os.environ.get("ADAPTER_INBOX"))
+
+
+_IS_TEST_SANDBOX = _adapter_is_test_sandbox()
+
+# INBOX / OUTBOX / PROCESSED can be overridden via env so a sandboxed test
+# adapter can run alongside the live one without touching real channels.
+INBOX     = Path(os.environ.get("ADAPTER_INBOX")     or (ROOT / "inbox"))
+OUTBOX    = Path(os.environ.get("ADAPTER_OUTBOX")    or (ROOT / "outbox"))
+PROCESSED = Path(os.environ.get("ADAPTER_PROCESSED") or (ROOT / "processed"))
+# Same sandboxing story for settings: without this override, every sandboxed
+# test adapter still read the LIVE repo settings.json — a real deployment's
+# discord whitelist leaked into the test run and its senders were dropped via
+# the SPG private-session path (adapter-parallel/audit suites red on any
+# machine with a configured live bridge; the "test reads live config" class).
+SETTINGS_FILE = Path(os.environ.get("ADAPTER_SETTINGS") or (ROOT / "settings.json"))
+
+# Test-hygiene: when ADAPTER_INBOX is set explicitly (= sandboxed test
+# run; every test_adapter_*.py does that), and no explicit
+# VOICE_AUDIT_PATH / CORVIN_HOME was given, default both into the
+# same sandbox so test events do not pollute the real
+# ~/.config/corvin-voice/forge/audit.jsonl or production budgets/process_table.
+# Production never sets ADAPTER_INBOX → production paths are unaffected.
+if _IS_TEST_SANDBOX and not os.environ.get("VOICE_AUDIT_PATH"):
+    os.environ["VOICE_AUDIT_PATH"] = str(INBOX.parent / "audit.jsonl")
+if (
+    _IS_TEST_SANDBOX
+    and not os.environ.get("CORVIN_HOME")
+):
+    # context_budget, process_table, pipe_registry, context_cold_storage
+    # all derive their on-disk paths from corvin_home(). Without this
+    # redirect, every adapter-driven test would auto-register budgets
+    # into the production budgets.json (Phase-4.3 regression caught
+    # via /budget show showing chatA/chatB/chatX leak artefacts from
+    # test_adapter_parallel.py). Production paths unaffected because
+    # production never sets ADAPTER_INBOX.
+    sandbox_home = str(INBOX.parent / ".corvin")
+    os.environ["CORVIN_HOME"] = sandbox_home
+
+
 
 def _forge_mod(name: str):
     """``forge.<name>`` from the REAL forge package, healing a namespace-bound ``forge``
@@ -290,44 +356,6 @@ def _budget_account_turn(chat_key: str, msg_id: str,
     except Exception as exc:
         log(f"budget account_turn failed: {exc}")
 
-ROOT = Path(__file__).resolve().parent
-def _adapter_is_test_sandbox() -> bool:
-    """True when this adapter runs as an isolated TEST sandbox — the signal
-    that redirects the audit chain, CORVIN_HOME, budgets and process table
-    into a throwaway dir and skips the production-only migrations.
-
-    Historically this was INFERRED from ADAPTER_INBOX being set, because only
-    tests ever set it. That inference broke the moment a real deployment
-    legitimately pinned ADAPTER_INBOX to align its queues with the daemons'
-    runtime dir (2026-07-22): production then forked its GDPR hash-chained
-    audit.jsonl to <corvin_home>/bridges/shared/audit.jsonl and re-rooted
-    CORVIN_HOME, silently splitting consent/opt-out state. The signal is now
-    EXPLICIT: CORVIN_ADAPTER_SANDBOX=1 forces sandbox, =0 forces production.
-    The ADAPTER_INBOX fallback is kept ONLY for backward-compat with the 24
-    existing test files that set ADAPTER_INBOX but not the flag; any code path
-    that pins ADAPTER_INBOX in production MUST also set
-    CORVIN_ADAPTER_SANDBOX=0 (bridge_manager does)."""
-    flag = os.environ.get("CORVIN_ADAPTER_SANDBOX")
-    if flag is not None:
-        return flag == "1"
-    return bool(os.environ.get("ADAPTER_INBOX"))
-
-
-_IS_TEST_SANDBOX = _adapter_is_test_sandbox()
-
-# INBOX / OUTBOX / PROCESSED can be overridden via env so a sandboxed test
-# adapter can run alongside the live one without touching real channels.
-INBOX     = Path(os.environ.get("ADAPTER_INBOX")     or (ROOT / "inbox"))
-OUTBOX    = Path(os.environ.get("ADAPTER_OUTBOX")    or (ROOT / "outbox"))
-PROCESSED = Path(os.environ.get("ADAPTER_PROCESSED") or (ROOT / "processed"))
-# Same sandboxing story for settings: without this override, every sandboxed
-# test adapter still read the LIVE repo settings.json — a real deployment's
-# discord whitelist leaked into the test run and its senders were dropped via
-# the SPG private-session path (adapter-parallel/audit suites red on any
-# machine with a configured live bridge; the "test reads live config" class).
-SETTINGS_FILE = Path(os.environ.get("ADAPTER_SETTINGS") or (ROOT / "settings.json"))
-
-
 def _atomic_write_outbox(path: Path, content: str) -> None:
     """Write an outbox envelope atomically: temp file in the SAME
     directory, then os.replace() into the final name.
@@ -360,28 +388,6 @@ def _atomic_write_outbox(path: Path, content: str) -> None:
         except OSError:
             pass
         raise
-
-# Test-hygiene: when ADAPTER_INBOX is set explicitly (= sandboxed test
-# run; every test_adapter_*.py does that), and no explicit
-# VOICE_AUDIT_PATH / CORVIN_HOME was given, default both into the
-# same sandbox so test events do not pollute the real
-# ~/.config/corvin-voice/forge/audit.jsonl or production budgets/process_table.
-# Production never sets ADAPTER_INBOX → production paths are unaffected.
-if _IS_TEST_SANDBOX and not os.environ.get("VOICE_AUDIT_PATH"):
-    os.environ["VOICE_AUDIT_PATH"] = str(INBOX.parent / "audit.jsonl")
-if (
-    _IS_TEST_SANDBOX
-    and not os.environ.get("CORVIN_HOME")
-):
-    # context_budget, process_table, pipe_registry, context_cold_storage
-    # all derive their on-disk paths from corvin_home(). Without this
-    # redirect, every adapter-driven test would auto-register budgets
-    # into the production budgets.json (Phase-4.3 regression caught
-    # via /budget show showing chatA/chatB/chatX leak artefacts from
-    # test_adapter_parallel.py). Production paths unaffected because
-    # production never sets ADAPTER_INBOX.
-    sandbox_home = str(INBOX.parent / ".corvin")
-    os.environ["CORVIN_HOME"] = sandbox_home
 
 # Phase 4 (Corvin rebrand): on-disk migration helper. Runs once per
 # adapter boot in PRODUCTION (no ADAPTER_INBOX = test sandbox). Idempotent

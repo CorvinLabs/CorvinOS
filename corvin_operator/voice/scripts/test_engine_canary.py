@@ -27,6 +27,23 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "corvin_operator" / "voice" / "scripts"))
 sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
+# The CORVIN_HOME this process was started with (the runner's sandbox).
+# A section that points CORVIN_HOME at its own temp dir puts THIS value back
+# afterwards — never pops it: with CORVIN_HOME unset every later resolver
+# (the audit writer's instance identity among them) falls back to
+# `<checkout>/.corvin`, and this suite created
+# `global/instance_{id.json,key.pem,pubkey.pem}` there — the live install when
+# run from the main checkout (measured 2026-11-05 on a clean worktree).
+_CORVIN_HOME_AT_START = os.environ.get("CORVIN_HOME")
+
+
+def _restore_corvin_home() -> None:
+    if _CORVIN_HOME_AT_START is None:
+        os.environ.pop("CORVIN_HOME", None)
+    else:
+        os.environ["CORVIN_HOME"] = _CORVIN_HOME_AT_START
+
+
 PASS = 0
 FAIL = 0
 
@@ -212,7 +229,7 @@ def section_fake_run() -> None:
             t("score record structure correct",
               rec.passed == 2 and rec.failed == 0 and rec.unparseable == 0)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
             os.environ.pop("CORVIN_CANARY_FAKE", None)
 
 
@@ -248,7 +265,7 @@ def section_fake_bypass() -> None:
             t("unparseable count == 1", rec.unparseable == 1)
             t("passed count == 1", rec.passed == 1)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
             os.environ.pop("CORVIN_CANARY_FAKE", None)
             os.environ.pop("CORVIN_CANARY_FAKE_BYPASS", None)
 
@@ -292,7 +309,7 @@ def section_persistence() -> None:
             t("nonexistent engine returns empty",
               ec.load_canary_scores("nonexistent") == {})
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
             os.environ.pop("CORVIN_CANARY_FAKE", None)
 
 
@@ -353,7 +370,7 @@ def section_audit() -> None:
             except ec.CanaryAuditFieldNotAllowed:
                 t("off-allowlist field rejected", True)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
             os.environ.pop("CORVIN_CANARY_FAKE", None)
 
 

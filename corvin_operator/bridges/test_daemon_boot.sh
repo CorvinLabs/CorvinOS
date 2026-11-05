@@ -41,7 +41,12 @@ test_daemon() {
 
   local logfile="$TMPDIR/$channel.log"
   # Run with fake port so we don't collide with a live daemon.
-  env -i HOME="$HOME" PATH="$PATH" "$port_var=$port" \
+  # CORVIN_HOME is passed explicitly (into this script's own temp dir): `env -i`
+  # dropped the caller's sandbox, the daemon's bridge_paths.js then walked up from
+  # the symlinked shared/js to the checkout, and its legacy-settings migration
+  # copied the sandbox's '{}' into <checkout>/.corvin/bridges/<channel>/settings.json
+  # — the live install when run from the main checkout (measured 2026-11-05).
+  env -i HOME="$HOME" PATH="$PATH" CORVIN_HOME="$TMPDIR/corvin_home" "$port_var=$port" \
     timeout 5 node "$sandbox/daemon.js" >"$logfile" 2>&1
   local rc=$?
 

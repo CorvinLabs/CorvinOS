@@ -49,6 +49,14 @@ _SLOT = tempfile.mkdtemp(prefix="outcome-grade-slot-")
 os.environ["CORVIN_HOME"] = _TD
 os.environ["CORVIN_FORCE_SCOPE"] = "user"
 os.environ["CORVIN_PLUGIN_SLOT_DIR"] = _SLOT
+# The PROJECT scope is `<project root>/.corvin/skill-forge`. Passing the checkout
+# as project_root made every MultiSkillRegistry() here create
+# `<checkout>/.corvin/skill-forge/{manifest,skills_registry}.json` — the live
+# install when run from the main checkout (measured 2026-11-05 on a clean
+# worktree). A throwaway project root, also exported for the adapter's own
+# project-scope lookup, keeps every scope inside the sandbox.
+_PROJECT = Path(tempfile.mkdtemp(prefix="outcome-grade-project-"))
+os.environ["CORVIN_PROJECT_ROOT"] = str(_PROJECT)
 
 import skill_inject  # noqa: E402
 from skill_forge.multi_registry import MultiSkillRegistry  # noqa: E402
@@ -154,7 +162,7 @@ def _seed_skill(reg: MultiSkillRegistry, name: str) -> None:
 def section_grade_from_user_followup() -> None:
     print("\n[grade_from_user_followup — real SkillForge registry]")
 
-    reg = MultiSkillRegistry(channel_id=None, project_root=REPO)
+    reg = MultiSkillRegistry(channel_id=None, project_root=_PROJECT)
     _seed_skill(reg, "phase1.outcome_demo")
 
     spec0 = next(s for _, s in reg.list_with_scope()
@@ -168,7 +176,7 @@ def section_grade_from_user_followup() -> None:
         user_text="Danke, perfekt!",
         prev_run_id="turn-A",
         prev_skill_names=["phase1.outcome_demo"],
-        project_root=REPO,
+        project_root=_PROJECT,
     )
     t("approval: 1 outcome-grade returned",
       len(res) == 1, detail=f"len={len(res)}")
@@ -188,7 +196,7 @@ def section_grade_from_user_followup() -> None:
         user_text="Nein, falsch.",
         prev_run_id="turn-B",
         prev_skill_names=["phase1.outcome_demo"],
-        project_root=REPO,
+        project_root=_PROJECT,
     )
     t("rejection: signal=rejection, score=0.1",
       res and res[0].get("signal") == "rejection"
@@ -207,7 +215,7 @@ def section_grade_from_user_followup() -> None:
         prev_user_text="wie mache ich ein backup von der db",
         prev_run_id="turn-C",
         prev_skill_names=["phase1.outcome_demo"],
-        project_root=REPO,
+        project_root=_PROJECT,
     )
     t("rephrase: signal=rephrase, score=0.3",
       res and res[0].get("signal") == "rephrase"
@@ -220,7 +228,7 @@ def section_grade_from_user_followup() -> None:
         user_text="hi, was geht heute",
         prev_run_id="turn-D",
         prev_skill_names=["phase1.outcome_demo"],
-        project_root=REPO,
+        project_root=_PROJECT,
     )
     t("no-signal: empty list returned",
       res == [], detail=f"got={res}")
@@ -235,7 +243,7 @@ def section_grade_from_user_followup() -> None:
         user_text="danke",
         prev_run_id="turn-E",
         prev_skill_names=["phase1.outcome_demo"],
-        project_root=REPO,
+        project_root=_PROJECT,
     )
     spec_post = next(s for _, s in reg.list_with_scope()
                      if s.name == "phase1.outcome_demo")
@@ -250,7 +258,7 @@ def section_grade_from_user_followup() -> None:
         user_text="perfekt",
         prev_run_id="turn-F",
         prev_skill_names=["phase1.outcome_demo"],
-        project_root=REPO,
+        project_root=_PROJECT,
     )
     t("opt-out inject_skills=false: no grade written",
       res == [], detail=f"got={res}")
@@ -261,7 +269,7 @@ def section_grade_from_user_followup() -> None:
         user_text="danke",
         prev_run_id="turn-G",
         prev_skill_names=[],
-        project_root=REPO,
+        project_root=_PROJECT,
     )
     t("empty prev_skill_names: no-op",
       res == [], detail=f"got={res}")
@@ -304,7 +312,7 @@ def section_e2e_via_adapter() -> None:
         # Seed a skill in the user-scope tempdir so it's eligible for
         # injection AND for outcome-grade lookup. (Skill creation happens
         # before adapter loads the registry — same env in both paths.)
-        reg = MultiSkillRegistry(channel_id=None, project_root=REPO)
+        reg = MultiSkillRegistry(channel_id=None, project_root=_PROJECT)
         skill_name = "phase1.e2e_demo"
         # Avoid duplicate-create across test re-runs.
         if not any(s.name == skill_name
