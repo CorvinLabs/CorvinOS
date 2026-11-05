@@ -66,7 +66,12 @@ class TokenMetricsDB:
         if not create and not path.exists():
             yield None
             return
-        if path not in self._ready:
+        if path not in self._ready or not path.exists():
+            # A file removed after the first connect (tenant reset, restore, operator
+            # cleanup) is recreated WITH its schema: the per-process "ready" cache used
+            # to outlive the file, so every later insert failed with "no such table"
+            # until a restart (refutation 2026-11-05, RL-8).
+            self._ready.discard(path)
             self._initialize_schema(path)
         with contextlib.closing(sqlite3.connect(str(path))) as conn:
             yield conn

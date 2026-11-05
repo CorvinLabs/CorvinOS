@@ -110,6 +110,23 @@ class EventStore:
         date_str = timestamp.split("T")[0]
         return self.events_dir / f"{date_str}.jsonl"
 
+    def _partition_files(self) -> list[Path]:
+        """The date-named partitions (``YYYY-MM-DD.jsonl``), oldest first.
+
+        The ONE selector :meth:`query_events` and :meth:`count_events` share: an
+        operator copy (``backup.jsonl``) or any other non-date file is neither counted
+        nor returned, a pre-2026 partition is both (refutation 2026-11-05, RL-9).
+        """
+        out = []
+        for f in self.events_dir.glob("*.jsonl"):
+            try:
+                datetime.strptime(f.stem, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if len(f.stem) == 10:
+                out.append(f)
+        return sorted(out)
+
     def write_event(self, event: LearningEvent, *, subject_verified: bool = False) -> str:
         """Write event: core audit chain FIRST (fail-closed), then disk.
 
@@ -257,16 +274,20 @@ class EventStore:
             results: list[LearningEvent] = []
             wanted = offset + limit
 
-            start_date = since or "2026-01-01"
-            end_date = until or datetime.utcnow().strftime("%Y-%m-%d")
+            # Date-level window on the partition name. No implicit floor or ceiling:
+            # the 2026-01-01 floor and the "today" ceiling made query_events skip
+            # partitions count_events counted (refutation 2026-11-05, RL-9). A full
+            # ISO timestamp names its day.
+            start_date = since[:10] if since else None
+            end_date = until[:10] if until else None
 
             # Newest date file first: the newest ``wanted`` events live at the
             # END of the newest files, so we walk backwards and stop as soon as
             # we hold enough. Older files are never opened.
-            for event_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
+            for event_file in reversed(self._partition_files()):
                 file_date = event_file.stem
 
-                if file_date < start_date or file_date > end_date:
+                if (start_date and file_date < start_date) or (end_date and file_date > end_date):
                     continue
 
                 file_results: list[LearningEvent] = []
@@ -372,7 +393,7 @@ class EventStore:
         count = 0
 
         with self._lock:
-            for event_file in sorted(self.events_dir.glob("*.jsonl")):
+            for event_file in self._partition_files():
                 try:
                     with open(event_file, "r", encoding="utf-8") as f:
                         for line in f:

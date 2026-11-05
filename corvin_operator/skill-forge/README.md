@@ -105,6 +105,37 @@ The path-gate hook
 (`operator/voice/hooks/path_gate.py`) keeps the structural safety
 boundary in place regardless of the persona's `permission_mode`.
 
+### Namespace gate — who may mutate what
+
+The server reads its caller persona from its own env (`CORVIN_CALLER_PERSONA`,
+else `SKILL_FORGE_PERSONA`) and gates every mutating tool on it:
+
+| Caller | Namespace | Force-promote, project/user create, organic grades |
+|---|---|---|
+| no persona | none — every mutation refused (LRN-1) | no |
+| persona with a `persona_namespaces` entry (`assistant`, `coder`, …) | that prefix | no |
+| any other persona — `delegate` (an unnamed delegating caller), operator-created personas, … | its OWN name, non-`[A-Za-z0-9_]` mapped to `_` (`my-persona` → `my_persona.`) | no |
+| `skill-forge` / `forge` WITH a resolver launch record | wildcard (the operator) | yes |
+| `skill-forge` / `forge` WITHOUT one (e.g. a server a worker started itself) | its own name | no |
+
+The wildcard is the operator's only for a server the cowork resolver launched:
+`resolver._skill_forge_launch` writes `<tenant>/skill-forge/launches/<sha256(nonce)>.json`
+(0600) before the spawn and puts `<tenant>:<nonce>` into the server's
+`CORVIN_SKILL_FORGE_LAUNCH`; the server honours the wildcard only when that record
+names the same persona and tenant and is younger than 24 h, and removes it at exit
+(`skill_forge/launch_record.py`). The registry's own defence-in-depth gate gets the
+same rule. Until 2026-11-05 every named persona without a namespace entry was the
+wildcard (refutation RL-5/RL-6). `path_gate` denies a Bash command that starts the
+server itself (`python3 -m skill_forge.mcp_server`, `…/skill_forge/mcp_server.py`,
+`forge.py mcp`).
+
+**Boundary (stated, not hidden): this is ATTRIBUTION, not isolation.** The nonce
+travels in the MCP config and in the server's environment, and the record is a
+file of the same OS user the worker runs as. A worker that deliberately reads the
+nonce or writes a record — or evades `path_gate`, a syntactic guard — can still
+present itself as the operator. Integrity against that needs OS-level isolation of
+the worker (ADR-0241/0238).
+
 ## Auto-grade after bridge turn
 
 The bridge adapter runs `skill_inject.auto_grade_from_output(...)` after

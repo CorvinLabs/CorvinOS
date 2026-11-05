@@ -433,9 +433,12 @@ class LearningHost:
             return
         res = res if isinstance(res, dict) else {}
         self.retention_state.update({
-            "last_at": _iso(now), "last_error": "",
+            "last_at": _iso(now),
+            "last_error": ",".join(sorted(k[:-6] for k in res if k.endswith("_error"))),
             "events_removed": int(res.get("events_removed") or 0),
             "ledger_lines_removed": int(res.get("ledger_lines_removed") or 0),
+            **{k: int(res.get(k) or 0) for k in res
+               if k.endswith("_removed") and k not in ("events_removed", "ledger_lines_removed")},
         })
 
     async def _check_sources(self) -> int:
@@ -609,23 +612,64 @@ def _iso(ts: float) -> str:
 
 
 def _default_retention(tenant_id: str, *, now: float, retention_days: int) -> dict[str, int]:
-    """Production retention of the tenant's learning stores (LRN-13).
+    """Production retention of the tenant's learning stores (LRN-13, RL-10).
 
     ``event_persistence.EventStore.cleanup_old_events`` rewrites the expired date partitions of
     ``<tenant>/learning/events`` - the directory BOTH learning stores write, so both stores'
-    records expire with their partition - and chains ``learning.retention`` (scope ``events``);
-    ``feedback_gate.prune_ledgers`` trims ``learning/feedback_gate`` (scope ``feedback_gate``).
-    The routing ledger has its own owner and is not touched here.
+    records expire with their partition - after moving any other tenant's records home once
+    (``repair_foreign_records``), and chains ``learning.retention`` (scope ``events``);
+    ``feedback_gate.prune_ledgers`` trims ``learning/feedback_gate`` (scope ``feedback_gate``)
+    after :func:`feedback_gate.reconcile_pending` voided admissions a crash left unconfirmed.
+    The remaining tenant stores follow with the same window, each chained as
+    ``learning.retention`` with its scope: ``skill_feedback`` (stream4 ratings),
+    ``token_metrics`` (``learning/token_metrics.db``), ``ce_stage_grades`` (CEL stage grades)
+    and ``model_confidence`` (``global/model_confidence_stats.json``). The routing ledger has
+    its own owner (the rollback judge) and is not touched here. One store's failure is logged
+    and named in the result (``<scope>_error``); the others still run, and the pass is retried
+    tomorrow.
     """
     from core.learning import feedback_gate  # noqa: PLC0415
-    from core.learning.event_persistence import EventStore  # noqa: PLC0415
+    from core.learning.event_persistence import EventStore, core_audit_event  # noqa: PLC0415
     from core.paths.tenant import tenant_home  # noqa: PLC0415
 
+    home = tenant_home(tenant_id)
+    feedback_gate.reconcile_pending(Path(home) / "learning", tenant_id)
     removed = asyncio.run(EventStore(tenant_id).cleanup_old_events(
         tenant_id=tenant_id, retention_days=retention_days))
-    sweep = feedback_gate.prune_ledgers(tenant_home(tenant_id), tenant_id,
-                                        retention_days=retention_days, now=now)
-    return {"events_removed": int(removed), "ledger_lines_removed": sweep.lines_removed}
+    sweep = feedback_gate.prune_ledgers(home, tenant_id, retention_days=retention_days, now=now)
+    out: dict[str, Any] = {"events_removed": int(removed), "ledger_lines_removed": sweep.lines_removed}
+
+    def _skill_feedback() -> int:
+        from datetime import timezone  # noqa: PLC0415
+        from core.skills.feedback import history_store  # noqa: PLC0415
+        return history_store.prune(tenant_id, retention_days=retention_days,
+                                   now=datetime.fromtimestamp(now, timezone.utc))
+
+    def _token_metrics() -> int:
+        from core.learning.token_metrics_db import TokenMetricsDB  # noqa: PLC0415
+        return TokenMetricsDB().cleanup_old_metrics(days_old=retention_days, tenant_id=tenant_id)
+
+    def _grades() -> int:
+        from corvin_operator.context_engineering.stages.grades import prune_grades  # noqa: PLC0415
+        return prune_grades(tenant_id, retention_days=retention_days, now=now)
+
+    def _confidence() -> int:
+        from core.learning.confidence_persistence import prune_stale  # noqa: PLC0415
+        return prune_stale(tenant_id, retention_days=retention_days, now=now)
+
+    for scope, fn in (("skill_feedback", _skill_feedback), ("token_metrics", _token_metrics),
+                      ("ce_stage_grades", _grades), ("model_confidence", _confidence)):
+        try:
+            n = int(fn())
+        except Exception as exc:  # noqa: BLE001 - named in the result, retried tomorrow
+            logger.warning("learning retention of %s failed (%s)", scope, type(exc).__name__)
+            out[f"{scope}_error"] = type(exc).__name__
+            continue
+        core_audit_event("learning.retention", tenant_id=tenant_id, details={
+            "scope": scope, "retention_days": retention_days, "deleted_count": n,
+            "partitions_rewritten": 1 if n else 0})
+        out[f"{scope}_removed"] = n
+    return out
 
 
 def _default_prune(tenant_id: str, *, now: float, used_ids, observing_since):

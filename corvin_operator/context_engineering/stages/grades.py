@@ -106,7 +106,28 @@ def _load(tenant_id: str) -> dict:
         raise GradeStoreUnreadable("stage grade store does not parse") from exc
     if not isinstance(data, dict):
         raise GradeStoreUnreadable("stage grade store is not an object")
+    _check_shape(data)
     return data
+
+
+def _is_score(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _check_shape(data: dict) -> None:
+    """Every stage record is ``{"grades": [{"score": <number>, ...}, ...]}``.
+
+    A store that parses but has another shape (``{"s": []}``, ``{"s": {"grades": "x"}}``,
+    a grade without a score) used to surface as TypeError / AttributeError / KeyError
+    from the writer and the aggregate, or was appended to and broke the next read
+    (refutation 2026-11-05, RL-7). It is unreadable like a torn file: fail closed.
+    """
+    for stage_id, rec in data.items():
+        grades = rec.get("grades") if isinstance(rec, dict) else None
+        if not isinstance(grades, list) or not all(
+                isinstance(g, dict) and _is_score(g.get("score")) for g in grades):
+            raise GradeStoreUnreadable(
+                f"stage grade store has an unexpected shape (stage {str(stage_id)[:64]!r})")
 
 
 def _save(tenant_id: str, data: dict) -> None:
@@ -171,6 +192,9 @@ def bootstrap_seed(tenant_id: str, stage_id: str,
                 grader="__bootstrap__")
 
 
+_UNREADABLE_LOGGED: set = set()
+
+
 def is_default_eligible(tenant_id: str, stage_id: str, builtin_ids) -> bool:
     """May this stage sit in a DEFAULT pipeline? Builtin (vetted) → always. Else it
     needs ≥ MIN_SAMPLE grades at ≥ THRESHOLD mean. (Opt-in use is always allowed —
@@ -179,8 +203,14 @@ def is_default_eligible(tenant_id: str, stage_id: str, builtin_ids) -> bool:
         return True
     try:
         g = get_grade(tenant_id, stage_id, promoting_only=True)  # only operator grades promote
-    except GradeStoreUnreadable:
-        return False  # fail-closed: an unreadable store promotes nothing (LRN-11)
+    except GradeStoreUnreadable as exc:
+        # fail-closed: an unreadable store promotes nothing (LRN-11). Said once per
+        # tenant and process, so a stage leaving the default pipeline is visible (RL-7).
+        if tenant_id not in _UNREADABLE_LOGGED:
+            _UNREADABLE_LOGGED.add(tenant_id)
+            logger.warning("stage grade store of tenant %s unreadable (%s): non-builtin "
+                           "stages are not default-eligible", tenant_id, exc)
+        return False
     return g["n_grades"] >= _MIN_SAMPLE and g["mean_score"] >= _DEFAULT_THRESHOLD
 
 
@@ -193,3 +223,37 @@ def record_turn_outcome(tenant_id: str, stage_ids, success: bool) -> None:
             grade_stage(tenant_id, sid, score, notes="turn_outcome", grader="__loop__")
         except Exception as exc:  # noqa: BLE001 — the loop never breaks a turn
             logger.warning("stage outcome grade for %s not recorded: %s", sid, exc)
+
+
+#: CLAUDE.md § Phase 3: learning state has a 90-day retention default (RL-10).
+RETENTION_DAYS = 90
+
+
+def prune_grades(tenant_id: str, *, retention_days: int = RETENTION_DAYS,
+                 now: float | None = None) -> int:
+    """Drop grades older than ``retention_days``; return how many (RL-10).
+
+    Under the store lock. A grade without ``ts`` (written before the field existed) has
+    no age and is kept. A stage left with no grade is removed. Operator grades expire
+    too: a non-builtin stage needs fresh operator grades to stay default-eligible.
+    Raises :class:`GradeStoreUnreadable` like every writer.
+    """
+    if not isinstance(retention_days, int) or retention_days < 1:
+        raise ValueError("retention_days must be a positive int")
+    cutoff = (time.time() if now is None else now) - retention_days * 86400
+    with _store_lock(tenant_id):
+        if not _store_path(tenant_id).exists():
+            return 0
+        data = _load(tenant_id)
+        dropped = 0
+        for stage_id in list(data):
+            grades = data[stage_id]["grades"]
+            kept = [g for g in grades if not (_is_score(g.get("ts")) and g["ts"] < cutoff)]
+            dropped += len(grades) - len(kept)
+            if kept:
+                data[stage_id]["grades"] = kept
+            else:
+                del data[stage_id]
+        if dropped:
+            _save(tenant_id, data)
+    return dropped

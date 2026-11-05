@@ -34,6 +34,7 @@ try:
 except Exception:
     _uah_write = None
 
+from . import launch_record
 from .multi_registry import MultiSkillRegistry, VALID_SCOPES, detect_scope
 from .registry import (
     LinterError,
@@ -167,14 +168,23 @@ class SkillForgeMCPServer:
         # across scopes and grade its own run ids as organic (review 2026-11-05
         # LRN-1). An ABSENT persona is NOT a wildcard: it is unprivileged and
         # owns no namespace (see _is_unprivileged_caller / _namespace_check).
-        # The operator's explicit wildcard is a NAMED persona that has no
-        # prefix in persona_namespaces (``skill-forge`` / ``forge``).
+        #
+        # RL-5/RL-6 (refutation 2026-11-05): the wildcard is ONLY one of the
+        # explicit launcher names (launch_record.WILDCARD_PERSONAS: ``skill-forge``,
+        # ``forge``) AND only for a server the cowork resolver launched - its
+        # CORVIN_SKILL_FORGE_LAUNCH nonce must match the resolver's record under
+        # ``<tenant>/skill-forge/launches/``. Every other persona (``delegate``,
+        # custom personas, a wildcard name without a record, e.g. a server a
+        # worker started from Bash) is namespaced to its OWN name. Attribution,
+        # not isolation: see launch_record's boundary note.
         self.caller_persona = (
             (os.environ.get("CORVIN_CALLER_PERSONA") or "").strip()
             or (os.environ.get("SKILL_FORGE_PERSONA") or "").strip()
         )
-        self.multi = MultiSkillRegistry(caller_persona=self.caller_persona or None)
+        self._launch_record = self._verify_launch(os.environ.get(launch_record.LAUNCH_ENV, ""))
         self._policy: Any = None  # lazy — resolved on first need
+        self.multi = MultiSkillRegistry(caller_persona=self.caller_persona or None,
+                                        policy=_ServerPolicy(self))
         self._stdin = stdin or sys.stdin
         if stdin is None:
             # MCP stdio is UTF-8. On Windows without Python UTF-8 mode sys.stdin decodes the
@@ -189,6 +199,38 @@ class SkillForgeMCPServer:
         self._stdout_lock = threading.Lock()
         self._initialized = False
         self._shutting_down = False
+
+    def _verify_launch(self, value: str):
+        """The resolver's launch record vouching for a wildcard persona, or None."""
+        if self.caller_persona not in launch_record.WILDCARD_PERSONAS or not value:
+            return None
+        try:
+            from forge.paths import tenant_home  # type: ignore  # validates the id
+        except ImportError:
+            return None
+        path = launch_record.verify(value, self.caller_persona, tenant_home)
+        if path is not None:
+            import atexit  # noqa: PLC0415
+            atexit.register(launch_record.release, path)
+        return path
+
+    def caller_namespace(self) -> str | None:
+        """The prefix this caller may mutate: ``""`` = the operator's wildcard,
+        ``None`` = no persona (owns nothing). A persona with a ``persona_namespaces``
+        entry gets that prefix; a wildcard launcher name with a verified launch record
+        gets ``""``; every other persona gets its own name (RL-5/RL-6), with every
+        character a skill name cannot carry mapped to ``_`` (``my-persona`` →
+        ``my_persona.``)."""
+        if not self.caller_persona:
+            return None
+        policy = self._get_policy()
+        prefix = policy.namespace_for(self.caller_persona) if policy not in (None, False) else None
+        if prefix:
+            return prefix
+        if self.caller_persona in launch_record.WILDCARD_PERSONAS and self._launch_record is not None:
+            return ""
+        import re  # noqa: PLC0415
+        return re.sub(r"[^A-Za-z0-9_]", "_", self.caller_persona)
 
     def _get_policy(self):
         """Lazy-load the bundle-default forge.policy.Policy. Returns None
@@ -231,24 +273,21 @@ class SkillForgeMCPServer:
                 "mutate skills. The operator names a wildcard persona "
                 "(e.g. 'skill-forge') explicitly."
             )
-        policy = self._get_policy()
-        if policy is None or policy is False:
-            return True, ""  # forge package unavailable → no name gate
-        return policy.namespace_check(self.caller_persona, name)
+        prefix = self.caller_namespace()
+        if prefix == "" or name == prefix or name.startswith(prefix + "."):
+            return True, ""
+        return False, (
+            f"namespace-gate: persona {self.caller_persona!r} may only register skills "
+            f"starting with {prefix + '.'!r}"
+        )
 
     def _is_unprivileged_caller(self) -> bool:
-        """True unless the caller is a NAMED persona without a prefix (the
-        operator's explicit wildcard). Unprivileged callers may not force a
-        promotion, mint into project/user, or write organic grades.
-
-        Fail-closed: an absent persona, a namespaced persona, and an unreadable
-        policy (we cannot tell who owns what) are all unprivileged (LRN-1)."""
-        if not self.caller_persona:
-            return True
-        policy = self._get_policy()
-        if policy is None or policy is False:
-            return True
-        return policy.namespace_for(self.caller_persona) is not None
+        """True unless the caller is the operator's wildcard: a launcher persona
+        (``skill-forge`` / ``forge``) whose launch the resolver recorded. Unprivileged
+        callers may not force a promotion, mint into project/user, or write organic
+        grades. Fail-closed: an absent persona, a namespaced persona, a custom or
+        ``delegate`` persona and a self-started server are unprivileged (LRN-1, RL-5/6)."""
+        return self.caller_namespace() != ""
 
     def _deny_if_outside_namespace(self, msgid: Any, name: str, *, tool: str) -> bool:
         """Layer 9 namespace gate for EVERY mutating tool.
@@ -262,9 +301,7 @@ class SkillForgeMCPServer:
         allowed, reason = self._namespace_check(name)
         if allowed:
             return False
-        policy = self._get_policy()
-        allowed_prefix = (policy.namespace_for(self.caller_persona)
-                          if policy not in (None, False) else None)
+        allowed_prefix = self.caller_namespace()
         self._emit_audit_event(
             "skill.namespace_denied",
             tool=name,
@@ -678,6 +715,21 @@ class SkillForgeMCPServer:
 
     def _tool_error(self, msgid: Any, text: str) -> None:
         self._tool_envelope(msgid, ok=False, error=text)
+
+
+class _ServerPolicy:
+    """The server's persona rule handed to the registry, so its defence-in-depth gate
+    applies the SAME namespaces (own-name fallback, recorded wildcard) as the server."""
+
+    def __init__(self, server: "SkillForgeMCPServer"):
+        self._server = server
+
+    def namespace_for(self, persona: str | None) -> str | None:
+        prefix = self._server.caller_namespace()
+        return prefix or None
+
+    def namespace_check(self, persona: str | None, name: str) -> tuple[bool, str]:
+        return self._server._namespace_check(name)
 
 
 def main() -> int:

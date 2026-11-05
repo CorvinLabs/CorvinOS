@@ -48,14 +48,95 @@ def append(
         },
         sort_keys=True,
     )
-    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                 | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
+    while True:
+        fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                     | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            if not _is_current(fd, p):
+                continue  # retention replaced the file meanwhile: append to the new one
+            os.write(fd, (line + "\n").encode("utf-8"))
+            os.fsync(fd)
+            return
+        finally:
+            os.close(fd)
+
+
+def _is_current(fd: int, p: Path) -> bool:
+    """Whether ``fd`` (locked) is still the file at ``p`` - :func:`prune` replaces it."""
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        os.write(fd, (line + "\n").encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        st = os.stat(p)
+    except FileNotFoundError:
+        return False
+    cur = os.fstat(fd)
+    return (cur.st_ino, cur.st_dev) == (st.st_ino, st.st_dev)
+
+
+#: CLAUDE.md § Phase 3: learning state has a 90-day retention default.
+RETENTION_DAYS = 90
+
+
+def prune(tenant_id: str, *, retention_days: int = RETENTION_DAYS,
+          now: datetime | None = None) -> int:
+    """Drop stored events older than ``retention_days``; return how many (RL-10).
+
+    The file grew without limit and every line names a ``subject_id``. Runs under the
+    writers' exclusive lock; the kept lines go to a private temp file that replaces the
+    original (``append`` re-opens when it locked a replaced inode, so no line is lost).
+    A line whose timestamp cannot be read is kept - retention never guesses an age.
+    """
+    if not isinstance(retention_days, int) or retention_days < 1:
+        raise ValueError("retention_days must be a positive int")
+    import tempfile  # noqa: PLC0415
+    from datetime import timedelta  # noqa: PLC0415
+
+    p = _path(tenant_id)
+    if not p.is_file():
+        return 0
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=retention_days)
+    with open(p, "r", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        kept, dropped = [], 0
+        for raw in fh:
+            if not raw.strip():
+                continue
+            ts = _ts_of(raw)
+            if ts is not None and ts < cutoff:
+                dropped += 1
+            else:
+                kept.append(raw if raw.endswith("\n") else raw + "\n")
+        if not dropped:
+            return 0
+        fd, tmp = tempfile.mkstemp(prefix="." + p.name + ".", suffix=".tmp", dir=str(p.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                out.writelines(kept)
+                out.flush()
+                os.fsync(out.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, p)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    return dropped
+
+
+def _ts_of(raw: str) -> datetime | None:
+    try:
+        rec = json.loads(raw)
+    except ValueError:
+        return None
+    value = rec.get("timestamp") if isinstance(rec, dict) else None
+    if not isinstance(value, str):
+        return None
+    try:
+        ts = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError:
+        return None
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
 
 
 def _iter_records(tenant_id: str) -> Iterator[dict[str, Any]]:

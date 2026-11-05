@@ -69,6 +69,7 @@ class MultiSkillRegistry:
         project_root: Path | None = None,
         hash_chain: bool = True,
         caller_persona: str | None = None,
+        policy: object = None,
     ):
         # Resolve tenant_id: explicit > env > _default (ADR-0433)
         # Import here to avoid circular dependency
@@ -84,6 +85,9 @@ class MultiSkillRegistry:
         self._hash_chain = hash_chain
         #: Layer 9 — the persona this registry acts for (see SkillRegistry).
         self.caller_persona = caller_persona or None
+        #: the namespace rule handed to every SkillRegistry (the MCP server passes its
+        #: own, RL-5/RL-6); None = the forge workspace policy
+        self._policy = policy
         self._registries: dict[str, SkillRegistry] = {}
 
     # forge.scope.scope_root returns "<...>/forge" — we strip the trailing
@@ -109,6 +113,7 @@ class MultiSkillRegistry:
                 root, hash_chain=self._hash_chain,
                 audit_path=self.audit_path(),
                 caller_persona=self.caller_persona,
+                policy=self._policy,
             )
         return self._registries[scope]
 

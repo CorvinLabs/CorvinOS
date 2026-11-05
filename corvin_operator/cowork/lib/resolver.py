@@ -680,6 +680,9 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str, source: str 
                 "{{REPO_ROOT}}/corvin_operator/forge",
             )),
         }
+        launch = _skill_forge_launch(persona_name)
+        if launch:
+            env[launch[0]] = launch[1]
         mcp["skill_forge"] = {
             # sys.executable — see the forge branch above. Same interpreter
             # that can import skill_forge / forge.policy.
@@ -690,6 +693,37 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str, source: str 
     out["mcp_servers"] = mcp
     _ensure_brief(out, _SKILL_FORGE_BRIEF)
     return out
+
+
+def _skill_forge_launch(persona_name: str) -> tuple[str, str] | None:
+    """``(env name, value)`` vouching for a wildcard launcher persona, or None (RL-5).
+
+    Only ``skill-forge`` / ``forge`` (``launch_record.WILDCARD_PERSONAS``) can be the
+    operator's wildcard, and the skill-forge server honours that only when the nonce in
+    its env matches a record written HERE, before the spawn, under
+    ``<tenant>/skill-forge/launches/`` (0600; the server removes it at exit). Any other
+    persona needs no record: it is namespaced to its own name. Attribution, not
+    isolation - see ``skill_forge/launch_record.py``."""
+    sf_root = REPO_ROOT / "corvin_operator" / "skill-forge"
+    if persona_name not in ("skill-forge", "forge"):  # launch_record.WILDCARD_PERSONAS
+        return None
+    if sf_root.is_dir() and str(sf_root) not in sys.path:
+        sys.path.insert(0, str(sf_root))
+    try:
+        from skill_forge import launch_record  # type: ignore  # noqa: PLC0415
+    except ImportError:
+        return None  # no record: the server namespaces the persona (fail-closed)
+
+    if persona_name not in launch_record.WILDCARD_PERSONAS:
+        return None
+    try:
+        from paths import tenant_home  # type: ignore  # noqa: PLC0415
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from paths import tenant_home  # type: ignore  # noqa: PLC0415
+    home = tenant_home()
+    value = launch_record.issue(home, home.name, persona_name)
+    return launch_record.LAUNCH_ENV, value
 
 
 # ---------------------------------------------------------------------------

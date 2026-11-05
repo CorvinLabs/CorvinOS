@@ -236,3 +236,50 @@ class PersistentConfidenceStore(MutableMapping):
 
     def keys(self):  # noqa: D102 — MutableMapping's default is correct but explicit is clearer here
         return list(iter(self))
+
+
+#: CLAUDE.md § Phase 3: learning state has a 90-day retention default (RL-10).
+RETENTION_DAYS = 90
+
+
+def prune_stale(tenant_id: str, *, retention_days: int = RETENTION_DAYS,
+                now: float | None = None) -> int:
+    """Drop ``(task_type, model)`` entries not updated for ``retention_days``; return how many.
+
+    An entry's age is its ``stats.last_updated`` (ISO 8601); an entry without a readable
+    one is kept - retention never guesses an age. A file that exists but does not parse
+    raises ``ValueError`` and is left untouched (``_load_file`` would read it as ``{}``,
+    and saving that would erase every entry). Under the per-tenant lock (RL-10).
+    """
+    import time  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    if not isinstance(retention_days, int) or retention_days < 1:
+        raise ValueError("retention_days must be a positive int")
+    cutoff = (time.time() if now is None else now) - retention_days * 86400
+    path = _stats_path(tenant_id)
+    with locked(tenant_id):
+        if not path.exists():
+            return 0
+        data = json.loads(path.read_text("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("model confidence stats file is not an object")
+        stale = []
+        for key, entry in data.items():
+            stats = entry.get("stats") if isinstance(entry, dict) else None
+            value = stats.get("last_updated") if isinstance(stats, dict) else None
+            if not isinstance(value, str):
+                continue
+            try:
+                ts = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+            except ValueError:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts.timestamp() < cutoff:
+                stale.append(key)
+        for key in stale:
+            del data[key]
+        if stale:
+            _save_file(tenant_id, data)
+    return len(stale)

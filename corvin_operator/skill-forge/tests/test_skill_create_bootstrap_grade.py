@@ -45,8 +45,13 @@ def sandbox(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("CORVIN_HOME", str(home))
     monkeypatch.setenv("CORVIN_PLUGIN_SLOT_DIR", str(tmp_path / "slot"))
-    # A named wildcard (operator) persona: an ABSENT persona is refused (LRN-1).
+    # The operator's wildcard: a launcher persona with a resolver launch record
+    # (RL-5); an ABSENT persona is refused (LRN-1).
     monkeypatch.setenv("CORVIN_CALLER_PERSONA", "skill-forge")
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    from skill_forge import launch_record
+    monkeypatch.setenv(launch_record.LAUNCH_ENV, launch_record.issue(
+        home / "tenants" / "_default", "_default", "skill-forge"))
     # "task" scope (forge/scope.py::scope_root) ignores CORVIN_HOME entirely —
     # it resolves to <platform-tmpdir>/.corvin/tasks/<CORVIN_TASK_ID>/forge, a
     # location SHARED across every test process on the machine unless pinned.

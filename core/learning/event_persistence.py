@@ -104,7 +104,9 @@ _LEARNING_EVENT_ALLOWLISTS: dict[str, frozenset[str]] = {
         )
     },
     # ``scope``: closed token - ``events`` (cleanup_old_events, both stores' records of the
-    # shared partition directory) | ``feedback_gate`` (feedback_gate.prune_ledgers).
+    # shared partition directory) | ``feedback_gate`` (feedback_gate.prune_ledgers) | the RL-10
+    # stores the learning host prunes: ``skill_feedback`` | ``token_metrics`` | ``ce_stage_grades``
+    # | ``model_confidence``.
     "learning.retention": frozenset({"retention_days", "deleted_count", "partitions_rewritten",
                                      "contaminated_partitions", "scope", "audit_ref"}),
     # core/learning/phase7_orchestrator_bridge.py (NOT WIRED as of 2026-09-27)
@@ -602,6 +604,70 @@ class EventStore:
                 pass
             raise
 
+    def repair_foreign_records(self, *, tenant_id: str) -> dict[str, int]:
+        """Move other tenants' records out of this tenant's partitions, once (RL-10).
+
+        Before LRN-2 the process-wide emitter's unbound store wrote every tenant's
+        events into the boot tenant's directory. ``cleanup_old_events`` refused such a
+        partition and chained a CRITICAL alert for it on every daily pass, forever, and
+        never expired it. This repairs it instead: a foreign record whose ``tenant_id``
+        validates is appended to that tenant's own partition of the same date, any other
+        foreign record (no tenant, an invalid one) is removed. Each repaired partition
+        chains ``learning.cross_tenant_records_repaired`` (counts and validated tenant ids
+        only). A record whose move fails stays where it is and is retried next pass.
+        Returns ``{"moved": n, "removed": n, "partitions": n}``.
+        """
+        from core.paths import tenant_learning_dir  # noqa: PLC0415
+
+        self._bind(tenant_id)
+        moved = removed = partitions = 0
+        for events_file in sorted(self.events_dir.glob("*.jsonl")):
+            try:
+                datetime.fromisoformat(events_file.stem)
+            except ValueError:
+                continue
+            with open(events_file, encoding="utf-8") as f:
+                lines = f.readlines()
+            keep: list[str] = []
+            f_moved = f_removed = 0
+            targets: set[str] = set()
+            for line in lines:
+                rec = _record_of(line) if line.strip() else None
+                if rec is None or rec.get("tenant_id") == tenant_id:
+                    keep.append(line)
+                    continue
+                other = rec.get("tenant_id")
+                try:
+                    validate_tenant_id(other)
+                except ValueError:
+                    f_removed += 1  # no tenant to give it back to
+                    continue
+                target_dir = tenant_learning_dir(other) / "events"
+                try:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    _append_line(target_dir / events_file.name,
+                                 line if line.endswith("\n") else line + "\n")
+                except OSError as exc:
+                    logger.warning("foreign learning record not moved to %s (%s); retried next pass",
+                                   other, type(exc).__name__)
+                    keep.append(line)
+                    continue
+                f_moved += 1
+                targets.add(other)
+            if not (f_moved or f_removed):
+                continue
+            self._rewrite_partition(events_file, keep, tombstone=None)
+            partitions += 1
+            moved += f_moved
+            removed += f_removed
+            core_audit_event(
+                "learning.cross_tenant_records_repaired",
+                tenant_id=tenant_id,
+                details={"file": events_file.name, "moved_count": f_moved,
+                         "removed_count": f_removed, "foreign_tenants": sorted(targets)},
+            )
+        return {"moved": moved, "removed": removed, "partitions": partitions}
+
     async def cleanup_old_events(self, *, tenant_id: str, retention_days: int = 90) -> int:
         """Remove events older than the retention period (ADR-0319 default 90d).
 
@@ -618,6 +684,11 @@ class EventStore:
         """
         self._bind(tenant_id)
         cutoff_date = (datetime.now(timezone.utc) - timedelta(days=retention_days)).date()
+        # RL-10: other tenants' records are moved home (or removed) first, once and
+        # audited, so a contaminated partition expires like any other instead of being
+        # re-alerted as CRITICAL every day. What remains contaminated below is a record
+        # whose move failed; it is retried on the next pass.
+        self.repair_foreign_records(tenant_id=tenant_id)
 
         deleted_count = 0
         touched_files = 0

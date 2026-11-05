@@ -181,18 +181,22 @@ def _admit_through_trust_gate(req, tenant_id: str, signal, producer: str) -> tup
     return float(admitted.signal["trust_weight"]), probe.event_id
 
 
-def _void_admission(event_id: str, stage: str, exc: BaseException) -> None:
+def _void_admission(event_id: str, stage: str, exc: BaseException) -> bool:
     """Void the gate's "accepted" for feedback this route did not store (LRN-9).
 
-    A void that cannot be chained is logged by type only; the route's own error
-    (the 500 the caller sees) is what propagates.
+    True only when every ledger file took the void. A void that did not land
+    (``learning.feedback_void_failed`` chained, a busy lock, a full disk) or could
+    not be chained returns False: the caller answers 503 ``feedback_void_failed``
+    instead of the plain store error, because the gate still counts the feedback
+    until the void is retried (refutation 2026-11-05, RL-1/RL-2).
     """
     from core.learning.feedback_gate import void_admission  # noqa: PLC0415
 
     try:
-        void_admission(event_id, stage=stage, error_type=type(exc).__name__)
-    except Exception as void_exc:  # noqa: BLE001 — the original failure is the answer
+        return void_admission(event_id, stage=stage, error_type=type(exc).__name__)
+    except Exception as void_exc:  # noqa: BLE001 — reported as the 503 below
         logger.error("feedback admission %s not voided (%s)", event_id, type(void_exc).__name__)
+        return False
 
 
 @router.post("", response_model=SkillFeedbackResponse)
@@ -225,6 +229,8 @@ async def submit_skill_feedback(
         - 400: Invalid request (invalid skill_id, rating, category)
         - 403: Consent required for skill feedback
         - 500: Audit chain failure
+        - 503: feedback not stored and its gate admission could not be voided yet
+          (``feedback_void_failed``; retried by the gate's reconcile pass)
 
     Examples:
         POST /v1/console/feedback/skill
@@ -318,8 +324,15 @@ async def submit_skill_feedback(
                 category=req.category,
             )
         except BaseException as exc:
-            _void_admission(admitted_id, stage, exc)
+            if not _void_admission(admitted_id, stage, exc):
+                from core.learning.feedback_gate import REASON_VOID_FAILED  # noqa: PLC0415
+                raise HTTPException(status_code=503, detail={
+                    "error": REASON_VOID_FAILED, "stage": stage,
+                    "message": "feedback not stored; its admission could not be voided yet"},
+                ) from exc
             raise
+        from core.learning.feedback_gate import confirm_admission  # noqa: PLC0415
+        confirm_admission(admitted_id)  # stored: the pending admission is done (RL-3)
 
         logger.info(
             "Feedback submitted: skill=%s, subject=%s, rating=%d, tenant=%s",

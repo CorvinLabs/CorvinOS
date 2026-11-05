@@ -156,6 +156,11 @@ def build_mcp_specs(
     """
     root = repo_root or _detect_repo_root()
     out: list[McpServerSpec] = []
+    # The sub-worker's servers are named by the delegating caller's REAL persona; an
+    # unnamed caller is ``delegate``. Neither is ever the operator's wildcard: the
+    # skill-forge server namespaces every persona to its own name unless it is a
+    # launcher persona (skill-forge / forge) whose launch the cowork resolver recorded,
+    # and this builder writes no launch record (refutation 2026-11-05, RL-6).
     persona = (persona or "").strip() or "delegate"
     if forge_enabled:
         out.append(_forge_spec(persona, root))

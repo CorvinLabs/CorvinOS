@@ -6,8 +6,10 @@ Mirrors operator/forge/tests/test_namespace_gate.py for SkillForge:
   2. ``coder`` may NOT register ``inbox.foo`` — error envelope, audit
      event ``skill.namespace_denied`` fires.
   3. Missing caller persona → refused (LRN-1: never a wildcard); the
-     operator's wildcard is a NAMED persona without a prefix (``skill-forge``).
-  4. Persona not in policy.persona_namespaces → wildcard.
+     operator's wildcard is a launcher persona (``skill-forge``) whose launch the
+     resolver recorded (RL-5, ``skill_forge/launch_record.py``).
+  4. Persona not in policy.persona_namespaces → namespaced to its OWN name
+     (RL-6: ``delegate`` and custom personas were wildcards until 2026-11-05).
   5. Successful skill_create / skill_grade / skill_promote audit events
      carry ``details.caller_persona``.
   6. (D-04) the gate applies to EVERY mutating tool: ``coder`` can neither
@@ -37,6 +39,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SKILL_FORGE = REPO_ROOT / "corvin_operator" / "skill-forge"
 FORGE = REPO_ROOT / "corvin_operator" / "forge"
+if str(SKILL_FORGE) not in sys.path:
+    sys.path.insert(0, str(SKILL_FORGE))
+from skill_forge import launch_record  # noqa: E402
 
 # Sandbox the plugin-slot mirror so this test never touches the real
 # operator/skill-forge/skills/dyn/ tree (test_registry.py does the same).
@@ -79,12 +84,27 @@ class _SFMCPClient:
     """Drives skill_forge.mcp_server over stdio with a controlled env."""
 
     def __init__(self, *, corvin_home: Path,
-                 caller_persona: str | None = None) -> None:
+                 caller_persona: str | None = None,
+                 launched: bool | None = None,
+                 launch_env: str | None = None) -> None:
         env = dict(os.environ)
         env.pop("CORVIN_CALLER_PERSONA", None)
         env.pop("SKILL_FORGE_PERSONA", None)
+        env.pop(launch_record.LAUNCH_ENV, None)
         if caller_persona:
             env["CORVIN_CALLER_PERSONA"] = caller_persona
+        # A wildcard launcher persona is the operator only for a server the resolver
+        # launched (RL-5): write the record the resolver writes, put its nonce in env.
+        if launched is None:
+            launched = caller_persona in launch_record.WILDCARD_PERSONAS
+        env["CORVIN_TENANT_ID"] = "_default"
+        self.launch_value = ""
+        if launched and caller_persona:
+            self.launch_value = launch_record.issue(
+                corvin_home / "tenants" / "_default", "_default", caller_persona)
+            env[launch_record.LAUNCH_ENV] = self.launch_value
+        elif launch_env is not None:
+            env[launch_record.LAUNCH_ENV] = launch_env  # a value the caller chose (forged / foreign)
         env["CORVIN_HOME"] = str(corvin_home)
         env["CORVIN_FORCE_SCOPE"] = "user"
         env["CORVIN_PLUGIN_SLOT_DIR"] = _SLOT_TMP
@@ -274,7 +294,7 @@ def test_coder_blocked_outside_namespace():
 
 # -- Case 3: missing persona → refused; named wildcard → any name ------------
 
-OPERATOR = "skill-forge"  # named persona without a prefix = the operator's wildcard
+OPERATOR = "skill-forge"  # launcher persona; the wildcard only with a launch record (RL-5)
 
 
 def test_no_caller_persona_is_refused_not_wildcard():
@@ -312,10 +332,10 @@ def test_no_caller_persona_is_refused_not_wildcard():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
-# -- Case 4: unknown persona → wildcard --------------------------------------
+# -- Case 4: unknown persona → its OWN namespace (RL-6) -----------------------
 
-def test_unknown_persona_falls_back_to_wildcard():
-    print("\n[case 4: persona NOT in persona_namespaces → wildcard]")
+def test_unknown_persona_is_namespaced_to_its_own_name():
+    print("\n[case 4: persona NOT in persona_namespaces → own-name namespace (RL-6)]")
     sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-4-"))
     try:
         client = _SFMCPClient(
@@ -323,14 +343,99 @@ def test_unknown_persona_falls_back_to_wildcard():
         )
         try:
             client.initialize()
-            r = client.request("tools/call",
-                               {"name": "skill_create",
-                                "arguments": _create_args("freeform.thing")})
-            ok = r["result"].get("isError") is False
-            t("unknown persona acts as wildcard", ok,
-              detail=("" if ok else r["result"]["content"][0]["text"]))
+            r = _call(client, "skill_create", _create_args("freeform.thing"))
+            assert r.get("isError") is True, r
+            assert "totally_unknown_persona." in r["content"][0]["text"], r
+            r = _call(client, "skill_create", _create_args("totally_unknown_persona.thing"))
+            assert r.get("isError") is False, r["content"][0]["text"]
+            t("unknown persona is namespaced to its own name", True)
         finally:
             client.close()
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+# -- Case 8 (RL-5/RL-6): who is the operator's wildcard ------------------------
+
+def _force_promote(client: _SFMCPClient, name: str) -> dict:
+    r = _call(client, "skill_create", _create_args(name, scope="session"))
+    assert r.get("isError") is False, r["content"][0]["text"]
+    return _call(client, "skill_promote", {"name": name, "to": "user", "force": True})
+
+
+def test_rl6_delegate_and_custom_personas_are_not_wildcards():
+    print("\n[case 8a: delegate / custom persona cannot force-promote (RL-6)]")
+    sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-8a-"))
+    try:
+        for persona in ("delegate", "my-custom-persona"):
+            c = _SFMCPClient(corvin_home=sandbox, caller_persona=persona)
+            try:
+                c.initialize()
+                r = _call(c, "skill_create", _create_args("zz.rl_skill"))
+                assert r.get("isError") is True and "namespace-gate" in r["content"][0]["text"], r
+                r = _force_promote(c, persona.replace("-", "_") + ".rl_skill")
+                assert r.get("isError") is True, (persona, r)
+            finally:
+                c.close()
+        t("delegate / custom personas namespaced, no force-promote", True)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_rl5_wildcard_name_without_a_launch_record_is_namespaced():
+    print("\n[case 8b: CORVIN_CALLER_PERSONA=skill-forge without a record (RL-5)]")
+    sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-8b-"))
+    try:
+        # the self-started server a worker could launch from Bash: no record
+        c = _SFMCPClient(corvin_home=sandbox, caller_persona=OPERATOR, launched=False)
+        try:
+            c.initialize()
+            r = _call(c, "skill_create", _create_args("anything.goes"))
+            assert r.get("isError") is True, r
+            r = _force_promote(c, "skill_forge.self_started")
+            assert r.get("isError") is True, r
+        finally:
+            c.close()
+        # a forged nonce (no record behind it) vouches for nothing either
+        env_value = "_default:" + "0" * 32
+        c = _SFMCPClient(corvin_home=sandbox, caller_persona=OPERATOR,
+                          launched=False, launch_env=env_value)
+        try:
+            c.initialize()
+            r = _call(c, "skill_create", _create_args("anything.goes"))
+            assert r.get("isError") is True, r
+        finally:
+            c.close()
+        # a record written for ANOTHER persona does not vouch for skill-forge
+        value = launch_record.issue(sandbox / "tenants" / "_default", "_default", "forge")
+        c = _SFMCPClient(corvin_home=sandbox, caller_persona=OPERATOR,
+                          launched=False, launch_env=value)
+        try:
+            c.initialize()
+            r = _call(c, "skill_create", _create_args("anything.goes"))
+            assert r.get("isError") is True, r
+        finally:
+            c.close()
+        t("wildcard name without a matching record is namespaced", True)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_rl5_recorded_launch_is_the_wildcard_and_its_record_is_removed_at_exit():
+    print("\n[case 8c: resolver-recorded launch = wildcard; record removed at exit (RL-5)]")
+    sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-8c-"))
+    try:
+        c = _SFMCPClient(corvin_home=sandbox, caller_persona=OPERATOR)
+        launches = launch_record.launches_dir(sandbox / "tenants" / "_default")
+        try:
+            c.initialize()
+            assert len(list(launches.glob("*.json"))) == 1
+            r = _force_promote(c, "anything.recorded")
+            assert r.get("isError") is False, r["content"][0]["text"]
+        finally:
+            c.close()
+        assert not list(launches.glob("*.json")), "the launch record outlived its server"
+        t("recorded launch is the wildcard; record removed at exit", True)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -488,11 +593,59 @@ def test_create_scope_gate():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def test_rl5_the_resolver_records_the_launch_the_server_honours():
+    """The cowork resolver's record (written before the spawn) is what the real server
+    verifies: the resolver's env value turns ``forge`` into the wildcard; a namespaced
+    persona gets no record at all (RL-5)."""
+    print("\n[case 8d: resolver-written launch record → real server wildcard (RL-5)]")
+    import importlib.util  # noqa: PLC0415
+    sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-8d-"))
+    saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID")}
+    os.environ["CORVIN_HOME"] = str(sandbox)
+    os.environ["CORVIN_TENANT_ID"] = "_default"
+    try:
+        lib = REPO_ROOT / "corvin_operator" / "cowork" / "lib"
+        spec = importlib.util.spec_from_file_location("_rl5_resolver", lib / "resolver.py")
+        resolver = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(lib))
+        try:
+            spec.loader.exec_module(resolver)
+        finally:
+            sys.path.remove(str(lib))
+        assert resolver._skill_forge_launch("coder") is None
+        name, value = resolver._skill_forge_launch("forge")
+        assert name == launch_record.LAUNCH_ENV and value.startswith("_default:")
+        rec = launch_record.launches_dir(sandbox / "tenants" / "_default")
+        assert len(list(rec.glob("*.json"))) == 1
+        if os.name == "posix":
+            assert (next(rec.glob("*.json")).stat().st_mode & 0o777) == 0o600
+        c = _SFMCPClient(corvin_home=sandbox, caller_persona="forge",
+                          launched=False, launch_env=value)
+        try:
+            c.initialize()
+            r = _force_promote(c, "anything.via_resolver")
+            assert r.get("isError") is False, r["content"][0]["text"]
+        finally:
+            c.close()
+        t("resolver-recorded launch honoured by the real server", True)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def main() -> int:
     test_coder_can_register_in_namespace()
     test_coder_blocked_outside_namespace()
     test_no_caller_persona_is_refused_not_wildcard()
-    test_unknown_persona_falls_back_to_wildcard()
+    test_unknown_persona_is_namespaced_to_its_own_name()
+    test_rl6_delegate_and_custom_personas_are_not_wildcards()
+    test_rl5_wildcard_name_without_a_launch_record_is_namespaced()
+    test_rl5_recorded_launch_is_the_wildcard_and_its_record_is_removed_at_exit()
+    test_rl5_the_resolver_records_the_launch_the_server_honours()
     test_caller_persona_in_audit_details()
     test_coder_cannot_grade_purge_or_promote_foreign_skill()
     test_create_scope_gate()

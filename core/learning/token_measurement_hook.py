@@ -35,6 +35,7 @@ class TurnContext:
     tenant_id: str
     start_time: float
     counter: TokenCounter
+    user_id: Optional[str] = None  # the erasure subject the turn belongs to (RL-8)
 
 
 class TokenMeasurementHook:
@@ -53,8 +54,11 @@ class TokenMeasurementHook:
         tenant_id: str = "default",
         engine: str = "claude",
         engine_tier: str = "cloud",
+        user_id: Optional[str] = None,
     ) -> None:
-        """Record turn start."""
+        """Record turn start. ``user_id``: the subject a GDPR Art. 17 erasure names
+        (the console's consent subject) - stored on the row so an erasure by user
+        finds it, not only one by session (refutation 2026-11-05, RL-8)."""
         start_time = time.time()
 
         # Create counter for this turn
@@ -71,6 +75,7 @@ class TokenMeasurementHook:
             tenant_id=tenant_id,
             start_time=start_time,
             counter=counter,
+            user_id=user_id,
         )
 
     def record_llm_call(self, input_tokens: int, output_tokens: int) -> None:
@@ -142,6 +147,7 @@ class TokenMeasurementHook:
             tenant_id=ctx.tenant_id,
             instance_id=_instance_id(),
             session_id=ctx.session_id,
+            user_id=ctx.user_id,
         )
 
         # Clear context for next turn
@@ -225,8 +231,11 @@ def record_turn_metrics(
     input_tokens: int = 0,
     output_tokens: int = 0,
     subsystems: Optional[dict] = None,
+    user_id: Optional[str] = None,
 ) -> None:
     """Convenience function to record a complete turn's metrics in one call.
+
+    ``user_id``: the erasure subject of the turn (see ``TokenMeasurementHook.start_turn``).
 
     Usage in ChatRuntime or similar:
         record_turn_metrics(
@@ -245,7 +254,7 @@ def record_turn_metrics(
     if not hook:
         return
 
-    hook.start_turn(turn_id, session_id, tenant_id)
+    hook.start_turn(turn_id, session_id, tenant_id, user_id=user_id)
 
     # Record LLM call
     if input_tokens > 0 or output_tokens > 0:
