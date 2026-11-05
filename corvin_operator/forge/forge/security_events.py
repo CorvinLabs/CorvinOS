@@ -1883,6 +1883,12 @@ def get_audit_chain_tail(path: Path) -> str | None:
 
 _ANCHOR_KEY: bytes | None = None
 _ANCHOR_KEY_LOADED = False
+#: The ``CORVIN_AUDIT_ANCHOR_KEY`` value the cached key was loaded under. The cache
+#: is valid for THAT key location only: a process whose variable changes (a test
+#: that points it at its own key, then restores it) otherwise kept MAC-ing with the
+#: old key while every other ``security_events`` instance in the process used the
+#: new one - their records then failed ``verify_chain`` as ``mac_tampered``.
+_ANCHOR_KEY_ENV: str | None = None
 #: Reason a PRESENT key file was refused (e.g. "insecure_mode:0o644"), else None.
 _ANCHOR_KEY_REFUSED: str | None = None
 
@@ -1918,9 +1924,12 @@ def _anchor_key() -> bytes | None:
     rehashing a record — ``verify_chain`` then detects the tamper. Returns None
     when the key can't be created/read (graceful: records carry no ``mac`` and
     verify falls back to hash-only, preserving the legacy contract)."""
-    global _ANCHOR_KEY, _ANCHOR_KEY_LOADED, _ANCHOR_KEY_REFUSED
-    if _ANCHOR_KEY_LOADED:
+    global _ANCHOR_KEY, _ANCHOR_KEY_LOADED, _ANCHOR_KEY_REFUSED, _ANCHOR_KEY_ENV
+    _env_now = os.environ.get("CORVIN_AUDIT_ANCHOR_KEY", "").strip()
+    if _ANCHOR_KEY_LOADED and _ANCHOR_KEY_ENV == _env_now:
         return _ANCHOR_KEY
+    _ANCHOR_KEY_LOADED = False
+    _ANCHOR_KEY_ENV = _env_now
     key: bytes | None = None
     rel = _anchor_key_env_relative()
     if rel is not None:
@@ -5402,7 +5411,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "console.panel_deleted": frozenset({"deleted_by", "panel_id", "sid_fingerprint", "tenant_id"}),
     "vault.secret_deleted": frozenset({"key_name", "tenant_id"}),
     "console.session_denied": frozenset({"reason", "tenant_id", "token_fingerprint", "user_agent_class"}),
-    "http.host_rejected": frozenset({"channel", "host_fp", "origin_fp", "path_class", "reason", "scope_type", "surface", "tenant_id"}),
+    "http.host_rejected": frozenset({"channel", "host_fp", "origin_fp", "path_class", "reason", "scope_type", "suppressed_count", "surface", "tenant_id"}),
     "console.session_ended": frozenset({"reason", "sid_fingerprint", "tenant_id"}),
     "console.session_started": frozenset({"sid_fingerprint", "tenant_id", "token_fingerprint", "user_agent_class"}),
     "cost.optimize_capped": frozenset({"cap", "counterfactual_usd", "month", "ratio", "reason", "tenant_id", "tier"}),

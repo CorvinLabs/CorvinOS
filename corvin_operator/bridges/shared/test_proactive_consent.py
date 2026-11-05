@@ -15,8 +15,13 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+# FIRST on sys.path, not merely present: ``core/compliance`` (on the runner's
+# PYTHONPATH and moved to the front by the root conftest's checkout-precedence
+# step) carries its own top-level ``consent`` module, which then shadowed the
+# Layer-17 store this file tests against.
+while str(HERE) in sys.path:
+    sys.path.remove(str(HERE))
+sys.path.insert(0, str(HERE))
 
 import proactive_consent as pc  # noqa: E402
 
@@ -63,11 +68,18 @@ def test_owner_carve_out_true_without_record(_owner):
 
 def test_owner_carve_out_via_real_disclosure_check(monkeypatch):
     # Exercise the real _is_owner path delegating to disclosure._is_intrinsic_owner.
+    # The proactive carve-out applies only when the channel HAS a whitelist
+    # (``_is_owner`` is fail-closed where disclosure is fail-open), so the owner
+    # is listed in one; without it there is no owner (asserted last).
     import disclosure  # type: ignore
     monkeypatch.setattr(disclosure, "_is_intrinsic_owner",
                         lambda channel, uid: uid == OWNER_UID)
+    monkeypatch.setattr(disclosure, "_read_channel_whitelist",
+                        lambda channel: [OWNER_UID])
     assert pc.is_granted(TENANT, CHANNEL, OWNER_UID) is True
     assert pc.is_granted(TENANT, CHANNEL, UID) is False
+    monkeypatch.setattr(disclosure, "_read_channel_whitelist", lambda channel: [])
+    assert pc.is_granted(TENANT, CHANNEL, OWNER_UID) is False
 
 
 # ── grant → revoke roundtrip ────────────────────────────────────────────────
@@ -125,21 +137,22 @@ def test_purpose_separation_inbound_consent_does_not_grant_proactive(
     # Grant an INBOUND observer-transcript consent via consent.py.
     monkeypatch.setenv("CORVIN_TENANT_ID", TENANT)
     import consent  # type: ignore
+    assert Path(consent.__file__).resolve().parent == HERE, consent.__file__
     # Write an inbound (Layer-17 observer-transcript) durable grant via the
     # real consent.py API. This is a DIFFERENT legal purpose (GDPR Art. 6/7).
-    # Wrapped: even if the inbound grant path is unavailable in this sandbox,
-    # the invariant under test is that a proactive grant is NOT implied by it.
-    try:
-        consent.grant(CHANNEL, "chatX", UID, ttl_s=None, via="slash")
-    except Exception:
-        pass
+    # Not wrapped: the invariant is only proven when the inbound grant really
+    # exists (positive control below).
+    consent.grant(CHANNEL, "chatX", UID, ttl_s=None, via="slash", tenant_id=TENANT)
+    assert consent.is_granted(CHANNEL, "chatX", UID, tenant_id=TENANT)[0] is True
 
     # proactive is_granted must remain False regardless of any inbound grant.
     assert pc.is_granted(TENANT, CHANNEL, UID) is False
-    # And the two stores are different files.
-    assert pc._store_path(TENANT, CHANNEL) != consent._store_path(CHANNEL, "chatX")
+    # And the two stores are different files (consent.py's store is
+    # tenant-scoped with a REQUIRED tenant_id, CRITICAL-3).
+    inbound = consent._store_path(CHANNEL, "chatX", tenant_id=TENANT)
+    assert pc._store_path(TENANT, CHANNEL) != inbound
     assert "proactive_consent" in str(pc._store_path(TENANT, CHANNEL))
-    assert "proactive_consent" not in str(consent._store_path(CHANNEL, "chatX"))
+    assert "proactive_consent" not in str(inbound)
 
 
 # ── E2E wiring / reachability ───────────────────────────────────────────────

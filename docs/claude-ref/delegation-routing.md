@@ -20,8 +20,12 @@ hints) — and they could disagree.
 | 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `corvin_operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | **off unless selected** — runs only while the operator has picked `worker_engine: tde` in Settings → Worker Engine | ADR-0114 delegated branch (auto, `_worker_engine_target`, `tde` mode only); console `/use-engine tiered_delegation <task>` (also `tde` mode only); `SendIntegration` for embedders | **yes** — shared agentic-compute pool (ADR-0216), charged at the `TieredDelegationEngine.execute` chokepoint |
 
 **Remote instances (A2A, L38)** are not a ladder mechanism: like mechanism 7
-they are a model-chosen tool (`a2a_send` MCP, persona flag
-`orchestration_enabled`), never forced by Tier-1/Tier-2 routing. Since
+they are a model-chosen tool, never forced by Tier-1/Tier-2 routing. From chat
+that tool is `mcp__forge__a2a_send` (tenant flag `a2a_send_from_chat`, two-step:
+it only stages a request the operator confirms in the console — ADR-2099 Phase 2);
+`orchestration_enabled` no longer grants `mcp__corvin_orchestration__a2a_send` /
+`a2a_list_endpoints` (675c99230; the capability registry lists `a2a.send` as
+`deprecated`). Since
 2026-07-20 the model can address a paired instance by its **connection name**
 (the label set in Agent Hub — e.g. "delegiere das an Papa Laptop"):
 `a2a_send` resolves name → endpoint via `RemoteEndpointRegistry.resolve()`

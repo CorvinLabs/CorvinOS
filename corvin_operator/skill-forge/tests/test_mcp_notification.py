@@ -139,6 +139,16 @@ class _Client:
         return self.proc.stderr.read() if self.proc.stderr else ""
 
 
+def _tool_ok(resp: dict) -> bool:
+    """The tool call SUCCEEDED (``"ok": true``), not merely answered: a refused
+    call also returns a ``result`` and made the checks pass vacuously (a refused
+    grade emits no notification either)."""
+    try:
+        return json.loads(resp["result"]["content"][0]["text"]).get("ok") is True
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+
+
 def _call_tool(c: _Client, name: str, args: dict, *, timeout: float = 5.0) -> dict:
     return c.request("tools/call", {"name": name, "arguments": args}, timeout=timeout)
 
@@ -166,9 +176,15 @@ def main() -> int:
             "CORVIN_CALLER_PERSONA", "SKILL_FORGE_PERSONA", "CORVIN_CHANNEL_ID",
         ):
             env.pop(k, None)
-        # The operator's NAMED wildcard persona: an absent persona is refused
-        # on every mutating tool (review 2026-11-05 LRN-1).
+        # The operator's wildcard: a launcher persona WITH a resolver launch
+        # record (bb70cd82a, RL-5). An absent persona is refused on every
+        # mutating tool (1a0bfcef0, LRN-1); a named one without a record is
+        # namespaced to its own name, which refused this test's skill name.
         env["CORVIN_CALLER_PERSONA"] = "skill-forge"
+        env["CORVIN_TENANT_ID"] = "_default"
+        from skill_forge import launch_record
+        env[launch_record.LAUNCH_ENV] = launch_record.issue(
+            Path(td) / "tenants" / "_default", "_default", "skill-forge")
         env["CORVIN_HOME"] = td
         env["CORVIN_FORCE_SCOPE"] = "user"
         env["CORVIN_PLUGIN_SLOT_DIR"] = slot
@@ -191,8 +207,8 @@ def main() -> int:
                 "body_md": SAMPLE_BODY,
                 "force": True,
             })
-            t("skill_create returned a result",
-              "result" in r1,
+            t("skill_create succeeded",
+              _tool_ok(r1),
               detail=str(r1)[:160])
             n1 = c.expect_notification("notifications/tools/list_changed")
             t("notifications/tools/list_changed arrived after skill_create",
@@ -205,8 +221,8 @@ def main() -> int:
                 "score": 0.8,
                 "notes": "tried-it-out",
             })
-            t("skill_grade returned a result",
-              "result" in r2,
+            t("skill_grade succeeded",
+              _tool_ok(r2),
               detail=str(r2)[:160])
             # skill_grade changes meta.json scores, NOT the tool list itself
             # — so no notifications/tools/list_changed should fire. This is
@@ -222,8 +238,8 @@ def main() -> int:
                 "name": "csv_diff_workflow",
                 "reason": "test-cleanup",
             })
-            t("skill_purge returned a result",
-              "result" in r3,
+            t("skill_purge succeeded",
+              _tool_ok(r3),
               detail=str(r3)[:160])
             n3 = c.expect_notification("notifications/tools/list_changed")
             t("notifications/tools/list_changed arrived after skill_purge",

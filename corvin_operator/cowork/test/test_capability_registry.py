@@ -59,8 +59,16 @@ def main() -> int:
     planned = reg.capabilities_by_status("planned")
     expect(len(wired) > 0, "at least one wired capability is registered")
     expect(len(planned) > 0, "at least one planned capability is registered (ADR-0190 M2-M8 tracked)")
-    expect(len(wired) + len(planned) == len(reg.CAPABILITIES),
-           "every capability is either wired or planned (none deprecated yet)")
+    deprecated = reg.capabilities_by_status("deprecated")
+    expect(len(wired) + len(planned) + len(deprecated) == len(reg.CAPABILITIES),
+           "every capability is wired, planned or deprecated")
+    # a2a.send became deprecated with 675c99230 (orchestration A2A tools are no
+    # longer granted to chat personas); a deprecated entry is never offered.
+    expect([c.id for c in deprecated] == ["a2a.send"],
+           "the only deprecated capability is a2a.send (675c99230)",
+           str([c.id for c in deprecated]))
+    expect("mcp__corvin_orchestration__a2a_send" not in reg.all_tool_names(),
+           "a deprecated capability's tools are not in all_tool_names()")
 
     got = reg.get("forge.tools")
     expect(got is not None and got.status == "wired", "get('forge.tools') resolves the real entry")

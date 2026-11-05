@@ -26,6 +26,27 @@ from core.security.secret_rotation import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _sandboxed_home(tmp_path, monkeypatch):
+    """Never read or archive the operator's real credentials.
+
+    ``create_backup`` tars ``Path.home()/.config/corvin-voice/{service.env,
+    secrets.json}`` and ``./.env`` (the working directory), and the inventory /
+    rotation paths expand ``~``. The root conftest sandboxes CORVIN_HOME and
+    XDG_CONFIG_HOME but not HOME, so these tests used to copy the REAL voice
+    vault (and the checkout's ``.env``) into a temp archive. HOME (USERPROFILE on
+    Windows) and the cwd point into the test's tmp dir instead."""
+    home = tmp_path / "sandbox_home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    cwd = tmp_path / "sandbox_cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    assert Path.home() == home
+    return home
+
+
 class TestRotationDaemonPhase1:
     """Phase 1: Credential Inventory (ADR-0869)."""
 
@@ -119,20 +140,22 @@ class TestRotationDaemonBackup:
         daemon.tenant_home = tmp_path / "tenant_home"
         return daemon
 
-    def test_backup_creates_tar_gz(self, daemon, tmp_path):
-        """Backup: Verify tar.gz file is created."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create mock credential files
-            env_file = Path(tmpdir) / ".env"
-            env_file.write_text("GITHUB_TOKEN=ghp_test\n", encoding="utf-8")
+    def test_backup_creates_tar_gz(self, daemon, _sandboxed_home):
+        """Backup: Verify tar.gz file is created and holds the (sandboxed) files."""
+        vault = _sandboxed_home / ".config" / "corvin-voice"
+        vault.mkdir(parents=True)
+        (vault / "service.env").write_text("OPENAI_API_KEY=sk-test\n", encoding="utf-8")
+        Path(".env").write_text("GITHUB_TOKEN=ghp_test\n", encoding="utf-8")
 
-            with patch("pathlib.Path.expanduser", return_value=env_file):
-                backup_path = daemon.create_backup()
+        backup_path = daemon.create_backup()
 
-                # Verify backup exists and is tar.gz
-                assert backup_path is not None
-                assert Path(backup_path).exists()
-                assert tarfile.is_tarfile(backup_path)
+        # Verify backup exists and is tar.gz
+        assert backup_path is not None
+        assert Path(backup_path).exists()
+        assert tarfile.is_tarfile(backup_path)
+        with tarfile.open(backup_path) as tar:
+            assert sorted(tar.getnames()) == [".env", "service.env"]
+            assert tar.extractfile("service.env").read() == b"OPENAI_API_KEY=sk-test\n"
 
     def test_backup_file_permissions_0o600(self, daemon):
         """Backup: Verify file mode is 0o600 (owner read-only)."""

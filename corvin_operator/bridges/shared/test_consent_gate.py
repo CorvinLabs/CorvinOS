@@ -54,12 +54,25 @@ def _set_sandbox(tmp: Path) -> None:
     os.environ["ADAPTER_ROUTING_MODE"] = "off"
     os.environ["VOICE_AUDIT_PATH"] = str(tmp / "audit.jsonl")
     os.environ["CORVIN_HOME"] = str(tmp / "corvinos")
+    # The adapter's channel-settings root (paths.resolve_bridge_settings_file):
+    # without it a sandboxed CORVIN_HOME has no canonical settings file, the
+    # resolver falls back to the IN-REPO ``bridges/<channel>/settings.json``,
+    # and this file wrote its fixtures into the checkout (a stray
+    # ``bridges/profiletest/`` was found there on 2026-11-05).
+    os.environ["ADAPTER_BRIDGES_DIR"] = str(tmp / "bridges")
     for d in ("inbox", "outbox", "processed"):
         (tmp / d).mkdir(parents=True, exist_ok=True)
 
 
+def _sandbox_settings_file(tmp: Path, channel: str) -> Path:
+    return tmp / "bridges" / channel / "settings.json"
+
+
 def _write_channel_settings(channel: str, settings: dict) -> Path:
-    chan_dir = ROOT.parent / channel
+    root = os.environ.get("ADAPTER_BRIDGES_DIR")
+    if not root:  # never fall back to the checkout's bridges/ tree
+        raise RuntimeError("ADAPTER_BRIDGES_DIR not set - call _set_sandbox first")
+    chan_dir = Path(root) / channel
     chan_dir.mkdir(parents=True, exist_ok=True)
     settings_file = chan_dir / "settings.json"
     settings_file.write_text(json.dumps(settings), encoding="utf-8")
@@ -152,6 +165,7 @@ def case_parse_ttl() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -183,6 +197,7 @@ def case_parse_share_prefix() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -239,6 +254,7 @@ def case_grant_revoke_status_roundtrip() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
 
 
 def case_lazy_prune_expired() -> None:
@@ -274,6 +290,7 @@ def case_lazy_prune_expired() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -283,7 +300,7 @@ def case_lazy_prune_expired() -> None:
 def case_observer_drop_without_consent() -> None:
     _section("L17/5: observer envelope without consent → drop + audit")
     tmp = Path(tempfile.mkdtemp(prefix="consent-l5-"))
-    settings_file = ROOT.parent / "telegram" / "settings.json"
+    settings_file = _sandbox_settings_file(tmp, "telegram")
     original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp)
@@ -320,6 +337,7 @@ def case_observer_drop_without_consent() -> None:
     finally:
         _restore_channel_settings(settings_file, original)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -330,7 +348,7 @@ def case_observer_drop_without_consent() -> None:
 def case_observer_pass_with_consent() -> None:
     _section("L17/6: observer envelope WITH consent → buffered")
     tmp = Path(tempfile.mkdtemp(prefix="consent-l6-"))
-    settings_file = ROOT.parent / "telegram" / "settings.json"
+    settings_file = _sandbox_settings_file(tmp, "telegram")
     original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp)
@@ -372,6 +390,7 @@ def case_observer_pass_with_consent() -> None:
     finally:
         _restore_channel_settings(settings_file, original)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -382,7 +401,7 @@ def case_observer_pass_with_consent() -> None:
 def case_share_envelope_admits_without_consent() -> None:
     _section("L17/7: /share one-shot envelope bypasses consent gate")
     tmp = Path(tempfile.mkdtemp(prefix="consent-l7-"))
-    settings_file = ROOT.parent / "telegram" / "settings.json"
+    settings_file = _sandbox_settings_file(tmp, "telegram")
     original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp)
@@ -428,6 +447,7 @@ def case_share_envelope_admits_without_consent() -> None:
     finally:
         _restore_channel_settings(settings_file, original)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -438,7 +458,7 @@ def case_share_envelope_admits_without_consent() -> None:
 def case_consume_drift_revoke_after_buffer() -> None:
     _section("L17/8: consume-time drift — revoke after buffer-write")
     tmp = Path(tempfile.mkdtemp(prefix="consent-l8-"))
-    settings_file = ROOT.parent / "telegram" / "settings.json"
+    settings_file = _sandbox_settings_file(tmp, "telegram")
     original = settings_file.read_text(encoding="utf-8") if settings_file.exists() else None
     try:
         _set_sandbox(tmp)
@@ -497,6 +517,7 @@ def case_consume_drift_revoke_after_buffer() -> None:
     finally:
         _restore_channel_settings(settings_file, original)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -576,6 +597,7 @@ def case_cli_subcommands() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -626,6 +648,7 @@ def test_no_uid_in_audit_events() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
         sys.modules.pop("consent", None)
 
 
@@ -662,6 +685,7 @@ def test_store_corrupted_denies_all() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
         sys.modules.pop("consent", None)
 
 
@@ -740,6 +764,7 @@ def test_prune_retry_on_write_failure() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
+        os.environ.pop("ADAPTER_BRIDGES_DIR", None)
         sys.modules.pop("consent", None)
 
 

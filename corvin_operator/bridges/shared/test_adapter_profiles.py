@@ -32,7 +32,12 @@ ARGS_DUMP = SANDBOX / "args.jsonl"
 # directory "profiletest" parallel zu telegram/discord/whatsapp an, damit
 # we die echten Channel-settings nicht patchen must.
 TEST_CHANNEL = "profiletest"
-TEST_CHANNEL_DIR = ROOT.parent / TEST_CHANNEL
+# Under the sandbox, handed to the adapter as ADAPTER_BRIDGES_DIR (the override
+# of paths.resolve_bridge_settings_file). It used to be ``ROOT.parent`` - the
+# checkout's own bridges/ tree - so a run that died before teardown left a stray
+# ``corvin_operator/bridges/profiletest/settings.json`` in the repo.
+BRIDGES_DIR = SANDBOX / "bridges"
+TEST_CHANNEL_DIR = BRIDGES_DIR / TEST_CHANNEL
 
 
 CHAT_PROFILES = {
@@ -58,7 +63,7 @@ def setup_sandbox() -> None:
         shutil.rmtree(SANDBOX)
     for d in (INBOX, OUTBOX, PROCESSED):
         d.mkdir(parents=True, exist_ok=True)
-    TEST_CHANNEL_DIR.mkdir(exist_ok=True)
+    TEST_CHANNEL_DIR.mkdir(parents=True, exist_ok=True)
     (TEST_CHANNEL_DIR / "settings.json").write_text(
         json.dumps({"chat_profiles": CHAT_PROFILES}, indent=2), encoding="utf-8"
     )
@@ -156,6 +161,7 @@ def main() -> int:
     # Dieser Test checks das Profil-Schema selbst — Auto-Routing würde die
     # Erwartungen (max-open default) verchange. Routing aus.
     env["ADAPTER_ROUTING_MODE"]    = "off"
+    env["ADAPTER_BRIDGES_DIR"]     = str(BRIDGES_DIR)
     # CORVIN_OS_MODEL_OVERRIDE is an operator kill-switch that beats
     # explicit profile.model.  Clear it so the per-profile model pin
     # (e.g. trusted-user → claude-haiku-4-5) is observable in the test.

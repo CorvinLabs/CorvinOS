@@ -290,8 +290,21 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         id="a2a.send",
         domain="A2A (instance-to-instance)",
-        status="wired",
-        one_liner="Send a signed task instruction to an already-paired CorvinOS instance — target by endpoint id or connection name (label) — or list configured endpoints.",
+        # NOT a chat capability since 675c99230: the resolver no longer puts these
+        # two tools on any persona's allowed_tools (orchestration_enabled injects
+        # only workflow_*/acs_delegate). Kept registered because
+        # corvin_orchestration.mcp_server still advertises them (reverse check);
+        # "deprecated" keeps capability_map from telling an orchestration_enabled
+        # persona it can call them.
+        status="deprecated",
+        not_yet_note=(
+            "Not reachable from chat: 675c99230 removed a2a_send/a2a_list_endpoints "
+            "from the orchestration tools the resolver grants (they sent to a real "
+            "peer ungated). The chat path to A2A is forge.a2a_chat_staging "
+            "(mcp__forge__a2a_send, two-step operator confirm, ADR-2099 Phase 2 / "
+            "ADR-2216). The orchestration server still exports both tools; removing "
+            "them there is the open follow-up."
+        ),
         persona_flag="orchestration_enabled",
         mcp_server="corvin_orchestration.mcp_server",
         tool_names=("mcp__corvin_orchestration__a2a_send", "mcp__corvin_orchestration__a2a_list_endpoints"),

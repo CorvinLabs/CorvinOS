@@ -215,6 +215,7 @@ name: Unsigned Vetted
 version: 1.0.0
 origin: vetted
 boot_layer: bundled
+plugin_type: data_connector
 """, encoding="utf-8"
         )
 

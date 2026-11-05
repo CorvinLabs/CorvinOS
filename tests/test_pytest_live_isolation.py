@@ -41,6 +41,12 @@ _WRITER = textwrap.dedent('''
 ''')
 
 
+# A foreign append made by a separate interpreter (outside the conftest's
+# in-process write fence).
+_APPEND = ("import json; open({path!r}, 'a').write(json.dumps("
+           "{{'event_type': {ev!r}, 'instance_id': 'test-process'}}) + chr(10))")
+
+
 def _fake_live_checkout(base: Path) -> "tuple[Path, Path, Path]":
     """A checkout with the repo marker, its own forge.paths and a live chain."""
     live = base / "fake_live"
@@ -95,7 +101,12 @@ def test_inherited_env_keeps_subprocess_out_of_live_home(tmp_path):
 def _nested_session(tmp_path: Path, body: str, live: Path, extra_env: "dict | None" = None):
     proj = tmp_path / "nested"
     proj.mkdir()
-    shutil.copy(_REPO / "conftest.py", proj / "conftest.py")
+    # A symlink, not a copy: the conftest resolves its own location
+    # (``Path(__file__).resolve().parent``) to decide which checkout the code
+    # under test must come from (the checkout-precedence guard, 2026-10-24). A
+    # copy made ``nested/`` that checkout, so every project import - which can
+    # only come from the real tree - failed the guard before the test body ran.
+    (proj / "conftest.py").symlink_to(_REPO / "conftest.py")
     (proj / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     (proj / "test_nested.py").write_text(textwrap.dedent(body), encoding="utf-8")
     env = {**os.environ,
@@ -153,13 +164,16 @@ def test_foreign_records_in_a_new_tenant_chain_stop_the_session(tmp_path):
     chain in such a home was never inspected at all."""
     live, _writer, _chain = _fake_live_checkout(tmp_path)
     new_chain = live / ".corvin" / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
+    # The write runs in a subprocess: since 08c59081c the conftest's write fence
+    # refuses an in-process open of a protected chain, so only a process outside
+    # the fence (the incident shape) still reaches the snapshot check under test.
     body = f'''
-        import json
+        import subprocess, sys
         from pathlib import Path
         def test_a_writes_new_tenant_chain():
             p = Path({str(new_chain)!r})
             p.parent.mkdir(parents=True)
-            p.write_text(json.dumps({{"event_type": "x", "instance_id": "test-process"}}) + "\\n")
+            subprocess.run([sys.executable, "-c", {_APPEND.format(path=str(new_chain), ev="x")!r}], check=True)
         def test_b_never_runs():
             pass
     '''
@@ -176,12 +190,12 @@ def test_append_between_two_tests_is_caught_on_the_next_test(tmp_path):
     (one snapshot per test). A write that a test's leftover thread makes after
     that test's teardown must still be caught, on the test it lands in."""
     live, _writer, chain = _fake_live_checkout(tmp_path)
+    # Subprocess write for the same reason as above (write fence, 08c59081c).
     body = f'''
-        import json, threading, time
+        import subprocess, sys, threading, time
         def _late_write():
             time.sleep(0.5)
-            with open({str(chain)!r}, "a") as fh:
-                fh.write(json.dumps({{"event_type": "late", "instance_id": "test-process"}}) + "\\n")
+            subprocess.run([sys.executable, "-c", {_APPEND.format(path=str(chain), ev="late")!r}], check=True)
         def test_a_leaves_a_thread():
             threading.Thread(target=_late_write).start()
         def test_b_is_running_when_it_lands():

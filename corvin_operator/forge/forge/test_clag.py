@@ -405,6 +405,9 @@ def test_verify_accepts_mac_bearing_records(audit_path: Path, monkeypatch) -> No
     # it at a temp key so the sentinel/key land in tmp, not the CWD/repo root.
     key_file = audit_path.parent / "audit_anchor.key"
     key_file.write_bytes(b"\x5a" * 32)
+    # F-A14 (cce86a13b): a key readable by group/other is refused (no mac at all);
+    # write_bytes leaves it at the umask (0o664), so give it the mode a real key has.
+    os.chmod(key_file, 0o600)
     monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(key_file))
     monkeypatch.setattr(_se, "_ANCHOR_KEY", None, raising=False)
     monkeypatch.setattr(_se, "_ANCHOR_KEY_LOADED", False, raising=False)

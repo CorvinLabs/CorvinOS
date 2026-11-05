@@ -210,7 +210,7 @@ uv run pytest core/plugins/tests/test_tenant_plugins.py -v
 - **Boot layer:** User-installed plugins are `boot_layer=installed` by default (fully disableable)
 - **Validation:** Manifest is validated before installation
 - **No privilege escalation:** A community-origin plugin cannot claim `boot_layer=compliance` or `boot_layer=core`
-- **Audit:** Installation is logged (future: audit chain integration)
+- **Audit:** every outcome is written to the tenant chain (`tenant_audit_chain(tenant)`, closed fields): `plugin.installed`, `plugin.already_present`, `plugin.install_cancelled`, `plugin.install_failed` (`stage`), `plugin.signature_verification_failed` (`origin`, `reason`). A record that cannot be written fails the install (exit 1).
 
 ## Limitations
 

@@ -403,20 +403,26 @@ def emit_audit_event(
     event_type: str,
     plugin_id: str,
     details: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Emit audit event for plugin installation.
+    *,
+    tenant_id: str,
+) -> Dict[str, Any]:
+    """Write a plugin-install event to the tenant's hash-chained audit chain.
 
-    TODO: Integrate with hash-chained audit trail (ADR-0232).
-    For now, log locally.
+    The chain is ``tenant_audit_chain(tenant_id)`` (the one file the ADR-0232
+    tripwire verifies); the fields are closed by the event's
+    ``_EVENT_ALLOWLIST`` entry in ``forge.security_events``. Until 2026-11-05
+    this only logged, so e.g. ``plugin.signature_verification_failed`` never
+    reached the chain. A write failure RAISES - the caller decides the exit
+    code; a silent loss of the record is not an option.
     """
-    event_data = {
-        "event_type": event_type,
-        "plugin_id": plugin_id,
-    }
-    if details:
-        event_data.update(details)
+    from forge.paths import tenant_audit_chain  # type: ignore[import-not-found]
+    from forge.security_events import write_event  # type: ignore[import-not-found]
 
-    logger.info(f"Plugin audit event: {json.dumps(event_data)}")
+    tid = _tenants_module.validate_tenant_id(tenant_id)
+    body: Dict[str, Any] = {"plugin_id": plugin_id, "tenant_id": tid}
+    if details:
+        body.update(details)
+    return write_event(tenant_audit_chain(tid), event_type, details=body)
 
 
 def install_plugin(
@@ -471,14 +477,14 @@ def install_plugin(
             "Use --force to reinstall.",
             file=sys.stderr,
         )
-        emit_audit_event("plugin.already_present", metadata.plugin_id)
+        emit_audit_event("plugin.already_present", metadata.plugin_id, tenant_id=tenant_id)
         return 0  # Not an error — already done
 
     # Step 5: Community plugin confirmation (fail-closed)
     if metadata.origin == "community" and not no_prompt and not force:
         if not prompt_community_confirmation(metadata):
             print("Installation cancelled.", file=sys.stderr)
-            emit_audit_event("plugin.install_cancelled", metadata.plugin_id)
+            emit_audit_event("plugin.install_cancelled", metadata.plugin_id, tenant_id=tenant_id)
             return 1
 
     # Step 6: Signature verification for vetted plugins (fail-closed)
@@ -508,7 +514,8 @@ def install_plugin(
                     emit_audit_event(
                         "plugin.signature_verification_failed",
                         metadata.plugin_id,
-                        {"reason": reason},
+                        {"reason": reason, "origin": metadata.origin},
+                        tenant_id=tenant_id,
                     )
                     return 1
             except Exception as e:
@@ -573,7 +580,8 @@ def install_plugin(
         pass
     except Exception as e:  # noqa: BLE001
         print(f"Error: Failed to update registry.yaml: {e}", file=sys.stderr)
-        emit_audit_event("plugin.install_failed", metadata.plugin_id, {"stage": "registry"})
+        emit_audit_event("plugin.install_failed", metadata.plugin_id, {"stage": "registry"},
+                         tenant_id=tenant_id)
         return 1
 
     # Step 10: Save tenant config (declarative spec.plugins.installed)
@@ -586,15 +594,21 @@ def install_plugin(
         # in tenant.corvin.yaml, just not visible in Console listing until restart
 
     # Step 10: Emit audit event
-    emit_audit_event(
-        "plugin.installed",
-        metadata.plugin_id,
-        {
-            "version": metadata.version,
-            "origin": metadata.origin,
-            "boot_layer": metadata.boot_layer,
-        },
-    )
+    try:
+        emit_audit_event(
+            "plugin.installed",
+            metadata.plugin_id,
+            {
+                "version": metadata.version,
+                "origin": metadata.origin,
+                "boot_layer": metadata.boot_layer,
+            },
+            tenant_id=tenant_id,
+        )
+    except Exception as e:  # noqa: BLE001 - reported as a failed install, never swallowed
+        print(f"Error: plugin recorded but its audit record could not be written: {e}",
+              file=sys.stderr)
+        return 1
 
     print(f"✅ Plugin installed: {metadata.plugin_id} v{metadata.version}")
     return 0
