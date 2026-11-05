@@ -315,33 +315,20 @@ def load_tenant_config(tenant_id: str) -> Dict[str, Any]:
 
 
 def save_tenant_config(tenant_id: str, config_dict: Dict[str, Any]) -> None:
-    """Write ``tenant.corvin.yaml`` atomically, preserving every foreign section.
+    """Write ``tenant.corvin.yaml`` through the ONE shared writer (ADR-2313).
 
-    Mode: keep the existing file's mode (the console writes 0o644-ish files
-    and reads them regardless); a brand-new file is created 0o600.
+    Review 2026-11-05 (RC-3): this was a private mkstemp/replace copy that KEPT
+    the existing file's mode - a 0o664 file stayed 0o664, which the gateway's
+    own ``tenant_config.load()`` refuses fail-closed (ADR-0759: 0o600 before
+    replace). ``corvin_console.tenant_yaml.write_mapping`` takes the
+    cross-process lock, writes 0o600 and fsyncs; every console and gateway
+    writer goes through it and a scan test fails on a new private copy.
     """
-    import os
-    import tempfile
-    import yaml
+    from corvin_console import tenant_yaml  # type: ignore[import-not-found]
 
     config_path = _tenant_config_path(tenant_id)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    mode = (config_path.stat().st_mode & 0o777) if config_path.exists() else 0o600
-
-    fd, tmp = tempfile.mkstemp(prefix=".tenant.corvin.", suffix=".yaml", dir=str(config_path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(yaml.safe_dump(config_dict, sort_keys=False, allow_unicode=True))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.chmod(tmp, mode)
-        os.replace(tmp, config_path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    tenant_yaml.write_mapping(config_path, dict(config_dict))
 
 
 def plugin_already_installed(

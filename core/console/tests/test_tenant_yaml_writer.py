@@ -251,10 +251,6 @@ _GATEWAY = Path(__file__).resolve().parents[2] / "gateway" / "corvin_gateway"
 _GATEWAY_DUMP_ALLOWED = {
     "cli.py": "prints a config to stdout (`corvin tenant show`), writes nothing",
     "packaging.py": "dumps a plugin package manifest, not the tenant spec",
-    # Open (2026-11-05): plugin_cmd.save_tenant_config still writes the file itself
-    # (without the shared flock). It is being reworked in a concurrent change; route
-    # it through corvin_console.tenant_yaml.update and delete this entry.
-    "plugin_cmd.py": "PENDING - concurrent rework; must move to tenant_yaml.update",
 }
 
 
