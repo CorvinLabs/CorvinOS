@@ -6,6 +6,16 @@ import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import PanelHost from "@/panels/PanelHost";
 
+// happy-dom >= 21 does not load iframe pages by default (the fix for
+// GHSA-c8p4-j97h-3vg8), so a mounted iframe has no contentWindow. The host-side
+// dispatch under test only needs a window identity to compare `ev.source`
+// against and a postMessage to spy on, so give the frame a stand-in window.
+function stubFrameWindow(iframe: HTMLIFrameElement): Window {
+  const win = { postMessage: () => {} } as unknown as Window;
+  Object.defineProperty(iframe, "contentWindow", { configurable: true, get: () => win });
+  return win;
+}
+
 describe("PanelHost dispatch (host side)", () => {
   it("replies host:hello with ctx when the panel sends panel:ready", async () => {
     const { container } = render(
@@ -21,7 +31,7 @@ describe("PanelHost dispatch (host side)", () => {
     );
     const iframe = container.querySelector("iframe") as HTMLIFrameElement;
     expect(iframe).toBeTruthy();
-    const win = iframe.contentWindow as Window;
+    const win = stubFrameWindow(iframe);
     const post = vi.spyOn(win, "postMessage");
 
     window.dispatchEvent(new MessageEvent("message", {
@@ -47,7 +57,7 @@ describe("PanelHost dispatch (host side)", () => {
       </MemoryRouter>,
     );
     const iframe = container.querySelector("iframe") as HTMLIFrameElement;
-    const post = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+    const post = vi.spyOn(stubFrameWindow(iframe), "postMessage");
     // message from a DIFFERENT source (not our iframe) → ignored
     window.dispatchEvent(new MessageEvent("message", {
       source: window,

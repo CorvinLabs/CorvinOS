@@ -130,7 +130,7 @@ const zPaletteStage = z.object({
 });
 const zPipeline = z.object({
   available: z.boolean(),
-  current: z.array(z.object({ stage: z.string(), config: z.record(z.unknown()).optional() })),
+  current: z.array(z.object({ stage: z.string(), config: z.record(z.string(), z.unknown()).optional() })),
   palette: z.array(zPaletteStage),
   default: z.array(z.string()),
   active_enabled: z.boolean().optional(),
@@ -191,7 +191,7 @@ export function usePipeline() {
 // ── CEL stage grades (G3) ───────────────────────────────────────────────────────
 const zGrades = z.object({
   available: z.boolean(),
-  grades: z.record(z.object({
+  grades: z.record(z.string(), z.object({
     n_grades: z.number(), mean_score: z.number(), promoting: z.number().optional(),
   })),
 });
