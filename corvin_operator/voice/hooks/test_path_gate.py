@@ -122,6 +122,25 @@ def main() -> int:
                "file_path": f"{HOME}/tenants/acme/global/notes.txt", "content": "x"}},
            blocked=False)
 
+    # 3c. A worker starting the skill-forge / forge MCP server itself → DENY
+    # (refutation 2026-11-05 RL-5: the persona it claims comes from its own env).
+    for _cmd in (
+        "CORVIN_CALLER_PERSONA=skill-forge python3 -m skill_forge.mcp_server < /tmp/req.jsonl",
+        "env SKILL_FORGE_PERSONA=forge PYTHONPATH=corvin_operator/skill-forge "
+        "python3 -m skill_forge.mcp_server < /tmp/req.jsonl",
+        "cd corvin_operator/skill-forge && python3 skill_forge/mcp_server.py < /tmp/r",
+        ".venv/bin/python 'corvin_operator/skill-forge/skill_forge/mcp_server.py'",
+        "python3 corvin_operator/forge/forge.py mcp --permission-mode yes",
+        "timeout 60 python -m\"skill_forge.mcp_server\"",
+    ):
+        expect(f"Bash self-start of the MCP server: {_cmd[:60]}",
+               {"tool_name": "Bash", "tool_input": {"command": _cmd}}, blocked=True)
+    # positive controls: reading the server's source and testing it stay allowed
+    for _cmd in ("grep -n caller_persona corvin_operator/skill-forge/skill_forge/mcp_server.py",
+                 "python3 -m pytest corvin_operator/skill-forge/tests -q"):
+        expect(f"Bash read/test of the MCP server (allowed): {_cmd[:60]}",
+               {"tool_name": "Bash", "tool_input": {"command": _cmd}}, blocked=False)
+
     # 4. Write to slot-mirror under repo's operator/skill-forge/skills/dyn/ → DENY
     if REPO is not None:
         expect(

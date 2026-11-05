@@ -738,11 +738,11 @@ def _pin_root() -> Path:
         return Path("/nonexistent-pin-root")
 
 
-#: kb engine 133f98518be0 + windows-binary-io (O_BINARY fds, LF audit lines, UTF-8 graph index), 2026-11-03.
+#: kb engine 133f98518be0 (Corvin-Knowledge scripts/, unchanged since 2026-10-16; the plugin ships the same bytes), re-pinned 2026-11-05: the 2026-11-03 pin named a windows-binary-io build that was never committed anywhere, so kb.py was refused for every session.
 _KB_ENGINE_PIN: dict[str, str] = {
-    "kb.py": "f38c035918e7ef6a04b6a7cc1a2bfb5db1bc8f7474c1caa0790a3bb369a1125f",
+    "kb.py": "1321506414271146ec8bf749548a90193f67dd71da865dce690239d0749ea027",
     "kb_lib.py": "1e0add58952fb0e2e7af754498084796e37ef4ca5a2d510346ecf1ff154f0bea",
-    "kb_model.py": "0782656cbcac85f4cb97e3ff4331712c20aee4452fd56e051de1a4bd2aa5fcb3",
+    "kb_model.py": "20365628ab203c1736e4a75992e504020a05126dc299fcd4537b37dbecc15fa0",
 }
 
 _PINNED_PYTHON_TOOLS: dict[str, dict[str, str]] = {
@@ -1901,6 +1901,20 @@ def _ota_structural_deny(tool: str) -> "tuple[bool, str]":
     return False, ""
 
 
+#: A worker starting the skill-forge / forge MCP server itself (refutation 2026-11-05,
+#: RL-5): such a server reads its caller persona from the env the WORKER gave it. An
+#: interpreter followed - in the same command segment - by the server module/script.
+#: Reading the file (cat, grep, sed) is untouched. A naive-start guard, not isolation.
+_MCP_SERVER_SELF_START_RE = re.compile(
+    r"(?:^|[\s/=])(?:python[0-9.]*|pypy[0-9.]*|py|uv|uvx)(?:\s|$)[^;&|\n\r]*?"
+    r"(?:-m\s*skill_forge\.mcp_server\b|skill_forge[/\\]*mcp_server\.py\b"
+    r"|forge\.py\s+mcp\b|-m\s*forge\s+mcp\b)")
+_MCP_SERVER_SELF_START_HINT = (
+    "path_gate: a worker may not start the skill-forge / forge MCP server itself - its "
+    "caller persona would be whatever this command sets (attribution, not identity). "
+    "Use the mcp__skill_forge__* / mcp__forge__* tools this session already has.")
+
+
 def check(payload: dict) -> tuple[bool, str]:
     """Return (allow, reason). allow=False means deny.
 
@@ -1949,6 +1963,8 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
         cmd = inp.get("command", "")
         if not isinstance(cmd, str) or not cmd:
             return True, ""
+        if _MCP_SERVER_SELF_START_RE.search(re.sub(r"[\"'\\]", "", cmd)):
+            return False, _MCP_SERVER_SELF_START_HINT  # RL-5
         if tool == "PowerShell":
             _ps_t = _powershell_deny(cmd)
             if _ps_t:
