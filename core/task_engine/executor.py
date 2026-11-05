@@ -3,6 +3,7 @@
 from typing import Optional, Dict, Any, Set
 from datetime import datetime
 import json
+import logging
 
 from .task_def import TaskDefinition
 from .dag_planner import DAGPlanner
@@ -18,6 +19,8 @@ try:
 except ImportError:
     _AUTO_STARTER_AVAILABLE = False
 
+logger = logging.getLogger(__name__)
+
 
 class TaskExecutor:
     """Orchestrates multi-phase task execution with audit trail (ADR-0540–0545)."""
@@ -28,15 +31,44 @@ class TaskExecutor:
         self.skill_dispatcher = SkillDispatcher()
         self.session_counter = 0
 
-        # Initialize SessionAutoStarter for infinite sessions (ADR-0649)
+        # Initialize SessionAutoStarter for infinite sessions (ADR-0649).
+        # SessionLifecycleManager takes no tenant (the checkpoint store carries it); passing
+        # tenant_id= raised TypeError, which a bare ``except: pass`` turned into a silently
+        # absent auto-starter on every executor.
         self.auto_starter = None
+        self._split_loop = None
         if _AUTO_STARTER_AVAILABLE:
             try:
-                lifecycle_mgr = SessionLifecycleManager(tenant_id=tenant_id)
-                checkpoint_mgr = CheckpointManager(tenant_id=tenant_id)
+                lifecycle_mgr = SessionLifecycleManager()
+                checkpoint_mgr = CheckpointManager(tenant_id=tenant_id, auto_cleanup=False)
                 self.auto_starter = SessionAutoStarter(lifecycle_mgr, checkpoint_mgr)
-            except Exception:
-                pass  # Auto-starter optional, not critical
+            except Exception as exc:  # noqa: BLE001 — optional, but never silently absent
+                logger.warning("TaskExecutor: SessionAutoStarter unavailable (%s: %s)",
+                               type(exc).__name__, exc)
+
+    def _drive(self, coro):
+        """Run one SessionAutoStarter coroutine from this synchronous executor.
+
+        The auto-starter's API is async and keeps per-task asyncio locks, so every call
+        runs on ONE private loop per executor. Called from inside a running loop, the
+        split check is skipped (logged) instead of blocking that loop.
+        """
+        import asyncio  # noqa: PLC0415
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            coro.close()
+            logger.warning("TaskExecutor: split check skipped — run() called inside a running event loop")
+            return None
+        if self._split_loop is None or self._split_loop.is_closed():
+            self._split_loop = asyncio.new_event_loop()
+        return self._split_loop.run_until_complete(coro)
+
+    def _last_event_hash(self) -> str:
+        events = self.event_store.events
+        return events[-1].hash if events else ""
 
     def register_skill(self, skill_id: str, skill_fn):
         """Register a mock skill for testing."""
@@ -59,6 +91,14 @@ class TaskExecutor:
                 payload={"autonomy_level": task_def.autonomy_level},
                 tenant_id=task_def.tenant_id,
             )
+            # The auto-starter only tracks a task it was told about: without this,
+            # every on_task_progress answered "Unknown task" and never split.
+            if self.auto_starter:
+                self._drive(self.auto_starter.on_task_start(
+                    task_id=task_def.task_id,
+                    goal=task_def.description or task_def.task_id,
+                    tenant_id=task_def.tenant_id,
+                ))
 
             # Execute phases in order
             completed_phases: Set[str] = set()
@@ -72,20 +112,27 @@ class TaskExecutor:
                 final_phase = phase_id
 
                 # Check for session split triggers (ADR-0649: infinite sessions)
+                # on_task_progress is async and takes the context-usage signature
+                # (context_usage_pct, iterations, context, audit_trail_hash); the old call
+                # passed phase_id/phase_idx/total_phases synchronously, which could only
+                # raise TypeError. Phase progress is the executor's usage proxy.
                 if self.auto_starter:
-                    split_trigger = self.auto_starter.on_task_progress(
+                    new_session = self._drive(self.auto_starter.on_task_progress(
                         task_id=task_def.task_id,
-                        phase_id=phase_id,
-                        phase_idx=phase_idx,
-                        total_phases=len(plan),
-                    )
-                    if split_trigger:
+                        # a FRACTION (0-1): should_split_session compares it with
+                        # context_limit_pct=0.85, as core/session_manager/tests do
+                        context_usage_pct=phase_idx / max(len(plan), 1),
+                        iterations=phase_idx,
+                        context={"phase_id": phase_id, "state": current_state},
+                        audit_trail_hash=self._last_event_hash(),
+                    ))
+                    if new_session:
                         # Emit split event and bridge to new session
                         self._emit_event(
                             event_type="session_auto_split",
                             task_id=task_def.task_id,
                             session_id=session_id,
-                            payload={"trigger": split_trigger.name, "next_session": self._new_session_id()},
+                            payload={"next_session": new_session},
                             tenant_id=task_def.tenant_id,
                         )
 

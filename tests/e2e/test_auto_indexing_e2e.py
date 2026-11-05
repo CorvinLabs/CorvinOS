@@ -43,14 +43,13 @@ def sample_learning_event() -> LearningEvent:
     """Create a sample learning event."""
     return LearningEvent(
         event_id="evt-123",
-        event_type=LearningEventType.CONFIDENCE,
+        event_type=LearningEventType.CONFIDENCE_SCORE,
         tenant_id="_default",
         skill_name="test_skill",
-        skill_version="1.0.0",
         session_id="sess-456",
         timestamp_utc=datetime.utcnow(),
-        tags={"learning_loop_id": "test_loop", "plugin_id": "test_plugin"},
-        feedback_value=0.8,
+        instance_id="test-instance",
+        tags=["learning_loop_id:test_loop", "plugin_id:test_plugin"],
     )
 
 
@@ -89,14 +88,13 @@ class TestFullEventFlow:
             for i in range(count):
                 event = LearningEvent(
                     event_id=f"evt-{i}",
-                    event_type=LearningEventType.CONFIDENCE,
+                    event_type=LearningEventType.CONFIDENCE_SCORE,
                     tenant_id="_default",
                     skill_name="test_skill",
-                    skill_version="1.0.0",
                     session_id=f"sess-{i}",
                     timestamp_utc=datetime.utcnow(),
-                    tags={"learning_loop_id": f"loop-{i}", "plugin_id": "test"},
-                    feedback_value=0.5,
+                    instance_id="test-instance",
+                    tags=[f"learning_loop_id:loop-{i}", "plugin_id:test"],
                 )
                 try:
                     with patch("core.learning.event_persistence.EventStore._update_kg_index", new_callable=AsyncMock):
@@ -359,14 +357,13 @@ class TestTenantIsolation:
 
         event = LearningEvent(
             event_id="evt-wrong-tenant",
-            event_type=LearningEventType.CONFIDENCE,
+            event_type=LearningEventType.CONFIDENCE_SCORE,
             tenant_id="other_tenant",  # Wrong!
             skill_name="test",
-            skill_version="1.0.0",
             session_id="sess",
             timestamp_utc=datetime.utcnow(),
-            tags={},
-            feedback_value=0.5,
+            instance_id="test-instance",
+            tags=[],
         )
 
         with pytest.raises(ValueError, match="Tenant mismatch"):

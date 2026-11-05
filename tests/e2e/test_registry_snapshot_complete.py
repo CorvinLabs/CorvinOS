@@ -27,60 +27,21 @@ class TestRegistrySnapshotCompletion:
         assert script_path.exists(), f"Script not found: {script_path}"
         assert os.access(script_path, os.X_OK), f"Script not executable: {script_path}"
 
-    def test_snapshot_directory_exists(self):
-        """Verify snapshot directory exists."""
-        snapshot_dir = Path(__file__).parent.parent.parent / "docs/reference/task_registry_snapshots"
-        assert snapshot_dir.exists(), f"Snapshot directory not found: {snapshot_dir}"
-        assert snapshot_dir.is_dir(), f"Snapshot path is not a directory: {snapshot_dir}"
+    def test_snapshot_directory_is_created_by_the_script(self):
+        """The snapshot directory is created on demand by the script.
 
-    def test_snapshot_script_creates_valid_snapshot(self):
-        """Verify script creates a valid JSON snapshot.
-
-        k=5 Validation: Snapshot file is valid JSON and contains registry data.
+        It holds no tracked file, and git does not track an empty directory, so a
+        clean checkout never has it: requiring it to pre-exist (as this test did)
+        failed on every fresh clone. The script's own ``mkdir -p`` is the contract.
         """
-        repo_root = Path(__file__).parent.parent.parent
-        snapshot_dir = repo_root / "docs/reference/task_registry_snapshots"
+        script = Path(__file__).parent.parent.parent / "scripts/commit_registry_snapshot.sh"
+        text = script.read_text(encoding="utf-8")
+        assert 'SNAPSHOT_DIR="$REPO_ROOT/docs/reference/task_registry_snapshots"' in text
+        assert 'mkdir -p "$SNAPSHOT_DIR"' in text
 
-        # Get list of existing snapshots
-        existing = set(snapshot_dir.glob("*.json"))
-
-        # Create a mock registry.json for testing
-        mock_registry = {
-            "tasks": [
-                {"id": f"task-{i}", "title": f"Test Task {i}", "status": "active"}
-                for i in range(5)
-            ],
-            "metadata": {
-                "version": "1.0",
-                "generated": datetime.utcnow().isoformat() + "Z"
-            }
-        }
-
-        # Write mock registry to temp location
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding="utf-8") as f:
-            json.dump(mock_registry, f)
-            temp_registry = f.name
-
-        try:
-            # Run snapshot script with temp registry
-            # (In real test, we'd mock CORVIN_HOME or patch the script)
-            # For now, just verify the snapshot directory is writable
-            test_snapshot = snapshot_dir / f"test-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.json"
-
-            # Create test snapshot
-            with open(test_snapshot, 'w', encoding="utf-8") as f:
-                json.dump(mock_registry, f)
-
-            # Verify it's valid JSON
-            with open(test_snapshot, 'r', encoding="utf-8") as f:
-                data = json.load(f)
-            assert "tasks" in data
-            assert len(data["tasks"]) > 0
-
-            # Clean up test file
-            test_snapshot.unlink()
-        finally:
-            os.unlink(temp_registry)
+    # test_snapshot_script_creates_valid_snapshot was removed: it never ran the
+    # script — it wrote its own JSON into the repo tree and read it back, so it
+    # proved nothing about the snapshot pipeline and failed on a clean checkout.
 
     def test_snapshot_contains_tasks_count(self):
         """Verify snapshots contain task count metadata.
@@ -206,8 +167,8 @@ class TestRegistrySnapshotIntegration:
 
         snapshots = list(snapshot_dir.glob("*.json"))
         if not snapshots:
-            # No snapshots yet; test infrastructure exists
-            assert snapshot_dir.exists(), "Snapshot directory must exist"
+            # No snapshot taken on this checkout (the directory is created by the
+            # script on its first run, so it may not exist) — nothing to check.
             return
 
         # Verify latest snapshot is recent (within last 7 days)

@@ -155,10 +155,16 @@ class TestTheTierIsWiredOnBothSurfaces:
     def test_the_resolver_has_the_tier(self):
         assert hasattr(MS, "classify_os_model"), "Tier 2.9 is gone again"
         src = Path(MS.__file__).read_text(encoding="utf-8")
-        body = src.split("def resolve_os_model(", 1)[1]
+        # Since aee1f8e99 (ADR-2259) resolve_os_model wraps the tiered decision
+        # in resolve_os_model_with_source; the tier lives in that function.
+        wrapper = src.split("def resolve_os_model(", 1)[1].split("\ndef ", 1)[0]
+        assert "resolve_os_model_with_source(" in wrapper, (
+            "resolve_os_model no longer delegates to resolve_os_model_with_source"
+        )
+        body = src.split("def resolve_os_model_with_source(", 1)[1].split("\ndef ", 1)[0]
         assert "classify_os_model(" in body, (
-            "classify_os_model exists but resolve_os_model does not call it — "
-            "the tier is dead code"
+            "classify_os_model exists but resolve_os_model_with_source does not "
+            "call it — the tier is dead code"
         )
 
     def test_the_resolver_accepts_the_kwarg_its_callers_pass(self):

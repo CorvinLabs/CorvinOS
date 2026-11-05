@@ -33,7 +33,11 @@ def main() -> None:
 
     app = FastAPI()
     app.include_router(console_router, prefix="/v1/console")
-    c = TestClient(app, client=("127.0.0.1", port))
+    # Loopback Host header: local-login refuses any other host since 9346ba843
+    # (DNS-rebinding guard); TestClient defaults to "testserver" — and its
+    # websocket_connect joins relative paths onto ws://testserver, so the
+    # WebSocket URLs below are absolute.
+    c = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", port))
     c.__enter__()
     r = c.get("/v1/console/auth/local-login", follow_redirects=False)
     assert r.status_code in (200, 302, 307), r.text
@@ -50,7 +54,7 @@ def main() -> None:
     # Connection 1: /resume with nothing snapshotted yet, then disconnect —
     # the disconnect handler in routes/chat.py must fire the snapshot.
     sid1 = _new_session()
-    with c.websocket_connect(f"/v1/console/chat/sessions/{sid1}/stream") as ws:
+    with c.websocket_connect(f"ws://127.0.0.1/v1/console/chat/sessions/{sid1}/stream") as ws:
         assert ws.receive_json()["type"] == "ready"
         ws.send_json({"type": "user", "text": f"/resume {TASK_ID}"})
         assert ws.receive_json()["type"] == "delta"
@@ -62,7 +66,7 @@ def main() -> None:
     # Connection 2: fresh session, /resume the SAME task_id — must restore.
     sid2 = _new_session()
     restore_reply = None
-    with c.websocket_connect(f"/v1/console/chat/sessions/{sid2}/stream") as ws:
+    with c.websocket_connect(f"ws://127.0.0.1/v1/console/chat/sessions/{sid2}/stream") as ws:
         assert ws.receive_json()["type"] == "ready"
         ws.send_json({"type": "user", "text": f"/resume {TASK_ID}"})
         ev = ws.receive_json()

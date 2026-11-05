@@ -40,6 +40,16 @@ class MockAuditBackend:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         })
 
+    def write_event_dict(self, *, event_type: str, tenant_id: str, details: dict, severity: str = "info"):
+        """Core chain writer interface used by SubsystemRegistry since c76bb2584
+        (the controller still calls ``log_event``). Same record shape either way."""
+        self.events.append({
+            "event_type": event_type,
+            "payload": {"tenant_id": tenant_id, **details},
+            "severity": severity,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        })
+
     def get_events_for_subsystem(self, subsystem_id: str):
         """Get all events for a subsystem."""
         return [
@@ -66,7 +76,7 @@ async def test_registry_creation_and_initialization():
     from core.control_plane.subsystems import SubsystemRegistry, SubsystemType
 
     audit = MockAuditBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
 
     # Verify initial state
     assert registry is not None
@@ -98,7 +108,7 @@ async def test_enable_disable_workflows():
 
     audit = MockAuditBackend()
     license_backend = MockLicenseBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
     controller = SubsystemController(audit, license_backend)
 
     # Register subsystem
@@ -132,7 +142,7 @@ async def test_health_check_status_tracking():
     from core.control_plane.subsystems import SubsystemRegistry, SubsystemType
 
     audit = MockAuditBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
 
     # Register subsystem
     await registry.register_subsystem(
@@ -173,7 +183,7 @@ async def test_concurrent_control_requests_with_locking():
 
     audit = MockAuditBackend()
     license_backend = MockLicenseBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
     controller = SubsystemController(audit, license_backend)
 
     # Register subsystem
@@ -210,7 +220,7 @@ async def test_tenant_isolation_and_scoping():
     from core.control_plane.subsystems import SubsystemRegistry, SubsystemType
 
     audit = MockAuditBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
 
     # Register subsystem for tenant A
     await registry.register_subsystem(
@@ -254,7 +264,7 @@ async def test_immutable_audit_trail_completeness():
 
     audit = MockAuditBackend()
     license_backend = MockLicenseBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
     controller = SubsystemController(audit, license_backend)
 
     # Register
@@ -301,7 +311,7 @@ async def test_dependency_validation_and_ordering():
     from core.control_plane.subsystems import SubsystemRegistry, SubsystemType
 
     audit = MockAuditBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
 
     # Register subsystem A
     await registry.register_subsystem(
@@ -340,7 +350,7 @@ async def test_error_handling_and_edge_cases():
     from core.control_plane.subsystems import SubsystemRegistry, SubsystemType
 
     audit = MockAuditBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
 
     # Test invalid subsystem_id (empty string)
     with pytest.raises(ValueError, match="subsystem_id must be"):
@@ -398,7 +408,7 @@ async def test_pause_resume_subsystem_state():
 
     audit = MockAuditBackend()
     license_backend = MockLicenseBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
     controller = SubsystemController(audit, license_backend)
 
     # Register subsystem
@@ -435,7 +445,7 @@ async def test_list_subsystems_by_type():
     from core.control_plane.subsystems import SubsystemRegistry, SubsystemType
 
     audit = MockAuditBackend()
-    registry = SubsystemRegistry(audit)
+    registry = SubsystemRegistry(audit_backend=audit)  # tenant_id is the 1st param since c76bb2584
 
     # Register multiple subsystems of different types
     for i, subsys_type in enumerate([SubsystemType.AUDIT, SubsystemType.LEARNING, SubsystemType.AUDIT]):

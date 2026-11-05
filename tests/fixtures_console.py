@@ -160,10 +160,12 @@ def client(app):
 @pytest.fixture
 async def async_client(app):
     """httpx.AsyncClient bound to the real console app via ASGI transport."""
+    # Host "testserver" is on the host-guard allowlist the root conftest sets
+    # (CORVIN_ALLOWED_HOSTS); "console.test" was refused 400 since 9346ba843.
     from httpx import ASGITransport, AsyncClient
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://console.test") as c:
+    async with AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
 
 
@@ -197,7 +199,7 @@ def anon_client(anon_app):
 async def anon_async_client(anon_app):
     from httpx import ASGITransport, AsyncClient
 
-    async with AsyncClient(transport=ASGITransport(app=anon_app), base_url="http://console.test") as c:
+    async with AsyncClient(transport=ASGITransport(app=anon_app), base_url="http://testserver") as c:
         yield c
 
 

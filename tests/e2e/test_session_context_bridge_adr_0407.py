@@ -28,6 +28,8 @@ class MockExecutionContext:
     task_id: str
     tenant_id: str
     task_template: dict = field(default_factory=dict)
+    # Real ExecutionContext carries it; SessionCheckpointManager._serialize_execution_context reads it.
+    context_stack: str = ""
     budget_remaining: float = 100.0
     time_remaining: int = 3600
     model: str = "claude-opus"
@@ -85,10 +87,7 @@ class TestSessionContextBridgeADR0407:
         )
 
         # Load checkpoint and verify goal is persisted
-        checkpoint = continuation_manager.load_checkpoint(
-            task_id=task_id,
-            tenant_id="_default"
-        )
+        checkpoint = continuation_manager.load_checkpoint(task_id=task_id)  # tenant is bound by the manager
 
         assert checkpoint is not None, "Checkpoint should be loaded"
         assert checkpoint.original_goal == goal, f"Goal mismatch: {checkpoint.original_goal} != {goal}"
@@ -118,10 +117,7 @@ class TestSessionContextBridgeADR0407:
         )
 
         # Load checkpoint
-        checkpoint = continuation_manager.load_checkpoint(
-            task_id=task_id,
-            tenant_id="_default"
-        )
+        checkpoint = continuation_manager.load_checkpoint(task_id=task_id)  # tenant is bound by the manager
 
         # Resume: reconstruct ExecutionContext from checkpoint
         resumed_ctx = continuation_manager.resume_from_checkpoint(
@@ -157,10 +153,7 @@ class TestSessionContextBridgeADR0407:
         )
 
         # Session 2: Resume and verify goal is unchanged
-        checkpoint = continuation_manager.load_checkpoint(
-            task_id=task_id,
-            tenant_id="_default"
-        )
+        checkpoint = continuation_manager.load_checkpoint(task_id=task_id)  # tenant is bound by the manager
 
         session2_ctx = continuation_manager.resume_from_checkpoint(
             checkpoint=checkpoint,
@@ -194,10 +187,7 @@ class TestSessionContextBridgeADR0407:
             turn_number=3
         )
 
-        checkpoint = continuation_manager.load_checkpoint(
-            task_id=task_id,
-            tenant_id="_default"
-        )
+        checkpoint = continuation_manager.load_checkpoint(task_id=task_id)  # tenant is bound by the manager
 
         # Resume with no goal — should not crash
         resumed_ctx = continuation_manager.resume_from_checkpoint(

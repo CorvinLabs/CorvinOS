@@ -33,10 +33,18 @@ if "--append-system-prompt-file" in argv:
     sp = open(argv[argv.index("--append-system-prompt-file") + 1], encoding="utf-8").read()
 elif "--append-system-prompt" in argv:
     sp = argv[argv.index("--append-system-prompt") + 1]
-try:
+# The console speaks `--input-format stream-json` and keeps stdin OPEN until the
+# first `result` event (live /btw injection, b78dfbd4d) — like the real CLI, read
+# exactly one user frame. Reading to EOF here deadlocks: the console closes stdin
+# only after the result this process has not printed yet.
+if "--input-format" in argv and argv[argv.index("--input-format") + 1] == "stream-json":
+    frame = json.loads(sys.stdin.readline() or "{}")
+    content = (frame.get("message") or {}).get("content", "")
+    if isinstance(content, list):
+        content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+    prompt = content
+else:
     prompt = sys.stdin.read()
-except Exception:
-    prompt = ""
 if not prompt and argv and not argv[-1].startswith("-"):
     prompt = argv[-1]
 with open(log, "a", encoding="utf-8") as fh:

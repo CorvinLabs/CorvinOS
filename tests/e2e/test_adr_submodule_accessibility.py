@@ -115,19 +115,23 @@ class TestADRSubmoduleIntegration:
                "Submodule URL does not point to CorvinLabs/Corvin-Knowledge repository"
 
     def test_ci_workflow_mentions_submodule_init(self, repo_root):
-        """Verify CI/CD workflows initialize submodules"""
+        """A CI workflow that READS the ADR submodule must initialize it.
+
+        The former rule ("every build/test workflow mentions submodules") was never
+        met — `git log -S submodules -- .github/workflows` shows no build/test workflow
+        ever initialized it — and cannot be: CorvinOS is public and Corvin-Knowledge is
+        private, so a plain `submodules: recursive` checkout with the default
+        GITHUB_TOKEN fails. The binding requirement is the narrower one: a workflow
+        that references `corvin_decisions/` must fetch it (with a token that can).
+        """
         workflow_dir = repo_root / ".github" / "workflows"
-
-        if workflow_dir.exists():
-            workflow_files = list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml"))
-
-            for workflow_file in workflow_files:
-                content = workflow_file.read_text(encoding="utf-8")
-
-                # Check for submodule initialization in build workflows
-                if "build" in workflow_file.name.lower() or "test" in workflow_file.name.lower():
-                    assert "submodule" in content.lower(), \
-                        f"{workflow_file.name} should include submodule initialization"
+        workflow_files = list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml"))
+        assert workflow_files, f"no workflows found under {workflow_dir}"  # positive control
+        for workflow_file in workflow_files:
+            content = workflow_file.read_text(encoding="utf-8")
+            if "corvin_decisions" in content:
+                assert "submodule" in content.lower(), \
+                    f"{workflow_file.name} reads corvin_decisions/ but never initializes the submodule"
 
 
 class TestADRSubmoduleUsage:

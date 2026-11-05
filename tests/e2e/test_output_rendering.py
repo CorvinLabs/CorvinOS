@@ -7,10 +7,24 @@ This covers the CRITICAL gap: Execution complete → Output visible.
 import pytest
 import asyncio
 
+import importlib.util
+
 from tests.e2e._console_origin import console_origin
 
 # Resolved at import: BASE_URL on :8765 without CORVIN_E2E_ALLOW_LIVE=1 refuses the whole module.
 CONSOLE_ORIGIN = console_origin()
+
+# The ``page`` fixture comes from the pytest-playwright plugin, and every test
+# drives a real browser against a running sandbox console. Without the plugin
+# all nine errored at setup ("fixture 'page' not found"); skip with the reason.
+# A skip MARK, not a module-level importorskip: the module must still collect
+# (and the live-origin refusal above must still fire at import) —
+# tests/e2e/test_e2e_console_origin.py drives exactly that through this file.
+pytestmark = pytest.mark.skipif(
+    importlib.util.find_spec("pytest_playwright") is None,
+    reason="pytest-playwright (the `page` fixture) is not installed; these tests "
+    "need a browser and a running sandbox console",
+)
 
 
 @pytest.mark.e2e

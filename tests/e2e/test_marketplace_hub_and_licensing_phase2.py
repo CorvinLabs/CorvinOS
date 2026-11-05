@@ -430,7 +430,8 @@ class TestMarketplaceAndLicensingIntegration:
     def setup_method(self):
         """Set up both systems."""
         self.tmpdir = tempfile.mkdtemp()
-        self.hub = MarketplaceHub(self.tmpdir)
+        # No MarketplaceHub: core/skills/marketplace_hub.py was deleted in
+        # 0d0906065 (ADR-0892, one marketplace); its hub-index test went with it.
         self.authority = AuthorityServer(self.tmpdir)
         self.verifier = A2ADelegationVerifier(self.tmpdir)
 
@@ -486,19 +487,6 @@ class TestMarketplaceAndLicensingIntegration:
         assert "Credential not expired" in result.checks_passed
         assert "Credential not revoked" in result.checks_passed
         assert "License tier permits delegation" in result.checks_passed
-
-    def test_hub_search_includes_licensing_metadata(self):
-        """Test Hub can show licensing status in search.
-
-        Future: Hub shows which items require licensing.
-        """
-        # Load hub index
-        index = self.hub.get_index()
-
-        # Hub items should have tier information
-        for item in index.skills + index.plugins + index.tools:
-            # Items should have tier/origin for licensing display
-            assert hasattr(item, 'tier') or hasattr(item, 'origin')
 
     def test_revocation_affects_delegation(self):
         """Test that revoking a credential blocks delegation."""

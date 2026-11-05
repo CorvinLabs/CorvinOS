@@ -64,7 +64,7 @@ class TestContextCoherenceInheritance:
 
         # Simulate 10 tool executions
         for i in range(10):
-            tool_id = "tool_fix" if i >= 1 else "tool_wrong"
+            tool_id = "tool_fix"  # 10 attempts of the same tool: 9/10 = 90%
             succeeded = i >= 1  # First fails, rest succeed
 
             coherence.record_tool_execution(
@@ -106,7 +106,7 @@ class TestContextCoherenceInheritance:
 
         # Learn tool_fix (9/10 successes)
         for i in range(10):
-            tool_id = "tool_fix" if i >= 1 else "tool_wrong"
+            tool_id = "tool_fix"  # 10 attempts of the same tool: 9/10 = 90%
             succeeded = i >= 1
 
             coherence_a.record_tool_execution(

@@ -130,18 +130,25 @@ class TestMediaSystemE2E:
         assert loaded_media.media_id == media.media_id
         assert loaded_media.original_name == media.original_name
 
-    def test_discord_bridge_validation(self):
+    def test_discord_bridge_validation(self, monkeypatch, tmp_path):
         """Test Discord bridge validates files"""
         from core.bridges.discord import DiscordBridge
         from core.media.models import MediaFile
 
+        # The size check runs only after the "configured" check; the test
+        # environment carries no DISCORD_BOT_TOKEN, so give it a placeholder.
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-placeholder-token")
+
         bridge = DiscordBridge()
 
-        # Create large file (over Discord 25MB limit)
+        # Create large file (over Discord 25MB limit; the size is the declared
+        # one). It must exist: send() checks existence before size.
+        stub = tmp_path / "large.mp4"
+        stub.write_bytes(b"\0")
         large_media = MediaFile(
             media_id="test",
             original_name="large.mp4",
-            file_path="/nonexistent/path",
+            file_path=str(stub),
             file_size_bytes=30 * 1024 * 1024,  # 30MB
             mime_type="video/mp4"
         )

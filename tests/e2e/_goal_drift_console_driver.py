@@ -35,7 +35,11 @@ def main() -> None:
 
     app = FastAPI()
     app.include_router(console_router, prefix="/v1/console")
-    c = TestClient(app, client=("127.0.0.1", port))
+    # Loopback Host header: local-login refuses any other host since 9346ba843
+    # (DNS-rebinding guard); TestClient defaults to "testserver" — and its
+    # websocket_connect joins relative paths onto ws://testserver, so the
+    # WebSocket URLs below are absolute.
+    c = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", port))
     c.__enter__()
     r = c.get("/v1/console/auth/local-login", follow_redirects=False)
     assert r.status_code in (200, 302, 307), r.text
@@ -45,7 +49,7 @@ def main() -> None:
     assert r.status_code == 200, r.text
     sid = r.json()["session"]["sid"]
     for text in (GOAL_TEXT, DRIFT_TEXT, DRIFT_TEXT, DRIFT_TEXT):
-        ws = c.websocket_connect(f"/v1/console/chat/sessions/{sid}/stream")
+        ws = c.websocket_connect(f"ws://127.0.0.1/v1/console/chat/sessions/{sid}/stream")
         ws.__enter__()
         assert ws.receive_json()["type"] == "ready"
         ws.send_json({"type": "user", "text": text})

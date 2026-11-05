@@ -49,7 +49,9 @@ async def test_e2e_invoke_skill_full_flow(skill_service):
     assert response.output["decision"] in ["native", "acs"]
     assert "confidence" in response.output
     assert 0 <= response.output.get("confidence", 0.5) <= 1.0
-    assert response.latency_ms > 0
+    # Whole milliseconds, truncated: the stub path completes in well under 1 ms,
+    # so 0 is a correct measurement here, not a missing one.
+    assert isinstance(response.latency_ms, int) and response.latency_ms >= 0
     assert len(response.execution_trace) > 0
     assert "Phase 4: Plan" in str(response.execution_trace)
     assert "Phase 5: Decision" in str(response.execution_trace)
@@ -93,9 +95,41 @@ async def test_e2e_audit_event_emitted(skill_service):
 
     response = await skill_service.invoke_skill(request)
 
-    # Audit event should be recorded
+    # Audit event should be recorded BY THE BACKEND (its id, not a local one)
     assert response.audit_event_id  # Not empty
-    assert "audit_event_" in response.audit_event_id
+    assert response.audit_event_id == f"audit_event_{request.request_id}"
+
+
+@pytest.mark.asyncio
+async def test_e2e_audit_backend_failure_fails_the_invocation():
+    """A backend that cannot write the record fails the invocation (fail-closed)."""
+
+    class _BrokenAudit:
+        calls = 0
+
+        async def write_event(self, event):
+            _BrokenAudit.calls += 1
+            raise OSError("audit chain unavailable")
+
+    service = SkillInvocationService(
+        skill_registry=None,
+        manifest_loader=SkillManifestLoader(),
+        audit_backend=_BrokenAudit(),
+        timeout_config=TimeoutConfig(),
+    )
+    request = SkillInvocationRequest(
+        tenant_id="_default",
+        skill_id="os.delegation_router",
+        skill_version="1.2",
+        input={},
+        engine=WorkerEngine.CLAUDE_CODE,
+    )
+    response = await service.invoke_skill(request)
+
+    assert _BrokenAudit.calls == 1
+    assert response.is_success is False
+    assert response.audit_event_id == ""
+    assert "audit chain unavailable" in (response.error or "")
 
 
 @pytest.mark.asyncio

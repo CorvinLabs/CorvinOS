@@ -44,6 +44,9 @@ class TestSkillForgePhase3Packaging:
                 "skill_id": "os.test_router",
                 "name": "Test Router Skill",
                 "version": "1.0.0",
+                # Phase 1 (phase1_skeleton_generator.py) emits boot_layer;
+                # SkillManifestV2.from_dict requires it (5f5b321f6).
+                "boot_layer": "installed",
                 "description": "Test skill for packaging",
                 "domain": "routing",
                 "entry_point": "src.skill:TestSkill.execute",
@@ -100,7 +103,7 @@ def pre_execute(ctx):
             assert zip_path.exists(), f"ZIP not created at {zip_path}"
             assert zip_hash.startswith("sha256:"), "Hash must start with sha256:"
             assert len(zip_hash) > 20, "Hash must be valid length"
-            assert metadata["skill_id"] == "test_skill"
+            assert metadata["skill_id"] == "os.test_router"  # the manifest's skill_id
             assert metadata["version"] == "1.0.0"
             print(f"✅ Package created: {zip_path.name} ({zip_hash[:20]}...)")
 
@@ -139,7 +142,7 @@ def pre_execute(ctx):
 
                 manifest_content = zf.read(skill_json_files[0]).decode('utf-8')
                 manifest_data = json.loads(manifest_content)
-                assert manifest_data["skill_id"] == "test_skill"
+                assert manifest_data["skill_id"] == "os.test_router"
 
                 print(f"✅ ZIP integrity verified: {len(namelist)} files, all required files present")
 
@@ -158,12 +161,16 @@ def pre_execute(ctx):
 
             zip_path, _, _ = packager.package(sample_skill_dir, manifest)
 
-            # Verify checksum file exists
-            checksum_path = zip_path.parent / zip_path.name.replace(".zip", ".sha256")
-            assert checksum_path.exists(), "Checksum file not created"
+            # The checksum list ships INSIDE the package at .forge/checksum.sha256
+            # (package_signing.CHECKSUM_REL), not as a sidecar next to the ZIP.
+            from core.skills import package_signing
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                rel = f"{manifest.skill_id}/{package_signing.CHECKSUM_REL}"
+                assert rel in zf.namelist(), "Checksum file not created"
+                checksum_text = zf.read(rel).decode("utf-8")
 
             # Read checksums
-            checksums = checksum_path.read_text(encoding="utf-8").strip().split('\n')
+            checksums = checksum_text.strip().split('\n')
             assert len(checksums) > 0, "No checksums found"
 
             # Verify checksum format

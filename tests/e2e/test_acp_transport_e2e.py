@@ -138,7 +138,9 @@ class TestAcpBootWiring(unittest.TestCase):
 
             registry = get_registry()
             ids = sorted(m.id for m in registry.list_skills())
-            self.assertEqual(ids, sorted(BUILTIN_SKILL_IDS))
+            # Since a81fec046 (ADR-2175) boot also registers bundle/SkillForge prompt skills
+            # as `prompt.<name>`; every builtin OS Skill must be there, and nothing else may be.
+            self.assertEqual(sorted(i for i in ids if not i.startswith("prompt.")), sorted(BUILTIN_SKILL_IDS))
             self.assertIsInstance(registry.audit_backend, CoreAuditBackend)
             self.assertEqual(registry.tenant_id, tid)
             self.assertIn(tid, registry._allowed_tenants)
@@ -154,10 +156,16 @@ class TestAcpBootWiring(unittest.TestCase):
             res = registry.execute(
                 "os.delegation_router",
                 {"complexity": 9, "task_type": "code"},
-                lom="core/skills/boot.py:boot_skills:L60",
+                # Bare <file>:<function> form: since 1b8a6eb66 a ":L<n>" suffix must fall inside
+                # the named def, and boot_skills no longer contains line 60.
+                lom="core/skills/boot.py:boot_skills",
             )
             self.assertEqual(res.status, "success", res.error_message)
-            self.assertEqual(res.output["engine"], "claude-opus-5")
+            # os.delegation_router 2.0.0 (c034d9eed, ADR-2092) advises a worker ENGINE
+            # (native/acs/tde), confirm-or-de-escalate only — never a model id. With no
+            # bundled engine in the input it confirms native.
+            self.assertEqual(res.output["engine"], "native")
+            self.assertEqual(res.output["reasoning"], "bundled_native_confirmed")
             self.assertEqual(registry.audit_backend.write_failures, 0)
 
             events = _skill_events(audit_file)
@@ -169,7 +177,11 @@ class TestAcpBootWiring(unittest.TestCase):
             self.assertEqual(details["lom_hash"], res.lom_hash)
             self.assertEqual(len(details["lom_hash"]), 64)
             # The chain writer keeps the record content-free: no Skill output in the chain.
-            self.assertIn("output", details.get("_dropped_fields", []))
+            # The registry now projects only allowlisted decision scalars into the record
+            # (_DECISION_SCALAR_KEYS, ac613719a), so the raw output is never sent and so
+            # never shows up as a dropped field either.
+            self.assertNotIn("output", details)
+            self.assertNotIn("reasoning", details)
             self.assertTrue(events[-1].get("hash") and events[-1].get("prev_hash"))
 
             ok, problems = verify_audit(audit_file)
@@ -265,9 +277,10 @@ class TestAcpHttpSurfaces(unittest.TestCase):
 
             registry = get_registry()
             self.assertIsNotNone(registry.learning_backend, "learning backend not wired at boot")
-            registry.execute("os.delegation_router", {"complexity": 2, "task_type": "chat"}, lom="x:y:1")
+            registry.execute("os.delegation_router", {"complexity": 2, "task_type": "chat"}, lom="core/skills/boot.py:boot_skills")  # an unresolvable LoM is refused since 86cef0778
             emitter = registry.learning_backend.emitter
-            events_dir = emitter.store.events_dir
+            # One bound store per tenant since a0b71c4cb (TenantEventStores).
+            events_dir = emitter.store.for_tenant(tid).events_dir
             deadline = time.time() + 5
             lines: list[dict] = []
             while time.time() < deadline:

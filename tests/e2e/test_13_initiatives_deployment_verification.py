@@ -37,6 +37,20 @@ logger = logging.getLogger(__name__)
 BASE_URL = "http://127.0.0.1:8765"
 CONSOLE_URL = f"{BASE_URL}/v1/console"
 
+
+# Port 8765 is the LIVE console: the local-login and every request below write to
+# the live install's audit chain, and the outcome depends on whatever build that
+# host serves right now. Tests never touch the live install unless asked to: same
+# opt-in as tests/e2e/_console_origin.py (bc4b4b0ef) — CORVIN_E2E_ALLOW_LIVE=1.
+import os as _os
+
+import pytest as _pytest
+
+pytestmark = _pytest.mark.skipif(
+    _os.environ.get("CORVIN_E2E_ALLOW_LIVE") != "1",
+    reason="deployment verifier for the live console on :8765; set CORVIN_E2E_ALLOW_LIVE=1 to run it on purpose",
+)
+
 # Session record for authenticated requests
 _session_cache: dict[str, Any] = {}
 
@@ -121,7 +135,9 @@ class DeploymentVerifier:
         try:
             # Look for DataHub Skill in the registry
             # For now, check if learning infrastructure (related) is live
-            resp = self.session.get(f"{CONSOLE_URL}/learning", timeout=5)
+            # /learning/status is the learning router's read endpoint; a bare GET /learning was
+            # never registered (git log -S'@router.get("/learning")' is empty), so it was a 404.
+            resp = self.session.get(f"{CONSOLE_URL}/learning/status", timeout=5)
 
             if resp.status_code == 401:
                 # Not authenticated for this test

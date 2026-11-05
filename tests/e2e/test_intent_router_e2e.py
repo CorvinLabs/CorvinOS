@@ -240,7 +240,10 @@ class TestIntentRouterAdversarial:
 
         inputs = [
             "Create a skill",
-            "Enable autonomy",
+            # "Enable autonomy" scores 2/3 regex patterns = 0.67, below the
+            # router's configured AUTONOMY threshold 0.7 (intent_router.py)
+            # -> AMBIGUOUS by design; use the phrase test_classify_autonomy pins.
+            "Delegate to autonomous systems",
             "Collect feedback",
             "Hello world",
         ]

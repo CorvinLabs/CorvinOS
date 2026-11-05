@@ -51,10 +51,15 @@ _DRIVER = Path(__file__).resolve().parent / "_goal_drift_console_driver.py"
 
 FAKE_CLI = r'''
 import json, sys
-try:
+argv = sys.argv[1:]
+# The console speaks `--input-format stream-json` and keeps stdin OPEN until the
+# first `result` event (live /btw injection, b78dfbd4d) — like the real CLI, read
+# exactly one user frame. Reading to EOF deadlocks: the console closes stdin only
+# after the result this process has not printed yet.
+if "--input-format" in argv and argv[argv.index("--input-format") + 1] == "stream-json":
+    prompt = sys.stdin.readline()
+else:
     prompt = sys.stdin.read()
-except Exception:
-    prompt = ""
 for evt in ({"type": "system", "subtype": "init", "model": "claude-sonnet-5"},
             {"type": "assistant", "message": {"content": [{"type": "text", "text": "ack"}]}},
             {"type": "result", "result": "ack",

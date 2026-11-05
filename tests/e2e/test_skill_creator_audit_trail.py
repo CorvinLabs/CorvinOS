@@ -78,7 +78,9 @@ async def test_sync_skill_creation_emits_audit(mock_audit_module, mock_orchestra
     )
 
     # Call endpoint
-    response = await generate_skill(req, mock_rec)
+    # generate_skill's 3rd parameter is the require_skill_forge_quota dependency
+    # (6e372872d); a direct call supplies the same session record for it.
+    response = await generate_skill(req, mock_rec, mock_rec)
 
     # Verify response
     assert response["status"] == "success"
@@ -126,7 +128,7 @@ async def test_sync_skill_creation_failure_logs_audit(
 
     # Call endpoint and expect failure
     with pytest.raises(HTTPException) as exc_info:
-        await generate_skill(req, mock_rec)
+        await generate_skill(req, mock_rec, mock_rec)
 
     assert exc_info.value.status_code == 400
 
@@ -187,7 +189,7 @@ async def test_full_skill_creation_workflow_audited(mock_audit_module, mock_orch
         user_request="create a skill that validates JSON",
         async_=False,
     )
-    response = await generate_skill(req_sync, mock_rec)
+    response = await generate_skill(req_sync, mock_rec, mock_rec)
     assert response["status"] == "success"
     assert mock_audit_module.action_performed.called
 
@@ -196,7 +198,7 @@ async def test_full_skill_creation_workflow_audited(mock_audit_module, mock_orch
         user_request="create a skill that validates YAML",
         async_=True,
     )
-    response = await generate_skill(req_async, mock_rec)
+    response = await generate_skill(req_async, mock_rec, mock_rec)
     assert response["status"] == "accepted"
     assert "run_id" in response
 

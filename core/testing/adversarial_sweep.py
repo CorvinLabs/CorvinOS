@@ -53,32 +53,39 @@ class AdversarialSweep:
         return mutated
     
     async def test_input_robustness(self, inputs: List[Dict], mutation_count: int = 10) -> List[AdversarialResult]:
-        """Test with mutated inputs."""
+        """Test with mutated inputs: exactly ``mutation_count`` mutations per input.
+
+        The mutation types are taken round-robin (noise, missing, overflow, noise, ...).
+        They used to get ``mutation_count // 3`` each, so any count below 3 ran NOTHING
+        and ``get_pass_rate`` then reported a vacuous 100% over zero cases.
+        """
         results = []
-        
+        mutation_types = ["noise", "missing", "overflow"]
+
         for input_data in inputs:
-            for mutation_type in ["noise", "missing", "overflow"]:
-                for _ in range(mutation_count // 3):
-                    try:
-                        mutated = await self.mutate_input(input_data, mutation_type)
-                        result = await self.handler(mutated)
-                        
-                        results.append(AdversarialResult(
-                            test_type=AdversarialType.INPUT_MUTATION,
-                            input_mutation=mutated,
-                            expected_output=self.baseline_output,
-                            actual_output=result,
-                            passed=result is not None
-                        ))
-                    except Exception as e:
-                        results.append(AdversarialResult(
-                            test_type=AdversarialType.INPUT_MUTATION,
-                            input_mutation=mutated,
-                            expected_output=self.baseline_output,
-                            actual_output=None,
-                            passed=False,
-                            error=str(e)
-                        ))
+            for i in range(mutation_count):
+                mutation_type = mutation_types[i % len(mutation_types)]
+                mutated = input_data
+                try:
+                    mutated = await self.mutate_input(input_data, mutation_type)
+                    result = await self.handler(mutated)
+
+                    results.append(AdversarialResult(
+                        test_type=AdversarialType.INPUT_MUTATION,
+                        input_mutation=mutated,
+                        expected_output=self.baseline_output,
+                        actual_output=result,
+                        passed=result is not None
+                    ))
+                except Exception as e:
+                    results.append(AdversarialResult(
+                        test_type=AdversarialType.INPUT_MUTATION,
+                        input_mutation=mutated,
+                        expected_output=self.baseline_output,
+                        actual_output=None,
+                        passed=False,
+                        error=str(e)
+                    ))
         
         self.results.extend(results)
         return results

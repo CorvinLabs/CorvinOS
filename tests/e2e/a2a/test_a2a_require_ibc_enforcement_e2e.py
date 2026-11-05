@@ -40,6 +40,24 @@ from test_a2a_pair_friendship_security import (  # noqa: E402  # type: ignore[im
 
 
 class TestRequireIbcWrittenOnNewPairings(_RouteSandbox):
+    def setUp(self):
+        super().setUp()
+        # The A2A network is member-only (gate 28ad07b54; ``friendship_import`` answers 402
+        # ``member_seat_required`` before writing anything since 70e71eb91). This file's
+        # subject is the origin a member install writes, so resolve the tier as ``member``
+        # for the network gate only — the seam core/console/tests/conftest.py::_a2a_member_tier
+        # uses for the sandbox this class reuses — and forget remembered verdicts.
+        from unittest import mock  # noqa: PLC0415
+
+        from corvin_operator.license import capability_api  # noqa: PLC0415
+        import a2a_license_gate  # noqa: PLC0415  # type: ignore[import-not-found]
+
+        tier = mock.patch.object(capability_api, "active_tier", lambda **_k: "member")
+        tier.start()
+        self.addCleanup(tier.stop)
+        a2a_license_gate.reset_allow_cache()
+        self.addCleanup(a2a_license_gate.reset_allow_cache)
+
     def test_friendship_import_writes_require_ibc_false(self):
         """Real route call: ap.friendship_import -> origin file on disk."""
         kid = "peer-" + secrets.token_hex(4)

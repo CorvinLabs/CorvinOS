@@ -343,16 +343,18 @@ class OTELIntegrator:
             if not self.enable_learning_feedback:
                 return True, "Learning feedback disabled"
 
-            # Queue for async learning processor
-            asyncio.create_task(
-                self._signal_queue.put(
-                    {
-                        "type": "learning_feedback",
-                        "signal_id": signal_id,
-                        "feedback": feedback,
-                        "timestamp": datetime.utcnow().isoformat() + "Z",
-                    }
-                )
+            # Queue for async learning processor. put_nowait, not a
+            # create_task(put(...)): that raised "no running event loop" from
+            # every synchronous caller, and from an async caller the put ran
+            # only after the next await, so process_pending_signals() could
+            # miss it. The queue is unbounded, so put_nowait never blocks.
+            self._signal_queue.put_nowait(
+                {
+                    "type": "learning_feedback",
+                    "signal_id": signal_id,
+                    "feedback": feedback,
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                }
             )
 
             self.audit_logger.info(
@@ -381,7 +383,10 @@ class OTELIntegrator:
                 item = self._signal_queue.get_nowait()
                 if item["type"] == "learning_feedback":
                     # Update learning context
-                    self._learning_context[item["signal_id"]] = item["feedback"]
+                    self._learning_context[item["signal_id"]] = {
+                        "feedback": item["feedback"],
+                        "timestamp": item.get("timestamp"),
+                    }
                     count += 1
             except asyncio.QueueEmpty:
                 break

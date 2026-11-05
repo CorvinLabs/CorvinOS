@@ -22,8 +22,6 @@ from core.infinite_session import (
     SessionBridger,
     SessionBridgeEvent,
     Snapshot,
-    SnapshotType,
-    SnapshotMetadata,
     CryptoBinding,
 )
 
@@ -74,44 +72,32 @@ def test_context_recovered_in_system_prompt(event_store, crypto_binding, session
         "next_step": "Follow up with approver",
     }
 
-    snapshot = Snapshot(
-        snapshot_id="snap_001",
-        snapshot_type=SnapshotType.MANUAL,
+    # Real API (core/infinite_session): Snapshot.create() computes the content
+    # hash, EventStore.write_snapshot() persists + chain-signs it, and
+    # SessionBridger.create_bridge() signs and persists the bridge.
+    snapshot = Snapshot.create(
+        tenant_id=tenant_id,
         task_id=task_id,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        content_hash="sha256_abc123",
-        metadata=SnapshotMetadata(
-            source_session="prior_session_id",
-            phase="phase_2",
-            quality_score=0.95,
-        ),
+        phase_id="phase_2",
         state_dict=prior_context,
     )
 
     # 2. Write snapshot to EventStore
-    ok, error = event_store.write_snapshot(tenant_id, task_id, snapshot)
+    ok, error = event_store.write_snapshot(snapshot)
     assert ok, f"Failed to write snapshot: {error}"
 
-    # 3. Create a bridge from prior session to new session
-    bridge = SessionBridgeEvent.create(
+    # 3+4. Create, sign and persist a bridge from prior session to new session
+    bridge, error = session_bridger.create_bridge(
         tenant_id=tenant_id,
         task_id=task_id,
         source_session_id="prior_session_id",
         dest_session_id="new_session_id",
-        snapshot_id=snapshot.snapshot_id,
-        snapshot_hash=snapshot.content_hash,
-        prev_hash="sha256_prev",
+        snapshot=snapshot,
         phase_completed="phase_2",
         artifacts=["artifact_1.json", "artifact_2.png"],
         metadata={"reason": "automatic_session_transition"},
     )
-
-    # Sign the bridge
-    signed_bridge = session_bridger.sign_bridge_event(bridge, crypto_binding)
-
-    # 4. Persist the bridge
-    ok, error = session_bridger._save_bridge(tenant_id, task_id, signed_bridge)
-    assert ok, f"Failed to save bridge: {error}"
+    assert bridge is not None, f"Failed to create bridge: {error}"
 
     # 5. Create a WebChatSession with task_id (THIS IS THE KEY FIX FOR PHASE 1)
     sess = WebChatSession(
@@ -179,37 +165,25 @@ def test_audit_trail_context_recovered(event_store, crypto_binding, session_brid
 
     # 1. Setup (similar to test_context_recovered_in_system_prompt)
     prior_context = {"goal": "Test audit trail"}
-    snapshot = Snapshot(
-        snapshot_id="snap_audit_001",
-        snapshot_type=SnapshotType.MANUAL,
+    snapshot = Snapshot.create(
+        tenant_id=tenant_id,
         task_id=task_id,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        content_hash="sha256_audit123",
-        metadata=SnapshotMetadata(
-            source_session="prior_session",
-            phase="phase_1",
-            quality_score=0.90,
-        ),
+        phase_id="phase_1",
         state_dict=prior_context,
     )
 
-    ok, error = event_store.write_snapshot(tenant_id, task_id, snapshot)
-    assert ok
+    ok, error = event_store.write_snapshot(snapshot)
+    assert ok, error
 
-    bridge = SessionBridgeEvent.create(
+    bridge, error = session_bridger.create_bridge(
         tenant_id=tenant_id,
         task_id=task_id,
         source_session_id="prior_session",
         dest_session_id="new_session_audit",
-        snapshot_id=snapshot.snapshot_id,
-        snapshot_hash=snapshot.content_hash,
-        prev_hash="sha256_prev_audit",
+        snapshot=snapshot,
         phase_completed="phase_1",
     )
-
-    signed_bridge = session_bridger.sign_bridge_event(bridge, crypto_binding)
-    ok, error = session_bridger._save_bridge(tenant_id, task_id, signed_bridge)
-    assert ok
+    assert bridge is not None, error
 
     # 2. Resume and verify audit events
     sess = WebChatSession(
@@ -224,27 +198,18 @@ def test_audit_trail_context_recovered(event_store, crypto_binding, session_brid
     context_block = _infinite_session_context_block(sess)
     assert context_block  # Context was recovered
 
-    # 4. Check audit trail for session_resumed event
-    # (The audit_callback in resume_from_bridge() should emit this)
-    audit_path = event_store.root_dir / "audit.jsonl"
-    if audit_path.exists():
-        with open(audit_path, encoding="utf-8") as f:
-            lines = f.readlines()
+    # 4. The restore is recorded CONTENT-FREE on the tenant's core chain
+    # (chat_runtime._infinite_session_context_block -> paths.core_audit).
+    from core.learning.event_persistence import _resolve_core_audit
 
-        # Find session_resumed event
-        found_event = False
-        for line in lines:
-            try:
-                event = json.loads(line)
-                if event.get("event_type") == "session_resumed" and event.get("task_id") == task_id:
-                    found_event = True
-                    assert event.get("source_session_id") == "prior_session"
-                    break
-            except json.JSONDecodeError:
-                pass
-
-        # Note: This is optional verification since audit_backend integration may vary
-        # The key test is that context_block is not empty (context was recovered)
+    chain = Path(_resolve_core_audit().audit_path())  # the path core_audit wrote to
+    assert chain.exists(), "core audit chain was never written"
+    records = [json.loads(line) for line in chain.read_text(encoding="utf-8").splitlines() if line.strip()]
+    restored = [r for r in records if "infinite_session.context_restored" in json.dumps(r)]
+    assert restored, "no infinite_session.context_restored record on the core chain"
+    last = json.dumps(restored[-1])
+    assert snapshot.content_hash in last
+    assert "Test audit trail" not in last  # never the snapshot content
 
 
 if __name__ == "__main__":

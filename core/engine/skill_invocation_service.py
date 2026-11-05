@@ -336,10 +336,19 @@ class SkillInvocationService:
 
     async def _emit_audit_event(self, request: SkillInvocationRequest, output: Dict[str, Any]) -> str:
         """Emit skill_invocation_completed event to audit backend (sync, fail-fast)."""
-        event_id = f"audit_{request.request_id}"
-        # TODO: Call self.audit.write_event() with proper AuditEvent
-        # Raises exception on failure → timeout catches it
-        return event_id
+        # The injected backend writes the record and names it. This used to return
+        # a locally minted id without ever calling the backend, so every response
+        # cited an audit event that was never written. A backend failure raises
+        # here; invoke_skill turns it into a failed response (fail-closed).
+        # Metadata only — the skill's output is never copied into the record.
+        return await self.audit.write_event({
+            "event_type": "skill_invocation_completed",
+            "request_id": request.request_id,
+            "tenant_id": request.tenant_id,
+            "skill_id": request.skill_id,
+            "skill_version": request.skill_version,
+            "engine": getattr(request.engine, "value", str(request.engine)),
+        })
 
     async def _enqueue_audit_retry(
         self,

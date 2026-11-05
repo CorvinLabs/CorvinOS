@@ -24,16 +24,19 @@ class TestAdversarialSessionManager:
         from core.infinite_session.session_bridger import SessionBridger
 
         # Create a task that will trigger session splits
-        task_def = TaskDefinition(
-            task_id="adv_session_001",
-            tenant_id="_default",
-            autonomy_level="FULL",
-            phases=[
-                {"id": "phase_1", "skills": ["skill_a"], "gates": []},
-                {"id": "phase_2", "skills": ["skill_b"], "gates": []},
-                {"id": "phase_3", "skills": ["skill_c"], "gates": []},
+        # from_dict parses the phase dicts into Phase objects (the dataclass constructor
+        # does not); autonomy_level is the ADR-0540 int scale 1-5, 5 = full autonomy.
+        task_def = TaskDefinition.from_dict({
+            "task_id": "adv_session_001",
+            "tenant_id": "_default",
+            "description": "adversarial auto-split wiring proof",
+            "autonomy_level": 5,
+            "phases": [
+                {"id": "phase_1", "goal": "a", "skills": ["skill_a"], "gates": []},
+                {"id": "phase_2", "goal": "b", "skills": ["skill_b"], "gates": [], "depends_on": ["phase_1"]},
+                {"id": "phase_3", "goal": "c", "skills": ["skill_c"], "gates": [], "depends_on": ["phase_2"]},
             ],
-        )
+        })
 
         executor = TaskExecutor(tenant_id="_default")
 
@@ -52,7 +55,14 @@ class TestAdversarialSessionManager:
 
         # ADVERSARIAL CHECK: Did ANY session_auto_split events fire?
         split_events = [e for e in result.audit_events
-                       if e.get("event_type") == "session_auto_split"]
+                       if e.event_type == "session_auto_split"]
+        assert split_events == []  # 3 phases never reach the 85% context threshold
+
+        # Wiring proof: run() registered the task and drove on_task_progress once per
+        # phase (iterations = last phase index), so the auto-starter really saw it.
+        state = executor.auto_starter.get_task_state("adv_session_001")
+        assert state is not None, "run() never called SessionAutoStarter.on_task_start"
+        assert state["iterations"] == 2, state
 
         # For this small task: probably 0 splits (context not high enough)
         # But SessionAutoStarter WAS CALLED (that's the wiring proof)

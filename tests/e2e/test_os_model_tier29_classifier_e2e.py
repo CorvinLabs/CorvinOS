@@ -51,10 +51,24 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: What Tier 2.9 must route a short, simple prompt to. This is the operator's
-#: own SIMPLE mapping from ``model_selection_config.py::_DEFAULTS``, not a value
-#: invented by the test.
-EXPECTED_SIMPLE_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _model_selector():
+    sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
+    import model_selector  # noqa: PLC0415
+
+    return model_selector
+
+
+def expected_simple_model() -> str:
+    """What Tier 2.9 must route a short, simple prompt to.
+
+    The classifier picks the Haiku family; since model lineage (ADR-2090,
+    a0d9aa8a3 "immer neueste") an AUTOMATIC tier the operator never saved
+    routes to the NEWEST registered member of that family. So the expectation
+    is ``tier_model("haiku")`` — never a literal id, which goes stale on the
+    next release (it read ``claude-haiku-4-5-20251001`` until Haiku 5.5)."""
+    return _model_selector().tier_model("haiku")
 
 
 # ── Phase 1 — reachability ───────────────────────────────────────────────────
@@ -80,8 +94,16 @@ class TestReachability:
             REPO_ROOT / "corvin_operator" / "bridges" / "shared" / "model_selector.py"
         ).read_text(encoding="utf-8")
         assert "def classify_os_model(" in src
-        assert "classify_os_model(" in src.split("def resolve_os_model(", 1)[1], (
-            "resolve_os_model no longer calls classify_os_model — Tier 2.9 is dead"
+        # ADR-2259 (aee1f8e99): resolve_os_model wraps the tiered decision,
+        # which lives in resolve_os_model_with_source; the wrapper must still
+        # delegate to it.
+        tiered = src.split("def resolve_os_model_with_source(", 1)[1].split("\ndef ", 1)[0]
+        assert "classify_os_model(" in tiered, (
+            "resolve_os_model_with_source no longer calls classify_os_model — Tier 2.9 is dead"
+        )
+        wrapper = src.split("def resolve_os_model(", 1)[1].split("\ndef ", 1)[0]
+        assert "resolve_os_model_with_source(" in wrapper, (
+            "resolve_os_model no longer goes through the tiered resolver"
         )
 
     def test_classifier_abstains_below_the_confidence_floor(self) -> None:
@@ -107,12 +129,17 @@ import json, os, sys
 with open(os.environ["CORVIN_FAKE_CLI_ARGV"], "w", encoding="utf-8") as fh:
     json.dump(sys.argv[1:], fh)
 
-try:
-    sys.stdin.read()
-except Exception:
-    pass
-
 argv = sys.argv[1:]
+
+# The console speaks `--input-format stream-json` and keeps stdin OPEN until the
+# first `result` event (live /btw injection, b78dfbd4d) — like the real CLI, read
+# exactly one user frame. Reading to EOF here deadlocks: the console closes stdin
+# only after the result this process has not printed yet.
+if "--input-format" in argv and argv[argv.index("--input-format") + 1] == "stream-json":
+    sys.stdin.readline()
+else:
+    sys.stdin.read()
+
 model = ""
 if "--model" in argv:
     i = argv.index("--model")
@@ -292,7 +319,7 @@ class TestTier29OverWebSocket:
         argv = turn["argv"]
         assert argv is not None, "the engine subprocess never launched"
         assert "--model" in argv, f"no --model in engine argv: {argv}"
-        assert argv[argv.index("--model") + 1] == EXPECTED_SIMPLE_MODEL, argv
+        assert argv[argv.index("--model") + 1] == expected_simple_model(), argv
 
     def test_classifier_decision_is_in_the_audit_chain(self, turn: dict) -> None:
         """ADR-0129 M2 is default-DENY for unregistered event types: without the
@@ -310,7 +337,7 @@ class TestTier29OverWebSocket:
         latest = applied[-1]["details"]
         assert latest.get("tier") == "2.9_classifier"
         assert latest.get("outcome") == "applied"
-        assert latest.get("selected_model") == EXPECTED_SIMPLE_MODEL
+        assert latest.get("selected_model") == expected_simple_model()
         assert "_dropped_fields" not in latest, (
             f"audit allowlist rejected fields: {latest.get('_dropped_fields')}"
         )
@@ -326,7 +353,7 @@ class TestTier29OverWebSocket:
             and turn["sid"] in (r.get("details", {}).get("chat_key") or "")
         ]
         assert mine, f"no os_turn.completed for sid {turn['sid']}"
-        assert mine[-1]["details"]["model"] == EXPECTED_SIMPLE_MODEL
+        assert mine[-1]["details"]["model"] == expected_simple_model()
 
 
 class TestCostPanelSeesTheMix:
@@ -340,6 +367,19 @@ class TestCostPanelSeesTheMix:
 
         mix_before = before.json().get("cost_model_mix") or {}
         mix_after = after.json().get("cost_model_mix") or {}
-        assert mix_after.get(EXPECTED_SIMPLE_MODEL, 0) > mix_before.get(
-            EXPECTED_SIMPLE_MODEL, 0
-        ), f"panel did not count this turn's Haiku: {mix_before} -> {mix_after}"
+        served = expected_simple_model()
+
+        from core.learning.model_selection_learner import _price_for_model  # noqa: PLC0415
+
+        if _price_for_model(served) is None:
+            # The rate card leaves a model without a verified published price
+            # out ON PURPOSE (c17ca7190: Haiku 5.5), and the panel counts only
+            # PRICED turns — an unpriced turn must not appear with a guessed
+            # price (ADR-0763: fabricate nothing).
+            assert mix_after.get(served, 0) == mix_before.get(served, 0), (
+                f"panel priced a model the rate card does not price: {mix_after}"
+            )
+            return
+        assert mix_after.get(served, 0) > mix_before.get(served, 0), (
+            f"panel did not count this turn's Haiku: {mix_before} -> {mix_after}"
+        )

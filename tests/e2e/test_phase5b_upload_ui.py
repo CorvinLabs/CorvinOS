@@ -25,10 +25,11 @@ class TestPhase5bUploadUI:
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
         content = component_path.read_text(encoding="utf-8")
         
-        assert "Install New Skill" in content
+        # Copy since 1c1f7aa64 (console redesign): "Install a skill package".
+        assert "Install a skill package" in content
         assert "Skill ID" in content
         assert "Version" in content
-        assert "ZIP File" in content
+        assert "ZIP file" in content
     
     def test_form_inputs_capture_state(self):
         """Form inputs bound to state."""
@@ -69,8 +70,10 @@ class TestPhase5bUploadUI:
         component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
         content = component_path.read_text(encoding="utf-8")
         
-        assert "width: `${upload.progress}%`" in content
-        assert "bg-green-600" in content
+        # Since 1c1f7aa64 the bar is the shared <Progress> component, not a
+        # hand-styled div.
+        assert "<Progress value={upload.progress} />" in content
+        assert "upload.uploading && <Progress" in content
     
     def test_upload_handler_posts_multipart(self):
         """handleUpload sends FormData with file."""
@@ -98,7 +101,9 @@ class TestPhase5bUploadUI:
         content = component_path.read_text(encoding="utf-8")
         
         assert "upload.success" in content
-        assert "✅" in content
+        # Since 1c1f7aa64 an icon component, not a literal emoji (the console
+        # carries no status-marker literals, ADR-2269).
+        assert "<CheckCircle2" in content
         assert "Skill installed successfully" in content or "alert" in content
     
     def test_auto_refresh_after_install(self):

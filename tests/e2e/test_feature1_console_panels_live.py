@@ -1,183 +1,64 @@
-"""E2E: Feature 1 — Console Panels → Live APIs (Phase 2)
+"""E2E: Feature 1 — Console Panels → Live APIs (Phase 2).
 
-Tests verify: licensing-audit, otel-telemetry, model-selection panels
-wired to real API endpoints, returning data <500ms p99.
+The panels (licensing audit, monitoring metrics, model selection) read the
+``features_phase2`` router through the real ``/v1/console`` mount. Since
+6ee192386 (ADR-0856) those routes are session-authenticated, return only
+measured data (``available`` says whether a source answered) and the old
+``POST /models/config`` — which answered ``success: True`` and persisted
+nothing — is an honest 501 naming the real writer (``/settings/engine``).
+
+The request goes over the real ASGI transport via the shared ``client`` /
+``async_client`` / ``anon_client`` fixtures (tests/fixtures_console.py).
+Schema checks of the three GET panels also live in test_vibe_dashboard_wiring.py;
+this file covers the model-config pair and concurrency.
 """
+from __future__ import annotations
+
 import asyncio
-import time
+
 import pytest
-from httpx import AsyncClient
 
-pytestmark = pytest.mark.asyncio
-
-
-class TestLicensingAuditPanel:
-    """Licensing Audit Panel → EventStore API"""
-
-    async def test_panel_fetch_audit_events(self):
-        """licensing-audit.tsx fetches /v1/licensing/audit-events"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/v1/licensing/audit-events?limit=50")
-            assert response.status_code == 200
-            data = response.json()
-            assert "events" in data
-            assert "total" in data
-            assert "compliance" in data
-            assert data["compliance"] == "ADR-0297 PII filtering applied"
-
-    async def test_panel_fetch_audit_events_with_status_filter(self):
-        """Panel can filter by status (granted/denied/expired)"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/v1/licensing/audit-events?status=granted")
-            assert response.status_code == 200
-            data = response.json()
-            assert isinstance(data["events"], list)
-
-    async def test_panel_latency_p99(self):
-        """API responds <500ms p99 (ADR-0625 target)"""
-        from corvin_console.app import app
-
-        timings = []
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            for _ in range(10):
-                start = time.perf_counter()
-                await client.get("/v1/licensing/audit-events?limit=100")
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                timings.append(elapsed_ms)
-
-        p99_ms = sorted(timings)[int(len(timings) * 0.99)]
-        assert p99_ms < 500, f"p99 latency {p99_ms}ms exceeds 500ms SLO"
-
-
-class TestOTELTelemetryPanel:
-    """OTEL Telemetry Panel → Prometheus API"""
-
-    async def test_panel_fetch_metrics(self):
-        """otel-telemetry.tsx fetches /v1/monitoring/metrics"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/v1/monitoring/metrics?range=1h")
-            assert response.status_code == 200
-            data = response.json()
-            assert "metrics" in data
-            assert isinstance(data["metrics"], list)
-            # At least 4 core metrics
-            assert len(data["metrics"]) >= 3
-
-    async def test_panel_metrics_have_schema(self):
-        """Each metric has name, value, unit, status, timestamp"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/v1/monitoring/metrics")
-            data = response.json()
-            for metric in data["metrics"]:
-                assert "name" in metric
-                assert "value" in metric
-                assert "unit" in metric
-                assert "status" in metric or "timestamp" in metric
-
-    async def test_panel_time_range_filter(self):
-        """Panel can request different time ranges (1h, 6h, 24h)"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            for range_val in ["1h", "6h", "24h"]:
-                response = await client.get(f"/v1/monitoring/metrics?range={range_val}")
-                assert response.status_code == 200
-                data = response.json()
-                assert data["range"] == range_val
+BASE = "/v1/console/v1"
 
 
 class TestModelSelectionPanel:
-    """Model Selection Panel → Model Registry API"""
+    def test_panel_fetch_config_reads_the_tenant_pins(self, client):
+        response = client.get(f"{BASE}/models/config")
+        assert response.status_code == 200, response.text[:300]
+        data = response.json()
+        assert {"config", "available", "timestamp"} <= set(data)
+        if data["available"]:
+            assert data["config"]["tenant_id"] == "_default"
+            assert {"default_engine", "os_model", "worker_model"} <= set(data["config"])
 
-    async def test_panel_fetch_models(self):
-        """model-selection.tsx fetches /v1/models/available"""
-        from corvin_console.app import app
+    def test_panel_save_config_is_refused_and_names_the_real_writer(self, client):
+        response = client.post(
+            f"{BASE}/models/config?default_model=claude-sonnet-5&cost_threshold=0.25"
+        )
+        assert response.status_code == 501
+        assert "/settings/engine" in response.json()["detail"]
 
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/v1/models/available")
-            assert response.status_code == 200
-            data = response.json()
-            assert "models" in data
-            assert isinstance(data["models"], list)
-            assert len(data["models"]) >= 2
-
-    async def test_panel_models_have_schema(self):
-        """Each model has id, name, provider, cost_per_1k, latency_ms, capabilities"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/v1/models/available")
-            data = response.json()
-            for model in data["models"]:
-                assert "id" in model
-                assert "name" in model
-                assert "provider" in model
-                assert "cost_per_1k" in model
-                assert "latency_ms" in model
-                assert "capabilities" in model
-
-    async def test_panel_fetch_config(self):
-        """Panel fetches current config from /v1/models/config"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/v1/models/config")
-            assert response.status_code == 200
-            data = response.json()
-            assert "config" in data
-            assert "default_model" in data["config"]
-
-    async def test_panel_save_config(self):
-        """Panel can POST new model config to /v1/models/config"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.post(
-                "/v1/models/config?default_model=claude-sonnet-5&cost_threshold=0.25"
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is True
-            assert data["config"]["default_model"] == "claude-sonnet-5"
+    def test_config_refuses_unauthenticated_caller(self, anon_client):
+        assert anon_client.get(f"{BASE}/models/config").status_code == 401
 
 
 class TestCrossPanelIntegration:
-    """All 3 panels work together in Vibe dashboard"""
+    ENDPOINTS = (
+        f"{BASE}/licensing/audit-events",
+        f"{BASE}/monitoring/metrics",
+        f"{BASE}/models/available",
+        f"{BASE}/models/config",
+    )
 
-    async def test_all_endpoints_live(self):
-        """All 3 panel APIs are live and reachable"""
-        from corvin_console.app import app
+    def test_all_endpoints_live(self, client):
+        for endpoint in self.ENDPOINTS:
+            response = client.get(endpoint)
+            assert response.status_code == 200, f"{endpoint}: {response.text[:200]}"
+            assert "available" in response.json(), endpoint
 
-        endpoints = [
-            "/v1/licensing/audit-events",
-            "/v1/monitoring/metrics",
-            "/v1/models/available",
-            "/v1/models/config",
-        ]
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            for endpoint in endpoints:
-                response = await client.get(endpoint)
-                assert response.status_code == 200, f"{endpoint} failed"
-
-    async def test_concurrent_panel_requests(self):
-        """All 3 panels can be fetched concurrently"""
-        from corvin_console.app import app
-
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            tasks = [
-                client.get("/v1/licensing/audit-events"),
-                client.get("/v1/monitoring/metrics"),
-                client.get("/v1/models/available"),
-            ]
-            responses = await asyncio.gather(*tasks)
-            assert all(r.status_code == 200 for r in responses)
-            assert len(responses) == 3
+    @pytest.mark.asyncio
+    async def test_concurrent_panel_requests(self, async_client):
+        responses = await asyncio.gather(
+            *(async_client.get(endpoint) for endpoint in self.ENDPOINTS[:3])
+        )
+        assert [r.status_code for r in responses] == [200, 200, 200]

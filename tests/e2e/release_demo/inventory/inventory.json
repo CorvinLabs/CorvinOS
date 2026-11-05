@@ -2867,12 +2867,12 @@
   "generator": "tests/e2e/release_demo/inventory/generate.py",
   "schema": 2,
   "sources": {
-    "core/console/corvin_console/default_plugins.yaml": "06d1dca35065fa29ebda6dbfb9b11037cc5e2ff4eab2458d3757c0e75b0aef82",
+    "core/console/corvin_console/default_plugins.yaml": "9531186c57b1662e5e48a1b29daa854e0be93dec48dc0bed796fec942293bc8d",
     "src/App.tsx": "10c24052924326b9b28ad077a9a0c507d3dc334b00cc7b53fce10cae6502aab4",
     "src/components/chat/ChatContextSidebar.tsx": "c9198042c518ac476da95efc87b83fb4a39da0a8b3a0d81959a25f7bdaf780b5",
     "src/components/layout.tsx": "39a6d8fd616bafe282c5f34f556305cdba313f80d5421e8a2860ded5a7413433",
     "src/pages/compliance.tsx": "27cbe35f70153f47ba30040943f513b173b079a295fc9dbf7bbc5275b5790cfa",
-    "src/pages/compute.tsx": "a2a38e96a6cffb06c2225f73a43ff44cdb2ea810c16406d691691dd145920379",
+    "src/pages/compute.tsx": "0db89bac50f9a24ef58c9c68d54388b5e952493ad435d1929b063e24c1ac88b2",
     "src/pages/forge.tsx": "bb819c1a3362a593133ce2f59c8a128562ff3ca9741a46081f0573f9f6377213",
     "src/pages/marketplace/tabs.ts": "9f9683db432642b97561f3350c90d22ddc8204cffa6fceaa7a8db825590a5767",
     "src/pages/models/tabs.ts": "53c063c065fcfd0f8455a3e3a1f86040cf0cdc8dc68f6c3a0ae70569e5f5f127",
@@ -2880,7 +2880,7 @@
     "src/pages/skills/SkillManagerDashboard.tsx": "d7d9036cc955c559c4579ad648daafd228463cba46b4da5a5d7d3b2affa49792",
     "src/pages/tasks/index.tsx": "d4bab92740275339f594447b41ba8b6cfa391ca580e22b886bf909f48640f081",
     "src/pages/vibe-engineering/VibeDashboard.tsx": "4dc491f27fcafb92a474a80aab1564b2cfdd28494bd3d548665c4c38f7779574",
-    "src/pages/video-producer.tsx": "3e0efb43b61c555ca5e7de19e54fc9dcb20508dc9f2c42782bab0d5a3254d189",
+    "src/pages/video-producer.tsx": "0d890e93a9e343e43ac79fc4ac2dc8ff9ce1e7340d75c2f7604a22fff25544aa",
     "src/panels/registry.tsx": "af889ab6bbe863e9f0e43ec62cf76525c81f5d550cbeaabcc42d63543945a306"
   }
 }

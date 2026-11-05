@@ -77,9 +77,10 @@ def test_videoproducerpage_removed_from_console():
 
 def test_migration_preserves_api_routes():
     """✅ API routes /v1/console/video/* remain in Console."""
+    # routes/quality_api.py was an unimported Flask module (never mounted) and
+    # was deleted in 53fef351e — it never served /v1/console/video/*.
     api_routes = [
         "routes/video_producer_api.py",
-        "routes/quality_api.py",
     ]
 
     for route in api_routes:

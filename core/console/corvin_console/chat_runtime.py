@@ -2682,7 +2682,7 @@ def _infinite_session_context_block(sess: WebChatSession) -> str:
         from core.infinite_session.session_bridger import SessionBridger
         from core.infinite_session.event_store import EventStore
         from core.infinite_session.crypto_binding import CryptoBinding
-        from core.paths import audit_backend
+        from core.infinite_session.paths import core_audit
 
         # Try to load and resume from a prior session bridge.
         # Bridges are task-scoped: use sess.task_id to find the most recent one.
@@ -2706,7 +2706,6 @@ def _infinite_session_context_block(sess: WebChatSession) -> str:
             tenant_id=sess.tenant_id,
             task_id=sess.task_id,
             bridge_id=bridge_id,
-            audit_callback=_make_audit_callback(),
         )
 
         if not recovered:
@@ -2717,6 +2716,18 @@ def _infinite_session_context_block(sess: WebChatSession) -> str:
         state_dict = recovered.get("state_dict", {})
         if not state_dict:
             return ""
+
+        # Audit-first: the restored context reaches the prompt only after its
+        # CONTENT-FREE record committed to the core chain (core_audit raises
+        # when it does not, and the except below withholds the block).
+        # Until 2026-11-05 this function imported a non-existent
+        # ``core.paths.audit_backend`` and therefore never returned a block.
+        core_audit(
+            "infinite_session.context_restored",
+            tenant_id=sess.tenant_id,
+            details={"task_id": sess.task_id,
+                     "content_hash": recovered.get("snapshot_hash", "")},
+        )
 
         # Format the recovered context for injection into the system prompt.
         recovered_text = "## RECOVERED CONTEXT (from prior session):\n\n"
@@ -2735,17 +2746,6 @@ def _infinite_session_context_block(sess: WebChatSession) -> str:
         import logging
         logging.exception(f"_infinite_session_context_block failed: {e}")
         return ""
-
-
-def _make_audit_callback():
-    """Create an audit callback for session bridge events."""
-    def audit_callback(event_type: str, **kwargs):
-        try:
-            from core.paths import audit_backend
-            audit_backend.write_event(event_type=event_type, **kwargs)
-        except Exception:  # noqa: BLE001
-            pass  # Non-critical
-    return audit_callback
 
 
 def _persona_mcp_config(tenant_id: str = "_default", workdir: "Path | None" = None,

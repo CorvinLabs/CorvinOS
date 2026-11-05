@@ -44,22 +44,26 @@ class TestE2EL5RoutingRealFlow:
             learning_backend=self.learning,
         )
 
+    # Since c034d9eed (ADR-2092) os.delegation_router advises a WORKER-ENGINE
+    # route (native | acs | tde), never a model id, and it never escalates:
+    # with no bundled delegation the advice is always "native".
+
     def test_routing_low_complexity_to_haiku(self):
-        """Real L5 routing: complexity 2 → Haiku."""
+        """Real L5 routing: low complexity, no bundled delegation → native."""
         r = self.integration.route_task_l5(complexity=2, task_type="chat")
         assert r["skill_executed"]
-        assert r["engine"] in ["claude-haiku-4", "claude-sonnet-4"]
+        assert r["engine"] == "native"
 
     def test_routing_high_complexity_to_opus(self):
-        """Real L5 routing: complexity 9 → Opus."""
+        """Real L5 routing: high complexity alone never escalates → native."""
         r = self.integration.route_task_l5(complexity=9, task_type="analysis")
         assert r["skill_executed"]
-        assert r["engine"] == "claude-opus-5"
+        assert r["engine"] == "native"
 
     def test_routing_code_prefers_sonnet(self):
-        """Real L5 routing: code tasks prefer Sonnet."""
+        """Real L5 routing: a code task without delegation stays native."""
         r = self.integration.route_task_l5(complexity=4, task_type="code")
-        assert r["engine"] in ["claude-sonnet-4", "claude-opus-5"]
+        assert r["engine"] == "native"
 
     def test_routing_audit_logged(self):
         """Real L5: audit event emitted."""
@@ -222,7 +226,7 @@ class TestE2EFallbackLogic:
         """Real fallback: routing always has valid engine."""
         for complexity in [1, 5, 10]:
             r = self.integration.route_task_l5(complexity=complexity, task_type="chat")
-            assert r["engine"] in ["claude-haiku-4", "claude-sonnet-4", "claude-opus-5"]
+            assert r["engine"] in ("native", "acs", "tde")
 
     def test_context_fallback_uses_base(self):
         """Real fallback: context always returns base tier."""

@@ -63,7 +63,11 @@ class TestApprovalAudit:
         assert not (forge_paths.corvin_home() / "orchestrator_audit.jsonl").exists()
 
     def test_request_fails_closed_when_chain_write_fails(self, gate, tenant):
-        with mock.patch.object(security_events, "write_event", side_effect=OSError("disk")):
+        # Patch by NAME, resolved at enter: the gate imports ``forge.security_events``
+        # at call time, and a test module that clears ``forge*`` from sys.modules
+        # (test_acp_transport_e2e._reset_modules) leaves this module's top-level
+        # ``security_events`` pointing at a stale object the gate no longer uses.
+        with mock.patch("forge.security_events.write_event", side_effect=OSError("disk")):
             with pytest.raises(RuntimeError, match="Failed to write approval request"):
                 gate.request_approval(tenant, "canary", {"confidence": 0.95})
 

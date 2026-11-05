@@ -33,6 +33,20 @@ BASE_URL = "http://127.0.0.1:8765"
 CONSOLE_URL = f"{BASE_URL}/v1/console"
 
 
+# Port 8765 is the LIVE console: the local-login and every request below write to
+# the live install's audit chain, and the outcome depends on whatever build that
+# host serves right now. Tests never touch the live install unless asked to: same
+# opt-in as tests/e2e/_console_origin.py (bc4b4b0ef) — CORVIN_E2E_ALLOW_LIVE=1.
+import os as _os
+
+import pytest as _pytest
+
+pytestmark = _pytest.mark.skipif(
+    _os.environ.get("CORVIN_E2E_ALLOW_LIVE") != "1",
+    reason="deployment verifier for the live console on :8765; set CORVIN_E2E_ALLOW_LIVE=1 to run it on purpose",
+)
+
+
 class E2EVerifier:
     """Verifier for 13 CorvinOS initiatives with real HTTP calls."""
 

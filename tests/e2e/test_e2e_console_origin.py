@@ -77,8 +77,10 @@ def test_python_scan_positive_control():
     # not a Playwright file (httpx API test): out of this scan's scope
     assert scan_python('client = AsyncClient(base_url="http://localhost:8765")\n') == []
     reached = {p.relative_to(REPO).as_posix() for p in _python_test_files()}
-    for must in ("tests/e2e/test_form_api_contract.py", "tests/e2e/test_full_task_orchestration_e2e.py",
-                 "tests/e2e/test_output_rendering.py", "tests/console/conftest.py"):
+    # test_form_api_contract.py / test_full_task_orchestration_e2e.py were deleted
+    # (they drove a UI and API that exist nowhere in the repo); the remaining
+    # Playwright module and the console conftest stay the reach proof.
+    for must in ("tests/e2e/test_output_rendering.py", "tests/console/conftest.py"):
         assert must in reached, must
 
 

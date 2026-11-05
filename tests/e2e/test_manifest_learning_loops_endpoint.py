@@ -10,39 +10,20 @@ from typing import Any, Optional
 import pytest
 
 
-# Note: These tests assume a running console instance at localhost:8765
-# To run: pytest tests/e2e/test_manifest_learning_loops_endpoint.py -v
-# Set CORVIN_CONSOLE_URL env var to override default
-
-
-def get_console_url() -> str:
-    """Get the console base URL (default: http://localhost:8765)."""
-    import os
-    return os.environ.get("CORVIN_CONSOLE_URL", "http://localhost:8765")
-
-
-def get_manifest(tenant_id: str = "_default") -> dict:
-    """Fetch the console manifest for a tenant."""
-    try:
-        import requests
-    except ImportError:
-        pytest.skip("requests library not available")
-
-    url = f"{get_console_url()}/v1/console/capabilities/manifest"
-    headers = {"X-Tenant-ID": tenant_id} if tenant_id != "_default" else {}
-
-    response = requests.get(url, headers=headers, timeout=5)
-    response.raise_for_status()
-    return response.json()
+# These tests drive the REAL console app in-process through the ``client``
+# fixture (tests/fixtures_console.py: TestClient over corvin_console with the
+# session dependency overridden). Until 2026-11-05 they called the LIVE
+# console at localhost:8765 with ``requests`` - the operator's running
+# install, unauthenticated (401) - which a test must never touch.
+MANIFEST_PATH = "/v1/console/capabilities/manifest"
 
 
 @pytest.fixture
-def manifest() -> dict:
-    """Fixture: fetch the manifest once per test."""
-    try:
-        return get_manifest()
-    except Exception as e:
-        pytest.skip(f"Could not fetch manifest: {e}")
+def manifest(client) -> dict:
+    """Fixture: fetch the manifest once per test from the in-process console."""
+    response = client.get(MANIFEST_PATH)
+    assert response.status_code == 200, response.text[:300]
+    return response.json()
 
 
 class TestManifestEndpointBasics:
@@ -182,20 +163,16 @@ class TestLearningLoopsStructure:
 class TestManifestPerformance:
     """Test performance characteristics."""
 
-    def test_manifest_load_time_under_100ms(self) -> None:
-        """Test that manifest loads in less than 100ms."""
-        try:
-            import requests
-        except ImportError:
-            pytest.skip("requests library not available")
-
-        url = f"{get_console_url()}/v1/console/capabilities/manifest"
-
+    def test_manifest_load_time_under_100ms(self, client) -> None:
+        """Test that a CACHED manifest load stays under 500ms."""
+        # The first request builds the manifest (cold, ~1s in-process);
+        # the budget is for the cached path, so warm it first.
+        assert client.get(MANIFEST_PATH).status_code == 200
         start = time.time()
-        response = requests.get(url, timeout=5)
+        response = client.get(MANIFEST_PATH)
         elapsed_ms = (time.time() - start) * 1000
 
-        response.raise_for_status()
+        assert response.status_code == 200
 
         # Load time should be < 100ms (cached; first request might be slower)
         assert elapsed_ms < 500, f"Manifest load took {elapsed_ms:.1f}ms (expected < 500ms)"
@@ -210,20 +187,13 @@ class TestManifestCaching:
         assert isinstance(manifest["hash"], str)
         assert len(manifest["hash"]) > 0  # Should be a non-empty hash
 
-    def test_manifest_hash_stable(self) -> None:
+    def test_manifest_hash_stable(self, client) -> None:
         """Test that manifest hash is stable across requests."""
-        try:
-            import requests
-        except ImportError:
-            pytest.skip("requests library not available")
-
-        url = f"{get_console_url()}/v1/console/capabilities/manifest"
-
         # Fetch manifest twice
-        resp1 = requests.get(url, timeout=5)
+        resp1 = client.get(MANIFEST_PATH)
         hash1 = resp1.json()["hash"]
 
-        resp2 = requests.get(url, timeout=5)
+        resp2 = client.get(MANIFEST_PATH)
         hash2 = resp2.json()["hash"]
 
         # Hashes should match (no plugin changes in between)
@@ -233,26 +203,18 @@ class TestManifestCaching:
 class TestTenantIsolation:
     """Test tenant isolation."""
 
-    def test_manifest_respects_tenant_id(self) -> None:
+    def test_manifest_respects_tenant_id(self, client) -> None:
         """Test that manifest correctly isolates by tenant_id.
 
         This test is somewhat limited without multiple tenants configured,
         but we can at least verify the tenant_id doesn't cause errors.
         """
-        try:
-            import requests
-        except ImportError:
-            pytest.skip("requests library not available")
-
-        url = f"{get_console_url()}/v1/console/capabilities/manifest"
-
         # Request with explicit tenant header
-        response = requests.get(
-            url,
+        response = client.get(
+            MANIFEST_PATH,
             headers={"X-Tenant-ID": "_default"},
-            timeout=5,
         )
-        response.raise_for_status()
+        assert response.status_code == 200
 
         manifest = response.json()
         assert manifest is not None
@@ -309,21 +271,14 @@ class TestManifestIntegration:
 class TestManifestErrorHandling:
     """Test error handling and degradation."""
 
-    def test_manifest_graceful_degradation(self) -> None:
+    def test_manifest_graceful_degradation(self, client) -> None:
         """Test that manifest endpoint degrades gracefully on errors.
 
         Even if plugin loading fails, the endpoint should return a valid
         manifest with empty learning_loops array, not a 500 error.
         """
-        try:
-            import requests
-        except ImportError:
-            pytest.skip("requests library not available")
-
-        url = f"{get_console_url()}/v1/console/capabilities/manifest"
-
         # Just verify we get a 200 response (no 500 errors)
-        response = requests.get(url, timeout=5)
+        response = client.get(MANIFEST_PATH)
         assert response.status_code == 200
 
         manifest = response.json()
@@ -340,17 +295,10 @@ class TestManifestErrorHandling:
 class TestManifestEndToEnd:
     """End-to-end test suite."""
 
-    def test_full_manifest_cycle(self) -> None:
+    def test_full_manifest_cycle(self, client) -> None:
         """Test a complete manifest fetch cycle."""
-        try:
-            import requests
-        except ImportError:
-            pytest.skip("requests library not available")
-
-        url = f"{get_console_url()}/v1/console/capabilities/manifest"
-
         # Fetch manifest
-        response = requests.get(url, timeout=5)
+        response = client.get(MANIFEST_PATH)
         assert response.status_code == 200
 
         manifest = response.json()

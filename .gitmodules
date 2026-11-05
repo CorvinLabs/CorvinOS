@@ -1,3 +1,4 @@
 [submodule "corvin_decisions"]
 	path = corvin_decisions
 	url = https://github.com/CorvinLabs/Corvin-Knowledge.git
+	branch = main

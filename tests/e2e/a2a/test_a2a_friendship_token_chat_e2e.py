@@ -49,6 +49,22 @@ _KEYS = ("CORVIN_HOME", "CORVIN_TENANT_ID", "FORGE_ROOT", "VOICE_AUDIT_PATH",
          "CORVIN_AUDIT_ANCHOR_KEY", "XDG_CONFIG_HOME")
 
 
+def _run_as_member_install(case: unittest.TestCase) -> None:
+    """The A2A network is member-only (gate 28ad07b54; the console pairing routes answer
+    402 ``member_seat_required`` since 70e71eb91) and refuse a Free install before their
+    subject runs. Resolve the tier as ``member`` for the network gate only — the same seam
+    core/console/tests/conftest.py::_a2a_member_tier uses — and forget remembered verdicts
+    so an earlier Free-tier test cannot answer from the gate's cache."""
+    from corvin_operator.license import capability_api  # noqa: PLC0415
+    import a2a_license_gate  # noqa: PLC0415  # type: ignore[import-not-found]
+
+    tier = patch.object(capability_api, "active_tier", lambda **_k: "member")
+    tier.start()
+    case.addCleanup(tier.stop)
+    a2a_license_gate.reset_allow_cache()
+    case.addCleanup(a2a_license_gate.reset_allow_cache)
+
+
 class _Sandbox(unittest.TestCase):
     """Same env-sandbox shape as test_a2a_send_mcp_e2e.py — never touches
     the live install's audit chain or CORVIN_HOME."""
@@ -72,6 +88,7 @@ class _Sandbox(unittest.TestCase):
         os.environ["CORVIN_AUDIT_ANCHOR_KEY"] = str(self.tmp / "anchor.key")
         self.ws = self.tmp / "checkout" / ".corvin" / "forge"
         self.ws.mkdir(parents=True)
+        _run_as_member_install(self)
 
 
 # ── A) MCP tool gating + staging ───────────────────────────────────────────

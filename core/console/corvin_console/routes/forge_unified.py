@@ -1064,6 +1064,10 @@ async def search_forge(
             "count": len(deduped),
             "results": deduped,
         }
+    except HTTPException:
+        # The 400 for a too-short query is the answer, not an internal error;
+        # the broad handler below used to turn it into a 500.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

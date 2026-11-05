@@ -5,10 +5,10 @@ Owner-self-service web UI for Corvin. Mounted onto the existing
 (SPA). Opt-in: a fresh Corvin install does not bootstrap this
 plugin.
 
-See [`docs/decisions/ADR-0015-console-self-service-ui.md`](../../docs/decisions/ADR-0015-console-self-service-ui.md)
-for the architecture decision and
-[`outputs/corvin-console-konzept.md`](../../outputs/corvin-console-konzept.md)
-for the original design document.
+See [`corvin_decisions/decisions/ADR-0015-console-self-service-ui.md`](../../corvin_decisions/decisions/ADR-0015-console-self-service-ui.md)
+for the architecture decision. ADRs live only in the `corvin_decisions/` submodule
+(Corvin-Knowledge, ADR-0862/ADR-2205); the former `docs/decisions/` and `outputs/`
+copies are deprecated and gone.
 
 ## Status
 

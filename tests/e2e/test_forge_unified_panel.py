@@ -43,7 +43,8 @@ class TestForgeUnifiedPanel:
         # a bare GET is a 422 (which still proves the route is mounted), and
         # listing it above asserted 404-is-bad against a 422.
         assert client.get("/v1/console/forge/search").status_code == 422
-        assert client.get("/v1/console/forge/search?q=x").status_code in [200, 401, 500]
+        # A one-character query is the documented 400 (it used to leak out as a 500).
+        assert client.get("/v1/console/forge/search?q=x").status_code == 400
 
     async def test_tools_list_endpoint(self, client):
         """GET /v1/console/forge/tools returns tools list."""

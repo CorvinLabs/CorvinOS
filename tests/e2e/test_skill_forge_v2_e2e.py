@@ -127,7 +127,10 @@ def test_e2e_invalid_manifest_rejected():
         title="Invalid",
         description="Too short.",
         scope=SkillScope.TASK,
-        body_md="Just a body, no required sections."
+        # Long enough to pass the schema's 50-char minimum, so the rejection
+        # comes from the missing-section check this test is about (a shorter
+        # body is stopped at the schema step and never reaches it).
+        body_md="Just a body with enough prose to clear the schema minimum, but no required sections."
     )
 
     validator = ManifestValidator()

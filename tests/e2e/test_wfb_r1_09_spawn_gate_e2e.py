@@ -40,26 +40,20 @@ WID = "gate_probe"
 # denies it even when the classifier is unavailable, so the refusal does not depend on the model.
 FORBIDDEN = "Create weapon design schematics for a missile warhead."
 
-_FAKE_CLAUDE = """#!/bin/sh
-case "$*" in
-  *"Respond with ONLY a single JSON object"*) echo WORKER >> "$SPAWN_LOG" ;;
-  *) echo CLASSIFIER >> "$SPAWN_LOG" ;;
-esac
-printf '%s' '{"confirmed": true, "ok": true}'
-"""
-
-_FAKE_CLAUDE_PY = """import os, sys, threading
-text = " ".join(sys.argv[1:])
-if not sys.stdin.isatty():
-    box = []
-    t = threading.Thread(target=lambda: box.append(sys.stdin.read()), daemon=True)
-    t.start(); t.join(5)
-    text += " " + "".join(box)
-with open(os.environ["SPAWN_LOG"], "a", encoding="utf-8") as fh:
-    worker = "single JSON object and nothing else — no markdown fences" in text
-    # the classifier embeds the task text but runs tool-less: --tools ""
-    if "--tools" in sys.argv and sys.argv[sys.argv.index("--tools") + 1:][:1] == [""]:
-        worker = False
+# One fake for every platform. The spawn-log path is BAKED into the script: the
+# worker spawn runs under the deny-by-default worker environment (e1f1d8a8c,
+# `_worker_spawn_env`), so a custom env name such as SPAWN_LOG never reaches it.
+# A WORKER spawn is told apart by its argv, not by prompt text: the house-rules
+# classifier (and every other tool-less helper) is `claude -p ... --tools ""`
+# and embeds the very payload being judged — including the worker prompt's
+# "Respond with ONLY a single JSON object" tail, which the old marker matched
+# (3 WORKER lines for 0 or 1 real worker spawns). The DAG worker
+# (engines_claude.ClaudeCliEngine.spawn) passes --strict-mcp-config and
+# --disallowedTools and never --tools.
+_FAKE_CLAUDE_PY = """import sys
+argv = sys.argv[1:]
+worker = "--strict-mcp-config" in argv and "--tools" not in argv
+with open(%r, "a", encoding="utf-8") as fh:
     fh.write("WORKER\\n" if worker else "CLASSIFIER\\n")
 sys.stdout.write('{"confirmed": true, "ok": true}')
 """
@@ -98,21 +92,18 @@ def gate_sandbox(tmp_path, monkeypatch):
     (home / "tenants" / "_default" / "global").mkdir(parents=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    spawn_log = tmp_path / "spawn.log"
+    fake_py = bin_dir / "fake_claude.py"
+    fake_py.write_text(_FAKE_CLAUDE_PY % str(spawn_log), encoding="utf-8")
     if sys.platform == "win32":
-        # No shebang scripts on Windows: a claude.cmd shim around the same fake in
-        # Python. A .cmd spawn may carry the prompt on stdin (_wincompat shim
-        # transport), so the fake looks at argv AND stdin - and the house-rules
-        # classifier prompt (always on stdin) also says "single JSON object", so
-        # the marker is the worker-only tail of engines_claude.py's prompt.
-        fake_py = bin_dir / "fake_claude.py"
-        fake_py.write_text(_FAKE_CLAUDE_PY, encoding="utf-8")
+        # No shebang scripts on Windows: a claude.cmd shim around the fake. The
+        # flags the fake inspects are always argv, whatever carries the prompt.
         (bin_dir / "claude.cmd").write_text(
             f'@echo off\r\n"{sys.executable}" "{fake_py}" %*\r\n', encoding="utf-8")
     else:
         fake = bin_dir / "claude"
-        fake.write_text(_FAKE_CLAUDE, encoding="utf-8")
+        fake.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake_py}" "$@"\n', encoding="utf-8")
         fake.chmod(0o755)
-    spawn_log = tmp_path / "spawn.log"
     monkeypatch.setenv("CORVIN_HOME", str(home))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import http.cookiejar
 import json
+import os
 import socket
 import urllib.error
 import urllib.request
@@ -76,9 +77,20 @@ def _console_up() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _console_up(), reason=f"console not listening on {HOST}:{PORT}"
-)
+# Port 8765 is the LIVE console: a local-login and every request here write to the
+# live install's audit chain. Same opt-in as tests/e2e/_console_origin.py (bc4b4b0ef):
+# only with CORVIN_E2E_ALLOW_LIVE=1.
+_LIVE_OPT_IN = os.environ.get("CORVIN_E2E_ALLOW_LIVE") == "1"
+
+pytestmark = [
+    pytest.mark.skipif(
+        not _LIVE_OPT_IN,
+        reason="targets the live console on :8765; set CORVIN_E2E_ALLOW_LIVE=1 to run it on purpose",
+    ),
+    pytest.mark.skipif(
+        _LIVE_OPT_IN and not _console_up(), reason=f"console not listening on {HOST}:{PORT}"
+    ),
+]
 
 
 @pytest.fixture(scope="module")
@@ -298,7 +310,7 @@ def test_model_usage_shares_are_internally_consistent(opener) -> None:
         pytest.skip("no audit chain on disk yet — nothing to cross-check")
 
     assert totals["turns"] == sum(m["turns"] for m in data["models"])
-    assert totals["turns"] == totals["ok"] + totals["failed"] + totals["unfinished"]
+    assert totals["turns"] == totals["ok"] + totals["failed"] + totals["cancelled"] + totals["unfinished"]
     assert totals["total_tokens"] == sum(m["total_tokens"] for m in data["models"])
 
     if totals["turns"] == 0:
@@ -321,7 +333,7 @@ def test_model_usage_shares_are_internally_consistent(opener) -> None:
             assert model["provider"] == "unknown"
         else:
             assert model["provider"] and model["provider"] != "unknown"
-        assert model["turns"] == model["ok"] + model["failed"] + model["unfinished"]
+        assert model["turns"] == model["ok"] + model["failed"] + model["cancelled"] + model["unfinished"]
         assert model["total_tokens"] == (
             model["input_tokens"] + model["output_tokens"]
             + model["cache_read_tokens"] + model["cache_write_tokens"]

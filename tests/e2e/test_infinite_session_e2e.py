@@ -39,16 +39,18 @@ class TestInfiniteSessionE2E:
     @pytest.fixture
     def task_def(self, tenant_id: str) -> TaskDefinition:
         """Create a multi-phase task definition."""
-        return TaskDefinition(
-            task_id="task_infinite_e2e_001",
-            tenant_id=tenant_id,
-            autonomy_level="FULL",
-            phases=[
-                {"id": "phase_1", "skills": ["skill_a"], "gates": []},
-                {"id": "phase_2", "skills": ["skill_b"], "gates": []},
-                {"id": "phase_3", "skills": ["skill_c"], "gates": []},
+        # Phases are ``Phase`` dataclasses (ADR-0540 task_def.py) — the parser
+        # is ``TaskDefinition.from_dict``; a raw dict list is not a Phase.
+        return TaskDefinition.from_dict({
+            "task_id": "task_infinite_e2e_001",
+            "tenant_id": tenant_id,
+            "autonomy_level": 5,
+            "phases": [
+                {"id": "phase_1", "goal": "g1", "skills": ["skill_a"], "gates": []},
+                {"id": "phase_2", "goal": "g2", "skills": ["skill_b"], "gates": [], "depends_on": ["phase_1"]},
+                {"id": "phase_3", "goal": "g3", "skills": ["skill_c"], "gates": [], "depends_on": ["phase_2"]},
             ],
-        )
+        })
 
     @pytest.fixture
     def executor(self, tenant_id: str) -> TaskExecutor:
@@ -68,8 +70,8 @@ class TestInfiniteSessionE2E:
 
         # All audit events should have the task's tenant_id
         for event in result.audit_events:
-            assert event.get("tenant_id") == task_def.tenant_id, \
-                f"Event {event['event_type']} has wrong tenant_id: {event.get('tenant_id')}"
+            assert event.tenant_id == task_def.tenant_id, \
+                f"Event {event.event_type} has wrong tenant_id: {event.get('tenant_id')}"
 
     def test_session_auto_starter_detects_split(self, executor: TaskExecutor, task_def: TaskDefinition):
         """GATE 2: Verify SessionAutoStarter.on_task_progress() is called each iteration."""
@@ -80,7 +82,7 @@ class TestInfiniteSessionE2E:
         # Look for session_auto_split events (would be emitted if split triggers fire)
         # For this simple task with 3 phases, no splits should trigger (no context limit hit)
         # but the on_task_progress() must have been called
-        split_events = [e for e in result.audit_events if e.get("event_type") == "session_auto_split"]
+        split_events = [e for e in result.audit_events if e.event_type == "session_auto_split"]
         # In this test: 0 splits expected (small task), but structure is verified
         assert isinstance(split_events, list)
 
@@ -101,16 +103,20 @@ class TestInfiniteSessionE2E:
         assert result.success
 
         # Look for task_session_bridged events (created between phases)
-        bridge_events = [e for e in result.audit_events if e.get("event_type") == "task_session_bridged"]
+        bridge_events = [e for e in result.audit_events if e.event_type == "task_session_bridged"]
 
         # With 3 phases, we expect 2 bridges (phase 1→2, phase 2→3)
         assert len(bridge_events) == 2, f"Expected 2 bridges, got {len(bridge_events)}"
 
     def test_context_recovery_block_in_prompt(self):
         """GATE 5: Verify _infinite_session_context_block() integrates in system prompt."""
+        import time
+        now = time.time()
         sess = WebChatSession(
-            session_id="test_infinite_001",
+            sid="test_infinite_001",
             tenant_id="test_tenant",
+            created_at=now,
+            last_active_at=now,
             language_context={},
         )
 
@@ -132,8 +138,8 @@ class TestInfiniteSessionE2E:
         assert result.success
 
         # Verify all 3 phases completed
-        phase_events = [e for e in result.audit_events if "phase" in e.get("event_type", "")]
-        phase_completed_count = len([e for e in phase_events if e.get("event_type") == "phase_complete"])
+        phase_events = [e for e in result.audit_events if "phase" in e.event_type]
+        phase_completed_count = len([e for e in phase_events if e.event_type == "phase_complete"])
         assert phase_completed_count == 3, f"Expected 3 phases completed, got {phase_completed_count}"
 
     def test_no_user_prompt_for_session_split(self, executor: TaskExecutor, task_def: TaskDefinition):
@@ -146,7 +152,8 @@ class TestInfiniteSessionE2E:
         # Verify no "ask_user_for_new_session" or similar events
         problematic_events = [
             e for e in result.audit_events
-            if "ask" in e.get("event_type", "").lower() or "prompt" in e.get("event_type", "").lower()
+            # Whole-word match: a substring test hit every "task_*" event.
+            if {"ask", "prompt"} & set(e.event_type.lower().split("_"))
         ]
 
         assert len(problematic_events) == 0, \
@@ -166,7 +173,7 @@ class TestInfiniteSessionIntegration:
     def test_session_bridge_event_immutability(self):
         """Verify SessionBridgeEvent is frozen (immutable)."""
         event = SessionBridgeEvent.create(
-            tenant_id="test",
+            tenant_id="infinite_tenant",  # "test" is a reserved tenant id
             task_id="task_001",
             source_session_id="s1",
             dest_session_id="s2",

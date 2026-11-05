@@ -19,88 +19,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 
-class TestLicensingAuditEventsEndpoint:
-    """Tests for /v1/licensing/audit-events endpoint"""
-
-    @pytest.mark.asyncio
-    async def test_audit_events_returns_pii_redacted_data(self):
-        """Verify audit events are returned with PII redacted (ADR-0297)"""
-        # Mock EventStore
-        mock_store = AsyncMock()
-        mock_store.query_events.return_value = [
-            MagicMock(
-                id="evt_abc123",
-                timestamp="2026-09-16T10:00:00Z",
-                event_type="consent_granted",
-                signal=0.9,
-            )
-        ]
-
-        # Mock PIIDetector
-        mock_detector = MagicMock()
-        mock_detector.redact.return_value = "consent_granted"
-        mock_detector.scan.return_value = False  # No PII detected
-
-        with patch('core.learning.event_store.EventStore', return_value=mock_store):
-            with patch('core.pii.detector.PIIDetector', return_value=mock_detector):
-                # Import after mocking
-                from core.console.corvin_console.routes.features_phase2 import get_audit_events
-
-                response = await get_audit_events(limit=50)
-
-                # Verify response structure
-                assert "events" in response
-                assert "total" in response
-                assert "compliance" in response
-                assert response["compliance"] == "ADR-0297 PII filtering applied"
-
-                # Verify PII redaction
-                assert len(response["events"]) > 0
-                assert response["events"][0]["user_id"] == "[REDACTED]"
-                assert response["events"][0]["event_type"] == "consent_granted"
-
-    @pytest.mark.asyncio
-    async def test_audit_events_skips_pii_detected_events(self):
-        """Events with detected PII are skipped (fail-closed)"""
-        mock_store = AsyncMock()
-        mock_store.query_events.return_value = [
-            MagicMock(
-                id="evt_with_pii",
-                timestamp="2026-09-16T10:00:00Z",
-                event_type="user_signup",
-                signal=0.8,
-            )
-        ]
-
-        mock_detector = MagicMock()
-        mock_detector.redact.return_value = "user_signup"
-        mock_detector.scan.return_value = True  # PII detected!
-
-        with patch('core.learning.event_store.EventStore', return_value=mock_store):
-            with patch('core.pii.detector.PIIDetector', return_value=mock_detector):
-                from core.console.corvin_console.routes.features_phase2 import get_audit_events
-
-                response = await get_audit_events(limit=50)
-
-                # Verify PII event was skipped
-                assert response["total"] == 0  # No events returned
-                assert len(response["events"]) == 0
-
-    @pytest.mark.asyncio
-    async def test_audit_events_graceful_error_handling(self):
-        """EventStore errors are handled gracefully (don't break dashboard)"""
-        mock_store = AsyncMock()
-        mock_store.query_events.side_effect = Exception("Database connection failed")
-
-        with patch('core.learning.event_store.EventStore', return_value=mock_store):
-            from core.console.corvin_console.routes.features_phase2 import get_audit_events
-
-            response = await get_audit_events(limit=50)
-
-            # Verify graceful fallback
-            assert "events" in response
-            assert response["events"] == []
-            assert "error" in response
+# TestLicensingAuditEventsEndpoint removed (2026-11-05): it mocked a PIIDetector
+# redaction path that 6ee192386 (ADR-0856) deleted — the route is now a
+# session-scoped, content-free projection of the tenant event store. The route
+# is driven over HTTP by tests/e2e/test_phase2_live_endpoints_e2e.py.
 
 
 class TestMonitoringMetricsEndpoint:
@@ -146,19 +68,7 @@ class TestModelsEndpoint:
 class TestVibeDashboardIntegration:
     """Integration tests: React components ↔ live endpoints"""
 
-    def test_licensing_audit_tab_queries_correct_endpoint(self):
-        """LicensingAuditTab fetches from /v1/licensing/audit-events"""
-        import os
-        tab_path = os.path.join(
-            os.path.dirname(__file__),
-            "../../core/console/corvin_console/web-next/src/pages/vibe-engineering/tabs/LicensingAuditTab.tsx"
-        )
-
-        # Verify component exists and contains endpoint
-        with open(tab_path, 'r', encoding="utf-8") as f:
-            content = f.read()
-            assert "/v1/licensing/audit-events" in content
-            assert "fetch" in content
+    # test_licensing_audit_tab_queries_correct_endpoint removed: LicensingAuditTab.tsx deleted in eb334c032.
 
     def test_monitoring_tab_queries_correct_endpoint(self):
         """MonitoringTab fetches from /v1/monitoring/metrics"""
@@ -172,17 +82,7 @@ class TestVibeDashboardIntegration:
             content = f.read()
             assert "/v1/monitoring/metrics" in content
 
-    def test_models_tab_queries_correct_endpoint(self):
-        """ModelsTab fetches from /v1/models/available"""
-        import os
-        tab_path = os.path.join(
-            os.path.dirname(__file__),
-            "../../core/console/corvin_console/web-next/src/pages/vibe-engineering/tabs/ModelsTab.tsx"
-        )
-
-        with open(tab_path, 'r', encoding="utf-8") as f:
-            content = f.read()
-            assert "/v1/models/available" in content
+    # test_models_tab_queries_correct_endpoint removed: ModelsTab.tsx deleted in 64e74e743 (ADR-0908).
 
 
 if __name__ == "__main__":

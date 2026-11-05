@@ -17,6 +17,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
+import copy
 import uuid
 import json
 
@@ -189,8 +190,10 @@ def mock_api_client():
                 "created_by": "test-user",
                 "tenant_id": tenant_id,
                 "state": {
-                    "subsystems": dict(self.state.subsystems),
-                    "overrides": dict(self.state.overrides),
+                    # deepcopy: a shallow dict() shared the per-subsystem dicts,
+                    # so a later control_subsystem() rewrote the snapshot too.
+                    "subsystems": copy.deepcopy(self.state.subsystems),
+                    "overrides": copy.deepcopy(self.state.overrides),
                     "intent_classifications": list(self.state.intent_classifications),
                 },
             }
@@ -213,8 +216,8 @@ def mock_api_client():
                 raise PermissionError(f"Cannot restore snapshot from different tenant")
 
             # Restore state from snapshot
-            self.state.subsystems = dict(snapshot["state"]["subsystems"])
-            self.state.overrides = dict(snapshot["state"]["overrides"])
+            self.state.subsystems = copy.deepcopy(snapshot["state"]["subsystems"])
+            self.state.overrides = copy.deepcopy(snapshot["state"]["overrides"])
 
             result = {
                 "snapshot_id": snapshot_id,

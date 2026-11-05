@@ -1,385 +1,146 @@
-"""
-E2E Tests for Forge Console Panel — All 5 Tabs with Real Data
+"""E2E: the Forge console panel's tabs serve the tenant's real Forge data.
 
-Tests verify that:
-1. Tools tab displays real tools (6 items)
-2. Skills tab displays real skills (5 items)
-3. OS-Skills tab structure is ready for plugins
-4. Graph tab displays nodes + edges
-5. Audit tab shows forge_* events
+Every request goes over the real ASGI transport through the ``/v1/console/forge``
+mount (``client`` fixture, tests/fixtures_console.py). The data is SEEDED into the
+test's sandboxed ``CORVIN_HOME`` in the exact on-disk layouts the routes read:
 
-NO MOCKS — all data comes from ~/.corvin/tenants/_default/global/
+* Tools: ``<tenant>/global/forge/registry.json`` (name → entry).
+* Skills: one DIRECTORY per skill, ``<tenant>/global/skill-forge/skills/<name>/``
+  with ``meta.json`` — never a skill ``registry.json`` (d3dbe9baa, ADR-0855: that
+  file never existed, which is why the tab once showed 0 skills).
+
+This file used to read the operator's LIVE ``~/.corvin`` registries and call the
+handlers directly; since the test harness sandboxes ``CORVIN_HOME`` it saw nothing.
+It also asserted behaviour d3dbe9baa removed on purpose: tool enable/disable
+"succeeded" while persisting nothing (now an honest 501), and the OS-Skill guard
+compared against fake ids such as ``audit-gate`` (now: unknown id → 404, real
+compliance-tier Skills are refused by the registry itself).
 """
+from __future__ import annotations
+
+import json
 
 import pytest
-import json
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Dict, Any, List
-from unittest.mock import MagicMock
-from fastapi.testclient import TestClient
 
-from core.console.corvin_console.routes import forge_unified
-from core.console.corvin_console import auth as session_auth
 from core.console.corvin_console import _bootstrap
 
+BASE = "/v1/console/forge"
+TID = "_default"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Fixtures: Real Registry Data
-# ─────────────────────────────────────────────────────────────────────────────
+TOOLS = {
+    "browser_control": {"name": "browser_control", "description": "Drive a browser",
+                        "version": "1.0.0", "runtime": "python",
+                        "input_schema": {"properties": {"url": {}, "action": {}}}},
+    "send_email": {"name": "send_email", "description": "Send an e-mail",
+                   "version": "1.0.0", "runtime": "python"},
+    "sql_query": {"name": "sql_query", "description": "Run a read-only SQL query",
+                  "version": "0.2.0", "runtime": "python"},
+}
 
-@pytest.fixture(scope="session")
-def forge_registry_path() -> Path:
-    """Get path to real Forge tools registry."""
-    tid = "_default"
-    return _bootstrap.forge_paths.tenant_global_dir(tid) / "forge" / "registry.json"
-
-
-@pytest.fixture(scope="session")
-def skill_registry_path() -> Path:
-    """Get path to real SkillForge registry."""
-    tid = "_default"
-    return _bootstrap.forge_paths.tenant_global_dir(tid) / "skill-forge" / "registry.json"
+SKILLS = {
+    "os.delegation_router": {
+        "description": "Routes a turn to the right engine", "type": "learned-experience",
+        "grades": [{"run_id": f"r{i}", "score": s, "ts": "2026-10-01T00:00:00Z", "notes": ""}
+                   for i, s in enumerate((0.92, 0.88, 0.95, 0.91))],
+    },
+    "assistant.code_reviewer": {"description": "Reviews code changes", "type": "workflow"},
+    "assistant.e2e_wiring_proof": {"description": "Proves a new entry point is reachable",
+                                   "type": "learned-experience"},
+}
 
 
 @pytest.fixture
-def mock_session_rec() -> session_auth.SessionRecord:
-    """Create a mock session record for auth."""
-    rec = MagicMock(spec=session_auth.SessionRecord)
-    rec.tenant_id = "_default"
-    rec.sid_fingerprint = "test_sid_12345"
-    rec.user_id = "test_user"
-    return rec
+def seeded(client):
+    """Seed the sandboxed tenant with a Tools registry and three skill directories."""
+    global_dir = _bootstrap.forge_paths.tenant_global_dir(TID)
+    reg = global_dir / "forge" / "registry.json"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps(TOOLS), encoding="utf-8")
+    skills_dir = global_dir / "skill-forge" / "skills"
+    for name, meta in SKILLS.items():
+        d = skills_dir / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps({"name": name, "scope": "user", **meta}),
+                                     encoding="utf-8")
+        (d / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+    return client
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test Suite: Real Registry Access
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestForgeRegistryFiles:
-    """Verify that registry files exist and are readable."""
-
-    def test_forge_registry_exists(self, forge_registry_path: Path):
-        """Verify forge registry.json exists."""
-        assert forge_registry_path.exists(), f"Forge registry not found at {forge_registry_path}"
-
-    def test_forge_registry_is_valid_json(self, forge_registry_path: Path):
-        """Verify forge registry.json is valid JSON."""
-        data = json.loads(forge_registry_path.read_text(encoding="utf-8"))
-        assert isinstance(data, dict), "Registry should be a dict"
-        assert len(data) >= 5, "Registry should have ≥5 tools"
-
-    def test_skill_registry_exists(self, skill_registry_path: Path):
-        """Verify skill-forge registry.json exists."""
-        assert skill_registry_path.exists(), f"Skill registry not found at {skill_registry_path}"
-
-    def test_skill_registry_is_valid_json(self, skill_registry_path: Path):
-        """Verify skill-forge registry.json is valid JSON."""
-        data = json.loads(skill_registry_path.read_text(encoding="utf-8"))
-        assert isinstance(data, dict), "Registry should be a dict"
-        assert len(data) >= 3, "Registry should have ≥3 skills"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test Suite: Tools Tab (Backend API)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TestForgeToolsTab:
-    """Verify Tools tab returns real data from registry."""
+    def test_list_tools_returns_the_seeded_registry(self, seeded):
+        data = seeded.get(f"{BASE}/tools").json()
+        by_name = {t["name"]: t for t in data["tools"]}
+        assert set(TOOLS) <= set(by_name)
+        assert by_name["browser_control"]["param_count"] == 2
+        assert by_name["browser_control"]["scope_source"] == "user"
+        for tool in data["tools"]:
+            assert {"id", "name", "enabled", "version", "runtime", "description"} <= set(tool)
 
-    @pytest.mark.asyncio
-    async def test_list_tools_returns_real_data(self, mock_session_rec, forge_registry_path: Path):
-        """Test /forge/tools endpoint returns real tools."""
-        # Load expected data
-        expected = json.loads(forge_registry_path.read_text(encoding="utf-8"))
+    @pytest.mark.parametrize("verb", ["enable", "disable"])
+    def test_tool_toggle_is_an_honest_501(self, seeded, verb):
+        response = seeded.post(f"{BASE}/tools/browser_control/{verb}")
+        assert response.status_code == 501
+        assert "not implemented" in response.json()["detail"]
 
-        # Call the route handler directly
-        response = await forge_unified.list_tools(mock_session_rec)
-
-        # Verify response structure
-        assert "tools" in response
-        assert "count" in response
-        assert response["count"] >= 5, f"Expected ≥5 tools, got {response['count']}"
-
-        # Verify specific tools exist
-        tool_names = {t["name"] for t in response["tools"]}
-        expected_names = {"browser_control", "send_email", "sql_query", "file_storage"}
-        assert expected_names.issubset(tool_names), f"Missing expected tools: {expected_names - tool_names}"
-
-    @pytest.mark.asyncio
-    async def test_tools_have_metadata(self, mock_session_rec):
-        """Test that tools have required metadata fields."""
-        response = await forge_unified.list_tools(mock_session_rec)
-
-        for tool in response["tools"]:
-            # Required fields per schema
-            assert "id" in tool
-            assert "name" in tool
-            assert "enabled" in tool
-            assert "version" in tool
-            assert "runtime" in tool
-            assert "description" in tool
-
-            # Verify types
-            assert isinstance(tool["name"], str)
-            assert isinstance(tool["enabled"], bool)
-            assert isinstance(tool["version"], str)
-
-    @pytest.mark.asyncio
-    async def test_tools_enabled_status_correct(self, mock_session_rec):
-        """Test that tool enabled/disabled status is correct."""
-        response = await forge_unified.list_tools(mock_session_rec)
-        tools_by_name = {t["name"]: t for t in response["tools"]}
-
-        # From test registry
-        assert tools_by_name["browser_control"]["enabled"] is True
-        assert tools_by_name["send_email"]["enabled"] is True
-        assert tools_by_name["webhook_sender"]["enabled"] is False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test Suite: Skills Tab (Backend API)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TestForgeSkillsTab:
-    """Verify Skills tab returns real data from registry."""
+    def test_list_skills_reads_the_skill_directories(self, seeded):
+        data = seeded.get(f"{BASE}/skills").json()
+        names = {s["name"] for s in data["skills"]}
+        assert set(SKILLS) <= names
+        assert data["capabilities"] == {"enable_disable": False, "rollback": False,
+                                        "versioning": False}
 
-    @pytest.mark.asyncio
-    async def test_list_skills_returns_real_data(self, mock_session_rec, skill_registry_path: Path):
-        """Test /forge/skills endpoint returns real skills."""
-        response = await forge_unified.list_skills(mock_session_rec)
+    def test_learning_state_comes_from_real_grades(self, seeded):
+        skills = {s["name"]: s for s in seeded.get(f"{BASE}/skills").json()["skills"]}
+        state = skills["os.delegation_router"]["learning_state"]
+        assert state["feedback_count"] == 4
+        assert state["confidence"] == pytest.approx((0.92 + 0.88 + 0.95 + 0.91) / 4, abs=1e-3)
+        assert skills["assistant.code_reviewer"]["learning_state"] is None
 
-        # Verify response structure
-        assert "skills" in response
-        assert "count" in response
-        assert response["count"] >= 3, f"Expected ≥3 skills, got {response['count']}"
-
-        # Verify specific skills exist
-        skill_names = {s["name"] for s in response["skills"]}
-        expected_names = {
-            "os.delegation_router",
-            "assistant.code_reviewer",
-            "assistant.e2e_wiring_proof",
-        }
-        assert expected_names.issubset(skill_names), f"Missing expected skills: {expected_names - skill_names}"
-
-    @pytest.mark.asyncio
-    async def test_skills_have_metadata(self, mock_session_rec):
-        """Test that skills have required metadata fields."""
-        response = await forge_unified.list_skills(mock_session_rec)
-
-        for skill in response["skills"]:
-            # Required fields per schema
-            assert "id" in skill
-            assert "name" in skill
-            assert "enabled" in skill
-            assert "version" in skill
-            assert "type" in skill
-            assert "description" in skill
-
-            # Verify types
-            assert isinstance(skill["name"], str)
-            assert isinstance(skill["enabled"], bool)
-            assert isinstance(skill["version"], str)
-
-    @pytest.mark.asyncio
-    async def test_skills_learning_state_populated(self, mock_session_rec):
-        """Test that skills with grades have learning_state populated."""
-        response = await forge_unified.list_skills(mock_session_rec)
-        skills_by_name = {s["name"]: s for s in response["skills"]}
-
-        # os.delegation_router has grades [0.92, 0.88, 0.95, 0.91]
-        router_skill = skills_by_name["os.delegation_router"]
-        assert router_skill["learning_state"] is not None
-        assert router_skill["learning_state"]["confidence"] > 0.9
-        assert router_skill["learning_state"]["feedback_count"] == 4
-
-    @pytest.mark.asyncio
-    async def test_skills_injectable_flag_set(self, mock_session_rec):
-        """Test that injectable flag is correctly set."""
-        response = await forge_unified.list_skills(mock_session_rec)
-        skills_by_name = {s["name"]: s for s in response["skills"]}
-
-        # os.delegation_router should be injectable
-        assert skills_by_name["os.delegation_router"]["injectable"] is True
-
-        # assistant.unified_learning_loops_optimizer should NOT be injectable
-        assert skills_by_name["assistant.unified_learning_loops_optimizer"]["injectable"] is False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test Suite: OS-Skills Tab (Backend API)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TestForgeOSSkillsTab:
-    """Verify OS-Skills tab structure is ready for plugins."""
+    def test_list_os_skills_structure(self, seeded):
+        data = seeded.get(f"{BASE}/os-skills").json()
+        assert {"os_skills", "count", "tenant_id", "timestamp"} <= set(data)
+        assert isinstance(data["os_skills"], list)
 
-    @pytest.mark.asyncio
-    async def test_list_os_skills_structure(self, mock_session_rec):
-        """Test /forge/os-skills endpoint returns proper structure."""
-        response = await forge_unified.list_os_skills(mock_session_rec)
+    def test_disabling_an_unregistered_os_skill_is_404(self, seeded):
+        assert seeded.post(f"{BASE}/os-skills/audit-gate/disable").status_code == 404
 
-        # Verify response structure
-        assert "os_skills" in response
-        assert "count" in response
-        assert "tenant_id" in response
-        assert "timestamp" in response
-
-        # Structure ready (empty for now, plugins not yet integrated)
-        assert isinstance(response["os_skills"], list)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test Suite: Graph Tab (Backend API)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TestForgeGraphTab:
-    """Verify Graph tab returns dependency graph."""
+    def test_graph_has_a_node_per_tool_and_skill(self, seeded):
+        data = seeded.get(f"{BASE}/graph").json()
+        ids = {n["id"] for n in data["nodes"]}
+        assert {f"tool:{n}" for n in TOOLS} <= ids
+        assert {f"skill:{n}" for n in SKILLS} <= ids
+        assert {n["type"] for n in data["nodes"]} <= {"tool", "skill", "os-skill"}
 
-    @pytest.mark.asyncio
-    async def test_graph_returns_nodes(self, mock_session_rec):
-        """Test /forge/graph endpoint returns nodes for tools + skills."""
-        response = await forge_unified.get_dependency_graph(mock_session_rec)
-
-        # Verify response structure
-        assert "nodes" in response
-        assert "edges" in response
-        assert "cycles" in response
-
-        # Verify nodes are populated (tools + skills)
-        assert len(response["nodes"]) >= 8, f"Expected ≥8 nodes, got {len(response['nodes'])}"
-
-        # Verify node structure
-        for node in response["nodes"]:
-            assert "id" in node
-            assert "name" in node
-            assert "type" in node
-            assert "enabled" in node
-            assert node["type"] in ("tool", "skill", "os-skill")
-
-    @pytest.mark.asyncio
-    async def test_graph_has_tool_and_skill_nodes(self, mock_session_rec):
-        """Test that graph has nodes for both tools and skills."""
-        response = await forge_unified.get_dependency_graph(mock_session_rec)
-
-        node_types = {n["type"] for n in response["nodes"]}
-        assert "tool" in node_types
-        assert "skill" in node_types
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test Suite: Audit Tab (Backend API)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TestForgeAuditTab:
-    """Verify Audit tab returns audit trail."""
+    def test_audit_endpoint_structure(self, seeded):
+        response = seeded.get(f"{BASE}/audit")
+        assert response.status_code == 200, response.text[:300]
+        data = response.json()
+        assert {"events", "count", "tenant_id", "timestamp", "complete"} <= set(data)
+        for event in data["events"]:
+            assert {"id", "timestamp", "type", "resource_type", "resource_id", "action"} <= set(event)
 
-    @pytest.mark.asyncio
-    async def test_audit_endpoint_structure(self, mock_session_rec):
-        """Test /forge/audit endpoint returns proper structure."""
-        response = await forge_unified.get_audit_trail(mock_session_rec)
-
-        # Verify response structure
-        assert "events" in response
-        assert "count" in response
-        assert "tenant_id" in response
-        assert "timestamp" in response
-
-        # Events should be a list (may be empty initially)
-        assert isinstance(response["events"], list)
-
-    @pytest.mark.asyncio
-    async def test_audit_events_have_required_fields(self, mock_session_rec):
-        """Test that audit events have required fields."""
-        response = await forge_unified.get_audit_trail(mock_session_rec)
-
-        for event in response["events"]:
-            assert "id" in event
-            assert "timestamp" in event
-            assert "type" in event
-            assert "resource_type" in event
-            assert "resource_id" in event
-            assert "action" in event
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test Suite: Cross-Tab Search
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TestForgeSearch:
-    """Verify search functionality works across tabs."""
+    def test_search_finds_tools(self, seeded):
+        results = seeded.get(f"{BASE}/search", params={"q": "browser"}).json()["results"]
+        assert any(r["type"] == "tool" and r["id"] == "browser_control" for r in results)
 
-    @pytest.mark.asyncio
-    async def test_search_finds_tools(self, mock_session_rec):
-        """Test search finds tools."""
-        response = await forge_unified.search_forge(mock_session_rec, q="browser")
+    def test_search_finds_skills(self, seeded):
+        results = seeded.get(f"{BASE}/search", params={"q": "router"}).json()["results"]
+        assert any(r["type"] == "skill" and r["id"] == "os.delegation_router" for r in results)
 
-        assert response["count"] >= 1
-        assert any(r["type"] == "tool" and "browser" in r["name"].lower() for r in response["results"])
+    def test_search_deduplicates_results(self, seeded):
+        results = seeded.get(f"{BASE}/search", params={"q": "re"}).json()["results"]
+        keys = [(r["type"], r["id"]) for r in results]
+        assert keys and len(keys) == len(set(keys))
 
-    @pytest.mark.asyncio
-    async def test_search_finds_skills(self, mock_session_rec):
-        """Test search finds skills."""
-        response = await forge_unified.search_forge(mock_session_rec, q="router")
-
-        assert response["count"] >= 1
-        assert any(r["type"] == "skill" and "router" in r["name"].lower() for r in response["results"])
-
-    @pytest.mark.asyncio
-    async def test_search_deduplicates_results(self, mock_session_rec):
-        """Test that search deduplicates results."""
-        response = await forge_unified.search_forge(mock_session_rec, q="code")
-
-        # Extract (type, id) pairs to check for duplicates
-        seen = set()
-        duplicates = []
-        for r in response["results"]:
-            key = (r["type"], r["id"])
-            if key in seen:
-                duplicates.append(key)
-            seen.add(key)
-
-        assert len(duplicates) == 0, f"Found duplicate results: {duplicates}"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test Suite: Mutations (Enable/Disable)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestForgeMutations:
-    """Verify enable/disable mutations work."""
-
-    @pytest.mark.asyncio
-    async def test_enable_tool_audit_logged(self, mock_session_rec):
-        """Test that enabling a tool is audit-logged."""
-        # Note: This test verifies audit logging is called (side effect)
-        # The actual audit chain write is tested separately
-
-        response = await forge_unified.enable_tool("test_tool", mock_session_rec)
-
-        assert response["status"] == "enabled"
-        assert response["tool_id"] == "test_tool"
-        assert "timestamp" in response
-
-    @pytest.mark.asyncio
-    async def test_disable_tool_audit_logged(self, mock_session_rec):
-        """Test that disabling a tool is audit-logged."""
-        response = await forge_unified.disable_tool("test_tool", mock_session_rec)
-
-        assert response["status"] == "disabled"
-        assert response["tool_id"] == "test_tool"
-        assert "timestamp" in response
-
-    @pytest.mark.asyncio
-    async def test_cannot_disable_meta_os_skill(self, mock_session_rec):
-        """Test that Meta-Skills (compliance-critical) cannot be disabled."""
-        from fastapi import HTTPException
-
-        with pytest.raises(HTTPException) as exc_info:
-            await forge_unified.disable_os_skill("audit-gate", mock_session_rec)
-
-        assert exc_info.value.status_code == 403
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    def test_one_character_query_is_400(self, seeded):
+        assert seeded.get(f"{BASE}/search", params={"q": "e"}).status_code == 400

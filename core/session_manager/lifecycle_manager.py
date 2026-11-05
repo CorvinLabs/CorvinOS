@@ -34,6 +34,13 @@ class Checkpoint:
     audit_trail_hash: str  # Hash-chain from previous session
     checkpoint_hash: str = field(default="")
     phase: str = field(default="execution")
+    # ADR-0668 token-savings metrics. CheckpointManager.save_checkpoint persists and
+    # load_checkpoint restores them since 252aa3705, but the fields were never declared
+    # here, so every save raised AttributeError and SessionAutoStarter refused every split.
+    baseline_tokens: int = field(default=0)
+    actual_tokens: int = field(default=0)
+    savings_tokens: int = field(default=0)
+    savings_pct: float = field(default=0.0)
 
     def compute_hash(self) -> str:
         """Compute SHA256 of all checkpoint fields (CRITICAL-004 fix: complete integrity).

@@ -133,63 +133,11 @@ class TestPhase2LiveDataE2E:
         # Should be able to handle both historical and new data
         assert isinstance(today_measurements, list)
 
-    def test_transformation_produces_valid_scores(self, sample_measurements: list[dict]):
-        """Transformation should convert loss metrics to valid 0-10 scores."""
-        from core.console.corvin_console.web_next.src.pages.vibe_engineering.hooks.useLiveMaturityData import (
-            transformToLoopScores,
-        )
-
-        # Note: Can't directly import TypeScript, so we simulate the transformation
-        # locally using the same logic
-
-        def simulate_transform(measurements: list[dict]) -> dict[str, float]:
-            """Simulate hook transformation logic."""
-            if not measurements:
-                return {
-                    "confidence": 7.8,
-                    "routing": 7.1,
-                    "context": 7.4,
-                    "workflow": 6.8,
-                    "data_flow": 7.0,
-                    "security": 7.3,
-                    "memory": 7.2,
-                    "skills": 6.9,
-                    "plugins": 7.1,
-                    "audit": 6.8,
-                    "compliance": 7.0,
-                    "system": 7.1,
-                    "meta_convergence": 8.1,
-                }
-
-            # Average metrics
-            avg_loss_confidence = sum(
-                m["learning"]["loss_confidence"] for m in measurements
-            ) / len(measurements)
-            avg_accuracy_routing = sum(
-                m["learning"]["accuracy_routing"] for m in measurements
-            ) / len(measurements)
-            avg_convergence = sum(
-                m["learning"]["convergence_rate"] for m in measurements
-            ) / len(measurements)
-
-            # Transform
-            confidence_score = (1 - avg_loss_confidence) * 10
-            routing_score = avg_accuracy_routing * 10
-            meta_score = min(10, avg_convergence * 10)
-
-            return {
-                "confidence": min(10, max(2, confidence_score)),
-                "routing": min(10, max(2, routing_score)),
-                "meta_convergence": min(10, max(2, meta_score)),
-            }
-
-        scores = simulate_transform(sample_measurements)
-
-        # All scores should be in valid range
-        assert all(0 <= v <= 10 for v in scores.values())
-
-        # Scores should be reasonable (not NaN or inf)
-        assert all(not float('nan') == v for v in scores.values())
+    # test_transformation_produces_valid_scores was removed: it imported the
+    # TypeScript hook useLiveMaturityData as a Python module (impossible) and
+    # then asserted on a local re-implementation of the transform, so it tested
+    # no shipped code. The transform is covered where it lives:
+    # web-next/src/pages/vibe-engineering/hooks/useLiveMaturityData.test.ts.
 
     def test_fallback_to_test_data_on_empty(self):
         """If no measurements available, should use fallback test data."""

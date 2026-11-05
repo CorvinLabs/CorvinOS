@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import http.cookiejar
 import json
+import os
 import urllib.error
 import urllib.request
 import uuid
@@ -50,9 +51,21 @@ from ._console_chunks import (
 
 CONSOLE = f"{BASE}/v1/console"
 
-pytestmark = pytest.mark.skipif(
-    not console_up(), reason="console not listening on 127.0.0.1:8765"
-)
+# This file CREATES (and then deletes) a skill on the live install — a write
+# into the operator's real registry and audit chain. Tests never touch the
+# live install unless asked to: same opt-in as tests/e2e/_console_origin.py
+# (bc4b4b0ef), CORVIN_E2E_ALLOW_LIVE=1.
+_LIVE_OPT_IN = os.environ.get("CORVIN_E2E_ALLOW_LIVE") == "1"
+
+pytestmark = [
+    pytest.mark.skipif(
+        not _LIVE_OPT_IN,
+        reason="writes a skill to the live console on :8765; set CORVIN_E2E_ALLOW_LIVE=1 to run it on purpose",
+    ),
+    pytest.mark.skipif(
+        _LIVE_OPT_IN and not console_up(), reason="console not listening on 127.0.0.1:8765"
+    ),
+]
 
 #: A string only the merged template composer contains (its form's test id).
 #: Used as the positive control: without it, an absence assertion below would
@@ -204,26 +217,36 @@ def test_skill_forge_is_the_first_tab_and_the_default(
     the two facts live in different constants — the ordered id list and the
     default — so nothing but a check keeps them together.
     """
-    # Match the FORGE_TABS array itself, whatever sits between its entries:
-    # the literal triple "skill-forge","tools","skills" went stale when
-    # 312e22648 inserted "autonomous-forge" as the second tab (2026-09-21),
-    # although skill-forge stayed first. What must hold is that the array
-    # STARTS with skill-forge and still carries tools and skills after it.
+    # a6c363004 (2026-10-05) folded Skill/Tool/Plugin Forge into ONE
+    # "generator" top-level tab: FORGE_TABS now starts with "generator" (also
+    # DEFAULT_TAB), and Skill Forge leads Generator's own sub-tabs
+    # (GENERATOR_SUBTABS = ["skill","tool","plugin","layer"], default "skill").
+    # What must hold: the top-level array STARTS with generator and still
+    # carries tools and skills after it, and the sub-tab array starts with skill.
     import re
 
     tab_arrays = [
         m.group(0)
         for body in served_chunks.values()
-        for m in re.finditer(r"""\[(["'])skill-forge\1[^\]]{0,300}\]""", body)
+        for m in re.finditer(r"""\[(["'])generator\1[^\]]{0,300}\]""", body)
     ]
     hits = [
         arr for arr in tab_arrays
         if re.search(r"""(["'])tools\1.*(["'])skills\2""", arr)
     ]
     assert hits, (
-        "the served bundle has no tab list that starts with skill-forge and "
+        "the served bundle has no tab list that starts with generator and "
         "then carries tools and skills; either the order changed or the crawl "
-        f"missed the page chunk (arrays starting with skill-forge: {tab_arrays})"
+        f"missed the page chunk (arrays starting with generator: {tab_arrays})"
+    )
+    sub_hits = [
+        m.group(0)
+        for body in served_chunks.values()
+        for m in re.finditer(r"""\[(["'])skill\1,\s*(["'])tool\2[^\]]{0,80}\]""", body)
+    ]
+    assert sub_hits, (
+        "no served Generator sub-tab list starting with skill then tool — "
+        "Skill Forge must lead the Generator sub-tabs"
     )
 
 
@@ -336,10 +359,14 @@ def test_template_composer_route_creates_a_skill_visible_in_the_creator_library(
         )
 
         entry = next(s for s in library["skills"] if s["name"] == name)
-        assert entry["injectable"] is False, (
-            "a freshly created, ungraded skill must report itself as inert — it "
-            "sits below skill_inject's eligibility gate and is never injected, "
-            "and the UI must not imply otherwise"
+        # Since 82753a612 (2026-09-28) the manual route seeds one bootstrap
+        # grade, so a fresh skill is injectable exactly when that seed landed —
+        # the library must report the same answer the create route did, never
+        # a claim of its own.
+        assert entry["injectable"] is bool(created.get("bootstrap_graded")), (
+            f"library reports injectable={entry['injectable']!r} but the create "
+            f"route reported bootstrap_graded={created.get('bootstrap_graded')!r}; "
+            "the UI must not imply a skill is used when it is not (or vice versa)"
         )
     finally:
         _request(opener, "DELETE", f"/skills/manual/{name}", csrf_token=csrf)

@@ -125,6 +125,7 @@ ROLE_TAB_FILES: dict[str, str] = {
     "src/pages/tasks/index.tsx": "parsed: VIEWS",
     "src/components/chat/ChatContextSidebar.tsx": "parsed: MODES",
     "src/pages/tasks/graph-view.tsx": "ignored: the tabs are the tenant's initiatives at runtime (data), not a declared set",
+    "src/pages/memory.tsx": "ignored: the tablist is a filter over one list (local state, no ?tab= deep link), not separate views",
 }
 
 _STR = r"['\"][A-Za-z0-9_ -]+['\"]"

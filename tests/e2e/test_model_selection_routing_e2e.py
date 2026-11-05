@@ -15,6 +15,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from corvin_operator.bridges.shared.model_selector import tier_model
+
 
 class TestATORoutingInjection:
     """ADR-0165: ATO Recommendation → Model Selection Routing."""
@@ -57,7 +59,8 @@ class TestATORoutingInjection:
         )
 
         # ATO recommendation should be applied
-        assert result == "claude-sonnet-5", "ATO recommendation not applied"
+        # The family resolves to its newest version (ADR-2090 model lineage).
+        assert result == tier_model("sonnet"), "ATO recommendation not applied"
 
     def test_ato_haiku_recommendation_applied(self):
         """Verify ATO can recommend Haiku (lowest cost model)."""
@@ -75,7 +78,7 @@ class TestATORoutingInjection:
             ato_plan_hint=ato_plan_hint,
         )
 
-        assert result == "claude-haiku-4-5-20251001", "Haiku recommendation not applied"
+        assert result == tier_model("haiku"), "Haiku recommendation not applied"
 
     def test_ato_low_confidence_falls_through(self):
         """Verify low-confidence ATO recommendation falls through to Tier 3."""
@@ -146,7 +149,7 @@ class TestATORoutingInjection:
         assert event["details"]["task_type"] == "code_review"
         assert event["details"]["recommended_model"] == "sonnet"
         assert event["details"]["confidence"] == 0.87
-        assert event["details"]["selected_model"] == "claude-sonnet-5"
+        assert event["details"]["selected_model"] == tier_model("sonnet")
         assert event["details"]["tier"] == "2.8_ato"
 
     def test_adapter_passes_ato_plan_to_resolver(self):

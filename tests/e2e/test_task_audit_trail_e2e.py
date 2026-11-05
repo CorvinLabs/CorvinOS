@@ -202,10 +202,15 @@ class TestAuditTrailCancelledTransition:
         # Verify audit trail
         audit = TaskAuditTrail(task_id=task_id, tenant_id="_default")
         events = audit.read_events()
-        assert len(events) == 2
-        assert events[1]["event_type"] == "task.cancelled"
-        assert events[1]["executor_id"] == "user456"
-        assert events[1]["reason"] == "User requested cancellation"
+        # cancel_task() goes through record_event and writes its OWN audit
+        # record (executor "system") — it has done so since the trail was added
+        # (5915983ce). The attributed record above is a second, idempotent
+        # cancelled -> cancelled entry (check_transition allows same-state).
+        assert len(events) == 3
+        assert [e["event_type"] for e in events] == ["task.created", "task.cancelled", "task.cancelled"]
+        assert events[1]["executor_id"] == "system"
+        assert events[2]["executor_id"] == "user456"
+        assert events[2]["reason"] == "User requested cancellation"
 
 
 class TestAuditTrailHashChainIntegrity:

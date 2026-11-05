@@ -438,12 +438,14 @@ class TestModelSelectionRealWorldScenario:
         selector = setup["selector"]
         optimizer = setup["optimizer"]
 
-        # Simulate 30 simple code generation tasks
+        # Simulate 30 simple tasks. Since 38964ed36 (operator policy) a short
+        # WORK request ("Rename variable ...") is MEDIUM -> Sonnet; only
+        # conversation stays SIMPLE -> Haiku, so the simple input is chat.
         haiku_tasks = 0
 
         for i in range(30):
             result = selector.classify(
-                task_input="Rename variable foo to bar",
+                task_input="Thanks, that was a simple one",  # "simple" -> mock simple features
                 tenant_id="_default",
                 task_type="code_gen",
             )
