@@ -82,3 +82,56 @@ def test_a_restarted_worker_continues_after_the_recorded_iterations(monkeypatch)
         assert xs == [0, 1, 2, 3, 4, 5], "each point exactly once, in grid order"
     finally:
         shutil.rmtree(home, ignore_errors=True)
+
+
+def test_a_service_restart_interrupts_a_run_and_the_next_start_continues_it(monkeypatch):
+    """A normal restart (SIGTERM -> WorkerServer.stop) used to mark every in-flight run
+    ``aborted`` — final; nothing ever resumed it. Now the run is INTERRUPTED: it stays
+    ``running`` on disk and the next worker start continues it after its last iteration.
+    An explicit compute_abort is still final (covered in test_worker.py)."""
+    home = Path(tempfile.mkdtemp(prefix="cr-"))
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    n = 80
+    try:
+        seed_user_tool("probe.quad", QUAD, SCHEMA)
+        store = RunStore(home, "_default")
+        with real_worker(home) as (client, _server):
+            rid = client.submit_run(
+                tool_name="probe.quad", param_grid={"x": list(range(n))}, loss_metric="loss",
+                strategy="grid", notify=None,
+                budget={"max_iterations": n, "max_wall_clock_s": 300})["compute_handle"]
+            iters = store.root / rid / "iterations"
+            for _ in range(200):
+                if len(list(iters.glob("*.json"))) >= 3:
+                    break
+                time.sleep(0.05)
+        # The worker was stopped (graceful shutdown) mid-run. stop() only REQUESTS the stop:
+        # the run's thread ends after its current iteration, so let it settle first (a
+        # service waits for it the same way when the process exits).
+        last, stable_since = None, time.monotonic()
+        while time.monotonic() - stable_since < 1.0:
+            snap = (len(list(iters.glob("*.json"))), store.read_summary(rid).get("state"))
+            if snap != last:
+                last, stable_since = snap, time.monotonic()
+            time.sleep(0.1)
+        summary = store.read_summary(rid)
+        done = {p.name: p.read_bytes() for p in iters.glob("*.json")}
+        assert summary["state"] == "running", f"a shutdown must not be a verdict: {summary}"
+        assert 3 <= len(done) < n, f"the run was expected to be mid-flight, {len(done)} of {n} done"
+
+        with real_worker(home) as (client, _server):
+            for _ in range(300):
+                if store.read_summary(rid).get("state") not in ("running", "queued"):
+                    break
+                time.sleep(0.2)
+            result = client.get_result(rid)
+
+        assert result["state"] not in ("failed", "aborted"), result
+        after = {p.name: p.read_bytes() for p in iters.glob("*.json")}
+        assert len(after) == n and result["total_iterations"] == n
+        for name, raw in done.items():
+            assert after[name] == raw, f"{name} was rewritten by the restart"
+        assert [r.params["x"] for r in store.read_iterations(rid)] == list(range(n))
+        assert result["best_loss"] == 0.0 and result["best_params"] == {"x": 2}
+    finally:
+        shutil.rmtree(home, ignore_errors=True)

@@ -65,6 +65,9 @@ RUN_STATE_BUDGET_EXHAUSTED = "budget_exhausted"
 RUN_STATE_FAILED = "failed"
 RUN_STATE_ABORTED = "aborted"
 RUN_STATE_QUEUED = "queued"
+#: A run the worker stopped on SHUTDOWN. Not a verdict and NOT in TERMINAL_STATES: the run
+#: stays ``running`` on disk so the next worker start resumes it (``recovery``).
+RUN_STATE_INTERRUPTED = "interrupted"
 
 TERMINAL_STATES = frozenset({
     RUN_STATE_CONVERGED, RUN_STATE_STALLED, RUN_STATE_BUDGET_EXHAUSTED,

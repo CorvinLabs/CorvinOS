@@ -21,7 +21,7 @@ from typing import Any, Callable, Mapping
 from .audit import redact_sensitive_fields
 from .budget import (
     Budget, evaluate_termination,
-    RUN_STATE_RUNNING, RUN_STATE_FAILED, RUN_STATE_ABORTED,
+    RUN_STATE_RUNNING, RUN_STATE_FAILED, RUN_STATE_ABORTED, RUN_STATE_INTERRUPTED,
     RUN_STATE_QUEUED, TERMINAL_STATES,
 )
 from .iteration import IterRecord, best_iter, now_ts, param_fingerprint
@@ -40,6 +40,10 @@ RunnerFn = Callable[[str, Mapping[str, Any]], Mapping[str, Any]]
 
 class AbortRequested(Exception):
     """Raised inside the loop when a compute_abort fires."""
+
+
+class InterruptRequested(Exception):
+    """Raised inside the loop when the worker shuts down: the run stops WITHOUT a verdict."""
 
 
 def _resolve_loss(envelope: Mapping[str, Any], loss_metric: str) -> float | None:
@@ -177,6 +181,7 @@ class ComputeRun:
         )
 
         self._abort = False
+        self._interrupt = False
         self._started_at: float | None = None
         self._terminal_state: str | None = None
         self._terminal_reason: str = ""
@@ -186,6 +191,15 @@ class ComputeRun:
     def request_abort(self) -> None:
         """Mark this run for graceful termination on the next loop turn."""
         self._abort = True
+
+    def request_interrupt(self) -> None:
+        """Stop this run on the next loop turn WITHOUT a verdict (worker shutdown).
+
+        An abort is final (``aborted``, terminal). A shutdown used to be one: a normal
+        service restart marked every in-flight run ``aborted`` and nothing ever resumed
+        it. An interrupted run stays ``running`` on disk, so the next worker start picks
+        it up after its last recorded iteration (``recovery.resume_run``)."""
+        self._interrupt = True
 
     def run(self, resume_history: "list[IterRecord] | None" = None,
             prior_wall_s: float = 0.0) -> RunRecord:
@@ -229,6 +243,8 @@ class ComputeRun:
             while True:
                 if self._abort:
                     raise AbortRequested()
+                if self._interrupt:
+                    raise InterruptRequested()
 
                 state, reason = evaluate_termination(
                     history, self.spec.budget,
@@ -263,6 +279,8 @@ class ComputeRun:
                     )
                     if self._abort:
                         raise AbortRequested()
+                    if self._interrupt:
+                        raise InterruptRequested()
 
                 failed_start = _deterministic_failure(history)
                 if failed_start is not None:
@@ -277,6 +295,9 @@ class ComputeRun:
                     self._terminal_state = RUN_STATE_FAILED
                     self._terminal_reason = "strategy-update-failed"
                     break
+        except InterruptRequested:
+            self._terminal_state = RUN_STATE_INTERRUPTED
+            self._terminal_reason = "worker-shutdown"
         except AbortRequested:
             self._terminal_state = RUN_STATE_ABORTED
             self._terminal_reason = "external-abort"
@@ -428,6 +449,25 @@ class ComputeRun:
         self.store.write_summary(self.run_id, existing)
 
     def _finalise(self, history: list[IterRecord]) -> RunRecord:
+        if self._terminal_state == RUN_STATE_INTERRUPTED:
+            # No verdict, no terminal summary, no terminal audit record: the run stays
+            # "running" on disk (the rolling summary already holds its progress) and
+            # the next worker start resumes it.
+            valid = [h for h in history if h.loss is not None]
+            b = best_iter(valid, minimise=self.spec.minimise)
+            last = history[-1] if history else None
+            summary = self.store.read_summary(self.run_id)
+            return RunRecord(
+                run_id=self.run_id, tenant_id=self.spec.tenant_id, tool_name=self.spec.tool_name,
+                strategy=self.spec.strategy_name, state=RUN_STATE_INTERRUPTED,
+                best_loss=(b.loss if b else None), best_iter=(b.iter if b else None),
+                total_iterations=len(history),
+                total_wall_s=max(0.0, self.time_fn() - (self._started_at or self.time_fn())),
+                accepted_at=self._started_at or 0.0, started_at=self._started_at,
+                last_iteration_at=(last.ts if last else None),
+                convergence_reason="worker-shutdown", error=None,
+                manifest=self.store.read_manifest(self.run_id), summary=summary,
+            )
         state = self._terminal_state or RUN_STATE_FAILED
         reason = self._terminal_reason or "unknown"
         valid = [h for h in history if h.loss is not None]

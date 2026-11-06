@@ -272,7 +272,9 @@ class WorkerServer:
         async with self._runs_lock:
             for entry in self._runs.values():
                 if entry.task and not entry.task.done():
-                    entry.run.request_abort()
+                    # INTERRUPT, not abort: the run stays resumable on disk and the next
+                    # start continues it. (compute_abort is the final one.)
+                    entry.run.request_interrupt()
                     aborted += 1
         # ADR-2041: worker termination is a processing-record fact (GDPR
         # Art. 30). Metadata only; best-effort like every compute.* emit, so
@@ -687,8 +689,11 @@ class WorkerServer:
             entry.state = "failed"
         finally:
             entry.result_event.set()
-            self._notify_compute_done(run_id, entry.state)
-            await self._dequeue_next()
+            if entry.state != "interrupted":
+                # An interrupted run is not finished: no completion notice (the
+                # resumed run sends it) and no queued run is started during shutdown.
+                self._notify_compute_done(run_id, entry.state)
+                await self._dequeue_next()
 
     def _register_compute_notify(self, run_id: str, params: "Mapping[str, Any]",
                                  tool_name: str) -> None:

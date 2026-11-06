@@ -372,8 +372,14 @@ real forge runner, bwrap).
   lose its binding). Strategies fast-forward through an optional `resume(history)`: grid sets its index,
   a seeded random strategy advances its RNG (same sequence); Bayesian is stateless beyond the history. The
   worker passes its audit emitter so a recovered run's own `compute.*` events reach the chain. Before, the
-  grid restarted at point 0 and overwrote `0001.json…`. Pinned by `test_compute_resume_e2e.py` (real worker
-  start over an interrupted run) and `test_recovery.py`.
+  grid restarted at point 0 and overwrote `0001.json…`. A normal service restart (SIGTERM ->
+  `WorkerServer.stop`) now INTERRUPTS in-flight flat runs (`ComputeRun.request_interrupt`, state
+  `interrupted`, NOT terminal): the run stays `running` on disk, sends no completion notice, no queued run
+  starts during shutdown, and the next start continues it. It used to mark them `aborted` (final) — a
+  restart destroyed every run in flight. `compute_abort` is still the final one. Not covered: queued runs
+  (nothing is on disk before they start) and pipeline/HAC jobs (in-memory engines). Pinned by
+  `test_compute_resume_e2e.py` (real worker: start over an interrupted run; stop mid-run, start again) and
+  `test_recovery.py`.
 - **A refused run costs no daily unit.** The forge MCP server takes the free tier's `compute_units_per_day`
   unit BEFORE it asks the worker; when the worker refuses the run (`ToolNotAvailable`, `ParamGridMismatch`,
   `DatasourceRefused`, `InvalidArgument`, ...) or the socket is absent/unreachable, it gives the unit back

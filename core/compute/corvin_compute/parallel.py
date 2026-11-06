@@ -27,10 +27,11 @@ from typing import Any, Callable, Mapping
 from .audit import redact_sensitive_fields
 from .budget import (
     Budget, evaluate_termination,
-    RUN_STATE_RUNNING, RUN_STATE_FAILED, RUN_STATE_ABORTED, TERMINAL_STATES,
+    RUN_STATE_RUNNING, RUN_STATE_FAILED, RUN_STATE_ABORTED, RUN_STATE_INTERRUPTED, TERMINAL_STATES,
 )
 from .driver import (
-    AbortRequested, ComputeRun, ComputeRunSpec, RunnerFn, _deterministic_failure, _public_error, _resolve_loss,
+    AbortRequested, ComputeRun, ComputeRunSpec, InterruptRequested, RunnerFn,
+    _deterministic_failure, _public_error, _resolve_loss,
 )
 from .iteration import IterRecord, best_iter, now_ts, param_fingerprint
 from .state import RunRecord, RunStore, new_run_id, validate_run_id
@@ -95,6 +96,8 @@ class ParallelDriver(ComputeRun):
             while True:
                 if self._abort:
                     raise AbortRequested()
+                if self._interrupt:
+                    raise InterruptRequested()
 
                 state, reason = evaluate_termination(
                     history, self.spec.budget,
@@ -135,6 +138,8 @@ class ParallelDriver(ComputeRun):
                     )
                 if self._abort:
                     raise AbortRequested()
+                if self._interrupt:
+                    raise InterruptRequested()
 
                 failed_start = _deterministic_failure(history)
                 if failed_start is not None:
@@ -149,6 +154,9 @@ class ParallelDriver(ComputeRun):
                     self._terminal_state = RUN_STATE_FAILED
                     self._terminal_reason = "strategy-update-failed"
                     break
+        except InterruptRequested:
+            self._terminal_state = RUN_STATE_INTERRUPTED
+            self._terminal_reason = "worker-shutdown"
         except AbortRequested:
             self._terminal_state = RUN_STATE_ABORTED
             self._terminal_reason = "external-abort"
