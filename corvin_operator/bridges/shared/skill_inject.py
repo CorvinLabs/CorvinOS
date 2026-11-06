@@ -639,8 +639,18 @@ def collect_active_skills(
     tenant_id: str | None = None,
     include_core: bool = True,
     only_name_prefix: str | None = None,
+    include_acs_skills: bool = False,
+    acs_owner: str | None = None,
 ) -> str | None:
     """Return a markdown block of currently active skills, or None.
+
+    ACS-forged skills (``meta.origin == "acs"``) are text a manager LLM wrote while it may have
+    been reading untrusted data; a persona's grade (clamped to 0.3, but > 0) is enough to pass
+    the grade gate. They are therefore kept OUT of every ordinary turn (``include_acs_skills``
+    False) and out of ACS workers of any other persona: an ACS caller passes
+    ``include_acs_skills=True`` and ``acs_owner`` (the persona that started the run), and a skill
+    tagged with a different ``meta.persona`` is skipped. A skill with no ``meta.persona`` was
+    graded by the operator and is eligible (adversarial review 2026-11-06).
 
     ``only_name_prefix`` (e.g. ``"acs."``) restricts the AUTOMATIC candidates to skills
     whose name starts with it. ``acs_delegate`` uses it so a worker gets the skills ACS
@@ -746,6 +756,14 @@ def collect_active_skills(
                 continue  # core copy already wins — avoid double-injecting
             if not inject_ungraded:
                 if spec.n_grades < 1 or spec.mean_score <= 0:
+                    continue
+            _meta = getattr(spec, "meta", None)
+            _meta = _meta if isinstance(_meta, dict) else {}
+            if _meta.get("origin") == "acs":
+                if not include_acs_skills:
+                    continue
+                _owner = _meta.get("persona")
+                if _owner and _owner != acs_owner:
                     continue
             registry_eligible.append((scope, spec))
 

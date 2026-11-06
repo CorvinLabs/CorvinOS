@@ -15,7 +15,7 @@ from corvin_compute.budget import Budget  # noqa: E402
 from corvin_compute.driver import ComputeRun, ComputeRunSpec  # noqa: E402
 from corvin_compute.iteration import IterRecord, param_fingerprint  # noqa: E402
 from corvin_compute.recovery import (  # noqa: E402
-    reap_orphaned, resume_run, scan_orphaned, scan_resumable,
+    ResumePlan, prepare_resume, reap_orphaned, resume_run, scan_orphaned, scan_resumable,
 )
 from corvin_compute.state import RunStore, new_run_id  # noqa: E402
 from corvin_compute import strategies as strat_pkg  # noqa: E402
@@ -142,6 +142,48 @@ class ResumeTests(_Fixture):
         self.assertEqual(s["best_loss"], 0.1)
         self.assertEqual(events.count("compute.iteration_completed"), 3,
                          "a recovered run's own events reach the audit emitter")
+
+    def test_a_run_resumed_again_and_again_without_progress_is_failed(self) -> None:
+        """A run that crashes the worker on every start must not loop forever under
+        Restart=on-failure: after 3 consecutive resumes with no new iteration it is failed."""
+        run_id = self._seed_interrupted_run(partial_iters=2)
+
+        def runner(t, p):
+            return {"loss": 1.0}
+
+        for attempt in (1, 2, 3):
+            plan = prepare_resume(self.corvin_home, "_default", run_id, runner)
+            self.assertIsInstance(plan, ResumePlan, f"attempt {attempt}")
+        self.assertEqual(prepare_resume(self.corvin_home, "_default", run_id, runner), "failed")
+        self.assertIn("resume-attempts-exceeded",
+                      self.store.read_summary(run_id)["convergence_reason"])
+
+    def test_progress_between_resumes_resets_the_attempt_counter(self) -> None:
+        run_id = self._seed_interrupted_run(partial_iters=2)
+        runner = lambda t, p: {"loss": 1.0}  # noqa: E731
+        for _ in range(3):
+            self.assertIsInstance(prepare_resume(self.corvin_home, "_default", run_id, runner), ResumePlan)
+        params = {"x": 0.3}
+        self.store.append_iteration(run_id, IterRecord(
+            iter=3, params=params, loss=0.3, wall_ms=1, ts=time.time(),
+            param_fingerprint=param_fingerprint(params)))
+        self.assertIsInstance(prepare_resume(self.corvin_home, "_default", run_id, runner), ResumePlan)
+
+    def test_the_resume_is_on_the_audit_chain_and_an_empty_history_keeps_the_manifest(self) -> None:
+        """``compute.run_recovering`` was never emitted by the worker (no emitter was passed);
+        a run interrupted before its first iteration rewrote its manifest and emitted a second
+        ``compute.run_started``."""
+        run_id = self._seed_interrupted_run(partial_iters=0)
+        accepted = self.store.read_manifest(run_id)["accepted_at"]
+        events: list[tuple] = []
+        resume_run(self.corvin_home, "_default", run_id, runner_fn=lambda t, p: {"loss": float(p["x"])},
+                   run_audit_emit=lambda ev, **kw: events.append((ev, kw)))
+        names = [e for e, _ in events]
+        self.assertEqual(names.count("compute.run_recovering"), 1, names)
+        self.assertNotIn("compute.run_started", names)
+        rec = next(kw for e, kw in events if e == "compute.run_recovering")
+        self.assertEqual((rec["resume_from_iter"], rec["history_size"]), (1, 0))
+        self.assertEqual(self.store.read_manifest(run_id)["accepted_at"], accepted)
 
     def test_the_iteration_budget_counts_the_recorded_iterations(self) -> None:
         run_id = self._seed_interrupted_run(partial_iters=4)

@@ -408,6 +408,12 @@ class RunForge:
             from skill_forge.registry import LinterError, SkillRegistry
             root = Path(tenant_home(self.tenant_id)) / "skill-forge"
             root.mkdir(parents=True, exist_ok=True)
+            # overwrite=True below would let a run of persona B replace (and reset the grades
+            # of) a skill persona A's run forged: refuse when it is tagged to another persona.
+            _existing = SkillRegistry(root).get(f"acs.{name}")
+            _owner = ((getattr(_existing, "meta", None) or {}).get("persona")) if _existing else None
+            if _owner and _owner != self.cfg.persona:
+                return self._reject_skill(name, R_DUP, iteration, "owned by another persona")
             try:
                 SkillRegistry(root).create(
                     name=f"acs.{name}", type="learned-experience", body_md=body,

@@ -708,6 +708,13 @@ A workflow author who wants the old behaviour omits `only_prefix`. Live proof (2
 run `acs-1794004955-1fb9963a` injected exactly that skill (`acs.worker_skills_injected skill_count=1`) and its
 worker used the guide.
 
+**ACS skills reach only their owner's ACS workers.** An ACS skill is text a manager LLM wrote while it may
+have been reading untrusted data, and a persona's grade (clamped to 0.3, but > 0) passes the injection grade
+gate. `skill_inject.collect_active_skills` therefore skips `meta.origin == "acs"` skills for every ordinary
+turn (`include_acs_skills=False`) and, for an ACS run, any skill tagged with a different `meta.persona` than the
+run's `dynamic_skills.persona` (`acs_owner`); an untagged one was graded by the operator and is eligible. An
+ACS run of persona B cannot overwrite a skill persona A's run forged (`acs.skill_forge_rejected`, `duplicate`).
+
 **Datasource licence.** `_resolve_acs_datasources` enforces the licence's adapter allowlist
 (`license.validator.datasource_adapter_allowed`: Free = `local_file`, Member = all), and `acs_delegate`
 refuses an unlicensed adapter up front (before any unit is charged).

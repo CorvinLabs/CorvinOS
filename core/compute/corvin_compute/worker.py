@@ -120,6 +120,7 @@ class _RunEntry:
     state: str  # current rolling state (queued / running / terminal)
     result_event: asyncio.Event
     engine_id: str = "flat"  # ADR-0029: which engine owns this job
+    resume: Any = None  # recovery.ResumePlan for a run continued after a restart
 
 
 class WorkerServer:
@@ -152,6 +153,8 @@ class WorkerServer:
         self._server: asyncio.AbstractServer | None = None
         self._stopped = asyncio.Event()
         self._store = RunStore(self.corvin_home, tenant_id)
+        self._recovery_task: asyncio.Task | None = None
+        self._instance_lock: Any = None
 
         # ADR-0029 — pluggable engines (pipeline, hac, custom)
         # Keyed by engine_id; injected at construction or via register_engine().
@@ -165,12 +168,34 @@ class WorkerServer:
         """Register an ADR-0029 ComputeEngine at runtime (before serve_forever)."""
         self._extra_engines[engine.engine_id] = engine
 
+    def _acquire_instance_lock(self) -> None:
+        """One worker per tenant home. Two workers on one home both recovered the same
+        interrupted runs, executed the same points twice and unlinked each other's
+        socket (adversarial review 2026-11-06). ``flock`` on ``<socket>.lock`` is released
+        by the OS when the process dies. Windows (TCP loopback) has no ``fcntl``: its
+        ``<sock>.port`` file is the guard there."""
+        try:
+            import fcntl as _fcntl
+        except ImportError:
+            return
+        lock_path = self.socket_path.with_name(self.socket_path.name + ".lock")
+        fh = open(lock_path, "w", encoding="utf-8")
+        try:
+            _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            raise RuntimeError(
+                f"another compute worker already serves tenant {self.tenant_id!r} "
+                f"(lock {lock_path})") from None
+        self._instance_lock = fh
+
     async def serve_forever(self) -> None:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.socket_path.parent, 0o700)
         except OSError:
             pass
+        self._acquire_instance_lock()
         if self.socket_path.exists():
             try:
                 self.socket_path.unlink()
@@ -181,13 +206,6 @@ class WorkerServer:
         for eng in self._extra_engines.values():
             if hasattr(eng, "set_loop"):
                 eng.set_loop(_loop)
-        # ADR-0013 Phase 13.9 — recover non-terminal runs from disk
-        # BEFORE accepting new submissions. Best-effort: a recovery
-        # failure logs but does NOT block serving.
-        try:
-            await asyncio.to_thread(self._recover_pending)
-        except Exception:  # noqa: BLE001
-            log.exception("recovery sweep crashed (continuing anyway)")
         if _endpoint.use_tcp_loopback():
             # Windows: no AF_UNIX. Bind loopback on an ephemeral port and
             # publish port + auth token in an owner-only <sock>.port file.
@@ -202,6 +220,12 @@ class WorkerServer:
             except OSError:
                 pass
             log.info("worker listening at %s (tenant=%s)", self.socket_path, self.tenant_id)
+        # ADR-0013 Phase 13.9 — continue the non-terminal runs left on disk. AFTER the bind and
+        # as ordinary runs: recovery used to run to completion BEFORE the socket opened, so a
+        # restart left the worker unreachable for the remaining runtime of every interrupted
+        # run (a hanging tool: forever) and those runs could be neither aborted nor
+        # interrupted. Best-effort: a failure logs but does not stop serving.
+        self._recovery_task = asyncio.create_task(self._recover_pending_async())
         try:
             async with self._server:
                 await self._server.serve_forever()
@@ -261,6 +285,8 @@ class WorkerServer:
         # again — one termination is one chain record.
         if self._stopped.is_set():
             return
+        if self._recovery_task is not None and not self._recovery_task.done():
+            self._recovery_task.cancel()
         if self._server is not None:
             self._server.close()
             try:
@@ -301,6 +327,13 @@ class WorkerServer:
             except OSError:
                 pass
         self._stopped.set()
+        # Release the single-instance lock (the OS also drops it when the process dies).
+        if self._instance_lock is not None:
+            try:
+                self._instance_lock.close()
+            except OSError:
+                pass
+            self._instance_lock = None
 
     # -- request dispatch --------------------------------------------------------
 
@@ -682,8 +715,23 @@ class WorkerServer:
         if entry is None or entry.run is None:
             return
         try:
-            rec = await asyncio.to_thread(entry.run.run)
+            if entry.resume is not None:
+                rec = await asyncio.to_thread(entry.resume.execute)
+            else:
+                rec = await asyncio.to_thread(entry.run.run)
             entry.state = rec.state
+        except asyncio.CancelledError:
+            # SIGTERM cancels the serving task; asyncio.run then cancels THIS one while it
+            # awaits the run's thread. That is a shutdown, not a verdict: ask the run to stop
+            # after its current iteration (it stays resumable on disk). Without this the
+            # finally below saw state "running" and sent a false "finished" notice and
+            # started queued runs mid-shutdown (adversarial review 2026-11-06).
+            try:
+                entry.run.request_interrupt()
+            except Exception:  # noqa: BLE001
+                pass
+            entry.state = "interrupted"
+            raise
         except Exception:  # noqa: BLE001
             log.exception("exec_run crashed")
             entry.state = "failed"
@@ -775,33 +823,50 @@ class WorkerServer:
                 running_count += 1
 
 
-    def _recover_pending(self) -> None:
-        """Phase 13.9 — scan disk for non-terminal runs and resume.
+    async def _recover_pending_async(self) -> None:
+        """Phase 13.9 — continue the non-terminal runs left on disk, as REGULAR runs.
 
-        Runs synchronously in a worker thread; the asyncio loop is
-        free during the scan. Each recovered run becomes a regular
-        background task via the same dispatch path as a fresh submit.
+        Each becomes a ``_RunEntry`` (so ``compute_abort`` / ``stop()`` reach it) started
+        through ``_exec_run`` up to ``max_concurrent_runs``; the rest queue. A run that cannot
+        be resumed ends ``failed`` and its origin is told. The completion notice of a resumed
+        run goes out from ``_exec_run`` like any other.
         """
         from . import recovery as _recovery
-        resumable = _recovery.scan_resumable(self.corvin_home,
-                                             self.tenant_id)
+        try:
+            resumable = await asyncio.to_thread(
+                _recovery.scan_resumable, self.corvin_home, self.tenant_id)
+        except Exception:  # noqa: BLE001
+            log.exception("recovery scan crashed (continuing anyway)")
+            return
         if not resumable:
             return
         log.info("recovery: %d non-terminal runs found", len(resumable))
         for run_id in resumable:
+            if self._stopped.is_set():
+                return
+            if run_id in self._runs:
+                continue
             try:
-                _state = _recovery.resume_run(
-                    self.corvin_home, self.tenant_id, run_id,
-                    runner_fn=self.runner_fn,
-                    run_audit_emit=self.audit_emit,
-                )
-                # A run interrupted by a restart resumes HERE, not via _exec_run,
-                # so fire the completion notification on this path too. Idempotent
-                # (no-op when no origin was registered or already delivered), so
-                # a restart-surviving compute run still reaches the user.
-                self._notify_compute_done(run_id, str(_state or "converged"))
+                plan = await asyncio.to_thread(
+                    _recovery.prepare_resume, self.corvin_home, self.tenant_id, run_id,
+                    self.runner_fn, run_audit_emit=self.audit_emit)
             except Exception:  # noqa: BLE001
                 log.exception("recovery for run_id=%s failed", run_id)
+                continue
+            if isinstance(plan, str):
+                self._notify_compute_done(run_id, plan)
+                continue
+            entry = _RunEntry(run=plan.run, task=None, state=RUN_STATE_QUEUED,
+                              result_event=asyncio.Event(), resume=plan)
+            async with self._runs_lock:
+                self._runs[run_id] = entry
+                running_count = sum(1 for e in self._runs.values()
+                                    if e.state == RUN_STATE_RUNNING and e.engine_id == "flat")
+                if running_count < self.max_concurrent_runs:
+                    entry.state = RUN_STATE_RUNNING
+                    entry.task = asyncio.create_task(self._exec_run(run_id))
+                else:
+                    self._queue.append(run_id)
 
 
 def _engine_stage_tools(extra: Mapping[str, Any]) -> list[tuple[str, dict]]:

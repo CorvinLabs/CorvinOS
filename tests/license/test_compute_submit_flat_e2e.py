@@ -70,3 +70,18 @@ def test_a_bayesian_flat_submit_is_charged_to_the_bayesian_trial_counter(stack):
     _wait_result(mcp, r["compute_handle"])
     state = json.loads((home / "global" / "license" / "trial_compute.json").read_text())
     assert state["bayesian_iterations_used"] == 6 and state["iterations_used"] == 0, state
+
+
+def test_an_empty_or_unknown_engine_cannot_dodge_the_bayesian_trial_cap(stack):  # noqa: F811
+    """The trial gate tested engine == "flat" while the worker reads ``engine or "flat"``:
+    ``engine: ""`` ran a flat Bayesian job under the 500-iteration GRID cap (review 2026-11-06)."""
+    home, mcp = stack
+    extra = {"tool_name": "probe.quad", "param_grid": {"x": [0, 1, 2, 3, 4, 5, 6, 7]},
+             "loss_metric": "loss", "strategy": "bayesian", "seed": 3}
+    r = _payload(_call(mcp, "compute_submit", {"engine": "", "budget": {"max_iterations": 5, "max_wall_clock_s": 60},
+                                               "extra": extra}))
+    _wait_result(mcp, r["compute_handle"])
+    state = json.loads((home / "global" / "license" / "trial_compute.json").read_text())
+    assert state["bayesian_iterations_used"] == 5 and state["iterations_used"] == 0, state
+    bad = _call(mcp, "compute_submit", {"engine": "nonsense", "budget": {"max_iterations": 1}, "extra": extra})
+    assert "engine must be one of" in json.dumps(bad), bad

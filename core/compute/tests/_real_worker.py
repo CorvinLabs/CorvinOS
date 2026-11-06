@@ -41,10 +41,12 @@ def seed_user_tool(name: str, impl: str, input_schema: dict, *, tenant: str = TE
 
 
 @contextmanager
-def real_worker(home: Path, *, tenant: str = TENANT, max_concurrent_runs: int = 2) -> Iterator[tuple]:
+def real_worker(home: Path, *, tenant: str = TENANT, max_concurrent_runs: int = 2,
+                runner_fn=None) -> Iterator[tuple]:
     """Start a worker over ``home`` and yield ``(client, server)``; stop it on exit.
 
-    ``CORVIN_HOME`` must already point at ``home`` (the forge runner reads it). Recovery of
+    ``CORVIN_HOME`` must already point at ``home`` (the forge runner reads it) unless a stub
+    ``runner_fn`` is passed (no forge, no bwrap). Recovery of
     non-terminal runs on disk runs as part of ``serve_forever``, exactly like a service start.
     """
     from corvin_compute import cli
@@ -52,7 +54,7 @@ def real_worker(home: Path, *, tenant: str = TENANT, max_concurrent_runs: int = 
     from corvin_compute.endpoint import endpoint_exists
     from corvin_compute.worker import WorkerServer
 
-    runner = cli._build_runner_fn(tenant_id=tenant, corvin_home_path=home)
+    runner = runner_fn or cli._build_runner_fn(tenant_id=tenant, corvin_home_path=home)
     sock = home / "tenants" / tenant / "compute" / "worker.sock"
     sock.parent.mkdir(parents=True, exist_ok=True)
     state: dict = {}

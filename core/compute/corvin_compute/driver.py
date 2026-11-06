@@ -211,7 +211,7 @@ class ComputeRun:
         is fast-forwarded past them, and the manifest is kept as accepted.
         ``prior_wall_s`` makes ``max_wall_clock_s`` cumulative across the restart.
         """
-        resuming = bool(resume_history)
+        resuming = resume_history is not None   # [] = a resumed run with nothing recorded yet
         self._started_at = self.time_fn() - max(0.0, float(prior_wall_s or 0.0))
         if not resuming:
             self._write_initial_manifest()

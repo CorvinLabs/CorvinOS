@@ -2447,6 +2447,8 @@ def _worker_skills_block(subtask: dict, ctx: "RunContext") -> "tuple[str, list[s
             task_text=str(subtask.get("instructions") or ""),
             tenant_id=ctx.tenant_id, include_core=False,
             only_name_prefix=_dynamic_skills_only_prefix(cfg),
+            include_acs_skills=True,
+            acs_owner=(cfg.get("persona") if isinstance(cfg.get("persona"), str) else None),
         )
     except Exception as exc:  # noqa: BLE001 - a skill lookup must never fail a worker
         log.warning("[acs] worker skill lookup failed (tenant=%s): %s",

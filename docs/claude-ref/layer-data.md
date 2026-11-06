@@ -377,7 +377,18 @@ real forge runner, bwrap).
   `interrupted`, NOT terminal): the run stays `running` on disk, sends no completion notice, no queued run
   starts during shutdown, and the next start continues it. It used to mark them `aborted` (final) — a
   restart destroyed every run in flight. `compute_abort` is still the final one. Not covered: queued runs
-  (nothing is on disk before they start) and pipeline/HAC jobs (in-memory engines). Pinned by
+  (nothing is on disk before they start) and pipeline/HAC jobs (in-memory engines).
+  **Recovery runs AFTER the socket is bound, as regular runs** (`WorkerServer._recover_pending_async` ->
+  `recovery.prepare_resume` -> a `_RunEntry` started through `_exec_run`): it used to run every
+  interrupted run to completion BEFORE binding, so a restart left the worker unreachable for the whole
+  remaining runtime (a hanging tool: forever) and those runs could be neither aborted nor interrupted.
+  Recovered runs honour `max_concurrent_runs` (the rest queue) and emit `compute.run_recovering` (the resume
+  RE-EXECUTES the tool, so it is on the chain). A run resumed 3 times in a row with no new iteration in
+  between is failed (`resume-attempts-exceeded`) instead of crash-looping under `Restart=on-failure`. A
+  SIGTERM-style cancellation of the serving task is an interruption too (`_exec_run` catches
+  `CancelledError`): no false "finished" notice, no queued run started mid-shutdown. One worker per tenant
+  home (`flock` on `<socket>.lock`; a second one refuses to start). Pinned by
+  `test_worker_restart_semantics.py`, and by
   `test_compute_resume_e2e.py` (real worker: start over an interrupted run; stop mid-run, start again) and
   `test_recovery.py`.
 - **A refused run costs no daily unit.** The forge MCP server takes the free tier's `compute_units_per_day`
@@ -385,6 +396,10 @@ real forge runner, bwrap).
   `DatasourceRefused`, `InvalidArgument`, ...) or the socket is absent/unreachable, it gives the unit back
   (`license.compute_quota.refund_one`, the rule the console route already followed). Any other failure
   stays charged — the run may have started. Pinned by `tests/license/test_compute_quota_refund_e2e.py`.
+- **`compute_submit` normalises `engine` once** (`null` / `""` = flat, anything outside flat/pipeline/hac is
+  refused): the trial gate tested `engine == "flat"` while the worker reads `engine or "flat"`, so `engine: ""`
+  ran a flat Bayesian job under the 500-iteration grid cap instead of the 50-iteration Bayesian cap. A client
+  TIMEOUT is not "never accepted": it stays charged (only refusals and connection failures are refunded).
 - **`compute_submit(engine="flat")` runs.** The schema carries the `compute_run` fields under `extra`; the
   worker now merges them (the envelope's `budget` / `tenant_id` / `engine` win) and says what is missing
   instead of a bare `KeyError`. The flat strategy is charged to the trial counter its clamp used (a Bayesian

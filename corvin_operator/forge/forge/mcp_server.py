@@ -1246,6 +1246,19 @@ class MCPServer:
         # quota; compute_gate/status/result/abort act on an existing run and
         # stay ungated here, matching the pre-existing compute_run-only scope
         # for those) ──────────────────────────────────────────────────────
+        if name == "compute_submit":
+            # Normalise the engine ONCE, before the trial gate: the gate tested
+            # ``engine == "flat"`` while the worker reads ``engine or "flat"``, so
+            # ``engine: ""`` / ``null`` ran a flat Bayesian job under the 500-iteration
+            # grid cap instead of the 50-iteration Bayesian cap. The schema's enum is
+            # not enforced by this server (adversarial review 2026-11-06).
+            _eng = args.get("engine")
+            _eng = "flat" if _eng in (None, "") else _eng
+            if _eng not in ("flat", "pipeline", "hac"):
+                self._error(msgid, INVALID_PARAMS,
+                            "compute_submit: engine must be one of flat, pipeline, hac")
+                return
+            args = {**args, "engine": _eng}
         _access = None
         _trial_reserved = 1
         _cq_charged = False  # the free-tier daily unit was taken (see _refund_compute_unit)
@@ -1497,7 +1510,8 @@ class MCPServer:
             # Same rule as the console route: a socket-level failure means the
             # worker never accepted the run. Any other failure is ambiguous (the
             # run may have started) and stays charged.
-            if _cq_charged and isinstance(exc, OSError):
+            if _cq_charged and isinstance(exc, OSError) and not isinstance(exc, TimeoutError):
+                # A client TIMEOUT is ambiguous (the worker may have accepted the run): stays charged.
                 self._refund_compute_unit()
             self._error(msgid, INTERNAL_ERROR,
                         f"compute worker call failed: {exc}")

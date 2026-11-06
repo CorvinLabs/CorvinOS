@@ -12,6 +12,7 @@ forged custom strategy) → ``state="failed"``, ``error_class="RecoveryFailed"``
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from pathlib import Path
@@ -43,7 +44,24 @@ def scan_resumable(corvin_home: Path, tenant_id: str) -> list[str]:
     return out
 
 
-def resume_run(
+#: A run that keeps being resumed WITHOUT making progress (it crashes the worker, or its
+#: first iteration never finishes) is failed after this many consecutive attempts instead of
+#: looping forever under ``Restart=on-failure`` (adversarial review 2026-11-06).
+MAX_RESUME_ATTEMPTS_WITHOUT_PROGRESS = 3
+
+
+@dataclasses.dataclass
+class ResumePlan:
+    """Everything needed to continue an interrupted run: build once, run anywhere."""
+    run: ComputeRun
+    history: list
+    prior_wall_s: float
+
+    def execute(self):
+        return self.run.run(resume_history=self.history, prior_wall_s=self.prior_wall_s)
+
+
+def prepare_resume(
     corvin_home: Path,
     tenant_id: str,
     run_id: str,
@@ -52,16 +70,14 @@ def resume_run(
     audit_path: Path | None = None,
     audit_emit_fn: Callable[..., Any] | None = None,
     run_audit_emit: Callable[..., Any] | None = None,
-) -> str:
-    """Rebuild a ComputeRun from disk and CONTINUE it after its last recorded iteration.
+) -> "ResumePlan | str":
+    """Rebuild a ComputeRun from disk, ready to CONTINUE after its last recorded iteration.
 
-    The recorded iterations seed the run (they are neither re-run nor overwritten,
-    and count against ``max_iterations``); ``max_wall_clock_s`` is cumulative.
-    ``run_audit_emit`` is the worker's emitter for the run's own ``compute.*``
-    events — without it a recovered run left nothing on the audit chain.
-
-    Returns the final state. Failures (missing strategy, malformed
-    manifest, etc.) mark the run failed and return ``"failed"``.
+    Returns a :class:`ResumePlan` — or a terminal state string (``"failed"``) when the run
+    cannot be resumed (missing manifest, strategy no longer installed, too many attempts
+    without progress). The recorded iterations seed the run (they are neither re-run nor
+    overwritten and count against ``max_iterations``); ``max_wall_clock_s`` is cumulative.
+    ``run_audit_emit`` is the worker's emitter for the run's own ``compute.*`` events.
     """
     store = RunStore(corvin_home, tenant_id)
     try:
@@ -79,6 +95,32 @@ def resume_run(
     history = store.read_iterations(run_id)
     last_iter = max((h.iter for h in history), default=0)
 
+    try:
+        summary = store.read_summary(run_id) or {}
+    except (OSError, FileNotFoundError):
+        summary = {}
+    # consecutive resumes with no new iteration in between
+    attempts = (int(summary.get("resume_attempts") or 0) + 1
+                if summary.get("resume_last_total") == len(history) else 1)
+    if attempts > MAX_RESUME_ATTEMPTS_WITHOUT_PROGRESS:
+        _emit_failure(store, run_id, audit_path, audit_emit_fn,
+                      reason="resume-attempts-exceeded", tenant_id=tenant_id)
+        return RUN_STATE_FAILED
+    summary.update({"resume_attempts": attempts, "resume_last_total": len(history)})
+    try:
+        store.write_summary(run_id, summary)
+    except OSError:
+        pass
+
+    # the resume itself is a fact on the chain: it RE-EXECUTES the tool
+    for emit in (run_audit_emit,):
+        if emit is None:
+            continue
+        try:
+            emit("compute.run_recovering", run_id=run_id, tenant_id=tenant_id,
+                 resume_from_iter=last_iter + 1, history_size=len(history))
+        except Exception:  # noqa: BLE001
+            log.exception("audit emit failed for compute.run_recovering")
     if audit_path is not None or audit_emit_fn is not None:
         try:
             _audit_emit(
@@ -107,22 +149,38 @@ def resume_run(
         sensitive_fields=list(manifest.get("sensitive_fields") or []),
         datasources=list(manifest.get("datasources") or []),
     )
-
     run = ComputeRun(
         spec, corvin_home=corvin_home, runner_fn=runner_fn,
         strategy_factory=strat_pkg.load_strategy,
         run_id=run_id, audit_emit=run_audit_emit,
     )
-
     try:
-        prior_wall_s = float((store.read_summary(run_id) or {}).get("total_wall_s") or 0.0)
-    except (OSError, FileNotFoundError, TypeError, ValueError):
+        prior_wall_s = float(summary.get("total_wall_s") or 0.0)
+    except (TypeError, ValueError):
         prior_wall_s = 0.0
+    return ResumePlan(run=run, history=history, prior_wall_s=prior_wall_s)
 
-    # The driver seeds its history from disk and fast-forwards the strategy
-    # (a failure there ends the run ``failed`` / strategy-resume-failed).
-    rec = run.run(resume_history=history, prior_wall_s=prior_wall_s)
-    return rec.state
+
+def resume_run(
+    corvin_home: Path,
+    tenant_id: str,
+    run_id: str,
+    runner_fn: RunnerFn,
+    *,
+    audit_path: Path | None = None,
+    audit_emit_fn: Callable[..., Any] | None = None,
+    run_audit_emit: Callable[..., Any] | None = None,
+) -> str:
+    """Rebuild a run from disk and run it to its end in THIS thread; returns the final state.
+
+    The worker does not use this (it registers the :class:`ResumePlan` as a regular run so
+    it can be aborted / interrupted and honours ``max_concurrent_runs``); it stays the
+    synchronous convenience for tools and tests."""
+    plan = prepare_resume(corvin_home, tenant_id, run_id, runner_fn, audit_path=audit_path,
+                          audit_emit_fn=audit_emit_fn, run_audit_emit=run_audit_emit)
+    if isinstance(plan, str):
+        return plan
+    return plan.execute().state
 
 
 def scan_orphaned(
