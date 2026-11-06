@@ -578,8 +578,8 @@ def _delete_statement(tmp_path: Path, ref: str) -> Path:
 
 @pytest.mark.parametrize("needle", [
     # review c120 r3_s3-1: each call has its own ``from x import needle`` 1-3 lines above
-    "chat_runtime.py:4668:route_and_record",
-    "chat_runtime.py:4768:record_turn_outcome",
+    "chat_runtime.py:4627:route_and_record",
+    "chat_runtime.py:4727:record_turn_outcome",
     "adapter.py:9916:record_turn_outcome",
     "adapter.py:10010:resolve_delegation_route",
     "orchestrator.py:211:emit_review_confidence",

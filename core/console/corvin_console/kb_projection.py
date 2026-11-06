@@ -309,12 +309,40 @@ def _env(actor: str) -> dict[str, str]:
     return env
 
 
+class KbIndexCorrupt(RuntimeError):
+    """The KB checkout's ``.git/index`` cannot be read (a writer was hard-killed mid-write)."""
+
+
+#: git's own wording for an unreadable index (``unknown index entry format 0x…``,
+#: ``index file corrupt``, ``bad signature``, ``index file smaller than expected``)
+_INDEX_CORRUPT = __import__("re").compile(
+    r"unknown index entry format|index file corrupt|bad index file|bad signature 0x"
+    r"|index file smaller than expected|index uses \S+ extension, which we do not understand")
+
+#: tenant -> (retry-after monotonic, message). A corrupt index is not repaired by retrying:
+#: the projector reports it ONCE (ERROR with the repair command) and re-checks every
+#: KB_INDEX_RETRY_S instead of running heal/export against a broken checkout every tick.
+_index_corrupt: dict[str, tuple[float, str]] = {}
+KB_INDEX_RETRY_S = 60.0
+
+
+def index_repair_hint(repo: Path) -> str:
+    g = repo / ".git"
+    return (f"KB checkout {repo}: .git/index is unreadable. Repair (stop the console first): "
+            f"copy {g / 'index'} to a backup; if {g / 'index.lock'} exists, delete it only after "
+            f"confirming the pid in its 3rd field is no longer running; then "
+            f"`mv {g / 'index'} {g / 'index.bad'}` and `git -C {repo} reset -q`.")
+
+
 def _uncommitted_work(repo: Path) -> list[str]:
     """Work-item files edited but not committed. Export reads the working tree, so such an
-    edit would reach the board without the state machine (a hand-set `status: done`)."""
+    edit would reach the board without the state machine (a hand-set `status: done`).
+    Raises ``KbIndexCorrupt`` when git cannot read the index."""
     r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall", "--",
                         "kb/initiatives", "kb/epics", "kb/tasks"],
                        capture_output=True, text=True, env=_env("sync:kb"), encoding="utf-8", errors="replace")
+    if r.returncode != 0 and _INDEX_CORRUPT.search(r.stderr or ""):
+        raise KbIndexCorrupt((r.stderr or "").strip()[-300:])
     # exactly what `kb export` reads (direct *.md children) — a scratch file is no work item
     return [p for p in (ln[3:].strip('"') for ln in r.stdout.splitlines() if ln.strip())
             if _WORK_FILE.match(p.split(" -> ")[-1])]
@@ -403,7 +431,23 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
         return st
     with _tenant_lock(tenant_id):
         prev = _state.get(tenant_id) or {}
-        fp = fingerprint(repo)
+        bad = _index_corrupt.get(tenant_id)
+        if bad is not None and bad[0] > time.monotonic():
+            return prev                         # reported once; re-checked after the back-off
+        try:
+            fp = fingerprint(repo)
+        except KbIndexCorrupt as exc:
+            if bad is None:
+                log.error("kb projection paused: %s (git: %s)", index_repair_hint(repo), exc)
+            _index_corrupt[tenant_id] = (time.monotonic() + KB_INDEX_RETRY_S, str(exc))
+            st = {**{k: v for k, v in prev.items() if k != "state"}, "state": "error",
+                  "error": f"KB git index corrupt: {exc}"[:300], "repair": index_repair_hint(repo),
+                  "checked_at": time.time()}
+            _save(tenant_id, st)
+            return st
+        if bad is not None:
+            log.warning("kb projection resumed: the KB checkout's git index is readable again")
+            _index_corrupt.pop(tenant_id, None)
         now = time.time()
         if not force and prev.get("fingerprint") == fp:
             # Unchanged KB. The last GOOD projection is kept in every state (ok, blocked, held),
@@ -472,7 +516,10 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
     to_kb = projection.STATUS_TO_KB.get(to_status, to_status)
     details = {"item_id": item_id, "kind": cur["kind"], "from_status": cur["status"], "to_status": to_status,
                "actor_kind": actor.split(":")[0], **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {})}
-    pending = _uncommitted_work(repo)
+    try:
+        pending = _uncommitted_work(repo)
+    except KbIndexCorrupt:
+        raise KbTransitionRefused(f"board moves are paused: {index_repair_hint(repo)}") from None
     if pending:
         # while held the board cannot show a move (it projects only committed state), so a
         # move is refused with the reason instead of answering 200 for a card that stays put
@@ -711,7 +758,11 @@ def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[st
                **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {})}
     service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "requested"})  # audit-first
     with _tenant_lock(tenant_id):
-        pending = _uncommitted_work(repo)
+        try:
+            pending = _uncommitted_work(repo)
+        except KbIndexCorrupt:
+            service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
+            raise KbTransitionRefused(f"board writes are paused: {index_repair_hint(repo)}") from None
         if pending:
             service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
             raise KbTransitionRefused(f"board writes are paused: uncommitted knowledge-base edits {pending[:5]}")

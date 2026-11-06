@@ -2262,64 +2262,23 @@ def _effective_os_engine(tenant_id: str, *, audit: bool = True) -> str:
     del audit
     return _configured_os_engine(tenant_id)
 
-def _claude_settings_env() -> dict:
-    """The ``env`` block of Claude Code's own settings.json (honouring
-    ``CLAUDE_CONFIG_DIR``, the same override Claude Code itself uses).
-
-    The Bedrock/Vertex/Foundry setup wizards write their ``CLAUDE_CODE_USE_*``
-    flags and credential vars HERE, not into the exported shell environment — so
-    a probe that only reads ``os.environ`` misses every wizard-configured
-    install. Mirrors ``engine_detection._claude_settings_env()``; re-read per
-    call (this is the low-frequency per-turn probe, not a hot loop) so a wizard
-    run since the last turn is picked up without a process restart.
-    """
-    try:
-        config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-        base = Path(os.path.expanduser(config_dir)) if config_dir else Path.home() / ".claude"
-        path = base / "settings.json"
-        if not path.is_file():
-            return {}
-        data = json.loads(path.read_text(encoding="utf-8"))
-        env = data.get("env")
-        return env if isinstance(env, dict) else {}
-    except Exception:  # noqa: BLE001 — a corrupt/unreadable settings file must not break detection
-        return {}
-
-
 def _claude_authenticated() -> bool:
-    """Cheap, subprocess-free Claude Code auth probe — mirrors the credential
-    signal used by engine_detection.probe_claude_code() without the `claude
-    --version` spawn (this runs on the per-turn engine-selection path).
+    """Cheap, subprocess-free Claude Code auth probe (per-turn engine selection).
 
-    Authenticated iff ANY of: ANTHROPIC_API_KEY is set; a 3rd-party platform
-    (Amazon Bedrock / Google Vertex / Microsoft Foundry) is configured; or an
-    OAuth session exists in ~/.claude/.credentials.json. Fail-OPEN (returns True)
-    on an unexpected read error so a transient glitch never refuses a
-    genuinely-logged-in user — the "log in" error only fires on a clearly-
-    absent credential.
+    Delegates to the ONE shared probe, ``engine_detection.claude_authenticated``
+    (API key, 3rd-party platform flag in env or settings.json, OAuth /
+    enterprise-gateway login in ~/.claude/.credentials.json; fail-open on a read
+    error). Guard: tests/test_claude_auth_probe_parity.py.
     """
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    # 3rd-party platform (Bedrock/Vertex/Foundry): auth is via the platform's
-    # OWN credentials (AWS/GCP/Azure), so there is NO ANTHROPIC_API_KEY and NO
-    # ~/.claude/.credentials.json. Checking only those two (the old behaviour)
-    # false-negatived every such install and reported it unauthenticated. The
-    # setup wizards write
-    # CLAUDE_CODE_USE_* into settings.json's `env` block (not the shell), so
-    # check both — mirroring engine_detection.probe_claude_code(), the canonical
-    # detector this probe's docstring claims to (but did not) mirror.
-    _settings_env = _claude_settings_env()
-    for _flag in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
-        if (os.environ.get(_flag) or _settings_env.get(_flag)) in ("1", "true", "True"):
-            return True
     try:
-        creds_path = Path.home() / ".claude" / ".credentials.json"
-        if not creds_path.exists():
-            return False
-        creds = json.loads(creds_path.read_text(encoding="utf-8"))
-        return bool(creds.get("claudeAiOauth") or creds.get("accessToken"))
+        _shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
+        if str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        import engine_detection as _ed  # type: ignore  # noqa: PLC0415
     except Exception:  # noqa: BLE001
-        return True  # fail-open: don't refuse a possibly-authenticated user
+        _log.warning("claude auth probe unavailable (engine_detection import failed)", exc_info=True)
+        return True  # fail-open, as the probe itself does on a read error
+    return _ed.claude_authenticated()
 
 
 def _engine_unavailable_message(engine_id: str) -> str | None:
@@ -5950,7 +5909,7 @@ async def _stream_tde_turn(
         "event": "task.started", "engine": "tiered_delegation",
         "turn": sess.turn_count,
     })
-    os_audit("os_turn.started", {"model": "tde/helper"})
+    await asyncio.to_thread(os_audit, "os_turn.started", {"model": "tde/helper"})
 
     rc = 1
     final = ""
@@ -6380,7 +6339,7 @@ async def _stream_tde_turn(
             raise
         except Exception:  # noqa: BLE001 — best-effort, C1 fallback below
             _sync_ok = False
-        os_audit("os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
+        await asyncio.to_thread(os_audit, "os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
     touch(sess, increment_turn=_sync_ok)
 
     # ADR-0222 Phase 2 (k=5): start the measurement-week sampler LAST — after the
@@ -7312,6 +7271,21 @@ async def _stream_turn_impl(
                           if rc == -1 else None),
             )
 
+    # The two writers above go through the canonical hash chain (``write_event``:
+    # a process-wide lock, fsync, anchor work). Called inline from this async
+    # generator they blocked the WHOLE event loop for as long as that takes — on
+    # an AV-scanned Windows box long enough, together with other GIL load, to
+    # wedge the console (2026-11-06: MainThread in ``write_event``, accept backlog
+    # full). The off-loop variants are AWAITED, so ordering and audit-first
+    # semantics are unchanged: the turn does not continue until the record is
+    # written. Cancel/close handlers keep the synchronous call so the paired
+    # completion is written even if a second cancellation arrives.
+    async def _os_audit_off_loop(event: str, extra: dict[str, Any] | None = None) -> None:
+        await asyncio.to_thread(_os_audit, event, extra)
+
+    async def _os_emit_completed_off_loop(rc: int) -> None:
+        await asyncio.to_thread(_os_emit_completed, rc)
+
     # Persist the user-side of this turn immediately so a tab refresh
     # mid-turn still shows what the user said.
     _append_turn(sess, "user", [{"kind": "text", "text": prompt}], recovery=recovery)
@@ -7413,7 +7387,7 @@ async def _stream_turn_impl(
     )
     _gate_refusal = _l34_route.refusal
     if _gate_refusal is not None:
-        _os_audit("os_turn.started", {"model": _os_model_used})
+        await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {
             "event": "task.failed", "exit_code": 1,
             "error": "blocked by pre-spawn acceptable-use / layer-integrity gate",
@@ -7422,7 +7396,7 @@ async def _stream_turn_impl(
                     result_chars=len(_gate_refusal), usage=None,
                     reason="pre_spawn_gate_blocked")
         _route_meta["no_engine"] = True
-        _os_emit_completed(rc=1)
+        await _os_emit_completed_off_loop(rc=1)
         # Persist the refusal BEFORE the first yield: a client that disconnects
         # mid-stream closes this generator at a yield, and a refusal written
         # after one would be lost — leaving the user line unmarked, so the
@@ -7464,7 +7438,7 @@ async def _stream_turn_impl(
             from corvin_console.chat_router import dispatch as _ccc_dispatch  # noqa: PLC0415
             _ccc_plan = _ccc_extract(_task_text)
             # Audit: metadata only — entity_type + confidence, never prompt text.
-            _os_audit("ccc.entity_extracted", {
+            await _os_audit_off_loop("ccc.entity_extracted", {
                 "entity_type": _ccc_plan.entity_type,
                 "confidence":  round(_ccc_plan.confidence, 3),
                 "forced":      _ccc_plan.forced,
@@ -7476,7 +7450,7 @@ async def _stream_turn_impl(
                     tenant_id=sess.tenant_id,
                     tasks_dir=_ccc_tasks_dir,
                 )
-                _os_audit("ccc.action_dispatched", {
+                await _os_audit_off_loop("ccc.action_dispatched", {
                     "entity_type": _ccc_result.entity_type,
                     "action_id":   _ccc_result.action_id,
                     "entity_id":   _ccc_result.entity_id,
@@ -7520,7 +7494,7 @@ async def _stream_turn_impl(
                     _ccc_msg = _ccc_result.message or (
                         f"{_ccc_result.entity_type}: {_ccc_result.status}")
                     _ccc_ok = _ccc_result.status in ("created", "confirmation_required")
-                    _os_audit("os_turn.started", {"model": _os_model_used})
+                    await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
                     tm.record_event(task_id, (
                         {"event": "task.completed", "exit_code": 0} if _ccc_ok else
                         {"event": "task.failed", "exit_code": 1,
@@ -7529,7 +7503,7 @@ async def _stream_turn_impl(
                                 result_chars=len(_ccc_msg), usage=None,
                                 reason="ccc_slash_command")
                     _route_meta["no_engine"] = True
-                    _os_emit_completed(0 if _ccc_ok else 1)
+                    await _os_emit_completed_off_loop(0 if _ccc_ok else 1)
                     yield {"type": "delta", "text": _ccc_msg}
                     yield {"type": "result", "text": _ccc_msg, "usage": None}
                     touch(sess, increment_turn=True)
@@ -7542,14 +7516,14 @@ async def _stream_turn_impl(
                 _ccc_msg = ("Unknown `/create` target. Supported: `/create task "
                             "[name=\"…\"]`. Workflows, tools and skills are created in "
                             "their own panels (**Workflows**, **Forge**, **Skills**).")
-                _os_audit("os_turn.started", {"model": _os_model_used})
+                await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
                 tm.record_event(task_id, {"event": "task.failed", "exit_code": 1,
                                           "error": "ccc command unknown target"})
                 _audit_emit(sess, "web.turn.completed", rc=1,
                             result_chars=len(_ccc_msg), usage=None,
                             reason="ccc_slash_command")
                 _route_meta["no_engine"] = True
-                _os_emit_completed(1)
+                await _os_emit_completed_off_loop(1)
                 yield {"type": "delta", "text": _ccc_msg}
                 yield {"type": "result", "text": _ccc_msg, "usage": None}
                 touch(sess, increment_turn=True)
@@ -7565,7 +7539,7 @@ async def _stream_turn_impl(
     if _ue_unknown is not None:
         _ue_msg = (f"Unbekannte Engine `{_ue_unknown}`. Verfügbar: "
                    "tiered_delegation, acs, claude_code.")
-        _os_audit("os_turn.started", {"model": _os_model_used})
+        await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {
             "event": "task.failed", "exit_code": 1,
             "error": "unknown engine in /use-engine",
@@ -7574,7 +7548,7 @@ async def _stream_turn_impl(
                     result_chars=len(_ue_msg), usage=None,
                     reason="use_engine_unknown")
         _route_meta["no_engine"] = True
-        _os_emit_completed(1)
+        await _os_emit_completed_off_loop(1)
         yield {"type": "delta", "text": _ue_msg}
         yield {"type": "result", "text": _ue_msg, "usage": None}
         touch(sess, increment_turn=False)
@@ -7592,7 +7566,7 @@ async def _stream_turn_impl(
     if _debug_engine:
         if not _task_text:
             _dbg_hint = "Bitte Task angeben: /debug-engine <task>"
-            _os_audit("os_turn.started", {"model": _os_model_used})
+            await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
             tm.record_event(task_id, {
                 "event": "task.failed", "exit_code": 1,
                 "error": "debug-engine command without task text",
@@ -7601,7 +7575,7 @@ async def _stream_turn_impl(
                         result_chars=len(_dbg_hint), usage=None,
                         reason="debug_engine_empty_task")
             _route_meta["no_engine"] = True
-            _os_emit_completed(1)
+            await _os_emit_completed_off_loop(1)
             yield {"type": "delta", "text": _dbg_hint}
             yield {"type": "result", "text": _dbg_hint, "usage": None}
             touch(sess, increment_turn=False)
@@ -7609,7 +7583,7 @@ async def _stream_turn_impl(
             yield {"type": "done"}
             return
 
-        _os_audit("os_turn.started", {"model": _os_model_used})
+        await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
         try:
             _orch_dir = Path(__file__).resolve().parents[3] / "corvin_operator" / "orchestration"
             if _orch_dir.is_dir() and str(_orch_dir) not in sys.path:
@@ -7667,7 +7641,7 @@ async def _stream_turn_impl(
                     result_chars=len(_dbg_msg), usage=None,
                     reason="debug_engine")
         _route_meta["no_engine"] = True
-        _os_emit_completed(0)
+        await _os_emit_completed_off_loop(0)
         yield {"type": "delta", "text": _dbg_msg}
         yield {"type": "result", "text": _dbg_msg, "usage": None}
         touch(sess, increment_turn=True)
@@ -7688,7 +7662,7 @@ async def _stream_turn_impl(
             "send the task again without `/use-engine` to run it on the "
             "active engine.\n"
         )
-        _os_audit("os_turn.started", {"model": _os_model_used})
+        await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {
             "event": "task.failed", "exit_code": 1,
             "error": "tde requested but worker engine is not tde",
@@ -7697,7 +7671,7 @@ async def _stream_turn_impl(
                     result_chars=len(_tde_off), usage=None,
                     reason="tde_disabled")
         _route_meta["no_engine"] = True
-        _os_emit_completed(1)
+        await _os_emit_completed_off_loop(1)
         yield {"type": "delta", "text": _tde_off}
         yield {"type": "result", "text": _tde_off, "usage": None}
         touch(sess, increment_turn=False)
@@ -7713,7 +7687,7 @@ async def _stream_turn_impl(
             # counts against the per-chat quota (round-2 finding). started
             # MUST precede completed — an unpaired os_turn.completed is the
             # same audit defect in the other direction (round-3 finding).
-            _os_audit("os_turn.started", {"model": _os_model_used})
+            await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
             tm.record_event(task_id, {
                 "event": "task.failed", "exit_code": 1,
                 "error": "tde command without task text",
@@ -7722,7 +7696,7 @@ async def _stream_turn_impl(
                         result_chars=len(_tde_hint), usage=None,
                         reason="tde_empty_task")
             _route_meta["no_engine"] = True
-            _os_emit_completed(1)
+            await _os_emit_completed_off_loop(1)
             yield {"type": "delta", "text": _tde_hint}
             yield {"type": "result", "text": _tde_hint, "usage": None}
             touch(sess, increment_turn=False)
@@ -7748,7 +7722,7 @@ async def _stream_turn_impl(
     # bookkeeping so the pre-created task never lingers PENDING.
     if _force_direct and not _task_text:
         _cc_hint = "Bitte Task angeben: /use-engine claude_code <task>"
-        _os_audit("os_turn.started", {"model": _os_model_used})
+        await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {
             "event": "task.failed", "exit_code": 1,
             "error": "claude_code command without task text",
@@ -7757,7 +7731,7 @@ async def _stream_turn_impl(
                     result_chars=len(_cc_hint), usage=None,
                     reason="claude_code_empty_task")
         _route_meta["no_engine"] = True
-        _os_emit_completed(1)
+        await _os_emit_completed_off_loop(1)
         yield {"type": "delta", "text": _cc_hint}
         yield {"type": "result", "text": _cc_hint, "usage": None}
         touch(sess, increment_turn=False)
@@ -7904,7 +7878,7 @@ async def _stream_turn_impl(
                 # does for the same class of system-level (not user-input)
                 # rejection.
                 _cq_msg = "compute quota enforcement unavailable (fail-closed)"
-                _os_audit("os_turn.started", {"model": _os_model_used})
+                await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
                 tm.record_event(task_id, {
                     "event": "task.failed", "exit_code": 1,
                     "error": "compute_quota module unavailable",
@@ -7913,7 +7887,7 @@ async def _stream_turn_impl(
                             result_chars=len(_cq_msg), usage=None,
                             reason="compute_quota_unavailable")
                 _route_meta["no_engine"] = True
-                _os_emit_completed(rc=1)
+                await _os_emit_completed_off_loop(rc=1)
                 yield {"type": "error", "code": 402, "message": _cq_msg}
                 yield {"type": "result", "text": _cq_msg, "usage": None}
                 touch(sess, increment_turn=True)
@@ -7992,7 +7966,7 @@ async def _stream_turn_impl(
             # a blocked turn never announces a fallback it will not perform.
             _fb_gate = await _gate_off_loop(sess, _task_text, engine_id=_os_engine)
             if _fb_gate is not None:
-                _os_audit("os_turn.started", {"model": _os_model_used})
+                await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
                 tm.record_event(task_id, {
                     "event": "task.failed", "exit_code": 1,
                     "error": "fallback engine blocked by pre-spawn gate",
@@ -8001,7 +7975,7 @@ async def _stream_turn_impl(
                             result_chars=len(_fb_gate), usage=None,
                             reason="pre_spawn_gate_blocked")
                 _route_meta["no_engine"] = True
-                _os_emit_completed(rc=1)
+                await _os_emit_completed_off_loop(rc=1)
                 # Persisted before the first yield — see the first gate (R4-1).
                 touch(sess, increment_turn=True)
                 # Phase 2a: Complete context with error code for this error path
@@ -8065,7 +8039,7 @@ async def _stream_turn_impl(
                 "event": "task.started", "engine": "acs-delegation",
                 "turn": sess.turn_count,
             })
-            _os_audit("os_turn.started", {"model": _os_model_used})
+            await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
             # Per-turn agentic-compute badge (frontend takes the LAST engine
             # event of a turn — fallback paths later re-stamp claude).
             yield {"type": "engine", "engine": "acs",
@@ -8556,10 +8530,10 @@ async def _stream_turn_impl(
                     raise
                 except Exception:  # noqa: BLE001 — best-effort; C1 fallback below covers it
                     _sync_ok = False
-            _os_audit("os_turn.context_sync", {
+            await _os_audit_off_loop("os_turn.context_sync", {
                 "delegated_run_id": run_id, "synced": _sync_ok,
             })
-            _os_emit_completed(0 if (ok or bounded_stop) else 1)
+            await _os_emit_completed_off_loop(0 if (ok or bounded_stop) else 1)
             # C1 fallback (ADR-0213): only advance turn_count when the
             # transcript actually advanced — otherwise the next turn's
             # `resume = turn_count > 0` would append --continue onto a
@@ -8601,7 +8575,7 @@ async def _stream_turn_impl(
     # inherit the user/tenant model, ADR-0112) and is intentionally NOT gated.
     _engine_msg = _engine_unavailable_message(_os_engine)
     if _engine_msg is not None:
-        _os_audit("os_turn.started", {"model": _os_model_used})
+        await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {
             "event": "task.failed", "exit_code": 1,
             "error": "configured engine not drivable by web-chat",
@@ -8609,7 +8583,7 @@ async def _stream_turn_impl(
         _audit_emit(sess, "web.turn.completed", rc=1, result_chars=len(_engine_msg),
                     usage=None, reason="engine_not_drivable")
         _route_meta["no_engine"] = True
-        _os_emit_completed(rc=1)
+        await _os_emit_completed_off_loop(rc=1)
         yield {"type": "delta", "text": _engine_msg}
         yield {"type": "result", "text": _engine_msg, "usage": None}
         touch(sess, increment_turn=True)
@@ -8683,7 +8657,7 @@ async def _stream_turn_impl(
         if _apply_route is not None:
             _route_problem = _apply_route(_spawn_env, str(sess.tenant_id))
     if _route_problem is not None:
-        _os_audit("os_turn.started", {"model": _os_model_used})
+        await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {
             "event": "task.failed", "exit_code": 1,
             "error": "provider route could not be built",
@@ -8691,7 +8665,7 @@ async def _stream_turn_impl(
         _audit_emit(sess, "web.turn.completed", rc=1, result_chars=len(_route_problem),
                     usage=None, reason="provider_route_unavailable")
         _route_meta["no_engine"] = True
-        _os_emit_completed(rc=1)
+        await _os_emit_completed_off_loop(rc=1)
         yield {"type": "delta", "text": _route_problem}
         yield {"type": "result", "text": _route_problem, "usage": None}
         touch(sess, increment_turn=True)
@@ -8817,7 +8791,7 @@ async def _stream_turn_impl(
                                    run_id=task_id, skill_names=_fg_injected)
         except Exception:  # noqa: BLE001 — grading bookkeeping never breaks a turn
             pass
-    _os_audit("os_turn.started", {"model": _os_model_used})
+    await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
     # routed_model: the selector's choice, known before the spawn, so the chat can name
     # the model of a running turn. The confirmed model arrives only on turn_usage.
     yield {"type": "engine", "engine": _os_engine or "claude_code",
@@ -9028,7 +9002,7 @@ async def _stream_turn_impl(
                             # Phase 2a: Track tool call in execution context
                             _exec_ctx_builder.add_tool_call()
                             # Chain: tool name + seq only, never inputs (GDPR Art. 5)
-                            _os_audit("os_turn.tool_called", {
+                            await _os_audit_off_loop("os_turn.tool_called", {
                                 "tool_name": tname, "seq": _os_tool_seq,
                             })
                             yield {
@@ -9290,7 +9264,7 @@ async def _stream_turn_impl(
                             wakeups=_bg.wakeups,                                 # ADR-2236
                             duration_ms=int((time.time() - _bg_t0) * 1000),      # ADR-2236
                             end_reason=_bg_cut or "quiescent")                   # ADR-2236
-    _os_emit_completed(rc)
+    await _os_emit_completed_off_loop(rc)
     if rc != 0 and not saw_any_event:
         stderr_bytes = await (proc.stderr.read() if proc.stderr else asyncio.sleep(0, b""))
         msg = (stderr_bytes or b"").decode("utf-8", errors="replace")[-400:]

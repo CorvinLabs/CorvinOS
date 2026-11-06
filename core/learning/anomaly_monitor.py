@@ -70,6 +70,13 @@ DOD_SKILL_ID = "os.definition_of_done_verifier"
 CONFIG_UPDATE_EVENT = "skill_config_updated"
 CONFIG_UPDATE_MAX_RECORDS = 1_000
 
+#: bytes read from the end of each chain file per scan. With a rare needle the reverse reader
+#: otherwise walks the WHOLE chain (measured: 112 MB / 185k lines -> ~68 s per pass every
+#: ``ANOMALY_CHECK_S``, starving the console's event loop of the GIL). The cost: the 7-day
+#: latency baseline only sees the newest ~24 MiB, so a very busy chain yields fewer samples ->
+#: fewer flagged regressions, never false ones. Config oscillation asks only for the last hour.
+CHAIN_SCAN_MAX_BYTES = 24 * 1024 * 1024
+
 EVENTS = {
     "skill.high_rejection_rate": ("skill_id", "rejection_count", "sample_count", "rate", "window_seconds"),
     "skill.config_oscillation": ("skill_id", "param_name", "change_count", "window_seconds"),
@@ -322,6 +329,7 @@ def _chained_executions(tenant_id: str) -> list[dict]:
     se, fp = _forge()
     return se.last_chain_records(
         fp.tenant_audit_chain(tenant_id), max_records=LATENCY_MAX_RECORDS, max_bytes=None,
+        max_scan_bytes=CHAIN_SCAN_MAX_BYTES,
         needles=tuple(f'"{name}"' for name in LATENCY_EVENT_NAMES))
 
 
@@ -333,6 +341,7 @@ def _chained_config_updates(tenant_id: str) -> list[dict]:
     se, fp = _forge()
     return se.last_chain_records(
         fp.tenant_audit_chain(tenant_id), max_records=CONFIG_UPDATE_MAX_RECORDS, max_bytes=None,
+        max_scan_bytes=CHAIN_SCAN_MAX_BYTES,
         needles=(f'"{CONFIG_UPDATE_EVENT}"',))
 
 

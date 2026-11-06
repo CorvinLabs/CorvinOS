@@ -1528,64 +1528,24 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     return base
 
 
-def _claude_settings_env() -> dict:
-    """The ``env`` block of Claude Code's own settings.json (honouring
-    ``CLAUDE_CONFIG_DIR``). The Bedrock/Vertex/Foundry setup wizards write the
-    ``CLAUDE_CODE_USE_*`` flags HERE, not into the shell environment — so a
-    probe that only reads ``os.environ`` misses every wizard-configured install.
-    Mirrors chat_runtime.py::_claude_settings_env().
-    """
-    try:
-        import json as _json
-        config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-        base = Path(os.path.expanduser(config_dir)) if config_dir else Path.home() / ".claude"
-        path = base / "settings.json"
-        if not path.is_file():
-            return {}
-        data = _json.loads(path.read_text(encoding="utf-8"))
-        env = data.get("env")
-        return env if isinstance(env, dict) else {}
-    except Exception:  # noqa: BLE001 — a corrupt settings file must not break detection
-        return {}
-
-
 def _claude_authenticated() -> bool:
-    """Cheap, subprocess-free Claude Code auth probe — mirrors
-    chat_runtime.py::_claude_authenticated() (the H4 fix, 0.10.25) so the
-    voice summarizer gets the same fast-fail as the main chat engine. Without
-    this, a fresh install with the `claude` CLI on PATH but not yet logged in
-    (via `claude auth login`) burns the full 90s CLI timeout on EVERY summarize
-    call before falling through to structural — on the short-text fast path this
-    also silently kills the LERN-ZUGABE/METAPHER annex (its own failure mode
-    is "return text verbatim"), so the very first replies read back near-raw
-    instead of humanized. Authenticated iff ANY of: ANTHROPIC_API_KEY is set; a
-    3rd-party platform (Amazon Bedrock / Google Vertex / Microsoft Foundry) is
-    configured; or an OAuth session exists in ~/.claude/.credentials.json.
-    Fail-OPEN (True) on an unexpected read error so a transient glitch never
-    reroutes a genuinely-logged-in user off Claude.
+    """Whether Claude Code is logged in — gates the voice summary's `claude` backend.
+
+    Delegates to the ONE shared probe, ``engine_detection.claude_authenticated``
+    (API key, 3rd-party platform flag in env or settings.json, OAuth /
+    enterprise-gateway login in ~/.claude/.credentials.json; fail-open on a read
+    error). Guard: tests/test_claude_auth_probe_parity.py.
     """
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    # 3rd-party platform (Bedrock/Vertex/Foundry): auth is via the platform's
-    # OWN credentials (AWS/GCP/Azure) — there is NO ANTHROPIC_API_KEY and NO
-    # ~/.claude/.credentials.json. Checking only those two false-negatived every
-    # such install, so the `claude` summary backend was skipped and every voice
-    # summary fell through to the structural fallback and spoke near-raw text. The wizards write CLAUDE_CODE_USE_* into
-    # settings.json's `env` block, so check both (mirrors chat_runtime.py).
-    # Guard: tests/test_claude_auth_probe_parity.py.
-    _settings_env = _claude_settings_env()
-    for _flag in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
-        if (os.environ.get(_flag) or _settings_env.get(_flag)) in ("1", "true", "True"):
-            return True
+    import sys as _sys
+    from pathlib import Path as _Path
     try:
-        creds_path = Path.home() / ".claude" / ".credentials.json"
-        if not creds_path.exists():
-            return False
-        import json as _json
-        creds = _json.loads(creds_path.read_text(encoding="utf-8"))
-        return bool(creds.get("claudeAiOauth") or creds.get("accessToken"))
+        _shared = str(_Path(__file__).resolve().parent.parent.parent / "bridges" / "shared")
+        if _shared not in _sys.path:
+            _sys.path.insert(0, _shared)
+        import engine_detection as _ed  # type: ignore  # noqa: PLC0415
     except Exception:  # noqa: BLE001
-        return True  # fail-open: don't reroute a possibly-authenticated user
+        return True  # fail-open, as the probe itself does on a read error
+    return _ed.claude_authenticated()
 
 
 

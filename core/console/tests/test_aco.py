@@ -500,15 +500,18 @@ class TestBootHealer(unittest.TestCase):
             (voice_dir / "chat_debug.jsonl").write_text('{"event":"turn.start"}\n', encoding="utf-8")
             # cli session with no chat_debug.jsonl — must NOT appear
             (tmp_path / "cli_test").mkdir()
+            # files inside a workdir are never walked into: a nested chat_debug.jsonl
+            # in a generated project below a workdir is not a second workdir
+            nested = tmp_path / "web_abc123" / "proj" / "sub"
+            nested.mkdir(parents=True)
+            (nested / "chat_debug.jsonl").write_text("{}" + chr(10), encoding="utf-8")
+            # deeper than voice/<channel>/<chat>/ is out of bounds
+            too_deep = tmp_path / "a" / "b" / "c" / "d"
+            too_deep.mkdir(parents=True)
+            (too_deep / "chat_debug.jsonl").write_text("{}" + chr(10), encoding="utf-8")
 
-            import unittest.mock as mock
-            with mock.patch(
-                "corvin_console.aco.boot_healer._find_all_workdirs",
-                wraps=lambda tenant_id: [
-                    p.parent for p in tmp_path.rglob("chat_debug.jsonl")
-                ],
-            ):
-                result = [p.parent for p in tmp_path.rglob("chat_debug.jsonl")]
+            from corvin_console.aco.boot_healer import _walk_workdirs
+            result = _walk_workdirs(tmp_path)
 
             self.assertEqual(len(result), 3)
             names = {p.name for p in result}

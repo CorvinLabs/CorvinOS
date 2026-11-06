@@ -167,6 +167,54 @@ def _run(cmd: list[str], timeout: float = _PROBE_TIMEOUT) -> tuple[int, str, str
         return -1, "", ""
 
 
+#: Claude Code's 3rd-party platform switches (auth via the platform's own credentials).
+CLAUDE_PLATFORM_FLAGS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+
+
+def claude_credentials_present(creds: object) -> bool:
+    """Whether a parsed Claude Code credentials document holds a login.
+
+    Three shapes: a Claude.ai OAuth session (``claudeAiOauth``), a bare
+    ``accessToken``, and an enterprise-gateway login (``enterpriseGateway`` —
+    ``claude auth status`` reports ``authMethod: third_party, apiProvider:
+    gateway``; the file then has NO ``claudeAiOauth``). Presence only: no token
+    value is read, logged or returned here.
+    """
+    if not isinstance(creds, dict):
+        return False
+    gw = creds.get("enterpriseGateway")
+    return bool(creds.get("claudeAiOauth") or creds.get("accessToken")
+                or (isinstance(gw, dict) and (gw.get("url") or gw.get("jwt"))))
+
+
+def claude_authenticated() -> bool:
+    """THE cheap, subprocess-free "is Claude Code logged in" probe.
+
+    Shared by chat_runtime (console engine choice), dialectic (judge) and
+    summarize (voice summary backend) — four drifting copies of this check broke
+    those features twice (platform flags 2026-09-20, enterprise gateway
+    2026-11-06). Authenticated iff ANY of: ``ANTHROPIC_API_KEY``; a 3rd-party
+    platform flag in the process env OR in settings.json's ``env`` block (where
+    the setup wizards write it); a login in ``~/.claude/.credentials.json``
+    (see ``claude_credentials_present``). Fail-OPEN (True) on an unexpected
+    read error so a transient glitch never refuses a logged-in user; a clearly
+    absent credential is False.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    settings_env = _claude_settings_env()
+    for flag in CLAUDE_PLATFORM_FLAGS:
+        if (os.environ.get(flag) or settings_env.get(flag)) in ("1", "true", "True"):
+            return True
+    try:
+        creds_path = Path.home() / ".claude" / ".credentials.json"
+        if not creds_path.exists():
+            return False
+        return claude_credentials_present(json.loads(creds_path.read_text(encoding="utf-8")))
+    except Exception:  # noqa: BLE001
+        return True  # fail-open: don't refuse a possibly-authenticated user
+
+
 def _find_claude_credentials() -> Path | None:
     """Find Claude credentials across all standard paths (v0.10.60 unification).
 
@@ -179,8 +227,8 @@ def _find_claude_credentials() -> Path | None:
         if path.exists() and path.is_file():
             try:
                 creds = json.loads(path.read_text(encoding="utf-8"))
-                # Valid JSON with at least one auth field
-                if creds.get("claudeAiOauth") or creds.get("accessToken"):
+                # Valid JSON with at least one auth field (OAuth, token, enterprise gateway)
+                if claude_credentials_present(creds):
                     return path
             except (json.JSONDecodeError, PermissionError, UnicodeDecodeError) as e:
                 _log.warning(f"Credentials file {path} is corrupted or unreadable: {e}")

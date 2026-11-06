@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -317,11 +318,46 @@ async def _heal_cycle() -> None:
         _write_audit(total_sessions, total_repaired, total_delta)
 
 
+#: deepest workdir below ``sessions/``: ``voice/<channel>/<chat>/chat_debug.jsonl``
+#: (web/discord/cli workdirs sit directly below ``sessions/``).
+_WORKDIR_MAX_DEPTH = 3
+
+
+def _walk_workdirs(sessions_root: Path, max_depth: int = _WORKDIR_MAX_DEPTH) -> list[Path]:
+    """Directories below ``sessions_root`` (depth 1..max_depth) holding a chat_debug.jsonl.
+
+    Bounded walk with ``os.scandir``: a directory that IS a workdir is not descended
+    into (its attachments, generated projects, node_modules, ... can hold thousands of
+    files), and nothing deeper than ``max_depth`` is visited. The former
+    ``rglob("chat_debug.jsonl")`` walked every file of every session (measured ~19 s
+    per pass on 9.4k files, every 5 min, competing with the console's event loop).
+    """
+    found: list[Path] = []
+    level = [sessions_root]
+    for _depth in range(max_depth):
+        nxt: list[Path] = []
+        for parent in level:
+            try:
+                with os.scandir(parent) as it:
+                    subdirs = [Path(e.path) for e in it
+                               if not e.name.startswith(".")
+                               and e.is_dir(follow_symlinks=False)]
+            except OSError:
+                continue
+            for d in subdirs:
+                if (d / "chat_debug.jsonl").is_file():
+                    found.append(d)
+                else:
+                    nxt.append(d)
+        level = nxt
+    return found
+
+
 def _find_all_workdirs(tenant_id: str) -> list[Path]:
     """Return all session workdirs that contain a chat_debug.jsonl.
 
-    Scans the tenant's sessions/ directory recursively, so every channel
-    (web:, discord:, voice/, cli:, and future ones) is included automatically.
+    Walks the tenant's sessions/ directory (bounded, see ``_walk_workdirs``), so
+    every channel (web:, discord:, voice/, cli:, and future ones) is included.
     A workdir is the *parent directory* of chat_debug.jsonl.
     """
     try:
@@ -329,7 +365,7 @@ def _find_all_workdirs(tenant_id: str) -> list[Path]:
         sessions_root = Path(_fp.corvin_home()) / "tenants" / tenant_id / "sessions"
         if not sessions_root.is_dir():
             return []
-        return [p.parent for p in sessions_root.rglob("chat_debug.jsonl")]
+        return _walk_workdirs(sessions_root)
     except Exception:
         logger.debug("[ACO] Boot-healer: workdir discovery failed for tenant=%s",
                      tenant_id, exc_info=True)

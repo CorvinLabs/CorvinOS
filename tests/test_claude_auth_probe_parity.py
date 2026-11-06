@@ -79,26 +79,39 @@ def test_probe_source_exists_at_its_canonical_path(rel: str) -> None:
     )
 
 
-@pytest.mark.parametrize("rel", _PROBE_SOURCES)
-def test_probe_source_checks_every_platform_flag(rel: str) -> None:
-    """Each copy must name all three platform flags AND read settings.json.
+_SHARED_PROBE = "corvin_operator/bridges/shared/engine_detection.py"
 
-    Source-level on purpose: it holds for ``engine_detection.py`` (which exposes
-    a differently-shaped ``probe_claude_code``) and for any future copy, without
-    this guard needing to know each one's call signature.
+
+def test_shared_probe_checks_every_platform_flag() -> None:
+    """The ONE shared probe names all three platform flags AND reads settings.json.
+
+    Source-level on purpose: the setup wizards write the CLAUDE_CODE_USE_* flags
+    into settings.json's ``env`` block, NOT into the shell environment, so an
+    os.environ-only check misses every wizard install.
     """
-    src = (_REPO / rel).read_text(encoding="utf-8", errors="replace")
+    src = (_REPO / _SHARED_PROBE).read_text(encoding="utf-8", errors="replace")
     for flag in _PLATFORM_FLAGS:
         assert flag in src, (
-            f"{rel} never mentions {flag} — a {flag.split('_USE_')[1].lower()} "
-            "install would be reported as unauthenticated and the feature this "
+            f"{_SHARED_PROBE} never mentions {flag} — a {flag.split('_USE_')[1].lower()} "
+            "install would be reported as unauthenticated and every feature the "
             "probe gates would silently degrade."
         )
-    assert "settings.json" in src, (
-        f"{rel} does not read settings.json. The setup wizards write the "
-        "CLAUDE_CODE_USE_* flags into its `env` block, NOT into the shell "
-        "environment, so an os.environ-only check misses every wizard install."
-    )
+    assert "settings.json" in src
+    assert "enterpriseGateway" in src, "an enterprise-gateway login must count (2026-11-06)"
+
+
+@pytest.mark.parametrize("rel", [r for r in _PROBE_SOURCES if r != _SHARED_PROBE])
+def test_consumers_delegate_to_the_shared_probe(rel: str) -> None:
+    """chat_runtime / summarize / dialectic must NOT carry their own copy.
+
+    Four hand-kept copies drifted twice (platform flags, 2026-09-20; enterprise
+    gateway, 2026-11-06). Each consumer delegates to
+    ``engine_detection.claude_authenticated`` and holds no credential-key logic.
+    """
+    src = (_REPO / rel).read_text(encoding="utf-8", errors="replace")
+    assert "_ed.claude_authenticated()" in src, f"{rel} no longer delegates to the shared probe"
+    for own_logic in ('creds.get("claudeAiOauth")', "CLAUDE_CODE_USE_BEDROCK"):
+        assert own_logic not in src, f"{rel} re-grew its own copy of the probe ({own_logic})"
 
 
 def _isolate(monkeypatch, tmp_path: Path) -> Path:
@@ -190,3 +203,53 @@ def test_corrupt_settings_json_does_not_crash_the_probe(
     config_dir = _isolate(monkeypatch, tmp_path)
     (config_dir / "settings.json").write_text("{not json at all", encoding="utf-8")
     assert _behavioural_probes()[name]() is False
+
+
+# ── enterprise gateway (2026-11-06) ─────────────────────────────────────────
+# ``claude auth status``: loggedIn, authMethod third_party, apiProvider gateway.
+# ~/.claude/.credentials.json then carries ONLY ``enterpriseGateway`` (+
+# ``gatewayTrust/<host>``) — no ``claudeAiOauth``, no ``accessToken``, no API
+# key, no platform flag. Every probe said "not signed in" and the console chat
+# refused the turn with "run claude auth login".
+
+_GATEWAY_CREDS = {"enterpriseGateway": {"url": "x", "jwt": "y"}}
+
+
+def _write_creds(monkeypatch, tmp_path: Path, creds) -> None:
+    _isolate(monkeypatch, tmp_path)
+    home = Path(tmp_path / "home")
+    (home / ".claude" / ".credentials.json").write_text(json.dumps(creds), encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", sorted(_behavioural_probes()))
+def test_enterprise_gateway_login_counts_as_authenticated(name, monkeypatch, tmp_path) -> None:
+    _write_creds(monkeypatch, tmp_path, _GATEWAY_CREDS)
+    assert _behavioural_probes()[name]() is True
+
+
+@pytest.mark.parametrize("name", sorted(_behavioural_probes()))
+@pytest.mark.parametrize("creds", [{}, {"enterpriseGateway": {}}, {"gatewayTrust/host": {"ok": True}}])
+def test_a_credentials_file_without_a_login_is_not_authenticated(name, creds, monkeypatch, tmp_path) -> None:
+    """Positive control: the file existing (or a bare trust entry) is no login."""
+    _write_creds(monkeypatch, tmp_path, creds)
+    assert _behavioural_probes()[name]() is False
+
+
+def test_engine_detection_finds_a_gateway_credentials_file(monkeypatch, tmp_path) -> None:
+    import engine_detection  # type: ignore
+
+    _write_creds(monkeypatch, tmp_path, _GATEWAY_CREDS)
+    found = engine_detection._find_claude_credentials()
+    assert found is not None and found.name == ".credentials.json"
+    _write_creds(monkeypatch, tmp_path / "empty", {})
+    assert engine_detection._find_claude_credentials() is None
+
+
+def test_chat_engine_message_is_none_for_a_gateway_login(monkeypatch, tmp_path) -> None:
+    """End of the user-visible chain: the console no longer answers "not signed in"."""
+    from corvin_console import chat_runtime  # type: ignore
+
+    _write_creds(monkeypatch, tmp_path, _GATEWAY_CREDS)
+    assert chat_runtime._claude_authenticated() is True
+    msg = chat_runtime._engine_unavailable_message("claude_code")
+    assert msg is None or "auth login" not in msg

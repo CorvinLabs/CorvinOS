@@ -227,6 +227,22 @@ Automatically created by installer:
 - **Window:** Hidden
 - **Logs:** `$CORVIN_HOME\logs\console-supervisor.log`
 
+**Watchdog (set up by `update.ps1`):** the same task also repeats every 5 minutes and
+runs `$CORVIN_HOME\bin\corvin-ensure-console.ps1` — the one supported console
+supervisor on Windows (the older `corvinos_autostart.py` supervisor is no longer
+generated or used). It keeps exactly one console running:
+
+- the console answers HTTP on its port → nothing to do;
+- a process still **listens** on the port but does not answer (overloaded, event loop
+  starved) → it never starts a second console next to it; only when the same listener
+  has not answered for **10 minutes** does it stop that process and start one console;
+- nothing listens → it starts the console, unless one started less than 3 minutes ago
+  (a cold start binds the port last);
+- never while an install/update holds its lock.
+
+Every decision is logged to `$CORVIN_HOME\logs\ensure-console.log`; the "not answering
+since" state lives in `$CORVIN_HOME\run\console-unresponsive.json`.
+
 **Manage:**
 
 ```powershell

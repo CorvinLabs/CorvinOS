@@ -442,62 +442,24 @@ def _json_safe(v: Any) -> str:
 _CLI_TIMEOUT_SECONDS = 15.0
 
 
-def _claude_settings_env() -> dict:
-    """The ``env`` block of Claude Code's own settings.json (honouring
-    ``CLAUDE_CONFIG_DIR``). The Bedrock/Vertex/Foundry setup wizards write the
-    ``CLAUDE_CODE_USE_*`` flags HERE, not into the shell environment — so a
-    probe that only reads ``os.environ`` misses every wizard-configured install.
-    Mirrors chat_runtime.py::_claude_settings_env().
-    """
-    import os as _os
-    from pathlib import Path as _Path
-    try:
-        import json as _json
-        config_dir = _os.environ.get("CLAUDE_CONFIG_DIR")
-        base = _Path(_os.path.expanduser(config_dir)) if config_dir else _Path.home() / ".claude"
-        path = base / "settings.json"
-        if not path.is_file():
-            return {}
-        data = _json.loads(path.read_text(encoding="utf-8"))
-        env = data.get("env")
-        return env if isinstance(env, dict) else {}
-    except Exception:  # noqa: BLE001 — a corrupt settings file must not break detection
-        return {}
-
-
 def _claude_authenticated() -> bool:
-    """Cheap, subprocess-free Claude Code auth probe — the ungated sibling of
-    the 41c174e summarize.py gate. Without it, a fresh install with `claude` on
-    PATH but not yet logged in burns the full judge timeout (15–20 s) on EVERY
-    research/forge voice summary before falling back. Mirrors
-    summarize.py::_claude_authenticated: ANTHROPIC_API_KEY, a 3rd-party platform
-    (Amazon Bedrock / Google Vertex / Microsoft Foundry), or an OAuth session in
-    ~/.claude/.credentials.json. Fail-OPEN on read error so a transient glitch
-    never disables a genuinely-logged-in user's judge.
+    """Whether Claude Code is logged in — gates the dialectic judge.
+
+    Delegates to the ONE shared probe, ``engine_detection.claude_authenticated``
+    (API key, 3rd-party platform flag in env or settings.json, OAuth /
+    enterprise-gateway login in ~/.claude/.credentials.json; fail-open on a read
+    error). Guard: tests/test_claude_auth_probe_parity.py.
     """
-    import os as _os
+    import sys as _sys
     from pathlib import Path as _Path
-    if _os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    # 3rd-party platform (Bedrock/Vertex/Foundry): auth is via the platform's OWN
-    # credentials (AWS/GCP/Azure) — no ANTHROPIC_API_KEY, no .credentials.json.
-    # Checking only those two false-negatived every such install and degraded the
-    # judge to thesis-only. The wizards write CLAUDE_CODE_USE_* into
-    # settings.json's `env` block, so check both (mirrors chat_runtime.py).
-    # Guard: tests/test_claude_auth_probe_parity.py.
-    _settings_env = _claude_settings_env()
-    for _flag in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
-        if (_os.environ.get(_flag) or _settings_env.get(_flag)) in ("1", "true", "True"):
-            return True
     try:
-        creds_path = _Path.home() / ".claude" / ".credentials.json"
-        if not creds_path.exists():
-            return False
-        import json as _json
-        creds = _json.loads(creds_path.read_text(encoding="utf-8"))
-        return bool(creds.get("claudeAiOauth") or creds.get("accessToken"))
+        _shared = str(_Path(__file__).resolve().parent)
+        if _shared not in _sys.path:
+            _sys.path.insert(0, _shared)
+        import engine_detection as _ed  # type: ignore  # noqa: PLC0415
     except Exception:  # noqa: BLE001
-        return True  # fail-open: don't disable a possibly-authenticated judge
+        return True  # fail-open, as the probe itself does on a read error
+    return _ed.claude_authenticated()
 
 
 def _run_cli_judge(*, site: str, thesis: Any, antithesis: Any) -> str:
