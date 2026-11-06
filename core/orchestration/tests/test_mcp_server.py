@@ -610,7 +610,7 @@ class TestAcsDelegateAdaptation(TestOrchestrationServerBase):
         spec, _ = self._spec_for({"task": "x"})
         self.assertEqual(spec["dynamic_tools"],
                          {"enabled": True, "publish": True, "allowed_namespaces": ["dynamic"]})
-        self.assertEqual(spec["dynamic_skills"], {"enabled": True, "forge": True})
+        self.assertEqual(spec["dynamic_skills"], {"enabled": True, "forge": True, "only_prefix": "acs."})
 
     def test_adapt_false_leaves_the_workers_with_what_exists(self):
         spec, _ = self._spec_for({"task": "x", "adapt": False})

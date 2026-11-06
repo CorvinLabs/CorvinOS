@@ -699,6 +699,15 @@ may now `skill_grade` it — and only that persona: `SkillRegistry.owns_acs_skil
 (`test_acs_runtime_forge.py`): run 1 forges, the persona grades over the real skill_forge MCP server, run 2 —
 nothing forged — injects it (and does not before the grade).
 
+**Workers get the ACS skills, not the persona's library.** `acs_delegate` sets
+`dynamic_skills.only_prefix: "acs."` (`skill_inject.collect_active_skills(only_name_prefix=...)`): a worker is
+handed the skills ACS forged and the persona graded, not the persona's whole graded library — with plain
+`dynamic_skills.enabled` a trivial live worker received three unrelated skills (slides, PowerPoint, pentest).
+A workflow author who wants the old behaviour omits `only_prefix`. Live proof (2026-11-06): run
+`acs-1794004778-d748d95f` forged `acs.holdout_choice_guide`; `assistant` graded it (1 grade, mean 0.3);
+run `acs-1794004955-1fb9963a` injected exactly that skill (`acs.worker_skills_injected skill_count=1`) and its
+worker used the guide.
+
 **Datasource licence.** `_resolve_acs_datasources` enforces the licence's adapter allowlist
 (`license.validator.datasource_adapter_allowed`: Free = `local_file`, Member = all), and `acs_delegate`
 refuses an unlicensed adapter up front (before any unit is charged).

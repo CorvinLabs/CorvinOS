@@ -577,3 +577,33 @@ def test_the_persona_in_the_spec_must_be_a_plain_name(tmp_path):
     assert config_from_spec({"dynamic_skills": {"enabled": True, "forge": True, "persona": "assistant"}}).persona == "assistant"
     for bad in ("../x", "a b", "", "x" * 65, 7, None):
         assert config_from_spec({"dynamic_skills": {"enabled": True, "forge": True, "persona": bad}}).persona == ""
+
+
+def test_only_prefix_keeps_the_personas_unrelated_graded_skills_out_of_a_worker(tmp_path):
+    """acs_delegate sets dynamic_skills.only_prefix="acs.": a worker gets the skills ACS forged,
+    not the persona's whole graded library (a trivial worker was handed three unrelated skills:
+    slides, PowerPoint, pentest — tokens for nothing)."""
+    from skill_forge.registry import SkillRegistry
+    from corvin_operator.forge.forge.paths import tenant_home
+    reg = SkillRegistry(Path(tenant_home("_default")) / "skill-forge")
+    reg.create(name="assistant.unrelated_deck_builder", type="learned-experience",
+               body_md="# deck builder\n\nBuild slide decks from outlines: one idea per slide, large type, "
+                       "a closing summary slide, and speaker notes for every slide.\n",
+               description="build slide decks from outlines", claim={}, scope="session", created_by="assistant")
+    reg.grade("assistant.unrelated_deck_builder", "r", 0.9, organic=True)
+    _forge_skill_run(tmp_path)
+    home = Path(os.environ["CORVIN_HOME"])
+    assert _grade_over_the_real_skill_forge_server(home, "assistant", "acs.hash_method")["result"].get("isError") is False
+
+    def system(dyn):
+        h = Harness(tmp_path)
+        h.run([_decision_delegate(), COMPLETE], _spec(dynamic_skills=dyn))
+        return h.worker_systems[0]
+
+    everything = system({"enabled": True})                                   # control: no restriction
+    assert 'name="assistant.unrelated_deck_builder"' in everything and 'name="acs.hash_method"' in everything
+    acs_only = system({"enabled": True, "only_prefix": "acs."})
+    assert 'name="acs.hash_method"' in acs_only, "the graded ACS skill must still be re-used"
+    assert 'name="assistant.unrelated_deck_builder"' not in acs_only, "unrelated skills must stay out"
+    assert 'name="assistant.unrelated_deck_builder"' in system({"enabled": True, "only_prefix": "../x"}), \
+        "a malformed prefix is ignored, not applied"

@@ -1673,7 +1673,9 @@ class OrchestrationServer:
         if adapt:
             spec["dynamic_tools"] = {"enabled": True, "publish": True,
                                      "allowed_namespaces": ["dynamic"]}
-            spec["dynamic_skills"] = {"enabled": True, "forge": True}
+            # only_prefix: workers get the skills ACS forged (and the persona graded), not
+            # the persona's whole graded library.
+            spec["dynamic_skills"] = {"enabled": True, "forge": True, "only_prefix": "acs."}
             if self.caller_persona and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", self.caller_persona):
                 # The persona that started the run may grade the skills it forges
                 # (SkillForge's namespace gate otherwise refuses an `acs.*` skill to

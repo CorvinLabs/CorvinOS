@@ -638,8 +638,14 @@ def collect_active_skills(
     persona: str | None = None,
     tenant_id: str | None = None,
     include_core: bool = True,
+    only_name_prefix: str | None = None,
 ) -> str | None:
     """Return a markdown block of currently active skills, or None.
+
+    ``only_name_prefix`` (e.g. ``"acs."``) restricts the AUTOMATIC candidates to skills
+    whose name starts with it. ``acs_delegate`` uses it so a worker gets the skills ACS
+    itself forged (and the persona graded), not the persona's whole graded library — a
+    trivial worker was handed three unrelated skills (slides, PowerPoint, pentest).
 
     ``include_core=False`` leaves out the always-on core quality skills
     (``adr_gate``, ``e2e-wiring-proof``). An ACS worker is a narrow, isolated
@@ -743,6 +749,9 @@ def collect_active_skills(
                     continue
             registry_eligible.append((scope, spec))
 
+        if only_name_prefix:
+            registry_eligible = [(sc, sp) for sc, sp in registry_eligible
+                                 if str(sp.name).startswith(only_name_prefix)]
         registry_eligible = _apply_ldd_filter(registry_eligible, profile)
         registry_eligible = _apply_quality_layer_filter(registry_eligible)
         # Sort by mean_score desc, then created_at desc — newest among ties.

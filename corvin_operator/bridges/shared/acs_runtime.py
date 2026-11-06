@@ -2413,6 +2413,13 @@ def _dynamic_skills_config(ctx: "RunContext") -> "dict | None":
     return None
 
 
+def _dynamic_skills_only_prefix(cfg: dict) -> "str | None":
+    """``dynamic_skills.only_prefix`` (e.g. ``"acs."``): inject only skills with this name
+    prefix. Anything that is not a plain ``name.`` prefix is ignored (inject as before)."""
+    pre = cfg.get("only_prefix")
+    return pre if isinstance(pre, str) and re.fullmatch(r"[A-Za-z0-9_]{1,32}\.", pre) else None
+
+
 def _worker_skills_block(subtask: dict, ctx: "RunContext") -> "tuple[str, list[str]]":
     """Graded SkillForge skills for ONE worker, rendered as TEXT. ``("", [])`` when off.
 
@@ -2439,6 +2446,7 @@ def _worker_skills_block(subtask: dict, ctx: "RunContext") -> "tuple[str, list[s
             channel_id=None, profile={"max_injected_skills": cap},
             task_text=str(subtask.get("instructions") or ""),
             tenant_id=ctx.tenant_id, include_core=False,
+            only_name_prefix=_dynamic_skills_only_prefix(cfg),
         )
     except Exception as exc:  # noqa: BLE001 - a skill lookup must never fail a worker
         log.warning("[acs] worker skill lookup failed (tenant=%s): %s",
