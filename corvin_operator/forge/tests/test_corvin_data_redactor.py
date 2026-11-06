@@ -572,7 +572,9 @@ def test_apply_redaction_clears_quantiles_of_a_redacted_column():
     assert (st.p05, st.p50, st.p95) == (None, None, None)
     assert snap.stats["n"].p50 == 3
 
+    # aggregate_only keeps COUNTS only: top values and quantiles are values too.
     agg = _make_snapshot([{"tel": "+49301234567"}], {"tel": "phone"})
-    agg.stats["tel"].p50 = 4930123
+    agg.stats["tel"].p50, agg.stats["tel"].top, agg.stats["tel"].distinct = 4930123, ["+4930"], 1
     apply_redaction(agg, RedactionPolicy(default_strategy="aggregate_only"))
-    assert agg.stats["tel"].p50 == 4930123
+    assert agg.stats["tel"].p50 is None and agg.stats["tel"].top is None
+    assert agg.stats["tel"].distinct == 1

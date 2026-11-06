@@ -48,6 +48,13 @@ QUAD = ("import json, sys\n"
 state_holder: dict = {}
 
 
+CLOSED = ("import json, sys\n"
+          "d = json.load(sys.stdin)\n"
+          "if d.get('method', 'ok') != 'ok':\n"
+          "    raise SystemExit('unknown method ' + d['method'])\n"
+          "print(json.dumps({'loss': 'nan' if d.get('nan') else float(d['a'])}))\n")
+
+
 @pytest.fixture
 def worker(tmp_path, monkeypatch):
     home = tmp_path / "corvin"
@@ -65,6 +72,13 @@ def worker(tmp_path, monkeypatch):
                                                        "y": {"type": "number"}},
                       "required": ["x"]},
         impl=QUAD, scope="user", tenant_id=TENANT)
+    freg.Registry(user_root).create(
+        name="probe.closed", description="closed schema, method-dependent",
+        input_schema={"type": "object", "properties": {"a": {"type": "number"},
+                                                       "method": {"type": "string"},
+                                                       "nan": {"type": "boolean"}},
+                      "required": ["a"], "additionalProperties": False},
+        impl=CLOSED, scope="user", tenant_id=TENANT)
 
     from corvin_compute import cli
     runner = cli._build_runner_fn(tenant_id=TENANT, corvin_home_path=home)
@@ -134,22 +148,52 @@ def test_a_tool_outside_the_user_scope_is_refused_before_the_run_starts(worker):
 
 
 def test_param_grid_keys_that_are_not_tool_inputs_are_refused(worker):
+    # A missing required input is always refused.
     with pytest.raises(WorkerClientError) as exc:
         _submit(worker, tool_name="probe.quad", param_grid={"z": [1, 2]})
     assert exc.value.error_class == "ParamGridMismatch"
-    assert "['x']" in exc.value.message and "['z']" in exc.value.message
+    assert "required input(s) ['x']" in exc.value.message
+    # An unknown key is refused when the schema is closed (additionalProperties: false) ...
+    with pytest.raises(WorkerClientError) as exc:
+        _submit(worker, tool_name="probe.closed", param_grid={"a": [1], "b": [2]})
+    assert exc.value.error_class == "ParamGridMismatch" and "['b']" in exc.value.message
+    # ... and accepted for an open schema, exactly as run_tool's jsonschema accepts it.
+    h = _submit(worker, tool_name="probe.quad", param_grid={"x": [2], "z": [5]})["compute_handle"]
+    assert _result(worker, h)["best_loss"] == 1.0
 
 
-def test_every_pipeline_stage_is_preflighted(worker, monkeypatch):
-    # The engine itself is not needed: the refusal must come before submission.
+def test_the_first_pipeline_stage_is_preflighted_later_ones_may_be_forged_at_a_gate(worker):
+    with pytest.raises(WorkerClientError) as exc:
+        worker._call("submit_run", {
+            "engine": "pipeline", "budget": {"max_iterations": 4},
+            "extra": {"steering_gate": False, "stages": [
+                {"stage_id": "a", "tool_name": "probe.missing", "param_grid": {"x": [1]}},
+                {"stage_id": "b", "tool_name": "probe.quad", "param_grid": {"x": [1]}}]}})
+    assert exc.value.error_class == "ToolNotAvailable" and "probe.missing" in exc.value.message
+    # A later stage's tool need not exist yet (ADR-0027 forge at the steering gate):
+    # the submission passes the preflight and reaches the engine lookup (no pipeline
+    # engine is registered in this harness, so that is where it stops).
     with pytest.raises(WorkerClientError) as exc:
         worker._call("submit_run", {
             "engine": "pipeline", "budget": {"max_iterations": 4},
             "extra": {"steering_gate": False, "stages": [
                 {"stage_id": "a", "tool_name": "probe.quad", "param_grid": {"x": [1]}},
-                {"stage_id": "b", "tool_name": "probe.missing", "param_grid": {"x": [1]}}]}})
-    assert exc.value.error_class == "ToolNotAvailable"
-    assert "probe.missing" in exc.value.message
+                {"stage_id": "b", "tool_name": "probe.forged_later", "param_grid": {"x": [1]}}]}})
+    assert exc.value.error_class != "ToolNotAvailable", exc.value.message
+
+
+def test_one_bad_value_of_a_later_grid_axis_does_not_stop_the_grid(worker):
+    h = _submit(worker, tool_name="probe.closed",
+                param_grid={"a": [3, 1, 2], "method": ["bad", "ok"]})["compute_handle"]
+    res = _result(worker, h)
+    assert res["total_iterations"] == 6, res
+    assert res["best_loss"] == 1.0 and res["best_params"] == {"a": 1, "method": "ok"}
+
+
+def test_a_nan_loss_is_not_a_result(worker):
+    h = _submit(worker, tool_name="probe.closed", param_grid={"a": [1, 2], "nan": [True]})["compute_handle"]
+    res = _result(worker, h)
+    assert res["state"] == "failed" and res["best_loss"] is None, res
 
 
 def test_a_run_without_one_valid_loss_ends_failed_and_names_the_cause(worker):

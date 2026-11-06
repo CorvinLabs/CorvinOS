@@ -444,3 +444,38 @@ def test_limits_are_clamped():
     assert cfg.max_tools == _af.MAX_TOOLS_HARD
     cfg = _af.config_from_spec({"dynamic_tools": {"enabled": True, "max_tools": 0}})
     assert cfg.max_tools == 1
+
+
+def test_a_confidential_datasource_raises_the_class_the_spawn_gate_sees(tmp_path):
+    """The per-engine L34 spawn gate saw only the workflow's declared class
+    ("internal" — acs_delegate never sets one), so a CONFIDENTIAL connection's
+    rows/env could reach a cloud worker the gate refuses for that class
+    (adversarial review 2026-11-06). The strictest connection class is folded in."""
+    import spawn_gates
+    conn = tmp_path / "tenants" / "_default" / "datasource_connections" / "conf.json"
+    conn.parent.mkdir(parents=True)
+    conn.write_text(json.dumps({"dsi_version": "1", "name": "conf", "adapter": "local_file",
+                                "config": {"path": "/nonexistent.csv", "format": "csv"},
+                                "data_classification": "CONFIDENTIAL", "data_residency": "any"}),
+                    encoding="utf-8")
+    seen: list = []
+    real = spawn_gates.check_l34
+
+    def spy(engine_id, tenant_id, *a, **k):
+        seen.append(str(k.get("classification", "")).lower())
+        return real(engine_id, tenant_id, *a, **k)
+
+    h = Harness(tmp_path)
+    spec = _spec()
+    spec["orchestration"]["delegation_loop"]["datasources"] = ["conf"]
+    with patch.object(spawn_gates, "check_l34", side_effect=spy):
+        h.run([_decision_delegate(), COMPLETE], spec)
+    assert seen, "the L34 spawn gate was never consulted"
+    assert set(seen) == {"confidential"}, seen
+
+
+def test_strongest_datasource_class_is_fail_closed(tmp_path):
+    with patch.object(_rt, "_corvin_home", return_value=tmp_path):
+        assert _rt._strongest_datasource_class("_default", ["missing"], "internal") == "secret"
+        assert _rt._strongest_datasource_class("_default", [], "public") == "public"
+        assert _rt._strongest_datasource_class("_default", [], "weird") == "secret"

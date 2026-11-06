@@ -140,8 +140,10 @@ class PipelineStore:
         current_stage_id: str | None,
         completed_stages: list,
         best_losses: dict,
+        error: str | None = None,
     ) -> None:
         payload = {
+            "error": error,
             "pipeline_id": self.pipeline_id,
             "tenant_id": self.tenant_id,
             "state": state,

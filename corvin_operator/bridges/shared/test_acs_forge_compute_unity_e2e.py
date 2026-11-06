@@ -118,6 +118,23 @@ def test_publish_never_overwrites_an_existing_user_tool(tmp_path):
     assert Registry(root).get("dynamic.Quad_Loss").description == "mine"
     assert Registry(root).get("dynamic.quad_loss") is None
     assert len(h.events("acs.tool_forged")) == 1                              # still usable for the run itself
+    # The manager is told: a skipped publish used to read as plain "ok".
+    assert any("NOT published: duplicate" in p for p in h.manager_prompts), h.manager_prompts[-1][-600:]
+
+
+def test_publish_honours_the_operator_policy_of_the_user_scope(tmp_path):
+    """The user scope's policy (where the compute worker executes) used to be skipped:
+    publishing checked only the built-in defaults."""
+    import json as _json
+    from forge.scope import scope_root
+    root = scope_root("user", tenant_id="_default")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "policy.json").write_text(_json.dumps({"forbidden_tool_names": ["dynamic.quad_loss"]}),
+                                      encoding="utf-8")
+    h = Harness(tmp_path)
+    h.run([_decision_delegate(forge={"tools": [QUAD_TOOL]}), COMPLETE], _spec(**PUBLISH))
+    assert h.events("acs.tool_published") == []
+    assert [e["reason"] for e in h.events("acs.tool_publish_rejected")] == ["policy_denied"]
 
 
 def test_without_publish_the_other_runtimes_do_not_see_the_tool(tmp_path):

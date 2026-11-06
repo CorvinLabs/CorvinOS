@@ -1601,7 +1601,11 @@ class OrchestrationServer:
         # run_acs_workflow() as its own kwarg below (which merges it over
         # spec.orchestration.delegation_loop.budget) — NOT embedded into the
         # spec here too, so there is exactly one source of truth for it.
-        adapt = args.get("adapt", True) is not False
+        adapt = args.get("adapt", True)
+        if not isinstance(adapt, bool):
+            # "false" (a string) used to read as on.
+            self._error(msgid, INVALID_PARAMS, "adapt must be a boolean")
+            return
         datasources = args.get("datasources") or []
         if not (isinstance(datasources, list)
                 and all(isinstance(d, str) and _DS_NAME_RE.fullmatch(d) for d in datasources)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import math
 import time
 import traceback
 from pathlib import Path
@@ -58,10 +59,16 @@ def _resolve_loss(envelope: Mapping[str, Any], loss_metric: str) -> float | None
         if part not in cur:
             return None
         cur = cur[part]
+    if isinstance(cur, bool):
+        return None
     try:
-        return float(cur)
+        val = float(cur)
     except (TypeError, ValueError):
         return None
+    # NaN / +-inf are not a loss: NaN compared false against everything and
+    # survived the "no valid loss" check as best_loss=nan; -inf won every
+    # minimisation (adversarial review 2026-11-06).
+    return val if math.isfinite(val) else None
 
 
 #: Consecutive failing iterations FROM THE START, all with the same error,
@@ -71,16 +78,38 @@ def _resolve_loss(envelope: Mapping[str, Any], loss_metric: str) -> float | None
 FAIL_FAST_IDENTICAL_ERRORS = 3
 
 
+#: Failure classes that do not depend on the parameter values: a missing tool
+#: or a missing loss field fails every point of the space the same way. A
+#: value-dependent error (one bad value of a later grid axis) must NOT stop the
+#: run — the grid enumerates the first axis fastest, so its first points can
+#: share one bad value of another axis while the rest of the grid is valid.
+_PARAM_INDEPENDENT_ERRORS = ("LossMetricMissing:", "ToolError: unknown tool")
+
+
 def _deterministic_failure(history: "list[IterRecord]") -> str | None:
-    """The shared error when the run has only ever failed, identically, N times."""
+    """The shared error when the run has only ever failed, identically, N times,
+    with a failure class that no other parameter value can avoid."""
     if len(history) < FAIL_FAST_IDENTICAL_ERRORS:
         return None
     if any(h.loss is not None for h in history):
         return None
     errors = {h.error for h in history}
-    if len(errors) == 1 and None not in errors:
-        return next(iter(errors))
-    return None
+    if len(errors) != 1 or None in errors:
+        return None
+    err = next(iter(errors))
+    return err if err.startswith(_PARAM_INDEPENDENT_ERRORS) else None
+
+
+def _public_error(err: str | None) -> str:
+    """The cause as it may travel to the caller (an LLM chat): never raw tool
+    output. Tool stderr and jsonschema messages can quote row values or param
+    values; the full text stays in the run's iterations/*.json."""
+    if not err:
+        return "no-valid-loss"
+    if err.startswith(_PARAM_INDEPENDENT_ERRORS):
+        return err  # composed by this module: names keys / the tool, never values
+    cls = err.split(":", 1)[0].strip()[:60] or "Error"
+    return f"{cls} (details in iterations/*.json of this run)"
 
 
 @dataclasses.dataclass
@@ -214,7 +243,7 @@ class ComputeRun:
                 failed_start = _deterministic_failure(history)
                 if failed_start is not None:
                     self._terminal_state = RUN_STATE_FAILED
-                    self._terminal_reason = f"all-iterations-failed: {failed_start}"[:240]
+                    self._terminal_reason = f"all-iterations-failed: {_public_error(failed_start)}"[:240]
                     break
 
                 try:
@@ -276,7 +305,9 @@ class ComputeRun:
         except Exception as exc:  # noqa: BLE001
             wall_ms = int((self.time_fn() - started) * 1000)
             rec = IterRecord(
-                iter=iter_n, params=dict(params), loss=None,
+                iter=iter_n,
+                params=redact_sensitive_fields(params, self.spec.sensitive_fields),
+                loss=None,
                 wall_ms=wall_ms, ts=now_ts(),
                 cache_hit=False, param_fingerprint=fingerprint,
                 error=f"{type(exc).__name__}: {exc}"[:200],
@@ -378,9 +409,9 @@ class ComputeRun:
         # ``state``. No valid loss means the run produced nothing: FAILED, with
         # the first iteration's error as the reason.
         if history and not valid and state not in (RUN_STATE_FAILED, RUN_STATE_ABORTED):
-            first = next((h.error for h in history if h.error), None) or "no-valid-loss"
+            first = next((h.error for h in history if h.error), None)
             state = RUN_STATE_FAILED
-            reason = f"all-iterations-failed: {first}"[:240]
+            reason = f"all-iterations-failed: {_public_error(first)}"[:240]
         b = best_iter(valid, minimise=self.spec.minimise)
         last = history[-1] if history else None
         total_wall_s = max(0.0, self.time_fn() - (self._started_at or self.time_fn()))

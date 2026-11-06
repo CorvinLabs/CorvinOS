@@ -107,8 +107,10 @@ class HACStore:
     def write_summary(self, *, state: str, round_n: int, root_loss: float | None,
                       manager_states: dict, attributions: dict,
                       sub_manager_losses: dict | None = None,
-                      root_loss_history: list | None = None) -> None:
+                      root_loss_history: list | None = None,
+                      error: str | None = None) -> None:
         data = {
+            "error": error,
             "state": state, "round": round_n, "root_loss": root_loss,
             "manager_states": manager_states, "attributions": attributions,
             # Persisted so the console HAC detail view can render real per-manager

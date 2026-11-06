@@ -30,7 +30,7 @@ from .budget import (
     RUN_STATE_RUNNING, RUN_STATE_FAILED, RUN_STATE_ABORTED, TERMINAL_STATES,
 )
 from .driver import (
-    AbortRequested, ComputeRun, ComputeRunSpec, RunnerFn, _deterministic_failure, _resolve_loss,
+    AbortRequested, ComputeRun, ComputeRunSpec, RunnerFn, _deterministic_failure, _public_error, _resolve_loss,
 )
 from .iteration import IterRecord, best_iter, now_ts, param_fingerprint
 from .state import RunRecord, RunStore, new_run_id, validate_run_id
@@ -139,7 +139,7 @@ class ParallelDriver(ComputeRun):
                 failed_start = _deterministic_failure(history)
                 if failed_start is not None:
                     self._terminal_state = RUN_STATE_FAILED
-                    self._terminal_reason = f"all-iterations-failed: {failed_start}"[:240]
+                    self._terminal_reason = f"all-iterations-failed: {_public_error(failed_start)}"[:240]
                     break
 
                 try:

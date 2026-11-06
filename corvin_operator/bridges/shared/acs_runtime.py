@@ -1568,6 +1568,36 @@ def _resolve_acs_datasources(tenant_id: str, names: list[str],
     return "\n\n".join(blocks), env
 
 
+_CLASS_ORDER = ("public", "internal", "confidential", "secret")
+
+
+def _strongest_datasource_class(tenant_id: str, names: list[str], declared: str) -> str:
+    """The strictest of the run's declared class and every bound connection's class.
+
+    The worker/manager L34 gate (``spawn_gates.check_l34``, engine-aware) used
+    only the workflow's declared class, which ``acs_delegate`` never sets
+    ("internal"): a CONFIDENTIAL/SECRET connection's rows (snapshot) or env
+    reached a cloud worker that the same gate refuses for that class
+    (adversarial review 2026-11-06). Folding the connection class in lets the
+    existing per-engine gate decide. Unknown/unreadable => "secret" (fail-closed).
+    """
+    rank = {c: i for i, c in enumerate(_CLASS_ORDER)}
+    best = declared.lower() if declared.lower() in rank else "secret"
+    home = _corvin_home()
+    conn_dir = (home / "tenants" / tenant_id / "datasource_connections").resolve()
+    for name in names:
+        try:
+            raw = json.loads((conn_dir / f"{name}.json").read_text(encoding="utf-8"))
+            cls = str(raw.get("data_classification", "INTERNAL")).lower()
+        except Exception:  # noqa: BLE001
+            cls = "secret"
+        if cls not in rank:
+            cls = "secret"
+        if rank[cls] > rank[best]:
+            best = cls
+    return best
+
+
 def _pg_live_snapshot(host: str, port: int, db: str, user: str, name: str) -> str:
     """Run a few read-only probes against the live PG and return a compact
     text snapshot. Best-effort: returns a note if psycopg2 / the DB is
@@ -3994,6 +4024,9 @@ class ACSRuntime:
         if _ds_names:
             _ds_context, _ds_env = _resolve_acs_datasources(
                 self._tenant_id, list(_ds_names), run_id=rid)
+            _dl = spec.setdefault("orchestration", {}).setdefault("delegation_loop", {})
+            _dl["data_classification"] = _strongest_datasource_class(
+                self._tenant_id, list(_ds_names), str(_dl.get("data_classification", "internal")))
             if _ds_context:
                 initial_state["_datasource_context"] = _ds_context
 

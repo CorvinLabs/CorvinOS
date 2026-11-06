@@ -9,8 +9,9 @@ def compute_root_loss(
     sub_losses: dict[str, float | None],
     weights: dict[str, float],
     mode: str = "weighted_sum",
-) -> float:
-    """Compute root loss from sub-manager losses.
+) -> "float | None":
+    """Compute root loss from sub-manager losses. ``None`` when no manager has one
+    (an invented 1.0 used to make an all-failed HAC run read as converged).
 
     sub_losses: manager_id -> primary_loss (None = not completed)
     weights: manager_id -> weight
@@ -24,15 +25,15 @@ def compute_root_loss(
             w = weights.get(mid, 1.0 / max(len(sub_losses), 1))
             total_l += w * loss
             total_w += w
-        return (total_l / total_w) if total_w > 0 else 1.0
+        return (total_l / total_w) if total_w > 0 else None
     elif mode == "pareto":
         # Root loss is max of sub_losses (worst case)
         losses = [l for l in sub_losses.values() if l is not None]
-        return max(losses) if losses else 1.0
+        return max(losses) if losses else None
     elif mode == "cascade":
         # Last sub_loss if all others meet threshold (not supported fully, use weighted_sum)
         return compute_root_loss(sub_losses, weights, mode="weighted_sum")
-    return 1.0
+    return None
 
 
 def compute_attribution(

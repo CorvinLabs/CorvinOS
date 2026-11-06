@@ -135,8 +135,15 @@ def _save_trial_state(state: TrialState, corvin_home: Path) -> None:
         raise
 
 
-def record_trial_iteration(corvin_home: Path, strategy: str = "grid") -> None:
-    """Increment the trial counter after a successful compute_run submission.
+def record_trial_iteration(corvin_home: Path, strategy: str = "grid", n: int = 1) -> None:
+    """Charge ``n`` trial iterations after a successful submission.
+
+    ``n`` is the iteration budget the run was GRANTED (``enforce_trial_*``
+    clamps it to what is left). It used to be a fixed +1 per submission while
+    each run was granted up to everything left, so three runs got
+    500 + 499 + 498 iterations out of a "500-iteration trial" (adversarial
+    review 2026-11-06). A reservation, not a refund: an early stop does not
+    give the unused part back.
 
     CMP-04 (ADR-0146): the load-modify-save is serialized under an exclusive
     flock so two concurrent compute_run submissions cannot both read the same
@@ -159,10 +166,11 @@ def record_trial_iteration(corvin_home: Path, strategy: str = "grid") -> None:
         if _fcntl is not None:
             _fcntl.flock(_lf.fileno(), _fcntl.LOCK_EX)
         state = _load_trial_state(corvin_home)
+        n = max(1, int(n))
         if strategy == "bayesian":
-            state.bayesian_iterations_used += 1
+            state.bayesian_iterations_used += n
         else:
-            state.iterations_used += 1
+            state.iterations_used += n
         if state.first_run_at is None:
             state.first_run_at = int(time.time())
         _save_trial_state(state, corvin_home)
@@ -527,7 +535,65 @@ def enforce_trial_strategy(args: dict[str, Any], corvin_home: Path) -> dict[str,
     return args
 
 
+def enforce_trial_engine(args: dict[str, Any], corvin_home: Path) -> tuple[dict[str, Any], int]:
+    """Clamp a pipeline / HAC submission to what is left of the trial; return (args, reserved).
+
+    ``compute_submit`` never went through the trial at all, and a pipeline
+    stage's own ``budget`` overrode the clamped top budget (``coordinator``
+    merges it over the manifest budget), a HAC sub-manager's ``min_iterations``
+    floored its share above it. The whole job is now bounded by the remaining
+    trial iterations: pipeline stages share them (each stage <= remaining //
+    n_stages), HAC gets one round (no backprop gate) with manager floors capped
+    to their share. Raises ValueError when nothing is left.
+    """
+    state = _load_trial_state(corvin_home)
+    remaining = max(0, TRIAL_ITERATION_CAP - state.iterations_used)
+    if remaining <= 0:
+        raise ValueError(
+            f"Trial limit of {TRIAL_ITERATION_CAP} compute iterations reached. "
+            f"Upgrade to a paid license at {UPGRADE_URL}")
+    args = dict(args)
+    engine = str(args.get("engine") or "")
+    extra = json.loads(json.dumps(args.get("extra") or {}))
+    budget = dict(args.get("budget") or {})
+    asked = budget.get("max_iterations")
+    asked = int(asked) if isinstance(asked, int) and asked > 0 else remaining
+
+    def _clamp_stage(st: Any, cap: int) -> None:
+        if isinstance(st, dict):
+            sb = dict(st.get("budget") or {})
+            own = sb.get("max_iterations")
+            sb["max_iterations"] = min(int(own), cap) if isinstance(own, int) and own > 0 else cap
+            st["budget"] = sb
+
+    if engine == "pipeline":
+        stages = [s_ for s_ in (extra.get("stages") or []) if isinstance(s_, dict)]
+        per_stage = max(1, min(asked, remaining // max(1, len(stages))))
+        for st in stages:
+            _clamp_stage(st, per_stage)
+        budget["max_iterations"] = per_stage
+        reserved = per_stage * max(1, len(stages))
+    elif engine == "hac":
+        top = min(asked, remaining)
+        managers = [m for m in (extra.get("sub_managers") or []) if isinstance(m, dict)]
+        share = max(1, top // max(1, len(managers)))
+        for m in managers:
+            m["min_iterations"] = min(int(m.get("min_iterations", 10) or 1), share)
+            for st in m.get("stages") or []:
+                _clamp_stage(st, share)
+        extra["max_backprop_rounds"] = 1
+        extra["backprop_gate"] = False
+        budget["max_iterations"] = top
+        reserved = top
+    else:
+        raise ValueError(f"engine {engine!r} is not available in the trial")
+    args["budget"] = budget
+    args["extra"] = extra
+    return args, min(reserved, remaining)
+
+
 __all__ = [
+    "enforce_trial_engine",
     "COMPUTE_FLAG",
     "COMPUTE_FABRIC_FLAG",
     "TRIAL_ITERATION_CAP",

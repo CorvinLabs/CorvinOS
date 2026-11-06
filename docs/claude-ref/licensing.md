@@ -190,6 +190,16 @@ is unlimited, `fabric_allowed` false; anything else (free, unresolvable, finite 
 trial. This matches the console's compute status (`routes/compute.py`, `except ImportError`).
 Pinned by `tests/license/test_license_deferred_load_subprocess_e2e.py` (real forge stdio server).
 
+### Compute trial accounting (2026-11-06)
+
+The trial (`TRIAL_ITERATION_CAP` 500, Bayesian 50) is a budget of ITERATIONS. A submission is charged
+the iteration budget it was GRANTED (`record_trial_iteration(..., n=granted)`) — a reservation; an early
+stop is not refunded. It used to charge +1 per submission while granting everything left (500 + 499 +
+498 ...). `compute_submit` pipeline/HAC jobs go through `enforce_trial_engine`: pipeline stages share
+what is left (each stage <= remaining // n_stages, stage budgets clamped — they used to override the
+top budget), HAC gets one round without the backprop gate and manager floors capped to their share;
+the job is charged its reservation. Members are unaffected (`mode: licensed`).
+
 ### Fail-Closed Contract
 
 **On enforcement error:**

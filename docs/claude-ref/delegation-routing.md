@@ -685,6 +685,11 @@ allowed_namespaces: [dynamic]}` and `dynamic_skills: {enabled: true, forge: true
 `acs.skill_forged persisted=true`); the published tool then ran grid, Bayesian, pipeline and HAC sweeps.
 Pinned by `TestAcsDelegateAdaptation` in `core/orchestration/tests/test_mcp_server.py`.
 
+Publishing checks the OPERATOR policy of the user scope (`Policy.load(user_root)`: forbidden names,
+namespaces, extra forbidden imports) — the scope the compute worker executes from — and the manager's
+`FORGE RESULTS` say "published" or "NOT published: <reason>; run-local only" (a skipped publish read as
+plain "ok", so a later `compute_run` under that name ran an older tool). `adapt` must be a boolean.
+
 Known gap: a persisted `acs.<name>` skill lands with zero grades, and the persona namespace gate refuses a
 grade from the `assistant` persona (`skill_grade` → `namespace-gate`), so such a skill never passes the
 injection grade gate in a later run. It works inside its own run (run-local).

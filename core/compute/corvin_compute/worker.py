@@ -777,18 +777,29 @@ class WorkerServer:
 
 
 def _engine_stage_tools(extra: Mapping[str, Any]) -> list[tuple[str, dict]]:
-    """(tool_name, param_grid) of every stage of a pipeline / HAC spec."""
+    """(tool_name, param_grid) of the stages that must exist when the job starts.
+
+    Pipeline: only the FIRST stage — a later stage's tool may be forged at a
+    steering gate (ADR-0027 ``forge_noted``), so it need not exist yet; a later
+    stage that still finds no tool fails the pipeline loudly. HAC: the first
+    stage of every sub-manager (the only stage a sub-manager runs). A stage's
+    ``inputs`` reach the tool as ``_input_<key>`` and count as provided keys.
+    """
     out: list[tuple[str, dict]] = []
 
-    def _stages(items: Any) -> None:
+    def _first(items: Any) -> None:
         for st in items or []:
             if isinstance(st, Mapping) and st.get("tool_name"):
-                out.append((str(st["tool_name"]), dict(st.get("param_grid") or {})))
+                grid = dict(st.get("param_grid") or {})
+                for k in (st.get("inputs") or {}):
+                    grid.setdefault(f"_input_{k}", [None])
+                out.append((str(st["tool_name"]), grid))
+                return
 
-    _stages(extra.get("stages"))
+    _first(extra.get("stages"))
     for sm in extra.get("sub_managers") or []:
         if isinstance(sm, Mapping):
-            _stages(sm.get("stages"))
+            _first(sm.get("stages"))
     return out
 
 

@@ -30,6 +30,10 @@ from .manifest import PipelineManifest, PipelineStore, StageSpec, _atomic_write_
 log = logging.getLogger(__name__)
 
 
+class _StageFailed(RuntimeError):
+    """A stage ended without a valid loss."""
+
+
 class PipelineCoordinator:
     """Manages sequential stage execution with forge gates.
 
@@ -84,10 +88,20 @@ class PipelineCoordinator:
             # Execute stage in a thread so the event loop stays responsive
             try:
                 result = await asyncio.to_thread(self._exec_stage, resolved_stage)
+                # A stage whose run produced no valid loss returned normally, and
+                # the pipeline went on to "converged" (adversarial review
+                # 2026-11-06). It is a failed stage: stop the pipeline, named.
+                if result.get("state") in ("failed", "aborted") or result.get("best_loss") is None:
+                    self._write_stage_summary(stage, result)
+                    raise _StageFailed(
+                        f"stage {stage.stage_id!r} produced no valid loss: "
+                        f"{result.get('error') or result.get('state')}")
             except Exception as exc:
                 log.exception("stage %s failed: %s", stage.stage_id, exc)
                 self._state = "failed"
+                self._failure = str(exc)[:240]
                 self._store.write_summary(
+                    error=self._failure,
                     state="failed",
                     current_stage_id=stage.stage_id,
                     completed_stages=list(self._completed.keys()),
@@ -282,7 +296,9 @@ class PipelineCoordinator:
         # Pass resolved input paths as prefixed extra params
         param_grid = dict(stage.param_grid)
         for input_key, input_val in stage.inputs.items():
-            param_grid[f"_input_{input_key}"] = input_val
+            # A grid axis is a LIST of values; the scalar used to make every
+            # pipeline with ``inputs`` fail with a grid ValueError.
+            param_grid[f"_input_{input_key}"] = [input_val]
 
         run_id = new_run_id()
         spec = ComputeRunSpec(
@@ -331,6 +347,7 @@ class PipelineCoordinator:
 
         return {
             "state": record.state,
+            "error": record.error,
             "best_loss": record.best_loss,
             "best_params": best_params,
             "total_iterations": record.total_iterations,
@@ -347,7 +364,8 @@ class PipelineCoordinator:
             _atomic_write_json(
                 self._store.stage_artifacts_dir(stage.stage_id).parent / "stage_summary.json",
                 {"stage_id": stage.stage_id, "tool_name": stage.tool_name, "strategy": stage.strategy,
-                 "state": "complete", "run_state": result.get("state"), "best_loss": result.get("best_loss"),
+                 "state": ("complete" if result.get("best_loss") is not None else "failed"),
+                 "run_state": result.get("state"), "best_loss": result.get("best_loss"),
                  "total_iterations": result.get("total_iterations", 0), "run_id": result.get("run_id")},
             )
         except OSError:
@@ -410,6 +428,7 @@ class PipelineCoordinator:
         return {
             "pipeline_id": self.pipeline_id,
             "state": self._state,
+            "error": getattr(self, "_failure", None),
             "current_stage_idx": self._current_idx,
             "current_stage_id": (
                 self._stages[self._current_idx].stage_id
@@ -428,6 +447,7 @@ class PipelineCoordinator:
         return {
             "pipeline_id": self.pipeline_id,
             "state": self._state,
+            "error": getattr(self, "_failure", None),
             "stages_completed": len(self._completed),
             "stages": {
                 sid: {

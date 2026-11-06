@@ -80,6 +80,18 @@ class HACCoordinator:
                 mid: res.get("best_loss")
                 for mid, res in self._manager_results.items()
             }
+            # A composite over a SUBSET of managers is not the objective: it
+            # silently drops the failed ones and reads better than the run is.
+            # Any manager without a valid loss fails the HAC run, named.
+            missing = sorted(mid for mid, v in sub_losses.items() if v is None)
+            if missing:
+                self._state = "failed"
+                self._failure = f"sub-managers without a valid loss: {missing}"
+                self._emit("compute.hac_root_loss_computed", {
+                    "hac_id": self.hac_id, "round": round_n, "root_loss": None,
+                    "sub_losses": {mid: v for mid, v in sub_losses.items() if v is not None},
+                })
+                break
             root_loss = compute_root_loss(
                 sub_losses,
                 self.manifest.loss_weights.weights,
@@ -142,6 +154,7 @@ class HACCoordinator:
                 else:
                     # All sub-managers failed — no attribution possible
                     self._state = "failed"
+                    self._failure = "no sub-manager produced a valid loss"
                     break
 
         self._emit("compute.hac_terminal", {
@@ -162,6 +175,7 @@ class HACCoordinator:
                                 for mid, res in self._manager_results.items()
                                 if res.get("best_loss") is not None},
             root_loss_history=list(self._root_loss_history),
+            error=getattr(self, "_failure", None),
         )
 
     async def _run_managers(self, manager_ids: list[str]) -> None:
@@ -334,6 +348,7 @@ class HACCoordinator:
         return {
             "hac_id": self.hac_id,
             "state": self._state,
+            "error": getattr(self, "_failure", None),
             "round": self._round,
             "root_loss_history": self._root_loss_history,
             "manager_states": {
@@ -350,6 +365,7 @@ class HACCoordinator:
         return {
             "hac_id": self.hac_id,
             "state": self._state,
+            "error": getattr(self, "_failure", None),
             "rounds_completed": self._round,
             "final_root_loss": self._root_loss_history[-1] if self._root_loss_history else None,
             "root_loss_history": self._root_loss_history,

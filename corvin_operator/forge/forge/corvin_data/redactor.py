@@ -301,6 +301,14 @@ def apply_redaction(
             for col in list(row.keys()):
                 if col in aggregate_cols:
                     del row[col]
+        # "Aggregates" are counts, not values: ``top`` lists raw values of a
+        # low-cardinality column and p05/p50/p95 are values from the file — the
+        # same leak the sample removal exists to prevent (review 2026-11-06).
+        for col in aggregate_cols:
+            st = snapshot.stats.get(col)
+            if st is not None:
+                st.top = None
+                st.p05 = st.p50 = st.p95 = None
 
     # Apply value-level redactions to remaining sample columns.
     for row in snapshot.sample:

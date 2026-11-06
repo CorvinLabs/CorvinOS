@@ -701,9 +701,19 @@ def _call_data_register_connection(
     from pathlib import Path as _Path
 
     # Resolve connection manifest path
+    import re as _re
+    # The name was never validated: "../../<other tenant>/datasource_connections/x"
+    # read another tenant's manifest into the LLM snapshot (adversarial review
+    # 2026-11-06). Same name rule as acs_delegate / the DSI registry, plus a
+    # resolve-and-contain check.
+    if not isinstance(connection_name, str) or not _re.fullmatch(
+            r"[a-z0-9][a-z0-9._-]{0,63}", connection_name) or ".." in connection_name:
+        raise ToolError(f"invalid connection name {connection_name!r}")
     corvin_home = _Path(_os.environ.get("CORVIN_HOME", str(_Path.home() / ".corvin")))
-    conn_dir = corvin_home / "tenants" / tenant_id / "datasource_connections"
-    manifest_path = conn_dir / f"{connection_name}.json"
+    conn_dir = (corvin_home / "tenants" / tenant_id / "datasource_connections").resolve()
+    manifest_path = (conn_dir / f"{connection_name}.json").resolve()
+    if conn_dir not in manifest_path.parents:
+        raise ToolError(f"invalid connection name {connection_name!r}")
     if not manifest_path.exists():
         raise ToolError(
             f"DSI connection '{connection_name}' not found for tenant '{tenant_id}'. "
@@ -743,9 +753,14 @@ def _call_data_register_connection(
     tags = raw.get("tags", []) or []
     secrets_list = raw.get("secrets", []) or []
 
+    def _strip_userinfo(v: object) -> object:
+        # A dsn/url/uri value can embed credentials (scheme://user:pw@host).
+        return _re.sub(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s]*@", r"\1<redacted>@", v) \
+            if isinstance(v, str) else v
+
     config_lines = "\n".join(
-        f"  {k}: {v}" for k, v in config.items()
-        if not any(s.lower() in str(k).lower() for s in ["key", "secret", "pass", "token"])
+        f"  {k}: {_strip_userinfo(v)}" for k, v in config.items()
+        if not any(s.lower() in str(k).lower() for s in ["key", "secret", "pass", "token", "credential"])
     )
 
     snapshot_text = (

@@ -607,6 +607,11 @@ class TestAcsDelegateAdaptation(TestOrchestrationServerBase):
         self.assertNotIn("dynamic_tools", spec)
         self.assertNotIn("dynamic_skills", spec)
 
+    def test_adapt_must_be_a_real_boolean(self):
+        spec, resp = self._spec_for({"task": "x", "adapt": "false"})
+        self.assertIsNone(spec)
+        self.assertIn("error", resp[-1])
+
     def test_datasources_reach_the_delegation_loop(self):
         spec, _ = self._spec_for({"task": "x", "datasources": ["spotify-top-tracks-csv"]})
         self.assertEqual(spec["orchestration"]["delegation_loop"]["datasources"],

@@ -180,7 +180,10 @@ def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None 
         required = [r for r in (schema.get("required") or []) if isinstance(r, str)]
         keys = list(param_keys)
         missing = [r for r in required if r not in keys]
-        unknown = [k for k in keys if props and k not in props]
+        # jsonschema semantics, i.e. what run_tool enforces: extra keys are an
+        # error only under additionalProperties: false (and no patternProperties).
+        closed = schema.get("additionalProperties") is False and not schema.get("patternProperties")
+        unknown = [k for k in keys if closed and k not in props]
         if missing or unknown:
             parts = []
             if missing:

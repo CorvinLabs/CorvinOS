@@ -171,6 +171,7 @@ class RunForge:
         self.tools: dict[str, ForgedTool] = {}
         self.skills: dict[str, str] = {}
         self.rejected = 0
+        self.publish_reasons: dict[str, str] = {}
 
     # ---- audit -------------------------------------------------------------------------------------
     def _emit(self, event: str, details: dict) -> None:
@@ -315,6 +316,7 @@ class RunForge:
         """
         def _skip(reason: str) -> bool:
             self._emit("acs.tool_publish_rejected", {"iteration": iteration, "name": name[:80], "reason": reason})
+            self.publish_reasons[name] = reason
             return False
 
         try:
@@ -322,8 +324,21 @@ class RunForge:
             from forge.registry import Registry
             from forge.runner import run_tool
             from forge.scope import scope_root
+            from forge.static_check import StaticCheckError, assert_imports_ok
             user_root = scope_root("user", tenant_id=self.tenant_id)
             user_root.mkdir(parents=True, exist_ok=True)
+            # The user scope is where the compute worker executes from, under the
+            # OPERATOR's policy there (Policy.load(user_root)). Publishing checked
+            # only the built-in defaults, so a tool name or import the operator
+            # forbade in that scope landed in it anyway (review 2026-11-06).
+            user_policy = Policy.load(user_root)
+            if not user_policy.name_allowed(name)[0]:
+                return _skip(R_POLICY)
+            try:
+                assert_imports_ok(impl, forbidden=sorted(set(user_policy.forbidden_imports)
+                                                         | set(EXTRA_FORBIDDEN_IMPORTS)), runtime="python")
+            except StaticCheckError:
+                return _skip(R_IMPORTS)
             reg = Registry(user_root)
             folded = name.casefold()
             if any(t.name.casefold() == folded for t in reg.list()):
@@ -338,7 +353,7 @@ class RunForge:
             return _skip(R_CREATE)
         try:
             res = run_tool(reg, name, dict(test_input), timeout=SELF_TEST_TIMEOUT_S, permission_mode="yes",
-                           use_sandbox=True, policy=Policy(), tenant_id=self.tenant_id)
+                           use_sandbox=True, policy=user_policy, tenant_id=self.tenant_id)
             good = (res.ok and res.sandbox == "bwrap" and isinstance(res.data, dict)
                     and (not expect or subset_match(res.data, expect)))
         except Exception:  # noqa: BLE001
@@ -471,7 +486,15 @@ class RunForge:
         lines = ["FORGE RESULTS (your last request):"]
         for r in results:
             if r.get("ok"):
-                lines.append(f"  - {r.get('kind')} {r.get('name')}: ok")
+                pub = ""
+                if r.get("published") is True:
+                    pub = " (published to the tenant Forge: compute_run / compute_submit can use it)"
+                elif r.get("published") is False:
+                    # A skipped publish used to read as plain "ok"; with a name that
+                    # already exists there, a later compute_run would run the OLDER tool.
+                    pub = (f" (NOT published: {self.publish_reasons.get(r.get('name'), 'refused')}; "
+                           "run-local only — compute runs cannot see it under this name)")
+                lines.append(f"  - {r.get('kind')} {r.get('name')}: ok{pub}")
             else:
                 d = f" ({r['detail']})" if r.get("detail") else ""
                 lines.append(f"  - {r.get('kind')} {r.get('name') or '?'}: REJECTED {r.get('reason')}{d}")

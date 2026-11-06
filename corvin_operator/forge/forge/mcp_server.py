@@ -139,6 +139,7 @@ try:
     from corvin_compute.license_gate import (  # type: ignore[import]
         check_compute_access as _check_compute_access,
         enforce_trial_strategy as _enforce_trial_strategy,
+        enforce_trial_engine as _enforce_trial_engine,
         record_trial_iteration as _record_trial_iteration,
     )
     # ADR-0026 — Compute Fabric MCP bridge extension. Imported in the same
@@ -162,6 +163,7 @@ except ImportError:
     _ComputeWorkerClientError = None  # type: ignore[assignment]
     _check_compute_access = None  # type: ignore[assignment]
     _enforce_trial_strategy = None  # type: ignore[assignment]
+    _enforce_trial_engine = None  # type: ignore[assignment]
     _record_trial_iteration = None  # type: ignore[assignment]
     _FABRIC_TOOL_DEFS = None
     _FABRIC_TOOL_NAMES = frozenset()
@@ -1245,6 +1247,7 @@ class MCPServer:
         # stay ungated here, matching the pre-existing compute_run-only scope
         # for those) ──────────────────────────────────────────────────────
         _access = None
+        _trial_reserved = 1
         if name in ("compute_run", "compute_submit") and _check_compute_access is not None:
             try:
                 from forge import paths as _forge_paths  # local import; forge is always on path
@@ -1293,7 +1296,14 @@ class MCPServer:
                             if _flat_strategy:
                                 _trial_args = dict(args)
                                 _trial_args["strategy"] = _flat_strategy
-                        args = _enforce_trial_strategy(_trial_args, corvin_home=_home)
+                        if name == "compute_submit" and args.get("engine") in ("pipeline", "hac"):
+                            # A pipeline / HAC job spends many iterations per
+                            # submission and never went through the trial at
+                            # all (adversarial review 2026-11-06).
+                            args, _trial_reserved = _enforce_trial_engine(args, corvin_home=_home)
+                        else:
+                            args = _enforce_trial_strategy(_trial_args, corvin_home=_home)
+                            _trial_reserved = int((args.get("budget") or {}).get("max_iterations") or 1)
                     except ValueError as exc:
                         self._respond(msgid, {
                             "content": [{
@@ -1480,8 +1490,9 @@ class MCPServer:
             return
 
         # ── Post-submission: record trial iteration ───────────────────────
+        # Charge what the run was GRANTED (the clamped budget), not a flat 1.
         if (
-            name == "compute_run"
+            name in ("compute_run", "compute_submit")
             and _access is not None
             and _access.mode == "trial"
             and _record_trial_iteration is not None
@@ -1489,9 +1500,11 @@ class MCPServer:
         ):
             try:
                 from forge import paths as _forge_paths
+                _strategy = args.get("strategy", "grid") if name == "compute_run" else "grid"
                 _record_trial_iteration(
                     _forge_paths.corvin_home(),
-                    strategy=args.get("strategy", "grid"),
+                    strategy=_strategy,
+                    n=_trial_reserved,
                 )
             except Exception:
                 pass

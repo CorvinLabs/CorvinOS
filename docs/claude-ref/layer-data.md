@@ -332,14 +332,29 @@ a finished sweep. Three rules close that:
   `preflight` in `cli.py`): the worker executes ONLY from the tenant's USER-scope
   forge registry, so it refuses a run whose tool is not there (`ToolNotAvailable`,
   message names `forge_promote(name, to="user")`) and a `param_grid` that misses a
-  required input or carries a key the tool does not declare (`ParamGridMismatch`).
-  Every stage of a `pipeline` and every sub-manager stage of a `hac` submission is
-  checked the same way before the engine starts.
+  required input, or carries an undeclared key while the schema is closed
+  (`additionalProperties: false` — the same rule `run_tool`'s jsonschema applies)
+  (`ParamGridMismatch`). Pipeline: the FIRST stage only (a later stage's tool may be
+  forged at a steering gate, ADR-0027; a later stage that still finds no tool fails
+  the pipeline). HAC: the first stage of every sub-manager (the only one it runs).
 - **No valid loss = `failed`** (`driver._finalise`): `convergence_reason` and
-  `error` read `all-iterations-failed: <first iteration error>`. An iteration whose
-  output lacks the metric carries `LossMetricMissing: …` instead of a bare `null`.
-  Three identical failures from the first iteration on stop the run (fail fast,
-  `FAIL_FAST_IDENTICAL_ERRORS`). `compute_result.error` returns the summary's error.
+  `error` read `all-iterations-failed: <cause>`. An iteration whose output lacks the
+  metric carries `LossMetricMissing: …` instead of a bare `null`; NaN and ±inf are
+  not losses (`_resolve_loss`, `math.isfinite`). Three identical failures from the
+  first iteration on stop the run only for PARAMETER-INDEPENDENT causes
+  (`LossMetricMissing`, `ToolError: unknown tool`) — a value-dependent error (one bad
+  value of a later grid axis) must not stop a grid whose other points are valid.
+  The cause that travels to the caller (`compute_result.error`) is `_public_error`:
+  the error class plus "details in iterations/*.json", never raw tool stderr or a
+  jsonschema message (both can quote row or param values); the full text stays on
+  disk, with `sensitive_fields` redacted in the failure branch too.
+- **Pipeline and HAC report failure, not a composite of what survived.** A pipeline
+  stage whose run ends without a valid loss fails the pipeline, named
+  (`pipeline/coordinator.py`, was `converged`). A HAC sub-manager without a valid
+  loss fails the HAC run; `compute_root_loss` returns `None` for no losses (it
+  invented 1.0, which a backprop-gate loop then read as convergence). Stage
+  `inputs` reach the tool as one-value grid axes `_input_<key>` (a scalar made every
+  pipeline with `inputs` fail).
 - **A grid is exhaustive**: the stall / convergence heuristics do not cut a
   `strategy: grid` run (`evaluate_termination(early_stop=False)`); only
   `max_iterations` and `max_wall_clock_s` bound it. Before, a 10x10 grid stopped
@@ -1030,7 +1045,17 @@ yields neither: the worker gets a note that points at `compute_run` / `compute_s
 
 **Snapshot quantiles of a redacted column are cleared** (`corvin_data/redactor.py`): the sample and
 `top` were redacted while p05/p50/p95 — values from the file — came back in clear. `aggregate_only`
-keeps its stats by design. Known, fail-safe limitation: the value-pattern detector classifies 8-digit
+now keeps COUNTS only (`nulls`, `distinct`): its `top` values and quantiles are values too.
+
+**ACS folds the connection class into the run's class.** `_strongest_datasource_class` raises the
+delegation loop's `data_classification` to the strictest bound connection (unknown/unreadable =>
+`secret`), so the per-engine L34 spawn gate (`spawn_gates.check_l34`) decides with the data's real
+class; it saw only the declared class ("internal" from `acs_delegate`) before.
+
+**`data_register(connection=...)` stays in the tenant.** The connection name is validated
+(`[a-z0-9][a-z0-9._-]{0,63}`) and resolve-and-contained; `../../<tenant>/datasource_connections/x` read
+another tenant's manifest (host, user) into the snapshot. Credentials embedded in a config value
+(`scheme://user:pw@host`) are shown as `<redacted>@host`. Known, fail-safe limitation: the value-pattern detector classifies 8-digit
 integers and ISO dates as `phone`, which over-redacts such columns.
 
 ### HTTP Data Bridges (status)
