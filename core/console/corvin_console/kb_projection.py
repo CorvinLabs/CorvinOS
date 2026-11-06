@@ -330,7 +330,7 @@ def index_repair_hint(repo: Path) -> str:
     g = repo / ".git"
     return (f"KB checkout {repo}: .git/index is unreadable. Repair (stop the console first): "
             f"copy {g / 'index'} to a backup; if {g / 'index.lock'} exists, delete it only after "
-            f"confirming the pid in its 3rd field is no longer running; then "
+            f"making sure no git or kb process is running; then "
             f"`mv {g / 'index'} {g / 'index.bad'}` and `git -C {repo} reset -q`.")
 
 
@@ -404,7 +404,34 @@ def status(tenant_id: str) -> dict[str, Any]:
 
 
 def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
-    """One projector tick. Serialised: the loop and a transition never interleave."""
+    """One projector tick. Serialised: the loop and a transition never interleave.
+
+    An unreadable KB index (``KbIndexCorrupt``, from any git status inside the tick) is
+    turned into ONE logged ERROR plus an ``error`` state naming the repair, never an
+    exception: ``transition``/``create_item`` call this after their KB write was applied."""
+    try:
+        return _sync(tenant_id, force=force)
+    except KbIndexCorrupt as exc:
+        repo = kb_repo(tenant_id)
+        with _tenant_lock(tenant_id):
+            if tenant_id not in _index_corrupt:
+                log.error("kb projection paused: %s (git: %s)",
+                          index_repair_hint(repo) if repo else "KB index unreadable", exc)
+            _index_corrupt[tenant_id] = (time.monotonic() + KB_INDEX_RETRY_S, str(exc))
+            prev = _state.get(tenant_id) or {}
+            # fingerprint None: the first readable tick after the repair re-exports (a
+            # `git reset` changes neither HEAD nor any KB file, so the old fingerprint
+            # would match and keep this error state forever)
+            st = {**{k: v for k, v in prev.items() if k not in ("state", "fingerprint")},
+                  "state": "error", "fingerprint": None,
+                  "error": f"KB git index corrupt: {exc}"[:300],
+                  "repair": index_repair_hint(repo) if repo else None,
+                  "checked_at": time.time()}
+            _save(tenant_id, st)
+            return st
+
+
+def _sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
     repo = kb_repo(tenant_id)
     if (_uses_tenant_kb(tenant_id)
             and tenant_id not in _kg_ensured and kg_plugin_state(tenant_id) == "enabled"):
@@ -432,19 +459,9 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
     with _tenant_lock(tenant_id):
         prev = _state.get(tenant_id) or {}
         bad = _index_corrupt.get(tenant_id)
-        if bad is not None and bad[0] > time.monotonic():
+        if bad is not None and not force and bad[0] > time.monotonic():
             return prev                         # reported once; re-checked after the back-off
-        try:
-            fp = fingerprint(repo)
-        except KbIndexCorrupt as exc:
-            if bad is None:
-                log.error("kb projection paused: %s (git: %s)", index_repair_hint(repo), exc)
-            _index_corrupt[tenant_id] = (time.monotonic() + KB_INDEX_RETRY_S, str(exc))
-            st = {**{k: v for k, v in prev.items() if k != "state"}, "state": "error",
-                  "error": f"KB git index corrupt: {exc}"[:300], "repair": index_repair_hint(repo),
-                  "checked_at": time.time()}
-            _save(tenant_id, st)
-            return st
+        fp = fingerprint(repo)                  # KbIndexCorrupt -> sync() reports it
         if bad is not None:
             log.warning("kb projection resumed: the KB checkout's git index is readable again")
             _index_corrupt.pop(tenant_id, None)
@@ -641,8 +658,22 @@ def periodic(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
     return out
 
 
+#: on a saturated host the projector ticks at most this often (each tick spawns git)
+SATURATED_TICK_S = 30.0
+
+
 def _loop(tenant_id: str, stop: threading.Event) -> None:
+    last_tick = 0.0
     while not stop.is_set():
+        try:
+            from corvin_console.loop_health import host_saturated as _saturated  # noqa: PLC0415
+            busy = _saturated()
+        except Exception:  # noqa: BLE001
+            busy = False
+        if busy and time.monotonic() - last_tick < SATURATED_TICK_S:
+            stop.wait(TICK_S)
+            continue
+        last_tick = time.monotonic()
         try:
             sync(tenant_id)
         except Exception as exc:  # noqa: BLE001 — the loop must survive; the status says what broke

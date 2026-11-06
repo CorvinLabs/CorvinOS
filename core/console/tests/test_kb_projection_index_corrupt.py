@@ -103,3 +103,68 @@ def test_projector_reports_once_pauses_and_resumes(repo, projector, caplog, monk
     assert "_t" not in kp._index_corrupt
     assert calls and calls[0] == ("heal",)
     assert any("resumed" in r.getMessage() for r in caplog.records)
+
+
+@pytest.fixture
+def stateful_projector(monkeypatch, repo):
+    """A projector whose kb subprocesses succeed and whose state persists between ticks."""
+    state: dict = {}
+    monkeypatch.setattr(kp, "kb_repo", lambda tenant_id=None: repo)
+    monkeypatch.setattr(kp, "_uses_tenant_kb", lambda tenant_id: False)
+    monkeypatch.setattr(kp, "_state", state)
+    monkeypatch.setattr(kp, "_save", lambda tenant_id, st: state.__setitem__(tenant_id, dict(st)))
+    monkeypatch.setattr(kp, "_index_corrupt", {})
+    calls: list[tuple] = []
+
+    def fake_run(_repo, *args, **_kw):
+        calls.append(args)
+        return {"export": (0, {"ok": True, "items": []}), "queue": (0, {"queue": []})}.get(
+            args[0], (0, {}))
+    monkeypatch.setattr(kp, "_run", fake_run)
+    monkeypatch.setattr(kp.projection, "apply", lambda tenant_id, payload, **kw: {"state": "ok", "remaining": 0})
+    monkeypatch.setattr(kp.projection, "diff", lambda tenant_id, payload: [])
+    return state, calls
+
+
+def test_a_repair_that_changes_no_kb_file_still_clears_the_error(repo, stateful_projector):
+    """Review 2026-11-06: `git reset` changes neither HEAD nor a KB file, so a kept
+    fingerprint matched and the error state stuck until the KB changed."""
+    state, calls = stateful_projector
+    assert kp.sync("_t")["state"] == "ok"
+    _corrupt_index(repo)
+    assert kp.sync("_t")["state"] == "error"
+    _repair(repo)
+    # a manual resync (force) is honoured inside the back-off
+    st = kp.sync("_t", force=True)
+    assert st["state"] == "ok", st
+    assert "_t" not in kp._index_corrupt
+    # and the plain tick afterwards stays ok
+    assert kp.sync("_t")["state"] == "ok"
+
+
+def test_without_force_the_back_off_holds_and_the_next_tick_after_it_recovers(repo, stateful_projector):
+    state, calls = stateful_projector
+    kp.sync("_t")
+    _corrupt_index(repo)
+    kp.sync("_t")
+    _repair(repo)
+    assert kp.sync("_t")["state"] == "error"          # inside the back-off: not re-checked
+    kp._index_corrupt["_t"] = (0.0, "x")
+    assert kp.sync("_t")["state"] == "ok"             # after it: full re-export
+
+
+def test_an_unreadable_index_inside_the_tick_is_a_state_not_an_exception(repo, stateful_projector, monkeypatch):
+    """transition()/create_item() call sync() after their KB write was applied: an index
+    that breaks mid-tick must not turn that into a 500."""
+    state, calls = stateful_projector
+    real = kp._uncommitted_work
+    n = {"calls": 0}
+
+    def flaky(r):
+        n["calls"] += 1
+        if n["calls"] >= 2:                             # fingerprint ok, the later check breaks
+            raise kp.KbIndexCorrupt("fatal: unknown index entry format 0x52410000")
+        return real(r)
+    monkeypatch.setattr(kp, "_uncommitted_work", flaky)
+    st = kp.sync("_t", force=True)
+    assert st["state"] == "error" and st["fingerprint"] is None

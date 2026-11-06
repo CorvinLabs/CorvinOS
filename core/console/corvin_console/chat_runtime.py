@@ -5909,7 +5909,7 @@ async def _stream_tde_turn(
         "event": "task.started", "engine": "tiered_delegation",
         "turn": sess.turn_count,
     })
-    await asyncio.to_thread(os_audit, "os_turn.started", {"model": "tde/helper"})
+    os_audit("os_turn.started", {"model": "tde/helper"})
 
     rc = 1
     final = ""
@@ -6339,7 +6339,7 @@ async def _stream_tde_turn(
             raise
         except Exception:  # noqa: BLE001 — best-effort, C1 fallback below
             _sync_ok = False
-        await asyncio.to_thread(os_audit, "os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
+        os_audit("os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
     touch(sess, increment_turn=_sync_ok)
 
     # ADR-0222 Phase 2 (k=5): start the measurement-week sampler LAST — after the
@@ -7109,6 +7109,7 @@ async def _stream_turn_impl(
     # the OS graph from spans uniformly. Paired by a stable per-turn span_id.
     _os_span_id = f"spn-os-{_os_turn_id}"
     _os_span_started = False
+    _os_started_written = False   # an os_turn.started went out: a cut turn must pair it
 
     # ADR-0641/0642/0644 — os.model_selector SHADOW classification, extended
     # to the console web-chat turn (previously wired only into the bridge
@@ -7138,6 +7139,9 @@ async def _stream_turn_impl(
         pass
 
     def _os_audit(event: str, extra: dict[str, Any] | None = None) -> None:
+        nonlocal _os_started_written
+        if event == "os_turn.started":
+            _os_started_written = True
         if _bridge_audit is None:
             return
         try:
@@ -7278,13 +7282,39 @@ async def _stream_turn_impl(
     # wedge the console (2026-11-06: MainThread in ``write_event``, accept backlog
     # full). The off-loop variants are AWAITED, so ordering and audit-first
     # semantics are unchanged: the turn does not continue until the record is
-    # written. Cancel/close handlers keep the synchronous call so the paired
-    # completion is written even if a second cancellation arrives.
+    # written.
+    #
+    # Cancellation (adversarial review 2026-11-06): the synchronous call had no
+    # suspension point, the await has one. A cancel landing there must not change
+    # what reaches the chain, so (1) the write always FINISHES before the
+    # CancelledError propagates (the thread cannot be interrupted anyway, and a
+    # later handler's record must not overtake it), and (2) a turn cut at one of
+    # these awaits after its os_turn.started went out gets its paired
+    # os_turn.completed(-1) right here (idempotent: a later cancel handler's call is
+    # a no-op). Sites where a cut would also strand a resource (the spawned CLI, the
+    # final persist) keep the synchronous call.
+    async def _finish_off_loop(fn: Any, *args: Any) -> None:
+        fut = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+        try:
+            await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            while not fut.done():
+                try:
+                    await asyncio.shield(fut)
+                except asyncio.CancelledError:
+                    pass
+            raise
+
     async def _os_audit_off_loop(event: str, extra: dict[str, Any] | None = None) -> None:
-        await asyncio.to_thread(_os_audit, event, extra)
+        try:
+            await _finish_off_loop(_os_audit, event, extra)
+        except asyncio.CancelledError:
+            if _os_started_written:
+                _os_emit_completed(-1)
+            raise
 
     async def _os_emit_completed_off_loop(rc: int) -> None:
-        await asyncio.to_thread(_os_emit_completed, rc)
+        await _finish_off_loop(_os_emit_completed, rc)
 
     # Persist the user-side of this turn immediately so a tab refresh
     # mid-turn still shows what the user said.
@@ -8791,7 +8821,9 @@ async def _stream_turn_impl(
                                    run_id=task_id, skill_names=_fg_injected)
         except Exception:  # noqa: BLE001 — grading bookkeeping never breaks a turn
             pass
-    await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
+    # synchronous on purpose: the CLI process is already spawned and the try that kills
+    # it on a cancel starts below — an await here could strand it (review 2026-11-06)
+    _os_audit("os_turn.started", {"model": _os_model_used})
     # routed_model: the selector's choice, known before the spawn, so the chat can name
     # the model of a running turn. The confirmed model arrives only on turn_usage.
     yield {"type": "engine", "engine": _os_engine or "claude_code",
@@ -9264,7 +9296,9 @@ async def _stream_turn_impl(
                             wakeups=_bg.wakeups,                                 # ADR-2236
                             duration_ms=int((time.time() - _bg_t0) * 1000),      # ADR-2236
                             end_reason=_bg_cut or "quiescent")                   # ADR-2236
-    await _os_emit_completed_off_loop(rc)
+    # synchronous on purpose: the answer was already yielded; a cancel at an await here
+    # would skip persisting it below (review 2026-11-06)
+    _os_emit_completed(rc)
     if rc != 0 and not saw_any_event:
         stderr_bytes = await (proc.stderr.read() if proc.stderr else asyncio.sleep(0, b""))
         msg = (stderr_bytes or b"").decode("utf-8", errors="replace")[-400:]

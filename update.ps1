@@ -1052,6 +1052,21 @@ function Get-ListenerPid {
 if (Test-ConsoleAnswers) { Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue; exit 0 }
 $listener = Get-ListenerPid
 if ($listener) {
+    # Only ever stop a CorvinOS console: the port may be held by another program (or by
+    # a process whose command line we cannot read) -- that is logged once and left alone.
+    $owner = $null
+    try { $owner = [string](Get-CimInstance Win32_Process -Filter "ProcessId=$listener" -ErrorAction Stop).CommandLine } catch { }
+    if (-not ($owner -match 'corvin_console|corvinos-serve|corvin_gateway')) {
+        $foreign = Join-Path $runDir "console-port-foreign.txt"
+        $seen = $null
+        try { $seen = (Get-Content -LiteralPath $foreign -Raw -ErrorAction Stop).Trim() } catch { }
+        if ($seen -ne "$listener") {
+            $null = New-Item -ItemType Directory -Force -Path $runDir -ErrorAction SilentlyContinue
+            Set-Content -LiteralPath $foreign -Value "$listener" -Encoding ASCII
+            Write-EnsureLog "port $port is held by pid $listener, which is not a CorvinOS console; leaving it alone"
+        }
+        exit 0
+    }
     $since = $null
     try {
         $m = Get-Content -LiteralPath $marker -Raw -ErrorAction Stop | ConvertFrom-Json

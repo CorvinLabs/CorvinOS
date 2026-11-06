@@ -1234,6 +1234,22 @@ files and reports success. Confirm the file count first.
 
 ---
 
+## Console Event Loop Stays Free (load-bearing, 2026-11-06)
+
+On a saturated Windows host a thread start costs 0.2–24 s, and the console wedged
+(LISTENING, CLOSE_WAIT pile-up, "connection refused") whenever the event loop started a
+thread, wrote the audit chain, or scanned a large file itself. Rules: blocking chain
+writes from an async path go through an AWAITED `asyncio.to_thread` (never
+fire-and-forget, order unchanged); thread pools are pre-warmed and long-lived
+(`corvin_console/loop_health.py`) — don't create threads per request; periodic scans are
+bounded (`max_scan_bytes`, depth-limited walks) and OPTIONAL ones skip a round while
+`loop_health.host_saturated()`; audit/tripwire/integrity work never does. A stall is
+recorded with MainThread's stack in `<CORVIN_HOME>/logs/loop-stall.log`.
+
+→ Full reference: [console-loop-health.md](docs/claude-ref/console-loop-health.md)
+
+---
+
 ## Console Frontend — Prove the NEW Build Is What Loads (load-bearing)
 
 Any change under `core/console/corvin_console/web-next/` is **not done when the source is

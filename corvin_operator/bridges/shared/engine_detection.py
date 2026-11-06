@@ -33,7 +33,7 @@ _log = logging.getLogger(__name__)
 # Bedrock/Vertex/Foundry install even though Claude Code was fully configured
 # and working — the exact three options the user's own /login screen lists.
 CREDENTIAL_SOURCES = (
-    "subscription", "env_var", "bedrock", "vertex", "foundry",
+    "subscription", "gateway", "env_var", "bedrock", "vertex", "foundry",
     "config_file", "vault", "none", "discovered",
 )
 _PROBE_TIMEOUT = 5.0
@@ -171,6 +171,15 @@ def _run(cmd: list[str], timeout: float = _PROBE_TIMEOUT) -> tuple[int, str, str
 CLAUDE_PLATFORM_FLAGS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 
 
+def _has_oauth(creds: object) -> bool:
+    return isinstance(creds, dict) and bool(creds.get("claudeAiOauth") or creds.get("accessToken"))
+
+
+def _has_gateway(creds: object) -> bool:
+    gw = creds.get("enterpriseGateway") if isinstance(creds, dict) else None
+    return isinstance(gw, dict) and bool(gw.get("url") or gw.get("jwt"))
+
+
 def claude_credentials_present(creds: object) -> bool:
     """Whether a parsed Claude Code credentials document holds a login.
 
@@ -180,11 +189,7 @@ def claude_credentials_present(creds: object) -> bool:
     gateway``; the file then has NO ``claudeAiOauth``). Presence only: no token
     value is read, logged or returned here.
     """
-    if not isinstance(creds, dict):
-        return False
-    gw = creds.get("enterpriseGateway")
-    return bool(creds.get("claudeAiOauth") or creds.get("accessToken")
-                or (isinstance(gw, dict) and (gw.get("url") or gw.get("jwt"))))
+    return _has_oauth(creds) or _has_gateway(creds)
 
 
 def claude_authenticated() -> bool:
@@ -219,22 +224,36 @@ def _find_claude_credentials() -> Path | None:
     """Find Claude credentials across all standard paths (v0.10.60 unification).
 
     Search order matches installer/core.py to ensure engine_detection and
-    the installer probe the SAME files. Stops at first valid, readable file.
+    the installer probe the SAME files. A Claude.ai OAuth login (``claudeAiOauth`` /
+    ``accessToken``) in ANY candidate file wins; only when none has one is a file
+    with an enterprise-gateway login returned. A gateway-only file earlier in the order
+    therefore never hides a later OAuth file, whose token the model-list call needs
+    (review 2026-11-06).
 
     Fail-closed: returns None if no credentials found, not if a file is corrupted.
     """
+    gateway: Path | None = None
     for path in _claude_credential_paths():
         if path.exists() and path.is_file():
             try:
                 creds = json.loads(path.read_text(encoding="utf-8"))
-                # Valid JSON with at least one auth field (OAuth, token, enterprise gateway)
-                if claude_credentials_present(creds):
+                if _has_oauth(creds):
                     return path
+                if gateway is None and _has_gateway(creds):
+                    gateway = path
             except (json.JSONDecodeError, PermissionError, UnicodeDecodeError) as e:
                 _log.warning(f"Credentials file {path} is corrupted or unreadable: {e}")
                 # Continue to next path instead of failing
                 continue
-    return None
+    return gateway
+
+
+def _is_gateway_only(path: Path) -> bool:
+    try:
+        creds = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return False
+    return _has_gateway(creds) and not _has_oauth(creds)
 
 
 def _claude_subscription_info(path: Path) -> "tuple[str, str]":
@@ -343,6 +362,14 @@ def probe_claude_code() -> EngineProbeResult:
 
     # Subscription (v0.10.60: unified search), reported WITH its plan.
     creds_path = _find_claude_credentials()
+    if creds_path and _is_gateway_only(creds_path):
+        # `claude auth status`: authMethod third_party, apiProvider gateway — not a
+        # Claude.ai subscription; no plan label exists for it.
+        return EngineProbeResult(
+            engine_id=engine_id, installed=True, authenticated=True,
+            credential_source="gateway", version=version,
+            detail=f"Authenticated via an enterprise gateway login — {creds_path}",
+        )
     if creds_path:
         plan, tier = _claude_subscription_info(creds_path)
         label = f"Claude {plan.capitalize()}" if plan else "Claude subscription"
@@ -601,7 +628,7 @@ def recommended_engine(results: list[EngineProbeResult]) -> Optional[str]:
     completed first in the concurrent detect_all() run.
     """
     by_id = {r.engine_id: r for r in results}
-    for source in ("subscription", "env_var", "config_file"):
+    for source in ("subscription", "gateway", "env_var", "config_file"):
         for engine_id in _ENGINE_PRIORITY:
             r = by_id.get(engine_id)
             if r and r.authenticated and r.credential_source == source:

@@ -618,7 +618,7 @@ def test_a_reader_that_no_longer_uses_the_value_fails(tmp_path, ref, kind, rel, 
 
 @pytest.mark.parametrize(("ref", "kind"), [
     # the pre-r3 L01/L11 refs: an import line, the call one line below it
-    ("core/console/corvin_console/standalone.py:369:learning_host", "caller"),
+    ("core/console/corvin_console/standalone.py:376:learning_host", "caller"),
     ("corvin_operator/bridges/shared/spawn_gates.py:454:flow_guard_skill", "caller"),
     ("corvin_operator/bridges/shared/spawn_gates.py:454:shadow_compare", "reader"),
 ])

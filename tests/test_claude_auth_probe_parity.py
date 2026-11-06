@@ -253,3 +253,27 @@ def test_chat_engine_message_is_none_for_a_gateway_login(monkeypatch, tmp_path) 
     assert chat_runtime._claude_authenticated() is True
     msg = chat_runtime._engine_unavailable_message("claude_code")
     assert msg is None or "auth login" not in msg
+
+
+def test_a_gateway_only_file_never_hides_a_later_oauth_file(monkeypatch, tmp_path) -> None:
+    """Review 2026-11-06: the first file with ANY login used to win, so a gateway-only
+    ~/.claude/.credentials.json hid a later file's OAuth token (the model-list call)."""
+    import engine_detection  # type: ignore
+
+    _write_creds(monkeypatch, tmp_path, _GATEWAY_CREDS)
+    later = Path(tmp_path / "home") / ".config" / "claude" / ".credentials.json"
+    later.parent.mkdir(parents=True)
+    later.write_text(json.dumps({"claudeAiOauth": {"accessToken": "t"}}), encoding="utf-8")
+    assert engine_detection._find_claude_credentials() == later
+
+
+def test_probe_labels_a_gateway_login_as_gateway_not_subscription(monkeypatch, tmp_path) -> None:
+    import engine_detection  # type: ignore
+
+    _write_creds(monkeypatch, tmp_path, _GATEWAY_CREDS)
+    monkeypatch.setattr(engine_detection, "_find_binary", lambda name: "claude")
+    monkeypatch.setattr(engine_detection, "_run", lambda cmd, timeout=5.0: (0, "2.1.0", ""))
+    r = engine_detection.probe_claude_code()
+    assert r.authenticated is True and r.credential_source == "gateway"
+    assert "subscription" not in r.detail.lower() and "jwt" not in r.detail.lower()
+    assert engine_detection.recommended_engine([r]) == "claude_code"

@@ -251,7 +251,14 @@ def tick(root: Path, *, fork_fn: Callable[..., dict] = fork) -> dict:
                 result["actions"].append({"skill_id": name, "action": "rolled_back"})
         except Exception as exc:  # noqa: BLE001 — one canary must not stop the pass
             logger.warning("autopilot: %s on %s failed: %s", verdict["decision"], name, exc)
-    signals = loss_signals(root)
+    # Canary verdicts above (incl. the gates_failed ROLLBACK) always run. Starting a NEW
+    # fork is optional work: it waits for the next pass while the console reports a
+    # saturated host (loop_health), so a skill-regeneration subprocess is not added to it.
+    if _host_saturated():
+        result["fork_deferred"] = "host_saturated"
+        signals = []
+    else:
+        signals = loss_signals(root)
     if signals and not forks_in_flight(root):
         sig = signals[0]
         try:
@@ -269,6 +276,17 @@ def tick(root: Path, *, fork_fn: Callable[..., dict] = fork) -> dict:
 
 
 _scheduler: Optional[threading.Thread] = None
+
+
+def _host_saturated() -> bool:
+    """The console's loop-health signal (slow thread starts / lagging event loop). False
+    when the console is not loaded in this process — nothing is skipped then."""
+    try:
+        from corvin_console.loop_health import host_saturated  # noqa: PLC0415
+        return host_saturated()
+    except Exception:  # noqa: BLE001
+        return False
+
 
 
 def start_scheduler(roots: Callable[[], list[Path]], *, interval_s: float = TICK_INTERVAL_S) -> bool:

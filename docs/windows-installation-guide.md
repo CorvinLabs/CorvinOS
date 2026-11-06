@@ -235,13 +235,17 @@ generated or used). It keeps exactly one console running:
 - the console answers HTTP on its port → nothing to do;
 - a process still **listens** on the port but does not answer (overloaded, event loop
   starved) → it never starts a second console next to it; only when the same listener
-  has not answered for **10 minutes** does it stop that process and start one console;
+  has not answered for **10 minutes** does it stop that process and start one console —
+  and only if the listener is a CorvinOS console (any other program holding the port is
+  logged once and left alone);
 - nothing listens → it starts the console, unless one started less than 3 minutes ago
   (a cold start binds the port last);
 - never while an install/update holds its lock.
 
 Every decision is logged to `$CORVIN_HOME\logs\ensure-console.log`; the "not answering
 since" state lives in `$CORVIN_HOME\run\console-unresponsive.json`.
+Event-loop stalls inside the console itself are recorded in
+`$CORVIN_HOME\logs\loop-stall.log` (see `docs/claude-ref/console-loop-health.md`).
 
 **Manage:**
 

@@ -21,6 +21,7 @@ import os
 import secrets
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -41,6 +42,64 @@ from forge import paths as _forge_paths  # noqa: E402
 _OPERATOR_PATH = _REPO / "corvin_operator"
 if str(_OPERATOR_PATH) not in sys.path:
     sys.path.insert(0, str(_OPERATOR_PATH))
+
+
+#: ``reload_from_disk`` from the per-request proof path at most this often. Every
+#: authenticated request reaches it; the validator's own 5-s throttle still re-verified the
+#: token, re-checked revocation/grace, wrote the monotonic-clock file and (expired permit)
+#: logged + audited ``grace period elapsed`` every 5 s — measured 2026-11-06 as constant
+#: per-request disk writes on a saturated host. The explicit /license/apply reload calls
+#: the validator directly and is NOT subject to this TTL; the clock-rollback and grace
+#: checks themselves are unchanged (they run on every real reload).
+LIC_RELOAD_TTL_S = 30.0
+_lic_reload_lock = threading.Lock()
+_lic_reload_at = 0.0
+_lic_files_sig: "tuple | None" = None
+
+
+def _license_files_sig(_lv) -> tuple:
+    """(mtime_ns, size) of the two files ``reload_from_disk`` reads — a changed or new
+    token (refresh daemon, a hand-copied key) bypasses the TTL, exactly like the
+    validator's own throttle lets a changed token through."""
+    paths = []
+    try:
+        paths.append(_lv._config_dir() / "session.key")
+    except Exception:  # noqa: BLE001
+        pass
+    home = getattr(_lv, "_CORVIN_HOME_SNAPSHOT", None)
+    if home is not None:
+        paths.append(Path(home) / "global" / "license.key")
+    sig = []
+    for p in paths:
+        try:
+            st = p.stat()
+            sig.append((str(p), st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append((str(p), None, None))
+    return tuple(sig)
+
+
+def _maybe_reload_license() -> None:
+    global _lic_reload_at, _lic_files_sig
+    from license import validator as _lv  # type: ignore
+    sig = _license_files_sig(_lv)
+    now = time.monotonic()
+    with _lic_reload_lock:
+        skip = bool(_lic_reload_at and now - _lic_reload_at < LIC_RELOAD_TTL_S
+                    and sig == _lic_files_sig)
+        if not skip:
+            _lic_reload_at = now
+            _lic_files_sig = sig
+    if not skip:
+        _lv.reload_from_disk()
+        return
+    # Skipped: still wait for a reload that is IN FLIGHT (another request's, or
+    # /license/apply's) — as the unconditional call did by blocking on the validator's
+    # lock — so this request's proof is computed against the root key it installs.
+    _rl = getattr(_lv, "_RELOAD_LOCK", None)
+    if _rl is not None:
+        with _rl:
+            pass
 
 
 def _compute_lic_proof(sid: str) -> str:
@@ -64,8 +123,7 @@ def _compute_lic_proof(sid: str) -> str:
         # free root when no token is present, so free-tier stays stable. Wrapped
         # best-effort: a validator failure must never brick owner login.
         try:
-            from license import validator as _lv  # type: ignore
-            _lv.reload_from_disk()
+            _maybe_reload_license()
         except Exception:  # noqa: BLE001
             pass  # fall through — feature_root_key() still returns a safe root
         from license.feature_lattice import session_lic_proof  # type: ignore

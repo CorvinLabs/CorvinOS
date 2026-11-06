@@ -314,6 +314,13 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(application: FastAPI):  # noqa: ARG001
+        # Loop health FIRST (2026-11-06, thread-start stall): on a saturated host a
+        # thread start costs 0.2-24 s and anyio started a new worker ON the event loop for
+        # nearly every threadpool call. Long-lived pre-warmed workers, ABOVE_NORMAL
+        # priority, and a loop-lag watchdog (logs/loop-stall.log). Best-effort, never
+        # raises, performance only — see corvin_console/loop_health.py.
+        from . import loop_health as _loop_health
+        _loop_health.install_early()
         # Activate the installed license in THIS process. The adapter loads it
         # at boot (adapter.py), but the standalone console process did not — so
         # a valid <corvin_home>/global/license.key (or CORVIN_LICENSE_KEY) was
@@ -591,7 +598,14 @@ def create_app() -> FastAPI:
         except Exception:
             log.exception("A2A connectivity manager failed to start (non-fatal)")
 
-        yield
+        await _loop_health.install_serving(application.state)
+        try:
+            yield
+        finally:
+            _loop_health.stop_watchdog()
+            _lh_task = getattr(application.state, "loop_health_task", None)
+            if _lh_task is not None:
+                _lh_task.cancel()
         if _healer_task is not None:
             _healer_task.cancel()
         # Stop the kb projector threads (a tick in flight finishes first; best-effort).
