@@ -118,6 +118,17 @@ else `SKILL_FORGE_PERSONA`) and gates every mutating tool on it:
 | `skill-forge` / `forge` WITH a resolver launch record | wildcard (the operator) | yes |
 | `skill-forge` / `forge` WITHOUT one (e.g. a server a worker started itself) | its own name | no |
 
+**One exception, for GRADING only: an ACS run's skills.** An `acs.*` skill is forged by an
+ACS run, not by a persona (no persona can mint `acs.*`: its namespace is `<persona>.`), and
+ACS records `created_by="acs"`, `meta.origin="acs"` and the persona that started the run
+(`acs_delegate` passes its caller) in `meta.persona`. That persona — and only it — may
+`skill_grade` the skill (`SkillRegistry.owns_acs_skill`, checked by the server and again by
+the registry's own gate). The grade is still a namespaced persona's: non-organic, clamped to
+`AUTO_GRADE_CAP_MAX` (0.3). Purge, promote and update stay behind the gate. Before this the
+gate refused every grade of an `acs.*` skill, so it stayed ungraded and the injection gate
+(`n_grades >= 1`) never let a later run use it. A skill with no `meta.persona` (an ACS run
+outside `acs_delegate`) is the operator's to grade.
+
 The wildcard is the operator's only for a server the cowork resolver launched:
 `resolver._skill_forge_launch` writes `<tenant>/skill-forge/launches/<sha256(nonce)>.json`
 (0600) before the spawn and puts `<tenant>:<nonce>` into the server's

@@ -59,6 +59,15 @@ class GridStrategy:
         # Grid is stateless; the index is the only state.
         return None
 
+    def resume(self, history: list) -> None:
+        """Continue after the points already recorded on disk.
+
+        The index lives only in memory, so a restarted worker used to walk the
+        grid from point 0 again and overwrite the iteration files it had written
+        (adversarial review 2026-11-06). One recorded iteration per point.
+        """
+        self._next_index = min(len(history), self._total)
+
     def should_stop(self, history: list) -> tuple[bool, str]:
         if self._next_index >= self._total:
             return True, "grid-exhausted"

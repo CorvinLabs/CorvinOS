@@ -1248,6 +1248,7 @@ class MCPServer:
         # for those) ──────────────────────────────────────────────────────
         _access = None
         _trial_reserved = 1
+        _cq_charged = False  # the free-tier daily unit was taken (see _refund_compute_unit)
         if name in ("compute_run", "compute_submit") and _check_compute_access is not None:
             try:
                 from forge import paths as _forge_paths  # local import; forge is always on path
@@ -1402,6 +1403,7 @@ class MCPServer:
                             channel=args.get("channel", ""),
                             chat_key=args.get("chat_key", ""),
                         )
+                        _cq_charged = True
                     except Exception as _cq_exc:
                         if _CQLimitError is not None and isinstance(_cq_exc, _CQLimitError):
                             _cq_blocked = True
@@ -1442,6 +1444,8 @@ class MCPServer:
             # of a Unix socket; either marks a started worker.
             if not (sock.exists()
                     or sock.with_name(sock.name + ".port").exists()):
+                if _cq_charged:
+                    self._refund_compute_unit()
                 self._error(
                     msgid, INVALID_PARAMS,
                     "compute worker socket not present — bootstrap + start "
@@ -1481,10 +1485,20 @@ class MCPServer:
                             f"unknown compute tool: {name}")
                 return
         except _ComputeWorkerClientError as exc:
+            # The worker refused the run (ToolNotAvailable, ParamGridMismatch,
+            # InvalidArgument, StrategyNotAllowed, ...): nothing ran. The daily
+            # unit taken above went to a run that never existed — give it back.
+            if _cq_charged:
+                self._refund_compute_unit()
             self._error(msgid, INVALID_PARAMS,
                         f"compute worker {exc.error_class}: {exc.message}")
             return
         except Exception as exc:  # noqa: BLE001
+            # Same rule as the console route: a socket-level failure means the
+            # worker never accepted the run. Any other failure is ambiguous (the
+            # run may have started) and stays charged.
+            if _cq_charged and isinstance(exc, OSError):
+                self._refund_compute_unit()
             self._error(msgid, INTERNAL_ERROR,
                         f"compute worker call failed: {exc}")
             return
@@ -1500,7 +1514,14 @@ class MCPServer:
         ):
             try:
                 from forge import paths as _forge_paths
-                _strategy = args.get("strategy", "grid") if name == "compute_run" else "grid"
+                # Charge the counter the clamp used: compute_submit(engine="flat")
+                # carries its strategy under extra.
+                if name == "compute_run":
+                    _strategy = args.get("strategy", "grid")
+                elif args.get("engine") == "flat":
+                    _strategy = (args.get("extra") or {}).get("strategy", "grid")
+                else:
+                    _strategy = "grid"
                 _record_trial_iteration(
                     _forge_paths.corvin_home(),
                     strategy=_strategy,
@@ -1533,6 +1554,21 @@ class MCPServer:
                 )
             except Exception:
                 pass
+
+    def _refund_compute_unit(self) -> None:
+        """Give back the free-tier daily compute unit taken for a run the worker
+        never accepted. Best-effort and never raises (``refund_one`` is fail-soft);
+        mirrors ``routes/_compute_license_gate.refund_compute_quota`` so the MCP
+        and console paths charge the same way."""
+        try:
+            _root = str(Path(__file__).resolve().parents[2])  # operator/
+            if _root not in sys.path:
+                sys.path.insert(0, _root)
+            from license.compute_quota import refund_one as _cq_refund  # type: ignore[import]
+            from forge import paths as _rf_paths
+            _cq_refund(_rf_paths.corvin_home())
+        except Exception:  # noqa: BLE001 — refund is best-effort
+            pass
 
     # -- ADR-0026 Compute Fabric helpers ----------------------------------
 

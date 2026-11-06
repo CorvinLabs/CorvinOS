@@ -83,7 +83,8 @@ FAIL_FAST_IDENTICAL_ERRORS = 3
 #: value-dependent error (one bad value of a later grid axis) must NOT stop the
 #: run — the grid enumerates the first axis fastest, so its first points can
 #: share one bad value of another axis while the rest of the grid is valid.
-_PARAM_INDEPENDENT_ERRORS = ("LossMetricMissing:", "ToolError: unknown tool")
+_PARAM_INDEPENDENT_ERRORS = ("LossMetricMissing:", "ToolError: unknown tool",
+                             "PermissionError: datasource ")
 
 
 def _deterministic_failure(history: "list[IterRecord]") -> str | None:
@@ -186,20 +187,43 @@ class ComputeRun:
         """Mark this run for graceful termination on the next loop turn."""
         self._abort = True
 
-    def run(self) -> RunRecord:
-        """Block until terminal and return the final RunRecord."""
-        self._started_at = self.time_fn()
-        self._write_initial_manifest()
-        self._write_summary(state=RUN_STATE_RUNNING)
-        self._emit_audit("compute.run_started", tool_name=self.spec.tool_name,
-                         strategy=self.spec.strategy_name,
-                         budget=dataclasses.asdict(self.spec.budget),
-                         # ADR-0127 review gap G2: record datasource binding
-                         # (connection NAMES are operator handles, not PII).
-                         datasources=list(getattr(self.spec, "datasources", []) or []))
+    def run(self, resume_history: "list[IterRecord] | None" = None,
+            prior_wall_s: float = 0.0) -> RunRecord:
+        """Block until terminal and return the final RunRecord.
 
-        history: list[IterRecord] = []
-        iter_counter = 0
+        ``resume_history`` continues a run interrupted by a restart: its recorded
+        iterations seed the history and the iteration counter (so nothing already
+        on disk is overwritten and ``max_iterations`` counts them), the strategy
+        is fast-forwarded past them, and the manifest is kept as accepted.
+        ``prior_wall_s`` makes ``max_wall_clock_s`` cumulative across the restart.
+        """
+        resuming = bool(resume_history)
+        self._started_at = self.time_fn() - max(0.0, float(prior_wall_s or 0.0))
+        if not resuming:
+            self._write_initial_manifest()
+        self._write_summary(state=RUN_STATE_RUNNING)
+        if not resuming:
+            self._emit_audit("compute.run_started", tool_name=self.spec.tool_name,
+                             strategy=self.spec.strategy_name,
+                             budget=dataclasses.asdict(self.spec.budget),
+                             # ADR-0127 review gap G2: record datasource binding
+                             # (connection NAMES are operator handles, not PII).
+                             datasources=list(getattr(self.spec, "datasources", []) or []))
+
+        history: list[IterRecord] = list(resume_history or [])
+        iter_counter = max((h.iter for h in history), default=0)
+        if history:
+            try:
+                resume = getattr(self.strategy, "resume", None)
+                if callable(resume):
+                    resume(history)
+                else:
+                    self.strategy.update(history, history)
+            except Exception:  # noqa: BLE001
+                log.exception("strategy resume failed")
+                self._terminal_state = RUN_STATE_FAILED
+                self._terminal_reason = "strategy-resume-failed"
+                return self._finalise(history)
 
         try:
             while True:
@@ -358,6 +382,9 @@ class ComputeRun:
             "seed":           self.spec.seed,
             "top_k_size":     self.spec.top_k_size,
             "sensitive_fields": list(self.spec.sensitive_fields),
+            # Needed to rebuild the spec after a restart: a resumed run used to
+            # lose its datasource binding and ran its tool without it.
+            "datasources":    list(getattr(self.spec, "datasources", []) or []),
             "accepted_at":    self._started_at,
         }
         self.store.write_manifest(self.run_id, manifest)
@@ -373,6 +400,7 @@ class ComputeRun:
             best_loss=(b.loss if b else None),
             total_iterations=len(history),
             last_iteration_at=(last.ts if last else None),
+            total_wall_s=max(0.0, self.time_fn() - (self._started_at or self.time_fn())),
             top_k=top_k,
         )
 

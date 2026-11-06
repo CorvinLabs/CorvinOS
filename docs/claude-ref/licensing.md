@@ -200,6 +200,15 @@ what is left (each stage <= remaining // n_stages, stage budgets clamped — the
 top budget), HAC gets one round without the backprop gate and manager floors capped to their share;
 the job is charged its reservation. Members are unaffected (`mode: licensed`).
 
+### Datasource adapters and the daily compute unit (2026-11-06)
+
+`datasource_adapters_allowed` (Free `["local_file"]`, Member unlimited) is decided in ONE place,
+`license.validator.datasource_adapter_allowed`, and is enforced on every path that binds a DSI connection:
+`datasource_connect` / `datasource_query` and the console routes (inline), and now also `compute_run` /
+`compute_submit(datasources=...)` (worker preflight + runner) and ACS (`acs_delegate` up front,
+`_resolve_acs_datasources` at resolution). The free tier's `compute_units_per_day` unit is taken before the
+worker is asked and refunded when the worker refuses the run — a refusal is not a run.
+
 ### Fail-Closed Contract
 
 **On enforcement error:**

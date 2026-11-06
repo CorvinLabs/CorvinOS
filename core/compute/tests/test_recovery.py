@@ -115,22 +115,106 @@ class ResumeTests(_Fixture):
         s = self.store.read_summary(run_id)
         self.assertIn("recovery-failed", s.get("convergence_reason", ""))
 
-    def test_strategy_update_is_idempotent_for_grid(self) -> None:
-        """Grid strategy re-walks the cartesian product from index 0 on a
-        fresh instance; the resume path passes the history through
-        update() which is a no-op for grid. The grid then re-walks
-        from 0 — duplicate iter numbers shouldn't be written because
-        the driver keeps its own counter from 1."""
+    def test_resume_continues_after_the_recorded_iterations(self) -> None:
+        """A restarted worker used to walk the grid from point 0 and overwrite the
+        iteration files it had already written (adversarial review 2026-11-06).
+        Now the recorded iterations seed the run: nothing is re-run or rewritten."""
         run_id = self._seed_interrupted_run(partial_iters=2)
+        before = {p.name: p.read_bytes() for p in
+                  (self.store.root / run_id / "iterations").glob("*.json")}
+        seen: list[float] = []
 
         def runner(tool_name, payload):
+            seen.append(float(payload["x"]))
             return {"loss": float(payload["x"])}
 
-        resume_run(self.corvin_home, "_default", run_id, runner_fn=runner)
-        # Re-read iterations; assert the file count is sensible
-        # (post-resume the driver wrote a fresh sequence starting from 1).
-        iters = self.store.read_iterations(run_id)
-        self.assertGreater(len(iters), 0)
+        events: list[str] = []
+        resume_run(self.corvin_home, "_default", run_id, runner_fn=runner,
+                   run_audit_emit=lambda ev, **kw: events.append(ev))
+        self.assertEqual(seen, [0.3, 0.4, 0.5], "only the points after the recorded ones run")
+        after = {p.name: p.read_bytes() for p in
+                 (self.store.root / run_id / "iterations").glob("*.json")}
+        self.assertEqual(sorted(after), ["0001.json", "0002.json", "0003.json", "0004.json", "0005.json"])
+        for name, raw in before.items():
+            self.assertEqual(after[name], raw, f"{name} was overwritten by the resume")
+        s = self.store.read_summary(run_id)
+        self.assertEqual(s["total_iterations"], 5)
+        self.assertEqual(s["best_loss"], 0.1)
+        self.assertEqual(events.count("compute.iteration_completed"), 3,
+                         "a recovered run's own events reach the audit emitter")
+
+    def test_the_iteration_budget_counts_the_recorded_iterations(self) -> None:
+        run_id = self._seed_interrupted_run(partial_iters=4)
+        m = self.store.read_manifest(run_id)
+        m["budget"]["max_iterations"] = 4
+        self.store.write_manifest(run_id, m)
+        calls: list = []
+        state = resume_run(self.corvin_home, "_default", run_id,
+                           runner_fn=lambda t, p: calls.append(p) or {"loss": 1.0})
+        self.assertEqual(calls, [], "the budget was already spent before the restart")
+        self.assertEqual(state, "budget_exhausted")
+
+    def test_the_wall_clock_budget_is_cumulative_across_the_restart(self) -> None:
+        run_id = self._seed_interrupted_run(partial_iters=2)
+        s = self.store.read_summary(run_id)
+        s["total_wall_s"] = 9999.0          # budget is max_wall_clock_s=10
+        self.store.write_summary(run_id, s)
+        calls: list = []
+        state = resume_run(self.corvin_home, "_default", run_id,
+                           runner_fn=lambda t, p: calls.append(p) or {"loss": 1.0})
+        self.assertEqual((state, calls), ("budget_exhausted", []))
+        self.assertEqual(self.store.read_summary(run_id)["convergence_reason"], "max-wall-clock-reached")
+
+    def test_a_seeded_random_run_continues_its_sequence(self) -> None:
+        grid = {"x": {"type": "float_uniform", "low": 0.0, "high": 1.0}}
+
+        def run_to(n: int, seed: int = 7) -> list[float]:
+            rid = new_run_id()
+            spec = ComputeRunSpec(tenant_id="_default", tool_name="t", param_grid=grid, loss_metric="loss",
+                                  strategy_name="random", seed=seed,
+                                  budget=Budget.from_dict({"max_iterations": n, "max_wall_clock_s": 30,
+                                                           "stall_after_n": 999, "convergence_eps": 0}))
+            ComputeRun(spec, corvin_home=self.corvin_home, runner_fn=lambda t, p: {"loss": p["x"]},
+                       strategy_factory=strat_pkg.load_strategy, run_id=rid).run()
+            return rid
+
+        full = run_to(8)
+        part = run_to(4)
+        s = self.store.read_summary(part)
+        s["state"] = "running"
+        self.store.write_summary(part, s)
+        m = self.store.read_manifest(part)
+        m["budget"]["max_iterations"] = 8
+        self.store.write_manifest(part, m)
+        calls: list = []
+        resume_run(self.corvin_home, "_default", part,
+                   runner_fn=lambda t, p: calls.append(p["x"]) or {"loss": p["x"]})
+        self.assertEqual(len(calls), 4, "only the 4 missing points run (the old code re-ran all 8)")
+        xs = lambda rid: [round(r.params["x"], 12) for r in self.store.read_iterations(rid)]  # noqa: E731
+        self.assertEqual(xs(part), xs(full), "resume must continue the seeded sequence, not repeat it")
+
+    def test_the_datasource_binding_survives_a_restart(self) -> None:
+        rid = new_run_id()
+        spec = ComputeRunSpec(tenant_id="_default", tool_name="t", param_grid={"x": [1, 2, 3]}, loss_metric="loss",
+                              strategy_name="grid", datasources=["conn-a"],
+                              budget=Budget.from_dict({"max_iterations": 1, "max_wall_clock_s": 30}))
+        ComputeRun(spec, corvin_home=self.corvin_home, runner_fn=lambda t, p: {"loss": 1.0},
+                   strategy_factory=strat_pkg.load_strategy, run_id=rid).run()
+        self.assertEqual(self.store.read_manifest(rid)["datasources"], ["conn-a"])
+        s = self.store.read_summary(rid)
+        s["state"] = "running"
+        self.store.write_summary(rid, s)
+        m = self.store.read_manifest(rid)
+        m["budget"]["max_iterations"] = 3
+        self.store.write_manifest(rid, m)
+        got: list = []
+
+        def runner(tool_name, payload, datasources=None):
+            got.append(datasources)
+            return {"loss": 1.0}
+
+        resume_run(self.corvin_home, "_default", rid, runner_fn=runner)
+        self.assertEqual(got, [["conn-a"], ["conn-a"]])
 
 
 class ReapTests(_Fixture):

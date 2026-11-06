@@ -900,6 +900,33 @@ except ImportError:
 
 _DS_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
+
+def _datasource_licence_problem(tenant_id: str, names: list[str]) -> str | None:
+    """Why the licence refuses binding these DSI connections to an ACS run, else None.
+
+    ``datasource_adapters_allowed``: Free = ``["local_file"]``, Member = unlimited.
+    Unresolvable manifests are left to the runtime (it fails closed on them).
+    """
+    if not names:
+        return None
+    try:
+        allowed = _lic_get_limit("datasource_adapters_allowed")
+    except Exception:  # noqa: BLE001 — no verdict means the Free allowance
+        allowed = ["local_file"]
+    if allowed is None:
+        return None
+    allowed_l = {str(a).lower() for a in allowed}
+    conn_dir = _tenant_home(tenant_id) / "datasource_connections"
+    for name in names:
+        try:
+            adapter = str(json.loads((conn_dir / f"{name}.json").read_text(encoding="utf-8")).get("adapter", ""))
+        except Exception:  # noqa: BLE001
+            continue
+        if adapter.lower() not in allowed_l:
+            return (f"datasource '{name}': the '{adapter}' adapter requires a Member licence "
+                    "(the Free tier binds local_file connections only)")
+    return None
+
 _ACS_DELEGATE_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -1613,6 +1640,12 @@ class OrchestrationServer:
             self._error(msgid, INVALID_PARAMS,
                         "datasources must be a list of at most 8 connection names")
             return
+        problem = _datasource_licence_problem(tenant_id, datasources)
+        if problem:
+            # Refused before any compute unit is charged; the ACS runtime enforces
+            # the same rule at resolution time.
+            self._error(msgid, INVALID_PARAMS, problem)
+            return
         delegation_loop: dict = {}
         if datasources:
             delegation_loop["datasources"] = list(datasources)
@@ -1641,6 +1674,11 @@ class OrchestrationServer:
             spec["dynamic_tools"] = {"enabled": True, "publish": True,
                                      "allowed_namespaces": ["dynamic"]}
             spec["dynamic_skills"] = {"enabled": True, "forge": True}
+            if self.caller_persona and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", self.caller_persona):
+                # The persona that started the run may grade the skills it forges
+                # (SkillForge's namespace gate otherwise refuses an `acs.*` skill to
+                # every named persona, so it was never graded and never re-injected).
+                spec["dynamic_skills"]["persona"] = self.caller_persona
 
         # F7 (re-audit 2026-07-22): budget_s bounds only THIS watchdog call —
         # on timeout _run_with_budget detaches and returns, but the delegation

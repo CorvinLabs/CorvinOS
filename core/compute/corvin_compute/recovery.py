@@ -51,8 +51,14 @@ def resume_run(
     *,
     audit_path: Path | None = None,
     audit_emit_fn: Callable[..., Any] | None = None,
+    run_audit_emit: Callable[..., Any] | None = None,
 ) -> str:
-    """Rebuild a ComputeRun from disk and continue execution.
+    """Rebuild a ComputeRun from disk and CONTINUE it after its last recorded iteration.
+
+    The recorded iterations seed the run (they are neither re-run nor overwritten,
+    and count against ``max_iterations``); ``max_wall_clock_s`` is cumulative.
+    ``run_audit_emit`` is the worker's emitter for the run's own ``compute.*``
+    events — without it a recovered run left nothing on the audit chain.
 
     Returns the final state. Failures (missing strategy, malformed
     manifest, etc.) mark the run failed and return ``"failed"``.
@@ -99,24 +105,23 @@ def resume_run(
         seed=manifest.get("seed"),
         top_k_size=int(manifest.get("top_k_size", 5)),
         sensitive_fields=list(manifest.get("sensitive_fields") or []),
+        datasources=list(manifest.get("datasources") or []),
     )
 
     run = ComputeRun(
         spec, corvin_home=corvin_home, runner_fn=runner_fn,
         strategy_factory=strat_pkg.load_strategy,
-        run_id=run_id,
+        run_id=run_id, audit_emit=run_audit_emit,
     )
 
-    # Replay history through the strategy so internal state is rebuilt.
     try:
-        run.strategy.update(history, history)
-    except Exception:  # noqa: BLE001
-        _emit_failure(store, run_id, audit_path, audit_emit_fn,
-                      reason="strategy-update-failed-on-recover",
-                      tenant_id=tenant_id)
-        return RUN_STATE_FAILED
+        prior_wall_s = float((store.read_summary(run_id) or {}).get("total_wall_s") or 0.0)
+    except (OSError, FileNotFoundError, TypeError, ValueError):
+        prior_wall_s = 0.0
 
-    rec = run.run()
+    # The driver seeds its history from disk and fast-forwards the strategy
+    # (a failure there ends the run ``failed`` / strategy-resume-failed).
+    rec = run.run(resume_history=history, prior_wall_s=prior_wall_s)
     return rec.state
 
 

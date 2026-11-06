@@ -1515,6 +1515,13 @@ def _resolve_acs_datasources(tenant_id: str, names: list[str],
             raise ValueError(f"datasource path escaped connections dir: {name!r}")
         raw = json.loads(path.read_text(encoding="utf-8"))
         adapter = str(raw.get("adapter", "")).lower()
+        # Licence adapter allowlist (Free: local_file only) — `datasource_query` and
+        # the console routes enforce it; this path built the connection env and a
+        # live row snapshot for ANY adapter (adversarial review 2026-11-06).
+        if not _acs_adapter_licensed(adapter):
+            raise ValueError(
+                f"datasource '{name}': the '{adapter}' adapter requires a Member licence "
+                "(the Free tier binds local_file connections only)")
         cfg = raw.get("config") or {}
         classification = str(raw.get("data_classification", "INTERNAL")).upper()
         # G4 — do not snapshot sensitive rows into a plaintext trace store.
@@ -1566,6 +1573,18 @@ def _resolve_acs_datasources(tenant_id: str, names: list[str],
             "withheld_residency": residency_local,
         })
     return "\n\n".join(blocks), env
+
+
+def _acs_adapter_licensed(adapter: str) -> bool:
+    """``license.validator.datasource_adapter_allowed``; the Free allowance when unreachable."""
+    try:
+        _op = str(Path(__file__).resolve().parents[2])  # corvin_operator/
+        if _op not in sys.path:
+            sys.path.insert(0, _op)
+        from license.validator import datasource_adapter_allowed  # type: ignore[import]
+        return bool(datasource_adapter_allowed(adapter))
+    except Exception:  # noqa: BLE001 — no verdict means the Free allowance
+        return adapter == "local_file"
 
 
 _CLASS_ORDER = ("public", "internal", "confidential", "secret")

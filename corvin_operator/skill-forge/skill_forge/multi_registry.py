@@ -184,6 +184,11 @@ class MultiSkillRegistry:
                 return spec
         return None
 
+    def owns_acs_skill(self, name: str) -> bool:
+        """See :meth:`SkillRegistry.owns_acs_skill` (the skill's own scope decides)."""
+        scope = self.find_scope(name)
+        return scope is not None and self._registry(scope).owns_acs_skill(name)
+
     def get_in_scope(self, name: str, scope: str) -> SkillSpec | None:
         return self._registry(scope).get(name)
 

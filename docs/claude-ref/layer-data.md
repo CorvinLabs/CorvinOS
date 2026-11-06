@@ -363,6 +363,33 @@ a finished sweep. Three rules close that:
 Pinned by `core/compute/tests/test_compute_silent_failure_e2e.py` (real worker socket,
 real forge runner, bwrap).
 
+### Restart, quota, `compute_submit(flat)`, datasource licence (2026-11-06)
+
+- **A restarted worker CONTINUES an interrupted run.** `recovery.resume_run` seeds the driver with the
+  iterations on disk (`ComputeRun.run(resume_history=..., prior_wall_s=...)`): they are neither re-run nor
+  rewritten and count against `max_iterations`; `max_wall_clock_s` is cumulative (`total_wall_s` is kept in
+  the rolling summary); the manifest is kept as accepted and now stores `datasources` (a resumed run used to
+  lose its binding). Strategies fast-forward through an optional `resume(history)`: grid sets its index,
+  a seeded random strategy advances its RNG (same sequence); Bayesian is stateless beyond the history. The
+  worker passes its audit emitter so a recovered run's own `compute.*` events reach the chain. Before, the
+  grid restarted at point 0 and overwrote `0001.json…`. Pinned by `test_compute_resume_e2e.py` (real worker
+  start over an interrupted run) and `test_recovery.py`.
+- **A refused run costs no daily unit.** The forge MCP server takes the free tier's `compute_units_per_day`
+  unit BEFORE it asks the worker; when the worker refuses the run (`ToolNotAvailable`, `ParamGridMismatch`,
+  `DatasourceRefused`, `InvalidArgument`, ...) or the socket is absent/unreachable, it gives the unit back
+  (`license.compute_quota.refund_one`, the rule the console route already followed). Any other failure
+  stays charged — the run may have started. Pinned by `tests/license/test_compute_quota_refund_e2e.py`.
+- **`compute_submit(engine="flat")` runs.** The schema carries the `compute_run` fields under `extra`; the
+  worker now merges them (the envelope's `budget` / `tenant_id` / `engine` win) and says what is missing
+  instead of a bare `KeyError`. The flat strategy is charged to the trial counter its clamp used (a Bayesian
+  flat submit is charged to the Bayesian counter). Pinned by `tests/license/test_compute_submit_flat_e2e.py`.
+- **Datasource adapters are licensed on the compute path.** Free = `["local_file"]`, Member = all
+  (`datasource_adapters_allowed`, decided by `license.validator.datasource_adapter_allowed`). The worker
+  refuses an unlicensed or unresolvable binding at submission (`DatasourceRefused`, before any unit is
+  charged) and the runner's env resolution refuses it again at execution (a run bound as Member and resumed
+  after a downgrade). Fail-closed to the Free allowance when the licence module is unreachable. Pinned by
+  `tests/license/test_compute_datasource_licence_e2e.py`.
+
 ### Console "compute jobs" (`routes/compute_jobs.py`) — submission is 501
 
 The ONLY ways to start compute are the MCP tools above and `POST

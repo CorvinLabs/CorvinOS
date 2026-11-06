@@ -583,7 +583,7 @@ class TestAcsDelegateAdaptation(TestOrchestrationServerBase):
     ACS runtime forge (tool + skill forging) was unreachable from chat
     (2026-11-06). The spec actually handed to run_acs_workflow is captured."""
 
-    def _spec_for(self, args):
+    def _spec_for(self, args, persona=""):
         import corvin_orchestration.mcp_server as m
         seen = {}
 
@@ -592,9 +592,19 @@ class TestAcsDelegateAdaptation(TestOrchestrationServerBase):
             return {"run_id": "r", "status": "completed", "summary": "ok",
                     "final_output": {}, "engine": "acs", "duration_s": 0.0}
 
+        server = self._server()
+        server.caller_persona = persona      # hermetic: never the env's CORVIN_CALLER_PERSONA
         with mock.patch.object(m, "_run_acs_workflow", _fake):
-            resp = _drive(self._server(), [_call("acs_delegate", args)])
+            resp = _drive(server, [_call("acs_delegate", args)])
         return seen.get("spec"), resp
+
+    def test_the_calling_persona_is_recorded_so_it_can_grade_the_skills_it_forges(self):
+        spec, _ = self._spec_for({"task": "x"}, persona="assistant")
+        self.assertEqual(spec["dynamic_skills"]["persona"], "assistant")
+        spec, _ = self._spec_for({"task": "x"}, persona="")
+        self.assertNotIn("persona", spec["dynamic_skills"])
+        spec, _ = self._spec_for({"task": "x"}, persona="../evil name")
+        self.assertNotIn("persona", spec["dynamic_skills"])
 
     def test_forging_is_on_by_default_and_publishes_to_the_user_scope(self):
         spec, _ = self._spec_for({"task": "x"})
@@ -606,6 +616,28 @@ class TestAcsDelegateAdaptation(TestOrchestrationServerBase):
         spec, _ = self._spec_for({"task": "x", "adapt": False})
         self.assertNotIn("dynamic_tools", spec)
         self.assertNotIn("dynamic_skills", spec)
+
+    def _with_connection(self, adapter, limit):
+        import corvin_orchestration.mcp_server as m
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "datasource_connections"
+            d.mkdir()
+            (d / "pg.json").write_text(json.dumps({"adapter": adapter}), encoding="utf-8")
+            with mock.patch.object(m, "_tenant_home", lambda tid=None, **k: Path(td)), \
+                 mock.patch.object(m, "_lic_get_limit", lambda feature: limit):
+                return self._spec_for({"task": "x", "datasources": ["pg"]})
+
+    def test_an_unlicensed_adapter_is_refused_before_the_run(self):
+        """Free = local_file only (datasource_adapters_allowed)."""
+        spec, resp = self._with_connection("postgresql", ["local_file"])
+        self.assertIsNone(spec)
+        self.assertIn("requires a Member licence", json.dumps(resp))
+
+    def test_a_licensed_adapter_reaches_the_run(self):
+        spec, _ = self._with_connection("postgresql", None)        # Member: unlimited
+        self.assertEqual(spec["orchestration"]["delegation_loop"]["datasources"], ["pg"])
+        spec, _ = self._with_connection("local_file", ["local_file"])
+        self.assertIsNotNone(spec)
 
     def test_adapt_must_be_a_real_boolean(self):
         spec, resp = self._spec_for({"task": "x", "adapt": "false"})

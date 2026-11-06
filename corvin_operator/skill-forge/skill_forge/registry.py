@@ -557,6 +557,27 @@ class SkillRegistry:
         policy = self._get_policy()
         return policy.namespace_for(self.caller_persona) if policy is not None else None
 
+    def owns_acs_skill(self, name: str) -> bool:
+        """True for an ``acs.*`` skill forged by an ACS run the attached persona started.
+
+        ACS writes these straight into the registry (no persona can mint ``acs.*``
+        through the MCP server: its namespace is ``<persona>.``) and records
+        ``created_by="acs"``, ``meta.origin="acs"`` and the starting persona in
+        ``meta.persona``. The namespace gate refused such a skill's GRADE to every named
+        persona, so it stayed ungraded and the injection gate (``n_grades >= 1``) never
+        let a later run use it. Only ``grade`` consults this — purge, promote and update
+        stay behind the gate — and a namespaced persona's grade is still non-organic, so
+        it is clamped to :data:`AUTO_GRADE_CAP_MAX`. A skill without ``meta.persona`` (an
+        ACS run outside ``acs_delegate``) stays the operator's to grade."""
+        if not (self.caller_persona and isinstance(name, str) and name.startswith("acs.")):
+            return False
+        spec = self.get(name)
+        if spec is None:
+            return False
+        meta = spec.meta if isinstance(spec.meta, dict) else {}
+        return (spec.created_by == "acs" and meta.get("origin") == "acs"
+                and meta.get("persona") == self.caller_persona)
+
     def _namespace_gate(self, name: str, *, operation: str) -> None:
         allowed, reason = self.namespace_check(name)
         if allowed:
@@ -1061,7 +1082,8 @@ class SkillRegistry:
         """
         if not (0.0 <= score <= 1.0):
             raise ValueError(f"score must be in [0,1], got {score!r}")
-        self._namespace_gate(name, operation="grade")
+        if not self.owns_acs_skill(name):
+            self._namespace_gate(name, operation="grade")
         requested = float(score)
         if not organic and score > AUTO_GRADE_CAP_MAX:
             score = AUTO_GRADE_CAP_MAX

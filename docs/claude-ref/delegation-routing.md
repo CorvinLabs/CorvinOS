@@ -690,8 +690,17 @@ namespaces, extra forbidden imports) — the scope the compute worker executes f
 `FORGE RESULTS` say "published" or "NOT published: <reason>; run-local only" (a skipped publish read as
 plain "ok", so a later `compute_run` under that name ran an older tool). `adapt` must be a boolean.
 
-Known gap: a persisted `acs.<name>` skill lands with zero grades, and the persona namespace gate refuses a
-grade from the `assistant` persona (`skill_grade` → `namespace-gate`), so such a skill never passes the
-injection grade gate in a later run. It works inside its own run (run-local).
+**Grading and re-use (2026-11-06).** A persisted `acs.<name>` skill lands with zero grades, and the
+injection gate lets a later run use only a graded one (`n_grades >= 1`, `mean_score > 0`). The persona that
+started the run (`acs_delegate` records its caller in `dynamic_skills.persona` -> the skill's `meta.persona`)
+may now `skill_grade` it — and only that persona: `SkillRegistry.owns_acs_skill` (see the skill-forge README,
+"Namespace gate") — as a non-organic grade clamped to 0.3. A skill from an ACS run outside `acs_delegate`
+(no `meta.persona`) is the operator's to grade. Proof: `test_an_acs_skill_graded_by_the_starting_persona_is_used_by_a_later_run`
+(`test_acs_runtime_forge.py`): run 1 forges, the persona grades over the real skill_forge MCP server, run 2 —
+nothing forged — injects it (and does not before the grade).
+
+**Datasource licence.** `_resolve_acs_datasources` enforces the licence's adapter allowlist
+(`license.validator.datasource_adapter_allowed`: Free = `local_file`, Member = all), and `acs_delegate`
+refuses an unlicensed adapter up front (before any unit is charged).
 
 → ADR: `corvin_decisions/decisions/ADR-2279-acs-forges-tools-and-skills-at-run-time-and-publishes-vetted.md`

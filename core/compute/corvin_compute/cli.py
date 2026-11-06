@@ -54,6 +54,40 @@ from .fabric.datasources.connection_env import (  # noqa: E402
 )
 
 
+def _adapter_licensed(adapter: str) -> bool:
+    """The active licence's verdict for a datasource adapter (``license.validator``).
+
+    The worker is its own process: it loads the licence from ``CORVIN_HOME`` on first
+    read (``validator._verified_license``). ``corvin_operator/`` is APPENDED to
+    ``sys.path`` — never inserted in front: ahead of ``corvin_operator/forge`` it turns
+    ``import forge`` into a namespace package and the runner loses ``forge.*``.
+    Fail-closed to the Free allowance when the licence module cannot be reached.
+    """
+    try:
+        op = str(Path(__file__).resolve().parents[3] / "corvin_operator")
+        if op not in sys.path:
+            sys.path.append(op)
+        from license.validator import datasource_adapter_allowed  # type: ignore[import]
+        return bool(datasource_adapter_allowed(adapter))
+    except Exception:  # noqa: BLE001 — no verdict means the Free allowance
+        return adapter == "local_file"
+
+
+def _datasource_problem(corvin_home, tenant_id: str, names: list[str]) -> str | None:
+    """Why this run may not bind ``names`` (unresolvable, or adapter not licensed), else None."""
+    from .fabric.datasources.connection_env import load_connection
+    for name in names:
+        try:
+            raw = load_connection(corvin_home, tenant_id, name)
+        except ValueError as exc:
+            return str(exc)
+        adapter = str(raw.get("adapter", ""))
+        if not _adapter_licensed(adapter):
+            return (f"datasource {name!r}: the {adapter!r} adapter requires a Member licence "
+                    "(the Free tier binds local_file connections only)")
+    return None
+
+
 def _resolve_datasource_env(corvin_home, tenant_id: str,
                             names: list[str]) -> dict[str, str]:
     """Resolve DSI v1 connection manifests -> connection env for the tool.
@@ -68,7 +102,15 @@ def _resolve_datasource_env(corvin_home, tenant_id: str,
     execute under the network-permissive datasource persona with no binding.
     The implementation is shared with the chat tool ``datasource_query``
     (``fabric/datasources/connection_env.py``).
+
+    The licence's adapter allowlist is enforced HERE too (execution time): this path
+    reached every adapter with no licence check at all — ``datasource_query`` and the
+    console routes refused a Free tenant's PostgreSQL connection, ``compute_run`` and a
+    run resumed after a downgrade did not (adversarial review 2026-11-06).
     """
+    problem = _datasource_problem(corvin_home, tenant_id, names)
+    if problem is not None:
+        raise PermissionError(problem)
     return _resolve_connection_env(corvin_home, tenant_id, names)
 
 
@@ -198,7 +240,13 @@ def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None 
                 + ". Each param_grid key becomes one input field of every call."))
         return None
 
+    def preflight_datasources(names: list[str]):
+        """``None`` when every bound connection resolves and its adapter is licensed."""
+        problem = _datasource_problem(ds_home, tenant_id, list(names))
+        return None if problem is None else ("datasource", problem)
+
     adapter.preflight = preflight  # type: ignore[attr-defined]
+    adapter.preflight_datasources = preflight_datasources  # type: ignore[attr-defined]
     return adapter
 
 

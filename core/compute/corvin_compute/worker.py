@@ -88,6 +88,10 @@ class ParamGridMismatch(WorkerError):
     """param_grid keys do not match the tool's input_schema."""
 
 
+class DatasourceRefused(WorkerError):
+    """A bound datasource does not resolve, or its adapter is not licensed."""
+
+
 class BudgetExhausted(WorkerError):
     pass
 
@@ -102,6 +106,7 @@ _ERROR_CLASS_MAP: dict[type, str] = {
     BudgetExhausted: "BudgetExhausted",
     ToolNotAvailable: "ToolNotAvailable",
     ParamGridMismatch: "ParamGridMismatch",
+    DatasourceRefused: "DatasourceRefused",
     ValueError: "InvalidArgument",
     KeyError: "InvalidArgument",
     TransportError: "TransportError",
@@ -354,7 +359,8 @@ class WorkerServer:
 
     # -- ops ---------------------------------------------------------------------
 
-    def _preflight(self, tool_name: str, param_grid: Mapping[str, Any]) -> None:
+    def _preflight(self, tool_name: str, param_grid: Mapping[str, Any],
+                   datasources: "list[str] | tuple[str, ...]" = ()) -> None:
         """Refuse a run that cannot produce a single valid iteration.
 
         Two causes made every iteration fail while the run still ended
@@ -366,14 +372,17 @@ class WorkerServer:
         minimal bootstrap) is not second-guessed.
         """
         check = getattr(self.runner_fn, "preflight", None)
-        if check is None:
-            return
-        problem = check(tool_name, list(param_grid.keys()))
+        problem = check(tool_name, list(param_grid.keys())) if check is not None else None
+        if problem is None and datasources:
+            dcheck = getattr(self.runner_fn, "preflight_datasources", None)
+            problem = dcheck(list(datasources)) if dcheck is not None else None
         if problem is None:
             return
         kind, message = problem
         if kind == "tool":
             raise ToolNotAvailable(message)
+        if kind == "datasource":
+            raise DatasourceRefused(message)
         raise ParamGridMismatch(message)
 
     async def _op_gate_action(self, params: Mapping[str, Any]) -> dict:
@@ -411,6 +420,18 @@ class WorkerServer:
 
         # ADR-0029 — dispatch non-flat engines before the flat path
         engine_name = str(params.get("engine") or "flat")
+        if engine_name == "flat" and isinstance(params.get("extra"), Mapping):
+            # compute_submit(engine="flat") carries the compute_run fields under
+            # ``extra`` (COMPUTE_SUBMIT_SCHEMA); this path read them from the top
+            # level only, so every such submission died with a bare KeyError.
+            # The envelope's own keys (budget, tenant_id, engine) win over ``extra``.
+            extra = dict(params["extra"])
+            missing = [k for k in ("tool_name", "param_grid") if k not in extra and k not in params]
+            if missing:
+                raise ValueError(
+                    f"compute_submit(engine='flat') needs extra.{' and extra.'.join(missing)} "
+                    "(the same fields as compute_run)")
+            params = {**extra, **{k: v for k, v in params.items() if k != "extra"}}
         if engine_name != "flat":
             # Every stage runs a forge tool through the same runner: check them
             # all before anything starts (see _preflight).
@@ -443,7 +464,8 @@ class WorkerServer:
                 f"{self.strategies_allowed!r}",
             )
 
-        self._preflight(str(params["tool_name"]), dict(params["param_grid"]))
+        self._preflight(str(params["tool_name"]), dict(params["param_grid"]),
+                        list(params.get("datasources") or []))
 
         budget = Budget.from_dict(params.get("budget"))
 
@@ -766,6 +788,7 @@ class WorkerServer:
                 _state = _recovery.resume_run(
                     self.corvin_home, self.tenant_id, run_id,
                     runner_fn=self.runner_fn,
+                    run_audit_emit=self.audit_emit,
                 )
                 # A run interrupted by a restart resumes HERE, not via _exec_run,
                 # so fire the completion notification on this path too. Idempotent

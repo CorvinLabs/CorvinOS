@@ -24,6 +24,7 @@ import re
 import shlex
 import socket
 import subprocess
+import os
 import sys
 import threading
 from pathlib import Path
@@ -479,3 +480,100 @@ def test_strongest_datasource_class_is_fail_closed(tmp_path):
         assert _rt._strongest_datasource_class("_default", ["missing"], "internal") == "secret"
         assert _rt._strongest_datasource_class("_default", [], "public") == "public"
         assert _rt._strongest_datasource_class("_default", [], "weird") == "secret"
+
+
+# --------------------------------------------------------------------------------- grading and re-use of ACS skills
+
+def _grade_over_the_real_skill_forge_server(home: Path, persona: str, name: str, score: float = 0.9) -> dict:
+    """skill_grade through the REAL skill_forge MCP server (stdio), as the persona's chat turn does."""
+    import os as _os
+    import subprocess as _sp
+    repo = Path(__file__).resolve().parents[3]
+    env = dict(_os.environ)
+    env.update({"CORVIN_HOME": str(home), "CORVIN_TENANT_ID": "_default", "CORVIN_CALLER_PERSONA": persona,
+                "CORVIN_PLUGIN_SLOT_DIR": str(home / "slot"),
+                "PYTHONPATH": _os.pathsep.join([str(repo / "corvin_operator" / "skill-forge"),
+                                                str(repo / "corvin_operator" / "forge"), str(repo)])})
+    for k in ("SKILL_FORGE_PERSONA",):
+        env.pop(k, None)
+    p = _sp.Popen([sys.executable, "-m", "skill_forge.mcp_server"], stdin=_sp.PIPE, stdout=_sp.PIPE,
+                  stderr=_sp.DEVNULL, text=True, env=env, cwd=str(repo))
+    try:
+        def rpc(i, method, params):
+            p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params}) + "\n")
+            p.stdin.flush()
+            while True:
+                msg = json.loads(p.stdout.readline())
+                if msg.get("id") == i:
+                    return msg
+        rpc(1, "initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                              "clientInfo": {"name": "t", "version": "0"}})
+        return rpc(2, "tools/call", {"name": "skill_grade",
+                                     "arguments": {"name": name, "run_id": "acs-run-1", "score": score}})
+    finally:
+        p.stdin.close()
+        p.terminate()
+
+
+def _forge_skill_run(tmp_path, persona="assistant"):
+    h = Harness(tmp_path)
+    body = ("When hashing a batch of corvin items: Verify the item count first, hash each item with sha256, "
+            "then report the first byte of every digest in order.")
+    skill = {"name": "hash_method", "description": "how to hash a batch of corvin items", "body": body}
+    dyn = {"enabled": True, "forge": True}
+    if persona:
+        dyn["persona"] = persona
+    h.run([_decision_delegate(forge={"skills": [skill]}), COMPLETE], _spec(dynamic_skills=dyn))
+    return h
+
+
+def _second_run_worker_system(tmp_path) -> str:
+    h = Harness(tmp_path)
+    h.run([_decision_delegate(), COMPLETE], _spec(dynamic_skills={"enabled": True}))
+    return h.worker_systems[0]
+
+
+def test_an_acs_skill_graded_by_the_starting_persona_is_used_by_a_later_run(tmp_path):
+    """End to end: run 1 forges the skill; the persona grades it over the real SkillForge MCP
+    server; run 2 (a fresh run, nothing forged) injects it. Before, the namespace gate refused
+    the grade, the skill stayed ungraded and no later run ever saw it."""
+    h1 = _forge_skill_run(tmp_path)
+    assert h1.events("acs.skill_forged")[0]["persisted"] is True
+    from skill_forge.registry import SkillRegistry
+    from corvin_operator.forge.forge.paths import tenant_home
+    reg = SkillRegistry(Path(tenant_home("_default")) / "skill-forge")
+    assert reg.get("acs.hash_method").meta["persona"] == "assistant"
+    assert reg.get("acs.hash_method").n_grades == 0
+
+    # negative control: ungraded, a later run does not get it
+    assert 'name="acs.hash_method"' not in _second_run_worker_system(tmp_path)
+
+    home = Path(os.environ["CORVIN_HOME"])
+    r = _grade_over_the_real_skill_forge_server(home, "assistant", "acs.hash_method")
+    assert r["result"].get("isError") is False, r
+    assert reg.get("acs.hash_method").n_grades >= 1 and reg.get("acs.hash_method").mean_score > 0
+
+    system = _second_run_worker_system(tmp_path)
+    assert "SKILLS (curated and graded" in system and 'name="acs.hash_method"' in system, system[-1500:]
+
+
+def test_another_persona_cannot_grade_the_skill_so_it_stays_unused(tmp_path):
+    _forge_skill_run(tmp_path, persona="assistant")
+    home = Path(os.environ["CORVIN_HOME"])
+    r = _grade_over_the_real_skill_forge_server(home, "coder", "acs.hash_method")
+    assert r["result"].get("isError") is True and "namespace-gate" in json.dumps(r), r
+    assert 'name="acs.hash_method"' not in _second_run_worker_system(tmp_path)
+
+
+def test_a_skill_without_a_starting_persona_stays_the_operators_to_grade(tmp_path):
+    _forge_skill_run(tmp_path, persona="")          # e.g. an ACS run outside acs_delegate
+    home = Path(os.environ["CORVIN_HOME"])
+    r = _grade_over_the_real_skill_forge_server(home, "assistant", "acs.hash_method")
+    assert r["result"].get("isError") is True and "namespace-gate" in json.dumps(r), r
+
+
+def test_the_persona_in_the_spec_must_be_a_plain_name(tmp_path):
+    from acs_forge import config_from_spec
+    assert config_from_spec({"dynamic_skills": {"enabled": True, "forge": True, "persona": "assistant"}}).persona == "assistant"
+    for bad in ("../x", "a b", "", "x" * 65, 7, None):
+        assert config_from_spec({"dynamic_skills": {"enabled": True, "forge": True, "persona": bad}}).persona == ""

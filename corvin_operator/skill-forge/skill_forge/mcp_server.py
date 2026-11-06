@@ -587,7 +587,11 @@ class SkillForgeMCPServer:
 
     def _call_skill_grade(self, msgid: Any, args: dict) -> None:
         name = args.get("name", "")
-        if self._deny_if_outside_namespace(msgid, name, tool="skill_grade"):
+        # The persona that started an ACS run may grade the skills it forged (the
+        # registry decides: ``owns_acs_skill``); every other cross-namespace grade is
+        # still refused here and again inside the registry.
+        if not self.multi.owns_acs_skill(name) and \
+                self._deny_if_outside_namespace(msgid, name, tool="skill_grade"):
             return
         # A NAMESPACED persona grading through this tool is the graded party
         # grading itself: its run_id is a string it chose, not evidence of a

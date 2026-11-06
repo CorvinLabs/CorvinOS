@@ -1035,6 +1035,16 @@ def test_build_worker_system_with_dynamic_tools():
 # with the write path's real validator on exactly this class of value —
 # fixed here).
 
+@pytest.fixture(autouse=True)
+def _adapters_licensed_for_the_gate_tests(request, monkeypatch):
+    """The WDAT / residency tests below are about THEIR gate and presume a licence that
+    allows the adapter. The adapter-licence tests (``..._adapter_licence_...``) run the REAL
+    verdict of the real validator instead."""
+    name = request.node.name
+    if name.startswith("test_resolve_acs_datasources") and "adapter_licence" not in name:
+        monkeypatch.setattr(_rt, "_acs_adapter_licensed", lambda adapter: True)
+
+
 def _write_datasource_conn(conn_dir: Path, name: str, *, adapter: str,
                             classification: str, config: dict | None = None) -> None:
     conn_dir.mkdir(parents=True, exist_ok=True)
@@ -1179,3 +1189,48 @@ def test_resolve_acs_datasources_non_sensitive_snapshots_regardless_of_key(monke
     assert "LIVE DATA sentinel-rows" in text
     audit_call = mock_audit.call_args_list[0]
     assert audit_call.args[2]["withheld_sensitive"] is False
+
+
+def _conn(td: str, adapter: str, name: str = "db1") -> Path:
+    home = Path(td)
+    _write_datasource_conn(home / "tenants" / "_test" / "datasource_connections", name,
+                           adapter=adapter, classification="INTERNAL")
+    return home
+
+
+def test_resolve_acs_datasources_adapter_licence_free_tier_refuses_postgresql(monkeypatch):
+    """Free = local_file only. This path built the env and a live row snapshot for ANY
+    adapter (adversarial review 2026-11-06). The verdict is the real validator's, on the
+    sandbox's licence-less (Free) install."""
+    monkeypatch.delenv("CORVIN_WDAT_KEY", raising=False)
+    with tempfile.TemporaryDirectory() as td:
+        home = _conn(td, "postgresql")
+        with patch.object(_rt, "_corvin_home", return_value=home), \
+             patch.object(_rt, "_write_audit"), patch.object(_rt, "_pg_live_snapshot") as snap:
+            with pytest.raises(ValueError, match="requires a Member licence"):
+                _rt._resolve_acs_datasources("_test", ["db1"], run_id="r1")
+    snap.assert_not_called()
+
+
+def test_resolve_acs_datasources_adapter_licence_free_tier_allows_local_file():
+    with tempfile.TemporaryDirectory() as td:
+        home = _conn(td, "local_file")
+        with patch.object(_rt, "_corvin_home", return_value=home), patch.object(_rt, "_write_audit"):
+            text, _env = _rt._resolve_acs_datasources("_test", ["db1"], run_id="r1")
+    assert "local_file" in text
+
+
+def test_resolve_acs_datasources_adapter_licence_member_allows_postgresql(monkeypatch):
+    import license.validator as _v
+    monkeypatch.delenv("CORVIN_WDAT_KEY", raising=False)
+    _v._set_active_license({"tier": "member", "jti": "t-acs-adapter"})
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            home = _conn(td, "postgresql")
+            with patch.object(_rt, "_corvin_home", return_value=home), \
+                 patch.object(_rt, "_write_audit"), \
+                 patch.object(_rt, "_pg_live_snapshot", return_value="LIVE DATA x"):
+                text, env = _rt._resolve_acs_datasources("_test", ["db1"], run_id="r1")
+    finally:
+        _v._set_active_license(None)
+    assert "LIVE DATA" in text and env.get("PGDATABASE") is not None

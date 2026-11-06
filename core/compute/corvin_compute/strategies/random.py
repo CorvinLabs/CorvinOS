@@ -72,6 +72,14 @@ class RandomStrategy:
     def update(self, history: list, new_results: list) -> None:
         return None
 
+    def resume(self, history: list) -> None:
+        """Advance the seeded RNG past the points already recorded, so a resumed
+        run continues the same sequence instead of repeating its first points.
+        (Unseeded runs have no sequence to preserve.)"""
+        for _ in range(len(history)):
+            for _name, spec in self._axes:
+                self._sample_one(spec)
+
     def should_stop(self, history: list) -> tuple[bool, str]:
         return False, ""
 

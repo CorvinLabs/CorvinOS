@@ -637,6 +637,69 @@ def test_rl5_the_resolver_records_the_launch_the_server_honours():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+# -- Case 8: the persona that started an ACS run may grade ITS acs.* skills ---------
+
+def _seed_acs_skill(home: Path, name: str, *, created_by: str = "acs",
+                    meta: dict | None = None) -> None:
+    """Write a skill the way acs_forge.forge_skill does: straight into the registry
+    (no persona can mint ``acs.*`` through the MCP server)."""
+    from skill_forge.registry import SkillRegistry
+    root = home / "tenants" / "_default" / "skill-forge"
+    root.mkdir(parents=True, exist_ok=True)
+    SkillRegistry(root).create(
+        name=name, type="learned-experience", body_md=GOOD_BODY.replace("code.review_checklist", name),
+        description="seeded like acs_forge does", claim={}, scope="session", overwrite=True,
+        created_by=created_by, meta=meta if meta is not None else {})
+
+
+def test_the_persona_that_started_an_acs_run_can_grade_its_skills():
+    """Before: the namespace gate refused ``acs.*`` to every named persona, so an ACS skill
+    stayed ungraded and the injection gate (n_grades >= 1) never let a later run use it."""
+    print("\n[case 8: acs.* skills gradable by the persona that started the run, only]")
+    sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-8-"))
+    try:
+        origin = {"lifecycle": "turn", "run_id": "acs-run-1", "origin": "acs"}
+        _seed_acs_skill(sandbox, "acs.mine", meta={**origin, "persona": "assistant"})
+        _seed_acs_skill(sandbox, "acs.nopersona", meta=dict(origin))
+        _seed_acs_skill(sandbox, "acs.lookalike", created_by="someone-else",
+                        meta={**origin, "persona": "assistant"})
+
+        # the persona that started the run
+        assistant = _SFMCPClient(corvin_home=sandbox, caller_persona="assistant")
+        try:
+            assistant.initialize()
+            r = _call(assistant, "skill_grade", {"name": "acs.mine", "run_id": "acs-run-1", "score": 0.9})
+            assert r.get("isError") is False, r["content"][0]["text"]
+            data = r["structuredContent"]["data"]
+            assert data["n_grades"] >= 1 and data["mean_score"] > 0, data
+            spec = _call(assistant, "skill_get", {"name": "acs.mine"})["structuredContent"]["data"]["spec"]
+            assert spec["grades"] and max(g["score"] for g in spec["grades"]) <= 0.3, \
+                "a namespaced persona's grade is non-organic and clamped to the cap"
+            # the other skills stay out of reach for it
+            for name in ("acs.nopersona", "acs.lookalike"):
+                r = _call(assistant, "skill_grade", {"name": name, "run_id": "x", "score": 0.9})
+                assert r.get("isError") is True and "namespace-gate" in r["content"][0]["text"], (name, r)
+            # and the exception is for GRADING only
+            for tool, args in (("skill_purge", {"name": "acs.mine", "reason": "x"}),
+                               ("skill_promote", {"name": "acs.mine", "to": "project"})):
+                r = _call(assistant, tool, args)
+                assert r.get("isError") is True and "namespace-gate" in r["content"][0]["text"], (tool, r)
+        finally:
+            assistant.close()
+
+        # another persona may not grade it
+        coder = _SFMCPClient(corvin_home=sandbox, caller_persona="coder")
+        try:
+            coder.initialize()
+            r = _call(coder, "skill_grade", {"name": "acs.mine", "run_id": "x", "score": 0.9})
+            assert r.get("isError") is True and "namespace-gate" in r["content"][0]["text"], r
+        finally:
+            coder.close()
+        t("only the persona that started the ACS run grades its acs.* skills (capped, grade-only)", True)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def main() -> int:
     test_coder_can_register_in_namespace()
     test_coder_blocked_outside_namespace()
@@ -649,6 +712,7 @@ def main() -> int:
     test_caller_persona_in_audit_details()
     test_coder_cannot_grade_purge_or_promote_foreign_skill()
     test_create_scope_gate()
+    test_the_persona_that_started_an_acs_run_can_grade_its_skills()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

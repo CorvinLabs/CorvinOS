@@ -85,6 +85,9 @@ class ForgeConfig:
     # Also register a tool that passed its self-test in the tenant's user-scope Forge, where the other agentic
     # compute runtimes (sweeps, Bayesian optimisation, HAC, pipelines) resolve tools. Never overwrites a tool.
     publish: bool = False
+    # The persona that started the run (``acs_delegate`` passes its caller). Recorded in
+    # every forged skill's meta: it is the one persona SkillForge lets grade the skill.
+    persona: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -100,6 +103,9 @@ def config_from_spec(spec: dict | None) -> ForgeConfig:
     cfg.tools_enabled = dt.get("enabled") is True
     cfg.skills_enabled = ds.get("enabled") is True and ds.get("forge") is True
     cfg.publish = cfg.tools_enabled and dt.get("publish") is True
+    persona = ds.get("persona")
+    if isinstance(persona, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", persona):
+        cfg.persona = persona
     ns = dt.get("allowed_namespaces")
     if isinstance(ns, list) and ns and all(isinstance(x, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", x) for x in ns):
         cfg.allowed_namespaces = tuple(ns)
@@ -407,7 +413,8 @@ class RunForge:
                     name=f"acs.{name}", type="learned-experience", body_md=body,
                     description=(description or body[:120]).replace("\n", " ").strip()[:MAX_DESCRIPTION],
                     claim={}, scope="session", overwrite=True, created_by="acs",
-                    meta={"lifecycle": "turn", "run_id": self.run_id, "origin": "acs"},
+                    meta={"lifecycle": "turn", "run_id": self.run_id, "origin": "acs",
+                          **({"persona": self.cfg.persona} if self.cfg.persona else {})},
                 )
                 persisted = True
             except LinterError as exc:

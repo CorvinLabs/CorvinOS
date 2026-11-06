@@ -1777,6 +1777,22 @@ def get_limit(feature: str) -> Any:
     return _resolve_limit(feature, _verified_license())
 
 
+def datasource_adapter_allowed(adapter: str) -> bool:
+    """True when the active licence allows binding a DSI connection of this adapter.
+
+    THE decision for datasource adapters (``datasource_adapters_allowed``: Free =
+    ``["local_file"]``, Member = unlimited). ``datasource_connect`` /
+    ``datasource_query`` and the console routes inline the same test; the compute
+    worker and ACS reach connections without passing through any of them, so they
+    call this (adversarial review 2026-11-06). Fail-closed: anything that is not a
+    plain adapter name is refused.
+    """
+    if not isinstance(adapter, str) or not adapter.strip():
+        return False
+    allowed = get_limit("datasource_adapters_allowed")
+    return allowed is None or adapter.strip().lower() in {str(a).lower() for a in allowed}
+
+
 def is_feature_allowed(feature: str) -> bool:
     """True when a boolean feature is enabled by the active licence."""
     val = get_limit(feature)
