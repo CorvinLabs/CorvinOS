@@ -15,7 +15,7 @@ import pytest
 
 # Ensure shared/ and operator/ are importable
 _SHARED = Path(__file__).resolve().parent
-_OPERATOR = _SHARED.parent
+_OPERATOR = _SHARED.parents[1]  # corvin_operator/ (holds the `license` package)
 for _p in (str(_SHARED), str(_OPERATOR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

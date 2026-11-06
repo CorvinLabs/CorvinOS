@@ -156,6 +156,40 @@ result = require_capability(
 5. **Marketplace:** `routes/marketplace.py::publish` → `require_capability("marketplace.publish")`
 6. **A2A Pairing:** `a2a_verifier.py::verify_delegation` → `require_capability("a2a.network")`
 
+### Every process loads the licence (deferred first-read load)
+
+`load_license_from_env()` runs at console/gateway/adapter boot, but the MCP servers the engine
+spawns (forge, skill_forge, orchestration) are separate processes that never booted it. Until
+2026-11-06 they read "no licence" and answered **free** for a paying member: `forge_tool` was
+refused with `license_required: forge.create denied (not_available_in_tier)`, `skill-forge:create`
+was audited as `free deny`. Now the first licence read in a process (`validator._verified_license`)
+performs that load once, through the same verification as boot (signature, CRL, expiry,
+device/installation binding):
+
+- it runs only while no licence is set and no load has finished (`_LICENSE_LOAD_DONE`), so a
+  licence a caller set — or cleared by tamper response / revocation — is never re-loaded;
+- the load holds `_RELOAD_LOCK` (RLock): a concurrent first read in another thread waits for the
+  result instead of reading Free; the load's own audit writes re-enter from the same thread;
+- a load that raises leaves the Free tier.
+
+Import the validator as `license.validator` (or `corvin_operator.license.validator`, the same
+module object). The bare `validator` name (with `corvin_operator/license` on `sys.path`) is a
+THIRD, unaliased module with its own licence state — don't use it in a long-lived process.
+
+A lazily loaded licence lives until the process exits, like the adapter's boot load; the
+in-process refresh is the console's `reload_from_disk()`.
+
+### Compute access without the Enterprise plugin
+
+`core/compute/corvin_compute/license_gate.py::check_compute_access` (the `compute_run` /
+`compute_submit` gate of the forge MCP server) used the Enterprise `corvin_license` package as
+its only licence source. That package was deleted in 853ee7c54 (2026-09-15), so every install,
+members included, ran on the 500-iteration trial. Without the package the gate now asks the
+operator licence: `licensed` when `active_tier()` is paid AND `CAPABILITIES["compute.run"][tier]`
+is unlimited, `fabric_allowed` false; anything else (free, unresolvable, finite limit) keeps the
+trial. This matches the console's compute status (`routes/compute.py`, `except ImportError`).
+Pinned by `tests/license/test_license_deferred_load_subprocess_e2e.py` (real forge stdio server).
+
 ### Fail-Closed Contract
 
 **On enforcement error:**

@@ -274,6 +274,51 @@ def _check_trial(corvin_home: Path) -> ComputeAccessResult:
     return _trial(remaining)
 
 
+# ── Operator licence (license.validator) ───────────────────────────────────
+
+def _operator_active_tier() -> str | None:
+    """The verified operator-licence tier, or None when it cannot be resolved.
+
+    Goes through ``license.validator.active_tier`` — signature, revocation (CRL),
+    expiry and device/installation binding are all checked there; an unverified,
+    expired or revoked token reads as ``"free"``. Imported under both names the
+    validator is reachable by (they are one module object, see
+    ``corvin_operator/license/tests/test_twin_module_identity.py``).
+    """
+    try:
+        try:
+            from license.validator import active_tier  # type: ignore[import]
+        except ImportError:
+            from corvin_operator.license.validator import active_tier  # type: ignore[import]
+        return str(active_tier())
+    except Exception:  # noqa: BLE001 — unresolvable licence = no paid tier
+        return None
+
+
+def _operator_licence_access() -> "ComputeAccessResult | None":
+    """Licensed access for a verified paid operator licence, else None (trial).
+
+    A paid tier is licensed only when the capability matrix grants it unlimited
+    ``compute.run`` (``limits.CAPABILITIES``) — the tier string alone does not
+    unlock compute, so a future paid tier without compute stays on the trial.
+    ``compute_fabric`` stays off: the operator licence carries no fabric grant.
+    """
+    tier = _operator_active_tier()
+    if not tier or tier == "free":
+        return None
+    try:
+        try:
+            from license.limits import CAPABILITIES  # type: ignore[import]
+        except ImportError:
+            from corvin_operator.license.limits import CAPABILITIES  # type: ignore[import]
+        grant = CAPABILITIES["compute.run"][tier]
+    except Exception:  # noqa: BLE001 — tier absent from the matrix = no grant
+        return None
+    if grant.get("limit", 0) is not None:
+        return None
+    return _licensed(tier, fabric=False)
+
+
 # ── Main gate ──────────────────────────────────────────────────────────────
 
 def _is_license_revoked() -> bool:
@@ -336,6 +381,16 @@ def check_compute_access(
     now_ = now or int(time.time())
 
     if not _LICENSE_PLUGIN_AVAILABLE:
+        # The enterprise ``corvin_license`` package was deleted in 853ee7c54
+        # (2026-09-15). From then on this branch was the ONLY path, and it sent
+        # every install, a paying member included, to the 500-iteration trial
+        # (measured 2026-11-06: compute.license.checked mode=trial tier=free on a
+        # member install). The licence that exists is the operator licence
+        # (``global/license.key``, ``license.validator``) — the same source the
+        # console's compute status already reads in this case. Its tier decides.
+        op = _operator_licence_access()
+        if op is not None:
+            return op
         return _check_trial(corvin_home)
 
     # RTL2-LIC-01 (ADR-0146): honor propagated revocation BEFORE granting any

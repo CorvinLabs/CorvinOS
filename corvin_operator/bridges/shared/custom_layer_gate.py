@@ -87,12 +87,16 @@ def _get_limit() -> "int | None":
     try:
         # Path insertion so this module works both as a package member and
         # when loaded standalone (e.g. from tests via sys.path hacks).
-        _lic_path = Path(__file__).resolve().parents[2] / "license"
-        if str(_lic_path) not in sys.path:
-            sys.path.insert(0, str(_lic_path))
-        # ADR-0215 F5: dead dotted primary removed — the sys.path insert
-        # above already makes the bare form below resolve directly.
-        from validator import get_limit as _gl  # type: ignore[import]
+        # The bare ``validator`` name (``corvin_operator/license`` on sys.path)
+        # is a THIRD module object, not aliased to ``license.validator`` /
+        # ``corvin_operator.license.validator``: it loads its own licence,
+        # duplicates the licence audit records and is never reached by
+        # ``reload_from_disk()`` or a tamper response on the real one
+        # (adversarial review 2026-11-06). Import the shared module.
+        _op_path = Path(__file__).resolve().parents[2]  # corvin_operator/
+        if str(_op_path) not in sys.path:
+            sys.path.insert(0, str(_op_path))
+        from license.validator import get_limit as _gl  # type: ignore[import]
         val = _gl(_FEATURE_KEY)
         # None = unlimited; int = hard cap; 0 = denied (also valid).
         if val is None:
@@ -110,11 +114,11 @@ def _get_limit() -> "int | None":
 def _get_active_tier() -> str:
     """Return the current license tier string ('free' on any error)."""
     try:
-        _lic_path = Path(__file__).resolve().parents[2] / "license"
-        if str(_lic_path) not in sys.path:
-            sys.path.insert(0, str(_lic_path))
-        # ADR-0215 F5: dead dotted primary removed (see _get_limit above).
-        from validator import active_tier as _at  # type: ignore[import]
+        _op_path = Path(__file__).resolve().parents[2]  # corvin_operator/
+        if str(_op_path) not in sys.path:
+            sys.path.insert(0, str(_op_path))
+        # The shared module object, never the bare ``validator`` (see _get_limit).
+        from license.validator import active_tier as _at  # type: ignore[import]
         return _at()
     except Exception:
         return "free"

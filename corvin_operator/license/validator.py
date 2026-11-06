@@ -251,6 +251,9 @@ _AUDIT_PATH_SNAPSHOT: "Path | None" = None
 # same token wrote ~1 350 identical records/hour on 2026-09-26.
 _LAST_SEEDED_STATE: "tuple[str, str] | None" = None
 _LICENSE_INITIALIZED: bool = False  # ADR-0138 M1 F2: idempotency guard
+# Set when the first load_license_from_env() has RETURNED (``_LICENSE_INITIALIZED``
+# is set at its START). Readers use it to wait for a load in progress.
+_LICENSE_LOAD_DONE: bool = False
 
 # ADR-0138 review: snapshot CORVIN_INTEGRATION_TEST at module import time so
 # post-boot os.environ mutations cannot satisfy the force=True escape-hatch guard.
@@ -1057,6 +1060,25 @@ def _init_instance_seed() -> None:
 # ── Public boot API ───────────────────────────────────────────────────────────
 
 def load_license_from_env(*, force: bool = False) -> None:
+    """Discover and activate a licence token (serialised; see the locked body).
+
+    Holds ``_RELOAD_LOCK`` for the whole load, and marks the load DONE when it
+    returns. A reader in another thread that arrives while the first load is
+    running (``_verified_license`` takes the same lock while the load is not
+    done) waits for its result instead of reading the half-initialised "no
+    licence" state as Free (adversarial review 2026-11-06). The lock is an
+    RLock, so the load's own audit writes re-entering a licence read from the
+    SAME thread do not deadlock; they see ``_LICENSE_INITIALIZED`` and return.
+    """
+    global _LICENSE_LOAD_DONE
+    with _RELOAD_LOCK:
+        try:
+            _load_license_from_env_locked(force=force)
+        finally:
+            _LICENSE_LOAD_DONE = True
+
+
+def _load_license_from_env_locked(*, force: bool = False) -> None:
     """Discover and activate a licence token.
 
     Call once at adapter boot.  Sets the module-level _ACTIVE_LICENSE.
@@ -1619,6 +1641,29 @@ def _verified_license() -> "types.MappingProxyType | None":
     ADR-0139 (out-of-process enforcer is the structural mitigation).
     """
     lic = _ACTIVE_LICENSE
+    if lic is None and not _LICENSE_LOAD_DONE:
+        # A process that never ran its boot-time load_license_from_env() used to
+        # read "no licence" here and answer FREE for a paying member: the forge
+        # and skill_forge MCP servers, the compute worker, the orchestration
+        # server, are subprocesses spawned by the engine and none of them booted
+        # the licence (measured 2026-11-06: forge.create denied as "free" from
+        # mcp:forge_tool and skill-forge:create on a member install). The first
+        # licence read now performs that load: idempotent, once per process,
+        # through the same verification path as boot (signature, revocation,
+        # device/installation binding). A licence a caller set explicitly is
+        # never replaced — this branch only runs while nothing is loaded and
+        # loading was never attempted. Re-entrant reads from inside the load
+        # (its audit writes) see _LICENSE_INITIALIZED already set and return.
+        # Another thread's load in progress: the lock makes this read wait for
+        # its result (load_license_from_env holds the same RLock), then the
+        # idempotency guard returns at once.
+        try:
+            with _RELOAD_LOCK:
+                if not _LICENSE_INITIALIZED:
+                    load_license_from_env()
+        except Exception:  # noqa: BLE001 — a failed load leaves the Free tier
+            log.warning("license: deferred load failed — Free tier applies", exc_info=True)
+        lic = _ACTIVE_LICENSE
     if lic is None:
         return None
     # ADR-0144 F-07: if the stored canary is _CANARY_UNCOMPUTABLE while the
