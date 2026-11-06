@@ -80,6 +80,7 @@ def evaluate_termination(
     minimise: bool = True,
     strategy_stop: tuple[bool, str] = (False, ""),
     now_fn=time.time,
+    early_stop: bool = True,
 ) -> tuple[str, str]:
     """Return ``(state, reason)``.
 
@@ -102,6 +103,14 @@ def evaluate_termination(
     # No completed iters yet → keep running.
     valid = [h for h in history_list if h.loss is not None]
     if not valid:
+        return RUN_STATE_RUNNING, ""
+
+    # An exhaustive search (grid) is not cut short by the convergence / stall
+    # heuristics: its order is enumeration order, so "no improvement in N
+    # points" says nothing about the rest of the grid, and the reported best
+    # then came from a fraction of it (measured 2026-11-06: a 10x10 grid
+    # stopped "stalled" after 16 points). Budget and wall clock still bound it.
+    if not early_stop:
         return RUN_STATE_RUNNING, ""
 
     best = best_iter(valid, minimise=minimise)

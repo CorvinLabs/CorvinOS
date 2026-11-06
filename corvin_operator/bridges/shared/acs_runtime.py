@@ -1519,9 +1519,22 @@ def _resolve_acs_datasources(tenant_id: str, names: list[str],
         classification = str(raw.get("data_classification", "INTERNAL")).upper()
         # G4 — do not snapshot sensitive rows into a plaintext trace store.
         sensitive = classification in ("CONFIDENTIAL", "SECRET")
+        # data_residency=local: rows must not reach a chat engine. ACS workers ARE
+        # chat engines, and this path embedded a live row snapshot in their
+        # prompt AND handed them the connection env to query on their own — the
+        # exact flow `datasource_query` refuses for the same connection
+        # (`residency_local`, forge mcp_server). Withhold both; the residency-
+        # respecting path is a sandboxed tool via compute_run(datasources=[name]),
+        # which returns only what the tool computes. (Adversarial review 2026-11-06.)
+        residency_local = str(raw.get("data_residency", "any")).lower() == "local"
         snapshot = ""
         snapshot_taken = False
-        if adapter in ("postgresql", "postgres"):
+        if residency_local:
+            snapshot = ("(rows withheld: data_residency=local — this connection's rows must not "
+                        "reach a chat engine, and its connection env is not given to workers. "
+                        "Compute over it with a sandboxed forge tool: compute_run / "
+                        f"compute_submit with datasources=[\"{name}\"].)")
+        elif adapter in ("postgresql", "postgres"):
             host = str(cfg.get("host", "localhost"))
             port = int(cfg.get("port", 5432))
             db = str(cfg.get("dbname") or cfg.get("database") or "")
@@ -1550,6 +1563,7 @@ def _resolve_acs_datasources(tenant_id: str, names: list[str],
             "snapshot_taken": snapshot_taken,
             "snapshot_bytes": len(snapshot) if snapshot_taken else 0,
             "withheld_sensitive": bool(sensitive and not wdat_key_set),
+            "withheld_residency": residency_local,
         })
     return "\n\n".join(blocks), env
 

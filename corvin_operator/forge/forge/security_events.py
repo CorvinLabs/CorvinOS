@@ -4013,7 +4013,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "tool.datasource_env_injected": frozenset({"persona", "env_keys"}),
     "acs.datasource_snapshot": frozenset({
         "run_id", "datasource", "adapter", "classification",
-        "snapshot_taken", "snapshot_bytes", "withheld_sensitive",
+        "snapshot_taken", "snapshot_bytes", "withheld_sensitive", "withheld_residency",
     }),
     "acs.l34_unavailable": frozenset({"engine_id"}),
     "acs.worker_l35_blocked": frozenset({"worker_id", "engine"}),

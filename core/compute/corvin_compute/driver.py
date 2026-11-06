@@ -64,6 +64,25 @@ def _resolve_loss(envelope: Mapping[str, Any], loss_metric: str) -> float | None
         return None
 
 
+#: Consecutive failing iterations FROM THE START, all with the same error,
+#: after which a run stops instead of spending the rest of its budget. A tool
+#: that is missing, or a param_grid that does not match the tool's schema,
+#: fails every point identically — iterating on is pure waste.
+FAIL_FAST_IDENTICAL_ERRORS = 3
+
+
+def _deterministic_failure(history: "list[IterRecord]") -> str | None:
+    """The shared error when the run has only ever failed, identically, N times."""
+    if len(history) < FAIL_FAST_IDENTICAL_ERRORS:
+        return None
+    if any(h.loss is not None for h in history):
+        return None
+    errors = {h.error for h in history}
+    if len(errors) == 1 and None not in errors:
+        return next(iter(errors))
+    return None
+
+
 @dataclasses.dataclass
 class ComputeRunSpec:
     """Inputs for a single compute run.
@@ -163,6 +182,7 @@ class ComputeRun:
                     started_at=self._started_at, minimise=self.spec.minimise,
                     strategy_stop=self._strategy_should_stop(history),
                     now_fn=self.time_fn,
+                    early_stop=self.spec.strategy_name != "grid",
                 )
                 if state in TERMINAL_STATES:
                     self._terminal_state, self._terminal_reason = state, reason
@@ -190,6 +210,12 @@ class ComputeRun:
                     )
                     if self._abort:
                         raise AbortRequested()
+
+                failed_start = _deterministic_failure(history)
+                if failed_start is not None:
+                    self._terminal_state = RUN_STATE_FAILED
+                    self._terminal_reason = f"all-iterations-failed: {failed_start}"[:240]
+                    break
 
                 try:
                     self.strategy.update(history, new_results)
@@ -269,10 +295,20 @@ class ComputeRun:
         params_for_disk = redact_sensitive_fields(
             params, self.spec.sensitive_fields,
         )
+        # A tool that ran but whose output carries no numeric value at
+        # ``loss_metric`` used to be recorded with loss=None and NO error: the
+        # run then ended "budget_exhausted" with best_loss null and nothing on
+        # disk said why. Name the cause on the record itself.
+        error = None
+        if loss is None:
+            keys = sorted(envelope.keys())[:12] if isinstance(envelope, Mapping) else []
+            error = (f"LossMetricMissing: no numeric value at {self.spec.loss_metric!r} "
+                     f"in the tool output (top-level keys: {keys})")[:200]
         rec = IterRecord(
             iter=iter_n, params=params_for_disk, loss=loss,
             wall_ms=wall_ms, ts=now_ts(),
             cache_hit=cache_hit, param_fingerprint=fingerprint,
+            error=error,
         )
         self.store.append_iteration(self.run_id, rec)
         return rec
@@ -336,6 +372,15 @@ class ComputeRun:
         state = self._terminal_state or RUN_STATE_FAILED
         reason = self._terminal_reason or "unknown"
         valid = [h for h in history if h.loss is not None]
+        # A run whose every iteration failed used to keep the termination
+        # verdict ("budget_exhausted" / "converged") with best_loss null —
+        # indistinguishable from a finished sweep for every caller that reads
+        # ``state``. No valid loss means the run produced nothing: FAILED, with
+        # the first iteration's error as the reason.
+        if history and not valid and state not in (RUN_STATE_FAILED, RUN_STATE_ABORTED):
+            first = next((h.error for h in history if h.error), None) or "no-valid-loss"
+            state = RUN_STATE_FAILED
+            reason = f"all-iterations-failed: {first}"[:240]
         b = best_iter(valid, minimise=self.spec.minimise)
         last = history[-1] if history else None
         total_wall_s = max(0.0, self.time_fn() - (self._started_at or self.time_fn()))
@@ -349,6 +394,7 @@ class ComputeRun:
             last_iteration_at=(last.ts if last else None),
             convergence_reason=reason,
             top_k=self._top_k(history),
+            error=(reason if state == RUN_STATE_FAILED else None),
         )
         self._emit_audit(
             "compute.run_terminal", state=state,
@@ -373,7 +419,7 @@ class ComputeRun:
             started_at=self._started_at,
             last_iteration_at=(last.ts if last else None),
             convergence_reason=reason,
-            error=None,
+            error=(reason if state == RUN_STATE_FAILED else None),
             manifest=manifest,
             summary=summary,
         )

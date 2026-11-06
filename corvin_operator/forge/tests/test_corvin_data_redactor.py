@@ -555,3 +555,24 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_apply_redaction_clears_quantiles_of_a_redacted_column():
+    """The sample and ``top`` of a redacted column were redacted, but p05/p50/p95
+    came back in clear — values from the file (measured 2026-11-06 on a column
+    classified ``phone``). aggregate_only keeps its stats by design."""
+    print("\n[apply: redacted column carries no value-level quantiles]")
+    snap = _make_snapshot([{"tel": "+49301234567", "n": "3"}], {"tel": "phone", "n": None})
+    snap.stats["tel"].p05, snap.stats["tel"].p50, snap.stats["tel"].p95 = 491, 4930123, 4999
+    snap.stats["n"].p50 = 3
+    apply_redaction(snap)
+    st = snap.stats["tel"]
+    t("quantiles cleared", (st.p05, st.p50, st.p95) == (None, None, None))
+    t("non-PII column keeps its quantiles", snap.stats["n"].p50 == 3)
+    assert (st.p05, st.p50, st.p95) == (None, None, None)
+    assert snap.stats["n"].p50 == 3
+
+    agg = _make_snapshot([{"tel": "+49301234567"}], {"tel": "phone"})
+    agg.stats["tel"].p50 = 4930123
+    apply_redaction(agg, RedactionPolicy(default_strategy="aggregate_only"))
+    assert agg.stats["tel"].p50 == 4930123

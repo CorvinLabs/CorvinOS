@@ -578,6 +578,46 @@ class TestACSTool(TestOrchestrationServerBase):
             self.assertEqual(seen["override"]["max_wall_time"], 45)
 
 
+class TestAcsDelegateAdaptation(TestOrchestrationServerBase):
+    """acs_delegate built its spec without dynamic_tools / dynamic_skills, so the
+    ACS runtime forge (tool + skill forging) was unreachable from chat
+    (2026-11-06). The spec actually handed to run_acs_workflow is captured."""
+
+    def _spec_for(self, args):
+        import corvin_orchestration.mcp_server as m
+        seen = {}
+
+        def _fake(spec, *, tenant_id, dry_run, budget_override):
+            seen["spec"] = spec
+            return {"run_id": "r", "status": "completed", "summary": "ok",
+                    "final_output": {}, "engine": "acs", "duration_s": 0.0}
+
+        with mock.patch.object(m, "_run_acs_workflow", _fake):
+            resp = _drive(self._server(), [_call("acs_delegate", args)])
+        return seen.get("spec"), resp
+
+    def test_forging_is_on_by_default_and_publishes_to_the_user_scope(self):
+        spec, _ = self._spec_for({"task": "x"})
+        self.assertEqual(spec["dynamic_tools"],
+                         {"enabled": True, "publish": True, "allowed_namespaces": ["dynamic"]})
+        self.assertEqual(spec["dynamic_skills"], {"enabled": True, "forge": True})
+
+    def test_adapt_false_leaves_the_workers_with_what_exists(self):
+        spec, _ = self._spec_for({"task": "x", "adapt": False})
+        self.assertNotIn("dynamic_tools", spec)
+        self.assertNotIn("dynamic_skills", spec)
+
+    def test_datasources_reach_the_delegation_loop(self):
+        spec, _ = self._spec_for({"task": "x", "datasources": ["spotify-top-tracks-csv"]})
+        self.assertEqual(spec["orchestration"]["delegation_loop"]["datasources"],
+                         ["spotify-top-tracks-csv"])
+
+    def test_a_datasource_name_with_a_path_is_refused_before_the_run(self):
+        spec, resp = self._spec_for({"task": "x", "datasources": ["../etc/passwd"]})
+        self.assertIsNone(spec)
+        self.assertIn("error", resp[-1])
+
+
 class TestBackgroundCompletionNotify(TestOrchestrationServerBase):
     """A run that outlives its wall-clock budget must not become an
     unrecoverable orphan: it must (a) register a completion_notify record so

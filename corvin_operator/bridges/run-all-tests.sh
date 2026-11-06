@@ -700,6 +700,7 @@ run "Python: corvin-compute skeleton (ADR-0013 Phase 13.1)" bash -c '
     echo "(skip: corvin-compute plugin not present)"
   fi
 ' || fails=$((fails+1))
+run "Python: corvin-compute no silent empty runs (real worker socket + forge runner, 2026-11-06)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../core/compute/tests/test_compute_silent_failure_e2e.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: corvin-compute driver+strategies (ADR-0013 Phase 13.2+3)" bash -c '
   if [ -d ../../core/compute ]; then
     if [ -x ../../core/compute/.venv/bin/python ]; then

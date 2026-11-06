@@ -80,6 +80,14 @@ class StrategyNotAllowed(WorkerError):
     pass
 
 
+class ToolNotAvailable(WorkerError):
+    """The tool is not in the registry this worker executes from (user scope)."""
+
+
+class ParamGridMismatch(WorkerError):
+    """param_grid keys do not match the tool's input_schema."""
+
+
 class BudgetExhausted(WorkerError):
     pass
 
@@ -92,6 +100,8 @@ _ERROR_CLASS_MAP: dict[type, str] = {
     UnknownHandle: "UnknownHandle",
     StrategyNotAllowed: "StrategyNotAllowed",
     BudgetExhausted: "BudgetExhausted",
+    ToolNotAvailable: "ToolNotAvailable",
+    ParamGridMismatch: "ParamGridMismatch",
     ValueError: "InvalidArgument",
     KeyError: "InvalidArgument",
     TransportError: "TransportError",
@@ -344,6 +354,28 @@ class WorkerServer:
 
     # -- ops ---------------------------------------------------------------------
 
+    def _preflight(self, tool_name: str, param_grid: Mapping[str, Any]) -> None:
+        """Refuse a run that cannot produce a single valid iteration.
+
+        Two causes made every iteration fail while the run still ended
+        "budget_exhausted" with best_loss null (measured 2026-11-06): a tool
+        that exists only in the caller's task/session scope (this worker
+        executes from the USER-scope registry) and param_grid keys that do not
+        match the tool's input_schema. The runner exposes ``preflight`` when it
+        has a registry to check against; a runner without one (tests, a
+        minimal bootstrap) is not second-guessed.
+        """
+        check = getattr(self.runner_fn, "preflight", None)
+        if check is None:
+            return
+        problem = check(tool_name, list(param_grid.keys()))
+        if problem is None:
+            return
+        kind, message = problem
+        if kind == "tool":
+            raise ToolNotAvailable(message)
+        raise ParamGridMismatch(message)
+
     async def _op_gate_action(self, params: Mapping[str, Any]) -> dict:
         """ADR-0029 — route a GateAction to the correct engine coordinator."""
         handle = params.get("compute_handle", "")
@@ -380,6 +412,10 @@ class WorkerServer:
         # ADR-0029 — dispatch non-flat engines before the flat path
         engine_name = str(params.get("engine") or "flat")
         if engine_name != "flat":
+            # Every stage runs a forge tool through the same runner: check them
+            # all before anything starts (see _preflight).
+            for _tool, _grid in _engine_stage_tools(dict(params.get("extra") or {})):
+                self._preflight(_tool, _grid)
             engine = self._extra_engines.get(engine_name)
             if engine is None:
                 raise ValueError(f"unknown engine {engine_name!r}")
@@ -406,6 +442,8 @@ class WorkerServer:
                 f"strategy {strategy_name!r} not in allowed list "
                 f"{self.strategies_allowed!r}",
             )
+
+        self._preflight(str(params["tool_name"]), dict(params["param_grid"]))
 
         budget = Budget.from_dict(params.get("budget"))
 
@@ -606,7 +644,9 @@ class WorkerServer:
             "artifact_path":      str((self.corvin_home / "tenants"
                                        / manifest.get("tenant_id", "_default")
                                        / "compute" / "runs" / run_id)),
-            "error":              None,
+            # The driver records the failure cause in the summary; a hard-coded
+            # None here hid it from every caller (MCP, console, ACS).
+            "error":              summary.get("error"),
         }
 
     # -- worker exec --------------------------------------------------------------
@@ -734,6 +774,22 @@ class WorkerServer:
                 self._notify_compute_done(run_id, str(_state or "converged"))
             except Exception:  # noqa: BLE001
                 log.exception("recovery for run_id=%s failed", run_id)
+
+
+def _engine_stage_tools(extra: Mapping[str, Any]) -> list[tuple[str, dict]]:
+    """(tool_name, param_grid) of every stage of a pipeline / HAC spec."""
+    out: list[tuple[str, dict]] = []
+
+    def _stages(items: Any) -> None:
+        for st in items or []:
+            if isinstance(st, Mapping) and st.get("tool_name"):
+                out.append((str(st["tool_name"]), dict(st.get("param_grid") or {})))
+
+    _stages(extra.get("stages"))
+    for sm in extra.get("sub_managers") or []:
+        if isinstance(sm, Mapping):
+            _stages(sm.get("stages"))
+    return out
 
 
 def _default_runner_fn(tool_name: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -320,6 +320,34 @@ Tools are only advertised when the worker socket
 discovery is cached for 5 s. First miss per process emits
 `compute.worker_unreachable` (WARNING); subsequent misses are silent.
 
+### A run that produced nothing says so (2026-11-06)
+
+Measured on a live install: a tool that existed only in the caller's task/session
+scope, a `param_grid` whose keys were not the tool's inputs, and a `loss_metric`
+missing from the tool's output each made EVERY iteration fail — and the run still
+ended `budget_exhausted` with `best_loss: null` and `error: null`, i.e. it read as
+a finished sweep. Three rules close that:
+
+- **Preflight before acceptance** (`WorkerServer._preflight`, the runner adapter's
+  `preflight` in `cli.py`): the worker executes ONLY from the tenant's USER-scope
+  forge registry, so it refuses a run whose tool is not there (`ToolNotAvailable`,
+  message names `forge_promote(name, to="user")`) and a `param_grid` that misses a
+  required input or carries a key the tool does not declare (`ParamGridMismatch`).
+  Every stage of a `pipeline` and every sub-manager stage of a `hac` submission is
+  checked the same way before the engine starts.
+- **No valid loss = `failed`** (`driver._finalise`): `convergence_reason` and
+  `error` read `all-iterations-failed: <first iteration error>`. An iteration whose
+  output lacks the metric carries `LossMetricMissing: …` instead of a bare `null`.
+  Three identical failures from the first iteration on stop the run (fail fast,
+  `FAIL_FAST_IDENTICAL_ERRORS`). `compute_result.error` returns the summary's error.
+- **A grid is exhaustive**: the stall / convergence heuristics do not cut a
+  `strategy: grid` run (`evaluate_termination(early_stop=False)`); only
+  `max_iterations` and `max_wall_clock_s` bound it. Before, a 10x10 grid stopped
+  "stalled" after 16 points and reported their best as the grid's best.
+
+Pinned by `core/compute/tests/test_compute_silent_failure_e2e.py` (real worker socket,
+real forge runner, bwrap).
+
 ### Console "compute jobs" (`routes/compute_jobs.py`) — submission is 501
 
 The ONLY ways to start compute are the MCP tools above and `POST
@@ -482,6 +510,11 @@ cache behaviour.
   would let an LLM see ghost tools that point at a stopped worker.
   Sub-second caches burn the connect syscall on every list-tools
   poll for no gain.
+- **Don't let a run with zero valid iterations end in any state but `failed`,**
+  and don't drop the preflight to "let the worker validate": an empty run that
+  reads as `budget_exhausted` is what callers (and ACS) mistook for a result.
+- **Don't re-enable stall/convergence stopping for `grid`.** Its order is
+  enumeration order; a stall says nothing about the unvisited points.
 - **Don't make `strategies_allowed` a tenant-level allowlist that
   defaults to empty.** The current default `["grid", "random",
   "bayesian"]` is the published baseline. An empty default would
@@ -987,6 +1020,18 @@ prefix, never the SQL text. Capability registry: `data.sources`.
 
 This runs in the MCP server process, not in bwrap (the compute runner path stays the bwrap one).
 The connection's role should be SELECT-only; the read-only session is the second line.
+
+**ACS honours the same residency rule (2026-11-06).** `acs_runtime._resolve_acs_datasources` used to
+embed a live PostgreSQL row snapshot in the worker prompt and hand the workers the connection env for
+a `data_residency: local` connection — the flow `datasource_query` refuses. Now a `local` connection
+yields neither: the worker gets a note that points at `compute_run` / `compute_submit` with
+`datasources=[name]` (a sandboxed tool reads the rows; only its result comes back), and
+`acs.datasource_snapshot` records `withheld_residency: true`.
+
+**Snapshot quantiles of a redacted column are cleared** (`corvin_data/redactor.py`): the sample and
+`top` were redacted while p05/p50/p95 — values from the file — came back in clear. `aggregate_only`
+keeps its stats by design. Known, fail-safe limitation: the value-pattern detector classifies 8-digit
+integers and ISO dates as `phone`, which over-redacts such columns.
 
 ### HTTP Data Bridges (status)
 

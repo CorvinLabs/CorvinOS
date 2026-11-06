@@ -322,6 +322,12 @@ def apply_redaction(
                 _redact_one(t, strategy, pii_class, seed=seed)
                 for t in st.top
             ]
+        # The quantiles are column VALUES too (p50 of a numeric phone column is
+        # a real number from the file). Redacting the sample and ``top`` while
+        # returning p05/p50/p95 verbatim leaked them (measured 2026-11-06: a
+        # column classified ``phone`` came back with its quantiles in clear).
+        # A redacted column carries no value-level statistics.
+        st.p05 = st.p50 = st.p95 = None
 
     return snapshot
 

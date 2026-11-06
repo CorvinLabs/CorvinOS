@@ -157,6 +157,45 @@ def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None 
                                     bool(getattr(result, "cache_hit", False)))
         return out
 
+    def preflight(tool_name: str, param_keys: list[str]):
+        """``None`` when a run can start, else ``(kind, message)``.
+
+        Read by ``WorkerServer._preflight`` before a run is accepted. Checks
+        the SAME registry ``adapter`` executes from, so a "yes" here means the
+        first iteration will find the tool.
+        """
+        try:
+            spec = registry.get(tool_name)
+        except Exception:  # noqa: BLE001 — a broken registry is not a verdict
+            return None
+        if spec is None:
+            return ("tool", (
+                f"tool {tool_name!r} is not in the user-scope forge registry the "
+                f"compute worker executes from ({user_root}). A tool forged in "
+                f"task or session scope is invisible here: forge it with "
+                f"scope='user' or call forge_promote(name={tool_name!r}, to='user') "
+                f"before compute_run / compute_submit."))
+        schema = spec.input_schema if isinstance(spec.input_schema, dict) else {}
+        props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        required = [r for r in (schema.get("required") or []) if isinstance(r, str)]
+        keys = list(param_keys)
+        missing = [r for r in required if r not in keys]
+        unknown = [k for k in keys if props and k not in props]
+        if missing or unknown:
+            parts = []
+            if missing:
+                parts.append(f"required input(s) {missing} are not in param_grid")
+            if unknown:
+                parts.append(f"param_grid key(s) {unknown} are not inputs of the tool")
+            return ("params", (
+                f"param_grid does not match the input_schema of {tool_name!r}: "
+                + "; ".join(parts)
+                + f". The tool takes {sorted(props) or 'no declared properties'}"
+                + (f", required {required}" if required else "")
+                + ". Each param_grid key becomes one input field of every call."))
+        return None
+
+    adapter.preflight = preflight  # type: ignore[attr-defined]
     return adapter
 
 

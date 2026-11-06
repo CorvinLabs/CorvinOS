@@ -1065,6 +1065,29 @@ def test_resolve_acs_datasources_withholds_sensitive_snapshot_with_no_key(monkey
     assert audit_call.args[2]["snapshot_taken"] is False
 
 
+def test_resolve_acs_datasources_residency_local_withholds_rows_and_env(monkeypatch):
+    """data_residency=local: rows must not reach a chat engine. The ACS path took a
+    live PG snapshot into the worker prompt AND handed the workers the connection
+    env, while datasource_query refused the same connection (2026-11-06)."""
+    monkeypatch.delenv("CORVIN_WDAT_KEY", raising=False)
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        conn_dir = home / "tenants" / "_test" / "datasource_connections"
+        _write_datasource_conn(conn_dir, "localdb", adapter="postgresql", classification="INTERNAL")
+        raw = json.loads((conn_dir / "localdb.json").read_text(encoding="utf-8"))
+        raw["data_residency"] = "local"
+        (conn_dir / "localdb.json").write_text(json.dumps(raw), encoding="utf-8")
+        with patch.object(_rt, "_corvin_home", return_value=home), \
+             patch.object(_rt, "_write_audit") as mock_audit, \
+             patch.object(_rt, "_pg_live_snapshot") as mock_snap:
+            text, env = _rt._resolve_acs_datasources("_test", ["localdb"], run_id="r1")
+    mock_snap.assert_not_called()
+    assert env == {}
+    assert "data_residency=local" in text and "compute_run" in text
+    details = mock_audit.call_args_list[0].args[2]
+    assert details["withheld_residency"] is True and details["snapshot_taken"] is False
+
+
 def test_resolve_acs_datasources_allows_live_snapshot_with_valid_key(monkeypatch):
     """Sanity counterpart: a genuinely valid 32-byte-hex key allows the live
     snapshot to proceed -- proves the gate isn't just always-deny, and that

@@ -30,7 +30,7 @@ from .budget import (
     RUN_STATE_RUNNING, RUN_STATE_FAILED, RUN_STATE_ABORTED, TERMINAL_STATES,
 )
 from .driver import (
-    AbortRequested, ComputeRun, ComputeRunSpec, RunnerFn, _resolve_loss,
+    AbortRequested, ComputeRun, ComputeRunSpec, RunnerFn, _deterministic_failure, _resolve_loss,
 )
 from .iteration import IterRecord, best_iter, now_ts, param_fingerprint
 from .state import RunRecord, RunStore, new_run_id, validate_run_id
@@ -101,6 +101,7 @@ class ParallelDriver(ComputeRun):
                     started_at=self._started_at, minimise=self.spec.minimise,
                     strategy_stop=self._strategy_should_stop(history),
                     now_fn=self.time_fn,
+                    early_stop=self.spec.strategy_name != "grid",
                 )
                 if state in TERMINAL_STATES:
                     self._terminal_state, self._terminal_reason = state, reason
@@ -134,6 +135,12 @@ class ParallelDriver(ComputeRun):
                     )
                 if self._abort:
                     raise AbortRequested()
+
+                failed_start = _deterministic_failure(history)
+                if failed_start is not None:
+                    self._terminal_state = RUN_STATE_FAILED
+                    self._terminal_reason = f"all-iterations-failed: {failed_start}"[:240]
+                    break
 
                 try:
                     self.strategy.update(history, new_results)

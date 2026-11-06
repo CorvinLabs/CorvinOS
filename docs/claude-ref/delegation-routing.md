@@ -676,4 +676,17 @@ with the real registry and sandbox, scripted LLM) and live runs with a real `cla
 (`acs-forge-live-e2e/` in the claude-playground repo). Test-fake note: a scripted `_call_worker_sync` must return a
 dict as its third value (the attestation), as the real one does; `None` makes `_run_one` die after the call.
 
+**Chat `acs_delegate` turns it on (2026-11-06).** The orchestration MCP tool built its spec without these keys,
+so a chat-delegated run could never forge. It now sets `dynamic_tools: {enabled: true, publish: true,
+allowed_namespaces: [dynamic]}` and `dynamic_skills: {enabled: true, forge: true}` unless the caller passes
+`adapt: false`, and passes `datasources: [...]` (DSI connection names, validated, max 8) to
+`delegation_loop.datasources`. Live proof: run `acs-1793999425-7ca9ea05` forged and published
+`dynamic.spotify_holt_mape` and forged `acs.spotify_forecast_scoring` (`acs.tool_forged`, `acs.tool_published`,
+`acs.skill_forged persisted=true`); the published tool then ran grid, Bayesian, pipeline and HAC sweeps.
+Pinned by `TestAcsDelegateAdaptation` in `core/orchestration/tests/test_mcp_server.py`.
+
+Known gap: a persisted `acs.<name>` skill lands with zero grades, and the persona namespace gate refuses a
+grade from the `assistant` persona (`skill_grade` → `namespace-gate`), so such a skill never passes the
+injection grade gate in a later run. It works inside its own run (run-local).
+
 → ADR: `corvin_decisions/decisions/ADR-2279-acs-forges-tools-and-skills-at-run-time-and-publishes-vetted.md`

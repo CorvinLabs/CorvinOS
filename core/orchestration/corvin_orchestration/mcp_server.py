@@ -898,6 +898,8 @@ try:
 except ImportError:
     _ACS_AVAILABLE = False
 
+_DS_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
 _ACS_DELEGATE_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -922,6 +924,25 @@ _ACS_DELEGATE_SCHEMA: dict = {
         "budget_s": {
             "type": "integer", "minimum": 30, "maximum": 600,
             "description": "Wall-clock watchdog in seconds (separate from the compute budget). Clamped [30,600], default 180.",
+        },
+        "adapt": {
+            "type": "boolean",
+            "description": (
+                "Runtime forging, default true: the manager may forge sandboxed, self-tested "
+                "tools (namespace 'dynamic.', published to the user-scope Tool Forge so "
+                "compute_run / compute_submit can sweep them afterwards) and SkillForge "
+                "skills (lint-gated, 'acs.<name>') when the task needs a capability the "
+                "workers lack. false = workers use only what exists."
+            ),
+        },
+        "datasources": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+            "maxItems": 8,
+            "description": (
+                "Registered DSI connection names (Data Sources) the run may read. Each is "
+                "resolved fail-closed; an unknown name fails the run."
+            ),
         },
     },
     "required": ["task"],
@@ -1580,6 +1601,17 @@ class OrchestrationServer:
         # run_acs_workflow() as its own kwarg below (which merges it over
         # spec.orchestration.delegation_loop.budget) — NOT embedded into the
         # spec here too, so there is exactly one source of truth for it.
+        adapt = args.get("adapt", True) is not False
+        datasources = args.get("datasources") or []
+        if not (isinstance(datasources, list)
+                and all(isinstance(d, str) and _DS_NAME_RE.fullmatch(d) for d in datasources)
+                and len(datasources) <= 8):
+            self._error(msgid, INVALID_PARAMS,
+                        "datasources must be a list of at most 8 connection names")
+            return
+        delegation_loop: dict = {}
+        if datasources:
+            delegation_loop["datasources"] = list(datasources)
         spec = {
             "awp": "1.0.0",
             "workflow": {
@@ -1589,10 +1621,22 @@ class OrchestrationServer:
             },
             "orchestration": {
                 "engine": "delegation_loop",
-                "delegation_loop": {},
+                "delegation_loop": delegation_loop,
             },
             "state": {"initial": {"task": task}},
         }
+        # A chat-delegated run used to be built without `dynamic_tools` /
+        # `dynamic_skills`, so the ACS runtime forge (acs_forge.RunForge: static
+        # check, bwrap self-test, licence gate, audit) was unreachable from chat
+        # and a manager facing a capability gap could only fail. On by default
+        # (operator directive 2026-11-06: ACS adapts with the native Tool Forge
+        # and SkillForge). `publish` registers a self-tested tool in the
+        # tenant's user-scope Forge — the only registry the compute worker
+        # reads — and never overwrites an existing tool.
+        if adapt:
+            spec["dynamic_tools"] = {"enabled": True, "publish": True,
+                                     "allowed_namespaces": ["dynamic"]}
+            spec["dynamic_skills"] = {"enabled": True, "forge": True}
 
         # F7 (re-audit 2026-07-22): budget_s bounds only THIS watchdog call —
         # on timeout _run_with_budget detaches and returns, but the delegation
