@@ -218,7 +218,12 @@ class HealthCollector:
     async def _loop(self) -> None:
         assert self._stop is not None
         while not self._stop.is_set():
-            self.poll_once()
+            # Off the event loop: poll_once() calls every plugin's health_check under a
+            # 2 s deadline (a thread the caller WAITS on) and writes audit events — run
+            # inline it held the loop for up to 2 s per plugin per poll
+            # (loop-stall.log 2026-11-07: health._loop → poll_once → health_check_all
+            # → emit → audit_event). The caller still awaits the result; order unchanged.
+            await asyncio.to_thread(self.poll_once)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self.interval_s)
             except asyncio.TimeoutError:

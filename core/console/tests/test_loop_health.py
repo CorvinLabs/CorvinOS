@@ -184,3 +184,66 @@ def test_install_is_inert_under_pytest():
 
     asyncio.run(main())
     assert lh._watchdog is None
+
+
+# ── both hosts wire it; the thread dump; the external watchdog's policy ──────
+
+_REPO = __import__("pathlib").Path(__file__).resolve().parents[3]
+
+
+def _lifespan_source(rel: str) -> str:
+    return (_REPO / rel).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("host", [
+    "core/gateway/corvin_gateway/app.py",        # corvin-webui.service (the live Linux host)
+    "core/console/corvin_console/standalone.py",  # corvinos-serve
+])
+def test_both_shipped_hosts_wire_loop_health_in_their_lifespan(host):
+    """Until 2026-11-07 only standalone did; the live gateway host ran with anyio's 10 s
+    worker lifetime, no pre-warm and no stall log while its watchdog restarted it."""
+    src = _lifespan_source(host)
+    early = src.index("_loop_health.install_early()")
+    serving = src.index("await _loop_health.install_serving(")
+    assert early < serving
+    # install_serving sits right before the lifespan yields, so boot + pre-warm are
+    # never reported as a stall
+    body = src[serving:]
+    assert body.index("yield") < body.index("stop_watchdog()")
+
+
+def test_thread_dump_signal_registers_sigusr2_for_all_threads(monkeypatch):
+    if sys.platform == "win32":
+        pytest.skip("POSIX only")
+    import faulthandler
+    import signal
+    calls: list = []
+    monkeypatch.setattr(faulthandler, "register",
+                        lambda sig, **kw: calls.append((sig, kw)))
+    monkeypatch.setattr(lh, "_thread_dump_installed", False)
+    assert lh.install_thread_dump_signal() is True
+    # chain=False is load-bearing: chain=True re-raises into SIG_DFL = terminate after the dump
+    assert calls == [(signal.SIGUSR2, {"file": sys.stderr, "all_threads": True, "chain": False})]
+    # idempotent: a second install registers nothing
+    assert lh.install_thread_dump_signal() is True
+    assert len(calls) == 1
+
+
+def test_thread_dump_signal_is_a_noop_on_windows(monkeypatch):
+    import faulthandler
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(lh, "_thread_dump_installed", False)
+    monkeypatch.setattr(faulthandler, "register",
+                        lambda *a, **kw: pytest.fail("must not register on Windows"),
+                        raising=False)
+    assert lh.install_thread_dump_signal() is False
+
+
+def test_systemd_watchdog_gives_a_listening_console_30s_to_answer():
+    """scripts/setup.sh writes corvin-watchdog.service. With `-m 5` a console whose loop
+    stalled 5-7 s failed three probes while still serving every request, and was
+    restarted ten times in an hour (2026-11-07). Not listening is still caught in 5 s."""
+    src = _lifespan_source("scripts/setup.sh")
+    exec_line = next(l for l in src.splitlines() if l.startswith("ExecStart=") and "healthz" in l)
+    assert "curl -fs --connect-timeout 5 -m 30 http://127.0.0.1:8765/v1/console/healthz" in exec_line
+    assert "curl -fs -m 5 " not in src

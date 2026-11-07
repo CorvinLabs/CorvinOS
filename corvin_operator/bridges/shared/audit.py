@@ -70,18 +70,38 @@ except Exception:  # pragma: no cover - fail-closed: absent capability blocks sp
     pass
 
 
+#: The sibling ``paths.py`` is executed ONCE per process. Both loaders below used to
+#: ``exec_module`` it on EVERY call — and ``audit_path()`` calls one of them on every
+#: audit event, so every chain write re-ran a module import. On the loop thread
+#: (plugin health poll, skill-registry audit) that showed up as 2+ s event-loop stalls
+#: under GIL contention (loop-stall.log, 2026-11-07). The functions it exports read
+#: ``CORVIN_HOME``/``CORVIN_TENANT_ID`` at call time, so caching the module changes
+#: nothing a caller can observe.
+_paths_module_cache: Any = None
+
+
+def _paths_module():
+    global _paths_module_cache
+    if _paths_module_cache is not None:
+        return _paths_module_cache
+    _audit_dir = Path(__file__).resolve().parent
+    _local_paths_file = _audit_dir / "paths.py"
+    spec = importlib.util.spec_from_file_location("_paths_audit", _local_paths_file)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load spec from {_local_paths_file}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _paths_module_cache = mod
+    return mod
+
+
 def _load_corvin_home():
     """Load ``corvin_home`` from the sibling ``paths.py`` by file path (avoids
-    the sys.path collision with ``operator/forge/paths.py``)."""
+    the sys.path collision with ``operator/forge/paths.py``). Cached per process."""
     _audit_dir = Path(__file__).resolve().parent
     _local_paths_file = _audit_dir / "paths.py"
     try:
-        spec = importlib.util.spec_from_file_location("_paths_audit", _local_paths_file)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load spec from {_local_paths_file}")
-        _paths_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_paths_module)
-        return _paths_module.corvin_home  # type: ignore
+        return _paths_module().corvin_home  # type: ignore
     except (ImportError, FileNotFoundError, AttributeError) as e:
         raise RuntimeError(
             f"Cannot load corvin_home from paths.py at {_local_paths_file}. "
@@ -97,15 +117,11 @@ def corvin_root() -> Path:
 
 def _load_tenant_audit_chain():
     """Load ``tenant_audit_chain`` from the sibling ``paths.py`` (same file-path
-    trick ``_load_corvin_home`` uses, for the same sys.path reason)."""
-    _audit_dir = Path(__file__).resolve().parent
-    _local_paths_file = _audit_dir / "paths.py"
-    spec = importlib.util.spec_from_file_location("_paths_audit", _local_paths_file)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load spec from {_local_paths_file}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.tenant_audit_chain  # type: ignore[attr-defined]
+    trick ``_load_corvin_home`` uses, for the same sys.path reason). Cached per process."""
+    try:
+        return _paths_module().tenant_audit_chain  # type: ignore[attr-defined]
+    except ImportError as e:
+        raise RuntimeError(str(e)) from e
 
 
 def default_audit_path() -> Path:

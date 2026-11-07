@@ -324,6 +324,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ``app.state.dispatcher`` themselves; this lifespan honours
     # an existing dispatcher and only constructs a default when
     # none is present.
+    # Loop health FIRST (docs/claude-ref/console-loop-health.md): never-retired anyio
+    # workers, pre-warmed thread pools, the loop-lag watchdog that writes
+    # <CORVIN_HOME>/logs/loop-stall.log, and the SIGUSR2 thread dump. The module was
+    # wired into corvin_console.standalone only; THIS host — what corvin-webui.service
+    # runs — had none of it, so the live install stalled with no stall log and the
+    # systemd watchdog restarted it on every slow patch (2026-11-07). Best-effort:
+    # a gateway without the console package simply runs without it.
+    _loop_health = None
+    try:
+        import corvin_console  # noqa: F401 — sys.path bootstrap side effect
+        from corvin_console import loop_health as _loop_health
+    except Exception:  # noqa: BLE001 — console-less gateway host
+        _loop_health = None
+    if _loop_health is not None:
+        _loop_health.install_early()
+
     # Activate the installed license in THIS process. The adapter loads it at
     # boot (adapter.py), but the gateway/console process did not — so a valid
     # <corvin_home>/global/license.key (or CORVIN_LICENSE_KEY) was ignored and
@@ -674,6 +690,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "KPI collector daemon failed to start (non-fatal)", exc_info=True
         )
 
+    # Pre-warm + loop-lag watchdog right before serving, so neither the boot nor the
+    # warm-up is reported as a stall (same placement as standalone._lifespan).
+    if _loop_health is not None:
+        await _loop_health.install_serving(app.state)
+
     try:
         yield
         # Data Hub learning loop: persist state + release the per-tenant lease (review DH-6).
@@ -684,6 +705,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 - shutdown must not raise
             pass
     finally:
+        if _loop_health is not None:
+            _loop_health.stop_watchdog()
+            _lh_task = getattr(app.state, "loop_health_task", None)
+            if _lh_task is not None:
+                _lh_task.cancel()
         # Live chat turns first, while the loop is alive: uvicorn re-raises the
         # SIGTERM after this lifespan returns, so a turn still pending then is
         # killed without its finaliser (chat_runtime.shutdown_live_turns).

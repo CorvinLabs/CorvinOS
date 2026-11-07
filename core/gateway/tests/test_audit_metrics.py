@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -493,3 +494,93 @@ class SnapshotHelperTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Incremental all-time projection (2026-11-07) ─────────────────────
+
+
+class IncrementalAllTimeTests(unittest.TestCase):
+    """``aggregate(since=None)`` projects only the bytes appended since its last
+    call. The KPI collector calls it every 15 s; a full re-parse of the live 500 MB
+    chain took 7–10 s per pass and stalled the console's event loop for the whole of
+    it (/healthz 7–10 s every ~26 s → ten watchdog restarts in one hour)."""
+
+    def test_second_pass_parses_only_the_appended_lines(self):
+        with sandbox(("acme",)) as home:
+            _write(home, "acme", "tool.created", persona="coder")
+            snap1 = audit_metrics.aggregate("acme")
+            self.assertEqual(snap1.events_read, 1)
+            path = _chain(home, "acme")
+            cur = audit_metrics._cursors[str(path)]
+            self.assertEqual(cur.offset, path.stat().st_size)
+            # nothing appended → nothing projected (and the walker is never entered)
+            with patch.object(audit_metrics, "_project_appended",
+                              side_effect=AssertionError("re-walked an unchanged chain")):
+                snap_same = audit_metrics.aggregate("acme")
+            self.assertEqual(snap_same.events_read, 1)
+            _write(home, "acme", "tool.created", persona="coder")
+            _write(home, "acme", "tool.created", persona="forge")
+            snap2 = audit_metrics.aggregate("acme")
+            self.assertEqual(snap2.events_read, 3)
+            self.assertEqual(cur.offset, path.stat().st_size)
+            body = audit_metrics.render_prometheus(snap2)
+            self.assertIn('corvin_forge_tools_created_total{persona="coder"} 2', body)
+            self.assertIn('corvin_forge_tools_created_total{persona="forge"} 1', body)
+
+    def test_returned_snapshot_is_a_copy_not_the_cursor(self):
+        with sandbox(("acme",)) as home:
+            _write(home, "acme", "tool.created", persona="coder")
+            snap1 = audit_metrics.aggregate("acme")
+            _write(home, "acme", "tool.created", persona="coder")
+            audit_metrics.aggregate("acme")
+            self.assertEqual(snap1.events_read, 1, "an earlier snapshot must not grow")
+
+    def test_partial_trailing_line_waits_for_the_writer(self):
+        with sandbox(("acme",)) as home:
+            _write(home, "acme", "tool.created", persona="coder")
+            path = _chain(home, "acme")
+            with path.open("ab") as fh:
+                fh.write(b'{"event_type": "tool.created", "details": {"persona": "forge"}')  # no newline yet
+            snap = audit_metrics.aggregate("acme")
+            self.assertEqual(snap.events_read, 1)
+            cur = audit_metrics._cursors[str(path)]
+            self.assertLess(cur.offset, path.stat().st_size)
+            with path.open("ab") as fh:
+                fh.write(b', "ts": 1.0}\n')
+            snap = audit_metrics.aggregate("acme")
+            self.assertEqual(snap.events_read, 2)
+
+    def test_replaced_or_truncated_chain_starts_over(self):
+        with sandbox(("acme",)) as home:
+            for _ in range(3):
+                _write(home, "acme", "tool.created", persona="coder")
+            self.assertEqual(audit_metrics.aggregate("acme").events_read, 3)
+            path = _chain(home, "acme")
+            lines = path.read_text(encoding="utf-8").splitlines()
+            path.write_text(lines[0] + "\n", encoding="utf-8")   # truncated
+            self.assertEqual(audit_metrics.aggregate("acme").events_read, 1)
+            path.unlink()
+            _write(home, "acme", "tool.created", persona="forge")  # new inode
+            snap = audit_metrics.aggregate("acme")
+            self.assertEqual(snap.events_read, 1)
+            self.assertIn('persona="forge"} 1', audit_metrics.render_prometheus(snap))
+
+    def test_windowed_scrape_is_unchanged_one_shot(self):
+        with sandbox(("acme",)) as home:
+            _write(home, "acme", "tool.created", persona="coder", ts=100.0)
+            _write(home, "acme", "tool.created", persona="coder", ts=200.0)
+            snap = audit_metrics.aggregate("acme", since=150.0)
+            self.assertEqual(snap.events_read, 1)
+            self.assertNotIn(str(_chain(home, "acme")), audit_metrics._cursors)
+
+    def test_walk_yields_the_gil_periodically(self):
+        with sandbox(("acme",)) as home:
+            path = _chain(home, "acme")
+            with path.open("w", encoding="utf-8") as fh:
+                for i in range(audit_metrics.PACE_EVERY_LINES * 2 + 5):
+                    fh.write(json.dumps({"event_type": "tool.created", "ts": float(i),
+                                         "details": {"persona": "coder"}}) + "\n")
+            with patch.object(audit_metrics.time, "sleep") as slp:
+                audit_metrics.aggregate("acme")
+            self.assertEqual(slp.call_count, 2)
+            slp.assert_called_with(0)

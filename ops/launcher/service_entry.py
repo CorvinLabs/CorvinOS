@@ -54,9 +54,18 @@ def _webui_command() -> str:
     # this string (shlex.split / systemd ExecStart) — an unquoted
     # "C:\Users\John Doe\...\python.exe" tears at the space and the always-on
     # service can never start (same M1/WA-5 class already fixed in core.py).
+    # --timeout-graceful-shutdown: uvicorn otherwise waits for EVERY open connection
+    # to close before it stops — and the console's chat WebSockets stay open as long
+    # as a tab is open, so every `systemctl restart` sat in "Waiting for connections
+    # to close" for the unit's full TimeoutStopSec (90 s) and ended in SIGKILL, the
+    # lifespan's own shutdown (live-turn finalisers, the shutdown timestamp for turn
+    # recovery) never ran, and the console was unreachable for the whole wait
+    # (2026-11-07, three restarts in a row). 15 s is long enough for an in-flight
+    # HTTP response; a WebSocket is closed with 1012 and the browser reconnects.
     return (
         f'"{sys.executable}" -m uvicorn corvin_gateway.app:app '
-        f"--host {_webui_bind_host()} --port 8765 --log-level info"
+        f"--host {_webui_bind_host()} --port 8765 --log-level info "
+        f"--timeout-graceful-shutdown 15"
     )
 
 

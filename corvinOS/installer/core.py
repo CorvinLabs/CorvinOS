@@ -583,9 +583,12 @@ class CorvinInstaller:
             # space (e.g. C:\Users\John Doe\...\python.exe) survives as ONE token
             # when the service managers re-tokenize this command
             # (shlex.split(..., posix=False)); an unquoted path tears at the space.
+            # --timeout-graceful-shutdown 15: see ops/launcher/service_entry.py::_webui_command
+            # (open chat WebSockets otherwise hold every restart for TimeoutStopSec).
             webui_cmd = (
                 f'"{sys.executable}" -m uvicorn corvin_gateway.app:app'
                 f" --host {self._webui_bind_host()} --port 8765 --log-level info"
+                f" --timeout-graceful-shutdown 15"
             )
             # WA-19: a plain two-token command needs no shell quoting (unlike
             # inlining `python -c "..."` directly into a systemd unit / launchd

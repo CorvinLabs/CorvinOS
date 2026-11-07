@@ -364,3 +364,31 @@ class TestExpositionValidity(_Base):
         body = hm.render_prometheus()
         for name, mtype, _help in hm._FAMILIES:
             self.assertIn(f"# TYPE {name} {mtype}", body)
+
+
+class LoopStaysFreeTests(_Base):
+    """The poll runs OFF the event loop (loop-stall.log 2026-11-07: ``health._loop →
+    poll_once → health_check_all → emit → audit_event`` held the console's loop for
+    2+ s per poll; each plugin's health_check is a 2 s-deadline thread the caller
+    waits on, plus a chain write)."""
+
+    def test_loop_polls_on_a_worker_thread_not_the_event_loop(self):
+        import threading
+        seen: list[int] = []
+        loop_ident: list[int] = []
+
+        def _poll():
+            seen.append(threading.get_ident())
+            self.collector._stop.set()
+            return self.collector._snapshot
+
+        self.collector.poll_once = _poll  # type: ignore[method-assign]
+
+        async def _run():
+            loop_ident.append(threading.get_ident())
+            self.collector._stop = asyncio.Event()
+            await asyncio.wait_for(self.collector._loop(), timeout=5)
+
+        asyncio.run(_run())
+        self.assertEqual(len(seen), 1)
+        self.assertNotEqual(seen[0], loop_ident[0])

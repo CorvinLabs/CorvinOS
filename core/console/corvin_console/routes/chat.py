@@ -616,17 +616,19 @@ async def chat_stream(
     # Manual auth check — FastAPI dependencies don't run for WebSocket
     # without a custom dependency-wrapper; doing it inline keeps the
     # control flow obvious.
-    if not corvin_console_sid:
-        await websocket.close(code=4401)
-        return
-    rec = session_auth.load_session(corvin_console_sid)
-    if rec is None:
-        await websocket.close(code=4401)
-        return
-
-    sess = chat_runtime.get_session(rec.tenant_id, sid)
-    if sess is None:
-        await websocket.close(code=4404)
+    #
+    # ACCEPT, then close with the code. A close() BEFORE accept() is sent as an
+    # HTTP 403 on the handshake, and the browser reports that as close code 1006
+    # — never 4401/4404 — so the frontend's "Session expired" / "Chat session not
+    # found" branches (chat-registry.ts) were unreachable and it retried every
+    # 30 s forever: a chat removed by the 50-per-tenant cap kept a tab in
+    # "reconnecting" for 1.5 h on 2026-11-07 (52 handshakes answered 403).
+    # Nothing but the close frame is sent on these paths.
+    rec = session_auth.load_session(corvin_console_sid) if corvin_console_sid else None
+    sess = chat_runtime.get_session(rec.tenant_id, sid) if rec is not None else None
+    if rec is None or sess is None:
+        await websocket.accept()
+        await websocket.close(code=4401 if rec is None else 4404)
         return
 
     await websocket.accept()

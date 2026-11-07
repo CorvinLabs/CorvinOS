@@ -96,8 +96,14 @@ Type=simple
 # reset-failed above turned a crash loop (a broken import) into 8 boot
 # attempts every ~80 s forever, invisible as such in `systemctl status`
 # (fresh-system review 2026-10-21, round 2). A healthy probe resets the count.
+# Slow is not dead: --connect-timeout 5 catches a console that is not listening at
+# once, -m 30 gives a listening one 30 s to answer. With -m 5 a console whose event
+# loop stalled 5-7 s (GC on a multi-GB heap, a chain scan) failed three probes while
+# every request it got was eventually served, and the watchdog restarted it ten
+# times in one hour; each restart dropped every chat WebSocket and cost minutes of
+# boot at 100 % CPU (2026-11-07). Only no answer at all for ~90 s is a wedge.
 # NO User=: in a --user unit it fails every start with 216/GROUP.
-ExecStart=/bin/bash -c 'f=0; r=0; while true; do if curl -fs -m 5 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || kill -0 "$$(cat "$${TMPDIR:-/tmp}/corvinos-setup.lock/pid" 2>/dev/null || echo none)" 2>/dev/null; then f=0; r=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then r=$$((r+1)); if [ "$$r" -gt 3 ]; then echo "<3>watchdog: console still down after 3 restarts - a crash loop? read: journalctl --user -u corvin-webui -n 100 - next attempt in 30 min"; sleep 1740; fi; echo "<4>watchdog: console unhealthy for 3 probes - restarting it (attempt $$r)"; systemctl --user reset-failed corvin-webui.service 2>/dev/null; systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
+ExecStart=/bin/bash -c 'f=0; r=0; while true; do if curl -fs --connect-timeout 5 -m 30 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || kill -0 "$$(cat "$${TMPDIR:-/tmp}/corvinos-setup.lock/pid" 2>/dev/null || echo none)" 2>/dev/null; then f=0; r=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then r=$$((r+1)); if [ "$$r" -gt 3 ]; then echo "<3>watchdog: console still down after 3 restarts - a crash loop? read: journalctl --user -u corvin-webui -n 100 - next attempt in 30 min"; sleep 1740; fi; echo "<4>watchdog: console unhealthy for 3 probes - restarting it (attempt $$r)"; systemctl --user reset-failed corvin-webui.service 2>/dev/null; systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
 Restart=always
 RestartSec=10
 StandardOutput=journal

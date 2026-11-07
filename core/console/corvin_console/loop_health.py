@@ -25,7 +25,17 @@ This module, wired from the console lifespan:
   rate-limited and size-capped;
 * ``host_saturated`` — asked ONLY by optional background work (the KB projector's
   cadence, starting a new SkillForge fork). Audit, tripwires, the integrity scan, the
-  learning brake (anomaly monitor) and canary rollback never ask it.
+  learning brake (anomaly monitor) and canary rollback never ask it;
+* ``install_thread_dump_signal`` — ``kill -USR2 <pid>`` writes EVERY thread's stack (code
+  locations only) to stderr, i.e. the journal. ``py-spy dump`` needs ptrace, which
+  ``kernel.yama.ptrace_scope=1`` denies a non-ancestor process without sudo — measured
+  2026-11-07 on the Linux install while the console stalled 2–7 s every ~20 s and the
+  systemd watchdog restarted it ten times in an hour. POSIX only; a no-op on Windows.
+
+Both shipped hosts wire this module: ``corvin_console.standalone`` (``corvinos-serve``) and
+``corvin_gateway.app`` (``corvin-webui.service``). Until 2026-11-07 only the standalone
+host did, so the live Linux install ran with anyio's 10 s worker lifetime, no pre-warm and
+no stall log.
 
 Performance only: nothing here changes audit ordering or any fail-closed decision, and
 every step is best-effort (a failure is logged and boot continues).
@@ -34,9 +44,12 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import faulthandler
+import gc
 import logging
 import os
 import sys
+import signal
 import threading
 import time
 import traceback
@@ -350,6 +363,82 @@ def stop_watchdog(join_s: float = 0.0) -> None:
         t.join(join_s)
 
 
+# ── GC pause log ────────────────────────────────────────────────────────────
+
+#: a cyclic-GC pass longer than this is logged (every thread stops for its duration)
+GC_PAUSE_LOG_S = 0.5
+_gc_started_at: dict[int, float] = {}
+_gc_log_installed = False
+
+
+def _gc_callback(phase: str, info: dict) -> None:
+    gen = info.get("generation", -1)
+    if phase == "start":
+        _gc_started_at[gen] = time.perf_counter()
+        return
+    t0 = _gc_started_at.pop(gen, None)
+    if t0 is None:
+        return
+    took = time.perf_counter() - t0
+    if took >= GC_PAUSE_LOG_S:
+        log.warning("gc: generation %d collection paused the process for %.2fs "
+                    "(collected %s, uncollectable %s, tracked objects now %s)",
+                    gen, took, info.get("collected"), info.get("uncollectable"),
+                    sum(gc.get_count()))
+
+
+def install_gc_pause_log() -> bool:
+    """Log every cyclic-GC pass over ``GC_PAUSE_LOG_S``.
+
+    A full (generation 2) collection walks every tracked container object and holds
+    the GIL throughout: on a multi-GB heap it takes seconds, during which the event
+    loop AND every worker thread stand still — a stall no thread stack can name, because
+    the loop thread's frame is wherever the allocation that triggered it happened to be.
+    The callback costs two ``perf_counter`` calls per pass."""
+    global _gc_log_installed
+    if _gc_log_installed:
+        return True
+    try:
+        gc.callbacks.append(_gc_callback)
+    except Exception:  # noqa: BLE001
+        log.warning("loop health: could not install the gc pause log", exc_info=True)
+        return False
+    _gc_log_installed = True
+    return True
+
+
+# ── thread dump on demand ───────────────────────────────────────────────────
+
+_thread_dump_installed = False
+
+
+def install_thread_dump_signal() -> bool:
+    """``kill -USR2 <pid>`` dumps every thread's stack to stderr (the journal).
+
+    ``faulthandler`` writes from the signal handler in C — it works while the GIL is
+    held by a busy thread or the loop is stalled, exactly when ``py-spy`` is wanted and,
+    on a host with ``kernel.yama.ptrace_scope=1``, refused without sudo. Code locations
+    only, never locals or request data. POSIX only (``faulthandler.register`` and
+    ``SIGUSR2`` do not exist on Windows): there it returns False and nothing changes."""
+    global _thread_dump_installed
+    if _thread_dump_installed:
+        return True
+    sig = getattr(signal, "SIGUSR2", None)
+    if sys.platform == "win32" or sig is None or not hasattr(faulthandler, "register"):
+        return False
+    # chain=False: with chain=True faulthandler restores the PREVIOUS disposition and
+    # re-raises the signal after the dump — and the previous disposition of SIGUSR2 is
+    # SIG_DFL, i.e. terminate. Measured 2026-11-07: the first dump was written and the
+    # console died with status=12/USR2 right after it.
+    try:
+        faulthandler.register(sig, file=sys.stderr, all_threads=True, chain=False)
+    except (AttributeError, ValueError, OSError, RuntimeError):
+        log.warning("loop health: could not install the SIGUSR2 thread dump", exc_info=True)
+        return False
+    _thread_dump_installed = True
+    return True
+
+
 # ── lifespan wiring ─────────────────────────────────────────────────────────
 
 def _under_pytest() -> bool:
@@ -367,6 +456,10 @@ def install_early() -> None:
         tune_worker_threads()
         if raise_process_priority():
             log.info("loop health: process priority ABOVE_NORMAL")
+        if install_thread_dump_signal():
+            log.info("loop health: kill -USR2 %d dumps every thread's stack to the journal",
+                     os.getpid())
+        install_gc_pause_log()
     except Exception:  # noqa: BLE001
         log.warning("loop health: early install failed (console continues)", exc_info=True)
 

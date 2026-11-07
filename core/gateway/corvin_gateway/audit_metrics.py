@@ -36,6 +36,7 @@ would explode cardinality.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -44,7 +45,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections import OrderedDict
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any, Iterable, Iterator
 
 # Forge subpackage hosts the tenant-path resolvers; same sys.path
@@ -405,6 +406,12 @@ def _audit_path(tenant_id: str) -> Path:
     return _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
 
 
+#: Every this many parsed lines a chain walk yields the GIL (``time.sleep(0)``) so
+#: the event loop in the same process keeps serving. Measured 2026-11-07 on a 500 MB
+#: chain: without it one walk starved the loop for 7–10 s (healthz 6.7 s, then 6 ms).
+PACE_EVERY_LINES = 2000
+
+
 def _iter_events(
     path: Path,
     *,
@@ -415,11 +422,18 @@ def _iter_events(
     Malformed lines are silently skipped — they're already surfaced by
     ``verify_chain`` (Phase 6.2 emits ``corvin_audit_chain_intact = 0``
     in that case). We don't fail the whole scrape on a single bad line.
+
+    A full walk; ``aggregate(since=None)`` does not use it any more (see
+    :func:`_aggregate_all_time`), only the windowed ``since=`` scrapes do.
     """
     if not path.exists():
         return
+    n = 0
     with path.open("r", encoding="utf-8") as fh:
         for line in fh:
+            n += 1
+            if n % PACE_EVERY_LINES == 0:
+                time.sleep(0)
             line = line.strip()
             if not line:
                 continue
@@ -433,6 +447,130 @@ def _iter_events(
             yield rec
 
 
+# ── Incremental all-time projection ─────────────────────────────────
+#
+# The chain is append-only, so the all-time snapshot of the first N bytes never
+# changes: keep it, and on the next pass project only the bytes appended since.
+# Until 2026-11-07 ``aggregate(since=None)`` re-parsed the WHOLE chain on every
+# call — and the KPI collector daemon calls it every 15 s to warm the cache. On
+# the live install (500 MB, ~1.5 M records) each pass took 7–10 s of GIL-heavy
+# JSON parsing plus a full ``verify_chain`` walk, the event loop stalled for the
+# whole pass, /healthz took 7–10 s every ~26 s, and the systemd watchdog
+# restarted the console ten times in one hour.
+
+
+#: bytes of the chain's head kept as its fingerprint (the genesis record)
+_HEAD_FP_BYTES = 512
+
+
+@dataclass
+class _ChainCursor:
+    inode: int
+    head: bytes                      # first _HEAD_FP_BYTES bytes when the cursor was made
+    offset: int                      # bytes of the chain already projected
+    snap: _Snapshot
+    run_open_ts: dict[str, float]    # open-run tracker carried across passes
+
+
+def _head_bytes(path: Path) -> bytes:
+    with path.open("rb") as fh:
+        return fh.read(_HEAD_FP_BYTES)
+
+
+_cursors: dict[str, _ChainCursor] = {}
+_cursors_lock = RLock()
+
+
+def _new_snapshot() -> _Snapshot:
+    snap = _Snapshot()
+    snap.histogram("corvin_gateway_run_duration_seconds", _DURATION_BUCKETS_S)
+    return snap
+
+
+def _project_appended(path: Path, cur: _ChainCursor) -> None:
+    """Project the lines appended after ``cur.offset`` into ``cur`` and advance it.
+
+    Whole lines only: a line the writer is still appending (no trailing newline)
+    is left for the next pass, so a half-written record is never parsed as
+    malformed and then skipped forever."""
+    with path.open("rb") as fh:
+        fh.seek(cur.offset)
+        consumed = 0
+        n = 0
+
+        def _events() -> Iterator[dict[str, Any]]:
+            nonlocal consumed, n
+            for raw in fh:
+                if not raw.endswith(b"\n"):
+                    break
+                consumed += len(raw)
+                n += 1
+                if n % PACE_EVERY_LINES == 0:
+                    time.sleep(0)
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:  # JSONDecodeError and UnicodeDecodeError
+                    continue
+                if isinstance(rec, dict):
+                    yield rec
+
+        _project(_events(), snap=cur.snap, run_open_ts=cur.run_open_ts)
+    cur.offset += consumed
+
+
+def _aggregate_all_time(path: Path) -> _Snapshot:
+    """All-time snapshot of ``path``, projecting only what was appended since the
+    last call. A replaced (other inode) or truncated chain starts over."""
+    key = str(path)
+    try:
+        st = path.stat()
+    except OSError:
+        with _cursors_lock:
+            _cursors.pop(key, None)
+        return _new_snapshot()
+    with _cursors_lock:
+        cur = _cursors.get(key)
+        if cur is not None:
+            # Same inode is not the same chain: a file replaced within one pass can
+            # reuse the inode number. The head (genesis record) must still match too,
+            # as far as it was known when the cursor was made.
+            try:
+                head = _head_bytes(path)
+            except OSError:
+                head = b""
+            known = min(len(cur.head), len(head))
+            if (cur.inode != st.st_ino or st.st_size < cur.offset
+                    or head[:known] != cur.head[:known]):
+                cur = None
+        if cur is None:
+            try:
+                head = _head_bytes(path)
+            except OSError:
+                head = b""
+            cur = _ChainCursor(inode=st.st_ino, head=head, offset=0,
+                               snap=_new_snapshot(), run_open_ts={})
+            _cursors[key] = cur
+        elif len(cur.head) < _HEAD_FP_BYTES and st.st_size > len(cur.head):
+            # the head grew to its full fingerprint length — pin it now
+            try:
+                cur.head = _head_bytes(path)
+            except OSError:
+                pass
+        if st.st_size > cur.offset:
+            _project_appended(path, cur)
+        # A copy: the cursor's snapshot keeps growing; the caller's must not.
+        return copy.deepcopy(cur.snap)
+
+
+def reset_cursors() -> None:
+    """Forget every incremental cursor (tests; operator request via clear_cache)."""
+    with _cursors_lock:
+        _cursors.clear()
+
+
 # ── Event projection ────────────────────────────────────────────────
 
 
@@ -441,13 +579,20 @@ def _iter_events(
 # nothing persists across aggregator passes.
 
 
-def _project(events: Iterable[dict[str, Any]]) -> _Snapshot:
-    """Walk every event and project it onto the metric families."""
-    snap = _Snapshot()
-    snap.histogram(
-        "corvin_gateway_run_duration_seconds", _DURATION_BUCKETS_S,
-    )
-    run_open_ts: dict[str, float] = {}
+def _project(
+    events: Iterable[dict[str, Any]],
+    *,
+    snap: _Snapshot | None = None,
+    run_open_ts: dict[str, float] | None = None,
+) -> _Snapshot:
+    """Walk every event and project it onto the metric families.
+
+    With ``snap``/``run_open_ts`` given, the events are projected INTO that
+    snapshot (the incremental all-time path); otherwise a fresh one is built."""
+    if snap is None:
+        snap = _new_snapshot()
+    if run_open_ts is None:
+        run_open_ts = {}
     for rec in events:
         snap.events_read += 1
         et = rec.get("event_type")
@@ -921,15 +1066,18 @@ def aggregate(
     append-only, so this is bounded by the chain's age.
     """
     path = _audit_path(tenant_id)
-    snap = _project(_iter_events(path, since=since))
-    # Best-effort chain-integrity gauge. We don't import verify_chain
-    # to avoid a cycle; instead, the existence of any json.decode error
-    # during _iter_events is silently swallowed and the gauge stays at
-    # 1. A heavier check is the audit-verify systemd timer (Roadmap L)
-    # which writes its own warning into the chain when broken.
+    if since is None:
+        snap = _aggregate_all_time(path)
+    else:
+        snap = _project(_iter_events(path, since=since))
+    # Best-effort chain-integrity gauge. ``verify_chain_incremental`` gives the SAME
+    # verdict as ``verify_chain`` (ADR-0640 R4: the proven prefix is admitted only
+    # after its bytes are re-hashed and match the witness), without re-walking the
+    # whole chain on every pass — the unconditional full walk stays with
+    # ``voice-audit verify`` and the daily verify unit, on the operator's schedule.
     try:
-        from forge.security_events import verify_chain as _vc
-        ok, problems = _vc(path)
+        from forge.security_events import verify_chain_incremental as _vci
+        ok, _problems, _lines = _vci(path)
         snap.chain_intact = bool(ok)
     except Exception:  # noqa: BLE001
         snap.chain_intact = True
@@ -961,7 +1109,9 @@ def render(tenant_id: str, *, since: float | None = None) -> str:
 
 
 def clear_cache() -> None:
-    """Drop the in-process cache. Used by tests + on operator request."""
+    """Drop the in-process cache (rendered bodies AND incremental cursors). Used by
+    tests + on operator request."""
+    reset_cursors()
     with _cache_lock:
         _cache.clear()
 

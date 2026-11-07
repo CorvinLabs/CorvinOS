@@ -1244,7 +1244,21 @@ fire-and-forget, order unchanged); thread pools are pre-warmed and long-lived
 (`corvin_console/loop_health.py`) — don't create threads per request; periodic scans are
 bounded (`max_scan_bytes`, depth-limited walks) and OPTIONAL ones skip a round while
 `loop_health.host_saturated()`; audit/tripwire/integrity work never does. A stall is
-recorded with MainThread's stack in `<CORVIN_HOME>/logs/loop-stall.log`.
+recorded with MainThread's stack in `<CORVIN_HOME>/logs/loop-stall.log`. BOTH hosts wire
+the module (`corvin_gateway.app._lifespan` — the live `corvin-webui.service` — and
+`corvin_console.standalone`; until 2026-11-07 only standalone did, and the live install
+had none of it). `kill -USR2 <console pid>` dumps every thread's stack to the journal
+(py-spy needs ptrace, denied without sudo on Linux). The systemd watchdog
+(`scripts/setup.sh` → `corvin-watchdog.service`) probes with `--connect-timeout 5 -m 30`:
+a slow console is not a dead one — with `-m 5` it restarted the console ten times in one
+hour of 5–7 s stalls, and the operator saw a console that "crashes and reconnects". The
+stalls themselves were the KPI collector re-parsing AND re-verifying the whole 500 MB
+chain every 15 s (`audit_metrics.aggregate(since=None)`, 7–10 s per pass): the all-time
+projection is now incremental (byte-offset cursor, `verify_chain_incremental`); **no
+periodic job may walk the whole chain** — bound it, read the tail, or carry a cursor.
+Restarts are bounded by `--timeout-graceful-shutdown 15` (open chat WebSockets held every
+stop for 90 s → SIGKILL), and the chat WebSocket closes with 4401/4404 AFTER `accept()`
+(a pre-accept close is a 403 handshake = browser code 1006 = endless "reconnecting").
 
 → Full reference: [console-loop-health.md](docs/claude-ref/console-loop-health.md)
 

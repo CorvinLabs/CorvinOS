@@ -378,6 +378,31 @@ def check_engine_config_safe(tenant_id: str) -> list[IntegrityFinding]:
 
 # ── Check 4: ACS-Fehlerrate als Angriffsindikator ────────────────────────────
 
+def _tail_lines(path: Path, n: int, *, block: int = 1 << 20, max_bytes: int = 16 << 20) -> list[str]:
+    """The last ``n`` non-empty lines of ``path`` without reading the file.
+
+    Seeks backwards in ``block`` steps and stops after ``max_bytes`` at most. The
+    previous ``read_text().splitlines()[-500:]`` decoded the WHOLE chain — 500 MB on
+    the live install, 1–2 GB of transient heap and a GIL-holding decode+split that
+    stalled the console's event loop — every integrity scan (boot + every 300 s).
+    """
+    with path.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        pos = size
+        buf = b""
+        while pos > 0 and buf.count(b"\n") <= n and (size - pos) < max_bytes:
+            step = min(block, pos)
+            pos -= step
+            fh.seek(pos)
+            buf = fh.read(step) + buf
+    lines = buf.split(b"\n")
+    if pos > 0:
+        lines = lines[1:]          # the first piece may be a partial line
+    out = [ln.decode("utf-8", errors="replace") for ln in lines if ln.strip()]
+    return out[-n:]
+
+
 def check_global_acs_anomaly(tenant_id: str) -> list[IntegrityFinding]:
     """Erkennt systemweite ACS-Anomalien als möglichen Prompt-Injection-Angriff.
 
@@ -398,9 +423,9 @@ def check_global_acs_anomaly(tenant_id: str) -> list[IntegrityFinding]:
         if not audit_file.exists():
             return findings
 
-        lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _tail_lines(audit_file, 500)  # the last 500 lines, read from the end
         acs_events: list[dict] = []
-        for line in reversed(lines[-500:]):  # letzte 500 Zeilen
+        for line in reversed(lines):
             try:
                 evt = json.loads(line)
                 if evt.get("event_type", "").startswith("acs."):
