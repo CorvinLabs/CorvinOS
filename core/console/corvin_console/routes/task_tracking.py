@@ -320,6 +320,7 @@ def get_kb_status(rec: Annotated[session_auth.SessionRecord, Depends(require_ses
     st.pop("payload", None)
     st.pop("fingerprint", None)
     st["enabled"] = kb_projection.kb_repo(rec.tenant_id) is not None
+    st["projects"] = kb_projection.project_status(rec.tenant_id)   # ADR-2316: one entry per project KB
     return st
 
 

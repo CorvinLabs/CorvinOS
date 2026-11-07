@@ -93,7 +93,7 @@ The prefix is not `task.` because `task.spawn_*` already names runtime spawns.
 | POST / DELETE | `/items/{id}/runs` | `run_type` ∈ task_sources types except `initiative` |
 | POST | `/import` | **retired → 410** (2026-10-03): Loop A/B/C were imported into the KB once (`I-02..I-04`) |
 | POST | `/items/{id}/kb-transition` | CSRF; `{to, reason?, dod?}` — board move of a knowledge-base task; runs `kb task` (the KB state machine) and re-projects; **409** `{message, kb_refused}` with the KB's own refusal |
-| GET | `/kb/status` | projector state: `ok`/`blocked`/`diverged`/`error`/`off`, `blocking`, `failing`, `drift_total`, `human_queue` (what waits for a human: `queue[]` of `{id, kind: decision\|review\|incident, title, since, hours}`, `max_age_hours`, `paused`) |
+| GET | `/kb/status` | projector state: `ok`/`blocked`/`diverged`/`error`/`off`, `blocking`, `failing`, `drift_total`, `human_queue` (what waits for a human: `queue[]` of `{id, kind: decision\|review\|incident, title, since, hours}`, `max_age_hours`, `paused`), `projects` (per project id: state, sha, counts, error — ADR-2316) |
 | POST | `/kb/sync` | CSRF; one forced projector tick (heal → export → apply) |
 
 ## Runs are linked, not copied
@@ -178,6 +178,22 @@ label `kb`. One way only: nothing reads a status back into the KB.
 - **Fail-closed:** a KB whose `kb check` is red writes nothing but one
   `task_item.projection_blocked` record; the board shows a banner and the last
   consistent state.
+- **Project knowledge bases (ADR-2316, 2026-11-08).** Besides the bound KB, every tick projects
+  each project of the tenant's registry `<tenant_home>/projects/registry.json` (ADR-2315 shape
+  `{"projects": [{id, path, …}]}`) whose `project.yaml` names this tenant and sets
+  `features.kb: true`, and whose `docs/` is a KB (`kb/_meta/sources.yaml`). Each is its own
+  **scope**: its cards carry the label `prj-<id>` (the bound KB's carry none; a KB cannot plant a
+  `prj-*` label itself), and `projection.kb_items/diff/apply` only see their own scope — so one
+  KB's orphan pass never archives another KB's cards. The payload carries `scope`; the audit
+  records `task_item.projection_applied/_blocked` carry it too (allowlisted). Read-only on the
+  project: `kb export` only (no heal, no index, nothing committed into the user's repo), always
+  run by the **bound KB's engine** with `--repo` — no code from a project directory executes. A
+  red or failing project is `blocked`/`error` for its scope only; at most `MAX_PROJECT_KBS` (16)
+  per tick, round-robin; skipped while `loop_health.host_saturated()`. State per project in
+  `global/task_tracking/kb_projection_projects.json`, exposed as `projects` on `/kb/status`
+  (without payloads). The registry WRITER is ADR-2315 (T-0351); measured pass cost with fixture
+  KBs: 1 → 0.14 s, 4 → 0.43 s, 16 → 1.83 s first pass, 0.01–0.08 s unchanged. Proof:
+  `tests/e2e/test_projection_scope_e2e.py`, `tests/e2e/test_project_kb_projector_e2e.py`.
 - **Status mapping:** KB `open/in_progress/blocked/done/cancelled` → store
   `open/in_progress/blocked/complete/archived`; containers carry the KB's derived rollup.
 - **Ownership:** `service.update`/`delete` refuse writes to `status`, `parent_id`, `kind`,

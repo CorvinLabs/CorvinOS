@@ -348,9 +348,14 @@ def _uncommitted_work(repo: Path) -> list[str]:
             if _WORK_FILE.match(p.split(" -> ")[-1])]
 
 
-def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120) -> tuple[int, Any]:
+def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120,
+         engine: Optional[Path] = None) -> tuple[int, Any]:
+    """Run ``kb.py --repo <repo> <args>``. *engine* (a ``kb.py`` path) defaults to the repo's own
+    copy; a PROJECT knowledge base is always run by the bound KB's engine instead (ADR-2316
+    Decision 8): no code from a project directory is executed by the console."""
     env = _env(actor)
-    r = subprocess.run([sys.executable, str(repo / "scripts" / "kb.py"), "--repo", str(repo), *args],
+    script = engine if engine is not None else repo / "scripts" / "kb.py"
+    r = subprocess.run([sys.executable, str(script), "--repo", str(repo), *args],
                        capture_output=True, text=True, timeout=timeout, env=env, encoding="utf-8", errors="replace")
     out = r.stdout.strip() or r.stderr.strip()
     try:
@@ -518,6 +523,181 @@ def _sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
         return st
 
 
+# --- project knowledge bases (ADR-2316, T-0347) ---------------------------------------
+#
+# A project (ADR-2315) is a directory the user owns; the registry ``<tenant_home>/projects/
+# registry.json`` only indexes it. A project with the ``kb`` feature has its KB in ``docs/``.
+# Each one is projected as its own SCOPE (``core.task_tracking.projection``): its cards carry
+# ``prj-<id>``, and its orphan pass never sees another KB's cards. Read-only on the project:
+# export only — no heal, no index, nothing committed into the user's repository — and always
+# with the bound KB's engine (no code from the project directory runs here). The registry
+# WRITER arrives with ADR-2315 (T-0351); until then a missing registry is "no projects".
+
+MAX_PROJECT_KBS = 16          # per tick; more projects are visited round-robin
+_PROJECT_ID = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,27}$")
+_project_state: dict[str, dict[str, Any]] = {}
+_project_cursor: dict[str, int] = {}
+
+
+def project_registry_path(tenant_id: str) -> Path:
+    from core.paths.tenant import tenant_home  # honours CORVIN_HOME
+
+    return tenant_home(tenant_id) / "projects" / "registry.json"
+
+
+def _project_manifest(root: Path) -> dict[str, Any]:
+    try:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 -- unreadable manifest: not a project this tick
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def project_kbs(tenant_id: str) -> list[tuple[str, Path]]:
+    """``[(project_id, docs_path)]`` of this tenant's registered projects whose manifest names
+    this tenant and turns ``kb`` on, and whose ``docs/`` is a knowledge base. Anything else is
+    skipped (logged at debug), never guessed: a path resolving into ANOTHER tenant's home, a
+    manifest of another tenant, a duplicate id."""
+    try:
+        reg = json.loads(project_registry_path(tenant_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    entries = reg.get("projects") if isinstance(reg, dict) else None
+    if not isinstance(entries, list):
+        return []
+    try:
+        own = tenant_kb_path(tenant_id).parent.resolve()
+    except OSError:
+        return []
+    tenants_root = own.parent
+    out: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    for e in entries:
+        pid = e.get("id") if isinstance(e, dict) else None
+        raw = e.get("path") if isinstance(e, dict) else None
+        if not isinstance(pid, str) or not _PROJECT_ID.match(pid) or pid in seen or not isinstance(raw, str):
+            continue
+        try:
+            root = Path(raw).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if root.is_relative_to(tenants_root) and not root.is_relative_to(own):
+            log.debug("project %s of %s resolves into another tenant's home: skipped", pid, tenant_id)
+            continue
+        man = _project_manifest(root)
+        feats = man.get("features") if isinstance(man.get("features"), dict) else {}
+        if man.get("tenant") != tenant_id or feats.get("kb") is not True:
+            continue
+        docs = root / "docs"
+        if not (docs / "kb" / "_meta" / "sources.yaml").is_file():
+            continue
+        seen.add(pid)
+        out.append((pid, docs))
+    return out
+
+
+def project_status(tenant_id: str) -> dict[str, Any]:
+    """The per-project projection states without their payloads (for /kb/status)."""
+    st = _project_state.get(tenant_id)
+    if st is None:
+        try:
+            st = json.loads(_project_state_path(tenant_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            st = {}
+    return {k: {kk: vv for kk, vv in v.items() if kk != "payload"} if isinstance(v, dict) else v
+            for k, v in st.items()}
+
+
+def _project_state_path(tenant_id: str) -> Path:
+    return store.db_path(tenant_id).parent / "kb_projection_projects.json"
+
+
+def _save_projects(tenant_id: str, st: dict[str, Any]) -> None:
+    _project_state[tenant_id] = st
+    try:
+        p = _project_state_path(tenant_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(st, indent=1, default=str), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        log.debug("project projection state not persisted", exc_info=True)
+
+
+def _sync_one_project(tenant_id: str, scope: str, repo: Path, engine: Path,
+                      prev: dict[str, Any]) -> dict[str, Any]:
+    now = time.time()
+    fp = fingerprint(repo)                          # KbIndexCorrupt -> caller records an error
+    if prev.get("fingerprint") == fp and prev.get("payload"):
+        d = projection.diff(tenant_id, prev["payload"])
+        if not d:
+            return {**prev, "checked_at": now}
+        res = projection.apply(tenant_id, prev["payload"], drift_healed=len(d))
+        return {**prev, **{k: v for k, v in res.items() if k != "remaining"}, "checked_at": now,
+                "drift_total": prev.get("drift_total", 0) + len(d)}
+    rc, payload = _run(repo, "export", engine=engine)
+    if rc != 0 or "items" not in payload:
+        return {"state": "error", "error": str(payload.get("error") or payload.get("raw") or f"export rc={rc}")[:300],
+                "fingerprint": None, "checked_at": now, "payload": prev.get("payload")}
+    payload["scope"] = scope
+    if not payload.get("ok"):
+        if prev.get("state") == "blocked" and prev.get("fingerprint") == fp:
+            return {**prev, "checked_at": now}
+        res = projection.apply(tenant_id, payload)  # one projection_blocked record, nothing else
+        return {**res, "fingerprint": fp, "checked_at": now, "payload": prev.get("payload")}
+    pending = _uncommitted_work(repo)
+    if pending:
+        return {**{k: v for k, v in prev.items() if k != "error"}, "state": "held", "fingerprint": fp,
+                "pending_uncommitted": pending[:20], "checked_at": now, "payload": prev.get("payload")}
+    res = projection.apply(tenant_id, payload)
+    return {**res, "fingerprint": fp, "checked_at": now, "payload": payload, "items": len(payload["items"]),
+            "drift_total": prev.get("drift_total", 0)}
+
+
+def sync_projects(tenant_id: str, *, busy: bool = False) -> dict[str, Any]:
+    """One projector pass over the tenant's project KBs (ADR-2316). Each project is isolated:
+    its error or red KB is recorded for that scope only and never stops the bound KB or another
+    project. Skipped entirely on a saturated host (*busy*): project boards are optional, the
+    bound KB is not."""
+    if busy:
+        return {"skipped": "host saturated"}
+    kbs = project_kbs(tenant_id)
+    prev_all = dict(_project_state.get(tenant_id) or {})
+    if not prev_all:
+        try:
+            prev_all = json.loads(_project_state_path(tenant_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prev_all = {}
+    if not kbs:
+        if prev_all:
+            _save_projects(tenant_id, {})
+        return {"projects": 0}
+    bound = kb_repo(tenant_id)
+    engine = bound / "scripts" / "kb.py" if bound is not None and _is_kb(bound) else None
+    if engine is None:
+        st = {pid: {"state": "off", "reason": "no bound knowledge base whose engine could read it"}
+              for pid, _ in kbs}
+        _save_projects(tenant_id, st)
+        return {"projects": len(kbs), "state": "off"}
+    start_at = _project_cursor.get(tenant_id, 0) % len(kbs)
+    window = (kbs[start_at:] + kbs[:start_at])[:MAX_PROJECT_KBS]
+    _project_cursor[tenant_id] = (start_at + len(window)) % len(kbs)
+    live = {pid for pid, _ in kbs}
+    out = {pid: v for pid, v in prev_all.items() if pid in live}
+    for scope, repo in window:
+        with _tenant_lock(tenant_id):
+            try:
+                out[scope] = _sync_one_project(tenant_id, scope, repo, engine, out.get(scope) or {})
+            except Exception as exc:  # noqa: BLE001 -- one project's failure stays its own
+                out[scope] = {"state": "error", "error": f"{type(exc).__name__}: {exc}"[:300],
+                              "fingerprint": None, "checked_at": time.time(),
+                              "payload": (out.get(scope) or {}).get("payload")}
+    _save_projects(tenant_id, out)
+    return {"projects": len(kbs), "visited": [s for s, _ in window]}
+
+
 def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = "", dod: str = "",
                actor: str = "operator", sid_fingerprint: Optional[str] = None) -> dict[str, Any]:
     repo = kb_repo(tenant_id)
@@ -680,6 +860,10 @@ def _loop(tenant_id: str, stop: threading.Event) -> None:
             log.warning("kb projection tick failed: %s", exc)
             _save(tenant_id, {**(_state.get(tenant_id) or {}), "state": "error", "error": str(exc)[:300],
                               "checked_at": time.time()})
+        try:
+            sync_projects(tenant_id, busy=busy)
+        except Exception as exc:  # noqa: BLE001 -- a project pass never stops the bound KB's loop
+            log.warning("kb project projection failed: %s", exc)
         try:
             periodic(tenant_id)
         except Exception as exc:  # noqa: BLE001

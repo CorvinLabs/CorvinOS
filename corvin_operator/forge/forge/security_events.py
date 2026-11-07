@@ -3782,6 +3782,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
             "namespace", "sha", "created", "updated", "archived", "restored", "unchanged",
             "drift_healed", "blocking", "item_id", "kind", "from_status", "to_status",
             "outcome", "actor_kind", "sid_fingerprint", "tenant_id",
+            # ADR-2316: the project scope of a projection (a project id, never a path)
+            "scope",
         })
         for _et in ("task_item.projection_applied", "task_item.projection_blocked",
                     "task_item.kb_transition")
