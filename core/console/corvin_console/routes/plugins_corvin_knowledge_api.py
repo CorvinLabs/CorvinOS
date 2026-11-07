@@ -207,12 +207,53 @@ def bound_repo_path(tenant_id: str) -> str:
     return str(repo or kb_projection.tenant_kb_path(tenant_id))
 
 
+def _is_operator_tenant(tenant_id: str) -> bool:
+    """The tenant the operator's own KB binds to (``CORVIN_KB_TENANT``). Only this tenant reads
+    or writes ``CONFIG_FILE``: the file lives in the OS user's home and is shared by every
+    tenant of the install, so for any other tenant it is someone else's configuration (S-1b)."""
+    return tenant_id == kb_projection.kb_tenant()
+
+
+def _repo_allowed(tenant_id: str, value: Any) -> bool:
+    """ADR-2316 Decision 7 (T-0345). A tenant's ``repo_path`` is its bound KB; only the
+    operator's tenant may name another one (the operator's choice, like ``CORVIN_KB_REPO``),
+    and then only an existing knowledge-base checkout (``kb/_meta/sources.yaml``) that does
+    not resolve into another tenant's home. Resolved first, so ``..`` and symlinks are judged
+    by where they land. Until the project registry exists (ADR-2315) nothing else is allowed."""
+    raw = str(value or "").strip()
+    if raw in _UNSET_REPO_PATHS:
+        return True
+    try:
+        target = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    try:
+        bound = Path(bound_repo_path(tenant_id)).expanduser().resolve()
+    except (OSError, RuntimeError):
+        bound = None
+    if bound is not None and target == bound:
+        return True
+    if not _is_operator_tenant(tenant_id):
+        return False
+    if not target.is_dir() or not (target / "kb" / "_meta" / "sources.yaml").is_file():
+        return False
+    try:
+        own = kb_projection.tenant_kb_path(tenant_id).parent.resolve()   # <home>/tenants/<tid>
+        tenants_root = own.parent
+    except (OSError, RuntimeError):
+        return False
+    if target.is_relative_to(tenants_root) and not target.is_relative_to(own):
+        return False
+    return True
+
+
 def effective_config(tenant_id: str) -> Dict[str, Any]:
-    config = load_config()
+    config = load_config() if _is_operator_tenant(tenant_id) else DEFAULT_CONFIG.copy()
     stored = _registry_settings(tenant_id)
     if stored:
         config.update({k: v for k, v in stored.items() if k in _KEYS and v is not None})
-    if str(config.get("repo_path") or "").strip() in _UNSET_REPO_PATHS:
+    rp = str(config.get("repo_path") or "").strip()
+    if rp in _UNSET_REPO_PATHS or not _repo_allowed(tenant_id, rp):
         config["repo_path"] = bound_repo_path(tenant_id)
     return config
 
@@ -227,13 +268,22 @@ async def update_config(
     body: ConfigUpdate, session: Any = Depends(require_csrf)
 ) -> Dict[str, Any]:
     tenant_id = getattr(session, "tenant_id", "_default")
+    changes = body.model_dump(exclude_none=True)
+    if "repo_path" in changes and not _repo_allowed(tenant_id, changes["repo_path"]):
+        # nothing is written: an arbitrary client path is never stored (ADR-2316, T-0345)
+        raise HTTPException(status_code=422, detail=(
+            "repo_path refused: a tenant reads its own knowledge base; only the operator's tenant may "
+            "name another existing knowledge-base checkout outside every other tenant's home"))
     config = effective_config(tenant_id)
-    for key, value in body.model_dump(exclude_none=True).items():
-        config[key] = value
-    try:
-        save_config(config)
-    except OSError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    config.update(changes)
+    if _is_operator_tenant(tenant_id):
+        try:
+            save_config(config)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif _registry_settings(tenant_id) is None:
+        raise HTTPException(status_code=409, detail=(
+            "the Knowledge Graph plugin has no settings record for this tenant; install it first"))
     _write_registry_settings(tenant_id, config)
     return {"status": "saved", "config": config}
 
@@ -395,7 +445,8 @@ def sync_repository(
     # `git fetch` / `merge` / `push` against the operator's REAL sibling checkout is
     # exactly what kb_projection.kb_repo() refuses to a sandboxed CORVIN_HOME
     # (ADV-10); this route reached it by its own path (R4-I-2). An explicitly
-    # configured other repository is the operator's choice and stays allowed.
+    # configured other repository is the operator's choice and stays allowed — for the
+    # operator's tenant only, validated by _repo_allowed() (ADR-2316, T-0345).
     sibling = (kb_projection._REPO_ROOT.parent / "Corvin-Knowledge")
     if kb_projection.kb_repo(getattr(session, "tenant_id", "_default")) is None and \
             repo_path.resolve() == sibling.resolve():
@@ -446,23 +497,27 @@ def sync_repository(
 
 @router.post("/init")
 async def init_plugin(session: Any = Depends(require_csrf)) -> Dict[str, Any]:
-    """Called on plugin installation: default config + graph directory."""
-    try:
-        save_config(DEFAULT_CONFIG.copy())
-    except OSError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    """Called on plugin installation: default config. Only the operator's tenant owns the
+    shared file; for any other tenant this is a no-op that reports its effective config."""
+    tenant_id = getattr(session, "tenant_id", "_default")
+    if _is_operator_tenant(tenant_id):
+        try:
+            save_config(DEFAULT_CONFIG.copy())
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "status": "initialized",
         "message": "Plugin initialized successfully",
-        "config": load_config(),
+        "config": effective_config(tenant_id),
     }
 
 
 @router.post("/cleanup")
 async def cleanup_plugin(session: Any = Depends(require_csrf)) -> Dict[str, Any]:
-    """Called on plugin uninstallation: remove the config file."""
+    """Called on plugin uninstallation: remove the config file (the operator's tenant only —
+    the file is shared by every tenant of the install)."""
     try:
-        if CONFIG_FILE.exists():
+        if _is_operator_tenant(getattr(session, "tenant_id", "_default")) and CONFIG_FILE.exists():
             CONFIG_FILE.unlink()
     except OSError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

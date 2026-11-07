@@ -1187,6 +1187,20 @@ vis-network draws the graph) and the routes it uses
 routes read the plugin's registry settings over the file defaults when the
 plugin is installed, and a save from the panel writes the registry through the
 lifecycle (`plugin.config_changed`) as well as the CLI's file.
+**The file is the operator's, not every tenant's (ADR-2316, T-0345, 2026-11-08).**
+`~/.claude/plugins/corvin-knowledge.json` lives in the OS user's home and is shared
+by every tenant of the install, so only the operator's tenant (`CORVIN_KB_TENANT`,
+default `_default`) reads, writes, resets (`/init`) or deletes (`/cleanup`) it; every
+other tenant starts from the defaults plus its own registry record (until then the
+second tenant inherited the operator's `repo_path` and `remote_url`, sandbox finding
+S-1b). `POST /config` refuses (422, nothing written) a `repo_path` that is not the
+tenant's bound KB — only the operator's tenant may name another existing
+knowledge-base checkout (`kb/_meta/sources.yaml`), and never one that resolves into
+another tenant's home (symlinks and `..` are resolved first). A stored path that no
+longer passes that check falls back to the bound KB. A non-operator tenant without a
+registry record gets 409 instead of a write to the shared file. Proof:
+`tests/e2e/test_kg_config_path_hole_e2e.py`; the sandbox crawl
+(`tests/sandbox/test_crawl.py`) is green without its strict xfail.
 
 **The install is a job with real phases** (`marketplace_install._PHASES`:
 index check → source resolution → manifest gate → licence → record →

@@ -136,7 +136,11 @@ export function CorvinKnowledgePage() {
   const save = useMutation({
     mutationFn: (c: KnowledgeConfig) => api<{ status: string; config: KnowledgeConfig }>(`${BASE_PATH}/config`, { method: "POST", csrf, body: c }),
     onSuccess: () => { setMsg("Settings saved."); setDraft(null); qc.invalidateQueries({ queryKey: [...KEY_CONFIG] }); qc.invalidateQueries({ queryKey: [...KEY_GRAPH] }); },
-    onError: () => setMsg("Settings not saved."),
+    onError: (e) => setMsg(e instanceof ApiError && e.status === 422
+      ? "Settings not saved — repository path refused: use this tenant's own knowledge base, or (operator only) an existing knowledge-base checkout outside other tenants."
+      : e instanceof ApiError && e.status === 409
+        ? "Settings not saved — the Knowledge Graph plugin has no settings record for this tenant."
+        : "Settings not saved."),
   });
 
   const cfg = draft ?? config.data ?? null;
