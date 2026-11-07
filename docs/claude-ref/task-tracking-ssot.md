@@ -207,6 +207,12 @@ label `kb`. One way only: nothing reads a status back into the KB.
   `kb index` on a project KB (read-only), so a project's Knowledge Graph shows its last
   committed `kb/graph/`. Proof: `tests/e2e/test_project_kb_writes_e2e.py`,
   `tests/e2e/test_project_scope_api_e2e.py`.
+  **`docs_mode=plain`** (a project KB in `docs/` of the project's own git root, measured in NOTE-0017):
+  the engine works there, and since T-0365 the uncommitted-edit check strips the git-root prefix
+  (`git rev-parse --show-prefix`), because porcelain paths are root-relative (`docs/kb/tasks/…`);
+  before, a hand edit in such a KB was never `held`. KB commits then appear in the user's code
+  history (author `kb`); the default stays `nested` (ADR-2315 amendment). Proof:
+  `tests/e2e/test_project_kb_plain_mode_e2e.py`.
 - **Status mapping:** KB `open/in_progress/blocked/done/cancelled` → store
   `open/in_progress/blocked/complete/archived`; containers carry the KB's derived rollup.
 - **Ownership:** `service.update`/`delete` refuse writes to `status`, `parent_id`, `kind`,

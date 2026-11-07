@@ -343,9 +343,18 @@ def _uncommitted_work(repo: Path) -> list[str]:
                        capture_output=True, text=True, env=_env("sync:kb"), encoding="utf-8", errors="replace")
     if r.returncode != 0 and _INDEX_CORRUPT.search(r.stderr or ""):
         raise KbIndexCorrupt((r.stderr or "").strip()[-300:])
+    # porcelain paths are relative to the git ROOT. A KB that is a subdirectory of a larger
+    # repository (a project's docs/ in docs_mode=plain, ADR-2315) reports `docs/kb/tasks/…`;
+    # strip that prefix, or such an edit is never seen (spike T-0350, fixed in T-0365)
+    pre = subprocess.run(["git", "-C", str(repo), "rev-parse", "--show-prefix"], capture_output=True,
+                         text=True, env=_env("sync:kb"), encoding="utf-8", errors="replace").stdout.strip()
+
+    def _rel(path: str) -> str:
+        path = path.split(" -> ")[-1].strip('"')
+        return path[len(pre):] if pre and path.startswith(pre) else path
+
     # exactly what `kb export` reads (direct *.md children) — a scratch file is no work item
-    return [p for p in (ln[3:].strip('"') for ln in r.stdout.splitlines() if ln.strip())
-            if _WORK_FILE.match(p.split(" -> ")[-1])]
+    return [p for p in (_rel(ln[3:]) for ln in r.stdout.splitlines() if ln.strip()) if _WORK_FILE.match(p)]
 
 
 def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120,
