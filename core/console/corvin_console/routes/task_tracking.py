@@ -133,16 +133,48 @@ def _attach_live_runs(tenant_id: str, items: list[dict[str, Any]]) -> None:
 
 # ── Reads ────────────────────────────────────────────────────────────────────
 
+def _project_of(item: dict[str, Any]) -> Any:
+    from core.task_tracking import projection  # noqa: PLC0415
+
+    for x in item.get("labels") or []:
+        if isinstance(x, str) and x.startswith(projection.SCOPE_PREFIX):
+            return x[len(projection.SCOPE_PREFIX):]
+    return None
+
+
 @router.get("/items")
 def get_items(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     include_deleted: bool = False,
+    scope: str | None = Query(default=None, max_length=40,
+                              description="bound = the tenant's own board only; project:<id> = one project's KB"),
 ) -> dict:
+    """ADR-2316: every item carries ``project`` (its project id, or null), so a client can show a
+    qualified id (``<project>/T-0001``: KB ids are local). ``scope`` narrows the list; a project
+    that is not registered for THIS tenant is 404 (never a hint that another tenant has it)."""
+    want: Any = ...
+    if scope is not None:
+        if scope == "bound":
+            want = None
+        elif scope.startswith("project:"):
+            from .. import kb_projection  # noqa: PLC0415
+
+            pid = scope.split(":", 1)[1]
+            if pid not in {p for p, _ in kb_projection.project_kbs(rec.tenant_id)}:
+                raise HTTPException(status_code=404, detail="no such project")
+            want = pid
+        else:
+            raise HTTPException(status_code=422, detail="scope must be 'bound' or 'project:<id>'")
     try:
         body = service.list_items(rec.tenant_id, include_deleted=include_deleted)
     except Exception as exc:  # noqa: BLE001
         _fail(exc)
         raise
+    for it in body["items"]:
+        it["project"] = _project_of(it)
+    if want is not ...:
+        body["items"] = [it for it in body["items"] if it["project"] == want]
+        body["scope"] = scope
     _attach_evidence(body["items"], _evidence_index(rec.tenant_id, time.time()))
     _attach_live_runs(rec.tenant_id, body["items"])
     # Offer the import only on a store that never held anything: once items

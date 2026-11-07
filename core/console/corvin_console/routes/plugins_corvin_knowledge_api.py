@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..deps import require_csrf, require_session
@@ -288,9 +288,25 @@ async def update_config(
     return {"status": "saved", "config": config}
 
 
+def _scoped_config(tenant_id: str, project: Optional[str]) -> Dict[str, Any]:
+    """ADR-2316 Decision 7: ``?project=<id>`` reads that project's KB. The path comes from THIS
+    tenant's project registry (``kb_projection.project_kbs``), never from the request; an id
+    that is not registered for this tenant is 404."""
+    config = effective_config(tenant_id)
+    if project is None:
+        return config
+    for pid, docs in kb_projection.project_kbs(tenant_id):
+        if pid == project:
+            return {**config, "repo_path": str(docs)}
+    raise HTTPException(status_code=404, detail="no such project")
+
+
 @router.get("/graph")
-async def get_graph(session: Any = Depends(require_session)) -> Dict[str, Any]:
-    return load_graph_data(effective_config(getattr(session, "tenant_id", "_default")))
+async def get_graph(session: Any = Depends(require_session),
+                    project: Optional[str] = Query(default=None, max_length=28)) -> Dict[str, Any]:
+    tenant_id = getattr(session, "tenant_id", "_default")
+    data = load_graph_data(_scoped_config(tenant_id, project))
+    return {**data, "project": project}
 
 
 _DOC_MAX_BYTES = 512 * 1024
@@ -377,8 +393,9 @@ def load_document(config: Dict[str, Any], key: str) -> Dict[str, Any]:
 
 
 @router.get("/doc/{key}")
-async def get_document(key: str, session: Any = Depends(require_session)) -> Dict[str, Any]:
-    return load_document(effective_config(getattr(session, "tenant_id", "_default")), key)
+async def get_document(key: str, session: Any = Depends(require_session),
+                       project: Optional[str] = Query(default=None, max_length=28)) -> Dict[str, Any]:
+    return load_document(_scoped_config(getattr(session, "tenant_id", "_default"), project), key)
 
 
 _GIT_ENV_KEEP = ("PATH", "HOME", "LANG", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND")

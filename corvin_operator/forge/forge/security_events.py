@@ -804,6 +804,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "task_item.projection_applied": "INFO",
     "task_item.projection_blocked": "WARNING",
     "task_item.kb_transition":      "INFO",
+    # console "new item" on a KB-bound board (kb new); emitted since ADR-2205 but never
+    # registered, so its details fell to the vocabulary floor (found 2026-11-08, T-0348)
+    "task_item.kb_create":          "INFO",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
     # Allow-list: instance_id, sest_fp_prefix (16 hex chars), pairing_id,
@@ -3788,6 +3791,10 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         for _et in ("task_item.projection_applied", "task_item.projection_blocked",
                     "task_item.kb_transition")
     },
+    "task_item.kb_create": frozenset({
+        "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",
+        "scope",   # ADR-2316: the project scope (a project id, never a path)
+    }),
     "engine.span.start": frozenset({
         "span_id", "parent_span_id", "role", "engine_id", "model_id",
         "run_id", "turn_id", "started_at",

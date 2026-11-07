@@ -1201,6 +1201,9 @@ longer passes that check falls back to the bound KB. A non-operator tenant witho
 registry record gets 409 instead of a write to the shared file. Proof:
 `tests/e2e/test_kg_config_path_hole_e2e.py`; the sandbox crawl
 (`tests/sandbox/test_crawl.py`) is green without its strict xfail.
+`GET /graph` and `GET /doc/{key}` take `?project=<id>` (ADR-2316, T-0349): the KB of a project
+registered for the caller's tenant (`kb_projection.project_kbs`), path from the registry only;
+any other id is 404. The graph response carries `project`.
 
 **The install is a job with real phases** (`marketplace_install._PHASES`:
 index check → source resolution → manifest gate → licence → record →

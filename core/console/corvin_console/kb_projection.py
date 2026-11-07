@@ -698,21 +698,60 @@ def sync_projects(tenant_id: str, *, busy: bool = False) -> dict[str, Any]:
     return {"projects": len(kbs), "visited": [s for s, _ in window]}
 
 
+def _scope_of_item(cur: dict[str, Any]) -> Optional[str]:
+    labels = cur.get("labels") if isinstance(cur.get("labels"), list) else []
+    for x in labels:
+        if isinstance(x, str) and x.startswith(projection.SCOPE_PREFIX):
+            return x[len(projection.SCOPE_PREFIX):]
+    return None
+
+
+def _write_target(tenant_id: str, scope: Optional[str]) -> tuple[Path, Optional[Path]]:
+    """``(repo, engine)`` a write for *scope* goes to (ADR-2316 Decision 5). ``None``: the bound KB
+    with its own engine. A project scope: the REGISTERED project's ``docs/`` (never a path from a
+    request) run by the bound KB's engine. Refused when the project is not registered with ``kb``
+    on, or no bound engine exists."""
+    bound = kb_repo(tenant_id)
+    if bound is None:
+        raise service.TaskTrackingError("no knowledge base is bound to this tenant")
+    if scope is None:
+        return bound, None
+    if not _is_kb(bound):
+        raise KbTransitionRefused("project boards need the bound knowledge base's engine, which is missing")
+    for pid, docs in project_kbs(tenant_id):
+        if pid == scope:
+            return docs, bound / "scripts" / "kb.py"
+    raise KbTransitionRefused(f"project {scope!r} is not registered with the kb feature on for this tenant")
+
+
+def sync_project(tenant_id: str, scope: str) -> dict[str, Any]:
+    """Re-project ONE project scope now (after a board write into it)."""
+    repo, engine = _write_target(tenant_id, scope)
+    prev_all = dict(_project_state.get(tenant_id) or {})
+    with _tenant_lock(tenant_id):
+        prev = {k: v for k, v in (prev_all.get(scope) or {}).items() if k != "fingerprint"}
+        prev_all[scope] = _sync_one_project(tenant_id, scope, repo, engine, prev)
+    _save_projects(tenant_id, prev_all)
+    return prev_all[scope]
+
+
 def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = "", dod: str = "",
                actor: str = "operator", sid_fingerprint: Optional[str] = None) -> dict[str, Any]:
-    repo = kb_repo(tenant_id)
-    if repo is None:
+    if kb_repo(tenant_id) is None:
         raise service.TaskTrackingError("no knowledge base is bound to this tenant")
     with store.connect(tenant_id) as conn:
         cur = service._fetch(conn, tenant_id, item_id)
     ref = str(cur.get("external_ref") or "")
     if not ref.startswith(service.KB_REF_PREFIX):
         raise service.TaskTrackingError("not a knowledge-base item — use a normal update")
+    scope = _scope_of_item(cur)
+    repo, engine = _write_target(tenant_id, scope)
     if cur["kind"] != "task":
         raise KbTransitionRefused(f"a {cur['kind']}'s status is derived from its children — move its tasks")
     to_kb = projection.STATUS_TO_KB.get(to_status, to_status)
     details = {"item_id": item_id, "kind": cur["kind"], "from_status": cur["status"], "to_status": to_status,
-               "actor_kind": actor.split(":")[0], **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {})}
+               "actor_kind": actor.split(":")[0], **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {}),
+               **({"scope": scope} if scope else {})}
     try:
         pending = _uncommitted_work(repo)
     except KbIndexCorrupt:
@@ -729,7 +768,7 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
     if dod:
         args.append(f"--dod={dod}")
     try:
-        rc, res = _run(repo, *args, actor=actor)
+        rc, res = _run(repo, *args, actor=actor, engine=engine)
     except Exception:
         service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "error"})
         raise
@@ -737,7 +776,10 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
         service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "refused"})
         raise KbTransitionRefused(str(res.get("error") or res)[:500])
     service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "applied"})
-    sync(tenant_id, force=True)
+    if scope:
+        sync_project(tenant_id, scope)
+    else:
+        sync(tenant_id, force=True)
     with store.connect(tenant_id) as conn:
         return service._fetch(conn, tenant_id, item_id)
 
@@ -929,24 +971,25 @@ KB_KINDS = ("initiative", "epic", "task")
 _KB_PARENT_KIND = {"epic": "initiative", "task": "epic"}
 
 
-def _kb_ref_of(tenant_id: str, item_id: str) -> tuple[str, str]:
-    """(kind, uid) of a projected KB item of this tenant; refuses a non-KB item."""
+def _kb_ref_of(tenant_id: str, item_id: str) -> tuple[str, str, Optional[str]]:
+    """(kind, uid, scope) of a projected KB item of this tenant; refuses a non-KB item."""
     with store.connect(tenant_id) as conn:
         cur = service._fetch(conn, tenant_id, item_id)
     ref = str(cur.get("external_ref") or "")
     if not ref.startswith(service.KB_REF_PREFIX):
         raise KbTransitionRefused("the parent is not a knowledge-base item")
-    return cur["kind"], ref.split(":", 1)[1]
+    return cur["kind"], ref.split(":", 1)[1], _scope_of_item(cur)
 
 
 def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[str] = None,
                 description: str = "", dod: str = "", actor: str = "operator",
-                sid_fingerprint: Optional[str] = None) -> dict[str, Any]:
+                sid_fingerprint: Optional[str] = None, scope: Optional[str] = None) -> dict[str, Any]:
     """Create an initiative / epic / task IN the tenant's knowledge base (``kb new``, the KB's one
     identity writer), re-project, and return the projected store item. The board gets no second
-    writer: the store row appears only through the projection."""
-    repo = kb_repo(tenant_id)
-    if repo is None:
+    writer: the store row appears only through the projection. A child goes into its parent's
+    KB (ADR-2316: the parent's ``prj-*`` scope); an initiative goes into *scope* (a registered
+    project id) or, without one, into the bound KB."""
+    if kb_repo(tenant_id) is None:
         raise service.TaskTrackingError("no knowledge base is bound to this tenant")
     if kind not in KB_KINDS:
         raise KbTransitionRefused(f"the knowledge base holds {list(KB_KINDS)}, not {kind!r}")
@@ -956,21 +999,28 @@ def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[st
     if want_parent:
         if not parent_id:
             raise KbTransitionRefused(f"a {kind} needs a parent {want_parent} (the knowledge base's hierarchy)")
-        pkind, puid = _kb_ref_of(tenant_id, parent_id)
+        pkind, puid, pscope = _kb_ref_of(tenant_id, parent_id)
         if pkind != want_parent:
             raise KbTransitionRefused(f"a {kind}'s parent must be a {want_parent}, not a {pkind}")
-        rc_s, shown = _run(repo, "show", puid)
+        if scope is not None and scope != pscope:
+            raise KbTransitionRefused("a child goes into its parent's knowledge base")
+        scope = pscope
+        repo, engine = _write_target(tenant_id, scope)
+        rc_s, shown = _run(repo, "show", puid, engine=engine)
         pid = shown.get("id") if rc_s == 0 and isinstance(shown.get("id"), str) else puid
         args.append(f"--{want_parent}={pid}")
     elif parent_id:
         raise KbTransitionRefused("an initiative has no parent")
+    else:
+        repo, engine = _write_target(tenant_id, scope)
     if dod and kind == "task":
         args.append(f"--dod={dod}")
     if description:
         args.append(f"--body={description}")
     args.append(f"--actor={actor}")
     details = {"kind": kind, "actor_kind": actor.split(":")[0],
-               **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {})}
+               **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {}),
+               **({"scope": scope} if scope else {})}
     service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "requested"})  # audit-first
     with _tenant_lock(tenant_id):
         try:
@@ -982,7 +1032,7 @@ def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[st
             service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
             raise KbTransitionRefused(f"board writes are paused: uncommitted knowledge-base edits {pending[:5]}")
         try:
-            rc, res = _run(repo, *args, actor=actor)
+            rc, res = _run(repo, *args, actor=actor, engine=engine)
         except Exception:
             service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "error"})
             raise
@@ -991,12 +1041,15 @@ def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[st
         raise KbTransitionRefused(str(res.get("error") or res)[:500])
     service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "applied",
                                                       "kb_id": str(res.get("id") or "")})
-    sync(tenant_id, force=True)
-    item = projection.kb_items(tenant_id).get(f"{service.KB_REF_PREFIX}{res['uid']}")
+    if scope:
+        pst = sync_project(tenant_id, scope)
+    else:
+        pst = sync(tenant_id, force=True)
+    item = projection.kb_items(tenant_id, scope=scope).get(f"{service.KB_REF_PREFIX}{res['uid']}")
     if item is None:
         # created in the KB, but the projection did not take it (a red check holds the board)
         raise service.TaskTrackingError(f"{res.get('id')} was created in the knowledge base but is not on the "
-                                        f"board yet (projector: {status(tenant_id).get('state')})")
+                                        f"board yet (projector: {pst.get('state')})")
     with store.connect(tenant_id) as conn:
         return service._fetch(conn, tenant_id, item["id"])
 

@@ -194,6 +194,19 @@ label `kb`. One way only: nothing reads a status back into the KB.
   (without payloads). The registry WRITER is ADR-2315 (T-0351); measured pass cost with fixture
   KBs: 1 → 0.14 s, 4 → 0.43 s, 16 → 1.83 s first pass, 0.01–0.08 s unchanged. Proof:
   `tests/e2e/test_projection_scope_e2e.py`, `tests/e2e/test_project_kb_projector_e2e.py`.
+  **Writes on a project card** (T-0348) go into THAT project: `/kb-transition` and `POST /items`
+  (a child inherits its parent's scope; `create_item(scope=…)` for an initiative) resolve the repo
+  from the card's `prj-<id>` label through the registry — never from the request — and run
+  `kb task`/`kb new` there with the bound engine, then re-project that scope only
+  (`sync_project`). A card whose project is no longer registered is refused (409). The audit
+  records `task_item.kb_transition` and `task_item.kb_create` carry `scope`; `kb_create` was
+  emitted unregistered until 2026-11-08 and is now in `EVENT_SEVERITY` + `_EVENT_ALLOWLIST`.
+  **Reads** (T-0349): every item of `GET /items` carries `project` (id or null) so a client can
+  qualify the local KB id (`alpha/T-0001`); `?scope=bound` / `?scope=project:<id>` narrows the
+  list; a project not registered for the caller's tenant is 404. The projector does NOT run
+  `kb index` on a project KB (read-only), so a project's Knowledge Graph shows its last
+  committed `kb/graph/`. Proof: `tests/e2e/test_project_kb_writes_e2e.py`,
+  `tests/e2e/test_project_scope_api_e2e.py`.
 - **Status mapping:** KB `open/in_progress/blocked/done/cancelled` → store
   `open/in_progress/blocked/complete/archived`; containers carry the KB's derived rollup.
 - **Ownership:** `service.update`/`delete` refuse writes to `status`, `parent_id`, `kind`,
