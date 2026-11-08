@@ -285,3 +285,59 @@ export function getChangeFile(id: string, path: string, commit?: string | null, 
   const q = `?path=${encodeURIComponent(path)}${commit ? `&commit=${encodeURIComponent(commit)}` : ""}`;
   return api<ChangeFileView>(`/projects/${encodeURIComponent(id)}/changes/file${q}`, { signal });
 }
+
+// ── live work on a project (CONCEPT-0128, ADR-2320) ──────────────────────────────────────────
+
+export type ActivityKind = "turn_started" | "tool_use" | "turn_finished" | "file_changed" | "file_settled" | "files_burst";
+export interface ActivityEvent {
+  seq: number;
+  id: string;
+  ts: number;
+  kind: ActivityKind;
+  session_id?: string;
+  title?: string;
+  name?: string;
+  detail?: string;
+  sub?: boolean;
+  ok?: boolean;
+  reason?: string;
+  path?: string;
+  status?: string;
+  area?: string;
+  additions?: number | null;
+  deletions?: number | null;
+  count?: number;
+  links?: ChangeLink[];
+}
+export interface ActivityAgent {
+  session_id: string;
+  title: string;
+  state: "working" | "idle";
+  since: number;
+  tool: string | null;
+  detail: string;
+  tools: number;
+  finished?: number;
+  ok?: boolean;
+}
+export interface ActivitySnapshot {
+  epoch: string;
+  seq: number;
+  oldest_seq: number;
+  reset: boolean;
+  gap: boolean;
+  events: ActivityEvent[];
+  agents: ActivityAgent[];
+  watcher: "off" | "running" | "paused";
+  note: string;
+}
+
+/** The snapshot: agents and the backlog after `after` ("<epoch>:<seq>"). Cheap; it starts no watcher on the server. */
+export function getActivity(id: string, after?: string | null, signal?: AbortSignal): Promise<ActivitySnapshot> {
+  const q = after ? `?after=${encodeURIComponent(after)}` : "";
+  return api<ActivitySnapshot>(`/projects/${encodeURIComponent(id)}/activity${q}`, { signal });
+}
+
+export function activityStreamUrl(id: string, after?: string | null): string {
+  return `/v1/console/projects/${encodeURIComponent(id)}/activity/stream${after ? `?after=${encodeURIComponent(after)}` : ""}`;
+}

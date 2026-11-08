@@ -6,11 +6,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, FileDiff, FolderKanban, FolderOpen, Settings } from "lucide-react";
+import { Activity, ChevronDown, FileDiff, FolderKanban, FolderOpen, Settings } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { attachProject, detachProject, getChanges, getChatAttachment, listProjects, type ProjectSummary } from "@/lib/api/projects";
+import { attachProject, detachProject, getActivity, getChanges, getChatAttachment, listProjects, type ProjectSummary } from "@/lib/api/projects";
 import { AccessBadge, ClassBadge } from "./badges";
+import { anyWorking } from "./activity-logic";
 import { ChangesPanel, changesKey } from "./changes-panel";
+import { ExplorerPanel } from "./explorer-panel";
 import { accessOf, badgeLine, classOf, roleLabel } from "./roles";
 import { explain } from "./wizard";
 
@@ -22,6 +24,7 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState(false);
+  const [explorer, setExplorer] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const att = useQuery({ queryKey: attachKey(sid), queryFn: ({ signal }) => getChatAttachment(sid, signal), staleTime: 15_000, retry: false });
@@ -32,6 +35,10 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
   const changes = useQuery({ queryKey: changesKey(pid ?? "", null), enabled: !!pid, retry: false, refetchInterval: 15_000,
     queryFn: ({ signal }) => getChanges(pid as string, null, signal) });
   const count = changes.data?.files.length ?? 0;
+  // the live dot reads the cheap snapshot (it starts no watcher and opens no stream): an agent working on this project, in ANY chat
+  const activity = useQuery({ queryKey: ["projects", "activity-dot", pid ?? ""], enabled: !!pid, retry: false, refetchInterval: 8000,
+    queryFn: ({ signal }) => getActivity(pid as string, null, signal) });
+  const live = !!pid && anyWorking(activity.data?.agents ?? []);
 
   // a finished turn may have changed files: look again as soon as the answer is complete
   const wasStreaming = useRef(streaming);
@@ -64,6 +71,7 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
         className="inline-flex max-w-[14rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">
         <FolderKanban className="h-3.5 w-3.5 shrink-0" aria-hidden />
         <span className="truncate" data-testid="project-menu-label">{label}</span>
+        {live && <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 motion-safe:animate-pulse" data-testid="project-live-dot" role="img" aria-label="An agent is working on this project" />}
         {pid && count > 0 && <span className="rounded-full bg-primary/15 px-1.5 font-mono text-[10px] text-foreground" data-testid="project-menu-count" aria-label={`${count} changed files`}>{count}</span>}
         <ChevronDown className="h-3 w-3 shrink-0" aria-hidden />
       </button>
@@ -98,7 +106,10 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
           <div className="flex flex-wrap items-center gap-1 border-t pt-2">
             {pid && (
               <>
-                <button type="button" onClick={() => { setPanel(true); setOpen(false); }} className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted" data-testid="project-menu-changes">
+                <button type="button" onClick={() => { setExplorer(true); setPanel(false); setOpen(false); }} className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted" data-testid="project-menu-explorer">
+                  <Activity className="h-3.5 w-3.5" aria-hidden /> Explorer
+                </button>
+                <button type="button" onClick={() => { setPanel(true); setExplorer(false); setOpen(false); }} className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted" data-testid="project-menu-changes">
                   <FileDiff className="h-3.5 w-3.5" aria-hidden /> Changes{count > 0 ? ` (${count})` : ""}
                 </button>
                 <Link to={`/app/projects/${encodeURIComponent(pid)}?tab=structure`} className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted" data-testid="project-menu-storage">
@@ -114,6 +125,7 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
         </div>
       )}
       {panel && pid && <ChangesPanel projectId={pid} title={label} onClose={() => setPanel(false)} />}
+      {explorer && pid && <ExplorerPanel projectId={pid} title={label} onClose={() => setExplorer(false)} onOpenChanges={() => { setExplorer(false); setPanel(true); }} />}
     </div>
   );
 }
