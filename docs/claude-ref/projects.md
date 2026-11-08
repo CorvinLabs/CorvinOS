@@ -161,3 +161,16 @@ Proof: `tests/unit/projects-wizard.test.ts` (incl. a mutation: dropping the togg
 before the fix), `tests/e2e/projects-wizard.spec.ts` (the served bundle, network stubbed: four steps, gating,
 review, a pulled requirement, a refused plan, a conflict). The real create path is proven over HTTP in
 `tests/e2e/test_projects_api_e2e.py`; the browser spec never creates a real project.
+
+## Inspector (T-0359, partly built)
+
+`/app/projects/:projectId` (a detail route: mounted in `web-next/src/App.tsx`, not PANELS; not in the sidebar).
+Built tabs: **Overview** (the server's health checks, headline never "all good" over a red check), **Features**
+(switch on/off; a switch-off that would take dependants away asks first and then sends `cascade`; a switch-on that
+needs more asks first and then sends `accept_dependencies`; a feature whose tenant plugin is not enabled cannot be
+switched on and says why), **Settings** (repair: preview, then apply; show the open command; remove from the list
+with a confirmation that the files stay). Pure decisions in `pages/projects/inspector-logic.ts` (unit-tested).
+
+**Not built yet** (T-0359 stays open until they exist, each with real data or an explained empty state): Structure,
+Docs, Knowledge, Tasks, Videos, Compute. Proof so far: `tests/unit/projects-inspector.test.ts` (9, incl. a mutation
+probe on the dependants confirmation), `tests/e2e/projects-inspector.spec.ts` (6, served bundle, network stubbed).

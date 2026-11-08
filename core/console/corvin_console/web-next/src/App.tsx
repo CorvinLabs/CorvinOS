@@ -16,6 +16,7 @@ import {
   WorkflowRunsPage,
   WorkflowRunDetailPage,
   NotFoundPage,
+  ProjectInspectorPage,
 } from "@/lazy-pages";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -150,6 +151,7 @@ export default function App() {
           >
             <Route index element={<Navigate to="/app/chat" replace />} />
             <Route path="chat" element={<ChatPage />} />
+            <Route path="projects/:projectId" element={<ProjectInspectorPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
             <Route path="chat/group/:groupId" element={<ChatPage />} />
             <Route path="chat/peer/:peerId" element={<ChatPage />} />

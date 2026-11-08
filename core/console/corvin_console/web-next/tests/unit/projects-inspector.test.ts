@@ -1,0 +1,58 @@
+/** The inspector's decisions (pages/projects/inspector-logic.ts). */
+import { describe, expect, it } from "vitest";
+import { ApiError } from "@/lib/api/client";
+import type { FeatureRow } from "@/lib/api/projects";
+import { conflictOf, healthHeadline, parseTab, rowState } from "@/pages/projects/inspector-logic";
+
+const row = (over: Partial<FeatureRow>): FeatureRow => ({ id: "kb", title: "kb", description: "", active: true, requires: ["core"],
+  suggests: [], dependants: [], plugins: [], ...over });
+
+describe("feature rows", () => {
+  it("an active feature offers to switch off; an inactive one offers on and previews what it pulls in", () => {
+    expect(rowState(row({ active: true }))).toMatchObject({ action: "off", canToggle: true, preview: [] });
+    const off = rowState(row({ id: "acs", active: false, requires: ["core", "claude"] }));
+    expect(off).toMatchObject({ action: "on", canToggle: true, preview: ["Claude Code rules"] });
+  });
+  it("core is never toggled", () => {
+    expect(rowState(row({ id: "core", active: true })).canToggle).toBe(false);
+  });
+  it("a feature whose tenant plugin is not enabled cannot be switched on, and says why", () => {
+    const s = rowState(row({ id: "video_producer", active: false, plugins: [{ plugin: "video_producer", state: "absent" }] }));
+    expect(s.canToggle).toBe(false);
+    expect(s.blockedBy).toMatch(/video producer plugin, which is not enabled/);
+  });
+});
+
+describe("the server's refusal of a change", () => {
+  const err = (status: number, detail: unknown) => new ApiError(status, detail);
+  it("dependants: names the features that would have to go first", () => {
+    const c = conflictOf(err(409, { detail: { message: "x", reason_class: "has_dependants", feature: "kb", dependants: ["tasks", "graph"] } }));
+    expect(c).toEqual({ kind: "dependants", feature: "kb", dependants: ["Tasks", "Knowledge graph"] });
+  });
+  it("requires: names what switching on would also pull in", () => {
+    expect(conflictOf(err(409, { detail: { reason_class: "needs_dependencies", requires: ["claude"], message: "m" } })))
+      .toEqual({ kind: "requires", requires: ["Claude Code rules"] });
+  });
+  it("a plugin refusal and any other 409 keep the server's message", () => {
+    expect(conflictOf(err(409, { detail: { reason_class: "plugin_missing", message: "enable it" } }))).toEqual({ kind: "plugin", message: "enable it" });
+    expect(conflictOf(err(409, { detail: { message: "core cannot be switched off", reason_class: "core_required" } })))
+      .toEqual({ kind: "other", message: "core cannot be switched off" });
+  });
+  it("is null for anything that is not a 409", () => {
+    expect(conflictOf(err(500, { detail: "boom" }))).toBeNull();
+    expect(conflictOf(new Error("x"))).toBeNull();
+  });
+});
+
+describe("tabs and health", () => {
+  it("an unknown tab falls back to the overview", () => {
+    expect(parseTab("features")).toBe("features");
+    expect(parseTab("nope")).toBe("overview");
+    expect(parseTab(null)).toBe("overview");
+  });
+  it("never claims all is well while a check is red, and says so when nothing ran", () => {
+    expect(healthHeadline([{ ok: true }, { ok: false }])).toEqual({ text: "1 of 2 checks need attention.", ok: false });
+    expect(healthHeadline([{ ok: true }])).toEqual({ text: "Every check passes.", ok: true });
+    expect(healthHeadline([])).toMatchObject({ ok: false });
+  });
+});

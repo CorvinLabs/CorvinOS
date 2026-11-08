@@ -163,6 +163,10 @@ export const InitiativesPage = React.lazy(() =>
 export const ProjectsPage = React.lazy(() =>
   import("@/pages/projects").then((m) => ({ default: m.default }))
 );
+// One project (the inspector). A detail route, so it is mounted in App.tsx, not in PANELS.
+export const ProjectInspectorPage = React.lazy(() =>
+  import("@/pages/projects/inspector").then((m) => ({ default: m.default }))
+);
 
 
 

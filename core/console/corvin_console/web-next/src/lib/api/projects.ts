@@ -113,3 +113,53 @@ export function planProject(body: PlanRequest, csrf: string): Promise<ProjectPla
 export function createProject(planId: string, csrf: string): Promise<{ project: ProjectSummary; written: string[]; actions: string[] }> {
   return api("/projects", { method: "POST", body: { plan_id: planId }, csrf });
 }
+
+export interface HealthCheck { id: string; ok: boolean; detail: string; at: string }
+export interface Health { project_id: string; ok: boolean; checks: HealthCheck[] }
+
+export interface FeatureRow {
+  id: string;
+  title: string;
+  description: string;
+  active: boolean;
+  requires: string[];
+  suggests: string[];
+  dependants: string[];
+  plugins: PluginNeed[];
+}
+
+export interface ProjectDetail extends ProjectSummary {
+  catalogue?: { available: boolean; reason?: string; features?: FeatureRow[]; suggestions?: { feature: string; suggests: string }[] };
+  warnings?: string[];
+}
+
+export interface FeatureRequest {
+  set: Record<string, boolean>;
+  accept_dependencies?: boolean;
+  cascade?: boolean;
+}
+
+export function getProject(id: string, signal?: AbortSignal): Promise<ProjectDetail> {
+  return api<ProjectDetail>(`/projects/${encodeURIComponent(id)}`, { signal });
+}
+
+export function getHealth(id: string, signal?: AbortSignal): Promise<Health> {
+  return api<Health>(`/projects/${encodeURIComponent(id)}/health`, { signal });
+}
+
+export function setFeatures(id: string, body: FeatureRequest, csrf: string): Promise<ProjectDetail> {
+  return api<ProjectDetail>(`/projects/${encodeURIComponent(id)}/features`, { method: "PUT", body, csrf });
+}
+
+export function repairProject(id: string, dryRun: boolean, csrf: string): Promise<{ pending: { path: string; status: string; diff: string }[]; dry_run: boolean }> {
+  return api(`/projects/${encodeURIComponent(id)}/repair`, { method: "POST", body: { dry_run: dryRun }, csrf });
+}
+
+export function openProject(id: string, csrf: string): Promise<{ command: string; chat_attachment: boolean; note: string }> {
+  return api(`/projects/${encodeURIComponent(id)}/open`, { method: "POST", csrf });
+}
+
+/** Removes the registry entry ONLY. The directory and every file stay. */
+export function removeProjectFromList(id: string, csrf: string): Promise<{ removed: string; files_deleted: boolean }> {
+  return api(`/projects/${encodeURIComponent(id)}`, { method: "DELETE", csrf });
+}
