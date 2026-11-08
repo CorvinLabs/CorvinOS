@@ -163,3 +163,13 @@ export function openProject(id: string, csrf: string): Promise<{ command: string
 export function removeProjectFromList(id: string, csrf: string): Promise<{ removed: string; files_deleted: boolean }> {
   return api(`/projects/${encodeURIComponent(id)}`, { method: "DELETE", csrf });
 }
+
+export interface NewVideoResult {
+  video: { name: string; path: string; languages: string[]; kb: boolean; epic: string | null; tasks: string[] };
+  note: string;
+}
+
+/** Creates one video's folder, sources.md, index row and (with the knowledge base on) its epic and tasks. */
+export function createVideo(projectId: string, name: string, csrf: string): Promise<NewVideoResult> {
+  return api<NewVideoResult>(`/projects/${encodeURIComponent(projectId)}/videos`, { method: "POST", body: { name }, csrf });
+}

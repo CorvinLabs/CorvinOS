@@ -14,10 +14,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
-import { getHealth, getProject, openProject, removeProjectFromList, repairProject, setFeatures, type FeatureRow, type ProjectDetail } from "@/lib/api/projects";
+import { createVideo, getHealth, getProject, openProject, removeProjectFromList, repairProject, setFeatures, type FeatureRow, type ProjectDetail } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
 import { explain } from "./wizard";
-import { TABS, conflictOf, healthHeadline, parseTab, rowState, type Conflict, type Tab } from "./inspector-logic";
+import { TABS, conflictOf, healthHeadline, parseTab, rowState, videoNameProblem, type Conflict, type Tab } from "./inspector-logic";
 import { stateOf } from "./encodings";
 
 const KEY = (id: string) => ["projects", "detail", id] as const;
@@ -80,9 +80,52 @@ export default function ProjectInspectorPage() {
               </button>
             ))}
           </nav>
-          {tab === "overview" && <OverviewTab projectId={d.id} />}
+          {tab === "overview" && <OverviewTab projectId={d.id} videosOn={(d.active ?? []).includes("videos")} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />}
           {tab === "features" && <FeaturesTab d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />}
           {tab === "settings" && <SettingsTab d={d} csrf={csrf} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+function NewVideoCard({ projectId, videosOn, csrf, onCreated }: { projectId: string; videosOn: boolean; csrf: string; onCreated: () => void }) {
+  const [name, setName] = useState("");
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const problem = name.length > 0 ? videoNameProblem(name) : null;
+  const mut = useMutation({
+    mutationFn: () => createVideo(projectId, name.trim(), csrf),
+    onSuccess: (r) => {
+      setError(null);
+      setName("");
+      setResult(`Created ${r.video.name} at ${r.video.path}.${r.video.kb ? ` Epic ${r.video.epic} with ${r.video.tasks.length} tasks in the knowledge base.` : ""}`);
+      if (r.note) setResult((x) => `${x} ${r.note}`);
+      onCreated();
+    },
+    onError: (e) => { setResult(null); setError(explain(e)); },
+  });
+  return (
+    <div className="space-y-2 rounded-lg border p-4" data-testid="new-video-card">
+      <h2 className="font-medium">New video</h2>
+      {!videosOn ? (
+        <p className="text-sm text-muted-foreground" data-testid="new-video-off">The videos feature is off. Switch it on in Features to create videos here.</p>
+      ) : (
+        <>
+          <p className="text-sm text-muted-foreground">Creates the video's folder with source/, build/ and a sources.md of the eight sections. With the knowledge base on, it also makes the epic VIDEO-&lt;name&gt; with the German and English tasks.</p>
+          <div className="flex flex-wrap items-start gap-2">
+            <label className="min-w-0 flex-1 text-sm">
+              <span className="sr-only">Video name</span>
+              <input className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" data-testid="new-video-name"
+                value={name} onChange={(e) => { setName(e.target.value); setError(null); }} placeholder="e.g. plumbline-intro" />
+            </label>
+            <Button size="sm" onClick={() => mut.mutate()} disabled={mut.isPending || name.trim().length === 0 || problem !== null} data-testid="new-video-create">
+              {mut.isPending ? "Creating…" : "Create video"}
+            </Button>
+          </div>
+          {problem && <p className="text-xs text-amber-700 dark:text-amber-300" data-testid="new-video-problem">{problem}</p>}
+          {result && <p role="status" className="text-sm" data-testid="new-video-result">{result}</p>}
+          {error && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="new-video-error">{error}</p>}
         </>
       )}
     </div>
@@ -97,11 +140,12 @@ function BackLink() {
   );
 }
 
-function OverviewTab({ projectId }: { projectId: string }) {
+function OverviewTab({ projectId, videosOn, csrf, onChanged }: { projectId: string; videosOn: boolean; csrf: string; onChanged: () => void }) {
   const health = useQuery({ queryKey: HEALTH(projectId), queryFn: ({ signal }) => getHealth(projectId, signal) });
   const head = healthHeadline(health.data?.checks ?? []);
   return (
     <section className="space-y-3" aria-label="Checks" data-testid="overview-tab">
+      <NewVideoCard projectId={projectId} videosOn={videosOn} csrf={csrf} onCreated={onChanged} />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className={cn("text-sm font-medium", head.ok ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300")} data-testid="health-headline">
           {health.isLoading ? "Checking…" : head.text}

@@ -56,3 +56,16 @@ describe("tabs and health", () => {
     expect(healthHeadline([])).toMatchObject({ ok: false });
   });
 });
+
+import { videoNameProblem } from "@/pages/projects/inspector-logic";
+describe("video names (the same rule the server enforces)", () => {
+  it("accepts kebab-case and says why anything else is refused", () => {
+    expect(videoNameProblem("plumbline-intro")).toBeNull();
+    expect(videoNameProblem("v2")).toBeNull();
+    expect(videoNameProblem("")).toMatch(/Give the video a name/);
+    expect(videoNameProblem("Bad Name")).toMatch(/lowercase/);
+    expect(videoNameProblem("../escape")).toMatch(/lowercase/);
+    expect(videoNameProblem("-leading")).toMatch(/lowercase/);
+    expect(videoNameProblem("x".repeat(61))).toMatch(/at most 60/);
+  });
+});

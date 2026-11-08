@@ -194,3 +194,21 @@ Pure decisions in `pages/projects/scope.ts` (9 unit tests incl. a mutation probe
 
 Proof: `tests/e2e/projects-scope.spec.ts` (3 browser tests on the served bundle, endpoints stubbed, incl. the direct
 link with a delayed project list). Screenshot checked: two islands, qualified labels, "4 of 4 nodes shown".
+
+## New video (T-0361)
+
+`POST /v1/console/projects/{id}/videos` `{name}` (session + CSRF) creates one video's folder under the project's
+`videos.root` (default `../Corvin-Videos`, relative to the project; refused inside CORVIN_HOME): `source/`, `build/`
+(each with a `.gitkeep`), `sources.md` from the project's `videos/TEMPLATE-sources.md` (its title line replaced; refused
+when the template lacks its eight sections), and a row in `videos/INDEX.md`. With the `kb` feature on it also creates
+the epic `VIDEO-<name>` under the project's first initiative and the tasks Narration/Render per language, the number
+check (DE against EN, when both are present) and the acceptance task, each with a definition of done, through the bound
+engine. Refused: a bad name (lowercase kebab-case, at most 60), an existing folder (409 `exists`), the videos feature
+off (409 `feature_off`). Audit-first: `project.video_created` requested, then applied or error; on any failure what this
+call created is removed and nothing that existed before. The inspector's Overview holds the form; the name rule is the
+same in the page (`videoNameProblem`) and on the server.
+
+Proof: `tests/e2e/test_projects_videos_e2e.py` (4: one run with the eight sections, the index row, the epic and the six
+tasks, a fresh `kb check` blocking 0 and the audit sequence; no knowledge base; names and existing folders refused
+before any write; the feature off). Mutation probe: writing a generic sources.md fails the convention test.
+Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed).

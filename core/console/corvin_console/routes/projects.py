@@ -54,6 +54,11 @@ class FeaturesBody(BaseModel):
     cascade: bool = False
 
 
+class VideoBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=60)
+
+
 class RepairBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dry_run: bool = False
@@ -124,6 +129,12 @@ def put_features(project_id: str, body: FeaturesBody, rec: SessCsrf) -> dict:
 @router.post("/{project_id}/repair")
 def post_repair(project_id: str, body: RepairBody, rec: SessCsrf) -> dict:
     return _call(svc.repair, rec.tenant_id, project_id, dry_run=body.dry_run)
+
+
+@router.post("/{project_id}/videos", status_code=201)
+def post_video(project_id: str, body: VideoBody, rec: SessCsrf) -> dict:
+    """Creates one video's folder, sources.md and (with the knowledge base on) its epic and tasks (T-0361)."""
+    return _call(svc.new_video, rec.tenant_id, project_id, body.name)
 
 
 @router.post("/{project_id}/open")

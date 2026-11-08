@@ -642,3 +642,124 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
             except (Conflict, subprocess.TimeoutExpired) as exc:
                 add("kb_check", False, str(exc)[:160])
     return {"project_id": project_id, "ok": all(c["ok"] for c in checks), "checks": checks}
+
+
+# ── videos (T-0361, CONCEPT-0126 §5.6) ───────────────────────────────────────────────────────
+
+VIDEO_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
+VIDEO_SECTIONS = ("Videoeigenschaften", "Inhalt", "Reproduktion", "Konfiguration", "Pipeline",
+                  "Quellen im Codebase", "Bekannte Einschränkungen", "Verwandte ADRs/Konzepte")
+
+
+def _videos_root(tenant_id: str, root: Path, man: dict[str, Any]) -> Path:
+    """Where a project's videos go: ``videos.root`` of project.yaml, relative to the project or absolute.
+    Refused inside CORVIN_HOME (the platform's own stores) and under the tenants directory."""
+    cfg = man.get("videos") if isinstance(man.get("videos"), dict) else {}
+    raw = str(cfg.get("root") or "../Corvin-Videos")
+    if "\x00" in raw or len(raw) > 500:
+        raise ProjectsError("videos.root is not a usable path")
+    target = Path(raw).expanduser()
+    if not target.is_absolute():
+        target = root / target
+    resolved = registry._resolve_forgiving(target)
+    home = registry._resolve_forgiving(corvin_home())
+    if resolved == home or home in resolved.parents or resolved in home.parents:
+        raise ProjectsError("videos.root must not be inside the CorvinOS home")
+    return resolved
+
+
+def _kb_initiative(root: Path) -> Optional[str]:
+    """The id of the project's first initiative (the one the seed created), or None."""
+    for p in sorted((root / "docs" / "kb" / "initiatives").glob("*.md")):
+        m = re.search(r"^id:\s*(\S+)\s*$", p.read_text(encoding="utf-8"), re.M)
+        if m:
+            return m.group(1)
+    return None
+
+
+def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
+    """Create one video's folder (source/, build/, sources.md), a row in the project's videos/INDEX.md and,
+    when the knowledge base is on, the epic VIDEO-<name> with the narration and render tasks per language.
+    Audit-first. Nothing is overwritten: an existing folder is refused."""
+    root, man = _load_project(tenant_id, project_id)
+    if not manifest.active_features(man) or "videos" not in manifest.active_features(man):
+        raise Conflict("the videos feature is off for this project - switch it on first", "feature_off", feature="videos")
+    name = (name or "").strip()
+    if not VIDEO_NAME_RE.match(name):
+        raise ProjectsError("the video name must be lowercase kebab-case, 1-60 characters")
+    cfg = man.get("videos") if isinstance(man.get("videos"), dict) else {}
+    langs = [x for x in (cfg.get("languages") or ["de", "en"]) if isinstance(x, str)]
+    vroot = _videos_root(tenant_id, root, man)
+    vdir = vroot / name
+    if vdir.exists() or vdir.is_symlink():
+        raise Conflict("a video with this name already exists in the videos folder", "exists")
+    kb_on = "kb" in manifest.active_features(man)
+    if kb_on:
+        bound_engine(tenant_id)            # refuse before anything is written when there is no engine for the KB
+    _audit(tenant_id, "project.video_created", project_id=project_id, outcome="requested", files=0)
+    created: list[Path] = []
+    try:
+        vroot.mkdir(parents=True, exist_ok=True)
+        vdir.mkdir()
+        created.append(vdir)
+        for sub in ("source", "build"):
+            (vdir / sub).mkdir()
+            created.append(vdir / sub)
+            (vdir / sub / ".gitkeep").write_text("", encoding="utf-8")
+        tpl = root / "videos" / "TEMPLATE-sources.md"
+        text = tpl.read_text(encoding="utf-8") if tpl.is_file() else ""
+        if [s for s in VIDEO_SECTIONS if f"## {s}" not in text]:
+            raise ProjectsError("videos/TEMPLATE-sources.md is missing its eight sections; restore it with Repair")
+        body = re.sub(r"^# sources\.md - .*$", f"# sources.md - {name}", text, count=1, flags=re.M)
+        (vdir / "sources.md").write_text(body, encoding="utf-8")
+        created.append(vdir / "sources.md")
+        index = root / "videos" / "INDEX.md"
+        if index.is_file() and not index.is_symlink():
+            row = "| {} | {} | {} | `{}` | started |\n".format(
+                name, "yes" if "de" in langs else "-", "yes" if "en" in langs else "-", vdir)
+            with index.open("a", encoding="utf-8") as fh:
+                fh.write(row)
+        epic_id: Optional[str] = None
+        tasks: list[str] = []
+        if kb_on:
+            docs = root / "docs"
+            ini = _kb_initiative(root)
+            if ini is None:
+                raise ProjectsError("the project has no initiative in its knowledge base to put the video's epic under")
+            rc, out = kb_projection._run(docs, "new", "epic", f"--title=VIDEO-{name}", f"--initiative={ini}",
+                                         "--actor=operator", actor="operator", engine=bound_engine(tenant_id))
+            if rc != 0 or not isinstance(out, dict) or not out.get("id"):
+                raise ProjectsError(f"the knowledge base refused the epic: {str(out)[:160]}")
+            epic_id = str(out["id"])
+            plan = []
+            for lang in langs:
+                plan.append((f"Narration {lang.upper()}", f"the {lang.upper()} narration exists and matches the storyboard"))
+                plan.append((f"Render {lang.upper()}", f"the {lang.upper()} MP4 is rendered and its ffprobe values are recorded"))
+            if "de" in langs and "en" in langs:
+                plan.append(("Check numbers DE against EN", "every number and date in both languages agrees"))
+            plan.append(("Acceptance and sources.md", "loudness about -16 LUFS, frames sampled, duration equals the sum of the segments, sources.md has all eight sections"))
+            for title, dod in plan:
+                rc, t = kb_projection._run(docs, "new", "task", f"--title={title}", f"--epic={epic_id}",
+                                           f"--dod={dod}", "--actor=operator", actor="operator", engine=bound_engine(tenant_id))
+                if rc != 0 or not isinstance(t, dict) or not t.get("id"):
+                    raise ProjectsError(f"the knowledge base refused the task {title!r}: {str(t)[:160]}")
+                tasks.append(str(t["id"]))
+    except BaseException as exc:
+        # roll back only what this call created: nothing that existed before is removed
+        for path in sorted(created, key=lambda p: len(p.parts), reverse=True):
+            try:
+                if path.is_file() or path.is_symlink():
+                    path.unlink()
+                elif path.is_dir():
+                    path.rmdir()
+            except OSError:
+                pass
+        _audit(tenant_id, "project.video_created", project_id=project_id, outcome="error", files=0)
+        if isinstance(exc, ProjectsError):
+            raise
+        raise ProjectsError(f"the video could not be created ({type(exc).__name__}); what was written was removed") from None
+    _audit(tenant_id, "project.video_created", project_id=project_id, outcome="applied", files=len(created))
+    note = ("" if kb_on else
+            "No knowledge base on this project: the folder and sources.md were created; no epic or tasks.")
+    return {"video": {"name": name, "path": str(vdir), "languages": langs, "kb": kb_on,
+                      "epic": epic_id, "tasks": tasks}, "note": note}

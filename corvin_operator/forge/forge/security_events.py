@@ -816,6 +816,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "project.repaired":             "INFO",
     "project.registry_removed":     "WARNING",
     "project.blocked":              "WARNING",
+    "project.video_created":        "INFO",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
     # Allow-list: instance_id, sest_fp_prefix (16 hex chars), pairing_id,
@@ -3803,7 +3804,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     **{
         _et: frozenset({"project_id", "feature", "to", "template", "files", "reason_class", "outcome", "tenant_id"})
         for _et in ("project.plan_created", "project.created", "project.adopted", "project.opened",
-                    "project.feature_toggled", "project.repaired", "project.registry_removed", "project.blocked")
+                    "project.feature_toggled", "project.repaired", "project.registry_removed", "project.blocked",
+                    "project.video_created")
     },
     "task_item.kb_create": frozenset({
         "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",

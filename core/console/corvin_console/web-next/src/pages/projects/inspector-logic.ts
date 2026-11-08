@@ -70,3 +70,12 @@ export function healthHeadline(checks: { ok: boolean }[]): { text: string; ok: b
   if (failing === 0) return { text: "Every check passes.", ok: true };
   return { text: `${failing} of ${checks.length} checks need attention.`, ok: false };
 }
+
+/** The same rule the server enforces (VIDEO_NAME_RE): shown before the request, never instead of it. */
+export function videoNameProblem(name: string): string | null {
+  const n = name.trim();
+  if (n.length === 0) return "Give the video a name.";
+  if (n.length > 60) return "The name is at most 60 characters.";
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(n)) return "Use lowercase letters, digits and dashes, starting with a letter or digit.";
+  return null;
+}
