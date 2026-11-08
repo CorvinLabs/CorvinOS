@@ -749,6 +749,9 @@ class WebChatSession:
     # turn ends without one. One turn per session at a time (_session_turn_lock in
     # routes/chat.py), so a single slot is sufficient.
     in_flight_task: tuple[Path, str] | None = field(default=None, repr=False)
+    # CONCEPT-0128: the per-turn tracker of the project explorer (None when the chat has no project attached).
+    # Transient exactly like in_flight_task: never persisted, set by stream_turn, read at the tool_use site.
+    activity_turn: Any = field(default=None, repr=False)
     # Set by _stream_turn_impl's cancel path when the turn had ALREADY delivered its
     # answer ("final": the closing result was yielded; "children_open": the answer
     # was yielded while background children were still running, ADR-2236). Read
@@ -6605,12 +6608,24 @@ async def stream_turn(
     """
     sess.in_flight_task = None
     _btw_turn_opened(sess.chat_key)
+    # CONCEPT-0128 / ADR-2320: the project explorer sees this turn. Resolved ONCE here; every call below swallows its own errors,
+    # so the explorer can never break a turn. The finish is published exactly once, in the `finally`, even when the generator is closed.
+    try:
+        from core.projects import activity as _activity  # noqa: PLC0415
+        sess.activity_turn = _activity.tracker_for(sess.tenant_id, sess.sid, sess.title)
+        if sess.activity_turn is not None:
+            sess.activity_turn.start()
+    except Exception:  # noqa: BLE001
+        sess.activity_turn = None
     try:
         async with contextlib.aclosing(
             _stream_turn_impl(sess, prompt, sid_fingerprint=sid_fingerprint, recovery=recovery,
                               route_phase=route_phase)
         ) as gen:
             async for event in gen:
+                _at = sess.activity_turn
+                if _at is not None and event.get("type") in ("done", "error"):
+                    _at.reason = "done" if event.get("type") == "done" else "error"
                 if event.get("type") == "done":
                     # CONCEPT-0107: a note still queued is undelivered — say so
                     # before `done`, so the client's reconcile reads the record.
@@ -6618,6 +6633,11 @@ async def stream_turn(
                         yield _ev
                 yield event
     finally:
+        try:
+            if sess.activity_turn is not None:
+                sess.activity_turn.finish()
+        finally:
+            sess.activity_turn = None
         _btw_drain_undelivered(sess)   # abnormal exit: record, nobody to tell
         _btw_turn_closed(sess.chat_key)
         slot = sess.in_flight_task  # read BEFORE the finalizer clears it
@@ -9082,6 +9102,8 @@ async def _stream_turn_impl(
                             await _os_audit_off_loop("os_turn.tool_called", {
                                 "tool_name": tname, "seq": _os_tool_seq,
                             })
+                            if sess.activity_turn is not None:       # CONCEPT-0128: the explorer's own derived detail, never the input
+                                sess.activity_turn.tool(tname, tinput, tool_id=tool_id, sub=_from_subagent)
                             yield {
                                 "type": "tool_use",
                                 "name": tname,

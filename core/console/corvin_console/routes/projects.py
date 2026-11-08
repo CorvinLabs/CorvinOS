@@ -7,10 +7,16 @@ every other call carries a project id and resolves the path from the registry.
 """
 from __future__ import annotations
 
-from typing import Annotated, Any, Optional
+import asyncio
+import json
+import time
+from typing import Annotated, Any, AsyncIterator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+
+from core.projects import activity
 
 from core.projects import fragments as F
 from core.projects import manifest, registry
@@ -183,6 +189,81 @@ def post_repair(project_id: str, body: RepairBody, rec: SessCsrf) -> dict:
 def post_video(project_id: str, body: VideoBody, rec: SessCsrf) -> dict:
     """Creates one video's folder, sources.md and (with the knowledge base on) its epic and tasks (T-0361)."""
     return _call(svc.new_video, rec.tenant_id, project_id, body.name)
+
+
+# ── live work on a project (CONCEPT-0128, ADR-2320) ───────────────────────────────────────────
+
+def _activity_root(tenant_id: str, project_id: str):
+    """The registered project's folder for THIS tenant, or 404. The only way into a channel: a viewer of another tenant never gets here."""
+    e = svc._entry(tenant_id, project_id)
+    return e.get("path")
+
+
+def _sse(event: str, data: dict, *, id_: Optional[str] = None) -> str:
+    head = f"id: {id_}\n" if id_ else ""
+    return f"{head}event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+
+
+async def _activity_stream(request: Request, tenant_id: str, project_id: str, cursor: Optional[str]) -> AsyncIterator[str]:
+    """One short stream: snapshot first, live events, a heartbeat, an ``end`` event, then the response closes (``activity.STREAM_LIFETIME_S``,
+    because uvicorn waits for an open response at shutdown and the app is never told). The browser reconnects with ``Last-Event-ID``."""
+    def _root():
+        e = registry.get(tenant_id, project_id)
+        return e.get("path") if e else None
+
+    try:
+        q = activity.subscribe(tenant_id, project_id, _root)
+    except activity.StreamLimit:                      # lost the race against the pre-check: say so instead of failing mid-stream
+        yield _sse("end", {"reason": "stream_limit"})
+        return
+    try:
+        snap = activity.snapshot(tenant_id, project_id, cursor)
+        yield "retry: 2000\n\n"
+        yield _sse("snapshot", snap, id_=f"{snap['epoch']}:{snap['seq']}")
+        sent = snap["seq"]                             # subscribed BEFORE the snapshot: queued events at or below it are duplicates
+        deadline = time.monotonic() + activity.STREAM_LIFETIME_S
+        last_beat = time.monotonic()
+        tick = 0
+        reason = "lifetime"
+        while time.monotonic() < deadline:
+            if await request.is_disconnected():
+                return
+            try:
+                ev = await asyncio.wait_for(q.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                ev = None
+            tick += 1
+            if ev is not None:
+                if ev["seq"] > sent:
+                    sent = ev["seq"]
+                    yield _sse("activity", ev, id_=ev["id"])
+                last_beat = time.monotonic()
+            elif time.monotonic() - last_beat >= 5.0:
+                last_beat = time.monotonic()
+                yield ": ping\n\n"
+            if tick % 3 == 0 and registry.get(tenant_id, project_id) is None:
+                reason = "project_removed"
+                break
+        yield _sse("end", {"reason": reason})
+    finally:
+        activity.unsubscribe(tenant_id, project_id, q)
+
+
+@router.get("/{project_id}/activity")
+def project_activity(project_id: str, rec: Sess, after: Optional[str] = None) -> dict:
+    """The snapshot (agents, backlog after the cursor). Cheap: it starts no watcher - the live dot polls this."""
+    _call(_activity_root, rec.tenant_id, project_id)
+    return activity.snapshot(rec.tenant_id, project_id, after)
+
+
+@router.get("/{project_id}/activity/stream")
+async def project_activity_stream(project_id: str, request: Request, rec: Sess, after: Optional[str] = None) -> StreamingResponse:
+    _call(_activity_root, rec.tenant_id, project_id)
+    cursor = request.headers.get("last-event-id") or after
+    if activity.stream_count(rec.tenant_id) >= activity.MAX_STREAMS_PER_TENANT:       # a real HTTP status (EventSource cannot show one)
+        raise HTTPException(status_code=429, detail={"message": "too many open explorers; close one and try again", "reason_class": "stream_limit"})
+    return StreamingResponse(_activity_stream(request, rec.tenant_id, project_id, cursor), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @router.put("/{project_id}/settings")
