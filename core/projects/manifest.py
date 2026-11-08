@@ -21,6 +21,11 @@ PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,27}$")
 FEATURE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 TEMPLATE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}@[0-9]{1,4}$")
 DOCS_MODES = ("nested", "plain")
+ROLES = ("software", "data_science", "marketing", "product", "sales", "legal", "video", "research", "knowledge")
+CLASSES = ("public", "internal", "confidential", "secret")      # the L34 vocabulary, lowest to highest
+ACCESS = ("read", "write")
+DEFAULT_CLASS = "internal"
+DEFAULT_ACCESS = "read"
 _TENANT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
 _MAX_BYTES = 64 * 1024
 
@@ -48,6 +53,12 @@ def validate(data: Any) -> dict[str, Any]:
         raise ManifestError("template must look like '<id>@<n>'")
     if data.get("docs_mode", "nested") not in DOCS_MODES:
         raise ManifestError(f"docs_mode must be one of {DOCS_MODES}")
+    if data.get("role") is not None and data.get("role") not in ROLES:
+        raise ManifestError(f"role must be one of {ROLES}")
+    if data.get("classification", DEFAULT_CLASS) not in CLASSES:
+        raise ManifestError(f"classification must be one of {CLASSES}")
+    if data.get("assistant_access", DEFAULT_ACCESS) not in ACCESS:
+        raise ManifestError(f"assistant_access must be one of {ACCESS}")
     feats = data.get("features", {})
     if not isinstance(feats, dict) or not all(
             isinstance(k, str) and FEATURE_ID_RE.match(k) and isinstance(v, bool) for k, v in feats.items()):
@@ -101,3 +112,11 @@ def write(root: Path, data: dict[str, Any]) -> None:
 
 def active_features(data: dict[str, Any]) -> list[str]:
     return [k for k, v in (data.get("features") or {}).items() if v]
+
+
+def classification_of(data: dict[str, Any]) -> str:
+    return data.get("classification") or DEFAULT_CLASS
+
+
+def access_of(data: dict[str, Any]) -> str:
+    return data.get("assistant_access") or DEFAULT_ACCESS

@@ -92,6 +92,10 @@ class Template:
     offered: tuple[str, ...]           # every feature the wizard may show
     docs_mode: str = "nested"
     videos: dict[str, Any] = field(default_factory=dict, compare=False)
+    role: str = ""                       # one of manifest.ROLES, or "" (a template without a job)
+    classification: str = "internal"     # the template's default data class (L34 vocabulary)
+    assistant_access: str = "read"       # the template's default for what the assistant may do
+    outcome: str = ""                    # plain words: what this role typically produces
 
 
 @dataclass
@@ -181,7 +185,15 @@ def load_catalogue(src: Path) -> Catalogue:
                 raise FragmentError(f"{p.name}: id must equal the file name")
             feats = tuple(_tup(raw.get("features"), f"{tid}.features"))
             offered = tuple(_tup(raw.get("offered"), f"{tid}.offered")) or feats
+            from . import manifest as _m  # noqa: PLC0415
+            role = raw.get("role") or ""
+            cls = raw.get("classification") or _m.DEFAULT_CLASS
+            acc = raw.get("assistant_access") or _m.DEFAULT_ACCESS
+            if (role and role not in _m.ROLES) or cls not in _m.CLASSES or acc not in _m.ACCESS:
+                raise FragmentError(f"{tid}: role, classification or assistant_access is not in the closed lists")
             templates[tid] = Template(id=tid, version=int(raw.get("version", 1)), title=str(raw.get("title", tid)),
+                                      role=str(role), classification=str(cls), assistant_access=str(acc),
+                                      outcome=str(raw.get("outcome", ""))[:160],
                                       description=str(raw.get("description", "")), features=feats, offered=offered,
                                       docs_mode=str(raw.get("docs_mode", "nested")),
                                       videos=raw.get("videos") if isinstance(raw.get("videos"), dict) else {})

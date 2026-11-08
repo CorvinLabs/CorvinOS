@@ -189,6 +189,9 @@ class PlanRecord:
     location: Path
     docs_mode: str
     created: float = field(default_factory=time.monotonic)
+    role: str = ""
+    classification: str = manifest.DEFAULT_CLASS
+    assistant_access: str = manifest.DEFAULT_ACCESS
 
 
 _plans: dict[str, PlanRecord] = {}
@@ -276,14 +279,17 @@ def list_templates(tenant_id: str) -> dict[str, Any]:
                       "plugins": [{"plugin": p, "state": plugin_state(tenant_id, p)} for p in f.requires_plugins]})
     return {"available": True, "projects_root": str(registry.projects_root(tenant_id)),
             "templates": [{"id": t.id, "version": t.version, "title": t.title, "description": t.description,
-                           "features": list(t.features), "offered": list(t.offered), "docs_mode": t.docs_mode}
+                           "features": list(t.features), "offered": list(t.offered), "docs_mode": t.docs_mode,
+                           "role": t.role, "classification": t.classification,
+                           "assistant_access": t.assistant_access, "outcome": t.outcome}
                           for t in cat.templates.values()],
             "features": feats}
 
 
 def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optional[str] = None,
                  location: Optional[str] = None, features: Optional[list[str]] = None,
-                 docs_mode: Optional[str] = None) -> dict[str, Any]:
+                 docs_mode: Optional[str] = None, classification: Optional[str] = None,
+                 assistant_access: Optional[str] = None) -> dict[str, Any]:
     cat = catalogue(tenant_id)
     tpl = cat.templates.get(template)
     if tpl is None:
@@ -303,6 +309,12 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     mode = docs_mode or tpl.docs_mode
     if mode not in manifest.DOCS_MODES:
         raise ProjectsError(f"docs_mode must be one of {manifest.DOCS_MODES}")
+    cls = classification or tpl.classification
+    acc = assistant_access or tpl.assistant_access
+    if cls not in manifest.CLASSES:
+        raise ProjectsError(f"classification must be one of {manifest.CLASSES}")
+    if acc not in manifest.ACCESS:
+        raise ProjectsError(f"assistant_access must be one of {manifest.ACCESS}")
     raw_loc = location or str(registry.projects_root(tenant_id) / pid)
     try:
         loc = registry.validate_location(tenant_id, raw_loc)
@@ -314,14 +326,15 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     plugins = _check_plugins(tenant_id, plan)
     rec = PlanRecord(plan_id=secrets.token_urlsafe(18), tenant_id=tenant_id, template=tpl.id,
                      template_version=tpl.version, project_id=pid, title=title, features=selected,
-                     location=loc, docs_mode=mode)
+                     location=loc, docs_mode=mode, role=tpl.role, classification=cls, assistant_access=acc)
     _audit(tenant_id, "project.plan_created", project_id=pid, template=f"{tpl.id}@{tpl.version}",
            files=len(plan.writes))
     _store_plan(rec)
     summary = plan.summary()
     summary["warnings"] = [*summary["warnings"], *external_warnings(tenant_id, plan.features)]
     return {"plan_id": rec.plan_id, "project_id": pid, "title": title, "template": f"{tpl.id}@{tpl.version}",
-            "docs_mode": mode, "location": str(loc), **summary, "plugins": plugins,
+            "docs_mode": mode, "location": str(loc), "role": tpl.role, "classification": cls,
+            "assistant_access": acc, **summary, "plugins": plugins,
             "ready": not plan.conflicts and all(p["state"] == "enabled" for p in plugins),
             "expires_in_s": int(PLAN_TTL_S)}
 
@@ -376,12 +389,17 @@ def _runner(tenant_id: str, root: Path):
 
 
 def _manifest_for(rec_tenant: str, pid: str, title: str, template: str, version: int, mode: str,
-                  features: list[str], offered: list[str], videos: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                  features: list[str], offered: list[str], videos: Optional[dict[str, Any]] = None,
+                  role: str = "", classification: str = manifest.DEFAULT_CLASS,
+                  assistant_access: str = manifest.DEFAULT_ACCESS) -> dict[str, Any]:
     on = set(features)
     man: dict[str, Any] = {"schema": manifest.SCHEMA, "id": pid, "title": title, "tenant": rec_tenant,
                            "template": f"{template}@{version}",
                            "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                           "docs_mode": mode, "features": {f: (f in on) for f in dict.fromkeys([*offered, *features])}}
+                           "docs_mode": mode, "classification": classification, "assistant_access": assistant_access,
+                           "features": {f: (f in on) for f in dict.fromkeys([*offered, *features])}}
+    if role:
+        man["role"] = role
     if "videos" in on and videos:
         man["videos"] = dict(videos)                  # the template's defaults: where videos live, which languages
     if "directory" in on:
@@ -417,7 +435,8 @@ def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
     try:
         loc.mkdir(parents=True, exist_ok=True)
         man = _manifest_for(tenant_id, rec.project_id, rec.title, tpl.id, tpl.version, rec.docs_mode,
-                            plan.features, list(tpl.offered), tpl.videos)
+                            plan.features, list(tpl.offered), tpl.videos, rec.role, rec.classification,
+                            rec.assistant_access)
         manifest.write(loc, man)                                                # the truth first,
         registry.register(tenant_id, rec.project_id, loc, man["template"])      # then the index
         applied = F.apply_plan(plan, loc, {**ctx, "_root": str(loc)}, _runner(tenant_id, loc))
@@ -536,7 +555,8 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
         return {**out, "state": "invalid", "reason": "project.yaml does not match the registry entry"}
     return {**out, "state": "ok", "title": man.get("title", e["id"]), "docs_mode": man.get("docs_mode", "nested"),
             "features": man.get("features", {}), "active": manifest.active_features(man),
-            "kb": (root / "docs" / "kb" / "_meta").is_dir()}
+            "role": man.get("role") or "", "classification": manifest.classification_of(man),
+            "assistant_access": manifest.access_of(man), "kb": (root / "docs" / "kb" / "_meta").is_dir()}
 
 
 def list_projects(tenant_id: str) -> dict[str, Any]:
@@ -931,6 +951,11 @@ def attach_chat(tenant_id: str, project_id: str, session_id: str) -> dict[str, A
     if _summary(tenant_id, e)["state"] != "ok":
         raise Conflict("only a project in state ok can be attached", "not_openable")
     _require_chat(tenant_id, session_id)
+    _, man = _load_project(tenant_id, project_id)
+    refusal = _class_refusal(tenant_id, manifest.classification_of(man))
+    if refusal:
+        _audit_refusal(tenant_id, "classification", project_id)
+        raise Conflict(refusal, "classification")
     _audit(tenant_id, "project.attached", project_id=project_id)
     attachment.attach(tenant_id, session_id, project_id)
     return {"project_id": project_id, "session_id": session_id, "attached": True,
@@ -955,3 +980,57 @@ def chat_attachment(tenant_id: str, session_id: str) -> dict[str, Any]:
     e = registry.get(tenant_id, pid) if pid else None
     return {"session_id": session_id, "project_id": pid if e else None,
             "title": _summary(tenant_id, e).get("title") if e else None}
+
+
+def _class_refusal(tenant_id: str, classification: str) -> Optional[str]:
+    """The L34 gate's refusal for sending a project of this class to the OS engine, or None. Fail closed."""
+    from . import chat_runtime  # noqa: PLC0415
+    return chat_runtime.project_class_refusal(tenant_id, classification)
+
+
+# ── settings: classification and what the assistant may do (T-0369, ADR-2319) ───────────────
+
+def set_settings(tenant_id: str, project_id: str, *, classification: Optional[str] = None,
+                 assistant_access: Optional[str] = None, confirm: bool = False) -> dict[str, Any]:
+    """Change the project's data class and/or the assistant's access. Raising access to ``write`` and
+    LOWERING the class need ``confirm`` (the UI's confirming click); everything else applies at once."""
+    root, man = _load_project(tenant_id, project_id)
+    new_cls = classification if classification is not None else manifest.classification_of(man)
+    new_acc = assistant_access if assistant_access is not None else manifest.access_of(man)
+    if new_cls not in manifest.CLASSES:
+        raise ProjectsError(f"classification must be one of {manifest.CLASSES}")
+    if new_acc not in manifest.ACCESS:
+        raise ProjectsError(f"assistant_access must be one of {manifest.ACCESS}")
+    old_cls, old_acc = manifest.classification_of(man), manifest.access_of(man)
+    if (new_cls, new_acc) == (old_cls, old_acc):
+        return get_project(tenant_id, project_id)
+    lowers = manifest.CLASSES.index(new_cls) < manifest.CLASSES.index(old_cls)
+    raises = old_acc == "read" and new_acc == "write"
+    if (lowers or raises) and not confirm:
+        raise Conflict("this change lowers the protection of the project and needs confirmation", "confirmation_required",
+                       lowers_classification=lowers, raises_access=raises)
+    _audit(tenant_id, "project.settings_changed", project_id=project_id, classification=new_cls, access=new_acc)
+    manifest.write(root, {**man, "classification": new_cls, "assistant_access": new_acc})
+    return get_project(tenant_id, project_id)
+
+
+# ── changes (T-0370, ADR-2319 D5) ──────────────────────────────────────────────────────────
+
+def project_changes(tenant_id: str, project_id: str, commit: Optional[str] = None) -> dict[str, Any]:
+    from core.projects import changes  # noqa: PLC0415
+    root, _man = _load_project(tenant_id, project_id)
+    try:
+        files = changes.commit_files(root, commit) if commit else changes.working_changes(root)
+        return {"project_id": project_id, "commit": commit, "files": files, "commits": changes.recent_commits(root),
+                "has_repository": bool(changes.repos(root)), "truncated": len(files) >= changes.MAX_FILES}
+    except changes.ChangesError as exc:
+        raise ProjectsError(str(exc)) from None
+
+
+def project_change_file(tenant_id: str, project_id: str, path: str, commit: Optional[str] = None) -> dict[str, Any]:
+    from core.projects import changes  # noqa: PLC0415
+    root, _man = _load_project(tenant_id, project_id)
+    try:
+        return changes.file_view(root, path, commit)
+    except changes.ChangesError as exc:
+        raise ProjectsError(str(exc)) from None

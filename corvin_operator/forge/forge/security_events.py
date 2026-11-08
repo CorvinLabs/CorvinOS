@@ -812,6 +812,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "project.created":              "INFO",
     "project.adopted":              "INFO",
     "project.renamed":              "INFO",
+    "project.settings_changed":     "WARNING",
     "project.attached":             "INFO",
     "project.detached":             "INFO",
     "project.moved":                "WARNING",
@@ -3806,11 +3807,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
                     "task_item.kb_transition")
     },
     **{
-        _et: frozenset({"project_id", "feature", "to", "template", "files", "reason_class", "outcome", "tenant_id"})
+        _et: frozenset({"project_id", "feature", "to", "template", "files", "reason_class", "outcome", "tenant_id",
+                        "role", "classification", "access"})
         for _et in ("project.plan_created", "project.created", "project.adopted", "project.opened",
                     "project.feature_toggled", "project.repaired", "project.registry_removed", "project.blocked",
                     "project.video_created", "project.renamed", "project.moved", "project.attached",
-                    "project.detached")
+                    "project.detached", "project.settings_changed")
     },
     "task_item.kb_create": frozenset({
         "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",

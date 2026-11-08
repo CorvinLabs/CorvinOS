@@ -81,9 +81,12 @@ class TemplateCatalogueE2E(unittest.TestCase):
     def test_the_catalogue_is_valid_closed_and_free_of_absolute_paths(self):
         cat = F.load_catalogue(_SRC)
         self.assertEqual(F.validate_catalogue(cat), [])
-        self.assertEqual(sorted(cat.templates), ["knowledge-only", "research-compute", "video-engineering"])
+        self.assertEqual(sorted(cat.templates), ["data-science", "knowledge-only", "legal-compliance", "marketing-campaign",
+                                                 "product-management", "research-compute", "sales-account",
+                                                 "software-development", "video-engineering"])
         self.assertEqual(set(cat.fragments), {"core", "kb", "tasks", "graph", "gates", "claude", "ldd", "experiments",
-                                              "acs", "videos", "video_producer", "directory", "dashboard"})
+                                              "acs", "videos", "video_producer", "directory", "dashboard",
+                                              "software", "datasci", "marketing", "product", "sales", "legal"})
         for t in cat.templates.values():                       # every default AND offered set is requires-closed
             self.assertEqual(set(F.closure(cat, t.features)), set(t.features), t.id)
             self.assertEqual(set(F.closure(cat, t.offered)), set(t.offered), t.id)
@@ -155,6 +158,35 @@ class TemplateCatalogueE2E(unittest.TestCase):
             self.assertNotIn(".mcp.json", tracked)
             self.assertTrue((rc / "docs/data/experiments/README.md").is_file())
             self.assertIn("Agentic compute", (rc / "CLAUDE.md").read_text(encoding="utf-8"))
+
+    def test_every_role_template_creates_a_green_project_with_its_role_seed_files_and_defaults(self):
+        """CONCEPT-0127: the six role templates added in plugin 1.1.0 create real projects with their role's files,
+        their role/class/access defaults, a green fresh kb check and a healthy doctor."""
+        expect = {  # template -> (title, role, class, access, a seed file the role must bring)
+            "software-development": ("Billing service", "software", "internal", "write", "engineering/ARCHITECTURE.md"),
+            "data-science": ("Churn model", "data_science", "confidential", "write", "reports/REPORT-TEMPLATE.md"),
+            "marketing-campaign": ("Spring launch", "marketing", "internal", "write", "campaigns/BRIEF-TEMPLATE.md"),
+            "product-management": ("Mobile app", "product", "internal", "write", "product/PRD-TEMPLATE.md"),
+            "sales-account": ("Acme account", "sales", "confidential", "read", "accounts/ACCOUNT-PLAN-TEMPLATE.md"),
+            "legal-compliance": ("Vendor contracts", "legal", "confidential", "read", "clauses/CLAUSE-LIBRARY.md"),
+        }
+        with self._sandboxed() as (c, hdr, root), mock.patch(
+                "corvin_console.projects_service.compute_worker_reachable", lambda tenant: True):
+            for tpl, (title, role, cls, acc, seed) in expect.items():
+                p = self._create(c, hdr, tpl, title)
+                pid = p["project_id"]
+                proj = root / pid
+                self.assertTrue((proj / seed).is_file(), (tpl, seed))
+                chk = json.loads(fx._sh(sys.executable, self.bound / "scripts" / "kb.py", "--repo", proj / "docs", "check"))
+                self.assertEqual(chk["blocking"], 0, (tpl, chk))
+                got = c.get(f"{_URL}/{pid}").json()
+                self.assertEqual((got["role"], got["classification"], got["assistant_access"]), (role, cls, acc), tpl)
+                self.assertEqual(c.get(f"{_URL}/{pid}/health").json()["ok"], True, tpl)
+                claude = (proj / "CLAUDE.md").read_text(encoding="utf-8")
+                self.assertIn({"software": "## Software engineering", "data_science": "## Data science", "marketing": "## Marketing",
+                               "product": "## Product management", "sales": "## Sales", "legal": "## Legal and compliance"}[role], claude)
+                for bad in ("/home/", "shumway"):
+                    self.assertNotIn(bad, claude)
 
     def test_acs_warns_about_the_worker_and_the_licence_it_cannot_verify(self):
         with self._sandboxed() as (c, hdr, root):

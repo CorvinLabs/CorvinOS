@@ -268,3 +268,24 @@ byte-identical) and `tests/e2e/projects-manage.spec.ts`. Audit: `project.attache
 **Project chip.** A chat's header shows a chip with the attached project's title (`pages/projects/chat-chip.tsx`, reads
 `GET /projects/chat-attachment`); it links to the project's Settings tab. No attachment, or a failing lookup, renders nothing - the
 chip never breaks the chat. Proof: `tests/e2e/projects-chat-chip.spec.ts` (a real chat session of the console; only the lookup is stubbed).
+
+
+## Roles, classification and assistant access (T-0368..T-0370, ADR-2319, CONCEPT-0127)
+
+- **Role templates** (plugin `project_templates` 1.1.0): software, data science, marketing, product, sales, legal and compliance, plus video,
+  research and knowledge-only. A template names a closed-list `role`, a default `classification` (L34 vocabulary) and `assistant_access`, and an
+  `outcome` in plain words; the host refuses a value outside the lists. `GET /projects/templates` returns them; `POST /projects/plan` accepts
+  `classification` and `assistant_access` overrides and returns the resolved values.
+- **`project.yaml`** carries optional `role`, `classification` (default `internal`), `assistant_access` (default `read`).
+- **Settings** `PUT /projects/{id}/settings` `{classification?, assistant_access?, confirm?}`: raising the class applies at once; LOWERING it or raising
+  access to `write` answers 409 `confirmation_required` until `confirm: true`. Audit `project.settings_changed` (enums only).
+- **Enforcement** is the existing L34 gate: `POST /projects/{id}/attach` and every spawn of an attached chat run
+  `chat_runtime.project_class_refusal` (= `check_l34(<OS engine>, tenant, classification=<project class>)`); a refusal answers 409
+  `reason_class: classification`. `assistant_access: write` removes the write-deny rules of THAT project only (`attachment.spawn_parts`).
+  With no tenant data-classification policy L34 is opt-in, except that a `secret` class is still refused.
+- **Rights** mean what the assistant may do. A per-user access list is not built: there is no credential login to give it a subject.
+- **Change view** (`core/projects/changes.py`): `GET /projects/{id}/changes[?commit=]` lists files that differ from the last commit in the project and
+  the nested `docs/` repository (status, +/- lines, area code/docs/knowledge, ids found in the file name as links) plus recent commits;
+  `GET /projects/{id}/changes/file?path=[&commit=]` returns the unified diff, or the text of a new file. Read-only git with
+  `GIT_OPTIONAL_LOCKS=0`; a path outside the repository, through a symlink, `.git`, or not in the listing is refused (400); binaries and
+  files over 200 KB are listed, not rendered. Proof: `tests/e2e/test_projects_roles_e2e.py`, `tests/e2e/test_project_templates_catalogue_e2e.py`.

@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from . import registry
+from . import manifest, registry
 from .fsutil import atomic_write, file_lock
 
 SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -75,11 +75,13 @@ def _regular(p: Path) -> bool:
     return p.is_file() and not p.is_symlink() and p.stat().st_size <= _MAX_FILE
 
 
-def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None) -> Optional[dict[str, Any]]:
+def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None) -> Optional[dict[str, Any]]:
     """What the chat's next CLI spawn adds, or None (not attached, project gone or invalid, or a gate said no).
 
     ``l34_allows(text) -> bool`` judges the project's rules text against the engine that will read it
-    (ADR-2317 Decision 6); an error or ``False`` withholds the whole attachment (fail closed)."""
+    (ADR-2317 Decision 6); an error or ``False`` withholds the whole attachment (fail closed).
+    ``class_allows(classification) -> bool`` judges the PROJECT's data class against the same engine (ADR-2319);
+    the same fail-closed rule holds. ``assistant_access: write`` is the only thing that lifts the write-deny rules."""
     pid = attached(tenant_id, sid)
     if not pid:
         return None
@@ -90,10 +92,16 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None) -> Optional[dict[s
     try:
         if not root.is_dir() or root.is_symlink():
             return None
-        from . import manifest  # noqa: PLC0415
         man = manifest.load(root)
         if man.get("tenant") != tenant_id or man.get("id") != pid:
             return None
+        cls, access = manifest.classification_of(man), manifest.access_of(man)
+        if class_allows is not None:
+            try:
+                if not class_allows(cls):
+                    return None
+            except Exception:  # noqa: BLE001 - fail closed
+                return None
         rules = root / "CLAUDE.md"
         if _regular(rules) and l34_allows is not None:
             try:
@@ -104,7 +112,8 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None) -> Optional[dict[s
     except (OSError, manifest.ManifestError):
         return None
     abs_root = os.path.abspath(root)
-    deny = [f"{tool}(/{Path(abs_root).as_posix()}/**)" for tool in ("Write", "Edit", "NotebookEdit")]
+    deny = ([] if access == "write" else
+            [f"{tool}(/{Path(abs_root).as_posix()}/**)" for tool in ("Write", "Edit", "NotebookEdit")])
     mcp = root / ".mcp.json"
     return {
         "project_id": pid,
@@ -112,4 +121,6 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None) -> Optional[dict[s
         "env": {RULES_ENV: "1"},
         "mcp_config": str(mcp) if _regular(mcp) else None,
         "deny": deny,
+        "classification": cls,
+        "access": access,
     }

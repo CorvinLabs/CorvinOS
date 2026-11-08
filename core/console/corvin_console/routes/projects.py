@@ -35,6 +35,8 @@ class PlanBody(BaseModel):
     location: Optional[str] = Field(default=None, max_length=1000)
     features: Optional[list[str]] = Field(default=None, max_length=64)
     docs_mode: Optional[str] = Field(default=None, max_length=10)
+    classification: Optional[str] = Field(default=None, max_length=16)
+    assistant_access: Optional[str] = Field(default=None, max_length=8)
 
 
 class CreateBody(BaseModel):
@@ -52,6 +54,13 @@ class AdoptBody(BaseModel):
 class RenameBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=120)
+
+
+class SettingsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    classification: Optional[str] = Field(default=None, max_length=16)
+    assistant_access: Optional[str] = Field(default=None, max_length=8)
+    confirm: bool = False
 
 
 class AttachBody(BaseModel):
@@ -114,7 +123,8 @@ def templates(rec: Sess) -> dict:
 def plan(body: PlanBody, rec: SessCsrf) -> dict:
     return _call(svc.plan_project, rec.tenant_id, template=body.template, title=body.title,
                  project_id=body.project_id, location=body.location, features=body.features,
-                 docs_mode=body.docs_mode)
+                 docs_mode=body.docs_mode, classification=body.classification,
+                 assistant_access=body.assistant_access)
 
 
 @router.post("", status_code=201)
@@ -173,6 +183,22 @@ def post_repair(project_id: str, body: RepairBody, rec: SessCsrf) -> dict:
 def post_video(project_id: str, body: VideoBody, rec: SessCsrf) -> dict:
     """Creates one video's folder, sources.md and (with the knowledge base on) its epic and tasks (T-0361)."""
     return _call(svc.new_video, rec.tenant_id, project_id, body.name)
+
+
+@router.put("/{project_id}/settings")
+def settings(project_id: str, body: SettingsBody, rec: SessCsrf) -> dict:
+    return _call(svc.set_settings, rec.tenant_id, project_id, classification=body.classification,
+                 assistant_access=body.assistant_access, confirm=body.confirm)
+
+
+@router.get("/{project_id}/changes")
+def changes(project_id: str, rec: Sess, commit: Optional[str] = None) -> dict:
+    return _call(svc.project_changes, rec.tenant_id, project_id, commit)
+
+
+@router.get("/{project_id}/changes/file")
+def change_file(project_id: str, path: str, rec: Sess, commit: Optional[str] = None) -> dict:
+    return _call(svc.project_change_file, rec.tenant_id, project_id, path, commit)
 
 
 @router.put("/{project_id}/title")

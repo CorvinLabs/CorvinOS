@@ -3367,6 +3367,17 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
     return args
 
 
+def project_class_refusal(tenant_id: str, classification: str) -> "str | None":
+    """ADR-2319: the L34 gate's refusal for a project of this data class against the OS engine, or None if the
+    class may go there. Fail closed: a gate that cannot be consulted refuses."""
+    try:
+        from spawn_gates import check_l34 as _l34  # type: ignore  # noqa: PLC0415
+        engine = _configured_os_engine(tenant_id) or "claude_code"
+        return _l34(engine, tenant_id, classification=str(classification), channel=CHANNEL, chat_key="")
+    except Exception:  # noqa: BLE001
+        return "the data-flow gate could not be consulted; the project is not attached"
+
+
 def _project_attachment_parts(sess: "WebChatSession") -> "dict[str, Any] | None":
     """The attached project's spawn additions for this chat, judged by L34 against the OS engine; None if none."""
     try:
@@ -3381,7 +3392,8 @@ def _project_attachment_parts(sess: "WebChatSession") -> "dict[str, Any] | None"
             cls = classify_task(text, detector=_detector_on(sess.tenant_id))
             return _l34(engine, sess.tenant_id, classification=cls, channel=CHANNEL, chat_key=sess.chat_key) is None
 
-        return _pa.spawn_parts(sess.tenant_id, sess.sid, l34_allows=_l34_allows)
+        return _pa.spawn_parts(sess.tenant_id, sess.sid, l34_allows=_l34_allows,
+                               class_allows=lambda cls: project_class_refusal(sess.tenant_id, cls) is None)
     except Exception:  # noqa: BLE001 - an attachment problem must never break a chat turn
         _log.warning("project attachment skipped", exc_info=True)
         return None
