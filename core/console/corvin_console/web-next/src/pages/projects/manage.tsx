@@ -3,7 +3,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
-import { adoptProject, attachProject, detachProject, getChatAttachment, moveProject, renameProject, type ProjectDetail } from "@/lib/api/projects";
+import { adoptProject, attachProject, detachProject, getChatAttachment, moveProject, renameProject, setProjectSettings, type Access, type DataClass, type ProjectDetail } from "@/lib/api/projects";
+import { ACCESS_META, CLASS_META, CLASS_ORDER, accessOf, classOf, lowersProtection, needsConfirmation } from "./roles";
 import { listChatSessions } from "@/lib/api/sessions";
 import { explain } from "./wizard";
 
@@ -128,6 +129,60 @@ export function AttachSection({ d, csrf }: { d: ProjectDetail; csrf: string }) {
         </div>
       )}
       {msg && <p role="status" className="text-sm" data-testid="attach-note-chat">{msg}</p>}
+    </div>
+  );
+}
+
+
+/** What the assistant may do in this project, and how sensitive its data is. Lowering protection is asked twice. */
+export function ProtectionSection({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; onChanged: () => void }) {
+  const curCls = classOf(d);
+  const curAcc = accessOf(d);
+  const [cls, setCls] = useState<DataClass>(curCls);
+  const [acc, setAcc] = useState<Access>(curAcc);
+  const [ask, setAsk] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const dirty = cls !== curCls || acc !== curAcc;
+  const mut = useMutation({
+    mutationFn: (confirm: boolean) => setProjectSettings(d.id, { classification: cls, assistant_access: acc, confirm }, csrf),
+    onSuccess: () => { setAsk(false); setMsg("Saved. A chat that has this project attached picks it up with its next message."); onChanged(); },
+    onError: (e) => { if (needsConfirmation(e)) { setAsk(true); setMsg(null); } else { setAsk(false); setMsg(explain(e)); } },
+  });
+  return (
+    <div className="space-y-2" data-testid="protection-section">
+      <h2 className="font-medium">Protection</h2>
+      <p className="text-sm text-muted-foreground">How sensitive this project's data is, and what the assistant may do with its files. The data class decides which engines may read it.</p>
+      <div className="grid gap-1 sm:grid-cols-2" role="radiogroup" aria-label="Data class">
+        {CLASS_ORDER.map((c) => (
+          <label key={c} className="flex items-start gap-2 rounded border p-2 text-sm">
+            <input type="radio" name="settings-class" className="mt-1" data-testid="settings-class" data-class={c} checked={cls === c}
+              onChange={() => { setCls(c); setAsk(false); setMsg(null); }} />
+            <span><span className="block font-medium">{CLASS_META[c].label}</span><span className="block text-xs text-muted-foreground">{CLASS_META[c].hint}</span></span>
+          </label>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-3" role="radiogroup" aria-label="What the assistant may do">
+        {(["read", "write"] as const).map((a) => (
+          <label key={a} className="flex items-center gap-2 text-sm" title={ACCESS_META[a].hint}>
+            <input type="radio" name="settings-access" data-testid="settings-access" data-access={a} checked={acc === a}
+              onChange={() => { setAcc(a); setAsk(false); setMsg(null); }} />
+            {ACCESS_META[a].label}
+          </label>
+        ))}
+      </div>
+      {!ask ? (
+        <Button size="sm" variant="outline" disabled={!dirty || mut.isPending} onClick={() => mut.mutate(false)} data-testid="protection-save">Save protection</Button>
+      ) : (
+        <div className="space-y-2 rounded border border-amber-600/50 p-2" role="alertdialog" aria-label="Confirm lower protection" data-testid="protection-confirm">
+          <p className="text-sm">{lowersProtection(curCls, cls, curAcc, acc) ? "This lowers the protection of the project" : "Please confirm"}
+            {" "}({CLASS_META[cls].label}, {ACCESS_META[acc].label.toLowerCase()}). Are you sure?</p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="destructive" disabled={mut.isPending} onClick={() => mut.mutate(true)} data-testid="protection-confirm-yes">Yes, change it</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setAsk(false); setCls(curCls); setAcc(curAcc); }}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      {msg && <p role="status" className="text-sm" data-testid="protection-note">{msg}</p>}
     </div>
   );
 }

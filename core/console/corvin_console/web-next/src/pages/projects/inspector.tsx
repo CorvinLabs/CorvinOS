@@ -20,7 +20,9 @@ import { explain } from "./wizard";
 import { TABS, conflictOf, healthHeadline, parseTab, rowState, tabGate, videoNameProblem, type Conflict, type Tab } from "./inspector-logic";
 import { ComputeTab, DirectoryTab, DocsTab, FeatureOff, KnowledgeTab, StructureTab, TasksTab, VideosTab } from "./inspector-tabs";
 import { stateOf } from "./encodings";
-import { AttachSection, RenameMoveSection } from "./manage";
+import { AttachSection, ProtectionSection, RenameMoveSection } from "./manage";
+import { AccessBadge, ClassBadge } from "./badges";
+import { accessOf, classOf, roleLabel } from "./roles";
 
 const KEY = (id: string) => ["projects", "detail", id] as const;
 const HEALTH = (id: string) => ["projects", "health", id] as const;
@@ -57,6 +59,12 @@ export default function ProjectInspectorPage() {
         <div className="min-w-0">
           <h1 className="truncate text-xl font-semibold" data-testid="inspector-title">{d.title ?? d.id}</h1>
           <p className="truncate font-mono text-xs text-muted-foreground" title={d.path}>{d.path}</p>
+          {d.state === "ok" && (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5" data-testid="inspector-protection">
+              {roleLabel(d.role) && <span className="text-xs font-medium">{roleLabel(d.role)}</span>}
+              <ClassBadge cls={classOf(d)} /><AccessBadge access={accessOf(d)} />
+            </div>
+          )}
         </div>
         <span data-testid="inspector-state" className={cn("rounded-md border px-2 py-1 text-xs",
           st.tone === "ok" ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-300" : "border-red-500/40 text-red-700 dark:text-red-300")}>
@@ -326,6 +334,7 @@ function SettingsTab({ d, csrf }: { d: ProjectDetail; csrf: string }) {
         <Button size="sm" variant="outline" onClick={() => openMut.mutate()} disabled={openMut.isPending} data-testid="open-project">Show command</Button>
         {opened && <code className="block break-all rounded bg-muted p-2 text-xs" data-testid="open-command">{opened}</code>}
       </div>
+      <ProtectionSection d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />
       <AttachSection d={d} csrf={csrf} />
       <RenameMoveSection d={d} csrf={csrf} onChanged={() => { void qc.invalidateQueries({ queryKey: KEY(d.id) }); void qc.invalidateQueries({ queryKey: HEALTH(d.id) }); void qc.invalidateQueries({ queryKey: ["projects", "list"] }); }} />
       <RemoveSection projectId={d.id} csrf={csrf} onDone={() => void qc.invalidateQueries({ queryKey: ["projects", "list"] })} />

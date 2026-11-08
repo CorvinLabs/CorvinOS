@@ -19,6 +19,8 @@ import { ApiError } from "@/lib/api/client";
 import { listProjects, listTemplates, type ProjectSummary } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
 import { emptyState, featureChips, offFeatures, sortProjects, stateOf, templateLabel } from "./encodings";
+import { AccessBadge, ClassBadge } from "./badges";
+import { CLASS_META, NO_FILTER, ROLE_LABEL, accessOf, classOf, filterProjects, presentValues, roleLabel, type Filter } from "./roles";
 
 const PROJECTS_KEY = ["projects", "list"] as const;
 const TEMPLATES_KEY = ["projects", "templates"] as const;
@@ -50,6 +52,13 @@ function ProjectCard({ p }: { p: ProjectSummary }) {
             <span>{st.detail}</span>
           </p>
         )}
+        {p.state === "ok" && (
+          <div className="flex flex-wrap items-center gap-1.5" aria-label="Role and protection" data-testid="project-protection">
+            {roleLabel(p.role) && <span className="text-xs font-medium" data-testid="project-role">{roleLabel(p.role)}</span>}
+            <ClassBadge cls={classOf(p)} />
+            <AccessBadge access={accessOf(p)} />
+          </div>
+        )}
         {chips.length > 0 && (
           <ul className="flex flex-wrap gap-1.5" aria-label="Active features" data-testid="project-features">
             {chips.map((c) => (
@@ -75,7 +84,10 @@ export default function ProjectsPage() {
   const projects = useQuery({ queryKey: PROJECTS_KEY, queryFn: ({ signal }) => listProjects(signal), refetchInterval: 10_000 });
   const templates = useQuery({ queryKey: TEMPLATES_KEY, queryFn: ({ signal }) => listTemplates(signal), staleTime: 30_000 });
 
-  const list = projects.data ? sortProjects(projects.data.projects) : [];
+  const [filter, setFilter] = useState<Filter>(NO_FILTER);
+  const all = projects.data ? sortProjects(projects.data.projects) : [];
+  const present = presentValues(all);
+  const list = filterProjects(all, filter);
   const empty = emptyState(templates.data);
   const loadError = projects.error instanceof ApiError ? projects.error.message : projects.error ? "Could not load projects." : null;
 
@@ -114,7 +126,7 @@ export default function ProjectsPage() {
 
       {projects.isLoading && <Skeleton className="h-32 w-full" data-testid="projects-loading" />}
 
-      {projects.data && list.length === 0 && (
+      {projects.data && all.length === 0 && (
         <Card data-testid="projects-empty">
           <CardContent className="space-y-3 p-8 text-center">
             <FolderKanban className="mx-auto h-8 w-8 text-muted-foreground" aria-hidden />
@@ -127,6 +139,36 @@ export default function ProjectsPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {all.length > 1 && (present.roles.length > 1 || present.classes.length > 1) && (
+        <div className="flex flex-wrap items-center gap-3 text-sm" role="group" aria-label="Filter projects" data-testid="projects-filter">
+          {present.roles.length > 1 && (
+            <label className="flex items-center gap-2">Role
+              <select className="rounded border bg-background px-2 py-1 text-sm" value={filter.role} data-testid="filter-role"
+                onChange={(e) => setFilter({ ...filter, role: e.target.value as Filter["role"] })}>
+                <option value="all">All roles</option>
+                {present.roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+              </select>
+            </label>
+          )}
+          {present.classes.length > 1 && (
+            <label className="flex items-center gap-2">Data class
+              <select className="rounded border bg-background px-2 py-1 text-sm" value={filter.cls} data-testid="filter-class"
+                onChange={(e) => setFilter({ ...filter, cls: e.target.value as Filter["cls"] })}>
+                <option value="all">All classes</option>
+                {present.classes.map((c) => <option key={c} value={c}>{CLASS_META[c].label}</option>)}
+              </select>
+            </label>
+          )}
+          <span className="text-xs text-muted-foreground" data-testid="filter-count">{list.length} of {all.length}</span>
+        </div>
+      )}
+
+      {all.length > 0 && list.length === 0 && (
+        <p className="text-sm text-muted-foreground" data-testid="filter-empty">
+          No project matches this filter. <button type="button" className="underline" onClick={() => setFilter(NO_FILTER)}>Show all</button>
+        </p>
       )}
 
       {list.length > 0 && (

@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth";
 import { createProject, listTemplates, planProject, type ProjectPlan, type TemplateInfo } from "@/lib/api/projects";
 import { featureLabel } from "./encodings";
+import { AccessBadge, ClassBadge } from "./badges";
+import { ACCESS_META, CLASS_META, CLASS_ORDER, badgeLine, groupTemplates } from "./roles";
 import { INITIAL, canAdvance, choosable, chooseTemplate, explain, featureNames, planRequest, templateById, toggleFeature,
   type WizardState } from "./wizard";
 
@@ -51,7 +53,7 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl" data-testid="new-project-wizard">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl" data-testid="new-project-wizard">
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription data-testid="wizard-step">Step {s.step} of 4</DialogDescription>
@@ -63,17 +65,25 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
             {cat.data && !cat.data.available && (
               <p className="text-sm text-red-700 dark:text-red-300" data-testid="wizard-unavailable">{cat.data.reason}</p>
             )}
-            {(cat.data?.templates ?? []).map((t) => (
-              <button key={t.id} type="button" data-testid="template-option" data-template={t.id}
-                aria-pressed={s.templateId === t.id}
-                onClick={() => set(chooseTemplate(s, cat.data, t.id))}
-                className={`w-full rounded-lg border p-3 text-left ${s.templateId === t.id ? "border-primary bg-primary/5" : "border-border"}`}>
-                <div className="font-medium">{t.title}</div>
-                <div className="text-sm text-muted-foreground">{t.description}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  On by default: {t.features.filter((f) => f !== "core").map(featureLabel).join(", ") || "nothing else"}
+            {groupTemplates(cat.data?.templates ?? []).map((g) => (
+              <div key={g.id} className="space-y-2" data-testid="template-group" data-family={g.id}>
+                <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{g.label}</h3>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {g.items.map((t) => (
+                    <button key={t.id} type="button" data-testid="template-option" data-template={t.id} data-role={t.role ?? ""}
+                      aria-pressed={s.templateId === t.id}
+                      onClick={() => set(chooseTemplate(s, cat.data, t.id))}
+                      className={`flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors ${s.templateId === t.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`}>
+                      <span className="font-medium">{t.title}</span>
+                      <span className="text-sm text-muted-foreground" data-testid="template-outcome">{t.outcome || t.description}</span>
+                      <span className="mt-1 flex flex-wrap gap-1">
+                        <ClassBadge cls={t.classification ?? "internal"} />
+                        <AccessBadge access={t.assistant_access ?? "read"} />
+                      </span>
+                    </button>
+                  ))}
                 </div>
-              </button>
+              </div>
             ))}
           </section>
         )}
@@ -96,6 +106,28 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
 
         {s.step === 3 && tpl && (
           <section className="space-y-3" aria-label="Features">
+            <fieldset className="space-y-2 rounded-lg border p-3" data-testid="wizard-protection">
+              <legend className="px-1 text-sm font-medium">Protection</legend>
+              <p className="text-xs text-muted-foreground">The role proposes these; you decide. You can change them later in the project's settings.</p>
+              <div className="grid gap-1 sm:grid-cols-2" role="radiogroup" aria-label="Data class">
+                {CLASS_ORDER.map((c) => (
+                  <label key={c} className="flex items-start gap-2 rounded border p-2 text-sm">
+                    <input type="radio" name="wizard-class" className="mt-1" data-testid="wizard-class" data-class={c}
+                      checked={s.classification === c} onChange={() => set({ classification: c })} />
+                    <span><span className="block font-medium">{CLASS_META[c].label}</span><span className="block text-xs text-muted-foreground">{CLASS_META[c].hint}</span></span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-3" role="radiogroup" aria-label="What the assistant may do">
+                {(["read", "write"] as const).map((a) => (
+                  <label key={a} className="flex items-center gap-2 text-sm">
+                    <input type="radio" name="wizard-access" data-testid="wizard-access" data-access={a}
+                      checked={s.access === a} onChange={() => set({ access: a })} />
+                    {ACCESS_META[a].label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <p className="text-sm text-muted-foreground">Switch features on or off. Each one can be changed later; switching off never deletes a file.</p>
             <ul className="space-y-2">
               {choosable(tpl).map((id) => {
@@ -139,6 +171,7 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
               <dt className="text-muted-foreground">Project</dt><dd data-testid="review-title">{plan.title} <span className="font-mono text-xs">({plan.project_id})</span></dd>
               <dt className="text-muted-foreground">Folder</dt><dd className="break-all font-mono text-xs" data-testid="review-location">{plan.location}</dd>
+              <dt className="text-muted-foreground">Protection</dt><dd data-testid="review-protection">{badgeLine({ classification: plan.classification, assistant_access: plan.assistant_access })}</dd>
               <dt className="text-muted-foreground">Features</dt><dd data-testid="review-features">{featureNames(plan.features).join(", ") || "none"}</dd>
               <dt className="text-muted-foreground">Files</dt><dd data-testid="review-files">{plan.files.length} to write</dd>
               <dt className="text-muted-foreground">Git</dt><dd>{plan.docs_mode === "nested" ? "knowledge base in its own repository" : "one repository"}</dd>

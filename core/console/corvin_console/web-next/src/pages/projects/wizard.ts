@@ -2,7 +2,7 @@
  * The new-project wizard's decisions, kept pure so they are unit-tested: which features a template starts
  * with, what a step may advance past, and how the server's error becomes a sentence the user can act on.
  */
-import type { PlanRequest, ProjectPlan, TemplateCatalogue, TemplateInfo } from "@/lib/api/projects";
+import type { Access, DataClass, PlanRequest, ProjectPlan, TemplateCatalogue, TemplateInfo } from "@/lib/api/projects";
 import { ApiError } from "@/lib/api/client";
 import { featureLabel } from "./encodings";
 
@@ -15,9 +15,13 @@ export interface WizardState {
   location: string;
   features: string[];
   docsMode: "nested" | "plain";
+  /** Starts from the template's default (a role proposes, the user decides). */
+  classification: DataClass;
+  access: Access;
 }
 
-export const INITIAL: WizardState = { step: 1, templateId: null, title: "", location: "", features: [], docsMode: "nested" };
+export const INITIAL: WizardState = { step: 1, templateId: null, title: "", location: "", features: [], docsMode: "nested",
+  classification: "internal", access: "read" };
 
 export function templateById(cat: TemplateCatalogue | undefined, id: string | null): TemplateInfo | undefined {
   return cat?.templates.find((t) => t.id === id);
@@ -26,7 +30,8 @@ export function templateById(cat: TemplateCatalogue | undefined, id: string | nu
 /** Choosing a template starts from its default features and its default docs mode. */
 export function chooseTemplate(s: WizardState, cat: TemplateCatalogue | undefined, id: string): WizardState {
   const t = templateById(cat, id);
-  return { ...s, templateId: id, features: t ? [...t.features] : [], docsMode: t?.docs_mode ?? "nested" };
+  return { ...s, templateId: id, features: t ? [...t.features] : [], docsMode: t?.docs_mode ?? "nested",
+    classification: t?.classification ?? "internal", access: t?.assistant_access ?? "read" };
 }
 
 /** A feature the user toggles: switching on keeps the list requires-closed in the UI; the server confirms. */
@@ -73,6 +78,8 @@ export function planRequest(s: WizardState): PlanRequest {
     ...(s.location.trim() ? { location: s.location.trim() } : {}),
     features: s.features,
     docs_mode: s.docsMode,
+    classification: s.classification,
+    assistant_access: s.access,
   };
 }
 

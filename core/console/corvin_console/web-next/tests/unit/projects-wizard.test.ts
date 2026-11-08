@@ -78,11 +78,37 @@ describe("advancing", () => {
 describe("the request", () => {
   it("sends the trimmed name, an empty folder means the server default, never an empty string", () => {
     const req = planRequest({ ...INITIAL, templateId: "knowledge-only", title: "  Plumbline  ", location: "  ", features: ["core", "kb"], docsMode: "plain" });
-    expect(req).toEqual({ template: "knowledge-only", title: "Plumbline", features: ["core", "kb"], docs_mode: "plain" });
+    expect(req).toEqual({ template: "knowledge-only", title: "Plumbline", features: ["core", "kb"], docs_mode: "plain",
+      classification: "internal", assistant_access: "read" });
     expect(req).not.toHaveProperty("location");
   });
   it("a typed folder is sent trimmed", () => {
     expect(planRequest({ ...INITIAL, templateId: "t", title: "x", location: " /p/x " }).location).toBe("/p/x");
+  });
+});
+
+describe("a role proposes its protection, the user decides", () => {
+  const cat = { available: true, features: [], templates: [
+    { id: "legal-compliance", version: 1, title: "Legal", description: "", features: ["core", "kb"], offered: ["core", "kb"], docs_mode: "nested" as const,
+      role: "legal" as const, classification: "confidential" as const, assistant_access: "read" as const },
+    { id: "software-development", version: 1, title: "Software", description: "", features: ["core"], offered: ["core"], docs_mode: "nested" as const,
+      role: "software" as const, classification: "internal" as const, assistant_access: "write" as const },
+  ] };
+  it("choosing a template takes its class and access as the starting point", () => {
+    const s = chooseTemplate(INITIAL, cat, "legal-compliance");
+    expect([s.classification, s.access]).toEqual(["confidential", "read"]);
+    const t = chooseTemplate(s, cat, "software-development");
+    expect([t.classification, t.access]).toEqual(["internal", "write"]);
+  });
+  it("what the user changed is what the request sends", () => {
+    const s = { ...chooseTemplate(INITIAL, cat, "legal-compliance"), title: "x", classification: "secret" as const, access: "write" as const };
+    const req = planRequest(s);
+    expect([req.classification, req.assistant_access]).toEqual(["secret", "write"]);
+  });
+  it("a template with no metadata falls back to internal and read only", () => {
+    const bare = { ...cat, templates: [{ ...cat.templates[0], role: undefined, classification: undefined, assistant_access: undefined }] };
+    const s = chooseTemplate(INITIAL, bare, "legal-compliance");
+    expect([s.classification, s.access]).toEqual(["internal", "read"]);
   });
 });
 

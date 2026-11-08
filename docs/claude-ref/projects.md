@@ -265,9 +265,11 @@ Proof: `tests/e2e/test_projects_attach_e2e.py` (API half always; live half with 
 WebSocket: rules in context, project MCP tool answers, a write into the project is refused, rules gone after detach, project tree
 byte-identical) and `tests/e2e/projects-manage.spec.ts`. Audit: `project.attached`, `project.detached`.
 
-**Project chip.** A chat's header shows a chip with the attached project's title (`pages/projects/chat-chip.tsx`, reads
-`GET /projects/chat-attachment`); it links to the project's Settings tab. No attachment, or a failing lookup, renders nothing - the
-chip never breaks the chat. Proof: `tests/e2e/projects-chat-chip.spec.ts` (a real chat session of the console; only the lookup is stubbed).
+**Project menu (replaces the former chip).** A chat's header shows ONE button (`pages/projects/chat-menu.tsx`): the attached project's
+title, a count of changed files, or "Project" when none. It opens a multiple-choice list ("No project" first, then every project in state
+`ok` with role, class and access) - one click attaches or detaches, the menu closes; a refusal (the data class may not go to this engine) is shown
+in words and the choice stays. Entries: Changes, Storage (`?tab=structure`), Settings (`?tab=settings`), All projects. On a phone the menu is a
+fixed full-width sheet. See "UI" below.
 
 
 ## Roles, classification and assistant access (T-0368..T-0370, ADR-2319, CONCEPT-0127)
@@ -289,3 +291,25 @@ chip never breaks the chat. Proof: `tests/e2e/projects-chat-chip.spec.ts` (a rea
   `GET /projects/{id}/changes/file?path=[&commit=]` returns the unified diff, or the text of a new file. Read-only git with
   `GIT_OPTIONAL_LOCKS=0`; a path outside the repository, through a symlink, `.git`, or not in the listing is refused (400); binaries and
   files over 200 KB are listed, not rendered. Proof: `tests/e2e/test_projects_roles_e2e.py`, `tests/e2e/test_project_templates_catalogue_e2e.py`.
+
+
+## UI of roles, protection and changes (T-0371..T-0373, CONCEPT-0127)
+
+- **Wizard** (`wizard-dialog.tsx`, words and grouping in `roles.ts`): step 1 shows the templates as role cards in three families - Build
+  (software, data science, video), Grow (marketing, product, sales), Govern and learn (legal, research, knowledge) - each with its outcome in plain
+  words, its class badge and its access badge. Step 3 starts with "Protection" (class and access), pre-filled from the role; the review shows it.
+- **List** (`index.tsx`): every card shows role, class and access (`badges.tsx`: label + icon shape + tone, never colour alone); a Role and a Data
+  class filter appear when there is something to filter, offer only values that exist, and an empty result says so with "Show all".
+- **Settings** (`manage.tsx::ProtectionSection`): class and access. The server decides what needs confirmation (409 `confirmation_required`);
+  the UI then asks once ("This lowers the protection of the project ... Are you sure?") and resends with `confirm: true`.
+- **Changes panel** (`changes-panel.tsx`, logic in `changes-logic.ts`): a side panel next to the chat. Files grouped Code, Documents, Knowledge base,
+  each with a status letter AND word, +/- counts; click opens the diff (lines typed add/del/hunk/ctx, the leading +/- stays in the text) or the text of a
+  new file; a binary is listed, not shown. "Show" switches between changes not yet committed and a recent commit. Ids in file names and commit subjects
+  link to the project's Tasks board (`/app/initiatives?scope=project:<id>`) and Knowledge Graph (`/app/corvin-knowledge?scope=project:<id>`); a change
+  with no id has no link. The list is read again every time the panel opens and every 10 s, and the menu button reloads the count when an answer finishes.
+- **Perception choices, checked on screenshots** (both themes, 1280 and 375 px): nine roles in three rows (chunking, Hick's law), outcomes before feature
+  jargon (recognition over recall), badges always in the same shape and place (similarity), safe default (read only) and a second look only in the
+  direction of less protection (forgiveness), no animation beyond the dialog's fade. Two defects were found only by looking: access badges that wrapped
+  in the wizard, and a menu that left the screen on a phone.
+- Proof: `tests/e2e/projects-roles.spec.ts`, `projects-chat-menu.spec.ts` (real chat session, stubbed project endpoints), unit tests `projects-roles`,
+  `projects-changes`, `projects-wizard`.

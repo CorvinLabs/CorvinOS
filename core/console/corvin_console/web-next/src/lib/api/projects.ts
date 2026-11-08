@@ -7,6 +7,9 @@
 import { api } from "./client";
 
 export type ProjectState = "ok" | "missing" | "invalid";
+export type Role = "software" | "data_science" | "marketing" | "product" | "sales" | "legal" | "video" | "research" | "knowledge";
+export type DataClass = "public" | "internal" | "confidential" | "secret";
+export type Access = "read" | "write";
 
 export interface ProjectSummary {
   id: string;
@@ -24,6 +27,9 @@ export interface ProjectSummary {
   active?: string[];
   /** docs/kb exists. */
   kb?: boolean;
+  role?: Role | "";
+  classification?: DataClass;
+  assistant_access?: Access;
 }
 
 export interface ProjectList {
@@ -53,6 +59,11 @@ export interface TemplateInfo {
   features: string[];
   offered: string[];
   docs_mode: "nested" | "plain";
+  role?: Role | "";
+  classification?: DataClass;
+  assistant_access?: Access;
+  /** What this role typically produces, in plain words. */
+  outcome?: string;
 }
 
 export interface TemplateCatalogue {
@@ -95,6 +106,9 @@ export interface ProjectPlan {
   suggestions: { feature: string; suggests: string }[];
   ready: boolean;
   expires_in_s: number;
+  role?: Role | "";
+  classification?: DataClass;
+  assistant_access?: Access;
 }
 
 export interface PlanRequest {
@@ -104,6 +118,8 @@ export interface PlanRequest {
   location?: string;
   features?: string[];
   docs_mode?: "nested" | "plain";
+  classification?: DataClass;
+  assistant_access?: Access;
 }
 
 export function planProject(body: PlanRequest, csrf: string): Promise<ProjectPlan> {
@@ -220,4 +236,52 @@ export function attachProject(id: string, sessionId: string, csrf: string): Prom
 
 export function detachProject(sessionId: string, csrf: string): Promise<{ attached: boolean }> {
   return api("/projects/detach", { method: "POST", body: { session_id: sessionId }, csrf });
+}
+
+
+/** Changes the data class and/or what the assistant may do. Lowering the class or raising access answers 409
+ *  `confirmation_required` until `confirm` is true; the server decides, the UI only asks. */
+export function setProjectSettings(
+  id: string, body: { classification?: DataClass; assistant_access?: Access; confirm?: boolean }, csrf: string,
+): Promise<ProjectDetail> {
+  return api<ProjectDetail>(`/projects/${encodeURIComponent(id)}/settings`, { method: "PUT", body, csrf });
+}
+
+export type ChangeStatus = "modified" | "added" | "deleted" | "renamed" | "untracked" | "committed";
+export interface ChangeLink { id: string; kind: "task" | "knowledge" }
+export interface ChangedFile {
+  path: string;
+  status: ChangeStatus;
+  additions: number | null;
+  deletions: number | null;
+  area: "code" | "docs" | "knowledge";
+  links: ChangeLink[];
+}
+export interface ChangeCommit { sha: string; short: string; repo: string; author: string; at: number; subject: string; links: ChangeLink[] }
+export interface ChangeList {
+  project_id: string;
+  commit: string | null;
+  files: ChangedFile[];
+  commits: ChangeCommit[];
+  has_repository: boolean;
+  truncated: boolean;
+}
+export interface ChangeFileView {
+  path: string;
+  status: ChangeStatus;
+  area: string;
+  binary: boolean;
+  truncated: boolean;
+  diff: string;
+  text: string | null;
+}
+
+export function getChanges(id: string, commit?: string | null, signal?: AbortSignal): Promise<ChangeList> {
+  const q = commit ? `?commit=${encodeURIComponent(commit)}` : "";
+  return api<ChangeList>(`/projects/${encodeURIComponent(id)}/changes${q}`, { signal });
+}
+
+export function getChangeFile(id: string, path: string, commit?: string | null, signal?: AbortSignal): Promise<ChangeFileView> {
+  const q = `?path=${encodeURIComponent(path)}${commit ? `&commit=${encodeURIComponent(commit)}` : ""}`;
+  return api<ChangeFileView>(`/projects/${encodeURIComponent(id)}/changes/file${q}`, { signal });
 }
