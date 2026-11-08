@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -222,7 +223,8 @@ def _take_plan(tenant_id: str, plan_id: str) -> PlanRecord:
 
 def slug(title: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:28].strip("-")
-    return s or "project"
+    s = s or "project"
+    return f"{s[:20]}-project" if s in manifest.RESERVED_IDS else s       # never an id that collides with a fixed route (review R9)
 
 
 def _unique_id(tenant_id: str, base: str) -> str:
@@ -298,8 +300,8 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     if not title or len(title) > 120:
         raise ProjectsError("the title must be 1-120 characters")
     pid = project_id or _unique_id(tenant_id, slug(title))
-    if not manifest.PROJECT_ID_RE.match(pid):
-        raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters")
+    if not manifest.PROJECT_ID_RE.match(pid) or pid in manifest.RESERVED_IDS:
+        raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters, and not a reserved word")
     if registry.get(tenant_id, pid) is not None:
         raise Conflict("a project with this id already exists", "id_taken")
     selected = list(features) if features is not None else list(tpl.features)
@@ -323,6 +325,9 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
         raise
     ctx = _context(tenant_id, pid, title, loc)
     plan = F.build_plan(cat, loc, selected, ctx, docs_mode=mode, mode="create")
+    if any(o.kind == "action" and o.action in ("git_init", "git_commit") for o in plan.ops) and shutil.which("git") is None:
+        _audit_refusal(tenant_id, "git_missing", pid)
+        raise Conflict("git is not installed on this machine; install git and plan again - nothing was written", "git_missing")
     plugins = _check_plugins(tenant_id, plan)
     rec = PlanRecord(plan_id=secrets.token_urlsafe(18), tenant_id=tenant_id, template=tpl.id,
                      template_version=tpl.version, project_id=pid, title=title, features=selected,
@@ -439,7 +444,13 @@ def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
                             rec.assistant_access)
         manifest.write(loc, man)                                                # the truth first,
         registry.register(tenant_id, rec.project_id, loc, man["template"])      # then the index
-        applied = F.apply_plan(plan, loc, {**ctx, "_root": str(loc)}, _runner(tenant_id, loc))
+        registry.set_protection(tenant_id, rec.project_id, rec.classification, rec.assistant_access)
+        try:
+            applied = F.apply_plan(plan, loc, {**ctx, "_root": str(loc)}, _runner(tenant_id, loc))
+        except Exception as exc:  # noqa: BLE001 - a half-created project must not stay in the list (release review R4)
+            registry.unregister(tenant_id, rec.project_id)
+            raise Conflict(f"creating the project failed ({type(exc).__name__}); it was taken off the list and its folder "
+                           f"{loc} was left as it is - remove it or add it again", "create_failed") from None
         outcome = "applied"
     finally:
         try:
@@ -476,11 +487,12 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
             raise Conflict("a project with this id is already registered", "id_taken")
         _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"))
         registry.register(tenant_id, man["id"], loc, man.get("template"))        # writes nothing in the project
+        registry.set_protection(tenant_id, man["id"], manifest.classification_of(man), manifest.access_of(man))
         return get_project(tenant_id, man["id"])
     ttl = (title or loc.name).strip()
     if not 0 < len(ttl) <= 120:
         raise ProjectsError("the title must be 1-120 characters")
-    if project_id is not None and not manifest.PROJECT_ID_RE.match(project_id):
+    if project_id is not None and (not manifest.PROJECT_ID_RE.match(project_id) or project_id in manifest.RESERVED_IDS):
         raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters")
     pid = project_id or _unique_id(tenant_id, slug(loc.name))
     if registry.get(tenant_id, pid) is not None:
@@ -492,6 +504,7 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
     _audit(tenant_id, "project.adopted", project_id=pid, template="adopted@1", outcome="requested")
     manifest.write(loc, data)                                                    # the ONLY write
     registry.register(tenant_id, pid, loc, "adopted@1")
+    registry.set_protection(tenant_id, pid, manifest.DEFAULT_CLASS, manifest.DEFAULT_ACCESS)
     return get_project(tenant_id, pid)
 
 
@@ -511,7 +524,7 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
     index. Same filesystem only (an atomic rename); an existing target is never overwritten."""
     root, _man = _load_project(tenant_id, project_id)
     try:
-        dest = registry.validate_location(tenant_id, location)          # create rules: absent or empty
+        dest = registry.validate_location(tenant_id, location, ignore=registry._resolve_forgiving(root))  # create rules: absent or empty
     except registry.ProjectPathError:
         _audit_refusal(tenant_id, "path_rule", project_id)
         raise
@@ -526,8 +539,22 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
             dest.rmdir()                                                # empty by the check above
         os.rename(root, dest)
     except OSError as exc:
+        _audit_refusal(tenant_id, "move_failed", project_id)
         raise Conflict(f"the directory could not be moved ({type(exc).__name__}); nothing changed", "move_failed") from None
-    registry.relocate(tenant_id, project_id, dest)
+    try:
+        registry.relocate(tenant_id, project_id, dest)
+    except Exception:  # noqa: BLE001 - the index did not follow: put the folder back (release review R10)
+        try:
+            os.rename(dest, root)
+        except OSError:
+            pass
+        _audit_refusal(tenant_id, "move_failed", project_id)
+        raise Conflict("the list could not be updated, so the folder was moved back; nothing changed", "move_failed") from None
+    from core.projects import attachment  # noqa: PLC0415
+    for sid, att in attachment._load(tenant_id).items():                       # attached chats follow the folder
+        if att["project_id"] == project_id:
+            attachment.attach(tenant_id, sid, project_id, str(dest))
+    _audit(tenant_id, "project.moved", project_id=project_id, outcome="applied")
     # machine-local files carry the old absolute path (ADR-2315 Decision 5): regenerate them now
     repaired: Optional[int] = None
     try:
@@ -555,8 +582,15 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
         return {**out, "state": "invalid", "reason": "project.yaml does not match the registry entry"}
     return {**out, "state": "ok", "title": man.get("title", e["id"]), "docs_mode": man.get("docs_mode", "nested"),
             "features": man.get("features", {}), "active": manifest.active_features(man),
-            "role": man.get("role") or "", "classification": manifest.classification_of(man),
-            "assistant_access": manifest.access_of(man), "kb": (root / "docs" / "kb" / "_meta").is_dir()}
+            "role": man.get("role") or "", **_protection_of(tenant_id, e["id"], man),
+            "kb": (root / "docs" / "kb" / "_meta").is_dir()}
+
+
+def _protection_of(tenant_id: str, project_id: str, man: dict[str, Any]) -> dict[str, str]:
+    """The tenant's own record wins; project.yaml is a copy the assistant could have edited (release review R5)."""
+    prot = registry.protection(tenant_id, project_id) or {}
+    return {"classification": prot.get("classification") or manifest.classification_of(man),
+            "assistant_access": prot.get("assistant_access") or manifest.access_of(man)}
 
 
 def list_projects(tenant_id: str) -> dict[str, Any]:
@@ -685,6 +719,8 @@ def remove_from_registry(tenant_id: str, project_id: str) -> dict[str, Any]:
     _entry(tenant_id, project_id)
     _audit(tenant_id, "project.registry_removed", project_id=project_id)
     registry.unregister(tenant_id, project_id)
+    from core.projects import attachment  # noqa: PLC0415
+    attachment.detach_project(tenant_id, project_id)          # a removed project is attached to no chat (release review R2)
     return {"removed": project_id, "files_deleted": False}
 
 
@@ -706,6 +742,11 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
     except manifest.ManifestError as exc:
         add("manifest", False, str(exc))
         return {"project_id": project_id, "ok": False, "checks": checks}
+    prot = registry.protection(tenant_id, project_id)
+    if prot:
+        same = prot.get("classification") == manifest.classification_of(man) and prot.get("assistant_access") == manifest.access_of(man)
+        add("protection", same, "project.yaml matches the project's protection setting" if same else
+            "project.yaml was changed by hand or by the assistant: the setting still applies (save the protection in Settings to rewrite the file)")
     active = manifest.active_features(man)
     try:
         cat = catalogue(tenant_id)
@@ -951,15 +992,22 @@ def attach_chat(tenant_id: str, project_id: str, session_id: str) -> dict[str, A
     if _summary(tenant_id, e)["state"] != "ok":
         raise Conflict("only a project in state ok can be attached", "not_openable")
     _require_chat(tenant_id, session_id)
-    _, man = _load_project(tenant_id, project_id)
-    refusal = _class_refusal(tenant_id, manifest.classification_of(man))
+    root_, man = _load_project(tenant_id, project_id)
+    refusal = _class_refusal(tenant_id, _protection_of(tenant_id, project_id, man)["classification"])
     if refusal:
         _audit_refusal(tenant_id, "classification", project_id)
         raise Conflict(refusal, "classification")
+    loaded = attachment._load(tenant_id)
+    if session_id not in loaded and len(loaded) >= attachment.MAX_ENTRIES:
+        from . import chat_runtime  # noqa: PLC0415
+        attachment.prune(tenant_id, lambda sid: chat_runtime.get_session(tenant_id, sid) is not None)
+        if len(attachment._load(tenant_id)) >= attachment.MAX_ENTRIES:
+            raise Conflict("too many chats have a project attached; detach some first", "attachment_full")
     _audit(tenant_id, "project.attached", project_id=project_id)
-    attachment.attach(tenant_id, session_id, project_id)
+    attachment.attach(tenant_id, session_id, project_id, str(root_))
     return {"project_id": project_id, "session_id": session_id, "attached": True,
-            "note": "Applies from the chat's next message. The project's files are read-only for the assistant; its rules and tools are available."}
+            "note": "Applies from the chat's next message. The assistant can follow the project's rules and use its tools. Its file tools "
+                    "cannot change the project's files unless you allow editing in the project's settings (a shell command is not covered)."}
 
 
 def detach_chat(tenant_id: str, session_id: str) -> dict[str, Any]:
@@ -978,8 +1026,19 @@ def chat_attachment(tenant_id: str, session_id: str) -> dict[str, Any]:
     _require_chat(tenant_id, session_id)
     pid = attachment.attached(tenant_id, session_id)
     e = registry.get(tenant_id, pid) if pid else None
-    return {"session_id": session_id, "project_id": pid if e else None,
-            "title": _summary(tenant_id, e).get("title") if e else None}
+    if not e:
+        return {"session_id": session_id, "project_id": None, "title": None, "withheld": None}
+    summ = _summary(tenant_id, e)
+    withheld = None                                    # attached, but not sent to the assistant now (release review R10)
+    if summ.get("state") != "ok":
+        withheld = "the project folder is missing or its project.yaml is not usable"
+    else:
+        att = attachment._entry(tenant_id, session_id) or {}
+        if att.get("path") and os.path.abspath(att["path"]) != os.path.abspath(str(e.get("path"))):
+            withheld = "this chat was attached to a different folder with the same id; attach it again"
+        else:
+            withheld = _class_refusal(tenant_id, summ.get("classification", "internal"))
+    return {"session_id": session_id, "project_id": pid, "title": summ.get("title"), "withheld": withheld}
 
 
 def _class_refusal(tenant_id: str, classification: str) -> Optional[str]:
@@ -995,13 +1054,15 @@ def set_settings(tenant_id: str, project_id: str, *, classification: Optional[st
     """Change the project's data class and/or the assistant's access. Raising access to ``write`` and
     LOWERING the class need ``confirm`` (the UI's confirming click); everything else applies at once."""
     root, man = _load_project(tenant_id, project_id)
-    new_cls = classification if classification is not None else manifest.classification_of(man)
-    new_acc = assistant_access if assistant_access is not None else manifest.access_of(man)
+    _cur = _protection_of(tenant_id, project_id, man)
+    new_cls = classification if classification is not None else _cur["classification"]
+    new_acc = assistant_access if assistant_access is not None else _cur["assistant_access"]
     if new_cls not in manifest.CLASSES:
         raise ProjectsError(f"classification must be one of {manifest.CLASSES}")
     if new_acc not in manifest.ACCESS:
         raise ProjectsError(f"assistant_access must be one of {manifest.ACCESS}")
-    old_cls, old_acc = manifest.classification_of(man), manifest.access_of(man)
+    cur = _protection_of(tenant_id, project_id, man)
+    old_cls, old_acc = cur["classification"], cur["assistant_access"]
     if (new_cls, new_acc) == (old_cls, old_acc):
         return get_project(tenant_id, project_id)
     lowers = manifest.CLASSES.index(new_cls) < manifest.CLASSES.index(old_cls)
@@ -1010,6 +1071,7 @@ def set_settings(tenant_id: str, project_id: str, *, classification: Optional[st
         raise Conflict("this change lowers the protection of the project and needs confirmation", "confirmation_required",
                        lowers_classification=lowers, raises_access=raises)
     _audit(tenant_id, "project.settings_changed", project_id=project_id, classification=new_cls, access=new_acc)
+    registry.set_protection(tenant_id, project_id, new_cls, new_acc)                  # the authoritative record
     manifest.write(root, {**man, "classification": new_cls, "assistant_access": new_acc})
     return get_project(tenant_id, project_id)
 

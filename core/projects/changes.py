@@ -46,8 +46,12 @@ def _is_repo(p: Path) -> bool:
 
 
 def repos(root: Path) -> list[tuple[str, Path]]:
-    """The repositories of a project: the project itself and a nested ``docs/`` repository."""
+    """The repositories of a project: the project itself and a nested ``docs/`` repository. None when git is not installed
+    (the change view then says "not a git repository" instead of failing - release review R4)."""
+    import shutil  # noqa: PLC0415
     out: list[tuple[str, Path]] = []
+    if shutil.which("git") is None:
+        return out
     if _is_repo(root):
         out.append(("", root))
     d = root / "docs"
@@ -163,12 +167,28 @@ def commit_files(root: Path, sha: str) -> list[dict[str, Any]]:
                           timeout=_GIT_TIMEOUT, env=_env()).returncode != 0:
             continue
         files = []
-        for line in _git(repo, "show", "--numstat", "--format=", "-M", sha).splitlines()[:MAX_FILES]:
-            a, _, rest = line.partition("\t")
+        # `-z`: "add\tdel\tpath\0", and a rename "add\tdel\t\0old\0new\0" (without -z git prints "{old => new}", which no
+        # pathspec matches - release review R8)
+        parts = _git(repo, "show", "--numstat", "-z", "--format=", "-M", sha).split("\0")
+        entries: list[tuple[str, str, str]] = []
+        i = 0
+        while i < len(parts) and len(entries) < MAX_FILES:
+            head = parts[i].lstrip("\n")
+            i += 1
+            if not head:
+                continue
+            a, _, rest = head.partition("\t")
             d, _, path = rest.partition("\t")
+            old = ""
+            if path == "":                                         # a rename: the next two fields are old and new
+                old = parts[i] if i < len(parts) else ""
+                path = parts[i + 1] if i + 1 < len(parts) else ""
+                i += 2
+            entries.append((a, d, path, old))
+        for a, d, path, old in entries:
             full = prefix + path
             files.append({"path": full, "status": "committed", "additions": int(a) if a.isdigit() else None,
-                          "deletions": int(d) if d.isdigit() else None, "area": _area(full),
+                          "deletions": int(d) if d.isdigit() else None, "area": _area(full), "old_path": (prefix + old) if old else None,
                           "links": [{"id": i, "kind": _kind(i)} for i in ids_in(Path(path).name)]})
         return files
     raise ChangesError("no such commit")
@@ -199,7 +219,9 @@ def file_view(root: Path, rel: str, commit: Optional[str] = None) -> dict[str, A
     out: dict[str, Any] = {"path": rel, "status": meta["status"], "area": meta["area"], "binary": False, "truncated": False,
                            "diff": "", "text": None}
     if commit:
-        raw = _git(repo, "show", "--format=", "-M", "--unified=3", commit, "--", inner)
+        old = meta.get("old_path")
+        spec = [inner] + ([old[len(rel) - len(inner):] if old.startswith(rel[: len(rel) - len(inner)]) else old] if old else [])
+        raw = _git(repo, "show", "--format=", "-M", "--unified=3", commit, "--", *spec)
     elif meta["status"] == "untracked" or (meta["status"] == "added" and not _has_head(repo)):
         p = repo / inner
         if p.is_symlink() or not p.is_file():

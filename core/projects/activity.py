@@ -3,7 +3,8 @@
 An in-memory, per-tenant, per-project event channel. It is a VIEW of what already happens - the chat ledger and the audit chain stay
 the record. Bounded (ring buffer, subscribers, streams per tenant), lost on restart (``epoch`` makes a restart visible), and safe by
 construction: an event has a CLOSED set of fields; a tool event carries a derived ``detail`` (program name, file NAME, host) and never
-an input, a command body, a URL query, a prompt, an answer or a file's content.
+an input, a command body, a URL query, a prompt, an answer or a file's content. One stated exception: ``turn_started`` carries the chat's
+title, the same string the operator already sees in the chat list (it is derived from the first words of the first prompt).
 
 Producers: ``chat_runtime`` (via :class:`TurnTracker`) for the turns of a chat attached to the project, and a per-project watcher that
 polls git while somebody watches, so a change made by anything else shows up too. Consumers: SSE streams in ``routes/projects.py``.

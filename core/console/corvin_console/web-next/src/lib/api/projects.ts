@@ -222,7 +222,7 @@ export function moveProject(id: string, location: string, csrf: string): Promise
   return api(`/projects/${encodeURIComponent(id)}/move`, { method: "POST", body: { location }, csrf });
 }
 
-export interface ChatAttachment { session_id: string; project_id: string | null; title: string | null }
+export interface ChatAttachment { session_id: string; project_id: string | null; title: string | null; withheld?: string | null }
 
 /** Which project (if any) one console chat is attached to. */
 export function getChatAttachment(sessionId: string, signal?: AbortSignal): Promise<ChatAttachment> {

@@ -303,7 +303,7 @@ def suggestions(cat: Catalogue, active: Any) -> list[dict[str, str]]:
 
 @dataclass
 class Op:
-    kind: str                       # "write" | "action"
+    kind: str                       # "write" | "delete" | "action"
     status: str                     # "new" | "changed" | "unchanged" | "skip"
     path: str = ""                  # project-relative, posix
     file_kind: str = ""             # seed | generated | local
@@ -361,6 +361,16 @@ def _walk_sub(obj: Any, ctx: dict[str, str], where: str) -> Any:
     if isinstance(obj, dict):
         return {k: _walk_sub(v, ctx, where) for k, v in obj.items()}
     return obj
+
+
+def _read_bytes_regular(p: Path) -> Optional[bytes]:
+    """The bytes of a regular file (never through a symlink), or None."""
+    try:
+        if p.is_symlink() or not p.is_file():
+            return None
+        return p.read_bytes()
+    except OSError:
+        return None
 
 
 def _read_text(p: Path) -> Optional[str]:
@@ -499,12 +509,33 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
     for fid in pulled_all:
         for name, spec in cat.fragments[fid].mcp.items():
             servers[name] = _walk_sub(spec, ctx, f"fragment {fid} mcp {name}")
+    # The MCP block (release review R1/R6): the engine owns `.corvin/local/mcp.json`; the root `.mcp.json` (for the user's own terminal)
+    # is engine-owned only while it is byte-identical to that copy - a foreign one (an adopted repo's) is never overwritten, never deleted.
+    local_rel = f"{LOCAL_DIR}/mcp.json"
+    engine_copy = _read_bytes_regular(root / local_rel)
+    root_copy = _read_bytes_regular(root / ".mcp.json")
+    root_is_ours = root_copy is None or (engine_copy is not None and root_copy == engine_copy)
     if servers:
         mcp = (json.dumps({"mcpServers": servers}, indent=2, sort_keys=True) + "\n").encode("utf-8")
-        for rel in (f"{LOCAL_DIR}/mcp.json", ".mcp.json"):
-            st, df = _status_of(root, rel, mcp, "local")
-            plan.ops.append(Op(kind="write", status=st, path=rel, file_kind="local", owner="engine", content=mcp,
+        st, df = _status_of(root, local_rel, mcp, "local")
+        plan.ops.append(Op(kind="write", status=st, path=local_rel, file_kind="local", owner="engine", content=mcp,
+                           diff=df if st == "changed" else ""))
+        if root_is_ours:
+            st, df = _status_of(root, ".mcp.json", mcp, "local")
+            plan.ops.append(Op(kind="write", status=st, path=".mcp.json", file_kind="local", owner="engine", content=mcp,
                                diff=df if st == "changed" else ""))
+        else:
+            plan.ops.append(Op(kind="write", status="skip", path=".mcp.json", file_kind="local", owner="engine",
+                               reason="an existing .mcp.json that this engine did not write is never overwritten"))
+            plan.warnings.append(".mcp.json exists and is not the engine's: left untouched; chats use .corvin/local/mcp.json")
+    else:
+        # the feature that needed the block is off: drop the engine's copies, keep anything the user wrote
+        if engine_copy is not None:
+            plan.ops.append(Op(kind="delete", status="changed", path=local_rel, file_kind="local", owner="engine",
+                               diff="(removed: no active feature needs an MCP server)"))
+            if root_copy is not None and root_is_ours:
+                plan.ops.append(Op(kind="delete", status="changed", path=".mcp.json", file_kind="local", owner="engine",
+                                   diff="(removed: no active feature needs an MCP server)"))
     if kb_on:
         cmds = _kb_commands(ctx)
         st, df = _status_of(root, f"{LOCAL_DIR}/kb-commands.md", cmds, "local")
@@ -565,6 +596,11 @@ def apply_plan(plan: Plan, root: Path, ctx: dict[str, str], runner: Optional[Act
         if op.kind == "write":
             target = ensure_inside(root, root / op.path)
             atomic_write(target, op.content, mode=0o600 if op.file_kind == "local" else 0o644, root=root)
+            written.append(op.path)
+        elif op.kind == "delete":
+            target = ensure_inside(root, root / op.path)          # never through a symlink, never outside the project
+            if target.is_file() and not target.is_symlink():
+                target.unlink()
             written.append(op.path)
         else:
             if runner is None:

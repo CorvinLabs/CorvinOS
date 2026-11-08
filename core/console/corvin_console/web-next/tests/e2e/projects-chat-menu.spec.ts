@@ -124,3 +124,15 @@ test("a folder without git and a project with no changes each say why the list i
   await page.getByTestId("project-menu-changes").click();
   await expect(page.getByTestId("changes-empty")).toContainText("appear here");
 });
+
+test("an attachment the data-flow gate withholds is shown as withheld, in words and with its own icon", async ({ page }) => {
+  const sid = await aSid(page);
+  await stub(page, sid, { attached: "beta" });
+  await page.route(/\/v1\/console\/projects\/chat-attachment/, (r) => r.fulfill({ json: { session_id: sid, project_id: "beta", title: "BETA",
+    withheld: "[data-flow] classification SECRET is not allowed for engine claude_code" } }));
+  await page.goto(`/console/app/chat/${sid}`);
+  await expect(page.getByTestId("project-menu-withheld-icon")).toBeVisible();
+  await page.getByTestId("project-menu-button").click();
+  await expect(page.getByTestId("project-menu-withheld")).toContainText("not sent to the assistant right now");
+  await expect(page.getByTestId("project-menu-withheld")).toContainText("SECRET");
+});

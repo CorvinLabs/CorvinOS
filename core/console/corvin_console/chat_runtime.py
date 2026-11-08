@@ -752,6 +752,9 @@ class WebChatSession:
     # CONCEPT-0128: the per-turn tracker of the project explorer (None when the chat has no project attached).
     # Transient exactly like in_flight_task: never persisted, set by stream_turn, read at the tool_use site.
     activity_turn: Any = field(default=None, repr=False)
+    # Release review R10: the attached project is judged ONCE per turn (manifest + L34) and the same answer feeds the CLI args, the
+    # spawn env and the system prompt. ("unset" = not judged yet this turn.)
+    attachment_parts: Any = field(default="unset", repr=False)
     # Set by _stream_turn_impl's cancel path when the turn had ALREADY delivered its
     # answer ("final": the closing result was yielded; "children_open": the answer
     # was yielded while background children were still running, ADR-2236). Read
@@ -3402,7 +3405,18 @@ def project_class_refusal(tenant_id: str, classification: str) -> "str | None":
 
 
 def _project_attachment_parts(sess: "WebChatSession") -> "dict[str, Any] | None":
-    """The attached project's spawn additions for this chat, judged by L34 against the OS engine; None if none."""
+    """The attached project's spawn additions for this chat, judged by L34 against the OS engine; None if none.
+    Cached for the turn (``sess.attachment_parts``, reset by ``stream_turn``)."""
+    cached = getattr(sess, "attachment_parts", "unset")
+    if cached != "unset":
+        return cached
+    parts = _project_attachment_parts_uncached(sess)
+    if getattr(sess, "activity_turn", "no-turn") != "no-turn" and getattr(sess, "_in_turn", False):
+        sess.attachment_parts = parts
+    return parts
+
+
+def _project_attachment_parts_uncached(sess: "WebChatSession") -> "dict[str, Any] | None":
     try:
         from core.projects import attachment as _pa  # noqa: PLC0415
         if _pa.attached(sess.tenant_id, sess.sid) is None:
@@ -6627,6 +6641,8 @@ async def stream_turn(
     sweep.
     """
     sess.in_flight_task = None
+    sess.attachment_parts = "unset"
+    sess._in_turn = True
     _btw_turn_opened(sess.chat_key)
     # CONCEPT-0128 / ADR-2320: the project explorer sees this turn. Resolved ONCE here; every call below swallows its own errors,
     # so the explorer can never break a turn. The finish is published exactly once, in the `finally`, even when the generator is closed.
@@ -6658,6 +6674,8 @@ async def stream_turn(
                 sess.activity_turn.finish()
         finally:
             sess.activity_turn = None
+            sess.attachment_parts = "unset"
+            sess._in_turn = False
         _btw_drain_undelivered(sess)   # abnormal exit: record, nobody to tell
         _btw_turn_closed(sess.chat_key)
         slot = sess.in_flight_task  # read BEFORE the finalizer clears it

@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ChevronDown, FileDiff, FolderKanban, FolderOpen, Settings } from "lucide-react";
+import { Activity, AlertTriangle, ChevronDown, FileDiff, FolderKanban, FolderOpen, Settings } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { attachProject, detachProject, getActivity, getChanges, getChatAttachment, listProjects, type ProjectSummary } from "@/lib/api/projects";
 import { AccessBadge, ClassBadge } from "./badges";
@@ -69,7 +69,8 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
         data-testid="project-menu-button" data-attached={pid ? "yes" : "no"}
         title={pid && current ? `${label} - ${badgeLine(current)}` : "Choose a project for this chat"}
         className="inline-flex max-w-[14rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">
-        <FolderKanban className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {att.data?.withheld ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-label="Not sent to the assistant" data-testid="project-menu-withheld-icon" />
+          : <FolderKanban className="h-3.5 w-3.5 shrink-0" aria-hidden />}
         <span className="truncate" data-testid="project-menu-label">{label}</span>
         {live && <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 motion-safe:animate-pulse" data-testid="project-live-dot" role="img" aria-label="An agent is working on this project" />}
         {pid && count > 0 && <span className="rounded-full bg-primary/15 px-1.5 font-mono text-[10px] text-foreground" data-testid="project-menu-count" aria-label={`${count} changed files`}>{count}</span>}
@@ -80,6 +81,11 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
         <div role="dialog" aria-label="Project for this chat" data-testid="project-menu-panel"
           className="fixed inset-x-2 top-14 z-40 max-h-[75vh] space-y-2 overflow-auto rounded-lg border border-border bg-popover p-2 text-sm shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-1 sm:w-[22rem]">
           <p className="px-1 text-xs text-muted-foreground">Project for this chat</p>
+          {att.data?.withheld && (
+            <p role="status" className="rounded border border-amber-600/40 p-2 text-xs" data-testid="project-menu-withheld">
+              Attached, but not sent to the assistant right now: {att.data.withheld}
+            </p>
+          )}
           <div role="radiogroup" aria-label="Project" className="space-y-1">
             <label className="flex cursor-pointer items-center gap-2 rounded border p-2 hover:border-primary/40">
               <input type="radio" name="chat-project" checked={!pid} data-testid="project-option" data-project="" disabled={choose.isPending}

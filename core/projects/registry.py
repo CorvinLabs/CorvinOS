@@ -170,7 +170,38 @@ def _other_tenants_claiming(tenant_id: str, resolved: Path) -> bool:
     return False
 
 
-def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanaged: bool = False) -> Path:
+def _registered_paths() -> list[tuple[str, str, Path]]:
+    """(tenant, id, resolved path) of every registered project of every tenant."""
+    out: list[tuple[str, str, Path]] = []
+    tdir = corvin_home() / "tenants"
+    try:
+        tenants = [d for d in tdir.iterdir() if d.is_dir() and not d.is_symlink()]
+    except OSError:
+        return out
+    for d in tenants:
+        try:
+            data = json.loads((d / "projects" / "registry.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for e in (data.get("projects") or []) if isinstance(data, dict) else []:
+            if isinstance(e, dict) and isinstance(e.get("path"), str):
+                out.append((d.name, str(e.get("id", "")), _resolve_forgiving(Path(e["path"]))))
+    return out
+
+
+def nesting_conflict(resolved: Path, *, ignore: Optional[Path] = None) -> bool:
+    """True when ``resolved`` lies inside, or contains, a registered project of ANY tenant (release review R3: a project inside
+    another one could read and, with write access, change the outer one's files). ``ignore`` = the project being moved."""
+    for _t, _i, p in _registered_paths():
+        if ignore is not None and p == ignore:
+            continue
+        if p == resolved or p in resolved.parents or resolved in p.parents:
+            return True
+    return False
+
+
+def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanaged: bool = False,
+                      ignore: Optional[Path] = None) -> Path:
     """Judge a client-supplied project location. Returns the resolved directory.
 
     ``adopt=False`` (create): the directory must not exist or be empty. ``adopt=True``: it must
@@ -211,6 +242,9 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanage
         raise ProjectPathError("the projects root must not be a symlink")
     if _other_tenants_claiming(tenant_id, resolved):
         raise ProjectPathError("this directory already belongs to another tenant")
+    if nesting_conflict(resolved, ignore=ignore) and not (adopt and not unmanaged and any(p == resolved and t == tenant_id
+                                                                                         for t, _i, p in _registered_paths())):
+        raise ProjectPathError("the location lies inside another project, or contains one")
     if adopt and unmanaged:
         # a directory that is not a project yet: it must exist and must NOT carry a foreign manifest
         if not resolved.is_dir():
@@ -244,7 +278,7 @@ def get(tenant_id: str, project_id: str) -> Optional[dict[str, Any]]:
 
 
 def register(tenant_id: str, project_id: str, path: Path, template: Optional[str]) -> dict[str, Any]:
-    if not manifest.PROJECT_ID_RE.match(project_id):
+    if not manifest.PROJECT_ID_RE.match(project_id) or project_id in manifest.RESERVED_IDS:
         raise ProjectPathError("invalid project id")
     resolved = _resolve_forgiving(path)
     with _lock(tenant_id):
@@ -254,6 +288,8 @@ def register(tenant_id: str, project_id: str, path: Path, template: Optional[str
             raise RegistryError("a project with this id already exists")
         if any(_resolve_forgiving(Path(str(e.get("path")))) == resolved for e in lst):
             raise RegistryError("this directory is already registered")
+        if nesting_conflict(resolved):                      # again under the lock: two requests cannot both nest
+            raise RegistryError("the location lies inside another project, or contains one")
         if len(lst) >= MAX_PROJECTS:
             raise RegistryError(f"at most {MAX_PROJECTS} projects per tenant")
         entry = {"id": project_id, "path": str(resolved), "template": template or "",
@@ -323,3 +359,26 @@ def relocate(tenant_id: str, project_id: str, new_path: Path) -> dict[str, Any]:
         data["projects"] = lst
         _save(tenant_id, data)
     return hit
+
+
+def protection(tenant_id: str, project_id: str) -> Optional[dict[str, str]]:
+    """The tenant's own record of a project's data class and assistant access (authoritative; project.yaml is a copy the assistant
+    could edit). None for an entry written before this field existed."""
+    e = get(tenant_id, project_id)
+    if not e or not isinstance(e.get("protection"), dict):
+        return None
+    p = e["protection"]
+    return {k: p[k] for k in ("classification", "assistant_access") if isinstance(p.get(k), str)}
+
+
+def set_protection(tenant_id: str, project_id: str, classification: str, assistant_access: str) -> None:
+    if classification not in manifest.CLASSES or assistant_access not in manifest.ACCESS:
+        raise RegistryError("invalid protection")
+    with _lock(tenant_id):
+        data = load(tenant_id)
+        lst = [e for e in data.get("projects", []) if isinstance(e, dict)]
+        for e in lst:
+            if e.get("id") == project_id:
+                e["protection"] = {"classification": classification, "assistant_access": assistant_access}
+        data["projects"] = lst
+        _save(tenant_id, data)
